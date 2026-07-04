@@ -1,0 +1,31 @@
+{
+  "name": "biomed-qagent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BioMed QAgent 前端 - Electron + React",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron electron/main.js\""
+  },
+  "dependencies": {
+    "react": "",
+    "react-dom": "",
+    "electron": "",
+    "zustand": "",
+    "antd": "",
+    "echarts": "",
+    "@xyflow/react": "",
+    "tailwindcss": ""
+  },
+  "devDependencies": {
+    "vite": "",
+    "typescript": "",
+    "@vitejs/plugin-react": "",
+    "@types/react": "",
+    "@types/react-dom": "",
+    "concurrently": "",
+    "wait-on": ""
+  }
+}

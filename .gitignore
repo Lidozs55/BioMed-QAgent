@@ -1,0 +1,82 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.venv/
+venv/
+env/
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg
+MANIFEST
+
+# ===== Node.js =====
+node_modules/
+dist/
+build/
+.npm
+.pnpm-store/
+.yarn/
+
+# ===== Electron =====
+out/
+release/
+
+# ===== IDE / Editor =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 环境变量与密钥 =====
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# ===== 运行时数据（保留目录结构 .gitkeep）=====
+data/uploads/*
+!data/uploads/.gitkeep
+data/parsed/*
+!data/parsed/.gitkeep
+data/output/*
+!data/output/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== 测试与覆盖率 =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ===== 其他 =====
+.cache
+*.bak

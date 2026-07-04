@@ -1,0 +1,8 @@
+openapi: 3.0.3
+info:
+  title: BioMed QAgent API
+  description: |
+    BioMed QAgent 后端 API 骨架。
+    完整接口定义将在后续阶段补充。
+  version: 0.1.0
+paths: {}

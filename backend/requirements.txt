@@ -1,0 +1,23 @@
+# ===== 后端核心依赖（ARCHITECTURE.md 第七节） =====
+fastapi
+uvicorn
+openai
+httpx
+pandas
+numpy
+scipy
+playwright
+beautifulsoup4
+qdrant-client
+redis
+aiosqlite
+websockets
+python-multipart
+pydantic
+
+# ===== 可选依赖（按场景安装） =====
+# mineru / magic-pdf  # PDF 解析
+# grobid-client       # 参考文献解析
+# rpy2                # 调用 R 分析包
+# matplotlib          # 可视化
+# seaborn             # 可视化
