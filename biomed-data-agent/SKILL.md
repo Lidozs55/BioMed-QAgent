@@ -1,6 +1,6 @@
 ---
 name: biomed-data-agent
-description: Biomedical multi-source data discovery, parsing, cleaning, analysis and provenance-tracked export for research goals described in natural language. Invoke when the user asks to find, integrate, clean, analyze, or visualize biomedical data (genes, compounds, targets, pathways, expression, PPI, structures), or when a research goal mentions diseases, TCM, oncology, proteins, or pathways. Also invoke when CSV/Excel export with source citations or data lineage is required.
+description: Biomedical multi-source data discovery, parsing, cleaning, analysis and provenance-tracked export. Invoke when user asks to find/integrate/clean/analyze/visualize biomedical data (genes, compounds, targets, pathways, expression, PPI, structures) or export with citations. Works on both Trae Work and Qoder/Qoder Work.
 ---
 
 # BioMed Data Agent
@@ -25,6 +25,42 @@ A biomedical research data integration skill. Given a natural-language research 
 - The user only wants web browsing or scraping of non-biomedical sites (use `agent-browser`).
 - The user only wants a literature search without data extraction (use WebSearch directly).
 - The task is purely software engineering with no biomedical data component.
+
+## Scheduler Compatibility
+
+This skill is designed to run on both **Trae Work** and **Qoder / Qoder Work** schedulers. It deliberately avoids duplicating built-in capabilities of either platform.
+
+### What this skill does NOT reimplement (use scheduler built-ins)
+
+| Capability | Trae Work | Qoder / Qoder Work | How to use |
+|------------|-----------|--------------------|-----------|
+| File read/write | ✅ built-in | ✅ built-in | Scheduler's native file tools |
+| WebFetch / web page reading | ✅ built-in | ✅ built-in (also via MCP fetch) | Scheduler's WebFetch tool |
+| WebSearch | ✅ built-in | ✅ built-in | Scheduler's WebSearch tool |
+| Bash / terminal execution | ✅ sandbox | ✅ Quest sandbox / Qoder Work safe env | Scheduler's shell tool |
+| Browser automation | ✅ agent-browser skill | ✅ built-in Browser Use / Chrome MCP | Scheduler's browser tool |
+| Generic chart visualization | ✅ chart-visualization skill | ✅ Canvas | Built-in chart skill |
+| Generic PDF reading | ❌ | ✅ pdf skill (Qoder Work) | Built-in pdf skill |
+| Generic Excel/Word/PPT | ❌ | ✅ xlsx/docx/pptx skills (Qoder Work) | Built-in office skills |
+| MCP protocol | ✅ | ✅ | Scheduler's MCP config |
+
+### What this skill provides (NOT in either scheduler)
+
+- 7 biomedical data source API clients (PubMed/NCBI/GEO/STRING/KEGG/PDB/TCMSP)
+- Biomedical format parsers (GEO SOFT, PDB, FASTA, biological network files)
+- Field alignment engine for heterogeneous biomedical sources
+- Bioinformatics analysis (differential expression, GO/KEGG enrichment, PPI network)
+- Provenance / lineage tracking with DAG validation
+- Biomedical-specific visualizations (volcano, enrichment bubble, heatmap, PPI network)
+- Local image understanding via Qwen-VL API (covers Trae Work which lacks this; Qoder Work has built-in)
+- Biomedical report generation (Markdown with embedded charts and lineage)
+- Excel/CSV export with mandatory source citation columns
+
+### Platform-specific notes
+
+- **Trae Work**: Use the sandbox to run Python scripts. For local image understanding, this skill's `scripts/viz/extract_chart_data.py` is the only option (Trae Work cannot read local images natively).
+- **Qoder Work**: Has built-in local image understanding and PDF/Excel/Word/PPT skills. This skill's pdf_table_parser.py focuses on **biomedical literature table extraction** (extracting experimental data tables with gene/compound/structure context), which is more specialized than the generic pdf skill. Prefer the built-in pdf skill for general PDF reading; use this skill's parser only when extracting structured biomedical data tables.
+- **Qoder Quest**: Long-running pipeline runs well in Quest mode. The `record`/`link`/`export` provenance commands map naturally to Quest's task lifecycle.
 
 ## Pipeline Overview
 
@@ -70,8 +106,8 @@ Each client returns a list of `SearchResult` objects. Mark any source without a 
 
 For sources marked `requires_crawl: true`:
 
-- Prefer the scheduler's built-in `WebFetch` for static HTML pages.
-- Use `agent-browser` skill (if installed) for dynamic JavaScript-rendered pages.
+- Prefer the scheduler's built-in WebFetch (Trae Work) or fetch MCP / built-in web tools (Qoder) for static HTML pages.
+- Use the scheduler's browser automation (agent-browser skill on Trae; Browser Use on Qoder) for dynamic JavaScript-rendered pages.
 - Only fall back to writing a custom Playwright script if neither works.
 
 ### Step 4 — Parse (Stage 3)
@@ -133,6 +169,8 @@ Produce final deliverables in the task output directory (default: `data/output/<
 - `lineage.json` — Full provenance graph (see `schemas/provenance_node.schema.json`).
 - `report.md` — Human-readable summary: total records, average confidence, source counts, top conflicts, analysis highlights.
 - `charts/` — All visualization PNGs.
+- `data.xlsx` — Excel version with two sheets: "Data" (the records) and "Lineage" (the provenance nodes). Generated by `scripts/export/to_excel.py`.
+- `report.docx` — Optional Word version of the report (requires Qoder Work's docx skill OR python-docx). Generated by `scripts/export/to_report.py`.
 
 ### Step 9 — Summarize to User
 
@@ -205,6 +243,7 @@ Templates specify: priority data sources, recommended field mappings, analysis r
 - **Respect rate limits.** All API clients use a default 1 req/sec rate. Do not remove throttling.
 - **Keep outputs reproducible.** Save the exact query strings and API responses in the lineage graph.
 - **No local image understanding built-in.** If the user needs to extract data from a local chart image, use `scripts/viz/extract_chart_data.py` which calls the Qwen-VL API (requires `QWEN_API_KEY` env var). Do not assume the scheduler can read local images directly.
+- **Respect scheduler built-ins.** Do not reimplement generic PDF reading, Excel editing, web browsing, or chart rendering that the scheduler already provides. This skill's tools are scoped to biomedical-specific tasks only.
 
 ## File Index
 
@@ -218,7 +257,9 @@ biomed-data-agent/
 │   ├── cleaners/                     # Cleaning & field alignment
 │   ├── analysis/                     # Bioinformatics analysis
 │   ├── provenance/                   # Lineage tracker
-│   └── viz/                          # Biomed visualizations
+│   ├── viz/                          # Biomed visualizations
+│   ├── export/                       # Final export (CSV/Excel/Markdown/Word report)
+│   └── io/                           # File format conversion (Excel/CSV/JSON)
 ├── schemas/                          # JSON/YAML schemas for data transfer
 ├── dictionaries/                     # Synonym dictionaries
 ├── domain_templates/                 # Per-domain config (TCM, oncology)
