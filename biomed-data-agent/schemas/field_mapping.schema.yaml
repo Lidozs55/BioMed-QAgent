@@ -1,0 +1,39 @@
+# Field Mapping Schema
+# Defines how source-specific field names map to unified field names.
+# Used by scripts/cleaners/field_aligner.py
+# Spec defined in ARCHITECTURE.md section 3.1.6.
+
+unified_field_name: string         # e.g. "gene_symbol"
+unified_field_label: string        # e.g. "基因符号" (human-readable)
+unified_unit: string | null        # e.g. "log2", null for non-numeric
+unified_data_type: string          # "string" | "number" | "boolean" | "array" | "object"
+description: string                # what this field represents
+source_mappings:                   # list of per-source mappings
+  - source_name: string            # e.g. "pubmed", "geo", "tcmsp"
+    original_field_name: string    # e.g. "GeneSymbol", "SYMBOL", "gene_name"
+    original_unit: string | null   # e.g. "log2FoldChange"
+    transform: string | null       # optional transform expression, e.g. "x * -1" or "log2(x)"
+    confidence: number             # 0-1, confidence in this mapping
+
+# Example (for documentation purposes only):
+# - unified_field_name: gene_symbol
+#   unified_field_label: 基因符号
+#   unified_unit: null
+#   unified_data_type: string
+#   description: Official HGNC gene symbol
+#   source_mappings:
+#     - source_name: ncbi
+#       original_field_name: SYMBOL
+#       original_unit: null
+#       transform: null
+#       confidence: 0.99
+#     - source_name: geo
+#       original_field_name: GeneSymbol
+#       original_unit: null
+#       transform: null
+#       confidence: 0.95
+#     - source_name: string
+#       original_field_name: "preferred_name"
+#       original_unit: null
+#       transform: null
+#       confidence: 0.92

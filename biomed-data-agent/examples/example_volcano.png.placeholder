@@ -1,0 +1,37 @@
+# example_volcano.png 占位说明
+
+本文件是一个占位标记，说明 `example_volcano.png` 图片的位置。
+
+## 为什么是占位文件
+
+本 skill 仓库不提交二进制 PNG 图片。实际的火山图（volcano plot）由
+`scripts/viz/volcano_plot.py` 在运行时根据差异表达结果动态生成。
+
+## 实际生成方式
+
+差异表达分析完成后，调用可视化脚本生成 PNG：
+
+```bash
+python scripts/viz/volcano_plot.py \
+    --input examples/example_diff_expr_result.json \
+    --out examples/example_volcano.png
+```
+
+脚本会读取 `result.chart_data` 中的 `{x: log2fc, y: -log10(p), gene, significant}`
+数据点，绘制散点图：
+
+- 显著上调（log2fc > 1, adj_p < 0.05）：红色
+- 显著下调（log2fc < -1, adj_p < 0.05）：蓝色
+- 不显著：灰色
+- 阈值线：log2fc = ±1（垂直虚线）、adj_p = 0.05（即 -log10(p) ≈ 1.30，水平虚线）
+
+## 对应的示例数据
+
+本占位文件对应的示例数据见 `examples/example_diff_expr_result.json`，
+其中 `chart_data` 包含 6 个基因的数据点（TP53、AKT1、BCL2、MYC、VEGFA、MMP9），
+均来自 GEO GSE21035 胰腺癌肝转移数据集（示例任务 tcm-jp-001）。
+
+## 在最终报告中的位置
+
+导出阶段（Stage 6）会将生成的 PNG 嵌入 `report.md`，并复制到
+`data/output/<task_id>/charts/` 目录下。

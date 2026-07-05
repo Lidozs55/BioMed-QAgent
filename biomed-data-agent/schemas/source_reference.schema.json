@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/source_reference.schema.json",
+  "title": "SourceReference",
+  "description": "How a piece of data is cited. Every DataRecord MUST have a source_ref. This is the foundation of provenance.",
+  "type": "object",
+  "required": ["source_name", "source_type", "query", "retrieved_at"],
+  "additionalProperties": false,
+  "properties": {
+    "source_name": {
+      "type": "string",
+      "description": "Canonical source identifier. e.g. 'pubmed', 'geo', 'string', 'tcmsp', 'pdb', 'kegg', 'ncbi_gene'."
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["api", "web_page", "pdf", "database", "file", "manual"],
+      "description": "The type of source."
+    },
+    "source_url": {
+      "type": "string",
+      "description": "Direct URL to the source page or API endpoint. REQUIRED for web_page, pdf, database types."
+    },
+    "source_doi": {
+      "type": "string",
+      "description": "DOI of the source publication, if applicable. e.g. '10.1234/abc.5678'."
+    },
+    "source_pmid": {
+      "type": "string",
+      "description": "PubMed ID, if the source is a PubMed article."
+    },
+    "source_accession": {
+      "type": "string",
+      "description": "Database accession. e.g. 'GSE12345' for GEO, '1AKI' for PDB, 'hsa04150' for KEGG pathway."
+    },
+    "query": {
+      "type": "string",
+      "description": "The exact query string or API parameters used to retrieve this data. Critical for reproducibility."
+    },
+    "retrieved_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the data was retrieved."
+    },
+    "raw_payload_path": {
+      "type": "string",
+      "description": "Optional. Relative path to the cached raw API response or downloaded file, e.g. 'cache/pubmed_a1b2c3d4.json'."
+    }
+  }
+}

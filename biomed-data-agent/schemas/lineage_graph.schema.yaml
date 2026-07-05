@@ -1,0 +1,20 @@
+# Lineage Graph Schema
+# The lineage.json file produced at export time. Wraps a list of ProvenanceNodes
+# and provides root source references for each final record.
+
+type: object
+required: [task_id, nodes, record_roots]
+additionalProperties: false
+properties:
+  task_id: {type: string, description: "The task this lineage graph belongs to."}
+  generated_at: {type: string, format: date-time}
+  nodes:
+    type: array
+    description: "All ProvenanceNodes in the graph, in topological order."
+    items: {$ref: "provenance_node.schema.json"}
+  record_roots:
+    type: object
+    description: "Map of record_id → list of root source References (the original sources that fed into this record)."
+    additionalProperties:
+      type: array
+      items: {$ref: "source_reference.schema.json"}

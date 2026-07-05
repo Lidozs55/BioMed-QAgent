@@ -1,0 +1,146 @@
+# 基因符号同义词字典
+# 用途：将多源异构基因名（别名、旧符号、拼写变体、小写形式）对齐到 HGNC 官方基因符号
+# 加载方：scripts/cleaners/field_aligner.py（用于 gene_symbol 字段值标准化与别名归并）
+# 维护：BioMed QAgent
+# 数据来源：HGNC (https://www.genenames.org/)、NCBI Gene
+# 命名规范：canonical 一律为 HGNC 官方符号（大写）；synonyms 含旧符号、常见拼写变体、小写形式
+version: 1.0.0
+updated_at: 2026-07-05
+
+# 别名表：每条记录包含 canonical 标准符号、synonyms 别名列表、可选 ncbi_gene_id
+aliases:
+  # ===== 癌症相关基因 =====
+  - canonical: TP53
+    synonyms: [p53, P53, TP-53, p53_tumor_suppressor, LFS1, Li-Fraumeni syndrome]
+    ncbi_gene_id: 7157
+
+  - canonical: AKT1
+    synonyms: [AKT, Akt1, PKB, PKB-ALPHA, RAC-ALPHA, CWS6, akt1]
+    ncbi_gene_id: 207
+
+  - canonical: AKT2
+    synonyms: [PKBBETA, RAC-BETA, akt2, AKT2]
+    ncbi_gene_id: 208
+
+  - canonical: MYC
+    synonyms: [c-Myc, c-myc, CMYC, MYCC, bHLHe39, myc]
+    ncbi_gene_id: 4609
+
+  - canonical: EGFR
+    synonyms: [ERBB1, ERBB-1, HER1, ERBB, NISBD2, egfr]
+    ncbi_gene_id: 1956
+
+  - canonical: KRAS
+    synonyms: [KRAS2, K-RAS, K-RAS2, CFC2, NS, kras, Kras]
+    ncbi_gene_id: 3845
+
+  - canonical: BRAF
+    synonyms: [B-RAF1, BRAF1, RAFB1, NS7, braf, B-Raf]
+    ncbi_gene_id: 673
+
+  - canonical: PTEN
+    synonyms: [MMAC1, TEP1, MMAC, PTEN1, BZS, DEC, pten]
+    ncbi_gene_id: 5728
+
+  - canonical: RB1
+    synonyms: [RB, pRb, PPP1R130, OSRC, RB1]
+    ncbi_gene_id: 5925
+
+  - canonical: CDK4
+    synonyms: [CMM3, PSK-J3, cdk4]
+    ncbi_gene_id: 1019
+
+  - canonical: CCND1
+    synonyms: [BCL1, PRAD1, CYL1, D11S287E, ccnd1, Cyclin D1]
+    ncbi_gene_id: 595
+
+  - canonical: MDM2
+    synonyms: [HDMX, MDM2-HUMAN, hdm2, MDM2]
+    ncbi_gene_id: 4193
+
+  - canonical: BCL2
+    synonyms: [Bcl-2, BCL-2, Bcl2, PPP1R50, bcl2]
+    ncbi_gene_id: 596
+
+  - canonical: VEGFA
+    synonyms: [VEGF, VEGF-A, MVCD1, VPF, vegf, vegfa]
+    ncbi_gene_id: 7422
+
+  - canonical: HIF1A
+    synonyms: [HIF1, HIF-1, HIF-1A, HIF1-alpha, MOP1, PASD8, hif1a]
+    ncbi_gene_id: 3091
+
+  # ===== 信号通路基因 =====
+  - canonical: MAPK1
+    synonyms: [ERK, ERK2, ERT1, MAPK2, PRKM1, PRKM2, p42mapk, mapk1]
+    ncbi_gene_id: 5594
+
+  - canonical: MAPK3
+    synonyms: [ERK1, ERT2, HS44KDAP, p44erk1, p44-MAPK, mapk3]
+    ncbi_gene_id: 5595
+
+  - canonical: STAT3
+    synonyms: [APRF, STAT-3, HIES, stat3]
+    ncbi_gene_id: 6774
+
+  - canonical: PIK3CA
+    synonyms: [PI3K, PI3K-ALPHA, PK3CA, PI3Kalpha, pik3ca]
+    ncbi_gene_id: 5290
+
+  - canonical: MTOR
+    synonyms: [mTOR, FRAP, FRAP1, FRAP2, RAFT1, RAPT1, mtor]
+    ncbi_gene_id: 2475
+
+  - canonical: CTNNB1
+    synonyms: [beta-catenin, Beta-catenin, CTNNB, MRD19, ctnnb1, CATNB]
+    ncbi_gene_id: 1499
+
+  - canonical: GSK3B
+    synonyms: [GSK3-beta, GSK3B, GSK3beta, gsk3b]
+    ncbi_gene_id: 2932
+
+  # ===== 凋亡相关基因 =====
+  - canonical: CASP3
+    synonyms: [CASP-3, CPP32, CPP32B, SCA-1, casp3, Yama]
+    ncbi_gene_id: 836
+
+  - canonical: CASP8
+    synonyms: [CASP-8, FLICE, MACH, MCH5, casp8]
+    ncbi_gene_id: 841
+
+  - canonical: CASP9
+    synonyms: [CASP-9, MCH6, ICE-LAP6, casp9]
+    ncbi_gene_id: 842
+
+  - canonical: BAX
+    synonyms: [Bax, BAX, BCL2L4, bcl2l4]
+    ncbi_gene_id: 581
+
+  - canonical: BAK1
+    synonyms: [BAK, BAK-LIKE, BCL2L7, CDN1, bak1]
+    ncbi_gene_id: 578
+
+  # ===== 中医药研究常见炎症/免疫基因 =====
+  - canonical: NFKB1
+    synonyms: [NF-kB, NF-kappa-B, NF-kappaB, p105, p50, KBF1, EBP-1, nfkb1]
+    ncbi_gene_id: 4790
+
+  - canonical: TNF
+    synonyms: [TNF-alpha, TNF-a, TNFA, DIF, TNF-a, tnf, Tumor Necrosis Factor]
+    ncbi_gene_id: 7124
+
+  - canonical: IL6
+    synonyms: [IL-6, IL6-B, B-cell stimulatory factor 2, BSF2, IFNB2, il6, Interleukin-6]
+    ncbi_gene_id: 3569
+
+  - canonical: IL1B
+    synonyms: [IL-1B, IL-1beta, IL1-BETA, IL-1β, IL1F2, il1b]
+    ncbi_gene_id: 3553
+
+  - canonical: NOS2
+    synonyms: [iNOS, NOS2A, INOS, NOS-II, nos2, Inducible NOS]
+    ncbi_gene_id: 4843
+
+  - canonical: PTGS2
+    synonyms: [COX-2, COX2, COX2-HUMAN, PHS-2, hCox-2, ptgs2, Cyclooxygenase-2]
+    ncbi_gene_id: 5743

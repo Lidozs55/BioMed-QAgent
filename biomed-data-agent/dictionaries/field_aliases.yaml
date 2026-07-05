@@ -1,0 +1,171 @@
+# 字段名同义词字典（最关键字典）
+# 用途：将多源异构字段名（Gene / SYMBOL / logFC / P.Value 等）对齐到统一字段名
+# 加载方：scripts/cleaners/field_aligner.py（核心字段对齐字典，决定字段映射质量）
+# 维护：BioMed QAgent
+# 字段命名规范：unified 一律采用 snake_case 小写；synonyms 含不同数据源使用的中英文字段名变体
+# transform 取值：upper / lower / title / float / int / bool；缺失时保留原值
+version: 1.0.0
+updated_at: 2026-07-05
+
+# 字段表：每条记录包含 unified 统一字段名、synonyms 同义字段名、data_type、default_unit、transform
+fields:
+  # ===== 标识与命名类 =====
+  - unified: gene_symbol
+    synonyms: [Gene, GeneSymbol, SYMBOL, gene_name, symbol, Gene Name, 基因名, 基因符号, gene_symbol, Gene_Symbol, hgnc_symbol]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: compound_name
+    synonyms: [MolName, Ingredient, Compound, compound, 化合物, 成分, Ingredient Name, compound_name, Molecule, molecule_name]
+    data_type: string
+    default_unit: null
+    transform: title
+
+  - unified: target_protein
+    synonyms: [Target, target_gene, TargetGene, 靶点, 靶蛋白, target_protein, Target_Protein, ProteinTarget]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  # ===== 表达与统计类 =====
+  - unified: log2fc
+    synonyms: [logFC, log2FoldChange, log2_FC, log2_fold_change, log fold change, log2fc, lfc, logFoldChange]
+    data_type: number
+    default_unit: log2
+    transform: float
+
+  - unified: p_value
+    synonyms: [p, pvalue, P, P.Value, p_value, pval, p-value, PValue, raw_p, rawp]
+    data_type: number
+    default_unit: null
+    transform: float
+
+  - unified: adj_p_value
+    synonyms: [padj, adj_p, FDR, q_value, adj_p_value, BH, qvalue, P.adj, PAdj, adjusted_p, p.adj]
+    data_type: number
+    default_unit: null
+    transform: float
+
+  - unified: fold_change
+    synonyms: [FC, fold_change, fold change, FoldChange, FC_value, foldchange]
+    data_type: number
+    default_unit: fold_change
+    transform: float
+
+  - unified: expression_value
+    synonyms: [expression, Expr, Expression, expression_value, expr_value, normalized_expression]
+    data_type: number
+    default_unit: log2
+    transform: float
+
+  # ===== TCMSP 专有属性 =====
+  - unified: ob_value
+    synonyms: [OB, oral_bioavailability, 生物利用度, ob_value, OB_value, OralBioavailability]
+    data_type: number
+    default_unit: percent
+    transform: float
+
+  - unified: dl_value
+    synonyms: [DL, drug_likeness, 类药性, dl_value, DL_value, DrugLikeness]
+    data_type: number
+    default_unit: null
+    transform: float
+
+  # ===== ID 类字段 =====
+  - unified: pubmed_id
+    synonyms: [PMID, pubmed, PubMed ID, pubmed_id, PMID_ID]
+    data_type: string
+    default_unit: null
+    transform: null
+
+  - unified: doi
+    synonyms: [DOI, digital_object_identifier, doi, Doi]
+    data_type: string
+    default_unit: null
+    transform: lower
+
+  - unified: ncbi_gene_id
+    synonyms: [GeneID, gene_id, NCBI_Gene_ID, ncbi_gene_id, EntrezGeneID, entrez_id]
+    data_type: string
+    default_unit: null
+    transform: null
+
+  - unified: uniprot_id
+    synonyms: [UniProt, uniprot_accession, UP_id, uniprot_id, UniProt_ID, Accession]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: pathway_id
+    synonyms: [KEGG_ID, pathway, PathwayID, kegg_id, pathway_id, Pathway_ID, KEGG_pathway]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: pdb_id
+    synonyms: [PDB, pdb_accession, structure_id, pdb_id, PDB_ID, PDBCode]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: go_term
+    synonyms: [GO, GO_Term, go_id, go_term, GO_ID, GO_term]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  # ===== 生物学属性类 =====
+  - unified: organism
+    synonyms: [species, Species, Organism, 物种, organism, Org, organism_name]
+    data_type: string
+    default_unit: null
+    transform: title
+
+  - unified: chromosome
+    synonyms: [chr, Chromosome, 染色体, chromosome, Chrom, chr_id]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: protein_sequence
+    synonyms: [sequence, Sequence, aa_sequence, protein_seq, protein_sequence, amino_acid_sequence]
+    data_type: string
+    default_unit: null
+    transform: null
+
+  - unified: mrna_sequence
+    synonyms: [mRNA, transcript_sequence, cds, mrna_sequence, mRNA_sequence, CDS]
+    data_type: string
+    default_unit: null
+    transform: null
+
+  - unified: tissue
+    synonyms: [Tissue, organ, 组织, tissue, Tissue_Type, organ_type]
+    data_type: string
+    default_unit: null
+    transform: title
+
+  - unified: disease
+    synonyms: [Disease, condition, 疾病, disease, Disease_Name, condition_name]
+    data_type: string
+    default_unit: null
+    transform: title
+
+  - unified: cell_line
+    synonyms: [CellLine, cell, 细胞系, cell_line, Cell_Type, celltype]
+    data_type: string
+    default_unit: null
+    transform: title
+
+  - unified: sample_id
+    synonyms: [Sample, sample_id, SampleID, sample_name, GSM, sample]
+    data_type: string
+    default_unit: null
+    transform: upper
+
+  - unified: concentration
+    synonyms: [Conc, concentration, dose, Dose, 浓度, IC50, EC50, dose_value]
+    data_type: number
+    default_unit: uM
+    transform: float

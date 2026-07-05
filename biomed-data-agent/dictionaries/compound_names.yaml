@@ -1,0 +1,159 @@
+# 化合物 / 中药活性成分同义词字典
+# 用途：将多源化合物名（中文名、商品名、CAS 号、拼写变体）对齐到标准化合物名
+# 加载方：scripts/cleaners/field_aligner.py（用于 compound_name 字段值标准化）
+# 维护：BioMed QAgent
+# 数据来源：PubChem (https://pubchem.ncbi.nlm.nih.gov/)、TCMSP (https://tcmspwe.com/)
+# 命名规范：canonical 采用 IUPAC 或通用英文名（首字母大写）；synonyms 含中文名、CAS 号、商品名、小写形式
+version: 1.0.0
+updated_at: 2026-07-05
+
+# 别名表：每条记录包含 canonical 标准名、synonyms 别名列表、可选 smiles 与 pubchem_cid
+aliases:
+  # ===== 中药黄酮类 =====
+  - canonical: Quercetin
+    synonyms: [槲皮素, quercetin, QUERCETIN, 3,3',4',5,7-pentahydroxyflavone, CAS 117-39-5, Meletin, Sophoretin]
+    smiles: C1=CC(=C(C=C1C2=C(C(=O)C3=C(C=C(C=C3O2)O)O)O)O)O
+    pubchem_cid: 5280343
+
+  - canonical: Baicalein
+    synonyms: [黄芩素, baicalein, BAICALEIN, 5,6,7-Trihydroxyflavone, Noroxylin, CAS 491-67-8]
+    smiles: C1=CC=C(C=C1)C2=CC(=O)C3=C(C=C(C=C3O2)O)O
+    pubchem_cid: 5281605
+
+  - canonical: Luteolin
+    synonyms: [木犀草素, luteolin, LUTEOLIN, 3',4',5,7-Tetrahydroxyflavone, CAS 491-70-3, Digitoflavone]
+    smiles: C1=CC(=C(C=C1C2=CC(=O)C3=C(C=C(C=C3O2)O)O)O)O
+    pubchem_cid: 5280445
+
+  - canonical: Apigenin
+    synonyms: [芹菜素, apigenin, APIGENIN, 4',5,7-Trihydroxyflavone, CAS 520-36-5, Apigenol]
+    smiles: C1=CC=C(C=C1)C2=CC(=O)C3=C(C=C(C=C3O2)O)O
+    pubchem_cid: 5280443
+
+  - canonical: Kaempferol
+    synonyms: [山奈酚, kaempferol, KAEMPFEROL, 3,4',5,7-Tetrahydroxyflavone, CAS 520-18-3, Indigo Yellow]
+    smiles: C1=CC=C(C=C1)C2=C(C(=O)C3=C(C=C(C=C3O2)O)O)O
+    pubchem_cid: 5280863
+
+  - canonical: Naringenin
+    synonyms: [柚皮素, naringenin, NARINGENIN, 4',5,7-Trihydroxyflavanone, CAS 480-41-1, Salipurol]
+    smiles: C1=CC(=CC=C1C2CC(=O)C3=C(C=C(C=C3O2)O)O)O
+    pubchem_cid: 932
+
+  - canonical: Hesperidin
+    synonyms: [橙皮苷, hesperidin, HESPERIDIN, Hesperetin 7-rutinoside, CAS 520-26-3]
+    smiles: CC1C(C(C(C(O1)OCC2C(C(C(C(O2)OC3=CC(=C(C=C3)O)C(=O)C4=C(C=C(C=C4O)O)O)O)O)O)O)O)O
+    pubchem_cid: 10621
+
+  - canonical: Genistein
+    synonyms: [染料木素, genistein, GENISTEIN, 4',5,7-Trihydroxyisoflavone, CAS 446-72-0, Genisteol]
+    smiles: C1=CC=C(C=C1)C2=COC3=CC(=CC(=C3C2=O)O)O
+    pubchem_cid: 5280961
+
+  - canonical: Gallic acid
+    synonyms: [没食子酸, gallic acid, GALlic acid, 3,4,5-Trihydroxybenzoic acid, CAS 149-91-7]
+    smiles: C1=CC(=C(C(=C1O)O)O)C(=O)O
+    pubchem_cid: 370
+
+  - canonical: Catechin
+    synonyms: [儿茶素, catechin, CATECHIN, Cianidanol, CAS 154-23-4, Cyanidanol]
+    smiles: C1=CC(=CC=C1C2C3=CC(=CC=C3O2)O)O
+    pubchem_cid: 9064
+
+  - canonical: Puerarin
+    synonyms: [葛根素, puerarin, PUERARIN, Daidzein-8-C-glucoside, CAS 3681-99-0]
+    smiles: C1=CC(=CC=C1C2=COC3=CC(=CC(=C3C2=O)C4C(C(C(C(O4)CO)O)O)O)O)O
+    pubchem_cid: 5281807
+
+  # ===== 中药多酚 / 蒽醌 / 萜类 =====
+  - canonical: Curcumin
+    synonyms: [姜黄素, curcumin, CURCUMIN, Diferuloylmethane, CAS 458-37-7, Turmeric yellow]
+    smiles: COC1=C(C=CC(=C1)C=CC(=O)CC(=O)C=CC2=CC(=C(C=C2)O)OC)O
+    pubchem_cid: 969516
+
+  - canonical: Resveratrol
+    synonyms: [白藜芦醇, resveratrol, RESVERATROL, 3,5,4'-Trihydroxystilbene, CAS 501-36-0]
+    smiles: C1=CC(=CC=C1C=CC2=CC(=CC(=C2)O)O)O
+    pubchem_cid: 445154
+
+  - canonical: Berberine
+    synonyms: [小檗碱, berberine, BERBERINE, 黄连素, Umbellatine, CAS 2086-83-1]
+    smiles: COC1=C(C2=C[C@@]3=[C+](C[C@@]4(C3=CC1=C2OC4=O)OC)CC5=C(C=C(C=C5)O)OC)OC
+    pubchem_cid: 2353
+
+  - canonical: Salidroside
+    synonyms: [红景天苷, salidroside, RHODIOLOSIDE, CAS 10338-51-9]
+    smiles: C1=CC(=C(C=C1CC2C(C(C(C(O2)CO)O)O)O)O)O
+    pubchem_cid: 159278
+
+  - canonical: Tanshinone IIA
+    synonyms: [丹参酮IIA, tanshinone IIA, TANSHINONE IIA, Tanshinone B, CAS 568-72-9]
+    smiles: CC1=C2C(=O)C3=C(C2=CC4=C1OC(=O)C4(C)C)CCCC3(C)C
+    pubchem_cid: 164676
+
+  - canonical: Artemisinin
+    synonyms: [青蒿素, artemisinin, ARTEMISININ, Qinghaosu, CAS 63968-64-9]
+    smiles: C1CCC2C(C1(C)C)C3C4C2C(=O)C5(C(=O)O4)C3C6(C)OC6C15OO5
+    pubchem_cid: 68827
+
+  - canonical: Honokiol
+    synonyms: [厚朴酚, honokiol, HONOKIOL, CAS 35354-74-6]
+    smiles: CC1=CC2=C(C=C1O)C(C=C3=C(C=C(C=C3)O)C)C2=O
+    pubchem_cid: 72303
+
+  - canonical: Magnolol
+    synonyms: [和厚朴酚, magnolol, MAGNOLOL, CAS 528-43-8, 5,5'-Diallyl-2,2'-biphenyldiol]
+    smiles: CC1=CC2=C(C=C1O)C(=CC3=C2C=C(C=C3)O)CC
+    pubchem_cid: 72300
+
+  - canonical: Emodin
+    synonyms: [大黄素, emodin, EMODIN, 大黄素素, Archin, CAS 518-82-1]
+    smiles: CC1=C(C2=C(C(=C1O)C(=O)C3=C(C2=O)C(=C(C(=C3)O)O)C)O)O
+    pubchem_cid: 3220
+
+  - canonical: Rhein
+    synonyms: [大黄酸, rhein, RHEIN, Rheic acid, Cass 478-43-3, CAS 478-43-3]
+    smiles: CC1=C(C2=C(C3=C(C(=C(C=C3C(=O)C2=O)O)O)C(=C1O)C(=O)O)O)O
+    pubchem_cid: 10168
+
+  # ===== 中药皂苷类 =====
+  - canonical: Ginsenoside Rb1
+    synonyms: [人参皂苷Rb1, ginsenoside Rb1, GINSENOSIDE RB1, Ginsenoside Rb-1, CAS 41753-43-9]
+    smiles: CC1(C)CCCC2(C)C1CCC3(C)C2CCC4(C)C3(CCC5C6(C)CCC(OC7C(C(C(C(CO7)(CO)O)O)O)OC8C(C(C(C(CO8)O)O)O)O)C6(C)CCC(OC9C(C(C(C(CO9)(CO)O)O)O)O)C5(C)CO)C4(C)CO
+    pubchem_cid: 9898279
+
+  - canonical: Ginsenoside Rg1
+    synonyms: [人参皂苷Rg1, ginsenoside Rg1, GINSENOSIDE RG1, Panaxoside A, CAS 22427-39-0]
+    smiles: CC12CCC3(C)C(CCC4C3(CCC5C4(CCC(OC6C(C(C(C(CO6)O)O)O)OC7C(C(OC(C7O)O)CO)O)C5(C)CO)C)C)C1(C)CCC(OC1C(C(C(OC(C1O)O)CO)O)O)C2(C)CO
+    pubchem_cid: 44269934
+
+  - canonical: Astragaloside IV
+    synonyms: [黄芪甲苷, astragaloside IV, ASTRAGALOSIDE IV, Astragaloside-A, CAS 84687-43-4]
+    smiles: CC1(C)CCC2(C)C1CCC3(C)C2CCC4(C)C3(CCC5C6(C)CCC(OC7C(C(C(C(CO7)O)O)O)OC8C(C(C(CO8)O)O)O)C6(C)CCC(O)C5(C)CO)C4(C)CO
+    pubchem_cid: 13943294
+
+  # ===== 化疗药物 =====
+  - canonical: Paclitaxel
+    synonyms: [紫杉醇, paclitaxel, PACLITAXEL, Taxol, CAS 33069-62-4]
+    smiles: CC1=C2C(C(=O)C3(C(CC4C(C3C(C(C2(C)C(=CC1=O)O)OC(=O)C5=CC=CC=C5)OC(=O)C6=CC=CC=C6)OC(=O)C)C4(C)O)C)OC(=O)C
+    pubchem_cid: 36314
+
+  - canonical: Cisplatin
+    synonyms: [顺铂, cisplatin, CISPLATIN, cis-DDP, Platinol, CAS 15663-27-1]
+    smiles: [NH3+][Pt+2]([NH3+])(Cl)Cl
+    pubchem_cid: 84069
+
+  - canonical: Doxorubicin
+    synonyms: [阿霉素, doxorubicin, DOXORUBICIN, Adriamycin, Hydroxydaunorubicin, CAS 23214-92-8]
+    smiles: CC1C(C(CC(O1)OC2CC3C4=CC(=C(C=C4C(=O)C3(C(=O)C2O)O)O)O)(C)O)N
+    pubchem_cid: 31703
+
+  - canonical: 5-Fluorouracil
+    synonyms: [5-氟尿嘧啶, 5-Fluorouracil, 5-FU, 5FU, Fluorouracil, CAS 51-21-8, Efudex]
+    smiles: C1=C(C(=O)NC(=O)N1)F
+    pubchem_cid: 3385
+
+  - canonical: Gemcitabine
+    synonyms: [吉西他滨, gemcitabine, GEMCITABINE, Gemzar, dFdC, CAS 95058-81-4]
+    smiles: C1=CN(C(=O)N=C1N)C2CC(C(O2)CO)(F)F
+    pubchem_cid: 60750

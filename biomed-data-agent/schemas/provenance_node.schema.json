@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/provenance_node.schema.json",
+  "title": "ProvenanceNode",
+  "description": "One node in the data lineage graph. Every processing step creates one node. Together, the nodes form a DAG that traces how raw source data became final output. Spec defined in ARCHITECTURE.md section 3.3.",
+  "type": "object",
+  "required": ["node_id", "operation_type", "agent_name", "timestamp"],
+  "additionalProperties": false,
+  "properties": {
+    "node_id": {
+      "type": "string",
+      "description": "Unique node identifier. Format: <operation>-<hash8> e.g. 'search-a1b2c3d4'."
+    },
+    "operation_type": {
+      "type": "string",
+      "enum": ["search", "acquire", "parse", "clean", "analyze", "review", "export"],
+      "description": "The pipeline stage that produced this node."
+    },
+    "agent_name": {
+      "type": "string",
+      "description": "Name of the agent or script that performed this operation. e.g. 'pubmed_client.py', 'field_aligner.py'."
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "Optional. Specific tool or function invoked. e.g. 'search_pubmed', 'align_fields'."
+    },
+    "input_node_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "IDs of upstream ProvenanceNodes whose outputs fed into this operation. Empty for the initial search step.",
+      "default": []
+    },
+    "output_data_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "IDs of DataRecords produced by this operation.",
+      "default": []
+    },
+    "parameters": {
+      "type": "object",
+      "description": "The exact parameters used. e.g. {'query': 'pancreatic cancer', 'max_results': 50}. Critical for reproducibility.",
+      "default": {}
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this operation ran."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "Optional. How long the operation took, in milliseconds.",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial", "failed"],
+      "default": "success"
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Present only if status is 'failed' or 'partial'."
+    }
+  }
+}

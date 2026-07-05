@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/data_record.schema.json",
+  "title": "DataRecord",
+  "description": "Unified record format for all biomedical data flowing through the pipeline. Every stage outputs lists of these. Defined in ARCHITECTURE.md section 3.1.5.",
+  "type": "object",
+  "required": ["record_id", "task_id", "fields", "source_ref", "extraction_method", "extraction_confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "description": "Globally unique record identifier. Format: <source>-<hash8> e.g. 'pubmed-a1b2c3d4'."
+    },
+    "task_id": {
+      "type": "string",
+      "description": "The task that produced this record."
+    },
+    "fields": {
+      "type": "object",
+      "description": "Field name → value. Field names MUST be unified names (see field_mapping.schema.yaml). Values can be string, number, boolean, array, or nested object.",
+      "minProperties": 1
+    },
+    "field_descriptions": {
+      "type": "object",
+      "description": "Optional. Field name → human-readable description. Useful when fields are domain-specific.",
+      "additionalProperties": {"type": "string"}
+    },
+    "source_ref": {
+      "$ref": "source_reference.schema.json"
+    },
+    "extraction_method": {
+      "type": "string",
+      "enum": ["api", "crawl", "table", "text", "chart", "manual"],
+      "description": "How the data was extracted from the source."
+    },
+    "extraction_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence in the extraction. 1.0 = direct API call, 0.5 = noisy OCR, etc."
+    },
+    "quality_flags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Quality markers. Common values: 'needs_review', 'low_confidence', 'conflict', 'missing_field', 'unit_mismatch'.",
+      "default": []
+    },
+    "unit_info": {
+      "type": "object",
+      "description": "Field name → unit string. e.g. {'log2fc': 'log2', 'p_value': 'none'}.",
+      "additionalProperties": {"type": "string"}
+    },
+    "processing_log": {
+      "type": "array",
+      "description": "List of processing steps applied to this record. Each step is a ProvenanceNode reference.",
+      "items": {"type": "string"},
+      "default": []
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this record was created."
+    }
+  }
+}

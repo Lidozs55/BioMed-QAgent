@@ -1,0 +1,103 @@
+{
+  "status": "ok",
+  "summary": "差异表达分析完成：共 6 基因，上调 4，下调 2，不显著 0",
+  "result": {
+    "task_id": "tcm-jp-001",
+    "analysis_type": "differential_expression",
+    "summary": "差异表达分析完成：共 6 基因，上调 4，下调 2，不显著 0。采用 BH FDR 校正（fdr_bh），阈值 |log2fc| > 1.0 且 adj_p_value < 0.05。数据来源 GEO GSE21035（胰腺癌肝转移 vs 正常组织）。注意：本示例为演示用，仅含 6 个基因；实际分析应包含数千基因。",
+    "stats_table": [
+      {
+        "gene_symbol": "TP53",
+        "log2fc": -2.31,
+        "p_value": 0.00012,
+        "adj_p_value": 0.0006,
+        "regulation": "down"
+      },
+      {
+        "gene_symbol": "AKT1",
+        "log2fc": 1.85,
+        "p_value": 0.00045,
+        "adj_p_value": 0.001125,
+        "regulation": "up"
+      },
+      {
+        "gene_symbol": "BCL2",
+        "log2fc": -1.92,
+        "p_value": 0.00078,
+        "adj_p_value": 0.00156,
+        "regulation": "down"
+      },
+      {
+        "gene_symbol": "MYC",
+        "log2fc": 2.14,
+        "p_value": 0.00033,
+        "adj_p_value": 0.0011,
+        "regulation": "up"
+      },
+      {
+        "gene_symbol": "VEGFA",
+        "log2fc": 2.67,
+        "p_value": 0.00005,
+        "adj_p_value": 0.0005,
+        "regulation": "up"
+      },
+      {
+        "gene_symbol": "MMP9",
+        "log2fc": 1.32,
+        "p_value": 0.0045,
+        "adj_p_value": 0.006429,
+        "regulation": "up"
+      }
+    ],
+    "chart_data": [
+      {
+        "x": -2.31,
+        "y": 3.920818,
+        "gene": "TP53",
+        "significant": true
+      },
+      {
+        "x": 1.85,
+        "y": 3.346786,
+        "gene": "AKT1",
+        "significant": true
+      },
+      {
+        "x": -1.92,
+        "y": 3.107905,
+        "gene": "BCL2",
+        "significant": true
+      },
+      {
+        "x": 2.14,
+        "y": 3.481486,
+        "gene": "MYC",
+        "significant": true
+      },
+      {
+        "x": 2.67,
+        "y": 4.30103,
+        "gene": "VEGFA",
+        "significant": true
+      },
+      {
+        "x": 1.32,
+        "y": 2.346786,
+        "gene": "MMP9",
+        "significant": true
+      }
+    ],
+    "parameters": {
+      "p_threshold": 0.05,
+      "lfc_threshold": 1.0,
+      "fdr_method": "fdr_bh",
+      "summary": {
+        "total_genes": 6,
+        "up_regulated": 4,
+        "down_regulated": 2,
+        "not_significant": 0
+      }
+    },
+    "created_at": "2026-07-05T08:41:08Z"
+  }
+}

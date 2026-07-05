@@ -1,0 +1,209 @@
+{
+  "task_id": "tcm-jp-001",
+  "generated_at": "2026-07-05T08:42:13Z",
+  "nodes": [
+    {
+      "node_id": "search-7f3a2c91",
+      "operation_type": "search",
+      "agent_name": "pubmed_client.py",
+      "tool_name": "search_pubmed",
+      "input_node_ids": [],
+      "output_data_ids": ["pubmed-q7r8s9t0"],
+      "parameters": {
+        "query": "Jianpi Sanjie formula pancreatic cancer liver metastasis",
+        "max_results": 20,
+        "db": "pubmed"
+      },
+      "timestamp": "2026-07-05T08:38:01Z",
+      "duration_ms": 1820,
+      "status": "success"
+    },
+    {
+      "node_id": "search-2b8e5d44",
+      "operation_type": "search",
+      "agent_name": "geo_client.py",
+      "tool_name": "search_geo",
+      "input_node_ids": [],
+      "output_data_ids": [
+        "geo-a1b2c3d4",
+        "geo-e5f6g7h8",
+        "geo-b1c2d3e4",
+        "geo-c3d4e5f6",
+        "geo-d4e5f6g7",
+        "geo-f6g7h8i9"
+      ],
+      "parameters": {
+        "query": "pancreatic cancer liver metastasis",
+        "max_results": 20,
+        "db": "gds"
+      },
+      "timestamp": "2026-07-05T08:38:04Z",
+      "duration_ms": 2145,
+      "status": "success"
+    },
+    {
+      "node_id": "search-9c1f4a67",
+      "operation_type": "search",
+      "agent_name": "tcmsp_client.py",
+      "tool_name": "_query_tcmsp",
+      "input_node_ids": [],
+      "output_data_ids": ["tcmsp-i9j0k1l2", "tcmsp-j2k3l4m5"],
+      "parameters": {
+        "herb": "健脾散结方",
+        "max_results": 50,
+        "ob_threshold": 30,
+        "dl_threshold": 0.18
+      },
+      "timestamp": "2026-07-05T08:38:07Z",
+      "duration_ms": 2380,
+      "status": "partial",
+      "error_message": "TCMSP 内部接口返回部分字段缺失，2/12 条化合物缺少 OB 值，已标记 needs_review"
+    },
+    {
+      "node_id": "search-1a8b3e52",
+      "operation_type": "search",
+      "agent_name": "string_client.py",
+      "tool_name": "search_string",
+      "input_node_ids": [],
+      "output_data_ids": ["string-m3n4o5p6"],
+      "parameters": {
+        "query": "AKT1",
+        "species": 9606,
+        "max_results": 50
+      },
+      "timestamp": "2026-07-05T08:38:10Z",
+      "duration_ms": 1567,
+      "status": "success"
+    },
+    {
+      "node_id": "parse-3d6b8e12",
+      "operation_type": "parse",
+      "agent_name": "geo_soft_parser.py",
+      "tool_name": "parse_soft",
+      "input_node_ids": ["search-2b8e5d44"],
+      "output_data_ids": [
+        "geo-a1b2c3d4",
+        "geo-e5f6g7h8",
+        "geo-b1c2d3e4",
+        "geo-c3d4e5f6",
+        "geo-d4e5f6g7",
+        "geo-f6g7h8i9"
+      ],
+      "parameters": {
+        "input_file": "cache/GSE21035.family.soft.gz",
+        "extract_diff_expr": true,
+        "case_group": "tumor",
+        "control_group": "normal"
+      },
+      "timestamp": "2026-07-05T08:39:22Z",
+      "duration_ms": 8420,
+      "status": "success"
+    },
+    {
+      "node_id": "clean-5a2f7c90",
+      "operation_type": "clean",
+      "agent_name": "field_aligner.py",
+      "tool_name": "align_fields",
+      "input_node_ids": [
+        "search-7f3a2c91",
+        "search-9c1f4a67",
+        "search-1a8b3e52",
+        "parse-3d6b8e12"
+      ],
+      "output_data_ids": [
+        "geo-a1b2c3d4",
+        "geo-e5f6g7h8",
+        "geo-b1c2d3e4",
+        "geo-c3d4e5f6",
+        "geo-d4e5f6g7",
+        "geo-f6g7h8i9",
+        "tcmsp-i9j0k1l2",
+        "tcmsp-j2k3l4m5",
+        "string-m3n4o5p6",
+        "pubmed-q7r8s9t0"
+      ],
+      "parameters": {
+        "dictionaries_dir": "dictionaries/",
+        "field_aliases_file": "dictionaries/field_aliases.yaml",
+        "dedup_strategy": "keep_highest_confidence",
+        "conflict_threshold_pct": 20
+      },
+      "timestamp": "2026-07-05T08:40:15Z",
+      "duration_ms": 3120,
+      "status": "success"
+    },
+    {
+      "node_id": "analyze-8e4d1b23",
+      "operation_type": "analyze",
+      "agent_name": "differential_expression.py",
+      "tool_name": "run_diff_expression",
+      "input_node_ids": ["clean-5a2f7c90"],
+      "output_data_ids": ["diffexpr-tcm-jp-001"],
+      "parameters": {
+        "p_threshold": 0.05,
+        "lfc_threshold": 1.0,
+        "fdr_method": "fdr_bh"
+      },
+      "timestamp": "2026-07-05T08:41:08Z",
+      "duration_ms": 980,
+      "status": "success"
+    },
+    {
+      "node_id": "export-6c9a3f45",
+      "operation_type": "export",
+      "agent_name": "provenance/tracker.py",
+      "tool_name": "export_data",
+      "input_node_ids": ["analyze-8e4d1b23", "clean-5a2f7c90"],
+      "output_data_ids": [
+        "data.csv",
+        "lineage.json",
+        "field_mapping.json",
+        "report.md"
+      ],
+      "parameters": {
+        "output_dir": "data/output/tcm-jp-001/",
+        "include_charts": true,
+        "charts": ["volcano.png", "network.png"]
+      },
+      "timestamp": "2026-07-05T08:42:13Z",
+      "duration_ms": 540,
+      "status": "success"
+    }
+  ],
+  "record_roots": {
+    "geo-a1b2c3d4": [
+      {
+        "source_name": "geo",
+        "source_type": "database",
+        "source_url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE21035",
+        "source_accession": "GSE21035",
+        "source_doi": "10.1186/s12935-023-03012-x",
+        "query": "pancreatic cancer liver metastasis",
+        "retrieved_at": "2026-07-05T08:38:04Z",
+        "raw_payload_path": "cache/geo_GSE21035_esummary.json"
+      }
+    ],
+    "tcmsp-i9j0k1l2": [
+      {
+        "source_name": "tcmsp",
+        "source_type": "database",
+        "source_url": "https://tcmspw.com/tcmspsearch.php",
+        "query": "herb=健脾散结方",
+        "retrieved_at": "2026-07-05T08:38:07Z",
+        "raw_payload_path": "cache/tcmsp_jianpi_sanjie.json"
+      }
+    ],
+    "pubmed-q7r8s9t0": [
+      {
+        "source_name": "pubmed",
+        "source_type": "database",
+        "source_url": "https://pubmed.ncbi.nlm.nih.gov/37501234/",
+        "source_pmid": "37501234",
+        "source_doi": "10.1038/s41568-023-00123-4",
+        "query": "Jianpi Sanjie formula pancreatic cancer liver metastasis",
+        "retrieved_at": "2026-07-05T08:38:01Z",
+        "raw_payload_path": "cache/pubmed_37501234.xml"
+      }
+    ]
+  }
+}

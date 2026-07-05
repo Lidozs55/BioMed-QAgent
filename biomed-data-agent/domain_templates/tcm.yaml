@@ -1,0 +1,78 @@
+# 中医药研究领域模板
+# 用途：当用户研究目标涉及中药、复方、活性成分、靶点通路时加载此模板
+# 加载方：SKILL.md Step 1（领域识别与模板加载阶段）
+# 维护：BioMed QAgent
+# 关键场景：复方机制解析、成分-靶点网络、通路富集、中药 vs 化疗联合用药
+template_name: 中医药研究
+description: |
+  中医药研究领域模板，适用于含中药名、复方、活性成分、靶点通路的研究目标。
+  数据源以 TCMSP 为核心，结合 PubMed 文献与 KEGG / STRING 通路数据，
+  侧重 compound-target-pathway 网络构建与多成分协同分析。
+
+# 优先数据源：TCMSP 排首位以获取 ob/dl 属性
+priority_sources:
+  - source: TCMSP
+    reason: 中药成分-靶点数据库，提供 OB（口服生物利用度）与 DL（类药性）属性
+    client: scripts/datasources/tcmsp_client.py
+    required_fields: [compound_name, target_protein, ob_value, dl_value]
+  - source: PubMed
+    reason: 中药药理与临床研究文献
+    client: scripts/datasources/pubmed_client.py
+  - source: KEGG
+    reason: 通路富集分析，识别中药调控信号通路
+    client: scripts/datasources/kegg_client.py
+  - source: STRING
+    reason: 靶点蛋白互作网络，构建 compound-target-pathway 网络
+    client: scripts/datasources/string_client.py
+
+# 推荐字段映射：聚焦化合物-靶点-通路核心字段
+recommended_field_mappings:
+  - compound_name        # 化合物/活性成分名（依赖 dictionaries/compound_names.yaml）
+  - target_protein       # 靶点蛋白/基因
+  - ob_value             # 口服生物利用度（TCMSP 专有）
+  - dl_value             # 类药性（TCMSP 专有）
+  - pathway_id           # KEGG 通路 ID
+  - gene_symbol          # 靶点对应的基因符号
+  - pubmed_id            # 文献来源
+  - organism             # 物种（多数为人 Homo sapiens）
+
+# 推荐分析配方：中医药研究典型分析流程
+analysis_recipes:
+  - name: compound_target_network
+    script: scripts/analysis/ppi_network.py
+    when_to_use: 构建化合物-靶点二部图与靶点 PPI 网络
+    required_fields: [compound_name, target_protein]
+    visualization: scripts/viz/network_plot.py
+  - name: pathway_enrichment
+    script: scripts/analysis/enrichment.py
+    when_to_use: 靶点基因 KEGG / GO 富集，识别协同通路
+    required_fields: [gene_symbol]
+    visualization: scripts/viz/enrichment_bubble.py
+  - name: ob_dl_filter
+    script: 内联（field_aligner + 阈值过滤）
+    when_to_use: 筛选 OB≥30% 且 DL≥0.18 的活性成分（TCMSP 经典阈值）
+    required_fields: [compound_name, ob_value, dl_value]
+
+# 置信度阈值：TCMSP 数据可信度最高
+confidence_thresholds:
+  api_result: 0.9            # TCMSP / KEGG / STRING API
+  crawl_result: 0.7          # 文献爬虫抓取
+  literature_extraction: 0.8 # 文献表格提取
+  needs_review_below: 0.6
+
+# 中药复方示例：常见研究复方（用于关键词识别与查询扩展）
+common_formulas:
+  - 健脾散结方
+  - 四君子汤
+  - 六味地黄丸
+  - 补中益气汤
+  - 桂枝汤
+  - 麻黄汤
+
+# 注意事项
+notes: |
+  - 中药名（如"黄芪"）与化合物名（如"黄芪甲苷"）必须区分：中药名为复方/药材层，化合物名为活性成分层
+  - TCMSP 返回的 target 字段可能是蛋白名而非基因符号，需用 dictionaries/gene_symbols.yaml 归并
+  - OB 与 DL 阈值可按需调整（默认 OB≥30%、DL≥0.18 为经典筛选条件）
+  - 中药复方研究需先拆解为单味药再查 TCMSP，最终合并靶点去重
+  - 同一化合物在不同来源可能有不同 SMILES（立体异构），以 PubChem CID 为准
