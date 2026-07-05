@@ -31,8 +31,6 @@ seaborn>=0.12.0           # Heatmap clustermap
 python-docx>=0.8.11          # Word report generation (degrades gracefully if missing)
 # reportlab is needed by to_pdf.py
 reportlab>=3.6.0             # PDF report generation (degrades gracefully if missing)
-# python-pptx is needed by to_pptx.py
-python-pptx>=0.6.21          # PPT report generation (degrades gracefully if missing)
 
 # === Optional - Not installed by default ===
 # Biopython is NOT required; PDB/FASTA parsers use pure Python
