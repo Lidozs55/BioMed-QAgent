@@ -4,7 +4,7 @@
 输出：report.docx（Word 格式，中文）
 
 复用 to_report.py 的 build_report() 构造报告结构，再用 python-docx 渲染为 Word。
-python-docx 不可用时输出错误并建议使用 Qoder Work 的 docx skill。
+python-docx 不可用时输出错误并建议安装该依赖或改用调度器自带的文档处理能力。
 
 接口：
     python scripts/export/to_docx.py --input cleaned.json \
@@ -78,7 +78,7 @@ def main():
             import docx  # noqa: F401
         except ImportError:
             emit_error("python-docx 未安装。建议：(1) 沙箱中执行 pip install python-docx；"
-                       "或 (2) 使用 Qoder Work 内置的 docx skill 生成 Word 报告。")
+                       "或 (2) 改用调度器自带的文档处理能力生成 Word 报告。")
         records = load_records(args.input)
         log_stderr(f"加载 {len(records)} 条记录")
         sections = build_report(records, load_lineage(args.lineage), args.task_id,
