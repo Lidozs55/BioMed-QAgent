@@ -77,6 +77,9 @@ htmlcov/
 coverage.xml
 *.cover
 
+# ===== Skill 打包产物 =====
+*.skill
+
 # ===== 其他 =====
 .cache
 *.bak

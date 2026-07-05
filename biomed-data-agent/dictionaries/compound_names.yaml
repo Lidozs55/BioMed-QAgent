@@ -140,7 +140,7 @@ aliases:
 
   - canonical: Cisplatin
     synonyms: [顺铂, cisplatin, CISPLATIN, cis-DDP, Platinol, CAS 15663-27-1]
-    smiles: [NH3+][Pt+2]([NH3+])(Cl)Cl
+    smiles: "[NH3+][Pt+2]([NH3+])(Cl)Cl"
     pubchem_cid: 84069
 
   - canonical: Doxorubicin
@@ -157,3 +157,106 @@ aliases:
     synonyms: [吉西他滨, gemcitabine, GEMCITABINE, Gemzar, dFdC, CAS 95058-81-4]
     smiles: C1=CN(C(=O)N=C1N)C2CC(C(O2)CO)(F)F
     pubchem_cid: 60750
+
+  # ===== 靶向药物 =====
+  - canonical: Imatinib
+    synonyms: [伊马替尼, imatinib, IMATINIB, Gleevec, STI-571, CGP-57148, CAS 152459-95-5]
+    smiles: CC1=C(NC2=NC=CC(=N2)C3=CN=CC=C3)C=CC(NC(=O)C4=CC=C(C=C4)CN5CCN(CC5)C)=C1
+    pubchem_cid: 5291
+
+  - canonical: Gefitinib
+    synonyms: [吉非替尼, gefitinib, GEFITINIB, Iressa, ZD-1839, CAS 184475-35-2]
+    smiles: COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1OCCCN3CCOCC3
+    pubchem_cid: 184466
+
+  - canonical: Erlotinib
+    synonyms: [厄洛替尼, erlotinib, ERLOTINIB, Tarceva, OSI-774, CAS 183321-74-6]
+    smiles: COCCOC1=CC2=NC=NC(NC3=CC=C(C=C3)C#C)=C2C=C1OCCOC
+    pubchem_cid: 176870
+
+  - canonical: Sunitinib
+    synonyms: [舒尼替尼, sunitinib, SUNITINIB, Sutent, SU11248, CAS 341031-54-7]
+    smiles: CCN(CC)CCNC(=O)/C=C/C1=C(C)C(=O)C(C)=C1/C=C\C(=O)NC
+    pubchem_cid: 5329102
+
+  - canonical: Sorafenib
+    synonyms: [索拉非尼, sorafenib, SORAFENIB, Nexavar, BAY-43-9006, CAS 284461-73-0]
+    smiles: CNC(=O)C1=NC=CC(=C1)OC2=CC=C(C=C2)NC(=O)NC3=CC(=C(C=C3)Cl)C(F)(F)F
+    pubchem_cid: 216239
+
+  - canonical: Dasatinib
+    synonyms: [达沙替尼, dasatinib, DASATINIB, Sprycel, BMS-354825, CAS 302962-49-8]
+    smiles: CC1=C(C(=CC=C1)Cl)NC(=O)C2=CC=C(N=C2)NC3=NC=C(C=C3)C#N
+    pubchem_cid: 3062316
+
+  - canonical: Lapatinib
+    synonyms: [拉帕替尼, lapatinib, LAPATINIB, Tykerb, GW572016, CAS 231277-92-2]
+    smiles: CS(=O)(=O)CCOc1ccc(Nc2ncnc3cc(OCCOCCS(=O)(=O)C)ccc23)cc1Cl
+    pubchem_cid: 208908
+
+  - canonical: Vemurafenib
+    synonyms: [维莫非尼, vemurafenib, VEMURAFENIB, Zelboraf, PLX4032, RG7204, CAS 918504-65-1]
+    smiles: CCCS(=O)(=O)NC1=CC=C(C=C1)C2=NC(=C(S2)C3=CC(=C(C=C3)F)F)C4=CC=C(C=C4)Cl
+    pubchem_cid: 42611257
+
+  - canonical: Trametinib
+    synonyms: [曲美替尼, trametinib, TRAMETINIB, Mekinist, GSK1120212, JTP-74057, CAS 871700-17-3]
+    smiles: ""
+    pubchem_cid: 11755335
+
+  - canonical: Palbociclib
+    synonyms: [哌柏西利, palbociclib, PALBOCICLIB, Ibrance, PD-0332991, CAS 571190-30-2]
+    smiles: ""
+    pubchem_cid: 5330286
+
+  - canonical: Rucaparib
+    synonyms: [卢卡帕利, rucaparib, RUCAPARIB, Rubraca, AG-014699, PF-01367338, CAS 283173-50-2]
+    smiles: ""
+    pubchem_cid: 9931954
+
+  - canonical: Olaparib
+    synonyms: [奥拉帕利, olaparib, OLAPARIB, Lynparza, AZD-2281, KU-0059436, CAS 763113-22-0]
+    smiles: C1CC1C(=O)N2CCN(CC2)C(=O)C3=CC=C(C=C3)CC4=CC5=CC=CC=C5N=C4
+    pubchem_cid: 23725625
+
+  # ===== 免疫治疗药物 (单克隆抗体，无 SMILES) =====
+  - canonical: Nivolumab
+    synonyms: [纳武利尤单抗, nivolumab, NIVOLUMAB, Opdivo, MDX-1106, BMS-936558, ONO-4538, CAS 946414-94-4]
+    smiles: ""
+    pubchem_cid: null
+
+  - canonical: Pembrolizumab
+    synonyms: [帕博利珠单抗, pembrolizumab, PEMBROLIZUMAB, Keytruda, MK-3475, SCH-900475, CAS 948605-69-0]
+    smiles: ""
+    pubchem_cid: null
+
+  - canonical: Atezolizumab
+    synonyms: [阿替利珠单抗, atezolizumab, ATEZOLIZUMAB, Tecentriq, MPDL3280A, RG7446, CAS 1380723-44-3]
+    smiles: ""
+    pubchem_cid: null
+
+  - canonical: Ipilimumab
+    synonyms: [伊匹木单抗, ipilimumab, IPILIMUMAB, Yervoy, MDX-010, BMS-734016, CAS 477202-00-9]
+    smiles: ""
+    pubchem_cid: null
+
+  # ===== 中药活性成分补充 =====
+  - canonical: Wogonin
+    synonyms: [汉黄芩素, wogonin, WOGONIN, 5,7-Dihydroxy-8-methoxyflavone, Norwogonin 8-methyl ether, CAS 632-85-9]
+    smiles: COC1=C(O)C2=C(C=C(O)C1=O)C(=O)C=C(C3=CC=C(C=C3)O)O2
+    pubchem_cid: 5281703
+
+  - canonical: Baicalin
+    synonyms: [黄芩苷, baicalin, BAICALIN, Baicalein 7-O-glucuronide, CAS 21967-41-9]
+    smiles: OC(=O)C1C(O)OC(C2=CC(=C3C(=C2O)C(=O)C=C(O3)O)O)C(O)C1O
+    pubchem_cid: 64982
+
+  - canonical: Paeoniflorin
+    synonyms: [芍药苷, paeoniflorin, PAEONIFLORIN, CAS 23180-57-6, Peoniflorin]
+    smiles: ""
+    pubchem_cid: 442534
+
+  - canonical: Glycyrrhizic acid
+    synonyms: [甘草酸, glycyrrhizic acid, GLYCYRRHIZIC ACID, Glycyrrhizin, 甘草甜素, CAS 1405-86-3]
+    smiles: ""
+    pubchem_cid: 14982

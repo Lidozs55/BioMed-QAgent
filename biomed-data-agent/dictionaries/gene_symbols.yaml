@@ -144,3 +144,176 @@ aliases:
   - canonical: PTGS2
     synonyms: [COX-2, COX2, COX2-HUMAN, PHS-2, hCox-2, ptgs2, Cyclooxygenase-2]
     ncbi_gene_id: 5743
+
+  # ===== 常见转录因子 (TF) =====
+  - canonical: ATF4
+    synonyms: [ATF-4, CREB2, CREB-2, TAXREB67, atf4]
+    ncbi_gene_id: 467
+
+  - canonical: CREB1
+    synonyms: [CREB, CREB-1, cAMP-responsive element binding protein 1, creb1]
+    ncbi_gene_id: 1385
+
+  - canonical: SMAD3
+    synonyms: [SMAD 3, Smad3, MADH3, JV15-2, HSPC193, smad3]
+    ncbi_gene_id: 4088
+
+  - canonical: SMAD4
+    synonyms: [SMAD 4, Smad4, MADH4, DPC4, JIP, smad4]
+    ncbi_gene_id: 4089
+
+  - canonical: JUN
+    synonyms: [c-Jun, cJun, AP-1, AP1, p39, jun, JUN]
+    ncbi_gene_id: 3725
+
+  - canonical: FOS
+    synonyms: [c-Fos, cFos, AP-1, FOS, p55, fos]
+    ncbi_gene_id: 2353
+
+  - canonical: RELA
+    synonyms: [p65, NFKB3, RelA, REL-A, rela, NF-kB p65]
+    ncbi_gene_id: 5970
+
+  - canonical: SP1
+    synonyms: [Sp1, SP-1, specificity protein 1, sp1]
+    ncbi_gene_id: 6667
+
+  - canonical: E2F1
+    synonyms: [E2F-1, RBBP3, RBP3, e2f1, RBAP1]
+    ncbi_gene_id: 1869
+
+  - canonical: FOXP3
+    synonyms: [FOXP-3, JM2, IPEX, Scurfin, foxp3]
+    ncbi_gene_id: 50943
+
+  - canonical: GATA1
+    synonyms: [GATA-1, ERYF1, GF1, NF-E1, gata1, NFE1]
+    ncbi_gene_id: 2623
+
+  - canonical: STAT1
+    synonyms: [STAT-1, ISGF-3, CANDF7, stat1, signal transducer and activator of transcription 1]
+    ncbi_gene_id: 6772
+
+  - canonical: STAT5A
+    synonyms: [STAT5, STAT-5A, STAT5a, MGF, stat5a]
+    ncbi_gene_id: 6776
+
+  - canonical: NFATC1
+    synonyms: [NFAT2, NFATc, NFATC1, NFAT-c, nfatc1, cytoplasmic 1]
+    ncbi_gene_id: 4772
+
+  - canonical: BATF
+    synonyms: [B-ATF, BATF, SFA-2, batf, B-ATF1]
+    ncbi_gene_id: 10538
+
+  - canonical: IRF1
+    synonyms: [IRF-1, IRF1, MAR, irf1, interferon regulatory factor 1]
+    ncbi_gene_id: 3659
+
+  - canonical: TCF7L2
+    synonyms: [TCF4, TCF-4, TCF7L2, E2-2, tcf7l2]
+    ncbi_gene_id: 6934
+
+  - canonical: LEF1
+    synonyms: [LEF-1, TCF1L, TCF7L3, lef1, lymphoid enhancer-binding factor 1]
+    ncbi_gene_id: 51176
+
+  # ===== 上游调控基因 =====
+  - canonical: ATM
+    synonyms: [ATM, AT1, ATA, ATB, ATC, ATD, ATE, TEL1, atm, ataxia telangiectasia mutated]
+    ncbi_gene_id: 472
+
+  - canonical: ATR
+    synonyms: [ATR, FRP1, FCTCS, SCKL1, MEC1, atr, ataxia telangiectasia and Rad3-related]
+    ncbi_gene_id: 545
+
+  - canonical: CHEK1
+    synonyms: [CHK1, Chk1, CHEK1, CHK-1, chek1, checkpoint kinase 1]
+    ncbi_gene_id: 1111
+
+  - canonical: CHEK2
+    synonyms: [CHK2, Chk2, CHEK2, CHK-2, CDS1, RAD53, chek2, checkpoint kinase 2]
+    ncbi_gene_id: 11200
+
+  - canonical: CDKN1A
+    synonyms: [p21, P21, CIP1, WAF1, SDI1, CAP20, PIC1, CDKN1A, cdkn1a, p21Cip1]
+    ncbi_gene_id: 1026
+
+  - canonical: CDKN2A
+    synonyms: [p16, P16, INK4a, INK4A, MTS1, CDKN2A, cdkn2a, p16INK4a, ARF]
+    ncbi_gene_id: 1029
+
+  - canonical: CCNE1
+    synonyms: [Cyclin E1, CyclinE, Cyclin-E1, CCNE, ccne1]
+    ncbi_gene_id: 898
+
+  - canonical: CDK2
+    synonyms: [CDK-2, p33(CDK2), cdk2, CDC28, cyclin dependent kinase 2]
+    ncbi_gene_id: 1017
+
+  - canonical: CDK6
+    synonyms: [CDK-6, PLSTIRE, cdk6, MCPH12, cyclin dependent kinase 6]
+    ncbi_gene_id: 1021
+
+  - canonical: MDM4
+    synonyms: [MDMX, MDM-4, HDMX, MRP1, MDM4, mdm4]
+    ncbi_gene_id: 4194
+
+  # ===== 表观遗传调控 =====
+  - canonical: EZH2
+    synonyms: [EZH-2, ENX1, KMT6, KMT6A, ezh2, enhancer of zeste 2]
+    ncbi_gene_id: 2146
+
+  - canonical: KDM1A
+    synonyms: [LSD1, LSD-1, AOF2, BHC110, KDM1A, kdm1a, lysine demethylase 1A]
+    ncbi_gene_id: 23028
+
+  - canonical: HDAC1
+    synonyms: [HD1, RPD3, RPD3L1, HDAC-1, GON-10, hdac1, histone deacetylase 1]
+    ncbi_gene_id: 3065
+
+  - canonical: DNMT1
+    synonyms: [DNMT, DNMT-1, CXXC9, HSN1, MGC10499, dnmt1, DNA methyltransferase 1]
+    ncbi_gene_id: 1343
+
+  - canonical: TET2
+    synonyms: [TET-2, KIAA1546, MDS, tET2, tet2, ten-eleven translocation 2]
+    ncbi_gene_id: 54790
+
+  # ===== 免疫检查点 =====
+  - canonical: CD274
+    synonyms: [PD-L1, PDL1, PD-L1, B7-H1, B7H1, CD274, cd274, programmed death-ligand 1]
+    ncbi_gene_id: 29126
+
+  - canonical: PDCD1
+    synonyms: [PD1, PD-1, PDCD-1, CD279, SLEB2, pdcd1, programmed cell death 1]
+    ncbi_gene_id: 5133
+
+  - canonical: CTLA4
+    synonyms: [CTLA-4, CD152, CELIAC3, GRD4, IDDM12, ctla4, cytotoxic T-lymphocyte associated protein 4]
+    ncbi_gene_id: 1493
+
+  - canonical: LAG3
+    synonyms: [LAG-3, CD223, LAG3, lag3, lymphocyte-activation gene 3]
+    ncbi_gene_id: 3902
+
+  - canonical: TIGIT
+    synonyms: [TIGIT, VSIG9, VSTM3, tigit, T cell immunoreceptor with Ig and ITIM domains]
+    ncbi_gene_id: 201633
+
+  # ===== 细胞周期 =====
+  - canonical: AURKA
+    synonyms: [Aurora A, Aurora-A, AIK, ARK1, AURORA2, BTAK, STK15, STK6, aurka]
+    ncbi_gene_id: 6790
+
+  - canonical: PLK1
+    synonyms: [PLK, STPK13, PLK-1, plk1, polo like kinase 1]
+    ncbi_gene_id: 5347
+
+  - canonical: WEE1
+    synonyms: [WEE-1, WEE1hu, wee1, WEE1 G2 checkpoint kinase]
+    ncbi_gene_id: 7461
+
+  - canonical: CDC25C
+    synonyms: [CDC25, CDC25C, cdc25c, M-phase inducer phosphatase 3]
+    ncbi_gene_id: 995

@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/survival_result.schema.json",
+  "title": "SurvivalResult",
+  "description": "生存分析结果：基于 TCGA 表达+临床数据，对单基因高/低表达组做 Kaplan-Meier + log-rank 检验。由 scripts/analysis/survival_analysis.py 生成。",
+  "type": "object",
+  "required": ["task_id", "analysis_type", "gene", "cohort", "groups", "log_rank_p", "significance", "summary", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {"type": "string"},
+    "analysis_type": {"type": "string", "const": "survival_analysis"},
+    "gene": {"type": "string", "description": "被分析的基因 symbol"},
+    "cohort": {"type": "string", "description": "TCGA 队列名，如 TCGA-PAAD（胰腺癌）"},
+    "groups": {
+      "type": "object",
+      "description": "按基因表达中位数分两组",
+      "required": ["high_expression", "low_expression"],
+      "additionalProperties": false,
+      "properties": {
+        "high_expression": {
+          "type": "object",
+          "required": ["n", "events", "median_survival_months"],
+          "properties": {
+            "n": {"type": "integer"},
+            "events": {"type": "integer", "description": "发生事件（死亡）数"},
+            "median_survival_months": {"type": "number"}
+          }
+        },
+        "low_expression": {
+          "type": "object",
+          "required": ["n", "events", "median_survival_months"],
+          "properties": {
+            "n": {"type": "integer"},
+            "events": {"type": "integer"},
+            "median_survival_months": {"type": "number"}
+          }
+        }
+      }
+    },
+    "log_rank_p": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "log-rank 检验 p 值"
+    },
+    "hr": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Hazard Ratio（高风险组对比低风险组）"
+    },
+    "hr_ci_95": {
+      "type": "array",
+      "description": "HR 95% 置信区间 [下限, 上限]",
+      "items": {"type": "number"},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "significance": {
+      "type": "string",
+      "enum": ["significant", "not_significant", "insufficient_data"]
+    },
+    "chart_data": {
+      "type": "object",
+      "description": "Kaplan-Meier 曲线数据点",
+      "properties": {
+        "km_curves": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time": {"type": "number"},
+              "survival_high": {"type": "number"},
+              "survival_low": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "summary": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

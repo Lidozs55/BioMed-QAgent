@@ -67,6 +67,14 @@ analysis_recipes:
     script: scripts/viz/heatmap.py
     when_to_use: 差异基因在样本间表达热图
     required_fields: [gene_symbol, sample_id, expression_value]
+  - name: hub_gene_analysis
+    script: scripts/analysis/hub_gene_analyzer.py
+    when_to_use: PPI 网络识别 hub 基因并反查上游调控
+    required_fields: [gene_symbol]
+  - name: survival_analysis
+    script: scripts/analysis/survival_analysis.py
+    when_to_use: 验证 hub 基因临床意义
+    required_fields: [gene_symbol]
 
 # 置信度阈值：GEO 数据可信度最高
 confidence_thresholds:

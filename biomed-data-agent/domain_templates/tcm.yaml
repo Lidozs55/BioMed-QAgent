@@ -52,6 +52,10 @@ analysis_recipes:
     script: 内联（field_aligner + 阈值过滤）
     when_to_use: 筛选 OB≥30% 且 DL≥0.18 的活性成分（TCMSP 经典阈值）
     required_fields: [compound_name, ob_value, dl_value]
+  - name: drug_target_analysis
+    script: scripts/analysis/drug_target_analyzer.py
+    when_to_use: 中药化合物-靶点结合分析
+    required_fields: [compound_name, target_protein]
 
 # 置信度阈值：TCMSP 数据可信度最高
 confidence_thresholds:

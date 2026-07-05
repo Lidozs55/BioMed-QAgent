@@ -1,0 +1,146 @@
+# 疾病同义词字典
+# 用途：将多源疾病名（中英文、缩写、ICD 编码）对齐到标准疾病名
+# 加载方：scripts/cleaners/field_aligner.py（用于 disease 字段值标准化）
+# 维护：BioMed QAgent
+# 数据来源：MeSH (https://meshb.nlm.nih.gov/)、ICD-10、DOID (Disease Ontology)
+# 命名规范：canonical 采用 MeSH 首选英文名（首字母大写）；synonyms 含中文名、缩写、ICD 编码
+version: 1.0.0
+updated_at: 2026-07-05
+
+# 别名表：每条记录包含 canonical 标准疾病名、synonyms 别名列表、可选 mesh_id
+aliases:
+  # ===== 恶性肿瘤 (癌症) =====
+  - canonical: Pancreatic Cancer
+    synonyms: [胰腺癌, pancreatic cancer, PANCREATIC CANCER, PDAC, pancreatic ductal adenocarcinoma, pancreatic neoplasm, ICD-10 C25]
+    mesh_id: D010190
+
+  - canonical: Breast Cancer
+    synonyms: [乳腺癌, breast cancer, BREAST CANCER, BRCA, mammary carcinoma, breast neoplasm, ICD-10 C50]
+    mesh_id: D001943
+
+  - canonical: Lung Cancer
+    synonyms: [肺癌, lung cancer, LUNG CANCER, NSCLC, SCLC, pulmonary carcinoma, lung neoplasm, ICD-10 C34]
+    mesh_id: D002289
+
+  - canonical: Hepatocellular Carcinoma
+    synonyms: [肝细胞癌, hepatocellular carcinoma, HCC, liver cancer, 肝癌, hepatoma, primary liver cancer, ICD-10 C22.0]
+    mesh_id: D006528
+
+  - canonical: Colorectal Cancer
+    synonyms: [结直肠癌, colorectal cancer, COLORECTAL CANCER, CRC, colon cancer, rectal cancer, colorectal carcinoma, ICD-10 C18-C20]
+    mesh_id: D015179
+
+  - canonical: Gastric Cancer
+    synonyms: [胃癌, gastric cancer, GASTRIC CANCER, stomach cancer, gastric carcinoma, ICD-10 C16]
+    mesh_id: D013274
+
+  - canonical: Prostate Cancer
+    synonyms: [前列腺癌, prostate cancer, PROSTATE CANCER, PCa, prostatic carcinoma, prostatic neoplasm, ICD-10 C61]
+    mesh_id: D011471
+
+  - canonical: Ovarian Cancer
+    synonyms: [卵巢癌, ovarian cancer, OVARIAN CANCER, OC, ovarian carcinoma, ovarian neoplasm, ICD-10 C56]
+    mesh_id: D010051
+
+  - canonical: Leukemia
+    synonyms: [白血病, leukemia, LEUKEMIA, blood cancer, ICD-10 C92-C95]
+    mesh_id: D007938
+
+  - canonical: Lymphoma
+    synonyms: [淋巴瘤, lymphoma, LYMPHOMA, Hodgkin lymphoma, Non-Hodgkin lymphoma, NHL, ICD-10 C81-C85]
+    mesh_id: D008223
+
+  - canonical: Melanoma
+    synonyms: [黑色素瘤, melanoma, MELANOMA, malignant melanoma, skin melanoma, ICD-10 C43]
+    mesh_id: D008545
+
+  # ===== 慢性病 =====
+  - canonical: Diabetes Mellitus, Type 1
+    synonyms: [1型糖尿病, type 1 diabetes, T1D, T1DM, IDDM, insulin-dependent diabetes mellitus, ICD-10 E10]
+    mesh_id: D003922
+
+  - canonical: Diabetes Mellitus, Type 2
+    synonyms: [2型糖尿病, type 2 diabetes, T2D, T2DM, NIDDM, non-insulin-dependent diabetes mellitus, ICD-10 E11]
+    mesh_id: D003924
+
+  - canonical: Hypertension
+    synonyms: [高血压, hypertension, HYPERTENSION, high blood pressure, HTN, arterial hypertension, ICD-10 I10]
+    mesh_id: D006973
+
+  - canonical: Coronary Artery Disease
+    synonyms: [冠状动脉疾病, coronary artery disease, CAD, CHD, coronary heart disease, ischemic heart disease, ICD-10 I25]
+    mesh_id: D003324
+
+  - canonical: Stroke
+    synonyms: [脑卒中, stroke, 中风, cerebrovascular accident, CVA, ICD-10 I63-I64]
+    mesh_id: D020521
+
+  - canonical: Alzheimer Disease
+    synonyms: [阿尔茨海默病, alzheimer disease, AD, Alzheimer's disease, 老年性痴呆, senile dementia, ICD-10 G30]
+    mesh_id: D000544
+
+  - canonical: Parkinson Disease
+    synonyms: [帕金森病, parkinson disease, PD, Parkinson's disease, 帕金森氏病, ICD-10 G20]
+    mesh_id: D010300
+
+  - canonical: Obesity
+    synonyms: [肥胖, obesity, OBESITY, 肥胖症, ICD-10 E66]
+    mesh_id: D009765
+
+  - canonical: Chronic Kidney Disease
+    synonyms: [慢性肾脏病, chronic kidney disease, CKD, chronic renal failure, CRF, ICD-10 N18]
+    mesh_id: D051437
+
+  # ===== 炎症与消化系统疾病 =====
+  - canonical: Hepatitis
+    synonyms: [肝炎, hepatitis, HEPATITIS, viral hepatitis, chronic hepatitis, ICD-10 K73]
+    mesh_id: D006505
+
+  - canonical: Liver Cirrhosis
+    synonyms: [肝硬化, liver cirrhosis, CIRRHOSIS, hepatic cirrhosis, 肝硬化症, ICD-10 K74]
+    mesh_id: D008103
+
+  - canonical: Pancreatitis
+    synonyms: [胰腺炎, pancreatitis, PANCREATITIS, acute pancreatitis, chronic pancreatitis, ICD-10 K85]
+    mesh_id: D010195
+
+  - canonical: Inflammatory Bowel Disease
+    synonyms: [炎症性肠病, inflammatory bowel disease, IBD, Crohn disease, ulcerative colitis, UC, 溃疡性结肠炎, 克罗恩病, ICD-10 K50-K51]
+    mesh_id: D015212
+
+  - canonical: Rheumatoid Arthritis
+    synonyms: [类风湿关节炎, rheumatoid arthritis, RA, 类风湿, ICD-10 M06]
+    mesh_id: D001172
+
+  - canonical: Asthma
+    synonyms: [哮喘, asthma, ASTHMA, bronchial asthma, ICD-10 J45]
+    mesh_id: D001249
+
+  - canonical: Atherosclerosis
+    synonyms: [动脉粥样硬化, atherosclerosis, ATHEROSCLEROSIS, arteriosclerosis, ICD-10 I70]
+    mesh_id: D050197
+
+  - canonical: Non-alcoholic Fatty Liver Disease
+    synonyms: [非酒精性脂肪肝, non-alcoholic fatty liver disease, NAFLD, fatty liver, 脂肪肝, ICD-10 K76.0]
+    mesh_id: D065626
+
+  # ===== 中医病症 (TCM syndromes，无直接 MeSH 映射，mesh_id 为 null) =====
+  - canonical: 消渴
+    synonyms: [Xiaoke, xiaoke syndrome, 消渴症, 消渴病, 上消, 中消, 下消, TCM diabetes, 对应西医糖尿病]
+    mesh_id: null
+
+  - canonical: 胸痹
+    synonyms: [Xiongbi, xiongbi syndrome, 胸痹心痛, 胸痛, chest bi syndrome, 心痛, 对应西医冠心病心绞痛]
+    mesh_id: null
+
+  - canonical: 眩晕
+    synonyms: [Xuanyun, xuanyun syndrome, 头晕, 眩晕症, dizziness, vertigo, 对应西医高血压/椎基底动脉供血不足]
+    mesh_id: null
+
+  - canonical: 积聚
+    synonyms: [Jiju, jiju syndrome, 腹部肿块, abdominal mass, 肿瘤积聚, 对应西医腹部肿瘤/肝硬化]
+    mesh_id: null
+
+  - canonical: 虚劳
+    synonyms: [Xulao, xulao syndrome, 虚损, 劳损, consumptive disease, deficiency fatigue, 对应西医慢性消耗性疾病]
+    mesh_id: null

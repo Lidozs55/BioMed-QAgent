@@ -1,24 +1,33 @@
 ---
 name: biomed-data-agent
-description: Biomedical multi-source data discovery, parsing, cleaning, analysis and provenance-tracked export. Invoke when user asks to find/integrate/clean/analyze/visualize biomedical data (genes, compounds, targets, pathways, expression, PPI, structures) or export with citations.
+description: Biomedical multi-source data discovery, parsing, cleaning, analysis and provenance-tracked export with Darwinian self-optimization. Invoke when user asks to find/integrate/clean/analyze/visualize biomedical data (genes, compounds, targets, pathways, expression, PPI, structures, clinical trials, drug-target interactions) or export with citations. The skill self-evaluates coverage/confidence after each stage and iteratively expands search when data is insufficient.
 ---
 
 # BioMed Data Agent
 
-A biomedical research data integration skill. Given a natural-language research goal (e.g. "analyze the effect of Jianpi Sanjie formula on pancreatic cancer liver metastasis"), this skill executes the full pipeline: **data discovery → acquisition → parsing → cleaning/field alignment → analysis → review → structured export with provenance**.
+A biomedical research data integration skill with **Darwinian self-optimization**. Given a natural-language research goal (e.g. "analyze the effect of Jianpi Sanjie formula on pancreatic cancer liver metastasis"), this skill executes the full pipeline: **data discovery → acquisition → parsing → cleaning/field alignment → analysis → review → structured export with provenance**, with a self-evaluation gate after every stage that triggers iterative search expansion when coverage is insufficient.
 
 The skill targets the competition problem "Scientific Data Discovery, Parsing and Integration" (方向1-A). It covers all seven core capabilities required by the problem statement: data discovery, data parsing, data cleaning, field alignment, source annotation, structured output, and chart-data processing — plus all three bonus items (auto-detect missing/duplicate/unit-inconsistency, auto-detect chart axis/legend errors, human-in-the-loop correction).
+
+## What's New in This Version (Darwinian Iteration)
+
+This version introduces three major upgrades based on domain-expert feedback that "data collection is not comprehensive enough, analysis is too shallow":
+
+1. **Broader data sources (+5)**: ClinicalTrials.gov, TCGA/GDC, DrugBank/OpenTargets, DisGeNET, PubChem — covering clinical trials, cancer genomics, drug-target interactions, gene-disease associations, and compound structures.
+2. **Deeper chained analysis (+4)**: hub gene identification with upstream TF reverse-lookup, upstream regulator network, drug-target binding analysis, and survival analysis (KM + log-rank). Analysis is now **chained**: DEG → hub genes → upstream regulators → drug targets → survival validation, instead of running independent analyses in parallel.
+3. **Darwinian self-optimization**: a `scripts/optimization/` module that runs a Stage Gate evaluation after every pipeline stage. If coverage/confidence/source-diversity fall below thresholds, the skill automatically expands search keywords, adds data sources, or deepens analysis — iterating up to 3 rounds per stage until convergence.
 
 ## When To Use
 
 **Use this skill when:**
 
 - The user describes a biomedical research goal and wants relevant data found, integrated, and exported.
-- The user asks for data from biomedical sources (PubMed, GEO, STRING, KEGG, PDB, NCBI, TCMSP).
+- The user asks for data from biomedical sources (PubMed, GEO, STRING, KEGG, PDB, NCBI, TCMSP, ClinicalTrials.gov, TCGA, DrugBank, DisGeNET, PubChem).
 - The user needs field alignment across heterogeneous biomedical sources (gene symbols, compound names, units).
-- The user needs bioinformatics analysis (differential expression, GO/KEGG enrichment, PPI network).
+- The user needs bioinformatics analysis (differential expression, GO/KEGG enrichment, PPI network, hub gene identification, upstream regulator, drug-target binding, survival analysis).
 - The user needs CSV/Excel export with source citations, confidence scores, and lineage.
 - The user asks to extract structured data from biomedical chart images.
+- The user wants the agent to **self-evaluate data coverage and iteratively expand search** when initial results are insufficient (Darwinian mode).
 
 **Do NOT use this skill when:**
 
@@ -76,16 +85,39 @@ If none of the above three layers can satisfy the task, write a custom script yo
 
 ## Pipeline Overview
 
-The skill executes a 6-stage pipeline. Each stage produces structured `DataRecord` objects (see `schemas/data_record.schema.json`) and records provenance nodes (see `schemas/provenance_node.schema.json`).
+The skill executes a 6-stage pipeline **with a Darwinian Stage Gate after every stage**. Each stage produces structured `DataRecord` objects (see `schemas/data_record.schema.json`) and records provenance nodes (see `schemas/provenance_node.schema.json`). After each stage, `scripts/optimization/stage_evaluator.py` evaluates coverage/confidence/source-diversity; if any metric falls below threshold, `scripts/optimization/reflection_loop.py` triggers iterative expansion (up to 3 rounds).
 
 ```
-Stage 1: SEARCH      — Query biomedical APIs (PubMed/NCBI/GEO/STRING/KEGG/PDB/TCMSP)
+Stage 1: SEARCH      — Query biomedical APIs (PubMed/NCBI/GEO/STRING/KEGG/PDB/TCMSP
+                       + ClinicalTrials/TCGA/DrugBank/DisGeNET/PubChem)
+  └─ Stage Gate 1 → evaluate coverage → if fail, expand keywords & re-search (max 3 rounds)
 Stage 2: ACQUIRE     — For sources without APIs, fall back to scheduler web tools
+  └─ Stage Gate 2 → evaluate completeness → if fail, retry with browser automation
 Stage 3: PARSE       — Parse PDF tables, GEO SOFT, PDB, FASTA, network files
+  └─ Stage Gate 3 → evaluate parse confidence → if fail, try alternative parsers
 Stage 4: CLEAN       — Field alignment, unit normalization, deduplication, conflict detection
-Stage 5: ANALYZE     — (Optional) Differential expression, GO/KEGG enrichment, PPI analysis
-Stage 6: EXPORT      — CSV/Excel with source columns + JSON lineage graph
+  └─ Stage Gate 4 → evaluate conflict rate → if fail, refine field mappings
+Stage 5: ANALYZE     — Chained analysis: DEG → hub genes → upstream TF → drug targets → survival
+  └─ Stage Gate 5 → evaluate analysis depth → if fail, deepen analysis chain
+Stage 6: EXPORT      — CSV/Excel with source columns + JSON lineage graph + reflection log
 ```
+
+### Darwinian Self-Optimization Mechanism
+
+This is the core differentiator. After every stage, the agent MUST:
+
+1. **Run `stage_evaluator.py`** with the current records and the user's expected entities (extracted from the original query).
+2. **Read the EvaluationResult**: if `passed=true`, proceed to next stage. If `passed=false`, read `suggestions`.
+3. **Consult `reflection_loop.py decide`** to get the next action (expand_search / add_source / deepen_analysis / request_user_input / accept).
+4. **Execute the suggested action**:
+   - `expand_search`: call `keyword_expander.py` to generate new queries, then re-run Stage 1 with the expanded queries.
+   - `add_source`: invoke a data source client not yet tried (e.g. add ClinicalTrials if user cares about trials).
+   - `deepen_analysis`: invoke the next link in the analysis chain (e.g. if DEG done, run hub_gene_analyzer).
+   - `request_user_input`: surface the gap to the user and ask for guidance.
+5. **Record the iteration** via `reflection_loop.py record`, appending to the task's ReflectionLog.
+6. **Repeat** until `passed=true` or max 3 iterations reached.
+
+The ReflectionLog is exported alongside the final output and serves as a transparent audit trail of the agent's self-optimization decisions.
 
 ## Execution Workflow
 
@@ -94,15 +126,17 @@ When this skill is invoked, follow these steps in order. Maintain a checklist an
 ### Step 1 — Understand the Research Goal
 
 - Identify key entities (compounds, genes, diseases, pathways) from the user's query.
-- Identify the research domain (TCM, oncology, molecular biology, etc.).
-- Load the matching domain template from `domain_templates/` if one exists.
+- Identify the research domain (TCM, oncology, molecular biology, pharmacology, etc.).
+- Load the matching domain template from `domain_templates/` if one exists (now includes `pharmacology.yaml`).
 - Decide which data sources are relevant (see `references/datasource_catalog.md`).
+- **Extract the expected entities list** (gene symbols, compound names, disease names) — this list will be passed to `stage_evaluator.py` as `--entities` for Darwinian self-evaluation in every subsequent stage.
 - If the goal is ambiguous, ask the user at most ONE clarifying question, then proceed with best assumptions.
 
 ### Step 2 — Search (Stage 1)
 
 Use `scripts/datasources/` clients to query each relevant source in parallel when possible.
 
+**Core biomedical sources (7):**
 - PubMed / NCBI: `pubmed_client.py`, `ncbi_client.py`
 - Gene expression: `geo_client.py`
 - Protein interactions: `string_client.py`
@@ -110,9 +144,27 @@ Use `scripts/datasources/` clients to query each relevant source in parallel whe
 - Protein structures: `pdb_client.py`
 - TCM compounds: `tcmsp_client.py`
 
-Each client returns a list of `SearchResult` objects. Mark any source without a usable API as `requires_crawl: true` and defer to Stage 2.
+**Extended sources (5, new in this version):**
+- Clinical trials: `clinicaltrials_client.py` — ClinicalTrials.gov v2 API, retrieves NCT IDs, phases, interventions
+- Cancer genomics: `tcga_client.py` — TCGA/GDC API, supports `--type cases|genes` for clinical/expression data
+- Drug-target interactions: `drugbank_client.py` — OpenTargets GraphQL (no key required), retrieves drug mechanisms & targets
+- Gene-disease associations: `disgenet_client.py` — DisGeNET REST API (requires `DISGENET_API_KEY` env var), GDA scores
+- Compound structures: `pubchem_client.py` — PubChem PUG REST, retrieves SMILES, MW, synonyms
+
+Each client returns a list of `DataRecord` objects. Mark any source without a usable API as `requires_crawl: true` and defer to Stage 2.
 
 **Failure policy:** If a source returns an error or empty results, log it and continue with other sources. Do NOT abort the whole pipeline.
+
+**Stage Gate 1 (Darwinian, MANDATORY):** After Search completes, run:
+```bash
+python scripts/optimization/stage_evaluator.py \
+    --records <combined_records.json> --stage search --iteration 1 \
+    --task-id <T> --entities "gene:TP53,compound:quercetin,disease:pancreatic_cancer" \
+    --out eval_search.json
+python scripts/optimization/reflection_loop.py decide \
+    --evaluation eval_search.json --reflection-log reflection.json
+```
+If `passed=false`, execute the suggested action (typically `expand_search` → call `keyword_expander.py` → re-run Step 2 with expanded queries). Iterate up to 3 rounds. See [Darwinian Self-Optimization Mechanism](#darwinian-self-optimization-mechanism) for details.
 
 ### Step 3 — Acquire (Stage 2)
 
@@ -141,7 +193,7 @@ Each parser must populate `extraction_method`, `extraction_confidence`, and `sou
 
 This is the most important stage for the competition scoring. Use `scripts/cleaners/`:
 
-- `field_aligner.py` — Map source-specific field names to unified names using `dictionaries/`.
+- `field_aligner.py` — Map source-specific field names to unified names using `dictionaries/` (now expanded with TF genes, targeted drugs, and disease names).
 - `unit_normalizer.py` — Normalize units (e.g. `logFC` ↔ `log2FoldChange` → `log2fc`, `ln` → `log2`, `μM` → `uM`).
 - `duplicate_dedector.py` — Detect duplicates, keep the highest-confidence version; flag conflicts where values diverge by more than 20%.
 
@@ -151,19 +203,44 @@ After cleaning, output:
 - A `FieldMapping` table (see `schemas/field_mapping.schema.yaml`).
 - A conflict report listing any entity with inconsistent values across sources.
 
+**Stage Gate 4 (Darwinian):** Run `stage_evaluator.py --stage clean` on the cleaned records. If `conflict_rate > threshold`, the reflection loop may suggest refining field mappings (e.g. add source-specific synonyms to `dictionaries/field_aliases.yaml`).
+
 **Human-in-the-loop:** If a conflict cannot be auto-resolved and the values diverge by more than 20%, mark the record with `quality_flags: ["needs_review"]` and surface it to the user at the end. This satisfies the competition bonus item "complete correction or seek human suggestion then correct".
 
-### Step 6 — Analyze (Stage 5, optional)
+### Step 6 — Analyze (Stage 5, chained analysis)
 
 Only run if the user explicitly asks for analysis, or if the cleaned data clearly supports it (e.g. an expression matrix).
 
-Use `scripts/analysis/`:
+**New in this version: analysis is now CHAINED, not parallel.** Each analysis feeds into the next:
+
+```
+6.1 differential_expression.py  →  identifies DEGs (log2fc, p_value, adj_p_value)
+   └─ Stage Gate 5a: if DEG count < 5, reflection loop may suggest relaxing thresholds or expanding search
+6.2 ppi_network.py              →  builds PPI from DEGs, computes centrality
+6.3 hub_gene_analyzer.py        →  identifies hub genes (degree top 10%), reverse-looks-up upstream TFs
+   └─ Stage Gate 5b: if no hub genes found, reflection loop may suggest lowering degree threshold
+6.4 upstream_regulator.py       →  builds TF → target network, identifies master TFs
+6.5 drug_target_analyzer.py     →  queries OpenTargets for drugs targeting hub genes / master TFs
+6.6 survival_analysis.py        →  validates hub genes via TCGA KM + log-rank (one gene per call)
+6.7 enrichment.py               →  GO/KEGG enrichment on DEGs / hub genes (can run in parallel with 6.3-6.6)
+```
+
+**Analysis scripts (use `scripts/analysis/`):**
 
 - `differential_expression.py` — DESeq2-style stats on expression matrix (BH FDR correction, with pure-Python fallback when statsmodels is missing).
 - `enrichment.py` — GO/KEGG enrichment via Enrichr API (degrades to gene-list output when Enrichr is unavailable).
 - `ppi_network.py` — Build PPI network from STRING, compute centrality (degrades to edge-list when networkx is missing).
+- `hub_gene_analyzer.py` — **NEW.** Identify hub genes from PPI results, reverse-lookup upstream TFs and downstream targets. Output conforms to `schemas/hub_gene_result.schema.json`.
+- `upstream_regulator.py` — **NEW.** Build TF → target gene regulatory network, identify master TFs (out-degree top 5).
+- `drug_target_analyzer.py` — **NEW.** Query OpenTargets for drug-target interactions, build drug-target bipartite graph, identify polypharmacology.
+- `survival_analysis.py` — **NEW.** Kaplan-Meier + log-rank for a single gene in a TCGA cohort. Output conforms to `schemas/survival_result.schema.json`. Requires `lifelines` (degrades to pure-Python χ² approximation).
 
-Each analysis produces an `AnalysisResult` with stats tables.
+Each analysis produces an `AnalysisResult` with stats tables. The chained outputs (hub genes → upstream TFs → drug targets → survival) should be cross-referenced in the final report's mechanism narrative.
+
+**Stage Gate 5 (Darwinian, MANDATORY):** After the analysis chain completes, run `stage_evaluator.py --stage analyze`. If `coverage` is low (e.g. no hub genes identified, no drug targets found), reflection loop may suggest:
+- `deepen_analysis`: invoke the next link in the chain (e.g. if only DEG done, run hub_gene_analyzer)
+- `expand_search`: re-search with hub gene names to find more context
+- `add_source`: add TCGA for survival validation if not yet done
 
 ### Step 7 — Visualize (optional)
 
@@ -192,11 +269,18 @@ Produce final deliverables in the task output directory (default: `data/output/<
 - `data.csv` — Unified table, one row per record, with mandatory columns: `record_id`, all unified fields, `source_doi`, `source_url`, `extraction_method`, `extraction_confidence`, `quality_flags`.
 - `field_mapping.json` — The field alignment table.
 - `lineage.json` — Full provenance graph (see `schemas/provenance_node.schema.json`).
-- `report.md` — Human-readable summary: total records, average confidence, source counts, top conflicts, analysis highlights.
+- `reflection.json` — **NEW.** The Darwinian reflection log (see `schemas/reflection_log.schema.json`). Records every Stage Gate evaluation, action taken, and lessons learned. Provides a transparent audit trail of the agent's self-optimization decisions.
+- `report.md` — Human-readable summary: total records, average confidence, source counts, top conflicts, analysis highlights, **plus a "Self-Optimization Summary" section describing how many iterations each stage took and what was learned**.
 - `charts/` — All visualization PNGs.
 - `data.xlsx` — Excel version with two sheets: "Data" (the records) and "Lineage" (the provenance nodes). Generated by `scripts/export/to_excel.py`. Fills a gap when the scheduler has no Excel skill.
 - `report.docx` — Optional Word version of the report. Generated by `scripts/export/to_docx.py` (requires python-docx; degrades gracefully if missing). Prefer a scheduler docx skill if available.
 - `report.pdf` — Optional PDF version of the report. Generated by `scripts/export/to_pdf.py` (requires reportlab; auto-detects Chinese fonts; degrades gracefully if missing). Provided as a user-facing research/data report format.
+
+**Finalize reflection (MANDATORY before export):**
+```bash
+python scripts/optimization/reflection_loop.py finalize \
+    --reflection-log reflection.json --task-id <T> --out data/output/<T>/reflection.json
+```
 
 ### Step 9 — Summarize to User
 
@@ -206,7 +290,8 @@ Reply to the user with:
 2. Average confidence score.
 3. Number of conflicts requiring review (if any).
 4. Path to the output directory.
-5. A 3-bullet executive summary of findings.
+5. **Self-optimization summary: how many Darwinian iterations ran, what gaps were identified, what was learned** (e.g. "Stage 1 took 2 iterations; initially missed TCGA data, added on iteration 2; final coverage 92%").
+6. A 3-bullet executive summary of findings.
 
 Keep the reply under 15 lines unless the user asks for detail.
 
@@ -229,6 +314,11 @@ Biomedical API clients. All inherit `BaseDataSource` with a 1 req/sec rate limit
 | `kegg_client.py` | Query KEGG REST API for pathways | Biomedical-specific |
 | `pdb_client.py` | Search RCSB PDB protein structures | Biomedical-specific |
 | `tcmsp_client.py` | Query TCMSP for TCM compounds (returns `requires_crawl` when blocked) | Biomedical-specific |
+| `clinicaltrials_client.py` | **NEW.** Search ClinicalTrials.gov v2 API (NCT IDs, phases, interventions) | Biomedical-specific |
+| `tcga_client.py` | **NEW.** Query TCGA/GDC API (`--type cases\|genes` for clinical/expression) | Biomedical-specific |
+| `drugbank_client.py` | **NEW.** Query OpenTargets GraphQL for drug-target interactions (no key required) | Biomedical-specific |
+| `disgenet_client.py` | **NEW.** Query DisGeNET REST API for gene-disease associations (requires `DISGENET_API_KEY`) | Biomedical-specific |
+| `pubchem_client.py` | **NEW.** Query PubChem PUG REST for compound structures (SMILES, MW, synonyms) | Biomedical-specific |
 
 ### Parsers — `scripts/parsers/`
 
@@ -254,13 +344,27 @@ Data cleaning and field alignment. Core to the competition scoring.
 
 ### Analysis — `scripts/analysis/`
 
-Bioinformatics analysis. Optional, runs only when the user asks or the data supports it.
+Bioinformatics analysis. Optional, runs only when the user asks or the data supports it. **Analysis is chained**: DEG → PPI → hub genes → upstream TF → drug targets → survival.
 
 | Script | Purpose | Fills a gap |
 |---|---|---|
 | `differential_expression.py` | Differential expression stats with BH FDR correction (pure-Python fallback) | Biomedical-specific |
 | `enrichment.py` | GO/KEGG enrichment via Enrichr API (degrades to gene-list output) | Biomedical-specific |
 | `ppi_network.py` | Build PPI network from STRING + compute centrality (networkx; edge-list fallback) | Biomedical-specific |
+| `hub_gene_analyzer.py` | **NEW.** Identify hub genes (degree top 10%), reverse-lookup upstream TFs & downstream targets | Biomedical-specific |
+| `upstream_regulator.py` | **NEW.** Build TF → target regulatory network, identify master TFs (out-degree top 5) | Biomedical-specific |
+| `drug_target_analyzer.py` | **NEW.** Query OpenTargets for drug-target interactions, identify polypharmacology | Biomedical-specific |
+| `survival_analysis.py` | **NEW.** Kaplan-Meier + log-rank for a single gene in TCGA cohort (lifelines; pure-Python χ² fallback) | Biomedical-specific |
+
+### Self-Optimization — `scripts/optimization/` (NEW)
+
+The Darwinian self-evaluation engine. Runs after every pipeline stage to decide whether to iterate.
+
+| Script | Purpose | Fills a gap |
+|---|---|---|
+| `stage_evaluator.py` | Evaluate coverage/confidence/conflict_rate/source_diversity after a stage; output EvaluationResult with gaps & suggestions | Biomed-agent-specific |
+| `reflection_loop.py` | Maintain ReflectionLog across iterations; `record` / `decide` / `finalize` subcommands | Biomed-agent-specific |
+| `keyword_expander.py` | Generate expanded search queries from covered entities + synonym dictionaries (missing-entity / synonym / cross-entity strategies) | Biomed-agent-specific |
 
 ### Provenance — `scripts/provenance/`
 
@@ -316,6 +420,10 @@ All inter-stage data MUST conform to the schemas in `schemas/`:
 - `field_mapping.schema.yaml` — How source fields map to unified fields.
 - `provenance_node.schema.json` — One node in the lineage graph (DAG node).
 - `lineage_graph.schema.yaml` — Full lineage graph structure.
+- `evaluation_result.schema.json` — **NEW.** Darwinian Stage Gate evaluation result (coverage/confidence/conflict_rate/gaps/suggestions).
+- `reflection_log.schema.json` — **NEW.** Cross-iteration reflection log with lessons learned.
+- `hub_gene_result.schema.json` — **NEW.** Hub gene analysis result (hub genes + upstream TFs + downstream targets).
+- `survival_result.schema.json` — **NEW.** Survival analysis result (KM curves + log-rank + HR).
 
 Do NOT invent ad-hoc JSON shapes. If a stage's output does not validate against the schema, fix the stage before continuing.
 
@@ -333,11 +441,39 @@ Each script is CLI-driven and self-documenting via `--help`. Examples:
 # Search PubMed for a query
 python scripts/datasources/pubmed_client.py --query "pancreatic cancer liver metastasis" --max 50 --out results/pubmed.json
 
+# NEW: Search ClinicalTrials.gov
+python scripts/datasources/clinicaltrials_client.py --query "pancreatic cancer" --max 20 --out results/trials.json
+
+# NEW: Query TCGA clinical data
+python scripts/datasources/tcga_client.py --query "PAAD" --type cases --max 100 --out results/tcga_cases.json
+
+# NEW: Get drug-target interactions from OpenTargets
+python scripts/datasources/drugbank_client.py --query "TP53" --max 30 --out results/drugs.json
+
 # Parse a GEO SOFT file
 python scripts/parsers/geo_soft_parser.py --input GSE12345.family.soft.gz --out results/geo_expr.json
 
 # Align fields across sources
 python scripts/cleaners/field_aligner.py --input results/raw/ --out results/cleaned.json --dictionaries dictionaries/
+
+# NEW: Run Stage Gate evaluation (Darwinian self-optimization)
+python scripts/optimization/stage_evaluator.py \
+    --records results/cleaned.json --stage clean --iteration 1 \
+    --task-id T1 --entities "gene:TP53,compound:quercetin,disease:pancreatic_cancer" \
+    --out eval_clean.json
+
+# NEW: Expand search keywords based on gaps
+python scripts/optimization/keyword_expander.py \
+    --records results/cleaned.json --entities "TP53,quercetin,pancreatic_cancer" \
+    --dictionaries dictionaries/ --out expanded.json
+
+# NEW: Run hub gene analysis (chained after PPI)
+python scripts/analysis/hub_gene_analyzer.py \
+    --ppi-result results/ppi.json --out results/hub.json --task-id T1
+
+# NEW: Run survival analysis for a hub gene
+python scripts/analysis/survival_analysis.py \
+    --gene TP53 --cohort TCGA-PAAD --out results/survival_tp53.json --task-id T1
 
 # Generate a volcano plot
 python scripts/viz/volcano_plot.py --input results/diff_expr.json --out charts/volcano.png
@@ -362,19 +498,24 @@ Every script emits structured JSON to stdout (or `--out` file) and human-readabl
 
 When the research goal matches a known domain, load the corresponding template from `domain_templates/`:
 
-- `tcm.yaml` — Traditional Chinese Medicine research (TCMSP priority, compound-target-pathway focus, OB≥30% / DL≥0.18 filters).
-- `oncology.yaml` — Cancer research (GEO/TCGA priority, expression + mutation focus).
+- `tcm.yaml` — Traditional Chinese Medicine research (TCMSP priority, compound-target-pathway focus, OB≥30% / DL≥0.18 filters, includes drug_target_analysis recipe).
+- `oncology.yaml` — Cancer research (GEO/TCGA priority, expression + mutation focus, includes hub_gene_analysis & survival_analysis recipes).
+- `pharmacology.yaml` — **NEW.** Pharmacology research (DrugBank/OpenTargets priority, drug-target binding & ADME focus, includes drug_target_analysis & survival_analysis recipes).
+- `_template.yaml` — Generic fallback template for unmatched domains.
 
 Templates specify: priority data sources, recommended field mappings, analysis recipes, and confidence thresholds.
 
 ## Key Constraints
 
 - **Provenance is non-negotiable.** Every output record MUST trace back to its original source. No record without a `source_ref` is allowed in the final export. This directly satisfies the competition's "source traceability" evaluation criterion.
-- **Do not fabricate data.** If a source does not return data, the record does not exist. Never invent values to "fill gaps."
+- **Do not fabricate data.** If a source does not return data, the record does not exist. Never invent values to "fill gaps." The Darwinian self-optimization mechanism compensates by expanding search — never by inventing data.
 - **Respect rate limits.** All API clients use a default 1 req/sec rate. Do not remove throttling.
 - **Keep outputs reproducible.** Save the exact query strings and API responses in the lineage graph.
 - **Prefer scheduler and external skills over built-in scripts.** Built-in scripts are a supplement, not a replacement for scheduler capabilities. Always check native tools and other available skills first.
 - **Local image understanding fallback.** If the scheduler cannot read a local chart image, use `scripts/viz/extract_chart_data.py` (requires `QWEN_API_KEY`). Otherwise prefer the scheduler's native multimodal capability.
+- **Darwinian Stage Gates are MANDATORY.** After every stage (search/acquire/parse/clean/analyze), the agent MUST run `stage_evaluator.py` and consult `reflection_loop.py decide`. Skipping a Stage Gate breaks the self-optimization loop and defeats the purpose of this skill.
+- **Iteration cap.** Each stage may iterate up to 3 times (configurable via `MAX_ITERATIONS` in `scripts/optimization/_base.py`). Do not exceed this cap; if convergence is not reached, accept the current result and surface the gap to the user.
+- **Reflection log is part of the output.** The final `reflection.json` MUST be exported alongside `data.csv` / `lineage.json` / `report.md`. It is the audit trail of self-optimization decisions and a key differentiator of this skill.
 
 ## File Index
 
@@ -383,17 +524,18 @@ biomed-data-agent/
 ├── SKILL.md                          # This file
 ├── scripts/                          # Executable Python scripts (last-resort supplement)
 │   ├── requirements.txt
-│   ├── datasources/                  # 7 biomedical API clients
+│   ├── datasources/                  # 12 biomedical API clients (7 core + 5 new)
 │   ├── parsers/                      # 5 biomedical format parsers
 │   ├── cleaners/                     # Cleaning & field alignment
-│   ├── analysis/                     # Bioinformatics analysis
+│   ├── analysis/                     # 7 analysis scripts (3 original + 4 new chained)
+│   ├── optimization/                 # NEW: Darwinian self-optimization (evaluator + loop + expander)
 │   ├── provenance/                   # Lineage tracker & query
 │   ├── viz/                          # Biomed visualizations + image data extraction
-│   ├── export/                       # Final export (CSV/Excel/Markdown/Word)
+│   ├── export/                       # Final export (CSV/Excel/Markdown/Word/PDF)
 │   └── io/                           # File format conversion (Excel/CSV/JSON)
-├── schemas/                          # JSON/YAML schemas for data transfer
-├── dictionaries/                     # Synonym dictionaries (genes, compounds, units, fields)
-├── domain_templates/                 # Per-domain config (TCM, oncology)
+├── schemas/                          # 9 schemas (5 original + 4 new: evaluation/reflection/hub_gene/survival)
+├── dictionaries/                     # Synonym dictionaries (genes/compounds/diseases/units/fields)
+├── domain_templates/                 # Per-domain config (TCM, oncology, pharmacology)
 ├── examples/                         # Input/output examples
 └── references/                       # Detailed reference docs
 ```

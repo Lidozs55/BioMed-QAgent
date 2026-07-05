@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/reflection_log.schema.json",
+  "title": "ReflectionLog",
+  "description": "达尔文自优化机制：跨 stage / 跨迭代的反思日志。由 scripts/optimization/reflection_loop.py 维护，记录每次自评估与对应行动。任务结束后可被 Agent 读取用于跨任务进化。",
+  "type": "object",
+  "required": ["task_id", "iterations", "total_iterations", "final_status", "summary", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {"type": "string"},
+    "iterations": {
+      "type": "array",
+      "description": "每次迭代的评估-行动记录，按时间顺序",
+      "items": {
+        "type": "object",
+        "required": ["iteration", "stage", "evaluation", "action_taken", "timestamp"],
+        "additionalProperties": false,
+        "properties": {
+          "iteration": {"type": "integer", "minimum": 1},
+          "stage": {"type": "string", "enum": ["search", "acquire", "parse", "clean", "analyze", "export"]},
+          "evaluation": {
+            "type": "object",
+            "description": "对 EvaluationResult 的精简引用（避免重复存储完整 schema）",
+            "required": ["passed", "coverage", "avg_confidence", "conflict_rate", "source_diversity"],
+            "properties": {
+              "passed": {"type": "boolean"},
+              "coverage": {"type": "number"},
+              "avg_confidence": {"type": "number"},
+              "conflict_rate": {"type": "number"},
+              "source_diversity": {"type": "integer"}
+            }
+          },
+          "action_taken": {
+            "type": "string",
+            "enum": ["expand_search", "add_source", "deepen_analysis", "refine_keywords", "request_user_input", "accept"],
+            "description": "accept 表示评估通过，无需进一步行动"
+          },
+          "new_queries": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "expand_search / refine_keywords 时新增的查询串"
+          },
+          "new_sources": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "add_source 时新增的数据源"
+          },
+          "new_analyses": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "deepen_analysis 时新增的分析类型"
+          },
+          "timestamp": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "total_iterations": {"type": "integer", "minimum": 0},
+    "final_status": {
+      "type": "string",
+      "enum": ["converged", "max_iterations_reached", "user_aborted"],
+      "description": "converged=所有 stage gate 通过；max_iterations_reached=达到迭代上限仍有缺口"
+    },
+    "convergence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "收敛分：综合各 stage 通过率与迭代改善度，1.0 表示完全收敛"
+    },
+    "lessons_learned": {
+      "type": "array",
+      "description": "本任务总结的经验教训，供跨任务进化使用",
+      "items": {"type": "string"}
+    },
+    "summary": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

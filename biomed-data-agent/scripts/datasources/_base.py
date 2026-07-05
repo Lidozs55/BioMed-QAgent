@@ -27,6 +27,11 @@ STRING_URL = "https://string-db.org/api"
 KEGG_URL = "https://rest.kegg.jp"
 PDB_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 TCMSP_URL = "https://tcmspw.com/tcmspsearch.php"
+CLINICALTRIALS_URL = "https://clinicaltrials.gov/api/v2/studies"
+GDC_URL = "https://api.gdc.cancer.gov"
+DRUGBANK_URL = "https://api.platform.opentargets.org/api/v4/graphql"
+DISGENET_URL = "https://www.disgenet.org/api/gda"
+PUBCHEM_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 
 
 def utc_now() -> str:
