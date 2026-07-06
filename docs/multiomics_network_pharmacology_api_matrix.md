@@ -1,20 +1,6 @@
-# 多组学与网络药理学 AGENT：高分论文、数据集与 API 采集矩阵
-
 日期：2026-07-06
 
-## 1. 这批高分文章给 AGENT 的启发
-
-| 方向 | 代表论文/项目 | 数据组合 | 常用数据源 | 对 AGENT 的启发 |
-|---|---|---|---|---|
-| 泛癌多组学 | TCGA Pan-Cancer Atlas, Cell 2018 | WES/WGS、RNA-seq、CNV、甲基化、临床 | GDC/TCGA、cBioPortal、UCSC Xena | 以 patient/sample barcode 为主键，统一突变、表达、CNV、甲基化和临床结局。 |
-| 蛋白基因组学 | CPTAC Pan-Cancer proteogenomics, Cell/Cancer Cell 2023-2024 | WES/WGS、RNA-seq、蛋白组、磷酸化蛋白组、临床 | PDC/CPTAC、GDC、Cancer Data Service | proteomics 和 genomics 分属不同 portal，必须建立样本映射表。 |
-| 癌症依赖性图谱 | DepMap/CCLE, Nature/Cell 系列 | CRISPR/RNAi dependency、RNA-seq、mutation、CNV、drug sensitivity | DepMap Portal、CCLE、Figshare/DepMap downloads | 适合做“疾病基因 -> 细胞系依赖性 -> 可药靶点”优先级排序。 |
-| 扰动表达药物重定位 | Connectivity Map / LINCS L1000, Cell 2017 | 药物/基因扰动后的表达 signature | CLUE、LINCS、GEO | 不一定下载全库；可通过 CLUE API 提交疾病 signature 做在线匹配。 |
-| 靶点证据整合 | Open Targets Platform/Genetics, NAR/Nat Genet 系列 | 遗传证据、表达、药物、临床、文献、动物模型 | Open Targets、GWAS Catalog、ChEMBL、Reactome 等 | 适合作为网络药理学的“证据总线”，不是只靠 GeneCards 打分。 |
-| 网络药物重定位 | Guney et al., Nat Commun 2016；Cheng et al., Nat Commun 2018/2019 | disease genes、drug targets、PPI interactome、drug indications | DrugBank/ChEMBL、OMIM/GWAS、STRING/BioGRID、Clinical/claims data | 核心不是简单取交集，而是计算 disease module 与 drug target 的网络距离/覆盖关系。 |
-| 网络药物组合 | Cheng, Kovacs & Barabasi, Nat Commun 2019 | 药物靶点、疾病模块、PPI、已批准组合 | DrugBank/ChEMBL、PPI、疾病基因库、临床组合库 | 组合药预测要区分“共同打中同一区域”和“覆盖疾病模块不同邻域”。 |
-
-## 2. 数据集和采集网站一一对应表
+数据集和采集网站一一对应表
 
 说明：
 
@@ -81,26 +67,11 @@
 | HERB | 中药-成分-靶点/疾病 | http://herb.ac.cn/ | 主要网页/下载，API 弱 | 看数据页要求 | 可下载快照 | 中药网络药理学可接，但要保留证据来源和预测/实验区分。 |
 | ETCM / SymMap | 中药方剂、成分、靶点、症状/疾病 | http://www.tcmip.cn/ETCM/、https://www.symmap.org/ | API 弱或不稳定 | 看站点要求 | 谨慎缓存 | 用于 TCM 场景，不作为通用药物靶点主源。 |
 
-## 3. 在线调用优先、无需下载全库的模块
-
-| 用途 | 推荐在线服务/API | 输入 | 输出 | 是否需申请 | 备注 |
-|---|---|---|---|---|---|
-| KEGG ID/pathway/drug/compound 映射 | KEGG REST | gene、compound、drug、pathway id | list/get/link/conv 结果 | 否 | 不要默认下载 KEGG 全库；记录查询日期。 |
-| Reactome 富集/表达分析 | Reactome Analysis Service | gene/protein/compound list 或表达矩阵 | pathway p value、FDR、token、浏览器链接 | 否 | 可直接 POST 在线分析。 |
-| 通用富集分析 | g:Profiler API | gene list | GO/KEGG/Reactome/WikiPathways enrichment | 否 | 适合 AGENT 自动报告，数据库版本由服务维护。 |
-| 快速富集和 signature 库 | Enrichr API | gene list | 多 gene-set library 富集结果 | 否 | 包含不少药物/扰动相关库。 |
-| 靶点-疾病-药物证据 | Open Targets GraphQL | gene/disease/drug id | 证据、known drugs、tractability、safety | 否 | 单实体查询用 API；批量用 downloads/BigQuery。 |
-| 药物-靶点活性 | ChEMBL API | target/drug/assay | IC50/Kd/EC50、mechanism、molecule | 否 | 网络药理学主数据源。 |
-| 化合物标准化 | PubChem PUG-REST | name/InChIKey/SMILES/CID | CID、synonyms、bioassay、structure | 否 | 做 compound resolver。 |
-| PPI 查询 | STRING API | gene/protein list | interaction network、score | 否 | 建议传 caller_identity，避免滥用。 |
-| 临床试验 | ClinicalTrials.gov API v2 | disease/drug/target keyword | trial phase/status/intervention | 否 | 药物转化证据。 |
-| 药物安全 | openFDA API | drug name、NDC、event query | adverse events、labels、recalls | 可选 key | key 主要提高 daily quota。 |
-
 ## 4. 首批 MVP 建议接入顺序
-
+我感觉现阶段解决第一个就基本够了，先从第一个来吧
 | 阶段 | 数据源 | 原因 |
 |---|---|---|
-| 1 | GEO/SRA/ENA、GDC、cBioPortal、UCSC Xena | 解决表达和癌症多组学的基础采集。 |
+| 1 | GEO/SRA/ENA、GDC、STRING、UCSC Xena | 解决表达和癌症多组学的基础采集。 |
 | 1 | Ensembl/NCBI Gene/HGNC/UniProt | 解决 ID 标准化。 |
 | 1 | KEGG REST、Reactome Analysis、g:Profiler、Enrichr | 解决在线富集，不必下载大型 pathway 库。 |
 | 1 | Open Targets、ChEMBL、PubChem、STRING、ClinicalTrials.gov、openFDA | 搭出网络药理学主链路：disease -> genes -> targets -> drugs -> safety/clinical。 |
@@ -108,18 +79,6 @@
 | 2 | CELLxGENE/HCA/HuBMAP/ENCODE/PRIDE/MetaboLights/MGnify | 扩展单细胞、空间、表观、蛋白组、代谢组、微生物组。 |
 | 3 | DrugBank、OMIM、DisGeNET、GeneCards、TCM 类数据库 | 需要许可证或登录，放到可选 connector，不能默认静默抓取。 |
 
-## 5. 实现时的数据模型建议
-
-| 实体 | 主 ID | 常用别名/映射源 | 关键字段 |
-|---|---|---|---|
-| Gene | Ensembl Gene ID + HGNC symbol | HGNC、NCBI Gene、UniProt、KEGG、Open Targets | species、symbol、synonym、biotype、genome build |
-| Protein | UniProt accession | UniProt、Ensembl、PDB、AlphaFold | sequence、domain、subcellular、structure availability |
-| Disease | MONDO/EFO/MeSH/DOID | Open Targets、GWAS Catalog、OMIM、ClinVar、MeSH | ontology id、synonym、parent disease |
-| Variant | rsID + genomic coordinate | dbSNP、gnomAD、ClinVar、Open Targets Genetics | genome build、allele、AF、clinical significance |
-| Drug/Compound | PubChem CID + InChIKey | ChEMBL、PubChem、DrugBank、KEGG Drug、RxNorm | name、synonym、SMILES、approval status |
-| Dataset | accession/project id | GEO、SRA、ENA、GDC、PDC、CELLxGENE | assay、species、tissue、disease、sample count、access level |
-| Sample | source-specific sample id | BioSample、GSM、TCGA barcode、PDC aliquot | donor、condition、batch、timepoint、omics layer |
-| Evidence | PMID/DOI/source record id | PubMed、Europe PMC、database citations | evidence type、curated/predicted/text-mined、date、confidence |
 
 ## 6. 关键来源链接
 
