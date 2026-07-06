@@ -62,10 +62,10 @@ BioMed QAgent 是一个面向**生物医学研究**场景的 AI 应用。用户�
 │                            │                                       │
 │  ┌─────────────────────────▼───────────────────────────────────┐  │
 │  │                  Data & Storage Layer                         │  │
-│  │  ┌──────┐ ┌───────┐ ┌──────┐ ┌───────┐ ┌──────────────┐  │  │
-│  │  │任务DB│ │向量DB │ │文件存储│ │缓存   │ │ Provenance   │  │  │
-│  │  │SQLite│ │Milvus │ │本地FS │ │Redis  │ │ (数据血缘)   │  │  │
-│  │  └──────┘ └───────┘ └──────┘ └───────┘ └──────────────┘  │  │
+│  │  ┌──────────┐ ┌──────────────┐ ┌───────────┐ ┌──────────┐ │  │
+│  │  │任务DB    │ │文件存储       │ │Provenance │ │缓存      │ │  │
+│  │  │(SQLite)  │ │(本地FS)       │ │(数据血缘) │ │(内存)    │ │  │
+│  │  └──────────┘ └──────────────┘ └───────────┘ └──────────┘ │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -614,34 +614,59 @@ class DataLineage(BaseModel):
 
 ---
 
-### 3.4 LLM 层 — Qwen API 封装
+### 3.4 LLM 层 — DashScope (阿里云百炼) 封装
+
+强制使用阿里云百炼平台，通过 **OpenAI 兼容模式** 接入，API Key 从环境变量 `DASHSCOPE_API_KEY` 读取。
 
 ```python
 # backend/app/llm/client.py
 
-class QwenClient:
-    """兼容 OpenAI 协议，通过 DashScope 接入"""
+from openai import OpenAI
+
+class DashScopeClient:
+    """阿里云百炼 DashScope 客户端（OpenAI 兼容模式）。
+
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    支持模型：qwen-plus / qwen-max / qwen-turbo（文本）
+             qwen-vl-max / qwen-vl-plus（多模态识图）
+             qwen-long（长文档理解，需先上传文件获取 fileid）
+    """
 
     def __init__(self, config):
         self.client = OpenAI(
-            api_key=config.api_key,
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
-    async def chat(self, messages, model=None, tools=None, **kwargs):
+    def chat(self, messages, model="qwen-plus", tools=None, **kwargs):
+        ...
+
+    def chat_vision(self, messages, model="qwen-vl-max", **kwargs):
+        """多模态：图片理解（图表数据提取、表格识别）"""
+        ...
+
+    def chat_document(self, messages, file_id, model="qwen-long", **kwargs):
+        """长文档理解：传入 fileid:// 协议"""
         ...
 ```
 
-**模型分层策略**：
+**模型分层策略**（全部通过 DashScope OpenAI 兼容模式调用）：
 
 | 场景 | 模型 | 理由 |
 |------|------|------|
-| Orchestrator 规划 | Qwen3.7-Max | 强推理 |
-| Acquire DOM分析 | Qwen3.7-Plus | 性价比 |
-| Parser 图表理解 | Qwen3.7-Plus | 多模态视觉 |
-| Cleaner 字段对齐 | Qwen3.7-Plus | 语义匹配 |
-| Analysis 代码生成 | Qwen3.7-Max | 复杂代码 |
-| Reviewer 审查 | Qwen3.7-Max | 细致推理 |
+| Orchestrator 规划 / 实体识别 | qwen-plus | 性价比高，速度快 |
+| Cleaner 字段对齐 / 语义匹配 | qwen-plus | 语义理解足够 |
+| Reviewer 审查 | qwen-max | 强推理 |
+| Parser 图表理解 / 表格识别 | qwen-vl-max | 多模态视觉 |
+| PDF 全文理解 | qwen-long | 支持长上下文 + fileid 文档理解 |
+| Analysis 代码生成（如需） | qwen-max | 复杂代码 |
+
+**关键能力**：
+- **Function Calling**：Orchestrator 用 function calling 选择调用哪个工具/脚本
+- **联网搜索**：`enable_search=True` 补充实时信息
+- **流式输出**：WebSocket 实时推送 LLM 思考过程
+- **图片理解**：base64 data URL 传入 qwen-vl-max，用于图表数据提取
+- **文档理解**：上传 PDF 到百炼平台获取 fileid，用 qwen-long 理解全文
 
 ---
 
@@ -803,35 +828,40 @@ T9  前端        展示数据表格 + 火山图 + 通路气泡图 + 反馈面�
 | 包 | 用途 |
 |---|------|
 | `fastapi` + `uvicorn` | Web 框架 |
-| `openai` | Qwen API（DashScope 兼容模式） |
+| `openai` | DashScope（阿里云百炼 OpenAI 兼容模式）|
 | `httpx` | 异步 HTTP |
 | `pandas` + `numpy` + `scipy` | 数据处理 |
-| `playwright` | 浏览器自动化爬虫 |
-| `beautifulsoup4` | HTML 解析 |
-| `milvus` / `qdrant-client` | 向量数据库 |
-| `redis` | 缓存 |
-| `aiosqlite` | 任务存储 |
+| `pdfplumber` | PDF 表格提取 |
+| `beautifulsoup4` + `lxml` | HTML/XML 解析 |
+| `aiosqlite` | 任务存储（SQLite） |
 | `websockets` | 实时推送 |
+| `python-multipart` | 文件上传 |
+| `pydantic` | 数据校验 |
 
-**后端可选**（按场景安装）：
-
-| 包 | 条件 |
-|---|------|
-| `mineru` / `magic-pdf` | PDF 解析 |
-| `grobid-client` | 参考文献解析 |
-| `rpy2` | 调用 R 分析包（DESeq2 等） |
-| `matplotlib` + `seaborn` | 可视化 |
+> **存储层精简**：使用 SQLite + 本地文件系统 + 内存缓存，不引入 Redis / Milvus / Qdrant。
 
 **前端核心**：
 
 | 包 | 用途 |
 |---|------|
-| `react` + `electron` + `vite` | 桌面应用 |
-| `zustand` | 状态管理 |
+| `react` + `vite` + `typescript` | Web 应用（浏览器直访问，Electron 可选） |
 | `antd` | UI 组件库 |
-| `echarts` | 图表可视化 |
+| `echarts` | 图表可视化（火山图/富集气泡/热图/网络图） |
 | `@xyflow/react` | 数据血缘图 |
 | `tailwindcss` | 样式 |
+
+**数据获取与文档理解**：
+
+| 能力 | 实现方式 |
+|------|---------|
+| 论文检索 | PubMed + OpenAlex + Semantic Scholar |
+| 基因/蛋白/化合物 | GEO / STRING / KEGG / PDB / TCMSP / PubChem / DisGeNET / OpenTargets |
+| 临床数据 | ClinicalTrials.gov + TCGA/GDC |
+| PDF 表格提取 | pdfplumber（结构化表格）+ qwen-long（全文理解）|
+| 图表数据提取 | qwen-vl-max（多模态识图，base64 data URL 传入）|
+| 网页采集 | httpx + BeautifulSoup（静态）/ Playwright（动态，可选）|
+
+> **不生成 PPT / DOC**：项目输出为 HTML 报告 + 前端页面展示 + CSV/Excel 结构化数据。
 
 ---
 

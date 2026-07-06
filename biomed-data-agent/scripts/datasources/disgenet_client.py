@@ -108,8 +108,10 @@ def main() -> None:
         emit_error("缺少 --query 参数")
         sys.exit(1)
     if _auth_headers() is None:
-        emit_error("缺少环境变量 DISGENET_API_KEY，请先在 DisGeNET 申请 API key 并设置 DISGENET_API_KEY")
-        sys.exit(1)
+        # 无 API Key 时优雅降级：输出空记录而非报错，避免阻塞流水线
+        log_stderr("disgenet: 未配置 DISGENET_API_KEY，跳过（输出空记录）")
+        write_output([], args.out)
+        sys.exit(0)
     try:
         records = search_disgenet(args.query, args.mode, args.max, args.task_id)
         write_output(records, args.out)

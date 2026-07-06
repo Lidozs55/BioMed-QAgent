@@ -1,31 +1,33 @@
 {
   "name": "biomed-qagent-frontend",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "BioMed QAgent 前端 - Electron + React",
+  "type": "module",
+  "description": "BioMed QAgent 前端 - React + TypeScript",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc -b && vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron electron/main.js\""
   },
   "dependencies": {
-    "react": "",
-    "react-dom": "",
-    "electron": "",
-    "zustand": "",
-    "antd": "",
-    "echarts": "",
-    "@xyflow/react": "",
-    "tailwindcss": ""
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "antd": "^5.21.0",
+    "@ant-design/icons": "^5.5.1",
+    "zustand": "^4.5.5",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2",
+    "@xyflow/react": "^12.3.5",
+    "dayjs": "^1.11.13"
   },
   "devDependencies": {
-    "vite": "",
-    "typescript": "",
-    "@vitejs/plugin-react": "",
-    "@types/react": "",
-    "@types/react-dom": "",
-    "concurrently": "",
-    "wait-on": ""
+    "vite": "^5.4.8",
+    "typescript": "^5.6.2",
+    "@vitejs/plugin-react": "^4.3.1",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "concurrently": "^9.0.1",
+    "wait-on": "^8.0.1"
   }
 }

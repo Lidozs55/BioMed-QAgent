@@ -70,7 +70,9 @@ def main() -> None:
     parser.add_argument("--herb", default=None, help="中药名")
     parser.add_argument("--compound", default=None, help="化合物名")
     args = parser.parse_args()
-    if not args.herb and not args.compound:
+    # --query 作为 compound 回退（orchestrator 统一传 --query）
+    compound = args.compound or (args.query if args.query else None)
+    if not args.herb and not compound:
         emit_error("需要 --herb 或 --compound 参数")
         sys.exit(1)
     try:
@@ -78,8 +80,8 @@ def main() -> None:
             form = {"herbName": args.herb, "pageNum": "1", "pageSize": str(args.max)}
             label = args.herb
         else:
-            form = {"compoundName": args.compound, "pageNum": "1", "pageSize": str(args.max)}
-            label = args.compound
+            form = {"compoundName": compound, "pageNum": "1", "pageSize": str(args.max)}
+            label = compound
         records = _query_tcmsp(form, args.task_id, label)
         if records is None:
             # 接口不可用，输出 requires_crawl 信号供 Stage 2 处理

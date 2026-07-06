@@ -38,6 +38,10 @@ def search_string(query: str, species: int, max_results: int, task_id: str) -> l
         "caller_identity": "BioMedQAgent",
     }
     r = requests.get(NETWORK_URL, params=params, headers=HEADERS, timeout=60)
+    if r.status_code == 400:
+        # 非基因符号查询（如中文研究目标）会返回 400，优雅返回空
+        log_stderr(f"string: 查询 '{query[:30]}' 不是有效基因符号（400），跳过")
+        return []
     r.raise_for_status()
     items = r.json()
     records = []
