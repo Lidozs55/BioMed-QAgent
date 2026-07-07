@@ -57,22 +57,27 @@ class Orchestrator:
             # Stage 2: Search — 并行检索数据源
             records = await self._stage_search(task, context, progress)
 
-            # Stage 3: Parse — （如有上传文件则解析，否则跳过）
+            # Stage 3: Acquire — 浏览器/爬虫采集（占位，完全隔离）
+            # 当数据源返回 requires_crawl 信号时，此阶段可对接浏览器工具采集
+            # 未实现时：静默跳过，不影响后续阶段
+            records = await self._stage_acquire(task, records, progress, context)
+
+            # Stage 4: Parse — （如有上传文件则解析，否则跳过）
             records = await self._stage_parse(task, records, progress)
 
-            # Stage 4: Clean — 清洗 + 字段对齐
+            # Stage 5: Clean — 清洗 + 字段对齐
             records = await self._stage_clean(task, records, progress)
 
-            # Stage 5: Analyze — （可选）生物信息学分析
+            # Stage 6: Analyze — （可选）生物信息学分析
             if task.enable_analysis:
                 analysis_results = await self._stage_analyze(task, records, context, progress)
                 context["analysis"] = analysis_results
 
-            # Stage 6: Review — LLM 审查质量
+            # Stage 7: Review — LLM 审查质量
             review = await self._stage_review(task, records, context, progress)
             context["review"] = review
 
-            # Stage 7: Export — CSV + HTML 报告
+            # Stage 8: Export — CSV + HTML 报告
             await self._stage_export(task, records, context, review, progress)
 
             # 完成
@@ -212,6 +217,13 @@ class Orchestrator:
                     prov.record("search", "search_agent", tool_name=src_name,
                                output_records=rec_ids,
                                parameters={"query": primary_query, "source": src_name})
+                # 保留 requires_crawl 信号供 acquire 阶段使用
+                if result.signals.get("status") == "requires_crawl":
+                    context.setdefault("crawl_targets", []).append({
+                        "source": src_name,
+                        "query": primary_query,
+                        "reason": result.signals.get("reason", ""),
+                    })
             else:
                 msg = f"✗ {src_name}: {result.error[:60]}"
                 task.errors.append(f"{src_name}: {result.error}")
@@ -387,7 +399,55 @@ class Orchestrator:
                                 pct=pct, message=msg)
         return all_records
 
-    # ========== Stage 3: Parse ==========
+    # ========== Stage 3: Acquire (浏览器/爬虫占位) ==========
+    async def _stage_acquire(self, task: Task, records: list[dict],
+                              progress: ProgressCallback | None,
+                              context: dict | None = None) -> list[dict]:
+        """采集阶段占位 — 当数据源返回 requires_crawl 信号时，可对接浏览器工具采集。
+
+        当前实现：完全隔离，仅识别信号并记录日志，不执行实际爬取。
+        对接浏览器工具的方式见 docs/agent_browser_integration.md。
+
+        隔离保证：
+        - 无论是否实现爬虫，本阶段都返回原始 records 不变
+        - 异常被捕获，绝不影响后续 parse/clean/analyze 阶段
+        """
+        self._set_stage(task, "acquire", StageStatus.RUNNING, "检查需要爬虫采集的数据源...")
+        self._emit(progress, type="stage_start", stage="acquire",
+                    message="检查需要爬虫采集的数据源...")
+
+        try:
+            # 从 context 中读取 requires_crawl 信号（由 search 阶段收集）
+            crawl_targets = (context or {}).get("crawl_targets", [])
+            crawl_needed = len(crawl_targets)
+
+            if crawl_needed > 0:
+                sources_list = ", ".join(t["source"] for t in crawl_targets)
+                self._emit(progress, type="stage_progress", stage="acquire",
+                            pct=0.5,
+                            message=f"需要爬虫采集: {sources_list}（当前未实现，已跳过）")
+                # 记录到任务错误列表（非致命，仅为提示）
+                task.errors.append(
+                    f"acquire: {crawl_needed} 个数据源需要爬虫采集（{sources_list}），"
+                    "当前未实现浏览器工具，已跳过。"
+                    "对接方式见 docs/agent_browser_integration.md"
+                )
+
+            msg = (f"采集阶段完成。需要爬虫的数据源: {crawl_needed} 个"
+                   f"{'（已跳过，未实现）' if crawl_needed else '（无需爬虫）'}")
+            self._set_stage(task, "acquire", StageStatus.DONE, msg, records_count=len(records))
+            self._emit(progress, type="stage_complete", stage="acquire", message=msg)
+        except Exception as e:
+            logger.warning("acquire 阶段异常（已隔离）: %s", e)
+            self._set_stage(task, "acquire", StageStatus.DONE,
+                            f"采集阶段异常已隔离: {e}", records_count=len(records))
+            self._emit(progress, type="stage_complete", stage="acquire",
+                        message=f"采集阶段异常已隔离: {e}")
+
+        self.store.update_task(task)
+        return records
+
+    # ========== Stage 4: Parse ==========
     async def _stage_parse(self, task: Task, records: list[dict],
                            progress: ProgressCallback | None) -> list[dict]:
         """解析阶段 — 1) 上传 PDF 2) 搜索结果中的 OA PDF 自动下载并解析。"""

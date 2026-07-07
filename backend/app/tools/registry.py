@@ -63,6 +63,14 @@ class ToolRegistry:
                 {"name": r.name, "description": r.description, "script": r.script_path}
                 for r in runners.values()
             ]
+        # 追加内置数据源
+        from app.tools.datasources import get_datasource_registry
+        ds_registry = get_datasource_registry()
+        builtin = [
+            {"name": s["name"], "description": s["description"], "script": "(builtin)"}
+            for s in ds_registry.list_sources()
+        ]
+        result["builtin_datasources"] = builtin
         return result
 
     def run(self, name: str, args: list[str] = None,
@@ -74,13 +82,29 @@ class ToolRegistry:
         return runner.run(args, timeout=timeout, env=env)
 
     def run_datasource(self, name: str, query: str, max_results: int = 20,
-                        task_id: str = "T0", timeout: int = 60) -> ScriptResult:
-        """便捷方法：执行数据源检索。"""
+                        task_id: str = "T0", timeout: int = 60,
+                        **kwargs) -> ScriptResult:
+        """便捷方法：执行数据源检索。
+
+        优先使用脚本数据源（通过 subprocess 调用 skill 脚本）；
+        若脚本不存在，回退到内置数据源（backend 中的 BaseDataSource 实现）。
+        """
         runner = self.get(name)
-        if not runner:
+        if runner:
+            args = ["--query", query, "--max", str(max_results), "--task-id", task_id]
+            return runner.run(args, timeout=timeout)
+        # 回退到内置数据源
+        from app.tools.datasources import get_datasource_registry
+        ds_registry = get_datasource_registry()
+        source = ds_registry.get(name)
+        if source is None:
             return ScriptResult(False, error=f"未知数据源: {name}")
-        args = ["--query", query, "--max", str(max_results), "--task-id", task_id]
-        return runner.run(args, timeout=timeout)
+        try:
+            records = source.search(query, max_results=max_results,
+                                    task_id=task_id, **kwargs)
+            return ScriptResult(True, data=records)
+        except Exception as e:
+            return ScriptResult(False, error=f"内置数据源 {name} 检索失败: {e}")
 
     def run_datasources_parallel(self, sources: list[str], query: str,
                                   max_results: int = 20, task_id: str = "T0") -> dict[str, ScriptResult]:

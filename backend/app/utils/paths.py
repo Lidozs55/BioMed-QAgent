@@ -1,4 +1,4 @@
-"""路径工具 — 定位 biomed-data-agent/scripts/ 目录。"""
+"""路径工具 — 定位 biomed-data-agent-skill/scripts/ 目录。"""
 from __future__ import annotations
 
 import sys
@@ -8,7 +8,7 @@ from app.config import SCRIPTS_DIR, SKILL_DIR
 
 
 def get_scripts_dir() -> Path:
-    """返回 biomed-data-agent/scripts/ 绝对路径。"""
+    """返回 biomed-data-agent-skill/scripts/ 绝对路径。"""
     return SCRIPTS_DIR
 
 

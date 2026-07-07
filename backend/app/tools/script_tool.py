@@ -1,4 +1,4 @@
-"""脚本运行器 — 通过 subprocess 调用 biomed-data-agent/scripts/ 中的脚本。
+"""脚本运行器 — 通过 subprocess 调用 biomed-data-agent-skill/scripts/ 中的脚本。
 
 这是后端与已测试脚本之间的桥梁：后端负责编排，脚本负责执行。
 所有脚本遵循统一约定：CLI 参数输入，JSON 输出到 stdout 或 --out 文件。
@@ -23,11 +23,14 @@ class ScriptResult:
     """脚本执行结果。"""
 
     def __init__(self, success: bool, data: list | dict | None = None,
-                 error: str = "", stderr: str = ""):
+                 error: str = "", stderr: str = "",
+                 signals: dict | None = None):
         self.success = success
         self.data = data
         self.error = error
         self.stderr = stderr
+        # 非记录信号（如 requires_crawl），供 acquire 阶段识别
+        self.signals = signals or {}
 
     def __repr__(self):
         if self.success:
@@ -117,9 +120,10 @@ class ScriptRunner:
             if isinstance(data, dict):
                 if "error" in data and data["error"]:
                     return ScriptResult(False, error=data["error"], stderr=proc.stderr)
-                # requires_crawl 等非记录信号 → 空记录
+                # requires_crawl 等非记录信号 → 空记录，但保留信号供 acquire 阶段使用
                 if data.get("status") in ("requires_crawl", "skipped"):
-                    return ScriptResult(True, data=[], stderr=proc.stderr)
+                    return ScriptResult(True, data=[], stderr=proc.stderr,
+                                        signals=data)
                 if "records" in data:
                     return ScriptResult(True, data=data["records"], stderr=proc.stderr)
                 return ScriptResult(True, data=data, stderr=proc.stderr)

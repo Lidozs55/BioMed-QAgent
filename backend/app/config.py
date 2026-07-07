@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 # ===== 路径 =====
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # d:\Code\BioMedQAgent
-SKILL_DIR = PROJECT_ROOT / "biomed-data-agent"
+SKILL_DIR = PROJECT_ROOT / "biomed-data-agent-skill"
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = DATA_DIR / "output"
