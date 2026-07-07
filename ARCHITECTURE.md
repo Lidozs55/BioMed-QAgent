@@ -4,7 +4,7 @@
 
 BioMed QAgent 是一个面向**生物医学研究**场景的 AI 应用。用户输入自然语言描述的研究目标（如"分析健脾散结方对胰腺癌肝转移的影响"），系统通过多智能体协作自动完成 **数据查找/采集 → 数据解析 → 数据清洗 → 字段对齐 → 数据分析 → 来源标注 → 结构化输出** 的全流程。
 
-系统核心解决生物医学研究中**多源异构数据库无标准 API、前端交互逻辑各异、数据格式多样**的痛点，通过"静态预设爬虫 + 动态浏览器自动化"双轨策略覆盖主流生物医学数据库（TCM、STRING、GEO、PDB、NCBI 等），并支持 Agent 动态生成分析脚本完成差异表达分析、功能富集、分子对接等生物信息学任务。
+系统核心解决生物医学研究中**多源异构数据库无标准 API、前端交互逻辑各异、数据格式多样**的痛点，通过"原生工具模块 + 动态浏览器自动化 + 可自迭代 Skill Library"三层策略覆盖主流生物医学数据库（TCM、STRING、GEO、PDB、NCBI 等），并支持 Agent 在现有 skill 不足时自动生成、验证、提升新的可复用能力单元。
 
 ### 1.2 核心设计原则
 
@@ -13,6 +13,7 @@ BioMed QAgent 是一个面向**生物医学研究**场景的 AI 应用。用户�
 | **多智能体协作** | 将复杂科研任务分解为专职 Agent，每个 Agent 负责一个明确阶段 |
 | **可追溯性（Provenance）** | 每条最终输出数据均可追溯到原始来源和完整的处理链路 |
 | **可扩展性** | Agent、数据源、爬虫、解析器、分析模板、输出格式均可通过注册机制动态扩展 |
+| **Skill 自迭代** | 每个可复用能力以 skill 单元管理，运行失败时自动修复、隔离验证、通过后自动提升 |
 | **人在回路** | 关键决策点（爬虫验证、数据合并冲突、低置信度数据）支持人工介入 |
 | **前后端分离** | 后端提供 REST API + WebSocket，前端通过 Electron + React 渲染 |
 
@@ -48,15 +49,15 @@ BioMed QAgent 是一个面向**生物医学研究**场景的 AI 应用。用户�
 │      └──────────┴──────────┴──────────┴──────────┴──────────┘       │
 │                            │                                       │
 │  ┌─────────────────────────▼───────────────────────────────────┐  │
-│  │                  Tool Registry (工具注册表)                    │  │
+│  │       Project Skill Library + Tool Registry (能力层)           │  │
 │  │  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────┐   │  │
 │  │  │DataSource│ │ Crawler & │ │ Document │ │  Analysis    │   │  │
-│  │  │ Plugins  │ │ Browser   │ │ Processors│ │  Templates   │   │  │
+│  │  │ Native   │ │ Browser   │ │ Processors│ │  Skills      │   │  │
 │  │  │ (API)    │ │Automation│ │ (PDF/生物)│ │  (生物信息)  │   │  │
 │  │  └──────────┘ └───────────┘ └──────────┘ └──────────────┘   │  │
 │  │  ┌──────────┐ ┌──────────┐                                  │  │
-│  │  │Execution │ │Validation│                                  │  │
-│  │  │ Engine   │ │ Rules    │                                  │  │
+│  │  │Skill     │ │Self-     │                                  │  │
+│  │  │Registry  │ │Iteration │                                  │  │
 │  │  └──────────┘ └──────────┘                                  │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │                            │                                       │
@@ -98,7 +99,7 @@ project-root/
 │   │   │
 │   │   ├── agents/              # 多智能体层
 │   │   │   ├── base.py          # BaseAgent 抽象基类
-│   │   │   ├── orchestrator.py # Orchestrator — 任务规划与调度
+│   │   │   ├── orchestrator.py  # Orchestrator — 任务规划与调度
 │   │   │   ├── search.py        # Search — API 数据源查找
 │   │   │   ├── acquire.py       # Acquire — 爬虫与浏览器自动化
 │   │   │   ├── parser.py        # Parser — 文献/生物数据解析
@@ -107,62 +108,74 @@ project-root/
 │   │   │   ├── reviewer.py      # Reviewer — 质量审查与置信度
 │   │   │   └── registry.py      # Agent 注册表
 │   │   │
-│   │   ├── tools/               # 工具注册表
-│   │   │   ├── base.py          # BaseTool 抽象基类
-│   │   │   ├── registry.py      # Tool Registry
+│   │   ├── skills/              # Project Skill Library（规划新增）
+│   │   │   ├── library.py       # skill 扫描、检索、版本管理
+│   │   │   ├── manifest.py      # skill.yaml / manifest 数据模型
+│   │   │   ├── retriever.py     # 按能力、输入输出、领域检索 skill
+│   │   │   ├── executor.py      # skill 执行 facade，复用 ToolRegistry
+│   │   │   ├── evaluator.py     # exit/json/schema/provenance/质量校验
+│   │   │   ├── repair_agent.py  # 失败诊断、候选修复生成
+│   │   │   ├── promotion.py     # candidate 自动提升与回滚
+│   │   │   ├── runtime_store.py # usage stats、failure events、版本索引
+│   │   │   └── catalog/         # skill.yaml、fixtures、tests、candidate、archive
+│   │   │
+│   │   ├── tools/               # 后端原生工具模块（已由 skill 脚本迁入）
+│   │   │   ├── registry.py      # Tool Registry，直接函数调用，无 subprocess
 │   │   │   │
-│   │   │   ├── datasources/     # 数据源插件（API）
+│   │   │   ├── datasources/     # 数据源原生模块（API）
 │   │   │   │   ├── base_ds.py
 │   │   │   │   ├── pubmed.py
 │   │   │   │   ├── geo.py
-│   │   │   │   ├── string_db.py
+│   │   │   │   ├── string.py
 │   │   │   │   ├── pdb.py
 │   │   │   │   ├── ncbi.py
 │   │   │   │   ├── tcmsp.py
-│   │   │   │   ├── tcm.py
 │   │   │   │   ├── kegg.py
 │   │   │   │   ├── openalex.py
 │   │   │   │   ├── arxiv.py
-│   │   │   │   └── semantic_scholar.py
+│   │   │   │   ├── semantic_scholar.py
+│   │   │   │   ├── clinicaltrials.py
+│   │   │   │   ├── tcga.py
+│   │   │   │   ├── drugbank.py
+│   │   │   │   ├── disgenet.py
+│   │   │   │   ├── pubchem.py
+│   │   │   │   └── ...          # UniProt / ChEMBL / Reactome 等扩展源
 │   │   │   │
-│   │   │   ├── crawlers/        # 爬虫与浏览器自动化
-│   │   │   │   ├── base_crawler.py
-│   │   │   │   ├── playwright_driver.py
-│   │   │   │   ├── static_crawlers/
-│   │   │   │   │   ├── geo_crawler.py
-│   │   │   │   │   ├── string_crawler.py
-│   │   │   │   │   ├── tcmsp_crawler.py
-│   │   │   │   │   └── tcm_crawler.py
-│   │   │   │   └── dynamic_generator.py
+│   │   │   ├── parsers/         # 文档与生物数据解析
+│   │   │   │   ├── pdf_table.py
+│   │   │   │   ├── pdf_download.py
+│   │   │   │   ├── geo_soft.py
+│   │   │   │   ├── pdb.py
+│   │   │   │   ├── fasta.py
+│   │   │   │   └── network.py
 │   │   │   │
-│   │   │   ├── processors/     # 文档与数据解析
-│   │   │   │   ├── base_proc.py
-│   │   │   │   ├── pdf_parser.py
-│   │   │   │   ├── table_extractor.py
-│   │   │   │   ├── chart_extractor.py
-│   │   │   │   ├── bio_data_parser.py
-│   │   │   │   │   ├── geo_soft_parser.py
-│   │   │   │   │   ├── pdb_parser.py
-│   │   │   │   │   └── network_parser.py
-│   │   │   │   ├── formula_parser.py
-│   │   │   │   └── reference_parser.py
+│   │   │   ├── cleaners/        # 字段对齐、单位归一化、去重
+│   │   │   │   ├── field_aligner.py
+│   │   │   │   ├── unit_normalizer.py
+│   │   │   │   └── duplicate_detector.py
 │   │   │   │
-│   │   │   ├── analysis_templates/  # 生物信息学分析模板
-│   │   │   │   ├── base_analysis.py
-│   │   │   │   ├── differential_expr.py
+│   │   │   ├── analysis/        # 生物信息学分析原生模块
+│   │   │   │   ├── differential_expression.py
 │   │   │   │   ├── enrichment.py
-│   │   │   │   ├── network_analysis.py
-│   │   │   │   └── molecular_docking.py
+│   │   │   │   ├── ppi_network.py
+│   │   │   │   ├── hub_gene.py
+│   │   │   │   ├── upstream_regulator.py
+│   │   │   │   ├── drug_target.py
+│   │   │   │   └── survival.py
 │   │   │   │
-│   │   │   ├── execution/       # 代码执行引擎
-│   │   │   │   ├── sandbox.py
-│   │   │   │   └── runner.py
+│   │   │   ├── optimization/    # Stage Gate 与反思循环
+│   │   │   │   ├── stage_evaluator.py
+│   │   │   │   ├── reflection_loop.py
+│   │   │   │   └── keyword_expander.py
 │   │   │   │
-│   │   │   └── validators/      # 数据校验规则
-│   │   │       ├── base_val.py
-│   │   │       ├── range_check.py
-│   │   │       ├── unit_check.py
-│   │   │       └── duplicate_check.py
+│   │   │   ├── export/          # CSV/Excel/报告导出
+│   │   │   ├── io/              # CSV/Excel/JSON 转换
+│   │   │   └── viz/             # 生物医学图表
+│   │   │
+│   │   ├── resources/           # 原 biomed-data-agent-skill 资源已内嵌
+│   │   │   ├── schemas/         # DataRecord / provenance / reflection 等 schema
+│   │   │   ├── dictionaries/    # 字段、单位、基因、化合物、疾病别名字典
+│   │   │   └── domain_templates/# tcm / oncology / pharmacology 等领域模板
 │   │   │
 │   │   ├── llm/                 # LLM 调用层
 │   │   │   ├── client.py        # Qwen API 统一客户端
@@ -345,46 +358,50 @@ CREATED → PLANNING → SEARCHING → ACQUIRING → PARSING → CLEANING → AN
 
 #### 3.1.4 Acquire Agent — 爬虫与浏览器自动化
 
-针对无标准 API 的数据库（如 TCMSP、STRING 网页版），通过浏览器自动化采集数据。采用"静态预设 + 动态生成"双轨策略。
+针对无标准 API 的数据库（如 TCMSP 网页版），通过浏览器自动化采集数据。当前实现中 acquire 阶段已作为隔离占位接入 Orchestrator：当数据源返回 `requires_crawl` 信号时记录爬取目标，但不会影响后续 parse/clean/analyze。后续通过 Project Skill Library 将爬虫能力升级为可检索、可生成、可自修复的 **Acquire Skill**。
 
 ```
 标记 requires_crawl=true 的结果输入
     │
     ├─ 数据源路由
-    │      TCMSP 网页 → tcmsp_crawler（静态预设）
-    │      STRING 网页 → string_crawler（静态预设）
-    │      未知网站 → dynamic_generator（动态生成）
+    │      TCMSP 网页 → 检索 tcmsp_acquire skill
+    │      其他网页 → 按 target_url_pattern / DOM 特征检索 acquire skill
+    │      未命中 → SkillRepairAgent / SkillGenerator 生成 candidate
     │
-    ├─ 静态预设爬虫（优先）
+    ├─ 已验证 Acquire Skill（优先）
     │      Playwright 模拟：导航 → 检索 → 下载
     │      XPath/CSS 提取 → 结构化数据
     │
-    ├─ 动态生成爬虫（兜底）
-    │      LLM 分析 DOM → 生成脚本 → 测试验证
-    │      成功 → 存入知识库复用
-    │      失败 → needs_human
+    ├─ 自迭代生成（兜底）
+    │      LLM 分析 DOM → 生成 candidate skill → 隔离测试验证
+    │      成功 → 自动提升为 active skill
+    │      失败 → 保留 candidate，active skill 不受污染，检索降权
     │
-    ├─ 文本模式浏览器（轻量备选）
-    │      w3m 渲染为文本 → LLM 理解并提取
+    ├─ 轻量备选
+    │      静态 HTML fetch / 文本抽取 / 浏览器截图验证
     │
     └─ 输出：AcquiredDataRecord 列表
 ```
 
-**爬虫插件接口**：
+**Acquire Skill manifest 示例**：
 
-```python
-# backend/app/tools/crawlers/base_crawler.py
-
-class BaseCrawler(BaseModel, ABC):
-    name: str
-    target_url_pattern: str
-    requires_login: bool = False
-
-    @abstractmethod
-    async def search_and_extract(self, query: str, browser) -> CrawlerResult: ...
-
-    @abstractmethod
-    async def validate_extraction(self, sample: dict) -> bool: ...
+```yaml
+name: tcmsp_acquire
+category: acquire
+capabilities:
+  - crawl_tcmsp
+target_url_patterns:
+  - "https://tcmspw.com/*"
+entrypoint:
+  type: browser_flow
+  module: app.skills.catalog.tcmsp_acquire.flow
+quality_gates:
+  require_screenshot_evidence: true
+  require_source_ref: true
+  schema_validation: true
+repair_policy:
+  auto_repair: true
+  auto_promote: true
 ```
 
 #### 3.1.5 Parser Agent — 文献与生物数据解析
@@ -484,9 +501,11 @@ CleanedDataRecord + 研究目标输入
     │      化合物-靶点 → 网络药理学分析
     │      蛋白质序列 → 分子对接
     │
-    ├─ 模板匹配或动态生成 Python/R 脚本
+    ├─ SkillLibrary 检索 Analysis Skill
+    │      已有：ppi_network / enrichment / drug_target / survival
+    │      缺失：生成 candidate analysis skill
     │
-    ├─ Docker 沙箱执行 → 捕获结果与图表
+    ├─ 原生函数执行或隔离 candidate 验证 → 捕获结果与图表
     │
     └─ 输出：AnalysisResult（统计表 + 可视化 + 解释文本）
 ```
@@ -532,40 +551,175 @@ class AgentRegistry:
 
 ---
 
-### 3.2 Tool Registry — 工具注册表
+### 3.2 Project Skill Library + Tool Registry
+
+最新实现已经将原 `biomed-data-agent-skill/` 中的脚本与资源迁入后端：
+
+- 可执行能力迁入 `backend/app/tools/`，由 `ToolRegistry` 以**原生函数调用**方式统一暴露，不再通过 `subprocess` 调 CLI 脚本。
+- schema、字典、领域模板迁入 `backend/app/resources/`。
+- Orchestrator 当前直接调用 `ToolRegistry`，例如 `run_datasource()`、`align_fields()`、`run_ppi()`、`export_csv()`。
+
+在此基础上新增 **Project Skill Library**。它不是回退到外部 skill 目录，而是在后端内部为每个可复用能力建立 skill 元数据、检索、验证、自修复和版本提升机制。
+
+```
+Agent / Orchestrator
+    │  需要能力：search_pubmed / parse_geo_soft / crawl_tcmsp / run_enrichment
+    ▼
+SkillRetriever
+    │  按 capability、输入格式、输出 schema、领域模板、历史成功率检索
+    ▼
+SkillExecutor
+    │  调用 active skill；执行体优先复用 backend/app/tools/ 原生函数
+    ▼
+SkillEvaluator
+    │  exit/error、JSON shape、schema、provenance、领域质量规则
+    ├─ pass  → 返回结果，记录 usage stats
+    └─ fail  → 进入 Skill Self-Iteration Loop
+```
+
+#### 3.2.1 Tool Registry 当前职责
+
+`ToolRegistry` 是底层稳定执行 facade，保持薄封装：
 
 ```python
 # backend/app/tools/registry.py
 
+class ToolResult:
+    success: bool
+    data: list | dict | None
+    error: str
+    signals: dict
+
 class ToolRegistry:
-    _tools: dict[str, BaseTool] = {}
+    def run_datasource(self, name: str, query: str, max_results: int,
+                       task_id: str, **kwargs) -> ToolResult: ...
+    def run_datasources_parallel(self, sources: list[str], query: str,
+                                 max_results: int, task_id: str) -> dict[str, ToolResult]: ...
 
-    def get_definitions_for_agent(self, agent_name: str) -> list[dict]:
-        """按 Agent 返回可用工具定义（OpenAI function calling 格式）"""
-        ...
+    def parse_pdf_table(self, pdf_path, output_file=None) -> ToolResult: ...
+    def download_pdfs(self, records: list[dict], pdf_dir, **kwargs) -> ToolResult: ...
 
-    async def invoke(self, tool_name: str, params: dict) -> ToolResult: ...
+    def align_fields(self, records: list[dict], dict_dir) -> ToolResult: ...
+    def normalize_units(self, records: list[dict]) -> ToolResult: ...
+    def deduplicate(self, records: list[dict]) -> ToolResult: ...
 
-# Agent → 工具映射
-_AGENT_TOOL_MAP = {
-    "search":   ["search_pubmed", "search_geo", "search_string",
-                 "search_ncbi", "search_openalex", "search_arxiv",
-                 "fetch_full_text", "download_file"],
-    "acquire":  ["crawl_tcmsp", "crawl_string", "crawl_geo_web",
-                 "dynamic_crawl", "playwright_navigate",
-                 "screenshot_verify", "cache_lookup"],
-    "parser":   ["parse_pdf", "extract_tables", "extract_charts",
-                 "parse_bio_data_geo", "parse_bio_data_pdb",
-                 "parse_network_string", "parse_references"],
-    "cleaner":  ["detect_duplicates", "normalize_units", "align_fields",
-                 "fill_missing", "validate_range", "merge_expression_matrix"],
-    "analysis": ["differential_expression", "go_kegg_enrichment",
-                 "ppi_network_analysis", "molecular_docking",
-                 "generate_visualization"],
-    "reviewer": ["validate_citation", "check_consistency",
-                 "assess_confidence", "validate_crawler_extraction"],
-}
+    def run_ppi(self, gene_list: list[str], task_id: str, **kwargs) -> ToolResult: ...
+    def run_enrichment(self, gene_list: list[str], task_id: str, **kwargs) -> ToolResult: ...
+    def run_drug_target(self, compounds: list[str], task_id: str, **kwargs) -> ToolResult: ...
+
+    def export_csv(self, records: list[dict], output_path) -> ToolResult: ...
 ```
+
+#### 3.2.2 Skill 单元模型
+
+每个 skill 是围绕一个可复用能力的元数据与验证单元，执行体可以是现有原生函数、未来生成的 Python 模块、浏览器自动化流程或组合管线。
+
+```yaml
+# backend/app/skills/catalog/geo_soft_parser/skill.yaml
+name: geo_soft_parser
+version: 1.0.0
+status: active
+category: parser
+capabilities:
+  - parse_geo_soft
+description: Parse GEO SOFT files into DataRecord-compatible records.
+
+entrypoint:
+  type: native_function
+  module: app.tools.parsers.geo_soft
+  callable: parse_geo_soft
+
+inputs:
+  - name: input_file
+    type: file
+    formats: [soft, soft.gz]
+outputs:
+  schema: data_record.schema.json
+  required_fields:
+    - record_id
+    - source_ref
+    - extraction_confidence
+
+quality_gates:
+  min_confidence: 0.75
+  require_provenance: true
+  schema_validation: true
+
+repair_policy:
+  auto_repair: true
+  auto_promote: true
+  max_repair_attempts: 3
+  rollback_on_regression: true
+```
+
+#### 3.2.3 Skill Self-Iteration Loop
+
+所有 skill 失败后自动进入自迭代闭环，并在验证通过后**全自动提升**为 active 版本：
+
+```
+运行 skill
+  │
+  ├─ 成功：记录 usage stats，返回 ToolResult
+  │
+  └─ 失败/低质量：
+       1. FailureRecorder 记录 failure event
+          - active skill 版本
+          - 输入摘要与可复现实例
+          - traceback / stderr / error message
+          - schema validation error
+          - provenance 缺失点
+
+       2. FailureClassifier 分类
+          - dependency_error
+          - api_changed
+          - schema_mismatch
+          - parse_error
+          - timeout
+          - empty_result
+          - low_confidence
+          - provenance_missing
+
+       3. SkillRepairAgent 生成 candidate
+          - 修改原生工具模块或 adapter
+          - 更新 manifest / schema adapter / repair policy
+          - 增加失败样例为回归测试
+
+       4. CandidateRunner 隔离验证
+          - 原失败样例必须通过
+          - fixtures 回归集必须通过
+          - 输出必须满足 schema
+          - provenance 必须完整
+          - 核心历史样例成功率不得下降
+
+       5. PromotionManager 自动提升
+          - candidate -> active
+          - 旧 active -> archive
+          - manifest version +1
+          - CHANGELOG / repair log 自动追加
+          - 若新版本失败率升高，自动回滚上一稳定版本
+```
+
+#### 3.2.4 自动提升与降级规则
+
+| 条件 | 系统动作 |
+|------|----------|
+| candidate 全部质量门通过 | 自动提升为 active |
+| candidate 验证失败 | 保留在 candidates，不影响 active |
+| 同一 failure 连续修复失败 >= 3 次 | 标记 skill 为 `degraded`，检索降权 |
+| 新 active 运行失败率高于上一稳定版 | 自动 rollback |
+| 数据源 API 结构变化但可自动适配 | 自动 patch adapter 并提升 |
+| provenance 缺失 | 修复不允许跳过；未补齐不得提升 |
+
+#### 3.2.5 与现有 Tool Registry 的边界
+
+| 层级 | 职责 | 示例 |
+|------|------|------|
+| `ToolRegistry` | 稳定、显式、可测试的原生函数调用 facade | `run_datasource("pubmed", ...)` |
+| `SkillLibrary` | 管理能力单元、版本、检索、质量门、历史表现 | 选择 `pubmed_search@1.2.0` |
+| `SkillRepairAgent` | 面向失败事件生成候选修复 | 修复 PubMed 字段映射变化 |
+| `PromotionManager` | 自动提升、降级、回滚 | `candidate@1.2.1 -> active` |
+
+Orchestrator 面向 `SkillLibrary` 表达“我需要什么能力”，`SkillLibrary` 再选择当前最可靠的执行体。短期内，active skill 的 entrypoint 大多指向现有 `ToolRegistry` 原生方法；长期可以支持组合 skill、浏览器 skill 和动态生成模块。
 
 ---
 
@@ -578,9 +732,11 @@ _AGENT_TOOL_MAP = {
 
 class ProvenanceNode(BaseModel):
     node_id: str
-    operation_type: str             # "search" | "acquire" | "parse" | "clean" | "analysis"
+    operation_type: str             # "search" | "acquire" | "parse" | "clean" | "analysis" | "skill_repair" | "skill_promote"
     agent_name: str
     tool_name: Optional[str]
+    skill_name: Optional[str] = None
+    skill_version: Optional[str] = None
     input_node_ids: list[str]       # 上游依赖
     output_data_ids: list[str]
     parameters: dict
@@ -593,12 +749,30 @@ class DataLineage(BaseModel):
     confidence_history: list[float]
 ```
 
+Skill 自迭代事件也进入 provenance / reflection 轨迹：
+
+```python
+class SkillRepairEvent(BaseModel):
+    event_id: str
+    task_id: str
+    skill_name: str
+    failed_version: str
+    failure_type: str
+    failure_summary: str
+    candidate_version: str
+    validation_report: dict
+    promoted: bool
+    rollback_from: Optional[str] = None
+    timestamp: datetime
+```
+
 **溯源链示例**：
 
 ```
 字段 "compound_name": "Quercetin"
-├─ [parse] Parser Agent → extract_tables → source: tcmsp_result 表格1
-│   └─ [acquire] Acquire Agent → crawl_tcmsp → Playwright 自动化
+├─ [parse] Parser Agent → skill:tcmsp_acquire@1.2.1 → source: tcmsp_result 表格1
+│   ├─ [skill_promote] tcmsp_acquire candidate@1.2.1 自动提升
+│   └─ [acquire] Acquire Agent → Playwright 自动化
 │       └─ 原始来源: TCMSP (https://tcmspw.com/tcmsp.php)
 └─ [clean] Cleaner Agent → align_fields → "MolName" → "compound_name"
     └─ 置信度: 0.95
@@ -753,17 +927,18 @@ WS     /api/v1/ws/tasks/{id}            # 实时状态推送
 | 扩展点 | 基类 | 扩展方式 | 示例 |
 |--------|------|---------|------|
 | **新增 Agent** | BaseAgent | 继承 → 实现 execute() → @register | CitationAgent（引用网络） |
-| **新增数据源** | BaseDataSource | 继承 → 实现 search()/fetch_*() | CNKI, ChEMBL |
-| **新增爬虫** | BaseCrawler | 继承 → 实现 search_and_extract() | kegg_crawler |
-| **新增处理器** | BaseProcessor | 继承 → 实现 process() | HDF5 解析器 |
-| **新增分析模板** | BaseAnalysis | 继承 → 实现 generate_script()/execute() | 蛋白质组学分析 |
-| **新增校验规则** | BaseValidator | 继承 → 实现 validate() | 天文坐标校验 |
-| **新增领域模板** | YAML 配置 | 在 config/domain_templates/ 添加 | 生物医学、中医药 |
+| **新增 Skill** | SkillManifest | 添加 manifest + entrypoint + fixtures + quality gates | tcmsp_acquire |
+| **新增数据源** | 原生函数 / BaseDataSource | 在 `backend/app/tools/datasources/` 添加模块并注册 manifest | CNKI, ChEMBL |
+| **新增爬虫** | Acquire Skill | 添加 browser_flow / fetch_flow entrypoint | kegg_web_acquire |
+| **新增处理器** | Parser Skill | 添加原生 parser + schema + fixtures | HDF5 解析器 |
+| **新增分析模板** | Analysis Skill | 添加分析函数 + 结果 schema + 回归样例 | 蛋白质组学分析 |
+| **新增校验规则** | SkillEvaluator Rule | 添加 schema/领域质量 gate | 生物医学范围校验 |
+| **新增领域模板** | YAML 配置 | 在 `backend/app/resources/domain_templates/` 添加 | 生物医学、中医药 |
 
 **领域模板示例**：
 
 ```yaml
-# config/domain_templates/tcm.yaml
+# backend/app/resources/domain_templates/tcm.yaml
 name: 中医药现代化
 datasources:
   - name: tcmsp
@@ -870,16 +1045,17 @@ T9  前端        展示数据表格 + 火山图 + 通路气泡图 + 反馈面�
 ```
 Phase 1 (第1-2周) — 核心骨架
 ├─ [P0] FastAPI 骨架 + API 路由
-├─ [P0] BaseAgent / BaseTool 抽象基类 + Registry
+├─ [P0] BaseAgent + ToolRegistry 原生函数 facade
 ├─ [P0] QwenClient 封装
 ├─ [P0] Orchestrator 基本流水线
 ├─ [P0] 任务状态管理
 └─ [P0] Electron + React 骨架 + 任务创建页
 
 Phase 2 (第3-4周) — 数据查找、采集与解析
-├─ [P0] Search Agent + PubMed, GEO, STRING, NCBI
-├─ [P0] Acquire Agent + TCMSP, STRING 爬虫 + Playwright
-├─ [P0] Parser Agent + MinerU PDF + GEO SOFT 解析
+├─ [P0] Search Agent + PubMed, GEO, STRING, NCBI 等原生数据源
+├─ [P0] 将原 skill 脚本迁入 backend/app/tools 与 backend/app/resources
+├─ [P0] Acquire Agent 隔离占位 + requires_crawl 信号链路
+├─ [P0] Parser Agent + PDF 表格 + GEO SOFT 解析
 ├─ [P1] Qwen 图表数据提取
 ├─ [P1] Provenance Tracker
 └─ [P1] 前端数据预览表格
@@ -887,16 +1063,18 @@ Phase 2 (第3-4周) — 数据查找、采集与解析
 Phase 3 (第5-6周) — 清洗、分析与质量
 ├─ [P0] Cleaner Agent + 生物医学字段对齐
 ├─ [P0] Reviewer Agent
-├─ [P1] Analysis Agent + 差异表达/富集分析模板
+├─ [P1] Analysis Agent + PPI/富集/药物靶点/生存分析原生模块
 ├─ [P1] 置信度评估 + 冲突检测 + 人在回路
 └─ [P1] 前端反馈修正界面
 
-Phase 4 (第7-8周) — 完善与打磨
+Phase 4 (第7-8周) — Project Skill Library 与自迭代
 ├─ [P0] CSV 导出（带来源标注）
 ├─ [P0] 数据血缘图前端
-├─ [P1] 更多爬虫 + 动态生成能力
-├─ [P1] 更多分析模板 + 可视化
-├─ [P2] 领域模板（中医药配置）
+├─ [P0] Skill manifest / retriever / executor / evaluator
+├─ [P0] Failure event + candidate 隔离验证 + 自动 promotion
+├─ [P1] Acquire Skill 浏览器自动化与 DOM 变化自修复
+├─ [P1] Analysis Skill 动态生成与回归验证
+├─ [P2] 领域模板增强（中医药/肿瘤/药理）
 └─ [P2] 演示视频
 ```
 
