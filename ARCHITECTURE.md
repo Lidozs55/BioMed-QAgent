@@ -959,6 +959,98 @@ field_mappings:
 
 ---
 
+## 4.1 LLM 错误决策机制（设计，暂不实施）
+
+### 动机
+
+当前流水线中，工具执行失败（如数据源 API 不可用、PDF 解析异常、LLM 报告生成超时）时，
+行为是固定的：非致命错误追加到 `task.errors`，致命错误抛异常导致任务失败。
+这种"硬编码"的容错策略缺乏灵活性——某些场景下用户希望 LLM 判断是否可以跳过某阶段、
+启用替代数据源、或调整参数重试。
+
+### 设计：ErrorDecisionAgent
+
+在 Orchestrator 的 PIPELINE 中，当某阶段 Agent 抛出异常时，插入一个 LLM 决策环节：
+
+```
+Agent.execute() 抛异常
+  → Orchestrator 捕获
+  → ErrorDecisionAgent.decide(error, stage, context) → 决策
+  → 按决策执行：
+      - "skip"        → 跳过该阶段，records 原样传递，task.errors 追加警告
+      - "retry"       → 用相同参数重试（最多 1 次）
+      - "fallback"    → 启用替代方案（如 disgenet 失败 → 用 opentargets 替代）
+      - "abort"       → 终止任务，标记 FAILED
+      - "request_user" → 暂停任务，通过 WebSocket 请求用户决策
+```
+
+### ErrorDecisionAgent 接口
+
+```python
+class ErrorDecisionAgent:
+    async def decide(self, error: Exception, stage: str,
+                     task: Task, context: dict) -> dict:
+        """调用 LLM 分析错误并给出决策。
+
+        Returns:
+            {
+                "action": "skip" | "retry" | "fallback" | "abort" | "request_user",
+                "reason": "决策理由",
+                "fallback_sources": ["opentargets", "hgnc"],  # 仅 fallback 时
+                "retry_params": {"max_results": 10},           # 仅 retry 时
+                "user_question": "是否跳过差异表达分析？"       # 仅 request_user 时
+            }
+        """
+```
+
+### LLM Prompt 示例
+
+```
+你是生物医学数据流水线的错误决策助手。
+
+当前阶段：{stage}
+错误类型：{error_type}
+错误信息：{error_message}
+已完成阶段：{completed_stages}
+已有记录数：{record_count}
+任务领域：{domain}
+
+可选决策：
+1. skip — 跳过此阶段（该阶段非必需时）
+2. retry — 重试此阶段（瞬时网络错误时）
+3. fallback — 启用替代方案（数据源不可用时切换到替代源）
+4. abort — 终止任务（核心阶段失败且无替代时）
+5. request_user — 请求用户决策（需要人工判断时）
+
+请返回 JSON：{"action": "...", "reason": "...", ...}
+```
+
+### 适用场景
+
+| 错误类型 | 建议决策 | 示例 |
+|---------|---------|------|
+| 数据源 API Key 缺失 | skip | disgenet 缺少 API Key → 跳过，已有 269 条记录足够 |
+| PDF 文件损坏 | skip | pdfplumber 报 PDFSyntaxError → 跳过该 PDF |
+| STRING 网络超时 | retry | 瞬时网络波动 → 重试 1 次 |
+| LLM 报告生成失败 | retry | DashScope 偶发 503 → 重试 1 次 |
+| TCGA 表达数据不可用 | fallback | GDC API 降级 → 改用 ucsc_xena |
+| 核心阶段全部数据源失败 | abort | search 阶段 0 条记录 → 终止 |
+| 分析参数不确定 | request_user | "是否对 log2fc<0.5 的基因也做富集？" |
+
+### 实现位置
+
+- `backend/app/agents/error_decision.py` — ErrorDecisionAgent
+- `Orchestrator.run` 中 `try/except` 包裹每个 `agent.execute()`，异常时调用 `ErrorDecisionAgent.decide()`
+- 决策为 `skip` 时 `continue`，`retry` 时重新调用，`abort` 时 `raise`，`request_user` 时通过 WebSocket 等待用户输入
+
+### 与现有架构的关系
+
+- 不改变 Agent 的 `execute` 签名，仅由 Orchestrator 在异常路径插入决策
+- 复用 `DashScopeClient.chat_json`，无需新增 LLM 客户端
+- 决策记录写入 `Provenance`（operation_type="error_decision"），便于事后审计
+
+---
+
 ## 五、端到端数据流示例
 
 以"分析健脾散结方对胰腺癌肝转移的影响"为例：

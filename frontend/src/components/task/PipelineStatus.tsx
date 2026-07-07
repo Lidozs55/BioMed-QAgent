@@ -1,8 +1,8 @@
 /** 流水线状态组件 — 展示各阶段进度和实时消息 */
-import { Card, Steps, Tag, Typography, Timeline, Statistic, Row, Col, Progress, Empty, Alert } from 'antd';
+import { Card, Steps, Tag, Typography, Timeline, Statistic, Row, Col, Progress, Empty, Alert, Collapse, Button, Tooltip } from 'antd';
 import {
   CheckCircleOutlined, LoadingOutlined, ClockCircleOutlined,
-  CloseCircleOutlined, BulbOutlined,
+  CloseCircleOutlined, BulbOutlined, WarningOutlined, ExpandOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
 import type { TaskSummary, StageInfo, StageStatus } from '@/api/types';
@@ -96,14 +96,78 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
         </Card>
       )}
 
-      {/* 错误提示 */}
+      {/* 致命错误（导致任务失败） */}
+      {task.status === 'failed' && task.errors.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="任务执行失败 — 致命错误"
+          description={
+            <div>
+              <Text strong style={{ color: '#ff4d4f', display: 'block', marginBottom: 4 }}>
+                {task.errors[task.errors.length - 1]}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                请检查后端日志获取完整 traceback。常见原因：数据清洗异常、LLM 报告生成失败、数据源 API 不可用。
+              </Text>
+            </div>
+          }
+        />
+      )}
+
+      {/* 非致命错误（可展开查看全部） */}
       {task.errors.length > 0 && (
         <Alert
           type="warning"
           showIcon
+          icon={<WarningOutlined />}
           style={{ marginBottom: 16 }}
-          message={`${task.errors.length} 个非致命错误`}
-          description={task.errors.slice(0, 3).join('；')}
+          message={
+            <span>
+              {task.status === 'failed'
+                ? `${task.errors.length - 1} 个非致命警告`
+                : `${task.errors.length} 个非致命错误`}
+              <Tooltip title="点击展开查看全部错误详情">
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<ExpandOutlined />}
+                  style={{ padding: '0 4px', height: 'auto', fontSize: 12 }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const panel = document.getElementById('error-detail-panel');
+                    if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+                  }}
+                >
+                  详情
+                </Button>
+              </Tooltip>
+            </span>
+          }
+          description={
+            <div>
+              <div style={{ marginBottom: 4 }}>
+                {task.errors.slice(0, 3).map((err, i) => (
+                  <div key={i} style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 2 }}>
+                    • {err.length > 120 ? err.slice(0, 120) + '…' : err}
+                  </div>
+                ))}
+              </div>
+              <div id="error-detail-panel" style={{ display: 'none', marginTop: 8,
+                   maxHeight: 300, overflowY: 'auto', padding: 8,
+                   background: '#fafafa', borderRadius: 4 }}>
+                {task.errors.map((err, i) => (
+                  <div key={i} style={{ fontSize: 11, fontFamily: 'monospace',
+                       marginBottom: 4, padding: '2px 0',
+                       borderBottom: i < task.errors.length - 1 ? '1px dashed #e8e8e8' : 'none' }}>
+                    <Tag style={{ fontSize: 10 }}>#{i + 1}</Tag>
+                    {err}
+                  </div>
+                ))}
+              </div>
+            </div>
+          }
         />
       )}
 
@@ -127,7 +191,13 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
                 <Text type="secondary" style={{ fontSize: 12 }}>{STAGE_DESC[s.name]}</Text>
                 {s.message && (
                   <div style={{ marginTop: 4 }}>
-                    <Text style={{ fontSize: 12 }}>{s.message}</Text>
+                    <Text style={{
+                      fontSize: 12,
+                      color: s.status === 'failed' ? '#ff4d4f' : undefined,
+                      fontWeight: s.status === 'failed' ? 600 : 400,
+                    }}>
+                      {s.message}
+                    </Text>
                   </div>
                 )}
               </div>
@@ -184,16 +254,34 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           <Empty description="等待消息…" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <Timeline
-            items={wsMessages.slice(-30).reverse().map((msg, i) => ({
+            items={wsMessages.slice(-50).reverse().map((msg, i) => ({
               color: msg.type === 'error' ? 'red'
                    : msg.type === 'task_complete' ? 'green'
                    : msg.type === 'stage_complete' ? 'blue'
+                   : msg.type === 'stage_start' ? 'blue'
                    : 'gray',
               children: (
                 <div>
-                  <Tag style={{ fontSize: 10 }}>{msg.type}</Tag>
+                  <Tag style={{
+                    fontSize: 10,
+                    color: msg.type === 'error' ? '#ff4d4f' : undefined,
+                    borderColor: msg.type === 'error' ? '#ff4d4f' : undefined,
+                  }}>{msg.type}</Tag>
                   {msg.stage && <Tag color="blue" style={{ fontSize: 10 }}>{STAGE_LABELS[msg.stage] || msg.stage}</Tag>}
-                  {msg.message && <Text style={{ fontSize: 12 }}>{msg.message}</Text>}
+                  {msg.pct !== undefined && msg.pct > 0 && (
+                    <Tag style={{ fontSize: 10 }}>{Math.round(msg.pct * 100)}%</Tag>
+                  )}
+                  {msg.message && (
+                    <Text style={{
+                      fontSize: 12,
+                      color: msg.type === 'error' ? '#ff4d4f' : undefined,
+                      wordBreak: 'break-all',
+                      display: 'block',
+                      marginTop: 2,
+                    }}>
+                      {msg.message}
+                    </Text>
+                  )}
                 </div>
               ),
               key: i,
