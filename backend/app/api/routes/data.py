@@ -12,7 +12,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 
-from app.config import OUTPUT_DIR
 from app.storage.task_store import get_task_store
 
 logger = logging.getLogger(__name__)
@@ -134,7 +133,35 @@ async def export_data(task_id: str, fmt: str) -> Response:
             headers={"Content-Disposition": f"attachment; filename={task_id}.json"},
         )
     else:
-        raise HTTPException(status_code=400, detail=f"不支持的格式: {fmt}（仅支持 csv/json）")
+        raise HTTPException(status_code=400, detail=f"不支持的格式: {fmt}（仅支持 csv/json/merged_csv）")
+
+
+@router.get("/tasks/{task_id}/export/merged/csv", summary="导出多源整合CSV")
+async def export_merged_csv(task_id: str) -> Response:
+    """导出多源整合 CSV — 按实体类型分组，字段对齐，便于研究分析。
+
+    与普通 CSV 的区别：
+    - 普通 CSV: 所有记录平铺，字段稀疏（适合溯源审计）
+    - 整合 CSV: 按实体类型分组（literature/compound/gene/interaction/pathway），
+      字段对齐，每个分组有独立的列头，便于后续统计分析
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    # 优先返回已生成的文件
+    if task.output_dir:
+        merged_path = Path(task.output_dir) / "merged_data.csv"
+        if merged_path.exists():
+            with open(merged_path, "rb") as f:
+                return Response(
+                    content=f.read(),
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={task_id}_merged.csv"},
+                )
+
+    raise HTTPException(status_code=404, detail="整合CSV尚未生成，请等待任务完成")
 
 
 @router.get("/tasks/{task_id}/report", summary="获取 HTML 报告")
@@ -157,3 +184,70 @@ async def get_report(task_id: str) -> Response:
         raise HTTPException(status_code=404, detail="报告尚未生成")
 
     return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@router.post("/tasks/{task_id}/regenerate-report", summary="重新生成 LLM 综合研究报告")
+async def regenerate_report(task_id: str) -> dict:
+    """对已完成的任务重新生成 LLM 综合研究报告和整合 CSV。
+
+    用途：
+    - 对已有任务重新生成报告（如调整了 prompt 或 LLM 模型后）
+    - 调试 LLM 报告生成流程
+
+    失败时直接返回 500 错误（不回退到模板）。
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    records = store._records.get(task_id, [])
+    if not records:
+        raise HTTPException(status_code=400, detail="任务无数据记录，无法生成报告")
+
+    analysis = store.get_analysis(task_id) or {}
+    entities = task.entities or {}
+
+    # 生成 LLM 综合报告（失败则抛出，不回退）
+    from app.agents.llm_reporter import LLMReporter
+    from app.llm.client import DashScopeClient
+    reporter = LLMReporter(DashScopeClient())
+    try:
+        html = await reporter.generate_report(
+            research_goal=task.research_goal,
+            records=records,
+            entities=entities,
+            analysis=analysis,
+            review={},
+            task_id=task_id,
+            domain=task.domain or "",
+        )
+    except Exception as e:
+        logger.exception("重新生成报告失败 task=%s: %s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"LLM 报告生成失败: {e}")
+
+    # 保存报告
+    store.set_report(task_id, html)
+    if task.output_dir:
+        report_path = Path(task.output_dir) / "report.html"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+    # 同时重新生成整合 CSV
+    merged_csv_rows = 0
+    try:
+        from app.agents.orchestrator import Orchestrator
+        orch = Orchestrator()
+        if task.output_dir:
+            merged_path = Path(task.output_dir) / "merged_data.csv"
+            _, merged_csv_rows = orch._write_merged_csv(records, merged_path)
+    except Exception as e:
+        logger.warning("重新生成整合CSV失败 task=%s: %s", task_id, e)
+
+    return {
+        "task_id": task_id,
+        "status": "ok",
+        "report_length": len(html),
+        "merged_csv_rows": merged_csv_rows,
+        "records_count": len(records),
+    }

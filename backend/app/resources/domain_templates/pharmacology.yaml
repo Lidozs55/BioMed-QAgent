@@ -1,0 +1,88 @@
+# 药理学研究领域模板
+# 用途：当用户研究目标涉及药物作用机制、药物-靶点互作、ADME、副作用、药物重定位时加载此模板
+# 加载方：Orchestrator planning 阶段（领域识别与模板加载）
+# 维护：BioMed QAgent
+# 关键场景：药物作用机制解析、靶点结合分析、ADME 评估、副作用监测、药物重定位
+template_name: 药理学研究
+description: |
+  药理学研究领域模板，适用于含药物名、靶点蛋白、作用机制、ADME 属性、副作用等研究目标。
+  数据源以 DrugBank / OpenTargets 为核心，结合 PubChem 化合物结构、PubMed 文献、
+  KEGG 通路与 TCGA 药物基因组学数据，侧重 drug-target 互作分析与药代动力学评估。
+
+# 优先数据源：DrugBank / OpenTargets 排首位以获取药物-靶点权威关系
+priority_sources:
+  - source: DrugBank
+    reason: 药物-靶点权威数据库，提供作用机制、ADME、药物互作完整信息
+    client: scripts/datasources/drugbank_client.py
+    required_fields: [compound_name, target_protein, mechanism_of_action, adme_property]
+  - source: OpenTargets
+    reason: 药物-靶点-疾病关联整合证据，支持药物重定位
+    client: scripts/datasources/opentargets_client.py
+  - source: PubChem
+    reason: 化合物结构（SMILES）与理化属性，支持相似性检索
+    client: scripts/datasources/pubchem_client.py
+  - source: PubMed
+    reason: 药理与临床研究文献，补充作用机制与副作用证据
+    client: scripts/datasources/pubmed_client.py
+  - source: KEGG
+    reason: 药物作用通路富集分析（KEGG Drug / Pathway）
+    client: scripts/datasources/kegg_client.py
+  - source: TCGA
+    reason: 药物基因组学数据，靶点基因表达与生存分析
+    client: scripts/datasources/tcga_client.py
+
+# 推荐字段映射：聚焦药物-靶点-机制核心字段
+recommended_field_mappings:
+  - compound_name        # 药物/化合物名（依赖 dictionaries/compound_names.yaml）
+  - target_protein       # 靶点蛋白/基因
+  - gene_symbol          # 靶点对应基因符号（依赖 dictionaries/gene_symbols.yaml）
+  - mechanism_of_action  # 作用机制（MOA）
+  - indication           # 适应症
+  - smiles               # 化合物 SMILES 结构式
+  - pubchem_cid          # PubChem CID
+  - adme_property        # ADME 属性（吸收/分布/代谢/排泄）
+  - side_effect          # 副作用 / 不良反应
+  - disease              # 适应症对应疾病（依赖 dictionaries/disease_names.yaml）
+  - pubmed_id            # 文献来源
+  - organism             # 物种（人为主）
+
+# 推荐分析配方：药理学研究典型分析流程
+analysis_recipes:
+  - name: drug_target_analysis
+    script: scripts/analysis/drug_target_analyzer.py
+    when_to_use: 药物-靶点互作核心分析，构建 drug-target 二部图与结合位点评估
+    required_fields: [compound_name, target_protein]
+  - name: ppi_network
+    script: scripts/analysis/ppi_network.py
+    when_to_use: 靶点蛋白 PPI 网络构建，识别多靶点药物的协同调控网络
+    required_fields: [gene_symbol, target_protein]
+    visualization: scripts/viz/network_plot.py
+  - name: pathway_enrichment
+    script: scripts/analysis/enrichment.py
+    when_to_use: 靶点基因 KEGG / GO 通路富集，解析药物作用通路
+    required_fields: [gene_symbol]
+    visualization: scripts/viz/enrichment_bubble.py
+  - name: survival_analysis
+    script: scripts/analysis/survival_analysis.py
+    when_to_use: 药物靶点基因在 TCGA 队列中的生存分析（药物基因组学验证）
+    required_fields: [gene_symbol]
+
+# 置信度阈值：DrugBank / OpenTargets API 数据可信度最高
+confidence_thresholds:
+  api_result: 0.95         # DrugBank / OpenTargets API 返回数据
+  crawl_result: 0.75       # 爬虫抓取数据
+  literature_extraction: 0.8   # 文献表格提取的作用机制与 ADME 数据
+  pdf_table_extraction: 0.78   # PDF 表格提取（药品说明书等）
+  needs_review_below: 0.65
+
+# 注意事项
+notes: |
+  - 必须严格区分 drug_name（药物通用名/商品名）与 compound_name（标准化合物名）：
+    drug_name 层含商品名与别名，需通过 dictionaries/compound_names.yaml 归并到 compound_name
+  - ADME 数据通常需从 DrugBank 完整 XML 获取（在线 API 仅返回摘要），建议优先本地 XML 解析
+  - 单克隆抗体类药物（如 Nivolumab / Pembrolizumab）无 SMILES 结构式，pubchem_cid 为 null，
+    需通过 DrugBank 的 biotech 类目检索
+  - 药物重定位分析需结合 OpenTargets 的 disease-target 证据与 KEGG 通路覆盖度
+  - 靶点字段可能是蛋白名而非基因符号，需用 dictionaries/gene_symbols.yaml 归并
+  - 副作用（side_effect）数据来源多元（FAERS / 药品说明书 / 文献），置信度差异大，需标注来源
+  - 跨数据源合并药物记录时，以 PubChem CID 或 DrugBank ID 为去重主键，避免 SMILES 立体异构差异

@@ -86,11 +86,11 @@ export function ChartsView({ taskId }: { taskId: string }) {
           <Text strong>数据概览：</Text>
           <Tag color="blue">{data.total} 条记录</Tag>
           <Tag color="green">{Object.keys(data.sources).length} 个数据源</Tag>
-          {data.records[0]?.fields?.title && (
+          {data.records[0]?.fields?.title ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
               示例：{String(data.records[0].fields.title).slice(0, 50)}
             </Text>
-          )}
+          ) : null}
         </div>
       </Card>
     </div>

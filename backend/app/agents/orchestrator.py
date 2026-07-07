@@ -15,19 +15,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
-from typing import Any
 
-from app.agents.base import BaseAgent, ProgressCallback
-from app.config import MAX_SEARCH_RESULTS, MAX_STAGE_ITERATIONS, MODEL_TEXT, MODEL_STRONG
+from app.agents.base import ProgressCallback
+from app.config import MODEL_TEXT, MODEL_STRONG
 from app.llm.client import DashScopeClient
 from app.models.task import Task, TaskStatus, StageStatus
-from app.provenance.tracker import ProvenanceTracker
 from app.storage.task_store import TaskStore, get_task_store
 from app.tools.registry import ToolRegistry, get_registry
-from app.tools.script_tool import ScriptResult
 from app.utils.paths import get_task_output_dir, get_dictionaries_dir
 
 logger = logging.getLogger(__name__)
@@ -362,25 +358,20 @@ class Orchestrator:
         total = sum(len(qs) for qs in by_source.values())
         done = 0
         for src_name, qs in by_source.items():
-            runner = self.tools.get(src_name)
-            if not runner:
-                continue
             for q in qs:
                 done += 1
                 pct = 0.55 + 0.25 * done / max(total, 1)
                 label = q["query"][:30]
                 self._emit(progress, type="stage_progress", stage="search",
                             pct=pct, message=f"{src_name}/{q.get('entity_type','')}: {label}")
-                # 构造参数：实体源用各自参数
-                args = ["--query", q["query"], "--max",
-                        str(min(task.max_sources, 10)), "--task-id", task.task_id]
+                # 直接函数调用：各数据源的特殊参数通过 kwargs 传递
+                kwargs: dict = {}
                 if src_name == "disgenet" and q.get("mode") == "disease":
-                    args.extend(["--mode", "disease"])
-                if src_name == "tcmsp":
-                    # tcmsp 用 --compound 参数
-                    args = ["--compound", q["query"], "--max",
-                            str(min(task.max_sources, 10)), "--task-id", task.task_id]
-                result = await self._to_thread(runner.run, args, timeout=60)
+                    kwargs["mode"] = "disease"
+                result = await self._to_thread(
+                    self.tools.run_datasource, src_name, q["query"],
+                    min(task.max_sources, 10), task.task_id, **kwargs,
+                )
                 if result.success:
                     recs = result.data if isinstance(result.data, list) else ([result.data] if result.data else [])
                     all_records.extend(recs)
@@ -465,18 +456,13 @@ class Orchestrator:
             for pdf in pdf_files:
                 self._emit(progress, type="stage_progress", stage="parse",
                             pct=0.2, message=f"解析上传 PDF: {pdf.name}")
-                runner = self.tools.get("pdf_table")
-                if runner:
-                    out_file = out_dir / f"parsed_{pdf.stem}.json"
-                    result = await self._to_thread(
-                        runner.run_to_file,
-                        ["--input", str(pdf), "--out", str(out_file)],
-                        output_file=out_file,
-                        timeout=120,
-                    )
-                    if result.success and result.data:
-                        parsed = result.data if isinstance(result.data, list) else [result.data]
-                        parsed_records.extend(parsed)
+                out_file = out_dir / f"parsed_{pdf.stem}.json"
+                result = await self._to_thread(
+                    self.tools.parse_pdf_table, pdf, out_file,
+                )
+                if result.success and result.data:
+                    parsed = result.data if isinstance(result.data, list) else [result.data]
+                    parsed_records.extend(parsed)
 
         # Step 2: 自动下载搜索结果中的开放获取 PDF（arXiv/OpenAlex 等）
         # 筛选含 pdf_url 的记录（最多前 5 条，避免被反爬）
@@ -492,45 +478,30 @@ class Orchestrator:
         if pdf_candidates:
             self._emit(progress, type="stage_progress", stage="parse",
                         pct=0.4, message=f"尝试下载 {len(pdf_candidates)} 篇开放获取论文...")
-            # 写入临时 records 文件供 pdf_downloader 读取
-            tmp_records = out_dir / "raw_for_download.json"
-            with open(tmp_records, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, default=str)
             pdf_dir = out_dir / "pdfs"
-            runner = self.tools.get("pdf_download")
-            if runner:
-                dl_out = out_dir / "downloaded_records.json"
-                result = await self._to_thread(
-                    runner.run_to_file,
-                    ["--input", str(tmp_records),
-                     "--out-dir", str(pdf_dir),
-                     "--max", "5",
-                     "--task-id", task.task_id],
-                    output_file=dl_out,
-                    timeout=180,
-                )
-                downloaded = []
-                if result.success and result.data:
-                    downloaded = result.data if isinstance(result.data, list) else [result.data]
-                self._emit(progress, type="stage_progress", stage="parse",
-                            pct=0.7, message=f"下载完成：{len(downloaded)} 篇 PDF")
+            dl_out = out_dir / "downloaded_records.json"
+            result = await self._to_thread(
+                self.tools.download_pdfs, records, pdf_dir,
+                5, task.task_id, dl_out,
+            )
+            downloaded = []
+            if result.success and result.data:
+                downloaded = result.data if isinstance(result.data, list) else [result.data]
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.7, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
-                # Step 3: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
-                runner = self.tools.get("pdf_table")
-                if runner and pdf_dir.exists():
-                    for pdf_file in sorted(pdf_dir.glob("*.pdf")):
-                        self._emit(progress, type="stage_progress", stage="parse",
-                                    pct=0.85, message=f"解析 PDF: {pdf_file.name}")
-                        out_file = out_dir / f"parsed_{pdf_file.stem}.json"
-                        result = await self._to_thread(
-                            runner.run_to_file,
-                            ["--input", str(pdf_file), "--out", str(out_file)],
-                            output_file=out_file,
-                            timeout=120,
-                        )
-                        if result.success and result.data:
-                            parsed = result.data if isinstance(result.data, list) else [result.data]
-                            parsed_records.extend(parsed)
+            # Step 3: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
+            if pdf_dir.exists():
+                for pdf_file in sorted(pdf_dir.glob("*.pdf")):
+                    self._emit(progress, type="stage_progress", stage="parse",
+                                pct=0.85, message=f"解析 PDF: {pdf_file.name}")
+                    out_file = out_dir / f"parsed_{pdf_file.stem}.json"
+                    result = await self._to_thread(
+                        self.tools.parse_pdf_table, pdf_file, out_file,
+                    )
+                    if result.success and result.data:
+                        parsed = result.data if isinstance(result.data, list) else [result.data]
+                        parsed_records.extend(parsed)
 
         # 记录溯源：parse 阶段
         prov = self.store.get_provenance(task.task_id)
@@ -558,68 +529,45 @@ class Orchestrator:
         out_dir = get_task_output_dir(task.task_id)
         cleaned = records
 
-        # Step 1: 保存原始记录供脚本读取
+        # 保存原始记录（供溯源/调试）
         raw_file = out_dir / "raw_records.json"
         with open(raw_file, "w", encoding="utf-8") as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
 
+        # Step 1: 字段对齐（直接传递 records，无需中间文件）
         self._emit(progress, type="stage_progress", stage="clean",
                     pct=0.2, message="字段对齐中...")
+        dict_dir = get_dictionaries_dir()
+        result = await self._to_thread(self.tools.align_fields, cleaned, dict_dir)
+        if result.success and result.data:
+            cleaned = result.data if isinstance(result.data, list) else [result.data]
+            self._write_records(out_dir / "aligned_records.json", cleaned)
+            self._emit(progress, type="stage_progress", stage="clean",
+                        pct=0.4, message=f"字段对齐完成：{len(cleaned)} 条")
+        else:
+            task.errors.append(f"field_aligner: {result.error}")
 
-        # Step 2: 字段对齐
-        aligned_file = out_dir / "aligned_records.json"
-        runner = self.tools.get("field_aligner")
-        if runner:
-            dict_dir = get_dictionaries_dir()
-            result = await self._to_thread(
-                runner.run_to_file,
-                ["--input", str(raw_file), "--out", str(aligned_file),
-                 "--dictionaries", str(dict_dir)],
-                output_file=aligned_file,
-                timeout=120,
-            )
-            if result.success and result.data:
-                cleaned = result.data if isinstance(result.data, list) else [result.data]
-                self._emit(progress, type="stage_progress", stage="clean",
-                            pct=0.4, message=f"字段对齐完成：{len(cleaned)} 条")
-            else:
-                task.errors.append(f"field_aligner: {result.error}")
-
-        # Step 3: 单位归一化
+        # Step 2: 单位归一化
         self._emit(progress, type="stage_progress", stage="clean",
                     pct=0.6, message="单位归一化中...")
-        normalized_file = out_dir / "normalized_records.json"
-        runner = self.tools.get("unit_normalizer")
-        if runner and cleaned:
-            norm_input = aligned_file if aligned_file.exists() else raw_file
-            result = await self._to_thread(
-                runner.run_to_file,
-                ["--input", str(norm_input), "--out", str(normalized_file)],
-                output_file=normalized_file,
-                timeout=120,
-            )
+        if cleaned:
+            result = await self._to_thread(self.tools.normalize_units, cleaned)
             if result.success and result.data:
                 cleaned = result.data if isinstance(result.data, list) else [result.data]
+                self._write_records(out_dir / "normalized_records.json", cleaned)
                 self._emit(progress, type="stage_progress", stage="clean",
                             pct=0.8, message=f"单位归一化完成：{len(cleaned)} 条")
             else:
                 task.errors.append(f"unit_normalizer: {result.error}")
 
-        # Step 4: 去重
-        dedup_file = out_dir / "deduped_records.json"
-        runner = self.tools.get("duplicate_dedector")
-        if runner and cleaned:
-            dedup_input = normalized_file if normalized_file.exists() else aligned_file if aligned_file.exists() else raw_file
-            result = await self._to_thread(
-                runner.run_to_file,
-                ["--input", str(dedup_input), "--out", str(dedup_file)],
-                output_file=dedup_file,
-                timeout=120,
-            )
+        # Step 3: 去重
+        if cleaned:
+            result = await self._to_thread(self.tools.deduplicate, cleaned)
             if result.success and result.data:
                 cleaned = result.data if isinstance(result.data, list) else [result.data]
                 self._emit(progress, type="stage_progress", stage="clean",
                             pct=0.95, message=f"去重完成：{len(cleaned)} 条")
+        self._write_records(out_dir / "deduped_records.json", cleaned)
 
         # 统计质量标记
         flags_count = sum(1 for r in cleaned if r.get("quality_flags"))
@@ -640,7 +588,7 @@ class Orchestrator:
             rec_ids = [r.get("record_id", "") for r in cleaned]
             # 输入：search 阶段产生的所有 record_id
             input_ids = [r.get("record_id", "") for r in records]
-            prov.record("clean", "clean_agent", tool_name="field_aligner+unit_normalizer+duplicate_dedector",
+            prov.record("clean", "clean_agent", tool_name="field_aligner+unit_normalizer+duplicate_detector",
                        input_records=input_ids,
                        output_records=rec_ids,
                        parameters={"input_count": len(records), "output_count": len(cleaned),
@@ -673,63 +621,45 @@ class Orchestrator:
         if gene_list:
             self._emit(progress, type="stage_progress", stage="analyze",
                         pct=0.3, message=f"PPI 网络分析（{len(gene_list)} 个基因）...")
-            runner = self.tools.get("ppi_network")
-            if runner:
-                ppi_out = out_dir / "ppi_result.json"
-                result = await self._to_thread(
-                    runner.run_to_file,
-                    ["--gene-list", ",".join(gene_list[:20]),
-                     "--task-id", task.task_id],
-                    output_file=ppi_out,
-                    timeout=60,
-                )
-                if result.success and result.data:
-                    analysis["ppi_network"] = result.data if isinstance(result.data, dict) else {"edges": result.data}
-                    self._emit(progress, type="stage_progress", stage="analyze",
-                                pct=0.5, message="PPI 网络分析完成")
-                else:
-                    self._emit(progress, type="stage_progress", stage="analyze",
-                                pct=0.5, message=f"PPI 跳过: {result.error[:40]}")
+            ppi_out = out_dir / "ppi_result.json"
+            result = await self._to_thread(
+                self.tools.run_ppi, gene_list[:20], task.task_id, ppi_out,
+            )
+            if result.success and result.data:
+                analysis["ppi_network"] = result.data if isinstance(result.data, dict) else {"edges": result.data}
+                self._emit(progress, type="stage_progress", stage="analyze",
+                            pct=0.5, message="PPI 网络分析完成")
+            else:
+                self._emit(progress, type="stage_progress", stage="analyze",
+                            pct=0.5, message=f"PPI 跳过: {result.error[:40]}")
 
         # Step 2: GO/KEGG 富集分析（如有基因列表）
         if gene_list:
             self._emit(progress, type="stage_progress", stage="analyze",
                         pct=0.6, message="GO/KEGG 富集分析...")
-            runner = self.tools.get("enrichment")
-            if runner:
-                enr_out = out_dir / "enrichment_result.json"
-                result = await self._to_thread(
-                    runner.run_to_file,
-                    ["--gene-list", ",".join(gene_list[:50]),
-                     "--task-id", task.task_id],
-                    output_file=enr_out,
-                    timeout=60,
-                )
-                if result.success and result.data:
-                    analysis["enrichment"] = result.data if isinstance(result.data, dict) else {"terms": result.data}
-                    self._emit(progress, type="stage_progress", stage="analyze",
-                                pct=0.8, message="富集分析完成")
-                else:
-                    self._emit(progress, type="stage_progress", stage="analyze",
-                                pct=0.8, message=f"富集跳过: {result.error[:40]}")
+            enr_out = out_dir / "enrichment_result.json"
+            result = await self._to_thread(
+                self.tools.run_enrichment, gene_list[:50], task.task_id, enr_out,
+            )
+            if result.success and result.data:
+                analysis["enrichment"] = result.data if isinstance(result.data, dict) else {"terms": result.data}
+                self._emit(progress, type="stage_progress", stage="analyze",
+                            pct=0.8, message="富集分析完成")
+            else:
+                self._emit(progress, type="stage_progress", stage="analyze",
+                            pct=0.8, message=f"富集跳过: {result.error[:40]}")
 
         # Step 3: 药物-靶点分析（如有化合物）
         compounds = entities.get("compounds", [])
         if compounds:
             self._emit(progress, type="stage_progress", stage="analyze",
                         pct=0.85, message="药物-靶点分析...")
-            runner = self.tools.get("drug_target")
-            if runner:
-                dt_out = out_dir / "drug_target_result.json"
-                result = await self._to_thread(
-                    runner.run_to_file,
-                    ["--compound-list", ",".join(compounds[:5]),
-                     "--task-id", task.task_id],
-                    output_file=dt_out,
-                    timeout=60,
-                )
-                if result.success and result.data:
-                    analysis["drug_targets"] = result.data if isinstance(result.data, dict) else {"compounds": result.data}
+            dt_out = out_dir / "drug_target_result.json"
+            result = await self._to_thread(
+                self.tools.run_drug_target, compounds[:5], task.task_id, dt_out,
+            )
+            if result.success and result.data:
+                analysis["drug_targets"] = result.data if isinstance(result.data, dict) else {"compounds": result.data}
 
         msg = f"分析完成：{len(analysis)} 项分析结果"
         self._set_stage(task, "analyze", StageStatus.DONE, msg)
@@ -820,40 +750,48 @@ class Orchestrator:
     async def _stage_export(self, task: Task, records: list[dict],
                             context: dict, review: dict,
                             progress: ProgressCallback | None):
-        self._set_stage(task, "export", StageStatus.RUNNING, "生成 CSV 和 HTML 报告...")
+        self._set_stage(task, "export", StageStatus.RUNNING, "生成 CSV 和 LLM 研究报告...")
         self._emit(progress, type="stage_start", stage="export",
-                    message="生成结构化输出和可视化报告...")
+                    message="生成结构化输出和综合研究报告...")
 
         out_dir = get_task_output_dir(task.task_id)
 
-        # Step 1: CSV 导出
+        # Step 1: CSV 导出（直接传递 records，无需读中间文件）
         self._emit(progress, type="stage_progress", stage="export",
-                    pct=0.3, message="CSV 导出中...")
+                    pct=0.2, message="CSV 导出中...")
         csv_file = out_dir / "data.csv"
-        runner = self.tools.get("to_csv")
-        if runner and records:
-            result = await self._to_thread(
-                runner.run_to_file,
-                ["--input", str(out_dir / "deduped_records.json"),
-                 "--out", str(csv_file)],
-                output_file=csv_file,
-                timeout=60,
-            )
+        if records:
+            result = await self._to_thread(self.tools.export_csv, records, csv_file)
             if not result.success:
-                # 退路：直接用 Python 写 CSV
-                self._write_csv_fallback(records, csv_file)
+                raise RuntimeError(f"CSV 导出失败: {result.error}")
 
-        # Step 2: 生成 HTML 报告
+        # Step 2: 生成多源整合 CSV（按实体类型分表，字段对齐）
         self._emit(progress, type="stage_progress", stage="export",
-                    pct=0.6, message="生成 HTML 报告中...")
-        html = self._generate_html_report(task, records, context, review)
+                    pct=0.4, message="生成多源整合 CSV...")
+        merged_csv = self._write_merged_csv(records, out_dir / "merged_data.csv")
+
+        # Step 3: LLM 生成综合研究报告（失败则整个任务失败，不回退）
+        self._emit(progress, type="stage_progress", stage="export",
+                    pct=0.6, message="LLM 生成综合研究报告中...")
+        from app.agents.llm_reporter import LLMReporter
+        reporter = LLMReporter(self.llm)
+        html = await reporter.generate_report(
+            research_goal=task.research_goal,
+            records=records,
+            entities=context.get("entities", {}),
+            analysis=context.get("analysis", {}),
+            review=review,
+            task_id=task.task_id,
+            domain=task.domain or "",
+        )
+        logger.info("LLM 报告生成成功，长度=%d", len(html))
+
         report_path = out_dir / "report.html"
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(html)
-
         self.store.set_report(task.task_id, html)
 
-        # Step 3: 保存完整 JSON 数据
+        # Step 4: 保存完整 JSON 数据
         data_file = out_dir / "final_data.json"
         with open(data_file, "w", encoding="utf-8") as f:
             json.dump({
@@ -864,135 +802,11 @@ class Orchestrator:
                 "review": review,
             }, f, ensure_ascii=False, indent=2)
 
-        msg = f"导出完成：CSV({len(records)} 行) + HTML 报告 + JSON 数据"
+        msg = (f"导出完成：CSV({len(records)} 行) + 整合CSV({merged_csv[1]} 行) "
+               f"+ LLM研究报告 + JSON 数据")
         self._set_stage(task, "export", StageStatus.DONE, msg)
         self._emit(progress, type="stage_complete", stage="export", message=msg)
         self.store.update_task(task)
-
-    # ========== HTML 报告生成 ==========
-    def _generate_html_report(self, task: Task, records: list[dict],
-                              context: dict, review: dict) -> str:
-        """生成完整的 HTML 报告。"""
-        sources = {}
-        for r in records:
-            src = r.get("source_ref", {}).get("source_name", "unknown")
-            sources[src] = sources.get(src, 0) + 1
-
-        entities = context.get("entities", {})
-        analysis = context.get("analysis", {})
-
-        # 表格行（前 50 条）
-        table_rows = ""
-        for r in records[:50]:
-            fields = r.get("fields", {})
-            src = r.get("source_ref", {})
-            conf = r.get("extraction_confidence", 1.0)
-            flags = ", ".join(r.get("quality_flags", [])) or "—"
-            title = fields.get("title", fields.get("compound_name", fields.get("gene_symbol", "")))[:60]
-            table_rows += f"""<tr>
-                <td>{title}</td>
-                <td>{src.get('source_name', '')}</td>
-                <td>{conf:.0%}</td>
-                <td>{flags}</td>
-                <td>{src.get('doi', '') or src.get('pmid', '') or '—'}</td>
-            </tr>"""
-
-        review_html = ""
-        if review:
-            review_html = f"""
-            <div class="card">
-                <h2>质量审查</h2>
-                <p><strong>总体质量：</strong>{review.get('overall_quality', '—')}</p>
-                <p><strong>完整度评分：</strong>{review.get('completeness_score', '—')}</p>
-                <p><strong>数据源覆盖：</strong>{review.get('source_coverage', '—')}</p>
-                <div><strong>关键发现：</strong><ul>
-                    {''.join(f'<li>{f}</li>' for f in review.get('key_findings', []))}
-                </ul></div>
-                <div><strong>改进建议：</strong><ul>
-                    {''.join(f'<li>{s}</li>' for s in review.get('recommendations', []))}
-                </ul></div>
-            </div>"""
-
-        entities_html = ""
-        for cat, items in entities.items():
-            if items:
-                entities_html += f"<span class='tag'>{cat}: {', '.join(items[:10])}</span> "
-
-        analysis_html = ""
-        if analysis:
-            analysis_html = "<div class='card'><h2>分析结果</h2>"
-            for k, v in analysis.items():
-                count = len(v) if isinstance(v, (list, dict)) else 1
-                analysis_html += f"<p><strong>{k}:</strong> {count} 项结果</p>"
-            analysis_html += "</div>"
-
-        return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BioMed QAgent 研究报告 — {task.task_id}</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-                background: #f5f7fa; color: #333; line-height: 1.6; padding: 20px; }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{ color: #1a1a2e; margin-bottom: 10px; }}
-        h2 {{ color: #16213e; margin-bottom: 12px; border-bottom: 2px solid #0f3460; padding-bottom: 8px; }}
-        .card {{ background: white; border-radius: 8px; padding: 24px; margin: 16px 0;
-                  box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-        .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }}
-        .stat {{ background: #16213e; color: white; padding: 16px; border-radius: 8px; text-align: center; }}
-        .stat .num {{ font-size: 28px; font-weight: bold; }}
-        .stat .label {{ font-size: 12px; opacity: 0.8; }}
-        .tag {{ display: inline-block; background: #e8f0fe; color: #1a73e8;
-                padding: 4px 12px; border-radius: 16px; margin: 4px; font-size: 13px; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-        th {{ background: #16213e; color: white; padding: 10px; text-align: left; }}
-        td {{ padding: 8px 10px; border-bottom: 1px solid #eee; }}
-        tr:nth-child(even) {{ background: #f9fafb; }}
-        .source-bar {{ display: flex; flex-wrap: wrap; gap: 8px; }}
-        .source-item {{ background: #e8f0fe; padding: 6px 14px; border-radius: 4px; font-size: 13px; }}
-        .meta {{ color: #666; font-size: 13px; margin-top: 4px; }}
-    </style>
-</head>
-<body>
-<div class="container">
-    <div class="card">
-        <h1>BioMed QAgent 研究报告</h1>
-        <p><strong>研究目标：</strong>{task.research_goal}</p>
-        <p class="meta">任务 ID: {task.task_id} | 领域: {task.domain or '未分类'} | 生成时间: {task.completed_at or task.updated_at}</p>
-    </div>
-
-    <div class="summary">
-        <div class="stat"><div class="num">{len(records)}</div><div class="label">总记录数</div></div>
-        <div class="stat"><div class="num">{len(sources)}</div><div class="label">数据源数</div></div>
-        <div class="stat"><div class="num">{task.avg_confidence:.0%}</div><div class="label">平均置信度</div></div>
-        <div class="stat"><div class="num">{sum(len(v) for v in entities.values())}</div><div class="label">识别实体数</div></div>
-    </div>
-
-    {f'<div class="card"><h2>识别实体</h2><div>{entities_html}</div></div>' if entities_html else ''}
-
-    <div class="card">
-        <h2>数据源分布</h2>
-        <div class="source-bar">
-            {''.join(f'<span class="source-item">{src}: {cnt}</span>' for src, cnt in sorted(sources.items(), key=lambda x: -x[1]))}
-        </div>
-    </div>
-
-    {review_html}
-    {analysis_html}
-
-    <div class="card">
-        <h2>数据预览（前 50 条）</h2>
-        <table>
-            <thead><tr><th>标题/名称</th><th>来源</th><th>置信度</th><th>质量标记</th><th>DOI/PMID</th></tr></thead>
-            <tbody>{table_rows}</tbody>
-        </table>
-    </div>
-</div>
-</body>
-</html>"""
 
     # ========== 辅助方法 ==========
     def _set_stage(self, task: Task, name: str, status: StageStatus,
@@ -1019,35 +833,140 @@ class Orchestrator:
         """在线程池中运行同步阻塞函数，避免阻塞事件循环。"""
         return await asyncio.to_thread(func, *args, **kwargs)
 
-    def _write_csv_fallback(self, records: list[dict], path: Path):
-        """CSV 导出退路：直接用 Python 写。"""
+    @staticmethod
+    def _write_records(path: Path, records: list[dict]) -> None:
+        """持久化记录到 JSON 文件（供溯源/调试）。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, default=str)
+
+    def _write_merged_csv(self, records: list[dict], path: Path) -> tuple[int, int]:
+        """生成多源整合 CSV — 按实体类型分组，字段对齐，便于后续分析。
+
+        与 data.csv 的区别：
+        - data.csv: 所有记录平铺，字段稀疏（适合溯源审计）
+        - merged_data.csv: 按实体类型分组，字段对齐（适合研究分析）
+
+        分组逻辑：
+        - literature: title/abstract/authors/year/doi/pmid
+        - compound: compound_name/herb/ob/dl/smile
+        - gene: gene_symbol/uniprot_id/function
+        - interaction: compound/target/action/score
+        - pathway: pathway_name/p_value/gene_count
+        - default: 其他
+
+        Returns:
+            (文件数, 总行数) — 通常 (N, total_rows)
+        """
         import csv
         if not records:
-            return
-        # 收集所有字段名
-        all_fields: list[str] = ["record_id", "source_name", "extraction_method",
-                                  "extraction_confidence", "quality_flags"]
-        seen: set[str] = set(all_fields)
-        for r in records:
-            for k in r.get("fields", {}):
-                if k not in seen:
-                    all_fields.append(k)
-                    seen.add(k)
-        all_fields.extend(["source_url", "doi", "pmid"])
+            # 写空文件
+            path.write_text("", encoding="utf-8-sig")
+            return (0, 0)
 
+        # 按实体类型分组
+        groups: dict[str, list[dict]] = {}
+        for r in records:
+            fields = r.get("fields", {})
+            etype = self._classify_record(r)
+            groups.setdefault(etype, []).append(r)
+
+        total_rows = 0
+        # 写入单一 CSV，每个分组有独立的列头
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
-            writer.writeheader()
-            for r in records:
-                row: dict = {
-                    "record_id": r.get("record_id", ""),
-                    "source_name": r.get("source_ref", {}).get("source_name", ""),
-                    "extraction_method": r.get("extraction_method", ""),
-                    "extraction_confidence": r.get("extraction_confidence", ""),
-                    "quality_flags": ", ".join(r.get("quality_flags", [])),
-                    "source_url": r.get("source_ref", {}).get("url", ""),
-                    "doi": r.get("source_ref", {}).get("doi", ""),
-                    "pmid": r.get("source_ref", {}).get("pmid", ""),
-                }
-                row.update(r.get("fields", {}))
-                writer.writerow(row)
+            writer = csv.writer(f)
+            for group_name, group_records in sorted(groups.items()):
+                # 分组标题行
+                writer.writerow([f"=== {group_name.upper()} ({len(group_records)} 条) ==="])
+                # 收集该组所有字段
+                columns = self._get_group_columns(group_name, group_records)
+                writer.writerow(columns)
+                # 数据行
+                for r in group_records:
+                    fields = r.get("fields", {})
+                    src = r.get("source_ref", {})
+                    row = []
+                    for col in columns:
+                        if col == "source_name":
+                            row.append(src.get("source_name", ""))
+                        elif col == "confidence":
+                            row.append(f"{r.get('extraction_confidence', 0):.2f}")
+                        elif col == "source_url":
+                            row.append(src.get("url", src.get("doi", "")))
+                        else:
+                            val = fields.get(col, "")
+                            if isinstance(val, (list, dict)):
+                                val = json.dumps(val, ensure_ascii=False)
+                            row.append(str(val) if val is not None else "")
+                    writer.writerow(row)
+                    total_rows += 1
+                writer.writerow([])  # 空行分隔
+
+        logger.info("整合CSV写入 %d 行 → %s", total_rows, path)
+        return (len(groups), total_rows)
+
+    def _classify_record(self, r: dict) -> str:
+        """根据记录字段判断实体类型。"""
+        fields = r.get("fields", {})
+        src = r.get("source_ref", {}).get("source_name", "")
+        # 文献类
+        if fields.get("title") or fields.get("pmid") or fields.get("arxiv_id"):
+            return "literature"
+        # 化合物类
+        if fields.get("compound_name") or fields.get("ob") or fields.get("dl"):
+            return "compound"
+        # 基因/蛋白类
+        if fields.get("gene_symbol") or fields.get("uniprot_id") or fields.get("gene_id"):
+            return "gene"
+        # 互作类
+        if fields.get("compound") and fields.get("target"):
+            return "interaction"
+        # 通路类
+        if fields.get("pathway_name") or fields.get("term") or fields.get("kegg_id"):
+            return "pathway"
+        # 表达类
+        if fields.get("log2fc") or fields.get("pvalue") or fields.get("adj_p"):
+            return "expression"
+        # 数据源兜底
+        if src in ("pubmed", "openalex", "semantic_scholar", "arxiv"):
+            return "literature"
+        if src in ("string", "biogrid"):
+            return "interaction"
+        if src in ("kegg", "reactome"):
+            return "pathway"
+        if src in ("tcmsp", "pubchem", "drugbank"):
+            return "compound"
+        if src in ("uniprot", "hgnc", "ensembl"):
+            return "gene"
+        return "other"
+
+    def _get_group_columns(self, group: str, records: list[dict]) -> list[str]:
+        """根据分组类型返回标准化列头。"""
+        base = ["source_name", "confidence", "source_url"]
+        schemas = {
+            "literature": ["title", "abstract", "authors", "year", "journal",
+                          "doi", "pmid", "arxiv_id", "keywords"],
+            "compound": ["compound_name", "herb", "ob", "dl", "smiles",
+                         "mol_weight", "formula", "cas_number"],
+            "gene": ["gene_symbol", "uniprot_id", "gene_id", "chromosome",
+                     "function", "disease"],
+            "interaction": ["compound", "target", "action", "score",
+                           "evidence", "source_db"],
+            "pathway": ["pathway_name", "term", "kegg_id", "p_value",
+                       "adj_p_value", "gene_count", "genes", "category"],
+            "expression": ["gene_symbol", "log2fc", "pvalue", "adj_p",
+                          "fc", "stat", "phenotype"],
+            "other": [],
+        }
+        cols = schemas.get(group, [])
+        if not cols:
+            # other 组：动态收集字段
+            seen = set(base)
+            dynamic = []
+            for r in records[:50]:
+                for k in r.get("fields", {}):
+                    if k not in seen:
+                        dynamic.append(k)
+                        seen.add(k)
+            cols = dynamic[:15]
+        return base + cols

@@ -184,7 +184,6 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           <Empty description="等待消息…" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <Timeline
-            size="small"
             items={wsMessages.slice(-30).reverse().map((msg, i) => ({
               color: msg.type === 'error' ? 'red'
                    : msg.type === 'task_complete' ? 'green'

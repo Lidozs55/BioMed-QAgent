@@ -123,8 +123,8 @@ export function DataPreview({ taskId }: { taskId: string }) {
       render: (_: any, r: DataRecord) => {
         const ref = r.source_ref || {};
         const fields = r.fields || {};
-        const idStr = ref.doi || ref.pmid || fields.arxiv_id || '';
-        const url = fields.pdf_url || fields.abs_url || ref.source_url || ref.url || '';
+        const idStr = String(ref.doi || ref.pmid || fields.arxiv_id || '');
+        const url = String(fields.pdf_url || fields.abs_url || ref.url || '');
         return (
           <div>
             {idStr && <div><Text style={{ fontSize: 10 }} type="secondary">{idStr}</Text></div>}

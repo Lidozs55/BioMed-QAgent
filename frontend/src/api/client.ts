@@ -50,9 +50,14 @@ export const api = {
 
   exportCsv: (id: string) => `${BASE}/tasks/${id}/export/csv`,
   exportJson: (id: string) => `${BASE}/tasks/${id}/export/json`,
+  exportMergedCsv: (id: string) => `${BASE}/tasks/${id}/export/merged/csv`,
 
   // ===== 报告 =====
   getReportUrl: (id: string) => `${BASE}/tasks/${id}/report`,
+  regenerateReport: (id: string) => request<{
+    task_id: string; status: string;
+    report_length: number; merged_csv_rows: number; records_count: number;
+  }>(`/tasks/${id}/regenerate-report`, { method: 'POST' }),
 
   // ===== 分析结果 =====
   getAnalysis: (id: string) => request<{

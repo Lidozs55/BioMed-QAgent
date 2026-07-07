@@ -3,18 +3,15 @@ import { useEffect } from 'react';
 import { Layout, Row, Col, Tabs, Typography, Tag, Badge } from 'antd';
 import {
   ExperimentOutlined, DatabaseOutlined, ApartmentOutlined,
-  BarChartOutlined, FileTextOutlined, ApiOutlined, ExperimentFilled,
+  BarChartOutlined, FileTextOutlined, ApiOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
 import { useTaskWebSocket } from '@/hooks/useTaskWebSocket';
 import { TaskInput } from '@/components/task/TaskInput';
 import { TaskListPanel } from '@/components/task/TaskList';
 import { PipelineStatus } from '@/components/task/PipelineStatus';
-import { DataPreview } from '@/components/data/DataPreview';
-import { AnalysisView } from '@/components/analysis/AnalysisView';
-import { LineageGraph } from '@/components/lineage/LineageGraph';
-import { ChartsView } from '@/components/charts/ChartsView';
-import { ReportView } from '@/components/report/ReportView';
+import { DataOverview } from '@/components/data/DataOverview';
+import { ResearchReport } from '@/components/report/ResearchReport';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -69,28 +66,13 @@ export default function App() {
                 },
                 {
                   key: 'data',
-                  label: <span><DatabaseOutlined /> 数据记录</span>,
-                  children: <DataPreview taskId={selectedTask.task_id} />,
-                },
-                {
-                  key: 'analysis',
-                  label: <span><ExperimentFilled /> 分析结果</span>,
-                  children: <AnalysisView taskId={selectedTask.task_id} />,
-                },
-                {
-                  key: 'charts',
-                  label: <span><BarChartOutlined /> 统计图表</span>,
-                  children: <ChartsView taskId={selectedTask.task_id} />,
-                },
-                {
-                  key: 'lineage',
-                  label: <span><ApartmentOutlined /> 数据溯源</span>,
-                  children: <LineageGraph taskId={selectedTask.task_id} />,
+                  label: <span><DatabaseOutlined /> 数据总览</span>,
+                  children: <DataOverview taskId={selectedTask.task_id} />,
                 },
                 {
                   key: 'report',
                   label: <span><FileTextOutlined /> 研究报告</span>,
-                  children: <ReportView taskId={selectedTask.task_id} />,
+                  children: <ResearchReport taskId={selectedTask.task_id} />,
                 },
               ]}
             />

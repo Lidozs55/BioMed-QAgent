@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://biomedqagent.local/schemas/evaluation_result.schema.json",
+  "title": "EvaluationResult",
+  "description": "达尔文自优化机制：每个 stage 完成后的运行时自评估结果。由 scripts/optimization/stage_evaluator.py 生成，驱动反思循环。",
+  "type": "object",
+  "required": ["task_id", "stage", "iteration", "metrics", "thresholds", "passed", "gaps", "suggestions", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "任务 ID"
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["search", "acquire", "parse", "clean", "analyze", "export"],
+      "description": "评估对应的流水线阶段"
+    },
+    "iteration": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "当前阶段迭代轮次（达尔文循环，默认上限 3 轮）"
+    },
+    "metrics": {
+      "type": "object",
+      "description": "量化指标，全部归一化到 [0,1] 区间（除 record_count/source_diversity）",
+      "required": ["coverage", "avg_confidence", "conflict_rate", "source_diversity", "record_count"],
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "覆盖率：用户查询中的关键实体已获得数据的比例"
+        },
+        "avg_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "当前所有记录的平均 extraction_confidence"
+        },
+        "conflict_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "冲突率：被 duplicate_detector 标记为 conflict 的记录占比"
+        },
+        "source_diversity": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "来源多样性：不同 source_name 的数量"
+        },
+        "record_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当前阶段产出的 DataRecord 总数"
+        },
+        "entity_coverage": {
+          "type": "object",
+          "description": "按实体类型分组的覆盖率明细",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "covered": {"type": "array", "items": {"type": "string"}},
+              "missing": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "判定阈值。任一未达标即 passed=false，触发反思循环",
+      "required": ["min_coverage", "min_confidence", "max_conflict_rate", "min_sources"],
+      "additionalProperties": false,
+      "properties": {
+        "min_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_conflict_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_sources": {"type": "integer", "minimum": 1}
+      }
+    },
+    "passed": {
+      "type": "boolean",
+      "description": "是否通过 Stage Gate。false 则触发反思循环"
+    },
+    "gaps": {
+      "type": "array",
+      "description": "识别的数据缺口，每条说明一个具体缺口",
+      "items": {
+        "type": "object",
+        "required": ["entity_type", "entity_id", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "entity_type": {"type": "string", "enum": ["gene", "compound", "disease", "pathway", "structure", "clinical_trial"]},
+          "entity_id": {"type": "string"},
+          "reason": {"type": "string", "description": "缺口原因，如 no_expression_data / no_pdb_structure / no_clinical_trial"}
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "description": "Agent 给出的下一步行动建议（驱动反思循环）",
+      "items": {
+        "type": "object",
+        "required": ["action", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["expand_search", "add_source", "deepen_analysis", "refine_keywords", "request_user_input"]
+          },
+          "query": {"type": "string", "description": "expand_search / refine_keywords 时的具体查询串"},
+          "source": {"type": "string", "description": "add_source 时的数据源名"},
+          "analysis": {"type": "string", "description": "deepen_analysis 时的分析类型"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

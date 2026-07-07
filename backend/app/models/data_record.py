@@ -1,4 +1,4 @@
-"""数据记录模型 — 与 biomed-data-agent-skill/schemas/data_record.schema.json 对齐。"""
+"""数据记录模型 — 与 resources/schemas/data_record.schema.json 对齐。"""
 from __future__ import annotations
 
 from typing import Any

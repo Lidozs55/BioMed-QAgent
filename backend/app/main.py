@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,9 +20,7 @@ from app.config import (
     PORT,
     is_api_key_configured,
 )
-from app.storage.task_store import get_task_store
 from app.tools.registry import get_registry
-from app.utils.paths import ensure_scripts_on_path
 
 # 日志配置
 logging.basicConfig(
@@ -36,13 +33,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化资源，关闭时清理。"""
-    # 确保 scripts/ 在 sys.path 上
-    ensure_scripts_on_path()
     # 预热工具注册表
     registry = get_registry()
     tools = registry.list_tools()
     total = sum(len(v) for v in tools.values())
-    logger.info("已注册 %d 个脚本工具", total)
+    logger.info("已注册 %d 个工具", total)
 
     if is_api_key_configured():
         logger.info("DashScope API Key 已配置（%s...）", DASHSCOPE_API_KEY[:8])
@@ -127,7 +122,6 @@ async def list_tools():
 @app.get("/api/v1/tasks/{task_id}/files", tags=["tasks"])
 async def list_task_files(task_id: str):
     """列出任务输出目录中的所有文件。"""
-    from pathlib import Path
     from app.config import OUTPUT_DIR
     task_dir = OUTPUT_DIR / task_id
     if not task_dir.exists():

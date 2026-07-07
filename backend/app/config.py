@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from dataclasses import dataclass, field
 
 
 # ===== 路径 =====
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # d:\Code\BioMedQAgent
-SKILL_DIR = PROJECT_ROOT / "biomed-data-agent-skill"
-SCRIPTS_DIR = SKILL_DIR / "scripts"
+BACKEND_DIR = PROJECT_ROOT / "backend"
+RESOURCES_DIR = BACKEND_DIR / "app" / "resources"
 DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = DATA_DIR / "output"
 UPLOADS_DIR = DATA_DIR / "uploads"

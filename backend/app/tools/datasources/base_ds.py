@@ -21,6 +21,21 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+# ===== 各数据源 API base URL 常量（从 skill _base.py 迁入）=====
+PUBMED_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+NCBI_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+GEO_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+STRING_URL = "https://string-db.org/api"
+KEGG_URL = "https://rest.kegg.jp"
+PDB_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
+TCMSP_URL = "https://tcmspw.com/tcmspsearch.php"
+CLINICALTRIALS_URL = "https://clinicaltrials.gov/api/v2/studies"
+GDC_URL = "https://api.gdc.cancer.gov"
+DRUGBANK_URL = "https://api.platform.opentargets.org/api/v4/graphql"
+DISGENET_URL = "https://www.disgenet.org/api/gda"
+PUBCHEM_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+
+
 def utc_now() -> str:
     """返回 ISO 8601 UTC 时间戳。"""
     return datetime.now(timezone.utc).isoformat()

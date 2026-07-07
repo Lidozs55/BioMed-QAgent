@@ -11,11 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制后端代码
+# 复制后端代码（含已迁入的 tools/ 模块与 resources/ 资源）
 COPY backend/app/ ./app/
-
-# 复制 biomed-data-agent-skill 脚本（后端通过 subprocess 调用）
-COPY biomed-data-agent-skill/ ./biomed-data-agent-skill/
 
 # 复制 data 目录占位
 COPY data/ ./data/

@@ -1,0 +1,107 @@
+# 肿瘤学研究领域模板
+# 用途：当用户研究目标涉及癌症、肿瘤、差异表达、突变、预后时加载此模板
+# 加载方：Orchestrator planning 阶段（领域识别与模板加载）
+# 维护：BioMed QAgent
+# 关键场景：差异表达分析、GO/KEGG 富集、PPI 网络、肿瘤 vs 正常样本比较
+template_name: 肿瘤学研究
+description: |
+  肿瘤学研究领域模板，适用于含癌症类型、基因表达、肿瘤 vs 正常比较、
+  生存分析等研究目标。数据源以 GEO 表达谱为核心，结合 PubMed 文献、
+  KEGG 通路、STRING PPI 与 PDB 结构数据，侧重差异表达与功能富集分析。
+
+# 优先数据源：GEO 表达谱排首位
+priority_sources:
+  - source: GEO
+    reason: 基因表达谱数据核心来源（GSE 系列数据集）
+    client: scripts/datasources/geo_client.py
+    parser: scripts/parsers/geo_soft_parser.py
+    required_fields: [gene_symbol, log2fc, p_value, adj_p_value, sample_id]
+  - source: PubMed
+    reason: 肿瘤相关文献检索
+    client: scripts/datasources/pubmed_client.py
+  - source: KEGG
+    reason: 通路富集分析
+    client: scripts/datasources/kegg_client.py
+  - source: STRING
+    reason: 差异基因 PPI 网络构建
+    client: scripts/datasources/string_client.py
+  - source: PDB
+    reason: 靶点蛋白结构数据，支持药物设计
+    client: scripts/datasources/pdb_client.py
+    parser: scripts/parsers/pdb_parser.py
+
+# 推荐字段映射：聚焦表达与统计字段
+recommended_field_mappings:
+  - gene_symbol          # 基因符号（HGNC 官方，依赖 dictionaries/gene_symbols.yaml）
+  - log2fc               # log2 倍数变化
+  - p_value              # 原始 P 值
+  - adj_p_value          # 校正 P 值（FDR/BH）
+  - pathway_id           # KEGG 通路 ID
+  - sample_id            # 样本 ID（GSM）
+  - cell_line            # 细胞系
+  - disease              # 疾病/癌症类型
+  - pubmed_id            # 文献来源
+  - organism             # 物种（人为主）
+
+# 推荐分析配方：肿瘤研究典型分析流程
+analysis_recipes:
+  - name: differential_expression
+    script: scripts/analysis/differential_expression.py
+    when_to_use: 对 GEO 表达矩阵进行 DESeq2 风格差异表达分析
+    required_fields: [gene_symbol, log2fc, p_value]
+    visualization: scripts/viz/volcano_plot.py
+    thresholds:
+      log2fc_cutoff: 1.0    # |log2FC| ≥ 1
+      padj_cutoff: 0.05     # adj_p_value < 0.05
+  - name: go_kegg_enrichment
+    script: scripts/analysis/enrichment.py
+    when_to_use: 对差异基因列表进行 GO / KEGG 富集
+    required_fields: [gene_symbol]
+    visualization: scripts/viz/enrichment_bubble.py
+  - name: ppi_network
+    script: scripts/analysis/ppi_network.py
+    when_to_use: 差异基因 PPI 网络构建与中心性分析（hub gene 识别）
+    required_fields: [gene_symbol]
+    visualization: scripts/viz/network_plot.py
+  - name: expression_heatmap
+    script: scripts/viz/heatmap.py
+    when_to_use: 差异基因在样本间表达热图
+    required_fields: [gene_symbol, sample_id, expression_value]
+  - name: hub_gene_analysis
+    script: scripts/analysis/hub_gene_analyzer.py
+    when_to_use: PPI 网络识别 hub 基因并反查上游调控
+    required_fields: [gene_symbol]
+  - name: survival_analysis
+    script: scripts/analysis/survival_analysis.py
+    when_to_use: 验证 hub 基因临床意义
+    required_fields: [gene_symbol]
+
+# 置信度阈值：GEO 数据可信度最高
+confidence_thresholds:
+  api_result: 0.95         # GEO / NCBI / KEGG / STRING API
+  crawl_result: 0.75       # 爬虫数据
+  literature_extraction: 0.85  # 文献表格提取
+  pdf_table_extraction: 0.8    # PDF 表格提取
+  needs_review_below: 0.65
+
+# 常见癌症类型：用于查询扩展与样本标注识别
+common_cancer_types:
+  - pancreatic             # 胰腺癌
+  - breast                 # 乳腺癌
+  - lung                   # 肺癌
+  - liver                  # 肝癌（HCC）
+  - colorectal             # 结直肠癌（CRC）
+  - gastric                # 胃癌
+  - prostate               # 前列腺癌
+  - ovarian                # 卵巢癌
+  - leukemia               # 白血病
+
+# 注意事项
+notes: |
+  - 必须严格区分 tumor vs normal 样本标注：sample_id 中常含 T/N/Tumor/Normal 标识
+  - GEO 表达矩阵解析后需保留样本分组信息（tumor / normal），用于差异表达
+  - adj_p_value 缺失时可用 p_value 代替，但需在报告中注明
+  - 火山图阈值默认 |log2FC|≥1 且 padj<0.05，可根据数据分布调整
+  - PPI 网络 hub gene 识别建议结合 degree + betweenness 两个指标
+  - 跨数据集合并时注意基因符号标准化（依赖 dictionaries/gene_symbols.yaml）
+  - 临床样本数据需注意批次效应（batch effect），必要时提示用户
