@@ -14,6 +14,7 @@ planning → [search → acquire → parse → clean → analyze → review] →
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
@@ -21,6 +22,7 @@ import time
 from pathlib import Path
 
 from app.agents.base import ProgressCallback, BaseAgent
+from app.agents.error_decision import ErrorDecisionAgent
 from app.agents.registry import AgentRegistry, register_all_agents
 from app.config import MODEL_TEXT
 from app.llm.client import DashScopeClient
@@ -157,19 +159,120 @@ class Orchestrator:
         """执行一轮完整 PIPELINE（search→acquire→parse→clean→analyze→review）。
 
         每轮从空 records 列表开始，避免重复处理历史记录。
+        阶段失败时由 ErrorDecisionAgent 决策 retry/skip/escalate/fail。
         """
         records: list[dict] = []
+        stage_retries: dict[str, int] = {}
+
         for stage_name in PIPELINE:
             if stage_name == "analyze" and not task.enable_analysis:
                 continue
+
             agent = self._get_agent(stage_name)
             if agent is None:
                 logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
                 continue
-            records, context = await agent.execute(
-                task, records, context, progress,
-            )
+
+            retry_count = stage_retries.get(stage_name, 0)
+            decision = await self._execute_stage_with_error_handling(
+                task, stage_name, agent, records, context, progress,
+                stage_retries, round_idx)
+
+            if decision is None:
+                # 正常完成: records 已被 agent.execute 更新
+                continue
+            elif decision == "skip_stage":
+                logger.info("阶段 %s 被跳过，继续流水线", stage_name)
+                continue
+            elif decision == "escalate":
+                logger.warning("阶段 %s 降级继续", stage_name)
+                continue
+            elif decision == "fail":
+                # 致命错误，冒泡到顶层
+                raise RuntimeError(
+                    f"致命错误：阶段 {stage_name} 失败且无法恢复")
+
         return records, context
+
+    async def _execute_stage_with_error_handling(
+            self, task: Task, stage_name: str, agent: BaseAgent,
+            records: list[dict], context: dict,
+            progress: ProgressCallback | None,
+            stage_retries: dict[str, int],
+            round_idx: int) -> str | None:
+        """执行单阶段，带错误决策。返回 None=成功，否则返回最终 action。"""
+        max_retries_per_stage = 2
+
+        while True:
+            retry_count = stage_retries.get(stage_name, 0)
+            try:
+                records, context = await agent.execute(
+                    task, records, context, progress)
+                return None  # 成功
+            except Exception as e:
+                logger.warning("阶段 %s 失败（第 %d 次）: %s",
+                               stage_name, retry_count + 1, e)
+
+                # 获取 ErrorDecisionAgent
+                decision_agent = self._get_agent("error_decision")
+                if decision_agent is None:
+                    logger.warning("ErrorDecisionAgent 未注册，终止流水线")
+                    raise
+
+                # 类型收窄（ErrorDecisionAgent 已通过注册表实例化）
+                assert isinstance(decision_agent, ErrorDecisionAgent)
+
+                # 调用决策（ErrorDecisionAgent 的 decide() 不在 BaseAgent 接口中）
+                decision = await decision_agent.decide(  # type: ignore[attr-defined]
+                    task, stage_name, e, records, context,
+                    retry_count, progress)
+
+                action = decision.get("action", "fail")
+                reason = decision.get("reason", "")
+
+                logger.info("错误决策 [%s]: action=%s reason=%s",
+                            stage_name, action, reason)
+
+                if action == "retry":
+                    stage_retries[stage_name] = retry_count + 1
+                    if retry_count + 1 > max_retries_per_stage:
+                        # 超过重试上限 → escalate
+                        task.errors.append(
+                            f"[{stage_name}] 重试上限({max_retries_per_stage})后仍失败: {e}")
+                        self._emit(progress, type="stage_error",
+                                    stage=stage_name, action="escalate",
+                                    reason=f"重试 {max_retries_per_stage} 次后跳过",
+                                    message=str(e)[:200])
+                        return "escalate"
+                    # 重试前短暂延迟（指数退避）
+                    delay = min(2 ** retry_count, 8)  # 1s, 2s, 4s, 8s
+                    logger.info("阶段 %s 将在 %ds 后重试", stage_name, delay)
+                    await asyncio.sleep(delay)
+                    continue  # 重试循环
+
+                elif action == "skip_stage":
+                    task.errors.append(
+                        f"[{stage_name}] 跳过: {reason} - {str(e)[:100]}")
+                    self._emit(progress, type="stage_error",
+                                stage=stage_name, action="skip",
+                                reason=reason, message=str(e)[:200])
+                    return "skip_stage"
+
+                elif action == "escalate":
+                    task.errors.append(
+                        f"[{stage_name}] 降级: {reason} - {str(e)[:100]}")
+                    self._emit(progress, type="stage_error",
+                                stage=stage_name, action="escalate",
+                                reason=reason, message=str(e)[:200])
+                    return "escalate"
+
+                elif action == "fail":
+                    task.errors.append(
+                        f"[{stage_name}] 致命错误: {reason} - {str(e)[:200]}")
+                    self._emit(progress, type="stage_error",
+                                stage=stage_name, action="fail",
+                                reason=reason, message=str(e)[:200])
+                    return "fail"
 
     @staticmethod
     def _dedup_round(round_records: list[dict],
@@ -353,7 +456,6 @@ class Orchestrator:
     @staticmethod
     async def _to_thread(func, *args, **kwargs):
         """在线程池中运行同步阻塞函数，避免阻塞事件循环。"""
-        import asyncio
         return await asyncio.to_thread(func, *args, **kwargs)
 
     # ========== 多源整合 CSV 生成 ==========
