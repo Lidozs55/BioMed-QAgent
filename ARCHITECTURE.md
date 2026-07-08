@@ -177,7 +177,13 @@ class ToolRegistry:
     def export_csv(self, records, output_path) -> ToolResult
 ```
 
-- 统一返回 `ToolResult(success, data, error, signals)`
+- 统一返回 `ToolResult(success, data, error, signals)`，**统一工具协议层契约**：
+  - `success: bool` — False 时 data 为空，error 必填
+  - `data: list[dict] | dict` — 检索/解析/清洗类返回 DataRecord 列表；分析/IO/导出类返回结果摘要 dict
+  - `error: str` — 失败信息（含工具名前缀，如 `pubmed: ...`）
+  - `signals: dict` — 非记录信号，约定键 `requires_crawl`/`status`/`partial`
+  - 置信度由 per-record `extraction_confidence` 承载（非 ToolResult 层）
+  - 溯源事件由 Agent 调用 `ProvenanceTracker.record()`（非 ToolResult 层）
 - 数据源模块函数惰性加载并缓存
 - 并行检索用 `ThreadPoolExecutor`（最多 5 并发）
 
@@ -230,7 +236,7 @@ class ToolRegistry:
 | 差异表达 | differential_expression.py | ✅ Phase1 | 有 log2fc 数据 | 本地计算 |
 | Hub 基因 | hub_gene.py | ✅ Phase2 | 有基因列表 | 本地计算（复用 PPI） |
 | 上游调控 | upstream_regulator.py | ✅ Phase2 | 有基因列表 | 本地计算（复用 PPI） |
-| 生存分析 | survival.py | ❌ | 有 TCGA 队列+基因 | 本地计算 |
+| 生存分析 | survival.py | ✅ Phase3 | 有基因列表 + disease→TCGA cohort 映射 | TCGA GDC API |
 
 **性能优化**：Phase1（PPI/富集/药靶/差异表达）`asyncio.gather` 并行；Phase2（Hub/上游）复用 Phase1 的 PPI 结果，不重复调用 STRING API（原 24 次→1 次）。
 
@@ -388,7 +394,6 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 |------|------|--------|
 | acquire 阶段 stub | TCMSP 等无 API 源数据缺失 | P1 |
 | 前端 feedback UI 缺失 | 后端路由存在，无人机回路入口 | P1 |
-| 生存分析未接线 | survival.py 已写但 AnalysisAgent 未调用（需 TCGA 队列数据） | P2 |
 | optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 | openapi.yaml 空壳 | 提交材料要求可调用测试 API 文档 | P2 |
