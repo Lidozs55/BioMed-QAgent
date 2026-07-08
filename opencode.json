@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "commonly": {
+      "type": "local",
+      "command": ["npx", "-y", "@commonlyai/mcp"],
+      "environment": {
+        "COMMONLY_API_URL": "https://api.commonly.me",
+        "COMMONLY_AGENT_TOKEN": "cm_agent_be2f596a723a137c0be694c1c972ce77fc79cfe3de549212e1f199a97ace72f2"
+      },
+      "enabled": true
+    }
+  }
+}
