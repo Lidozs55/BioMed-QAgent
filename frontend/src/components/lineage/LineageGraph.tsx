@@ -1,6 +1,6 @@
 /** 数据溯源图组件 — 使用 ReactFlow 展示数据血缘 DAG */
-import { useEffect, useState, useMemo } from 'react';
-import { Card, Typography, Empty, Spin, Tag } from 'antd';
+import { useEffect, useState, useMemo, useCallback } from 'react';
+import { Card, Typography, Empty, Spin, Tag, Drawer, Descriptions } from 'antd';
 import {
   ReactFlow, Background, Controls, MiniMap,
   type Node, type Edge, Position,
@@ -34,6 +34,8 @@ const OPERATION_LABEL: Record<string, string> = {
 export function LineageGraph({ taskId }: { taskId: string }) {
   const [graph, setGraph] = useState<LGraph | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -82,11 +84,13 @@ export function LineageGraph({ taskId }: { taskId: string }) {
               )}
             </div>
           ),
+          ...n,
         },
         style: {
           border: `2px solid ${OPERATION_COLOR[op] || '#d9d9d9'}`,
           borderRadius: 6,
           background: '#fff',
+          cursor: 'pointer',
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
@@ -103,6 +107,14 @@ export function LineageGraph({ taskId }: { taskId: string }) {
 
     return { nodes: flowNodes, edges: flowEdges };
   }, [graph]);
+
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    const found = nodes.find(n => n.id === node.id);
+    if (found) {
+      setSelectedNode(found);
+      setDrawerOpen(true);
+    }
+  }, [nodes]);
 
   if (loading) {
     return (
@@ -126,6 +138,7 @@ export function LineageGraph({ taskId }: { taskId: string }) {
           edges={edges}
           fitView
           attributionPosition="bottom-right"
+          onNodeClick={onNodeClick}
         >
           <Background />
           <Controls />
@@ -140,6 +153,56 @@ export function LineageGraph({ taskId }: { taskId: string }) {
       <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
         共 {graph.stats.total_nodes} 个操作节点，追踪 {graph.stats.total_records_tracked} 条数据记录
       </Text>
+
+      {/* Node Detail Drawer */}
+      <Drawer
+        title="数据溯源详情"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        width={420}
+        destroyOnClose
+      >
+        {selectedNode && (
+          <Descriptions column={1} size="small" bordered>
+            <Descriptions.Item label="操作类型">
+              <Tag color={OPERATION_COLOR[selectedNode.data?.operation_type as string] || 'default'}>
+                {selectedNode.data?.operation_type ? OPERATION_LABEL[selectedNode.data?.operation_type as string] || String(selectedNode.data?.operation_type) : 'unknown'}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="工具/Agent">
+              {String(selectedNode.data?.tool_name || selectedNode.data?.agent_name || '-')}
+            </Descriptions.Item>
+            <Descriptions.Item label="输入记录数">
+              {Array.isArray(selectedNode.data?.input_node_ids) ? selectedNode.data.input_node_ids.length : '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="输出记录数">
+              {Array.isArray(selectedNode.data?.output_record_ids) ? selectedNode.data.output_record_ids.length : '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="参数">
+              <Text code style={{ fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {JSON.stringify(selectedNode.data?.parameters || {}, null, 2)}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="时间戳">
+              {String(selectedNode.data?.timestamp || '-')}
+            </Descriptions.Item>
+            <Descriptions.Item label="字段级溯源">
+              {selectedNode.data?.field_provenance ? (
+                <div style={{ fontSize: 12 }}>
+                  {Object.entries(selectedNode.data.field_provenance as Record<string, string[]>).map(([field, sources]) => (
+                    <div key={field}>
+                      <Text type="secondary">{field}:</Text>{' '}
+                      {(sources as string[]).slice(0, 3).map(s => (
+                        <Tag key={s} style={{ marginBottom: 2 }}>{s}</Tag>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : '-'}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+      </Drawer>
     </Card>
   );
 }

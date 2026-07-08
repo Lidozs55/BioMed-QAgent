@@ -74,6 +74,7 @@ export interface LineageNode {
   output_record_ids: string[];
   parameters: Record<string, unknown>;
   timestamp: string;
+  field_provenance?: Record<string, string[]>;
 }
 
 export interface LineageGraph {
@@ -83,9 +84,26 @@ export interface LineageGraph {
   stats: { total_nodes: number; total_records_tracked: number };
 }
 
+/** Iteration round info from WS iteration_round event */
+export interface IterationInfo {
+  round: number;
+  max_rounds: number;
+  status: 'running' | 'completed' | 'converged';
+}
+
+/** Iteration decision from WS iteration_decision event */
+export interface IterationDecision {
+  round: number;
+  should_continue: boolean;
+  reason: string;
+  next_round_queries?: string[];
+  gap_analysis?: Record<string, unknown>;
+}
+
 export interface WSMessage {
   type: 'task_start' | 'stage_start' | 'stage_progress' | 'stage_complete'
-      | 'task_complete' | 'error' | 'snapshot' | 'pong';
+      | 'task_complete' | 'error' | 'snapshot' | 'pong'
+      | 'iteration_round' | 'iteration_decision' | 'iteration_converged';
   task_id?: string;
   stage?: string;
   message?: string;
@@ -97,4 +115,11 @@ export interface WSMessage {
   context?: Record<string, unknown>;
   review?: Record<string, unknown>;
   summary?: TaskSummary;
+  // Iteration fields
+  round?: number;
+  max_rounds?: number;
+  should_continue?: boolean;
+  reason?: string;
+  next_round_queries?: string[];
+  gap_analysis?: Record<string, unknown>;
 }

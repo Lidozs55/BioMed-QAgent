@@ -1,8 +1,9 @@
 /** 流水线状态组件 — 展示各阶段进度和实时消息 */
-import { Card, Steps, Tag, Typography, Timeline, Statistic, Row, Col, Progress, Empty, Alert, Collapse, Button, Tooltip } from 'antd';
+import { Badge, Card, Steps, Space, Tag, Typography, Timeline, Statistic, Row, Col, Progress, Empty, Alert, Collapse, Button, Tooltip } from 'antd';
 import {
   CheckCircleOutlined, LoadingOutlined, ClockCircleOutlined,
   CloseCircleOutlined, BulbOutlined, WarningOutlined, ExpandOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
 import type { TaskSummary, StageInfo, StageStatus } from '@/api/types';
@@ -52,7 +53,7 @@ function stageStatus(status: StageStatus): 'wait' | 'process' | 'finish' | 'erro
 }
 
 export function PipelineStatus({ task }: { task: TaskSummary }) {
-  const { wsMessages, stageProgress, currentStage } = useTaskStore();
+  const { wsMessages, stageProgress, currentStage, roundIdx, maxRounds, iterationDecisions, convergenceReason } = useTaskStore();
 
   const stages = Object.values(task.stages);
   const entities = task.entities || {};
@@ -84,6 +85,45 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           </Card>
         </Col>
       </Row>
+
+      {/* ====== Multi-Round Iteration Indicator ====== */}
+      {roundIdx > 0 && (
+        <Card size="small" style={{ marginBottom: 16, background: '#f6f8fa' }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="small">
+            {/* Round counter */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Space>
+                <Badge count={roundIdx} style={{ backgroundColor: '#1677ff' }} />
+                <Text strong>
+                  {task.status === 'completed' && convergenceReason
+                    ? `迭代完成 · ${roundIdx}/${maxRounds} 轮`
+                    : `第 ${roundIdx}/${maxRounds} 轮`}
+                </Text>
+                {task.status !== 'completed' && roundIdx > 0 && (
+                  <Tag icon={<SyncOutlined spin />} color="processing">迭代中</Tag>
+                )}
+              </Space>
+              {convergenceReason && (
+                <Tag icon={<CheckCircleOutlined />} color="success">{convergenceReason}</Tag>
+              )}
+            </div>
+            {/* Per-round decisions timeline */}
+            {iterationDecisions.length > 0 && (
+              <Timeline
+                items={iterationDecisions.map((d, i) => ({
+                  color: d.should_continue ? 'blue' : 'green',
+                  dot: d.should_continue ? <SyncOutlined /> : <CheckCircleOutlined />,
+                  children: (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      第 {d.round} 轮 · {d.should_continue ? '继续迭代' : '收敛'} · {d.reason}
+                    </Text>
+                  ),
+                }))}
+              />
+            )}
+          </Space>
+        </Card>
+      )}
 
       {/* 当前阶段进度条 */}
       {currentStage && task.status !== 'completed' && task.status !== 'failed' && (

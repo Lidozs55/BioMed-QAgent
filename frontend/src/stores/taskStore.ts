@@ -3,6 +3,8 @@ import { create } from 'zustand';
 import { api } from '@/api/client';
 import type { TaskSummary, WSMessage, StageInfo } from '@/api/types';
 
+const MAX_WS_MESSAGES = 200;
+
 interface TaskStore {
   // 任务列表
   tasks: TaskSummary[];
@@ -18,6 +20,12 @@ interface TaskStore {
   // 加载状态
   loading: boolean;
   error: string | null;
+
+  // 迭代状态 (来自 WS iteration_round / iteration_decision / iteration_converged)
+  roundIdx: number;
+  maxRounds: number;
+  iterationDecisions: Array<{ round: number; should_continue: boolean; reason: string }>;
+  convergenceReason: string;
 
   // 动作
   fetchTasks: () => Promise<void>;
@@ -36,6 +44,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   wsMessages: [],
   currentStage: '',
   stageProgress: 0,
+  roundIdx: 0,
+  maxRounds: 3,
+  iterationDecisions: [],
+  convergenceReason: '',
   loading: false,
   error: null,
 
@@ -64,7 +76,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   },
 
   createAndStartTask: async (goal, domainHint) => {
-    set({ loading: true, error: null, wsMessages: [] });
+    set({ loading: true, error: null, wsMessages: [], roundIdx: 0, maxRounds: 3, iterationDecisions: [], convergenceReason: '' });
     try {
       const task = await api.createTask({
         research_goal: goal,
@@ -102,8 +114,51 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   },
 
   handleWSMessage: (msg) => {
-    set((state) => ({ wsMessages: [...state.wsMessages.slice(-200), msg] }));
+    // Handle iteration round start
+    if (msg.type === 'iteration_round') {
+      set({
+        roundIdx: msg.round ?? 0,
+        maxRounds: msg.max_rounds ?? 3,
+        currentStage: '',
+        stageProgress: 0,
+        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
+      });
+      return;
+    }
 
+    // Handle iteration decision (per-round)
+    if (msg.type === 'iteration_decision') {
+      const decisions = [...get().iterationDecisions];
+      const idx = decisions.findIndex(d => d.round === msg.round);
+      const entry = {
+        round: msg.round ?? 0,
+        should_continue: msg.should_continue ?? false,
+        reason: msg.reason ?? '',
+      };
+      if (idx >= 0) decisions[idx] = entry;
+      else decisions.push(entry);
+      set({
+        iterationDecisions: decisions,
+        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
+      });
+      return;
+    }
+
+    // Handle iteration convergence (all rounds done)
+    if (msg.type === 'iteration_converged') {
+      set({
+        convergenceReason: msg.reason ?? '',
+        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
+      });
+      return;
+    }
+
+    set((state) => ({ wsMessages: [...state.wsMessages.slice(-MAX_WS_MESSAGES), msg] }));
+
+    // 新任务开始时重置迭代状态
+    if (msg.type === 'task_start') {
+      set({ roundIdx: 0, iterationDecisions: [], convergenceReason: '' });
+    }
     if (msg.type === 'stage_start' || msg.type === 'stage_complete') {
       set({ currentStage: msg.stage || '' });
     }

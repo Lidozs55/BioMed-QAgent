@@ -2,9 +2,11 @@
 import { useState } from 'react';
 import {
   Card, Radio, Input, Button, Select, Typography, Space, App, Tag, Divider, Alert,
+  Rate, Timeline as AntTimeline,
 } from 'antd';
 import {
   EditOutlined, ReloadOutlined, MessageOutlined, LoadingOutlined,
+  StarOutlined,
 } from '@ant-design/icons';
 import { api } from '@/api/client';
 import type { TaskSummary } from '@/api/types';
@@ -47,6 +49,12 @@ export function FeedbackPanel({ task }: FeedbackPanelProps) {
   // retry_stage 选择
   const [retryStage, setRetryStage] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [restarting, setRestarting] = useState(false);
+  const [feedbackHistory, setFeedbackHistory] = useState<Array<{
+    type: string; message: string; timestamp: string; rating?: number;
+  }>>([]);
   const { message: msg } = App.useApp();
 
   const handleReset = () => {
@@ -94,10 +102,21 @@ export function FeedbackPanel({ task }: FeedbackPanelProps) {
       payload.retry_stage = retryStage;
     }
 
+    if (rating > 0) {
+      payload.rating = rating;
+    }
+
     setSubmitting(true);
     try {
       const resp = await api.submitFeedback(task.task_id, payload as any);
       msg.success(`反馈已提交：${resp.note || '已记录'}`);
+      setFeedbackHistory(prev => [...prev, {
+        type: feedbackType,
+        message: message.trim(),
+        timestamp: new Date().toLocaleString('zh-CN'),
+        rating: rating > 0 ? rating : undefined,
+      }]);
+      setSubmitted(true);
       handleReset();
     } catch (e: any) {
       msg.error(`反馈提交失败：${e.message || e}`);
@@ -126,6 +145,21 @@ export function FeedbackPanel({ task }: FeedbackPanelProps) {
           message="人在回路反馈"
           description="对任务结果提供反馈，补充实体或请求重试特定阶段。提交后可重新启动任务以应用修正。"
         />
+
+        {/* Result Quality Rating */}
+        <Card size="small" title={<><StarOutlined /> 结果质量评分</>} style={{ marginBottom: 8 }}>
+          <Rate
+            value={rating}
+            onChange={setRating}
+            style={{ fontSize: 24 }}
+            tooltips={['很差', '较差', '一般', '好', '很好']}
+          />
+          {rating > 0 && rating <= 2 && (
+            <Text type="warning" style={{ display: 'block', marginTop: 8 }}>
+              评分较低，建议提交反馈修正并重新执行
+            </Text>
+          )}
+        </Card>
 
         <Radio.Group
           value={feedbackType}
@@ -224,10 +258,61 @@ export function FeedbackPanel({ task }: FeedbackPanelProps) {
           提交反馈
         </Button>
 
-        {(isCompleted || isFailed) && (
+        {/* After successful submission — show restart option */}
+        {submitted && feedbackType === 'retry_stage' && (
+          <Card size="small" style={{ background: '#fffbe6' }}>
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Text>反馈已提交。是否立即从 <Tag>{retryStage}</Tag> 阶段重新执行？</Text>
+              <Button
+                type="primary"
+                icon={<ReloadOutlined />}
+                loading={restarting}
+                onClick={async () => {
+                  setRestarting(true);
+                  try {
+                    await api.startTask(task.task_id);
+                    msg.success('任务已重新启动，请切换到"流水线状态"查看进度');
+                    setRestarting(false);
+                    setSubmitted(false);
+                    setRating(0);
+                    setMessage('');
+                  } catch {
+                    msg.error('重启失败，请手动在侧边栏点击"启动研究"');
+                    setRestarting(false);
+                  }
+                }}
+              >
+                从 {retryStage} 重新执行
+              </Button>
+            </Space>
+          </Card>
+        )}
+
+        {(isCompleted || isFailed) && !submitted && (
           <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0, textAlign: 'center' }}>
             提交反馈后，在左侧任务面板点击「启动研究」可重新执行任务以应用修正
           </Paragraph>
+        )}
+
+        {/* Feedback History */}
+        {feedbackHistory.length > 0 && (
+          <Card size="small" title="反馈历史" style={{ marginTop: 8 }}>
+            <AntTimeline
+              items={feedbackHistory.map((f, i) => ({
+                color: f.rating && f.rating <= 2 ? 'red' : 'blue',
+                children: (
+                  <div key={i}>
+                    <Tag>{f.type}</Tag>
+                    {f.rating && <Rate disabled value={f.rating} style={{ fontSize: 12 }} />}
+                    <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
+                      {f.message}
+                    </Text>
+                    <Text style={{ fontSize: 11 }} type="secondary">{f.timestamp}</Text>
+                  </div>
+                ),
+              }))}
+            />
+          </Card>
         )}
       </Space>
     </Card>
