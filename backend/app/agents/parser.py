@@ -1,9 +1,10 @@
-"""Parser Agent — 文献与生物数据解析 + 爬虫原始内容 LLM 提取。
+"""Parser Agent — 文献与生物数据解析 + 爬虫原始内容 LLM 提取 + 图表数据提取。
 
 从 Orchestrator._stage_parse 迁入，职责：
 - 解析用户上传的 PDF（表格 + caption）
 - 自动下载搜索结果中的开放获取 PDF 并解析
 - 对 acquire 阶段产出的 raw crawl record 调用 LLMExtractor 提取结构化字段
+- 对用户上传的图表图片调用 Qwen-VL 提取图表数据（chart_type/axes/data_points）
 - 记录溯源
 """
 from __future__ import annotations
@@ -15,9 +16,13 @@ from app.agents.base import BaseAgent, ProgressCallback
 from app.agents.llm_extractor import LLMExtractor, is_raw_crawl_record
 from app.agents.registry import AgentRegistry
 from app.models.task import Task, StageStatus
+from app.tools.parsers._base import make_record
 from app.utils.paths import get_task_output_dir
 
 logger = logging.getLogger(__name__)
+
+# 支持的图表图片扩展名
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
 
 @AgentRegistry.register
@@ -54,7 +59,11 @@ class ParserAgent(BaseAgent):
                 if result.success and result.data:
                     parsed_records.extend(self._extract_records(result))
 
-        # Step 3: 自动下载搜索结果中的开放获取 PDF
+        # Step 3: 图表图片数据提取（Qwen-VL 多模态识别）
+        chart_records = await self._extract_chart_images(
+            uploads_dir, out_dir, task, progress)
+
+        # Step 4: 自动下载搜索结果中的开放获取 PDF
         def _has_pdf(r: dict) -> bool:
             fields = r.get("fields", {}) or {}
             if fields.get("pdf_url"):
@@ -80,7 +89,7 @@ class ParserAgent(BaseAgent):
             self._emit(progress, type="stage_progress", stage="parse",
                         pct=0.8, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
-            # Step 4: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
+            # Step 5: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
             if pdf_dir.exists():
                 for pdf_file in sorted(pdf_dir.glob("*.pdf")):
                     self._emit(progress, type="stage_progress", stage="parse",
@@ -92,25 +101,32 @@ class ParserAgent(BaseAgent):
                     if result.success and result.data:
                         parsed_records.extend(self._extract_records(result))
 
+        # Step 5: 用户上传的图表图片 → Qwen-VL 提取图表数据
+        chart_records = await self._extract_chart_records(
+            uploads_dir, task, progress)
+
         # 用 LLM 提取的结构化记录替换 raw crawl record（就地更新 records）
         if extracted_from_crawl:
             self._replace_crawl_records(records, extracted_from_crawl)
 
         # 记录溯源：parse 阶段
         prov = self.store.get_provenance(task.task_id)
-        if prov and (parsed_records or extracted_from_crawl):
-            new_recs = parsed_records + extracted_from_crawl
+        if prov and (parsed_records or extracted_from_crawl or chart_records):
+            new_recs = parsed_records + extracted_from_crawl + chart_records
             rec_ids = [r.get("record_id", "") for r in new_recs]
             prov.record("parse", "parse_agent",
-                       tool_name="pdf_table+pdf_download+llm_extract",
+                       tool_name="pdf_table+pdf_download+llm_extract+chart_vision",
                        output_records=rec_ids,
                        parameters={"pdf_parsed": len(parsed_records),
                                    "crawl_extracted": len(extracted_from_crawl),
+                                   "chart_extracted": len(chart_records),
                                    "downloaded_count": len(pdf_candidates)})
 
         msg = (f"解析完成：PDF {len(parsed_records)} 条 + "
-               f"爬虫 LLM 提取 {len(extracted_from_crawl)} 条")
+               f"爬虫 LLM 提取 {len(extracted_from_crawl)} 条 + "
+               f"图表提取 {len(chart_records)} 条")
         records.extend(parsed_records)
+        records.extend(chart_records)
         self._set_stage(task, "parse", StageStatus.DONE, msg,
                         records_count=len(records))
         self._emit(progress, type="stage_complete", stage="parse", message=msg)
@@ -150,6 +166,66 @@ class ParserAgent(BaseAgent):
                     pct=0.35,
                     message=f"✓ LLM 提取完成：{len(extracted)} 条结构化记录")
         return extracted
+
+    async def _extract_chart_records(self, uploads_dir: Path, task: Task,
+                                      progress: ProgressCallback | None) -> list[dict]:
+        """对用户上传的图表图片调用 Qwen-VL 提取图表数据。
+
+        扫描 uploads_dir 中的图片文件（png/jpg/jpeg/webp/bmp/gif），
+        调用 ToolRegistry.extract_chart_data（底层 Qwen-VL API）提取
+        chart_type/axes/data_points/legend，构造 DataRecord。
+
+        Returns:
+            图表数据记录列表（entity_type="Chart"）
+        """
+        if not uploads_dir.exists():
+            return []
+
+        image_files = [f for f in sorted(uploads_dir.iterdir())
+                       if f.suffix.lower() in _IMAGE_EXTS and f.is_file()]
+        if not image_files:
+            return []
+
+        self._emit(progress, type="stage_progress", stage="parse",
+                    pct=0.55,
+                    message=f"Qwen-VL 提取 {len(image_files)} 张图表...")
+
+        out_dir = get_task_output_dir(task.task_id)
+        chart_records: list[dict] = []
+        for idx, img in enumerate(image_files):
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.55 + 0.1 * (idx + 1) / len(image_files),
+                        message=f"图表提取 {img.name} ({idx+1}/{len(image_files)})")
+            try:
+                out_file = out_dir / f"chart_{img.stem}.json"
+                result = await self._to_thread(
+                    self.tools.extract_chart_data, img, out_file,
+                )
+                if result.success and result.data:
+                    fields = {
+                        "entity_type": "Chart",
+                        "chart_type": result.data.get("chart_type", "unknown"),
+                        "axes": result.data.get("axes"),
+                        "data_points": result.data.get("data_points", []),
+                        "legend": result.data.get("legend", []),
+                        "image_file": img.name,
+                    }
+                    rec = make_record(
+                        task_id=task.task_id, source_name="qwen_vl",
+                        fields=fields, file_path=str(img),
+                        confidence=0.75, method="chart",
+                        accession=f"chart_{img.stem}",
+                        source_type="file")
+                    chart_records.append(rec)
+            except Exception as e:
+                logger.warning("图表提取 %s 失败（已跳过）: %s", img.name, e)
+                task.errors.append(f"chart_extract {img.name}: {e}")
+
+        if chart_records:
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.65,
+                        message=f"✓ 图表提取完成：{len(chart_records)} 条")
+        return chart_records
 
     @staticmethod
     def _replace_crawl_records(records: list[dict],

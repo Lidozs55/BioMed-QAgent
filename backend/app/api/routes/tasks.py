@@ -9,10 +9,11 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 
 from app.agents.orchestrator import Orchestrator
 from app.api.routes.ws import broadcast
+from app.config import UPLOADS_DIR
 from app.llm.client import DashScopeClient
 from app.models.task import TaskCreate
 from app.storage.task_store import get_task_store
@@ -20,6 +21,9 @@ from app.tools.registry import get_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+# 允许上传的文件扩展名（PDF + 图表图片）
+_ALLOWED_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
 
 @router.get("/{task_id}/analysis", summary="获取任务分析结果")
@@ -83,6 +87,40 @@ async def list_tasks() -> dict:
     return {
         "tasks": [t.to_summary() for t in tasks],
         "total": len(tasks),
+    }
+
+
+@router.post("/{task_id}/upload", summary="上传 PDF 或图表图片")
+async def upload_file(task_id: str, file: UploadFile = File(...)) -> dict:
+    """上传文件到全局 uploads 目录，供 parse 阶段处理。
+
+    支持 PDF（表格/caption 提取）和图表图片（Qwen-VL 图表数据提取）。
+    文件保存到 data/uploads/，parse 阶段会自动扫描该目录。
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    import os
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if suffix not in _ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {suffix}（仅支持 {', '.join(sorted(_ALLOWED_EXTS))}）",
+        )
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = UPLOADS_DIR / (file.filename or f"upload_{task_id}{suffix}")
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    logger.info("任务 %s 上传文件: %s (%d bytes)", task_id, dest.name, len(content))
+    return {
+        "task_id": task_id,
+        "filename": dest.name,
+        "size": len(content),
+        "path": str(dest),
     }
 
 
