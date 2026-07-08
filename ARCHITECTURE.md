@@ -381,7 +381,7 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 | 新增数据源 | `tools/datasources/` 添加模块函数 + `ToolRegistry._get_ds_func` 注册 | 15 活跃 |
 | 新增解析器 | `tools/parsers/` 添加模块 + `ToolRegistry` 加 facade + `ParserAgent._BIO_PARSER_MAP` 注册 | 6 个（全接线）|
 | 新增清洗器 | `tools/cleaners/` 添加模块 + `ToolRegistry` 加 facade | 3 个 |
-| 新增分析模板 | `tools/analysis/` 添加模块 + `ToolRegistry` 加 facade | 7 个（6 接线，仅 survival 未接）|
+| 新增分析模板 | `tools/analysis/` 添加模块 + `ToolRegistry` 加 facade | 7 个（全接线）|
 | 新增导出格式 | `tools/export/` 添加模块 | CSV/Excel/MD |
 | 新增领域模板 | `resources/domain_templates/` 加 YAML | 中医药/肿瘤学/药理学 |
 | 新增词典 | `resources/dictionaries/` 加 YAML | 基因/化合物/疾病/单位/字段别名 |
