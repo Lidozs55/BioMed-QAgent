@@ -18,6 +18,7 @@ class TaskStatus(str, Enum):
     CLEANING = "cleaning"
     ANALYZING = "analyzing"
     REVIEWING = "reviewing"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -76,6 +77,9 @@ class Task(BaseModel):
     report_html: str = ""
     # 错误
     errors: list[str] = Field(default_factory=list)
+    # 人工确认点（TASK-014 人在回路）
+    pending_checkpoint: str | None = None
+    checkpoint_payload: dict = Field(default_factory=dict)
     # 时间戳
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
@@ -112,6 +116,7 @@ class Task(BaseModel):
             "entities": self.entities,
             "domain": self.domain,
             "errors": self.errors,
+            "pending_checkpoint": self.pending_checkpoint,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
         }

@@ -108,9 +108,9 @@ class ParserAgent(BaseAgent):
                     if result.success and result.data:
                         parsed_records.extend(self._extract_records(result))
 
-        # Step 5: 用户上传的图表图片 → Qwen-VL 提取图表数据
+        # Step 5: 用户上传的图表图片 + 浏览器爬虫截图 → Qwen-VL 提取图表数据
         chart_records = await self._extract_chart_records(
-            uploads_dir, task, progress)
+            uploads_dir, task, progress, records=records)
 
         # Step 6: 用户上传的生物数据文件 → GEO SOFT / PDB / FASTA / 网络文件解析
         bio_records = await self._parse_bio_data_records(
@@ -182,34 +182,50 @@ class ParserAgent(BaseAgent):
         return extracted
 
     async def _extract_chart_records(self, uploads_dir: Path, task: Task,
-                                      progress: ProgressCallback | None) -> list[dict]:
-        """对用户上传的图表图片调用 Qwen-VL 提取图表数据。
+                                      progress: ProgressCallback | None,
+                                      records: list[dict] | None = None) -> list[dict]:
+        """对图表图片调用 Qwen-VL 提取图表数据。
 
-        扫描 uploads_dir 中的图片文件（png/jpg/jpeg/webp/bmp/gif），
+        扫描两个来源：
+        1. uploads_dir 中的用户上传图片（png/jpg/jpeg/webp/bmp/gif）
+        2. records 中 raw_type=screenshot 的浏览器爬虫截图（TASK-012）
+
         调用 ToolRegistry.extract_chart_data（底层 Qwen-VL API）提取
         chart_type/axes/data_points/legend，构造 DataRecord。
 
         Returns:
             图表数据记录列表（entity_type="Chart"）
         """
-        if not uploads_dir.exists():
-            return []
+        # 来源 1：用户上传的图片
+        image_files: list[Path] = []
+        if uploads_dir.exists():
+            image_files = [f for f in sorted(uploads_dir.iterdir())
+                           if f.suffix.lower() in _IMAGE_EXTS and f.is_file()]
 
-        image_files = [f for f in sorted(uploads_dir.iterdir())
-                       if f.suffix.lower() in _IMAGE_EXTS and f.is_file()]
-        if not image_files:
+        # 来源 2：浏览器爬虫截图（TASK-012）
+        screenshot_files: list[Path] = []
+        if records:
+            for r in records:
+                if r.get("raw_type") == "screenshot":
+                    path = r.get("screenshot_path")
+                    if path and Path(path).exists():
+                        screenshot_files.append(Path(path))
+
+        all_images = image_files + screenshot_files
+        if not all_images:
             return []
 
         self._emit(progress, type="stage_progress", stage="parse",
                     pct=0.55,
-                    message=f"Qwen-VL 提取 {len(image_files)} 张图表...")
+                    message=f"Qwen-VL 提取 {len(all_images)} 张图表"
+                            f"（上传 {len(image_files)} + 爬虫截图 {len(screenshot_files)}）")
 
         out_dir = get_task_output_dir(task.task_id)
         chart_records: list[dict] = []
-        for idx, img in enumerate(image_files):
+        for idx, img in enumerate(all_images):
             self._emit(progress, type="stage_progress", stage="parse",
-                        pct=0.55 + 0.1 * (idx + 1) / len(image_files),
-                        message=f"图表提取 {img.name} ({idx+1}/{len(image_files)})")
+                        pct=0.55 + 0.1 * (idx + 1) / len(all_images),
+                        message=f"图表提取 {img.name} ({idx+1}/{len(all_images)})")
             try:
                 out_file = out_dir / f"chart_{img.stem}.json"
                 result = await self._to_thread(

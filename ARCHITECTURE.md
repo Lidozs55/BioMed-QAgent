@@ -80,7 +80,7 @@ backend/app/
 │   ├── cleaner.py           # CleanerAgent（对齐/归一/去重）
 │   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达/Hub/上游 并行+复用）
 │   ├── reviewer.py          # ReviewerAgent（LLM 质量审查）
-│   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，LLM gap 分析）
+│   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，量化 Stage Gate + LLM gap 分析）
 ├── tools/
 │   ├── registry.py          # ★ ToolRegistry facade
 │   ├── datasources/         # 15 个数据源模块
@@ -90,7 +90,7 @@ backend/app/
 │   ├── export/              # CSV/Excel/Markdown
 │   ├── io/                  # 格式互转
 │   ├── viz/                 # 火山图/热图/气泡/网络图 + 图表数据提取(Qwen-VL)
-│   └── optimization/        # Darwinian Stage Gate（dormant，未接线）
+│   └── optimization/        # Darwinian Stage Gate（stage_evaluator 已接线 IterationDecisionAgent；reflection_loop 文件版 dormant）
 ├── llm/
 │   ├── client.py            # DashScopeClient
 │   └── prompts/             # 7 个提示词模板
@@ -147,7 +147,8 @@ class Orchestrator:
 - 同步阻塞函数用 `asyncio.to_thread` 包装（BaseAgent._to_thread），避免阻塞 FastAPI 事件循环
 - 异常 → 任务 FAILED，记录到 `task.errors`，可重新 `start`
 - Darwinian Stage Gate 在 SearchAgent 内部实现（记录不足或相关性低时扩展查询重试）
-- IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80%
+- IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80% / **Stage Gate 量化评估通过（coverage≥0.8 且 confidence≥0.8 且 sources≥2 且 conflict≤0.2）** / **冲突率 >40%（需用户介入）**
+- IterationDecisionAgent 量化接线：每轮调用 `stage_evaluator.evaluate()`（内存直调，stage="clean" 阈值）获取 coverage/confidence/conflict_rate/source_diversity + gaps + suggestions，注入 LLM prompt；无 LLM 时用 `keyword_expander.expand_keywords()` 基于同义词字典构造下一轮查询
 
 **可重入状态机**（用户反馈后从指定阶段重试，非重跑全流程）：
 
@@ -162,6 +163,26 @@ orchestrator.run_resume(task, from_stage="clean", progress=progress)
 - 从 `store._records` 加载已持久化的 records（前置阶段产出）
 - 从 search 重试时清空已有记录重新检索；其余阶段保留前置产出
 - 单轮执行（无多轮迭代），符合"用户显式请求重试"语义
+
+**人工确认点**（多轮迭代后质量低时暂停，等待用户 approve/reject）：
+
+```python
+# 多轮迭代完成 → review 后、export 前，Orchestrator 检查 _needs_confirmation
+# 触发条件：记录为空 / review.quality == "low" / avg_confidence < 0.5
+if orchestrator._needs_confirmation(task, records, review):
+    task.status = TaskStatus.AWAITING_CONFIRMATION  # 暂停，不阻塞协程
+    task.pending_checkpoint = "low_confidence"
+    task.checkpoint_payload = orchestrator._build_checkpoint_payload(...)
+    return task  # 等待用户确认
+
+# 用户确认：POST /tasks/{task_id}/confirm
+#   approve → orchestrator.run_export(task) → COMPLETED
+#   reject  → orchestrator.run_resume(task, from_stage) → 重试
+```
+
+- `AWAITING_CONFIRMATION` 状态：任务暂停但协程已返回，不阻塞 FastAPI 事件循环
+- `checkpoint_payload`：含低置信度记录样本（max 20）、审查问题、建议
+- approve 路径仅运行 export；reject 路径复用 `run_resume` 从指定阶段重试
 
 ### 4.2 ToolRegistry — 工具 facade
 
@@ -352,8 +373,8 @@ WebSocket 推送格式：
 |------|------|------|
 | 1. planning | LLM qwen-plus | 提取化合物/基因/疾病/通路实体，识别领域，生成检索查询与推荐数据源 |
 | 2. search | 原生模块 + 线程池 | 文献源并行 + 实体源串行；Darwinian 扩展重试 |
-| 3. acquire | WebCrawlerSource | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；爬虫失败隔离不影响流水线 |
-| 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取 + GEO SOFT/PDB/FASTA/网络文件 |
+| 3. acquire | WebCrawlerSource + BrowserAgent | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；JS 重站点（cnki/wanfang/chembl/...）路由到 Playwright 浏览器爬虫，输出截图供 Qwen-VL 提取；爬虫失败隔离不影响流水线 |
+| 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取（上传图片 + 浏览器截图）+ GEO SOFT/PDB/FASTA/网络文件 |
 | 5. clean | 三件套 | 字段对齐 → 单位归一化 → 去重 |
 | 6. analyze | 原生模块（可选）| Phase1 并行：PPI/富集/药靶/差异表达；Phase2 复用 PPI：Hub/上游；Phase3 生存分析（disease→TCGA cohort 映射）|
 | 7. review | LLM qwen-max | 审查完整性/覆盖/发现/建议，输出质量评分 |
@@ -406,7 +427,7 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
+| optimization 模块 dormant | ~~stage_evaluator 未接线~~ → 已接线 IterationDecisionAgent（量化指标驱动收敛 + LLM prompt 增强 + keyword_expander fallback）；reflection_loop 文件版仍 dormant（CLI 导向，内存直调 evaluate 已覆盖核心价值） | P2→已解决 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 
 ---

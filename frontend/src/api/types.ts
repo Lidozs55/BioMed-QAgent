@@ -100,10 +100,31 @@ export interface IterationDecision {
   gap_analysis?: Record<string, unknown>;
 }
 
+/** Stage Gate 量化评估指标（stage_gate_evaluation 载荷） */
+export interface StageGateMetrics {
+  coverage: number;          // 0-1，关键实体覆盖率
+  avg_confidence: number;    // 0-1，平均抽取置信度
+  conflict_rate: number;     // 0-1，冲突记录占比
+  source_diversity: number;  // 不同数据源数量
+  record_count?: number;
+  entity_coverage?: Record<string, { covered: string[]; missing: string[] }>;
+}
+
+export interface StageGateSuggestion {
+  action: 'expand_search' | 'add_source' | 'deepen_analysis'
+        | 'refine_keywords' | 'request_user_input' | string;
+  reason?: string;
+  query?: string;
+  source?: string;
+  analysis?: string;
+  [key: string]: unknown;
+}
+
 export interface WSMessage {
   type: 'task_start' | 'stage_start' | 'stage_progress' | 'stage_complete'
       | 'task_complete' | 'error' | 'snapshot' | 'pong'
-      | 'iteration_round' | 'iteration_decision' | 'iteration_converged';
+      | 'iteration_round' | 'iteration_decision' | 'iteration_converged'
+      | 'stage_gate_evaluation';
   task_id?: string;
   stage?: string;
   message?: string;
@@ -115,11 +136,18 @@ export interface WSMessage {
   context?: Record<string, unknown>;
   review?: Record<string, unknown>;
   summary?: TaskSummary;
-  // Iteration fields
+  // 迭代决策事件载荷（iteration_round / iteration_decision / iteration_converged）
   round?: number;
   max_rounds?: number;
   should_continue?: boolean;
   reason?: string;
   next_round_queries?: string[];
   gap_analysis?: Record<string, unknown>;
+  target_entities?: string[];
+  convergence_signals?: string[];
+  needs_user_input?: boolean;
+  // Stage Gate 量化评估载荷（stage_gate_evaluation）
+  passed?: boolean;
+  metrics?: StageGateMetrics;
+  suggestions?: StageGateSuggestion[];
 }

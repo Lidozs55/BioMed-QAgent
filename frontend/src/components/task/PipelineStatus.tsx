@@ -6,6 +6,7 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
+import { IterationPanel } from '@/components/task/IterationPanel';
 import type { TaskSummary, StageInfo, StageStatus } from '@/api/types';
 
 const { Title, Text, Paragraph } = Typography;
@@ -287,6 +288,9 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           )}
         </Card>
       )}
+
+      {/* 迭代决策面板（达尔文 Stage Gate 量化指标 + 收敛决策）*/}
+      <IterationPanel />
 
       {/* 实时日志 */}
       <Card size="small" title={<Title level={5} style={{ margin: 0 }}>实时日志</Title>}>

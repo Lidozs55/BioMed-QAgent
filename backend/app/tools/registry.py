@@ -231,7 +231,8 @@ class ToolRegistry:
         """网页爬虫采集（fallback） — 对 requires_crawl 数据源执行爬取。
 
         输出 raw crawl record（含 raw_content），由 parse 阶段 LLMExtractor
-        转换为结构化 DataRecord。
+        转换为结构化 DataRecord。JS 重站点（cnki/wanfang/chembl/...）自动
+        路由到浏览器爬虫（Playwright，TASK-012）。
 
         Args:
             crawl_targets: 爬虫目标列表，每项 {"source", "query", "reason"}
@@ -241,21 +242,37 @@ class ToolRegistry:
         """
         try:
             from app.tools.datasources.web_crawler import WebCrawlerSource
+            from app.tools.browser_agent import is_js_heavy_source, crawl_with_browser
+            from app.utils.paths import get_task_output_dir
             crawler = WebCrawlerSource()
             raw_records: list[dict] = []
+            screenshot_dir = get_task_output_dir(task_id) / "screenshots"
             for target in crawl_targets:
                 source = target.get("source", "web_crawler")
                 query = target.get("query", "")
                 if not query:
                     continue
-                recs = crawler.search(query, max_results=20, task_id=task_id,
-                                       source=source)
-                raw_records.extend(recs)
-                if recs:
-                    logger.info("crawl_web: %s 爬取 %d 条原始记录",
+                # JS 重站点 → 浏览器爬虫（含截图，供 Qwen-VL 提取）
+                if is_js_heavy_source(source):
+                    url = target.get("url") or crawler._build_url(source, query)
+                    if not url:
+                        logger.info("crawl_web: %s 无 URL 构造器", source)
+                        continue
+                    recs = crawl_with_browser(
+                        url, query=query, task_id=task_id,
+                        screenshot_dir=screenshot_dir,
+                        take_screenshot=True)
+                    logger.info("crawl_web: %s 浏览器爬取 %d 条",
                                 source, len(recs))
                 else:
-                    logger.info("crawl_web: %s 无可用内容", source)
+                    recs = crawler.search(query, max_results=20, task_id=task_id,
+                                           source=source)
+                    if recs:
+                        logger.info("crawl_web: %s 爬取 %d 条原始记录",
+                                    source, len(recs))
+                    else:
+                        logger.info("crawl_web: %s 无可用内容", source)
+                raw_records.extend(recs)
             return ToolResult(True, data=raw_records)
         except Exception as e:
             logger.exception("crawl_web 失败")

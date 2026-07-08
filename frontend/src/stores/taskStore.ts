@@ -16,6 +16,9 @@ interface TaskStore {
   wsMessages: WSMessage[];
   currentStage: string;
   stageProgress: number;
+  // 迭代决策最新状态（达尔文 Stage Gate 量化指标 + 收敛决策）
+  latestIterationDecision: WSMessage | null;
+  latestStageGateEvaluation: WSMessage | null;
 
   // 加载状态
   loading: boolean;
@@ -44,6 +47,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   wsMessages: [],
   currentStage: '',
   stageProgress: 0,
+  latestIterationDecision: null,
+  latestStageGateEvaluation: null,
   roundIdx: 0,
   maxRounds: 3,
   iterationDecisions: [],
@@ -63,10 +68,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   selectTask: async (id) => {
     if (!id) {
-      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0 });
+      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null });
       return;
     }
-    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, error: null });
+    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null, error: null });
     try {
       const task = await api.getTask(id);
       set({ selectedTask: task });
@@ -139,6 +144,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       else decisions.push(entry);
       set({
         iterationDecisions: decisions,
+        latestIterationDecision: msg,
         wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
       });
       return;
@@ -148,6 +154,15 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     if (msg.type === 'iteration_converged') {
       set({
         convergenceReason: msg.reason ?? '',
+        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
+      });
+      return;
+    }
+
+    // Handle stage gate evaluation
+    if (msg.type === 'stage_gate_evaluation') {
+      set({
+        latestStageGateEvaluation: msg,
         wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
       });
       return;
@@ -183,5 +198,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     }
   },
 
-  clearMessages: () => set({ wsMessages: [], currentStage: '', stageProgress: 0 }),
+  clearMessages: () => set({
+    wsMessages: [], currentStage: '', stageProgress: 0,
+    latestIterationDecision: null, latestStageGateEvaluation: null,
+  }),
 }));

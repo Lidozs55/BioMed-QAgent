@@ -28,8 +28,8 @@ pydantic>=2.6.0
 # 可视化（脚本端使用）
 matplotlib>=3.8.0
 
-# 浏览器自动化（可选，Acquire 阶段）
-# playwright>=1.42.0
+# 浏览器自动化（TASK-012 多模态采集，JS 重站点渲染 + 截图）
+playwright>=1.42.0
 
 # ===== 不再使用（已精简存储层）=====
 # qdrant-client   # 向量库 — 已移除
