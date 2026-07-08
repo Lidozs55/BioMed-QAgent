@@ -4,6 +4,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# 加载项目根目录 .env 文件（优先级低于系统环境变量）
+_env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+
 
 # ===== 路径 =====
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # d:\Code\BioMedQAgent
