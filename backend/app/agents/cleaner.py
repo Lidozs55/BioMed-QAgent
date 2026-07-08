@@ -88,18 +88,33 @@ class CleanerAgent(BaseAgent):
                     message=msg, records_count=len(cleaned),
                     avg_confidence=avg_conf)
 
-        # 记录溯源：清洗阶段
+        # 记录溯源：清洗阶段（含字段级变换摘要）
         prov = self.store.get_provenance(task.task_id)
         if prov and cleaned:
             rec_ids = [r.get("record_id", "") for r in cleaned]
             input_ids = [r.get("record_id", "") for r in records]
+            # 聚合字段级溯源：统计 field_align / unit_normalize 各发生多少次
+            align_count = sum(
+                1 for r in cleaned for chain in r.get("field_provenance", {}).values()
+                for entry in chain if entry.get("step") == "field_align"
+            )
+            unit_count = sum(
+                1 for r in cleaned for chain in r.get("field_provenance", {}).values()
+                for entry in chain if entry.get("step") == "unit_normalize"
+            )
+            fields_tracked = len({
+                fname for r in cleaned for fname in r.get("field_provenance", {})
+            })
             prov.record("clean", "clean_agent",
                        tool_name="field_aligner+unit_normalizer+duplicate_detector",
                        input_records=input_ids,
                        output_records=rec_ids,
                        parameters={"input_count": len(records),
                                    "output_count": len(cleaned),
-                                   "avg_confidence": avg_conf})
+                                   "avg_confidence": avg_conf,
+                                   "field_align_events": align_count,
+                                   "unit_normalize_events": unit_count,
+                                   "fields_with_provenance": fields_tracked})
 
         self.store.set_records(task.task_id, cleaned)
         self.store.update_task(task)

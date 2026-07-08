@@ -171,6 +171,8 @@ def align_records(records, field_dict):
         new_fields = {}
         new_unit_info = {}
         flags = list(r.get("quality_flags", []))
+        # 字段级溯源：记录每个字段的映射/变换链路
+        field_prov = dict(r.get("field_provenance", {}))
 
         for fname, fval in old_fields.items():
             unified = alias_index.get(_norm_key(fname)) or alias_index.get(_compact_key(fname))
@@ -187,12 +189,22 @@ def align_records(records, field_dict):
             if orig_unit:
                 new_unit_info[unified] = orig_unit
             mapping_hits.setdefault(unified, set()).add((src, fname, orig_unit))
+            # 追加字段级溯源条目（字段名对齐 + 值变换）
+            chain = field_prov.setdefault(unified, [])
+            chain.append({
+                "step": "field_align",
+                "from": fname,
+                "to": unified,
+                "transform": info.get("transform"),
+                "source": src,
+            })
 
         r2 = dict(r)
         r2["fields"] = new_fields
         r2["unit_info"] = new_unit_info
         r2["quality_flags"] = flags
         r2["processing_log"] = list(r.get("processing_log", [])) + ["field_aligned"]
+        r2["field_provenance"] = field_prov
         cleaned.append(r2)
 
     # 构造 field_mapping 表（仅包含实际命中的字段）

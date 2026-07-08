@@ -267,9 +267,31 @@ class ProvenanceTracker:
     def save(self, path) / load(self, path)
 ```
 
+**字段级溯源**：每条记录携带 `field_provenance` dict，记录各字段的完整变换链路，满足赛题"来源可追溯性"加分项：
+
+```python
+# record["field_provenance"] 结构
+{
+  "compound_name": [
+    {"step": "field_align", "from": "MolName", "to": "compound_name",
+     "transform": "title", "source": "tcmsp"}
+  ],
+  "log2fc": [
+    {"step": "field_align", "from": "logFC", "to": "log2fc", "transform": "float", "source": "geo"},
+    {"step": "unit_normalize", "from_unit": "ln", "to_unit": "log2"}
+  ]
+}
+```
+
+- 字段来源（表格/段落/网页/截图）由记录级 `source_ref.source_type` + `extraction_method` 标识
+- 字段名对齐由 [field_aligner.py](backend/app/tools/cleaners/field_aligner.py) 追加 `field_align` 条目
+- 单位转换由 [unit_normalizer.py](backend/app/tools/cleaners/unit_normalizer.py) 追加 `unit_normalize` 条目
+- clean 阶段 ProvenanceNode.parameters 汇总 `field_align_events` / `unit_normalize_events` / `fields_with_provenance`
+
 API 暴露：
 - `GET /tasks/{id}/lineage` — 完整 DAG
 - `GET /tasks/{id}/lineage/{record_id}` — 单记录链路
+- `GET /tasks/{id}/data` — 返回记录含 `field_provenance` 字段
 
 前端 [LineageGraph.tsx](frontend/src/components/lineage/LineageGraph.tsx) 用 ReactFlow 渲染。
 
