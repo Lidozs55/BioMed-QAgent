@@ -44,7 +44,16 @@ class Orchestrator:
     - planning（LLM 实体识别）
     - export（CSV + LLM 研究报告）
     - 流水线编排与异常兜底
+    - 多轮迭代调度（对齐 docs/multi_round_search_iteration.md）
+
+    多轮迭代结构：
+        planning → [Round N: search→acquire→parse→clean→analyze→review
+                    → IterationDecisionAgent] → export
+        迭代直到收敛或达到 MAX_ROUNDS
     """
+
+    # 多轮迭代最大轮数（对齐文档 §3.3，防止无限循环）
+    MAX_ROUNDS = 3
 
     def __init__(self, llm: DashScopeClient | None = None,
                  tools: ToolRegistry | None = None,
@@ -57,7 +66,7 @@ class Orchestrator:
 
     async def run(self, task: Task,
                   progress: ProgressCallback | None = None) -> Task:
-        """执行完整流水线。"""
+        """执行完整流水线（多轮迭代）。"""
         try:
             task.status = TaskStatus.PLANNING
             self._emit(progress, type="task_start", task_id=task.task_id,
@@ -65,31 +74,69 @@ class Orchestrator:
 
             # Stage 1: Planning — Orchestrator 直接持有（LLM 提取实体）
             context = await self._stage_planning(task, progress)
+            context["max_rounds"] = self.MAX_ROUNDS
 
-            # Stage 2-7: PIPELINE — 委托给各阶段 Agent
-            records: list[dict] = []
-            for stage_name in PIPELINE:
-                # analyze 阶段仅在 task.enable_analysis 时执行
-                if stage_name == "analyze" and not task.enable_analysis:
-                    continue
-                agent = self._get_agent(stage_name)
-                if agent is None:
-                    logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
-                    continue
-                records, context = await agent.execute(
-                    task, records, context, progress,
-                )
+            # Stage 2-7: 多轮迭代 PIPELINE — 每轮 search→...→review + 迭代决策
+            all_records: list[dict] = []
+            seen_ids: set[str] = set()
+            round_new_counts: list[int] = []
+
+            for round_idx in range(1, self.MAX_ROUNDS + 1):
+                context["round_idx"] = round_idx
+                context["round_new_counts"] = round_new_counts
+                self._emit(progress, type="iteration_round",
+                            round=round_idx, max_rounds=self.MAX_ROUNDS)
+
+                # 执行一轮完整流水线
+                round_records, context = await self._run_pipeline_round(
+                    task, context, progress, round_idx)
+
+                # 跨轮去重，累积到 all_records
+                new_records = self._dedup_round(round_records, seen_ids)
+                all_records.extend(new_records)
+                round_new_counts.append(len(new_records))
+                logger.info("第 %d 轮完成：新增 %d 条，累计 %d 条",
+                            round_idx, len(new_records), len(all_records))
+
+                # 最后一轮无需迭代决策
+                if round_idx >= self.MAX_ROUNDS:
+                    logger.info("达到最大轮数 %d，终止迭代", self.MAX_ROUNDS)
+                    break
+
+                # 迭代决策：是否继续
+                decision_agent = self._get_agent("iteration_decision")
+                if decision_agent is None:
+                    logger.warning("IterationDecisionAgent 未注册，单轮执行")
+                    break
+                _, context = await decision_agent.execute(
+                    task, all_records, context, progress)
+                decision = context.get("iteration_decision", {})
+
+                if not decision.get("should_continue", False):
+                    logger.info("迭代收敛于第 %d 轮: %s",
+                                round_idx, decision.get("reason", ""))
+                    self._emit(progress, type="iteration_converged",
+                                round=round_idx,
+                                reason=decision.get("reason", ""))
+                    break
+
+                # 准备下一轮查询
+                next_queries = decision.get("next_round_queries", [])
+                if next_queries:
+                    context["search_queries"] = next_queries
+                logger.info("进入第 %d 轮：查询=%s",
+                            round_idx + 1, next_queries[:3])
 
             # Stage 8: Export — Orchestrator 直接持有（CSV + LLM 报告）
             await self._stage_export(
-                task, records, context,
+                task, all_records, context,
                 context.get("review", {}), progress,
             )
 
             # 完成
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-            task.total_records = len(records)
+            task.total_records = len(all_records)
             self.store.save_task_to_file(task.task_id)
             self._emit(progress, type="task_complete", task_id=task.task_id,
                         summary=task.to_summary())
@@ -103,6 +150,40 @@ class Orchestrator:
             self._emit(progress, type="error", task_id=task.task_id,
                         message=str(e))
             return task
+
+    async def _run_pipeline_round(self, task: Task, context: dict,
+                                   progress: ProgressCallback | None,
+                                   round_idx: int) -> tuple[list[dict], dict]:
+        """执行一轮完整 PIPELINE（search→acquire→parse→clean→analyze→review）。
+
+        每轮从空 records 列表开始，避免重复处理历史记录。
+        """
+        records: list[dict] = []
+        for stage_name in PIPELINE:
+            if stage_name == "analyze" and not task.enable_analysis:
+                continue
+            agent = self._get_agent(stage_name)
+            if agent is None:
+                logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
+                continue
+            records, context = await agent.execute(
+                task, records, context, progress,
+            )
+        return records, context
+
+    @staticmethod
+    def _dedup_round(round_records: list[dict],
+                      seen_ids: set[str]) -> list[dict]:
+        """跨轮去重：过滤掉已见 record_id 的记录，更新 seen_ids。"""
+        new: list[dict] = []
+        for r in round_records:
+            rid = r.get("record_id", "")
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            new.append(r)
+        return new
 
     def _get_agent(self, name: str) -> BaseAgent | None:
         """从 AgentRegistry 实例化阶段 Agent（注入 llm/tools/store）。"""

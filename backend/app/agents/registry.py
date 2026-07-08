@@ -75,6 +75,7 @@ def register_all_agents() -> None:
     import app.agents.cleaner  # noqa: F401
     import app.agents.analysis  # noqa: F401
     import app.agents.reviewer  # noqa: F401
+    import app.agents.iteration_decision  # noqa: F401
     logger.info("已注册 %d 个阶段 Agent: %s",
                 len(AgentRegistry._agents),
                 list(AgentRegistry._agents.keys()))
