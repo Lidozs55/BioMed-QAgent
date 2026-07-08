@@ -112,6 +112,7 @@ class Task(BaseModel):
             "entities": self.entities,
             "domain": self.domain,
             "errors": self.errors,
+            "pending_checkpoint": self.pending_checkpoint,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
         }

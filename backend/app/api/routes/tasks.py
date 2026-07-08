@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from pydantic import BaseModel, Field
 
 from app.agents.orchestrator import Orchestrator
 from app.api.routes.ws import broadcast
@@ -185,10 +186,10 @@ async def start_task(task_id: str,
                 status_code=400,
                 detail=f"无效 from_stage: {from_stage}，可选: {sorted(valid_stages)}",
             )
-        if task.status.value not in ("completed", "failed"):
+        if task.status.value not in ("completed", "failed", "awaiting_confirmation"):
             raise HTTPException(
                 status_code=400,
-                detail=f"阶段重试需任务状态为 completed/failed（当前 {task.status.value}）",
+                detail=f"阶段重试需任务状态为 completed/failed/awaiting_confirmation（当前 {task.status.value}）",
             )
     else:
         if task.status.value not in ("created", "failed"):
@@ -251,4 +252,79 @@ async def get_task_status(task_id: str) -> dict:
         "stages": {k: v.model_dump() for k, v in task.stages.items()},
         "total_records": task.total_records,
         "errors": task.errors,
+        "pending_checkpoint": task.pending_checkpoint,
+        "checkpoint_payload": task.checkpoint_payload if task.pending_checkpoint else {},
+    }
+
+
+class ConfirmRequest(BaseModel):
+    """人工确认请求（TASK-014 人在回路）。"""
+    decision: str = Field(..., description="approve 或 reject")
+    from_stage: str | None = Field(None, description="reject 时指定重试阶段")
+
+
+@router.post("/{task_id}/confirm", summary="人工确认检查点（TASK-014）")
+async def confirm_task(task_id: str, body: ConfirmRequest) -> dict:
+    """对 AWAITING_CONFIRMATION 状态的任务进行人工确认。
+
+    - approve: 仅运行 export 阶段，标记 COMPLETED
+    - reject: 从指定阶段重试（from_stage），调用 run_resume
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    if task.status.value != "awaiting_confirmation":
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务非 awaiting_confirmation 状态（当前 {task.status.value}）",
+        )
+
+    decision = body.decision.lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"decision 需为 approve/reject（当前 {body.decision}）",
+        )
+
+    # 取消已有运行
+    if task_id in _running_tasks and not _running_tasks[task_id].done():
+        _running_tasks[task_id].cancel()
+
+    orchestrator = _get_orchestrator()
+
+    async def _run():
+        def progress_cb(msg: dict):
+            try:
+                asyncio.ensure_future(broadcast(task_id, msg))
+            except RuntimeError:
+                pass
+        try:
+            if decision == "approve":
+                await orchestrator.run_export(task, progress=progress_cb)
+            else:
+                from_stage = body.from_stage or "search"
+                valid = {"search", "acquire", "parse", "clean", "analyze", "review"}
+                if from_stage not in valid:
+                    raise ValueError(f"无效 from_stage: {from_stage}")
+                task.pending_checkpoint = None
+                task.checkpoint_payload = {}
+                await orchestrator.run_resume(task, from_stage, progress=progress_cb)
+        except Exception as e:
+            logger.exception("人工确认执行失败 %s", task_id)
+            task.errors.append(str(e))
+            store.update_task(task)
+            await broadcast(task_id, {"type": "error", "task_id": task_id, "message": str(e)})
+        finally:
+            _running_tasks.pop(task_id, None)
+
+    loop = asyncio.get_running_loop()
+    _running_tasks[task_id] = loop.create_task(_run())
+
+    logger.info("人工确认 %s: %s (from_stage=%s)", task_id, decision, body.from_stage)
+    return {
+        "status": "confirmed",
+        "task_id": task_id,
+        "decision": decision,
+        "from_stage": body.from_stage if decision == "reject" else None,
     }

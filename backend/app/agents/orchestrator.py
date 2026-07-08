@@ -129,6 +129,23 @@ class Orchestrator:
                 logger.info("进入第 %d 轮：查询=%s",
                             round_idx + 1, next_queries[:3])
 
+            # 人工确认点：审查后若质量低，暂停等待用户确认（TASK-014 人在回路）
+            review = context.get("review", {})
+            if self._needs_confirmation(task, all_records, review):
+                payload = self._build_checkpoint_payload(task, all_records, review)
+                task.status = TaskStatus.AWAITING_CONFIRMATION
+                task.pending_checkpoint = "low_confidence"
+                task.checkpoint_payload = payload
+                self.store.set_records(task.task_id, all_records)
+                self.store.save_task_to_file(task.task_id)
+                self._emit(progress, type="awaiting_confirmation",
+                            task_id=task.task_id,
+                            checkpoint="low_confidence",
+                            payload=payload)
+                logger.info("任务 %s 暂停等待人工确认（低置信度/低质量）",
+                            task.task_id)
+                return task
+
             # Stage 8: Export — Orchestrator 直接持有（CSV + LLM 报告）
             await self._stage_export(
                 task, all_records, context,
@@ -270,6 +287,94 @@ class Orchestrator:
             "recommended_sources": ["pubmed", "openalex", "semantic_scholar"],
             "analysis_plan": "",
         }
+
+    # ========== 人工确认点（TASK-014 人在回路） ==========
+
+    def _needs_confirmation(self, task: Task, records: list[dict],
+                             review: dict) -> bool:
+        """判断是否需要暂停等待人工确认。
+
+        触发条件（任一满足即触发）：
+        - 记录为空
+        - 审查质量标记为 low
+        - 平均置信度 < 0.5
+        """
+        if not records:
+            logger.info("触发确认点：记录为空")
+            return True
+        quality = (review.get("quality") or "").lower()
+        if quality == "low":
+            logger.info("触发确认点：审查质量 low")
+            return True
+        avg_conf = float(review.get("avg_confidence") or task.avg_confidence or 0)
+        if avg_conf < 0.5:
+            logger.info("触发确认点：平均置信度 %.3f < 0.5", avg_conf)
+            return True
+        return False
+
+    def _build_checkpoint_payload(self, task: Task, records: list[dict],
+                                    review: dict) -> dict:
+        """构建人工确认检查点的 payload（供前端展示与决策）。"""
+        low_conf_records = [
+            {"record_id": r.get("record_id", ""),
+             "source": (r.get("source_ref") or {}).get("source", ""),
+             "confidence": r.get("extraction_confidence", 0),
+             "fields": r.get("fields", {})}
+            for r in records
+            if (r.get("extraction_confidence") or 0) < 0.5
+        ][:20]
+        return {
+            "checkpoint": "low_confidence",
+            "task_id": task.task_id,
+            "total_records": len(records),
+            "avg_confidence": float(review.get("avg_confidence")
+                                     or task.avg_confidence or 0),
+            "review_quality": review.get("quality", "unknown"),
+            "review_issues": review.get("issues", []),
+            "review_recommendations": review.get("recommendations", []),
+            "low_confidence_records": low_conf_records,
+            "low_confidence_count": len(low_conf_records),
+        }
+
+    async def run_export(self, task: Task,
+                          progress: ProgressCallback | None = None) -> Task:
+        """用户 approve 后仅运行 export 阶段（TASK-014）。
+
+        从 AWAITING_CONFIRMATION 状态恢复，加载已持久化的 records + context，
+        执行 export 后标记 COMPLETED。
+        """
+        try:
+            context = self._load_context(task)
+            records = list(self.store._records.get(task.task_id, []))
+            task.status = TaskStatus.REVIEWING
+            self._emit(progress, type="task_start", task_id=task.task_id,
+                        research_goal=task.research_goal,
+                        resume_from="export_approved")
+            logger.info("人工确认通过，任务 %s 进入 export（记录 %d 条）",
+                        task.task_id, len(records))
+
+            await self._stage_export(
+                task, records, context,
+                context.get("review", {}), progress,
+            )
+
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            task.total_records = len(records)
+            task.pending_checkpoint = None
+            task.checkpoint_payload = {}
+            self.store.save_task_to_file(task.task_id)
+            self._emit(progress, type="task_complete", task_id=task.task_id,
+                        summary=task.to_summary(), approved=True)
+            return task
+        except Exception as e:
+            logger.exception("人工确认后 export 失败")
+            task.status = TaskStatus.FAILED
+            task.errors.append(str(e))
+            self.store.update_task(task)
+            self._emit(progress, type="error", task_id=task.task_id,
+                        message=str(e))
+            return task
 
     async def _run_pipeline_round(self, task: Task, context: dict,
                                    progress: ProgressCallback | None,
