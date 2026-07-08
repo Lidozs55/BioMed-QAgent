@@ -75,7 +75,7 @@ backend/app/
 │   ├── orchestrator.py      # ★ 流水线编排器（planning/export 内联 + 6 阶段委托）
 │   ├── llm_reporter.py      # ★ LLM 综合研究报告生成器
 │   ├── search.py            # SearchAgent（文献+实体+引用追溯+Darwinian fallback）
-│   ├── acquire.py           # AcquireAgent（爬虫信号识别）
+│   ├── acquire.py           # AcquireAgent（爬虫采集 fallback，输出 raw crawl record）
 │   ├── parser.py            # ParserAgent（PDF + LLM 提取 + 图表 Qwen-VL + 生物数据解析）
 │   ├── cleaner.py           # CleanerAgent（对齐/归一/去重）
 │   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达/Hub/上游 并行+复用）
@@ -352,10 +352,10 @@ WebSocket 推送格式：
 |------|------|------|
 | 1. planning | LLM qwen-plus | 提取化合物/基因/疾病/通路实体，识别领域，生成检索查询与推荐数据源 |
 | 2. search | 原生模块 + 线程池 | 文献源并行 + 实体源串行；Darwinian 扩展重试 |
-| 3. acquire | stub（隔离） | 识别 `requires_crawl` 信号并日志记录，不执行爬取 |
+| 3. acquire | WebCrawlerSource | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；爬虫失败隔离不影响流水线 |
 | 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取 + GEO SOFT/PDB/FASTA/网络文件 |
 | 5. clean | 三件套 | 字段对齐 → 单位归一化 → 去重 |
-| 6. analyze | 原生模块（可选）| Phase1 并行：PPI/富集/药靶/差异表达；Phase2 复用 PPI：Hub/上游 |
+| 6. analyze | 原生模块（可选）| Phase1 并行：PPI/富集/药靶/差异表达；Phase2 复用 PPI：Hub/上游；Phase3 生存分析（disease→TCGA cohort 映射）|
 | 7. review | LLM qwen-max | 审查完整性/覆盖/发现/建议，输出质量评分 |
 | 8. export | 原生 + LLMReporter | CSV + 整合 CSV + LLM 报告 + JSON |
 
@@ -377,7 +377,7 @@ T0  用户输入研究目标
 T1  planning: LLM 识别 compounds=[健脾散结方成分...] genes=[AKT1/TP53/...] diseases=[胰腺癌/肝转移] domain=tcm
 T2  search:   PubMed→18 / OpenAlex→12 / Semantic Scholar→8 / STRING→PPI / DisGeNET→基因-疾病
               记录不足时扩展查询 "pancreatic cancer liver metastasis" 重试
-T3  acquire:  跳过（TCMSP 返回 requires_crawl 信号，未实现爬虫）
+T3  acquire:  TCMSP 返回 requires_crawl 信号 → WebCrawlerSource 爬取页面 → raw crawl record（待 parse 阶段 LLM 提取）
 T4  parse:    下载 5 篇 OA 论文 PDF，pdfplumber 提取表格；爬虫内容 LLM 提取；用户上传图表 Qwen-VL 提取；用户上传生物数据解析
 T5  clean:    字段对齐（MolName→compound_name）+ 单位归一化 + 去重
 T6  analyze:  STRING PPI 网络 + Enrichr GO/KEGG 富集 + OpenTargets 药物-靶点
@@ -406,7 +406,6 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| acquire 阶段 stub | TCMSP 等无 API 源数据缺失 | P1 |
 | optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 | openapi.yaml 空壳 | 提交材料要求可调用测试 API 文档 | P2 |

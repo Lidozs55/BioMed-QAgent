@@ -66,7 +66,7 @@ _DISEASE_TO_TCGA_COHORT: dict[str, str] = {
 @AgentRegistry.register
 class AnalysisAgent(BaseAgent):
     name = "analyze"
-    description = "PPI/富集/药物靶点/差异表达/Hub基因/生存分析"
+    description = "PPI/富集/药物靶点/差异表达/Hub基因/上游调控/生存分析"
 
     async def execute(self, task: Task, records: list[dict],
                       context: dict,
