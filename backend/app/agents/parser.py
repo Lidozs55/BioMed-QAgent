@@ -1,8 +1,9 @@
-"""Parser Agent — 文献与生物数据解析。
+"""Parser Agent — 文献与生物数据解析 + 爬虫原始内容 LLM 提取。
 
 从 Orchestrator._stage_parse 迁入，职责：
 - 解析用户上传的 PDF（表格 + caption）
 - 自动下载搜索结果中的开放获取 PDF 并解析
+- 对 acquire 阶段产出的 raw crawl record 调用 LLMExtractor 提取结构化字段
 - 记录溯源
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ import logging
 from pathlib import Path
 
 from app.agents.base import BaseAgent, ProgressCallback
+from app.agents.llm_extractor import LLMExtractor, is_raw_crawl_record
 from app.agents.registry import AgentRegistry
 from app.models.task import Task, StageStatus
 from app.utils.paths import get_task_output_dir
@@ -21,25 +23,30 @@ logger = logging.getLogger(__name__)
 @AgentRegistry.register
 class ParserAgent(BaseAgent):
     name = "parse"
-    description = "PDF 表格解析 + 开放获取论文下载"
+    description = "PDF 解析 + 爬虫原始内容 LLM 提取"
 
     async def execute(self, task: Task, records: list[dict],
                       context: dict,
                       progress: ProgressCallback | None = None) -> tuple[list[dict], dict]:
         self._set_stage(task, "parse", StageStatus.RUNNING, "检查需要解析的文件...")
         self._emit(progress, type="stage_start", stage="parse",
-                    message="解析上传文件 + 自动下载开放获取论文 PDF...")
+                    message="解析上传文件 + 爬虫内容 LLM 提取 + 开放获取论文下载...")
 
         out_dir = get_task_output_dir(task.task_id)
         uploads_dir = Path(task.output_dir).parent.parent / "uploads"
         parsed_records: list[dict] = []
+        extracted_from_crawl: list[dict] = []
 
-        # Step 1: 解析用户上传的 PDF
+        # Step 1: 爬虫原始记录 LLM 提取（acquire 阶段产出的 raw_content）
+        extracted_from_crawl = await self._extract_crawl_records(
+            records, task, progress)
+
+        # Step 2: 解析用户上传的 PDF
         if uploads_dir.exists():
             pdf_files = list(uploads_dir.glob("*.pdf"))
             for pdf in pdf_files:
                 self._emit(progress, type="stage_progress", stage="parse",
-                            pct=0.2, message=f"解析上传 PDF: {pdf.name}")
+                            pct=0.4, message=f"解析上传 PDF: {pdf.name}")
                 out_file = out_dir / f"parsed_{pdf.stem}.json"
                 result = await self._to_thread(
                     self.tools.parse_pdf_table, pdf, out_file,
@@ -47,7 +54,7 @@ class ParserAgent(BaseAgent):
                 if result.success and result.data:
                     parsed_records.extend(self._extract_records(result))
 
-        # Step 2: 自动下载搜索结果中的开放获取 PDF
+        # Step 3: 自动下载搜索结果中的开放获取 PDF
         def _has_pdf(r: dict) -> bool:
             fields = r.get("fields", {}) or {}
             if fields.get("pdf_url"):
@@ -59,7 +66,7 @@ class ParserAgent(BaseAgent):
 
         if pdf_candidates:
             self._emit(progress, type="stage_progress", stage="parse",
-                        pct=0.4,
+                        pct=0.6,
                         message=f"尝试下载 {len(pdf_candidates)} 篇开放获取论文...")
             pdf_dir = out_dir / "pdfs"
             dl_out = out_dir / "downloaded_records.json"
@@ -71,13 +78,13 @@ class ParserAgent(BaseAgent):
             if result.success:
                 downloaded = self._extract_records(result)
             self._emit(progress, type="stage_progress", stage="parse",
-                        pct=0.7, message=f"下载完成：{len(downloaded)} 篇 PDF")
+                        pct=0.8, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
-            # Step 3: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
+            # Step 4: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
             if pdf_dir.exists():
                 for pdf_file in sorted(pdf_dir.glob("*.pdf")):
                     self._emit(progress, type="stage_progress", stage="parse",
-                                pct=0.85, message=f"解析 PDF: {pdf_file.name}")
+                                pct=0.9, message=f"解析 PDF: {pdf_file.name}")
                     out_file = out_dir / f"parsed_{pdf_file.stem}.json"
                     result = await self._to_thread(
                         self.tools.parse_pdf_table, pdf_file, out_file,
@@ -85,20 +92,75 @@ class ParserAgent(BaseAgent):
                     if result.success and result.data:
                         parsed_records.extend(self._extract_records(result))
 
+        # 用 LLM 提取的结构化记录替换 raw crawl record（就地更新 records）
+        if extracted_from_crawl:
+            self._replace_crawl_records(records, extracted_from_crawl)
+
         # 记录溯源：parse 阶段
         prov = self.store.get_provenance(task.task_id)
-        if prov and parsed_records:
-            rec_ids = [r.get("record_id", "") for r in parsed_records]
+        if prov and (parsed_records or extracted_from_crawl):
+            new_recs = parsed_records + extracted_from_crawl
+            rec_ids = [r.get("record_id", "") for r in new_recs]
             prov.record("parse", "parse_agent",
-                       tool_name="pdf_table+pdf_download",
+                       tool_name="pdf_table+pdf_download+llm_extract",
                        output_records=rec_ids,
-                       parameters={"uploaded_count": len(parsed_records),
+                       parameters={"pdf_parsed": len(parsed_records),
+                                   "crawl_extracted": len(extracted_from_crawl),
                                    "downloaded_count": len(pdf_candidates)})
 
-        msg = f"解析完成：{len(parsed_records)} 条新记录（含上传 PDF + 自动下载 PDF）"
+        msg = (f"解析完成：PDF {len(parsed_records)} 条 + "
+               f"爬虫 LLM 提取 {len(extracted_from_crawl)} 条")
         records.extend(parsed_records)
         self._set_stage(task, "parse", StageStatus.DONE, msg,
                         records_count=len(records))
         self._emit(progress, type="stage_complete", stage="parse", message=msg)
         self.store.update_task(task)
         return records, context
+
+    async def _extract_crawl_records(self, records: list[dict], task: Task,
+                                      progress: ProgressCallback | None) -> list[dict]:
+        """对 raw crawl record 调用 LLMExtractor 提取结构化字段。
+
+        Returns:
+            LLM 提取出的 DataRecord 列表（将替换 raw crawl record）
+        """
+        raw_records = [r for r in records if is_raw_crawl_record(r)]
+        if not raw_records:
+            return []
+
+        self._emit(progress, type="stage_progress", stage="parse",
+                    pct=0.15,
+                    message=f"LLM 提取 {len(raw_records)} 条爬虫原始记录...")
+
+        extractor = LLMExtractor(self.llm)
+        extracted: list[dict] = []
+        for idx, raw in enumerate(raw_records):
+            source = raw.get("crawl_source", "web_crawler")
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.15 + 0.2 * (idx + 1) / len(raw_records),
+                        message=f"LLM 提取 {source} ({idx+1}/{len(raw_records)})")
+            try:
+                recs = await self._to_thread(extractor.extract, raw)
+                extracted.extend(recs)
+            except Exception as e:
+                logger.warning("LLM 提取 %s 失败（已跳过）: %s", source, e)
+                task.errors.append(f"llm_extract {source}: {e}")
+
+        self._emit(progress, type="stage_progress", stage="parse",
+                    pct=0.35,
+                    message=f"✓ LLM 提取完成：{len(extracted)} 条结构化记录")
+        return extracted
+
+    @staticmethod
+    def _replace_crawl_records(records: list[dict],
+                                extracted: list[dict]) -> None:
+        """用 LLM 提取的结构化记录替换 records 中的 raw crawl record（就地）。
+
+        保留 records 中已有的 DataRecord（API/search 阶段产出），
+        移除 raw crawl record，追加提取出的 DataRecord。
+        """
+        # 过滤掉 raw crawl record，保留已结构化的 DataRecord
+        kept = [r for r in records if not is_raw_crawl_record(r)]
+        records.clear()
+        records.extend(kept)
+        records.extend(extracted)

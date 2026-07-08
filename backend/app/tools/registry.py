@@ -213,6 +213,41 @@ class ToolRegistry:
             logger.exception("trace_citations 失败")
             return ToolResult(False, error=f"trace_citations: {e}")
 
+    def crawl_web(self, crawl_targets: list[dict],
+                   task_id: str = "T0") -> ToolResult:
+        """网页爬虫采集（fallback） — 对 requires_crawl 数据源执行爬取。
+
+        输出 raw crawl record（含 raw_content），由 parse 阶段 LLMExtractor
+        转换为结构化 DataRecord。
+
+        Args:
+            crawl_targets: 爬虫目标列表，每项 {"source", "query", "reason"}
+            task_id: 任务 ID
+        Returns:
+            ToolResult.data = raw crawl record 列表（非 DataRecord）
+        """
+        try:
+            from app.tools.datasources.web_crawler import WebCrawlerSource
+            crawler = WebCrawlerSource()
+            raw_records: list[dict] = []
+            for target in crawl_targets:
+                source = target.get("source", "web_crawler")
+                query = target.get("query", "")
+                if not query:
+                    continue
+                recs = crawler.search(query, max_results=20, task_id=task_id,
+                                       source=source)
+                raw_records.extend(recs)
+                if recs:
+                    logger.info("crawl_web: %s 爬取 %d 条原始记录",
+                                source, len(recs))
+                else:
+                    logger.info("crawl_web: %s 无可用内容", source)
+            return ToolResult(True, data=raw_records)
+        except Exception as e:
+            logger.exception("crawl_web 失败")
+            return ToolResult(False, error=f"crawl_web: {e}")
+
     # ========== Parsers ==========
 
     def parse_pdf_table(self, pdf_path, output_file=None) -> ToolResult:
@@ -947,6 +982,7 @@ class ToolRegistry:
             {"name": "disgenet", "description": "DisGeNET 基因-疾病"},
             {"name": "pubchem", "description": "PubChem 化合物结构"},
             {"name": "citation_trace", "description": "引用追溯（OpenAlex 参考文献与被引）"},
+            {"name": "web_crawler", "description": "通用网页爬虫（fallback，输出原始文本供 LLM 提取）"},
             # dormant 13 个（BaseDataSource 子类，经 DataSourceRegistry 调用）
             {"name": "biogrid", "description": "BioGRID 蛋白互作"},
             {"name": "cbioportal", "description": "cBioPortal 癌症基因组"},
