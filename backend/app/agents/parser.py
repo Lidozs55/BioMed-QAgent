@@ -28,14 +28,14 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 @AgentRegistry.register
 class ParserAgent(BaseAgent):
     name = "parse"
-    description = "PDF 解析 + 爬虫原始内容 LLM 提取"
+    description = "PDF 解析 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取"
 
     async def execute(self, task: Task, records: list[dict],
                       context: dict,
                       progress: ProgressCallback | None = None) -> tuple[list[dict], dict]:
         self._set_stage(task, "parse", StageStatus.RUNNING, "检查需要解析的文件...")
         self._emit(progress, type="stage_start", stage="parse",
-                    message="解析上传文件 + 爬虫内容 LLM 提取 + 开放获取论文下载...")
+                    message="PDF解析 + 爬虫LLM提取 + 图表Qwen-VL提取 + 开放获取论文下载...")
 
         out_dir = get_task_output_dir(task.task_id)
         uploads_dir = Path(task.output_dir).parent.parent / "uploads"
@@ -59,11 +59,7 @@ class ParserAgent(BaseAgent):
                 if result.success and result.data:
                     parsed_records.extend(self._extract_records(result))
 
-        # Step 3: 图表图片数据提取（Qwen-VL 多模态识别）
-        chart_records = await self._extract_chart_images(
-            uploads_dir, out_dir, task, progress)
-
-        # Step 4: 自动下载搜索结果中的开放获取 PDF
+        # Step 3: 自动下载搜索结果中的开放获取 PDF
         def _has_pdf(r: dict) -> bool:
             fields = r.get("fields", {}) or {}
             if fields.get("pdf_url"):
@@ -89,7 +85,7 @@ class ParserAgent(BaseAgent):
             self._emit(progress, type="stage_progress", stage="parse",
                         pct=0.8, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
-            # Step 5: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
+            # Step 4: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
             if pdf_dir.exists():
                 for pdf_file in sorted(pdf_dir.glob("*.pdf")):
                     self._emit(progress, type="stage_progress", stage="parse",
