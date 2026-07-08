@@ -89,6 +89,40 @@ class SkillRegistry:
         """已注册 skills 总数。"""
         return len(cls._entries)
 
+    # ── 变更 API ─────────────────────────────────────────────
+
+    @classmethod
+    def remove(cls, skill_id: str) -> bool:
+        """Remove a skill. Returns True if it existed."""
+        if skill_id in cls._entries:
+            del cls._entries[skill_id]
+            logger.info("已移除 skill: %s", skill_id)
+            return True
+        return False
+
+    @classmethod
+    def update_manifest(cls, skill_id: str, manifest: SkillManifest) -> bool:
+        """Update a skill's manifest (preserving executor)."""
+        if skill_id not in cls._entries:
+            return False
+        old_executor = cls._entries[skill_id].get("executor")
+        cls._entries[skill_id] = {"manifest": manifest, "executor": old_executor}
+        logger.info("已更新 skill manifest: %s", skill_id)
+        return True
+
+    @classmethod
+    def replace(cls, old_skill_id: str, new_manifest: SkillManifest, new_executor=None) -> bool:
+        """Replace a skill entirely (atomically). Used for promotion.
+
+        Registers new_manifest under its own skill_id.  If old_skill_id differs
+        from new_manifest.skill_id, the old entry is removed.
+        """
+        executor = new_executor if new_executor is not None else cls._entries.get(old_skill_id, {}).get("executor")
+        cls._entries[new_manifest.skill_id] = {"manifest": new_manifest, "executor": executor}
+        if old_skill_id != new_manifest.skill_id:
+            cls._entries.pop(old_skill_id, None)
+        return True
+
 
 def get_skill_registry() -> type[SkillRegistry]:
     """获取 SkillRegistry 单例。

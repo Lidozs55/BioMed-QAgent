@@ -5,11 +5,14 @@
 """
 from __future__ import annotations
 
+from app.skills.candidate import CandidateRunner
 from app.skills.definitions import register_all_skills
 from app.skills.evaluator import EvaluationReport, SkillEvaluator
 from app.skills.executor import SkillExecutor, SkillResult
 from app.skills.manifest import SkillInputField, SkillManifest, SkillOutputField
+from app.skills.promotion import PromotionManager
 from app.skills.registry import SkillRegistry, get_skill_registry
+from app.skills.repair import SkillRepairAgent
 from app.skills.retriever import SkillRetriever
 
 __all__ = [
@@ -24,4 +27,7 @@ __all__ = [
     "SkillEvaluator",
     "EvaluationReport",
     "register_all_skills",
+    "SkillRepairAgent",
+    "CandidateRunner",
+    "PromotionManager",
 ]
