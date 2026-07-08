@@ -14,6 +14,9 @@ interface TaskStore {
   wsMessages: WSMessage[];
   currentStage: string;
   stageProgress: number;
+  // 迭代决策最新状态（达尔文 Stage Gate 量化指标 + 收敛决策）
+  latestIterationDecision: WSMessage | null;
+  latestStageGateEvaluation: WSMessage | null;
 
   // 加载状态
   loading: boolean;
@@ -36,6 +39,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   wsMessages: [],
   currentStage: '',
   stageProgress: 0,
+  latestIterationDecision: null,
+  latestStageGateEvaluation: null,
   loading: false,
   error: null,
 
@@ -51,10 +56,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   selectTask: async (id) => {
     if (!id) {
-      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0 });
+      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null });
       return;
     }
-    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, error: null });
+    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null, error: null });
     try {
       const task = await api.getTask(id);
       set({ selectedTask: task });
@@ -110,6 +115,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     if (msg.type === 'stage_progress' && msg.pct !== undefined) {
       set({ stageProgress: msg.pct });
     }
+    // 捕获迭代决策与 Stage Gate 量化评估（仅保留最新一条）
+    if (msg.type === 'iteration_decision') {
+      set({ latestIterationDecision: msg });
+    }
+    if (msg.type === 'stage_gate_evaluation') {
+      set({ latestStageGateEvaluation: msg });
+    }
     if (msg.type === 'snapshot' && msg.stages) {
       // 找到当前运行中的阶段
       const running = Object.entries(msg.stages).find(([, s]) => s.status === 'running');
@@ -128,5 +140,8 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     }
   },
 
-  clearMessages: () => set({ wsMessages: [], currentStage: '', stageProgress: 0 }),
+  clearMessages: () => set({
+    wsMessages: [], currentStage: '', stageProgress: 0,
+    latestIterationDecision: null, latestStageGateEvaluation: null,
+  }),
 }));
