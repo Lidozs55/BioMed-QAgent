@@ -352,8 +352,8 @@ WebSocket 推送格式：
 |------|------|------|
 | 1. planning | LLM qwen-plus | 提取化合物/基因/疾病/通路实体，识别领域，生成检索查询与推荐数据源 |
 | 2. search | 原生模块 + 线程池 | 文献源并行 + 实体源串行；Darwinian 扩展重试 |
-| 3. acquire | WebCrawlerSource | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；爬虫失败隔离不影响流水线 |
-| 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取 + GEO SOFT/PDB/FASTA/网络文件 |
+| 3. acquire | WebCrawlerSource + BrowserAgent | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；JS 重站点（cnki/wanfang/chembl/...）路由到 Playwright 浏览器爬虫，输出截图供 Qwen-VL 提取；爬虫失败隔离不影响流水线 |
+| 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取（上传图片 + 浏览器截图）+ GEO SOFT/PDB/FASTA/网络文件 |
 | 5. clean | 三件套 | 字段对齐 → 单位归一化 → 去重 |
 | 6. analyze | 原生模块（可选）| Phase1 并行：PPI/富集/药靶/差异表达；Phase2 复用 PPI：Hub/上游；Phase3 生存分析（disease→TCGA cohort 映射）|
 | 7. review | LLM qwen-max | 审查完整性/覆盖/发现/建议，输出质量评分 |
