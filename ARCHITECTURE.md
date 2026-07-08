@@ -164,6 +164,26 @@ orchestrator.run_resume(task, from_stage="clean", progress=progress)
 - 从 search 重试时清空已有记录重新检索；其余阶段保留前置产出
 - 单轮执行（无多轮迭代），符合"用户显式请求重试"语义
 
+**人工确认点**（多轮迭代后质量低时暂停，等待用户 approve/reject）：
+
+```python
+# 多轮迭代完成 → review 后、export 前，Orchestrator 检查 _needs_confirmation
+# 触发条件：记录为空 / review.quality == "low" / avg_confidence < 0.5
+if orchestrator._needs_confirmation(task, records, review):
+    task.status = TaskStatus.AWAITING_CONFIRMATION  # 暂停，不阻塞协程
+    task.pending_checkpoint = "low_confidence"
+    task.checkpoint_payload = orchestrator._build_checkpoint_payload(...)
+    return task  # 等待用户确认
+
+# 用户确认：POST /tasks/{task_id}/confirm
+#   approve → orchestrator.run_export(task) → COMPLETED
+#   reject  → orchestrator.run_resume(task, from_stage) → 重试
+```
+
+- `AWAITING_CONFIRMATION` 状态：任务暂停但协程已返回，不阻塞 FastAPI 事件循环
+- `checkpoint_payload`：含低置信度记录样本（max 20）、审查问题、建议
+- approve 路径仅运行 export；reject 路径复用 `run_resume` 从指定阶段重试
+
 ### 4.2 ToolRegistry — 工具 facade
 
 [backend/app/tools/registry.py](backend/app/tools/registry.py) 是薄封装层，**无 subprocess、无 CLI 参数解析**，直接调用 `tools/` 下模块函数。
