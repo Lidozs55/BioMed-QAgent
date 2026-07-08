@@ -7,12 +7,13 @@ import { useState } from 'react';
 import { Tabs, Button, Tooltip } from 'antd';
 import {
   DatabaseOutlined, BarChartOutlined, ApartmentOutlined,
-  DownloadOutlined, TableOutlined, FileTextOutlined,
+  DownloadOutlined, TableOutlined, FileTextOutlined, ExperimentOutlined,
 } from '@ant-design/icons';
 import { api } from '@/api/client';
 import { DataPreview } from './DataPreview';
 import { ChartsView } from '../charts/ChartsView';
 import { LineageGraph } from '../lineage/LineageGraph';
+import { AnalysisView } from '../analysis/AnalysisView';
 
 interface Props {
   taskId: string;
@@ -84,6 +85,15 @@ export function DataOverview({ taskId }: Props) {
               </span>
             ),
             children: <LineageGraph taskId={taskId} />,
+          },
+          {
+            key: 'analysis',
+            label: (
+              <span>
+                <ExperimentOutlined /> 分析结果
+              </span>
+            ),
+            children: <AnalysisView taskId={taskId} />,
           },
         ]}
       />
