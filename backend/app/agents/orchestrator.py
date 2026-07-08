@@ -153,6 +153,124 @@ class Orchestrator:
                         message=str(e))
             return task
 
+    # ========== 可重入状态机：用户反馈后从指定阶段重试 ==========
+
+    async def run_resume(self, task: Task, from_stage: str,
+                          progress: ProgressCallback | None = None) -> Task:
+        """从指定阶段重试（可重入状态机，对齐 PROBLEM.md 加分项）。
+
+        加载已持久化的 records + context，从 from_stage 运行到 review，
+        然后 export。单轮执行，不进行多轮迭代（用户显式重试，单轮即可）。
+
+        Args:
+            task: 任务对象（需已完成过至少一轮，状态 completed/failed）
+            from_stage: 起始阶段，取值 search/acquire/parse/clean/analyze/review
+        """
+        valid_stages = set(PIPELINE)
+        if from_stage not in valid_stages:
+            raise ValueError(
+                f"不可重入阶段: {from_stage}，可选: {sorted(valid_stages)}")
+
+        try:
+            # 设置任务状态为对应阶段的 ING 状态
+            stage_status_map = {
+                "search": TaskStatus.SEARCHING,
+                "acquire": TaskStatus.ACQUIRING,
+                "parse": TaskStatus.PARSING,
+                "clean": TaskStatus.CLEANING,
+                "analyze": TaskStatus.ANALYZING,
+                "review": TaskStatus.REVIEWING,
+            }
+            task.status = stage_status_map[from_stage]
+            self._emit(progress, type="task_start", task_id=task.task_id,
+                        research_goal=task.research_goal,
+                        resume_from=from_stage)
+
+            # 加载已持久化的 context 与 records
+            context = self._load_context(task)
+            records = list(self.store._records.get(task.task_id, []))
+            logger.info("重入状态机：从 %s 阶段重试，加载 %d 条已有记录",
+                        from_stage, len(records))
+
+            # search 重试时清空已有记录重新检索；其余阶段保留前置阶段产出
+            if from_stage == "search":
+                records = []
+
+            # 确定要运行的阶段子集
+            stage_idx = PIPELINE.index(from_stage)
+            resume_pipeline = PIPELINE[stage_idx:]
+            self._emit(progress, type="stage_start", stage="resume",
+                        message=f"从 {from_stage} 阶段重试，"
+                                f"运行 {list(resume_pipeline)}")
+
+            # 运行阶段子集（复用 _execute_stage_with_error_handling，
+            # 保持与正常流水线一致的错误决策语义）
+            stage_retries: dict[str, int] = {}
+            for stage_name in resume_pipeline:
+                if stage_name == "analyze" and not task.enable_analysis:
+                    continue
+                agent = self._get_agent(stage_name)
+                if agent is None:
+                    logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
+                    continue
+                decision = await self._execute_stage_with_error_handling(
+                    task, stage_name, agent, records, context,
+                    progress, stage_retries, round_idx=1)
+                if decision == "fail":
+                    raise RuntimeError(
+                        f"致命错误：阶段 {stage_name} 失败且无法恢复")
+
+            # export（与 run 一致）
+            await self._stage_export(
+                task, records, context,
+                context.get("review", {}), progress,
+            )
+
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            task.total_records = len(records)
+            self.store.save_task_to_file(task.task_id)
+            self._emit(progress, type="task_complete", task_id=task.task_id,
+                        summary=task.to_summary(), resumed_from=from_stage)
+            return task
+
+        except Exception as e:
+            logger.exception("重入流水线执行失败")
+            task.status = TaskStatus.FAILED
+            task.errors.append(str(e))
+            self.store.update_task(task)
+            self._emit(progress, type="error", task_id=task.task_id,
+                        message=str(e))
+            return task
+
+    def _load_context(self, task: Task) -> dict:
+        """从 final_data.json 加载已持久化的 context。"""
+        out_dir = get_task_output_dir(task.task_id)
+        data_file = out_dir / "final_data.json"
+        if data_file.exists():
+            try:
+                with open(data_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ctx = data.get("context", {})
+                # 确保关键字段存在（fallback 到 task 对象）
+                ctx.setdefault("entities", task.entities)
+                ctx.setdefault("domain", task.domain)
+                ctx.setdefault("search_queries", [task.research_goal])
+                ctx.setdefault("recommended_sources",
+                               ["pubmed", "openalex", "semantic_scholar"])
+                ctx.setdefault("analysis_plan", "")
+                return ctx
+            except Exception as e:
+                logger.warning("加载 context 失败，使用默认: %s", e)
+        # 回退：从 task 对象构建最小 context
+        return {
+            "entities": task.entities,
+            "domain": task.domain,
+            "search_queries": [task.research_goal],
+            "recommended_sources": ["pubmed", "openalex", "semantic_scholar"],
+            "analysis_plan": "",
+        }
+
     async def _run_pipeline_round(self, task: Task, context: dict,
                                    progress: ProgressCallback | None,
                                    round_idx: int) -> tuple[list[dict], dict]:

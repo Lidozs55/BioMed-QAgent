@@ -8,9 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 
 from app.agents.orchestrator import Orchestrator
 from app.api.routes.ws import broadcast
@@ -157,22 +156,46 @@ async def delete_task(task_id: str) -> dict:
 
 
 @router.post("/{task_id}/start", summary="启动任务执行")
-async def start_task(task_id: str) -> dict:
+async def start_task(task_id: str,
+                      from_stage: str | None = Query(
+                          None,
+                          description="从指定阶段重试（可重入状态机），"
+                                      "取值 search/acquire/parse/clean/analyze/review")) -> dict:
     """异步启动任务执行。
 
     任务将在后台运行 6+1 阶段流水线。
     通过 WebSocket /api/v1/ws/tasks/{task_id} 订阅实时进度。
+
+    可选参数：
+    - from_stage: 从指定阶段重试（可重入状态机），取值
+      search/acquire/parse/clean/analyze/review。
+      仅对已完成过至少一轮的任务有效，任务状态需为 completed/failed。
+      传入此参数时跳过 planning，从该阶段运行到 review 再 export（单轮，无多轮迭代）。
     """
     store = get_task_store()
     task = store.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
 
-    if task.status.value not in ("created", "failed"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"任务状态为 {task.status.value}，无法启动（仅 created/failed 可启动）",
-        )
+    # 状态校验：全量启动 vs 阶段重试
+    if from_stage:
+        valid_stages = {"search", "acquire", "parse", "clean", "analyze", "review"}
+        if from_stage not in valid_stages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效 from_stage: {from_stage}，可选: {sorted(valid_stages)}",
+            )
+        if task.status.value not in ("completed", "failed"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"阶段重试需任务状态为 completed/failed（当前 {task.status.value}）",
+            )
+    else:
+        if task.status.value not in ("created", "failed"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"任务状态为 {task.status.value}，无法启动（仅 created/failed 可启动）",
+            )
 
     # 取消已有运行
     if task_id in _running_tasks and not _running_tasks[task_id].done():
@@ -189,7 +212,10 @@ async def start_task(task_id: str) -> dict:
                 pass
 
         try:
-            await orchestrator.run(task, progress=progress_cb)
+            if from_stage:
+                await orchestrator.run_resume(task, from_stage, progress=progress_cb)
+            else:
+                await orchestrator.run(task, progress=progress_cb)
         except Exception as e:
             logger.exception("任务执行失败 %s", task_id)
             task.errors.append(str(e))
@@ -201,11 +227,12 @@ async def start_task(task_id: str) -> dict:
     loop = asyncio.get_running_loop()
     _running_tasks[task_id] = loop.create_task(_run())
 
-    logger.info("启动任务 %s", task_id)
+    logger.info("启动任务 %s (from_stage=%s)", task_id, from_stage)
     return {
         "status": "started",
         "task_id": task_id,
         "websocket": f"/api/v1/ws/tasks/{task_id}",
+        "resume_from": from_stage,
     }
 
 
