@@ -5,6 +5,7 @@
 - 自动下载搜索结果中的开放获取 PDF 并解析
 - 对 acquire 阶段产出的 raw crawl record 调用 LLMExtractor 提取结构化字段
 - 对用户上传的图表图片调用 Qwen-VL 提取图表数据（chart_type/axes/data_points）
+- 解析用户上传的生物数据文件（GEO SOFT / PDB / FASTA / 网络文件）
 - 记录溯源
 """
 from __future__ import annotations
@@ -16,13 +17,23 @@ from app.agents.base import BaseAgent, ProgressCallback
 from app.agents.llm_extractor import LLMExtractor, is_raw_crawl_record
 from app.agents.registry import AgentRegistry
 from app.models.task import Task, StageStatus
-from app.tools.parsers._base import make_record
+from app.tools.parsers._base import detect_format, make_record
 from app.utils.paths import get_task_output_dir
 
 logger = logging.getLogger(__name__)
 
 # 支持的图表图片扩展名
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+# detect_format 返回值 → ToolRegistry 解析方法名
+_BIO_PARSER_MAP = {
+    "geo_soft": "parse_geo_soft",
+    "pdb": "parse_pdb",
+    "fasta": "parse_fasta",
+    "network": "parse_network",
+    "sif": "parse_network",
+    "graphml": "parse_network",
+}
 
 
 @AgentRegistry.register
@@ -101,28 +112,35 @@ class ParserAgent(BaseAgent):
         chart_records = await self._extract_chart_records(
             uploads_dir, task, progress)
 
+        # Step 6: 用户上传的生物数据文件 → GEO SOFT / PDB / FASTA / 网络文件解析
+        bio_records = await self._parse_bio_data_records(
+            uploads_dir, task, progress)
+
         # 用 LLM 提取的结构化记录替换 raw crawl record（就地更新 records）
         if extracted_from_crawl:
             self._replace_crawl_records(records, extracted_from_crawl)
 
         # 记录溯源：parse 阶段
         prov = self.store.get_provenance(task.task_id)
-        if prov and (parsed_records or extracted_from_crawl or chart_records):
-            new_recs = parsed_records + extracted_from_crawl + chart_records
-            rec_ids = [r.get("record_id", "") for r in new_recs]
+        all_new = parsed_records + extracted_from_crawl + chart_records + bio_records
+        if prov and all_new:
+            rec_ids = [r.get("record_id", "") for r in all_new]
             prov.record("parse", "parse_agent",
-                       tool_name="pdf_table+pdf_download+llm_extract+chart_vision",
+                       tool_name="pdf_table+pdf_download+llm_extract+chart_vision+bio_parser",
                        output_records=rec_ids,
                        parameters={"pdf_parsed": len(parsed_records),
                                    "crawl_extracted": len(extracted_from_crawl),
                                    "chart_extracted": len(chart_records),
+                                   "bio_parsed": len(bio_records),
                                    "downloaded_count": len(pdf_candidates)})
 
         msg = (f"解析完成：PDF {len(parsed_records)} 条 + "
                f"爬虫 LLM 提取 {len(extracted_from_crawl)} 条 + "
-               f"图表提取 {len(chart_records)} 条")
+               f"图表提取 {len(chart_records)} 条 + "
+               f"生物数据 {len(bio_records)} 条")
         records.extend(parsed_records)
         records.extend(chart_records)
+        records.extend(bio_records)
         self._set_stage(task, "parse", StageStatus.DONE, msg,
                         records_count=len(records))
         self._emit(progress, type="stage_complete", stage="parse", message=msg)
@@ -222,6 +240,63 @@ class ParserAgent(BaseAgent):
                         pct=0.65,
                         message=f"✓ 图表提取完成：{len(chart_records)} 条")
         return chart_records
+
+    async def _parse_bio_data_records(self, uploads_dir: Path, task: Task,
+                                       progress: ProgressCallback | None) -> list[dict]:
+        """解析用户上传的生物数据文件（GEO SOFT / PDB / FASTA / 网络文件）。
+
+        扫描 uploads_dir 中非 PDF、非图片的文件，用 detect_format 识别格式，
+        分发到对应的 ToolRegistry 解析方法。
+
+        Returns:
+            生物数据记录列表
+        """
+        if not uploads_dir.exists():
+            return []
+
+        # 筛选生物数据文件（排除 PDF 和图片，这两类由前序步骤处理）
+        bio_files = [f for f in sorted(uploads_dir.iterdir())
+                     if f.is_file()
+                     and f.suffix.lower() not in _IMAGE_EXTS
+                     and f.suffix.lower() != ".pdf"]
+        if not bio_files:
+            return []
+
+        # 用 detect_format 识别可解析的生物数据文件
+        parseable: list[tuple[Path, str]] = []
+        for f in bio_files:
+            fmt = detect_format(str(f))
+            if fmt in _BIO_PARSER_MAP:
+                parseable.append((f, fmt))
+        if not parseable:
+            return []
+
+        self._emit(progress, type="stage_progress", stage="parse",
+                    pct=0.7,
+                    message=f"解析 {len(parseable)} 个生物数据文件...")
+
+        out_dir = get_task_output_dir(task.task_id)
+        bio_records: list[dict] = []
+        for idx, (f, fmt) in enumerate(parseable):
+            method_name = _BIO_PARSER_MAP[fmt]
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.7 + 0.1 * (idx + 1) / len(parseable),
+                        message=f"解析 {fmt} {f.name} ({idx+1}/{len(parseable)})")
+            try:
+                parser_fn = getattr(self.tools, method_name)
+                out_file = out_dir / f"parsed_{f.stem}.json"
+                result = await self._to_thread(parser_fn, f, out_file)
+                if result.success and result.data:
+                    bio_records.extend(self._extract_records(result))
+            except Exception as e:
+                logger.warning("生物数据解析 %s 失败（已跳过）: %s", f.name, e)
+                task.errors.append(f"bio_parse {f.name}: {e}")
+
+        if bio_records:
+            self._emit(progress, type="stage_progress", stage="parse",
+                        pct=0.8,
+                        message=f"✓ 生物数据解析完成：{len(bio_records)} 条")
+        return bio_records
 
     @staticmethod
     def _replace_crawl_records(records: list[dict],

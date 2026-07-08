@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -22,8 +23,14 @@ from app.tools.registry import get_registry
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-# 允许上传的文件扩展名（PDF + 图表图片）
-_ALLOWED_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+# 允许上传的文件扩展名（PDF + 图表图片 + 生物数据文件）
+_ALLOWED_EXTS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif",
+    ".soft", ".pdb", ".ent", ".fasta", ".fa", ".faa", ".fna",
+    ".fastq", ".tsv", ".sif", ".graphml", ".xml",
+}
+# 复合扩展名（Path.suffix 只取最后一段，需单独判断）
+_ALLOWED_COMPOUND = {".soft.gz"}
 
 
 @router.get("/{task_id}/analysis", summary="获取任务分析结果")
@@ -103,11 +110,14 @@ async def upload_file(task_id: str, file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
 
     import os
-    suffix = os.path.splitext(file.filename or "")[1].lower()
-    if suffix not in _ALLOWED_EXTS:
+    filename = (file.filename or "").lower()
+    suffix = os.path.splitext(filename)[1]
+    # 支持复合扩展名（如 .soft.gz）
+    compound = "".join(Path(filename).suffixes[-2:]).lower()
+    if suffix not in _ALLOWED_EXTS and compound not in _ALLOWED_COMPOUND:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件类型: {suffix}（仅支持 {', '.join(sorted(_ALLOWED_EXTS))}）",
+            detail=f"不支持的文件类型: {suffix}（仅支持 PDF/图片/GEO SOFT/PDB/FASTA/网络文件）",
         )
 
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
