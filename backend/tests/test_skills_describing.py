@@ -16,7 +16,7 @@ def test_all_manifests_have_required_fields():
     registry = get_skill_registry()
     skills = registry.list_skills()
 
-    assert len(skills) == 61, f"Expected 61 skills, got {len(skills)}"
+    assert len(skills) == 63, f"Expected 63 skills, got {len(skills)}"
 
     for s in skills:
         assert s.skill_id, f"skill_id is empty for {s}"

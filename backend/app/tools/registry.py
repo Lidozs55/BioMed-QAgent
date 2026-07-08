@@ -8,7 +8,7 @@
 
 数据源接入分两条路径：
 - 已接入 15 个模块级函数（pubmed/openalex/...）：通过 _get_ds_func 惰性加载
-- dormant 13 个 BaseDataSource 子类（biogrid/chembl/...）：通过 DataSourceRegistry.search 调用
+- dormant 15 个 BaseDataSource 子类（biogrid/chembl/...）：通过 DataSourceRegistry.search 调用
 """
 from __future__ import annotations
 
@@ -74,8 +74,8 @@ class ToolRegistry:
     # 由各数据源类内部通过 kwargs.get(...) 处理默认值，故 run_datasource 直接透传 kwargs
     _DORMANT_DS_NAMES: frozenset = frozenset({
         "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-        "ensembl", "gprofiler", "hgnc", "openfda", "opentargets",
-        "reactome", "ucsc_xena", "uniprot",
+        "ensembl", "gprofiler", "hgnc", "lincs", "openfda",
+        "opentargets", "pdc", "reactome", "ucsc_xena", "uniprot",
     })
 
     @classmethod
@@ -1000,6 +1000,8 @@ class ToolRegistry:
             {"name": "cbioportal", "description": "cBioPortal 癌症基因组"},
             {"name": "chembl", "description": "ChEMBL 化合物活性"},
             {"name": "depmap", "description": "DepMap 细胞系依赖性"},
+            {"name": "lincs", "description": "LINCS L1000 / Connectivity Map 药物扰动和重定位"},
+            {"name": "pdc", "description": "PDC/CPTAC 癌症蛋白组数据"},
             {"name": "enrichr", "description": "Enrichr 富集分析库"},
             {"name": "ensembl", "description": "Ensembl 基因组注释"},
             {"name": "gprofiler", "description": "g:Profiler 功能富集"},

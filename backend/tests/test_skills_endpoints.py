@@ -31,12 +31,12 @@ def client():
 
 
 def test_list_skills(client):
-    """GET /api/v1/skills returns list of 61 skills."""
+    """GET /api/v1/skills returns list of 63 skills."""
     resp = client.get("/api/v1/skills")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
-    assert len(data) == 61, f"Expected 61 skills, got {len(data)}"
+    assert len(data) == 63, f"Expected 63 skills, got {len(data)}"
     # Verify each entry has required keys
     for entry in data:
         assert "skill_id" in entry
@@ -49,7 +49,7 @@ def test_list_skills_filter_by_category(client):
     resp = client.get("/api/v1/skills?category=datasources")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 30, f"Expected 30 datasources, got {len(data)}"
+    assert len(data) == 32, f"Expected 32 datasources, got {len(data)}"
     for entry in data:
         assert entry["category"] == "datasources"
 
@@ -66,7 +66,7 @@ def test_list_skills_filter_by_version(client):
     resp2 = client.get("/api/v1/skills?version=dormant")
     assert resp2.status_code == 200
     data2 = resp2.json()
-    assert len(data2) == 13, f"Expected 13 dormant, got {len(data2)}"
+    assert len(data2) == 15, f"Expected 15 dormant, got {len(data2)}"
 
 
 # ── GET /api/v1/skills/{id} ──────────────────────────────────────
@@ -112,11 +112,11 @@ def test_list_categories(client):
 
 
 def test_count_skills(client):
-    """GET /api/v1/skills/count returns total=61."""
+    """GET /api/v1/skills/count returns total=63."""
     resp = client.get("/api/v1/skills/count")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] == 61
+    assert data["total"] == 63
     assert data["category"] is None
 
 

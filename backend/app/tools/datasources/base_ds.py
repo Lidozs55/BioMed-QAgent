@@ -263,6 +263,8 @@ def _register_all(registry: DataSourceRegistry) -> None:
     from app.tools.datasources.ucsc_xena import UCSCXenaSource
     from app.tools.datasources.cbioportal import CBioPortalSource
     from app.tools.datasources.depmap import DepMapSource
+    from app.tools.datasources.pdc import PDCSource
+    from app.tools.datasources.lincs import LINCSSource
 
     sources = [
         UniProtSource(),
@@ -278,6 +280,8 @@ def _register_all(registry: DataSourceRegistry) -> None:
         UCSCXenaSource(),
         CBioPortalSource(),
         DepMapSource(),
+        PDCSource(),
+        LINCSSource(),
     ]
     for source in sources:
         registry.register(source)

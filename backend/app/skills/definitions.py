@@ -44,6 +44,8 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
     "cbioportal":       ["cancer", "genomics", "cbioportal"],
     "chembl":           ["compound", "bioactivity", "chembl"],
     "depmap":           ["cell", "line", "dependency", "crispr"],
+    "lincs":            ["drug", "signature", "l1000", "connectivity", "repurposing"],
+    "pdc":              ["proteomics", "phosphoproteomics", "cptac", "cancer"],
     "enrichr":          ["enrichment", "go", "kegg", "pathway"],
     "ensembl":          ["genome", "annotation", "ensembl"],
     "gprofiler":        ["enrichment", "go", "functional"],
@@ -96,8 +98,8 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
 # ── dormant 数据源列表 ───────────────────────────────────────────────
 _DORMANT_DS: frozenset = frozenset({
     "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-    "ensembl", "gprofiler", "hgnc", "openfda", "opentargets",
-    "reactome", "ucsc_xena", "uniprot",
+    "ensembl", "gprofiler", "hgnc", "lincs", "openfda",
+    "opentargets", "pdc", "reactome", "ucsc_xena", "uniprot",
 })
 
 
