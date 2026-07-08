@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 
 from app.agents.orchestrator import Orchestrator
 from app.api.routes.ws import broadcast
+from app.config import UPLOADS_DIR
 from app.llm.client import DashScopeClient
 from app.models.task import TaskCreate
 from app.storage.task_store import get_task_store
@@ -20,6 +22,15 @@ from app.tools.registry import get_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+# 允许上传的文件扩展名（PDF + 图表图片 + 生物数据文件）
+_ALLOWED_EXTS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif",
+    ".soft", ".pdb", ".ent", ".fasta", ".fa", ".faa", ".fna",
+    ".fastq", ".tsv", ".sif", ".graphml", ".xml",
+}
+# 复合扩展名（Path.suffix 只取最后一段，需单独判断）
+_ALLOWED_COMPOUND = {".soft.gz"}
 
 
 @router.get("/{task_id}/analysis", summary="获取任务分析结果")
@@ -83,6 +94,43 @@ async def list_tasks() -> dict:
     return {
         "tasks": [t.to_summary() for t in tasks],
         "total": len(tasks),
+    }
+
+
+@router.post("/{task_id}/upload", summary="上传 PDF 或图表图片")
+async def upload_file(task_id: str, file: UploadFile = File(...)) -> dict:
+    """上传文件到全局 uploads 目录，供 parse 阶段处理。
+
+    支持 PDF（表格/caption 提取）和图表图片（Qwen-VL 图表数据提取）。
+    文件保存到 data/uploads/，parse 阶段会自动扫描该目录。
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    import os
+    filename = (file.filename or "").lower()
+    suffix = os.path.splitext(filename)[1]
+    # 支持复合扩展名（如 .soft.gz）
+    compound = "".join(Path(filename).suffixes[-2:]).lower()
+    if suffix not in _ALLOWED_EXTS and compound not in _ALLOWED_COMPOUND:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {suffix}（仅支持 PDF/图片/GEO SOFT/PDB/FASTA/网络文件）",
+        )
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = UPLOADS_DIR / (file.filename or f"upload_{task_id}{suffix}")
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    logger.info("任务 %s 上传文件: %s (%d bytes)", task_id, dest.name, len(content))
+    return {
+        "task_id": task_id,
+        "filename": dest.name,
+        "size": len(content),
+        "path": str(dest),
     }
 
 

@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { Layout, Row, Col, Tabs, Typography, Tag, Badge } from 'antd';
 import {
   ExperimentOutlined, DatabaseOutlined, ApartmentOutlined,
-  BarChartOutlined, FileTextOutlined, ApiOutlined,
+  BarChartOutlined, FileTextOutlined, ApiOutlined, CommentOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
 import { useTaskWebSocket } from '@/hooks/useTaskWebSocket';
@@ -12,6 +12,7 @@ import { TaskListPanel } from '@/components/task/TaskList';
 import { PipelineStatus } from '@/components/task/PipelineStatus';
 import { DataOverview } from '@/components/data/DataOverview';
 import { ResearchReport } from '@/components/report/ResearchReport';
+import { FeedbackPanel } from '@/components/feedback/FeedbackPanel';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -73,6 +74,11 @@ export default function App() {
                   key: 'report',
                   label: <span><FileTextOutlined /> 研究报告</span>,
                   children: <ResearchReport taskId={selectedTask.task_id} />,
+                },
+                {
+                  key: 'feedback',
+                  label: <span><CommentOutlined /> 反馈修正</span>,
+                  children: <FeedbackPanel task={selectedTask} />,
                 },
               ]}
             />

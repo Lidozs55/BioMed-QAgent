@@ -68,6 +68,20 @@ export const api = {
   // ===== 溯源 =====
   getLineage: (id: string) => request<LineageGraph>(`/tasks/${id}/lineage`),
 
+  // ===== 反馈 =====
+  submitFeedback: (id: string, payload: {
+    feedback_type: string;
+    message?: string;
+    extra_entities?: Record<string, string[]>;
+    retry_stage?: string;
+  }) => request<{
+    status: string; task_id: string;
+    feedback_type: string; note: string;
+  }>(`/tasks/${id}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+
   // ===== 系统 =====
   health: () => request<{ status: string; dashscope_configured: boolean }>('/health'),
   listTools: () => request<Record<string, Array<{ name: string; description: string }>>>('/tools'),

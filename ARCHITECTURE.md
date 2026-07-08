@@ -40,10 +40,11 @@ BioMed QAgent 是面向生物医学研究场景的 AI 应用。用户输入自�
 │      │ LLM 调用（规划/审查/报告）            │ 工具调用       │
 │  ┌───▼──────────────────┐  ┌────────────────▼────────────┐  │
 │  │  DashScopeClient      │  │  ToolRegistry facade         │  │
-│  │  (qwen-plus/max)      │  │  ├─ datasources/ (15 源)     │  │
+│  │  (qwen-plus/max/vl)   │  │  ├─ datasources/ (15 源)     │  │
 │  │  + LLMReporter        │  │  ├─ parsers/ (PDF/生物数据)  │  │
 │  └───────────────────────┘  │  ├─ cleaners/ (对齐/归一/去重)│  │
 │                              │  ├─ analysis/ (PPI/富集/药靶)│  │
+│                              │  ├─ viz/ (图表+Qwen-VL提取) │  │
 │                              │  └─ export/ (CSV/Excel/MD)  │  │
 │                              └─────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────┐ │
@@ -63,7 +64,7 @@ backend/app/
 ├── api/
 │   ├── __init__.py          # 路由聚合（统一前缀 /api/v1）
 │   └── routes/
-│       ├── tasks.py         # 任务 CRUD + 启动 + 状态 + 分析结果
+│       ├── tasks.py         # 任务 CRUD + 启动 + 状态 + 分析结果 + 文件上传
 │       ├── data.py          # 数据查询 + 导出 + 报告 + 重生成
 │       ├── lineage.py       # 溯源图 + 单记录链路
 │       ├── ws.py            # WebSocket 实时推送
@@ -74,11 +75,12 @@ backend/app/
 │   ├── orchestrator.py      # ★ 流水线编排器（planning/export 内联 + 6 阶段委托）
 │   ├── llm_reporter.py      # ★ LLM 综合研究报告生成器
 │   ├── search.py            # SearchAgent（文献+实体+引用追溯+Darwinian fallback）
-│   ├── acquire.py           # AcquireAgent（爬虫信号识别）
-│   ├── parser.py            # ParserAgent（PDF + LLM 提取）
+│   ├── acquire.py           # AcquireAgent（爬虫采集 fallback，输出 raw crawl record）
+│   ├── parser.py            # ParserAgent（PDF + LLM 提取 + 图表 Qwen-VL + 生物数据解析）
 │   ├── cleaner.py           # CleanerAgent（对齐/归一/去重）
-│   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达并行）
-│   └── reviewer.py          # ReviewerAgent（LLM 质量审查）
+│   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达/Hub/上游 并行+复用）
+│   ├── reviewer.py          # ReviewerAgent（LLM 质量审查）
+│   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，LLM gap 分析）
 ├── tools/
 │   ├── registry.py          # ★ ToolRegistry facade
 │   ├── datasources/         # 15 个数据源模块
@@ -87,7 +89,7 @@ backend/app/
 │   ├── analysis/            # PPI/富集/药物-靶点/差异表达/Hub/生存/上游
 │   ├── export/              # CSV/Excel/Markdown
 │   ├── io/                  # 格式互转
-│   ├── viz/                 # 火山图/热图/气泡/网络图
+│   ├── viz/                 # 火山图/热图/气泡/网络图 + 图表数据提取(Qwen-VL)
 │   └── optimization/        # Darwinian Stage Gate（dormant，未接线）
 ├── llm/
 │   ├── client.py            # DashScopeClient
@@ -114,8 +116,11 @@ backend/app/
 
 [backend/app/agents/orchestrator.py](backend/app/agents/orchestrator.py) 是系统核心。**planning/export 由 Orchestrator 直接持有**（输入解析 + 结果组装，非领域逻辑）；search→acquire→parse→clean→analyze→review 6 阶段委托给 [AgentRegistry](backend/app/agents/registry.py) 注册的阶段 Agent（[base.py](backend/app/agents/base.py) 的 BaseAgent 提供共享辅助方法）。
 
+**多轮迭代结构**（对齐 docs/multi_round_search_iteration.md）：planning → [Round N: search→acquire→parse→clean→analyze→review → IterationDecisionAgent] → export，迭代直到收敛或达到 MAX_ROUNDS（默认 3）。
+
 ```python
 PIPELINE = ("search", "acquire", "parse", "clean", "analyze", "review")
+MAX_ROUNDS = 3
 
 class Orchestrator:
     def __init__(self, ...):
@@ -123,13 +128,18 @@ class Orchestrator:
 
     async def run(self, task, progress) -> Task:
         context = await self._stage_planning(task, progress)   # Orchestrator 内联：LLM 提取实体
-        records: list[dict] = []
-        for stage in PIPELINE:
-            if stage == "analyze" and not task.enable_analysis:
-                continue
-            agent = self._get_agent(stage)                      # AgentRegistry.get(stage, llm, tools, store)
-            records, context = await agent.execute(task, records, context, progress)
-        await self._stage_export(task, records, context, context["review"], progress)  # Orchestrator 内联
+        all_records: list[dict] = []
+        for round_idx in range(1, MAX_ROUNDS + 1):
+            round_records, context = await self._run_pipeline_round(
+                task, context, progress, round_idx)             # 6 阶段委托
+            all_records.extend(self._dedup_round(round_records, seen_ids))
+            if round_idx >= MAX_ROUNDS:
+                break
+            # IterationDecisionAgent 判断是否继续（gap 分析 + 趋势收敛）
+            _, context = await self._get_agent("iteration_decision").execute(...)
+            if not context["iteration_decision"]["should_continue"]:
+                break
+        await self._stage_export(task, all_records, context, ...)  # Orchestrator 内联
 ```
 
 **关键设计**：
@@ -137,6 +147,21 @@ class Orchestrator:
 - 同步阻塞函数用 `asyncio.to_thread` 包装（BaseAgent._to_thread），避免阻塞 FastAPI 事件循环
 - 异常 → 任务 FAILED，记录到 `task.errors`，可重新 `start`
 - Darwinian Stage Gate 在 SearchAgent 内部实现（记录不足或相关性低时扩展查询重试）
+- IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80%
+
+**可重入状态机**（用户反馈后从指定阶段重试，非重跑全流程）：
+
+```python
+# POST /tasks/{task_id}/start?from_stage=clean
+# 对 completed/failed 任务生效，跳过 planning，从 from_stage 运行到 review 再 export
+orchestrator.run_resume(task, from_stage="clean", progress=progress)
+```
+
+- 可重入阶段：search / acquire / parse / clean / analyze / review
+- 从 `final_data.json` 加载已持久化的 context（entities/search_queries/...）
+- 从 `store._records` 加载已持久化的 records（前置阶段产出）
+- 从 search 重试时清空已有记录重新检索；其余阶段保留前置产出
+- 单轮执行（无多轮迭代），符合"用户显式请求重试"语义
 
 ### 4.2 ToolRegistry — 工具 facade
 
@@ -146,7 +171,13 @@ class Orchestrator:
 class ToolRegistry:
     def run_datasource(self, name, query, max_results, task_id, **kwargs) -> ToolResult
     def run_datasources_parallel(self, sources, query, ...) -> dict[str, ToolResult]
+    def trace_citations(self, seed_ids, ...) -> ToolResult      # 引用追溯
     def parse_pdf_table(self, pdf_path, output_file) -> ToolResult
+    def parse_geo_soft(self, file_path, output_file) -> ToolResult
+    def parse_fasta(self, file_path, output_file) -> ToolResult
+    def parse_pdb(self, file_path, output_file) -> ToolResult
+    def parse_network(self, file_path, fmt, output_file) -> ToolResult
+    def extract_chart_data(self, image_path, output_file) -> ToolResult  # Qwen-VL 图表提取
     def download_pdfs(self, records, pdf_dir, ...) -> ToolResult
     def align_fields(self, records, dict_dir) -> ToolResult
     def normalize_units(self, records) -> ToolResult
@@ -154,10 +185,19 @@ class ToolRegistry:
     def run_ppi(self, gene_list, task_id, output_file) -> ToolResult
     def run_enrichment(self, gene_list, task_id, output_file) -> ToolResult
     def run_drug_target(self, compounds, task_id, output_file) -> ToolResult
+    def run_diff_expression(self, records, task_id, output_file) -> ToolResult
+    def run_hub_gene(self, gene_list, task_id, output_file) -> ToolResult
+    def run_upstream_regulator(self, gene_list, task_id, output_file) -> ToolResult
     def export_csv(self, records, output_path) -> ToolResult
 ```
 
-- 统一返回 `ToolResult(success, data, error, signals)`
+- 统一返回 `ToolResult(success, data, error, signals)`，**统一工具协议层契约**：
+  - `success: bool` — False 时 data 为空，error 必填
+  - `data: list[dict] | dict` — 检索/解析/清洗类返回 DataRecord 列表；分析/IO/导出类返回结果摘要 dict
+  - `error: str` — 失败信息（含工具名前缀，如 `pubmed: ...`）
+  - `signals: dict` — 非记录信号，约定键 `requires_crawl`/`status`/`partial`
+  - 置信度由 per-record `extraction_confidence` 承载（非 ToolResult 层）
+  - 溯源事件由 Agent 调用 `ProvenanceTracker.record()`（非 ToolResult 层）
 - 数据源模块函数惰性加载并缓存
 - 并行检索用 `ThreadPoolExecutor`（最多 5 并发）
 
@@ -200,19 +240,19 @@ class ToolRegistry:
 
 ### 4.5 生物信息学分析
 
-[tools/analysis/](backend/app/tools/analysis/) 提供 7 个分析模板，orchestrator 接线其中 3 个：
+[tools/analysis/](backend/app/tools/analysis/) 提供 7 个分析模板，AnalysisAgent 按数据类型路由，Phase1 并行 + Phase2 复用 PPI 结果：
 
-| 分析 | 模块 | 接线 | 服务 |
-|------|------|------|------|
-| PPI 网络 | ppi_network.py | ✅ | STRING API |
-| GO/KEGG 富集 | enrichment.py | ✅ | Enrichr API |
-| 药物-靶点 | drug_target.py | ✅ | OpenTargets API |
-| 差异表达 | differential_expression.py | ❌ | 本地计算 |
-| Hub 基因 | hub_gene.py | ❌ | 本地计算 |
-| 生存分析 | survival.py | ❌ | 本地计算 |
-| 上游调控 | upstream_regulator.py | ❌ | 本地计算 |
+| 分析 | 模块 | 接线 | 触发条件 | 服务 |
+|------|------|------|---------|------|
+| PPI 网络 | ppi_network.py | ✅ Phase1 | 有基因列表 | STRING API |
+| GO/KEGG 富集 | enrichment.py | ✅ Phase1 | 有基因列表 | Enrichr API |
+| 药物-靶点 | drug_target.py | ✅ Phase1 | 有化合物 | OpenTargets API |
+| 差异表达 | differential_expression.py | ✅ Phase1 | 有 log2fc 数据 | 本地计算 |
+| Hub 基因 | hub_gene.py | ✅ Phase2 | 有基因列表 | 本地计算（复用 PPI） |
+| 上游调控 | upstream_regulator.py | ✅ Phase2 | 有基因列表 | 本地计算（复用 PPI） |
+| 生存分析 | survival.py | ✅ Phase3 | 有基因列表 + disease→TCGA cohort 映射 | TCGA GDC API |
 
-分析结果含 `summary` / `parameters` / `stats_table` / `chart_data`，供 LLM 报告生成与前端 `/analysis` 端点使用。
+**性能优化**：Phase1（PPI/富集/药靶/差异表达）`asyncio.gather` 并行；Phase2（Hub/上游）复用 Phase1 的 PPI 结果，不重复调用 STRING API（原 24 次→1 次）。
 
 ### 4.6 LLM 层
 
@@ -247,9 +287,31 @@ class ProvenanceTracker:
     def save(self, path) / load(self, path)
 ```
 
+**字段级溯源**：每条记录携带 `field_provenance` dict，记录各字段的完整变换链路，满足赛题"来源可追溯性"加分项：
+
+```python
+# record["field_provenance"] 结构
+{
+  "compound_name": [
+    {"step": "field_align", "from": "MolName", "to": "compound_name",
+     "transform": "title", "source": "tcmsp"}
+  ],
+  "log2fc": [
+    {"step": "field_align", "from": "logFC", "to": "log2fc", "transform": "float", "source": "geo"},
+    {"step": "unit_normalize", "from_unit": "ln", "to_unit": "log2"}
+  ]
+}
+```
+
+- 字段来源（表格/段落/网页/截图）由记录级 `source_ref.source_type` + `extraction_method` 标识
+- 字段名对齐由 [field_aligner.py](backend/app/tools/cleaners/field_aligner.py) 追加 `field_align` 条目
+- 单位转换由 [unit_normalizer.py](backend/app/tools/cleaners/unit_normalizer.py) 追加 `unit_normalize` 条目
+- clean 阶段 ProvenanceNode.parameters 汇总 `field_align_events` / `unit_normalize_events` / `fields_with_provenance`
+
 API 暴露：
 - `GET /tasks/{id}/lineage` — 完整 DAG
 - `GET /tasks/{id}/lineage/{record_id}` — 单记录链路
+- `GET /tasks/{id}/data` — 返回记录含 `field_provenance` 字段
 
 前端 [LineageGraph.tsx](frontend/src/components/lineage/LineageGraph.tsx) 用 ReactFlow 渲染。
 
@@ -290,10 +352,10 @@ WebSocket 推送格式：
 |------|------|------|
 | 1. planning | LLM qwen-plus | 提取化合物/基因/疾病/通路实体，识别领域，生成检索查询与推荐数据源 |
 | 2. search | 原生模块 + 线程池 | 文献源并行 + 实体源串行；Darwinian 扩展重试 |
-| 3. acquire | stub（隔离） | 识别 `requires_crawl` 信号并日志记录，不执行爬取 |
-| 4. parse | 原生模块 | 解析上传 PDF + 自动下载 OA 论文 PDF（≤5 篇）|
+| 3. acquire | WebCrawlerSource | 读取 search 阶段 `requires_crawl` 信号，爬取目标页面输出 raw crawl record（由 parse 阶段 LLMExtractor 转结构化）；爬虫失败隔离不影响流水线 |
+| 4. parse | 原生模块 + Qwen-VL | PDF 表格/caption + OA 下载 + 爬虫 LLM 提取 + 图表 Qwen-VL 提取 + GEO SOFT/PDB/FASTA/网络文件 |
 | 5. clean | 三件套 | 字段对齐 → 单位归一化 → 去重 |
-| 6. analyze | 原生模块（可选）| PPI + 富集 + 药物-靶点 |
+| 6. analyze | 原生模块（可选）| Phase1 并行：PPI/富集/药靶/差异表达；Phase2 复用 PPI：Hub/上游；Phase3 生存分析（disease→TCGA cohort 映射）|
 | 7. review | LLM qwen-max | 审查完整性/覆盖/发现/建议，输出质量评分 |
 | 8. export | 原生 + LLMReporter | CSV + 整合 CSV + LLM 报告 + JSON |
 
@@ -315,8 +377,8 @@ T0  用户输入研究目标
 T1  planning: LLM 识别 compounds=[健脾散结方成分...] genes=[AKT1/TP53/...] diseases=[胰腺癌/肝转移] domain=tcm
 T2  search:   PubMed→18 / OpenAlex→12 / Semantic Scholar→8 / STRING→PPI / DisGeNET→基因-疾病
               记录不足时扩展查询 "pancreatic cancer liver metastasis" 重试
-T3  acquire:  跳过（TCMSP 返回 requires_crawl 信号，未实现爬虫）
-T4  parse:    下载 5 篇 OA 论文 PDF，pdfplumber 提取表格
+T3  acquire:  TCMSP 返回 requires_crawl 信号 → WebCrawlerSource 爬取页面 → raw crawl record（待 parse 阶段 LLM 提取）
+T4  parse:    下载 5 篇 OA 论文 PDF，pdfplumber 提取表格；爬虫内容 LLM 提取；用户上传图表 Qwen-VL 提取；用户上传生物数据解析
 T5  clean:    字段对齐（MolName→compound_name）+ 单位归一化 + 去重
 T6  analyze:  STRING PPI 网络 + Enrichr GO/KEGG 富集 + OpenTargets 药物-靶点
 T7  review:   qwen-max 审查质量评分 0.89，标记缺失与建议
@@ -331,9 +393,9 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 | 扩展点 | 方式 | 现状 |
 |--------|------|------|
 | 新增数据源 | `tools/datasources/` 添加模块函数 + `ToolRegistry._get_ds_func` 注册 | 15 活跃 |
-| 新增解析器 | `tools/parsers/` 添加模块 + `ToolRegistry` 加 facade | 6 个 |
+| 新增解析器 | `tools/parsers/` 添加模块 + `ToolRegistry` 加 facade + `ParserAgent._BIO_PARSER_MAP` 注册 | 6 个（全接线）|
 | 新增清洗器 | `tools/cleaners/` 添加模块 + `ToolRegistry` 加 facade | 3 个 |
-| 新增分析模板 | `tools/analysis/` 添加模块 + `ToolRegistry` 加 facade | 7 个（3 接线）|
+| 新增分析模板 | `tools/analysis/` 添加模块 + `ToolRegistry` 加 facade | 7 个（全接线）|
 | 新增导出格式 | `tools/export/` 添加模块 | CSV/Excel/MD |
 | 新增领域模板 | `resources/domain_templates/` 加 YAML | 中医药/肿瘤学/药理学 |
 | 新增词典 | `resources/dictionaries/` 加 YAML | 基因/化合物/疾病/单位/字段别名 |
@@ -344,11 +406,7 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| acquire 阶段 stub | TCMSP 等无 API 源数据缺失 | P1 |
-| 图表数据提取未接线 | qwen-vl-max 已封装但未接入 parse 流程 | P1 |
-| GEO SOFT/PDB/FASTA 解析器未接线 | 解析器已写，orchestrator 仅调 PDF | P2 |
-| 前端 feedback UI 缺失 | 后端路由存在，无人机回路入口 | P1 |
-| optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 orchestrator 内联简化版 | P2 |
+| optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 | openapi.yaml 空壳 | 提交材料要求可调用测试 API 文档 | P2 |
 

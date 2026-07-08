@@ -20,13 +20,25 @@ logger = logging.getLogger(__name__)
 
 
 class ToolResult:
-    """工具执行结果。
+    """工具执行结果（统一工具协议层契约）。
+
+    所有 ToolRegistry 方法统一返回本类型，Agent 层按此契约处理：
 
     字段：
-    - success: 是否成功
-    - data: 返回数据（通常为记录列表，或分析结果 dict）
-    - error: 失败时的错误信息
-    - signals: 非记录信号（如 requires_crawl），供 acquire 阶段识别
+    - success: 是否成功。False 时 data 为空，error 必填
+    - data: 返回数据。检索/解析/清洗类工具为 list[dict]（DataRecord）；
+            分析/IO/导出类工具为 dict（结果摘要）。None 视作空
+    - error: 失败时的错误信息（含工具名前缀，如 "pubmed: ..."）
+    - signals: 非记录信号 dict，供下游 Agent 决策。约定键：
+        - requires_crawl: bool — 数据源需爬虫采集（acquire 阶段识别）
+        - status: str — 状态标记（如 "requires_crawl" / "degraded"）
+        - partial: bool — 部分成功
+
+    置信度：不在 ToolResult 层携带，由各 DataRecord.extraction_confidence
+    字段承载（per-record 粒度，更精确）。
+
+    溯源事件：不在 ToolResult 层携带，由各 Agent 调用
+    ProvenanceTracker.record() 记录（含 tool_name/parameters）。
     """
 
     def __init__(self, success: bool, data=None, error: str = "",

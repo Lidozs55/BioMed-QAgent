@@ -106,6 +106,7 @@ def normalize_records(records):
         fields = dict(r.get("fields", {}))
         unit_info = dict(r.get("unit_info", {}))
         flags = list(r.get("quality_flags", []))
+        field_prov = dict(r.get("field_provenance", {}))
 
         for fname, fval in fields.items():
             target_unit = NUMERIC_UNIT_FIELDS.get(fname)
@@ -120,11 +121,18 @@ def normalize_records(records):
                 entry = unit_changes.setdefault(
                     fname, {"original_unit": changed[0], "new_unit": changed[1], "count": 0})
                 entry["count"] += 1
+                # 追加字段级溯源条目（单位转换）
+                field_prov.setdefault(fname, []).append({
+                    "step": "unit_normalize",
+                    "from_unit": changed[0],
+                    "to_unit": changed[1],
+                })
 
         r2 = dict(r)
         r2["fields"] = fields
         r2["unit_info"] = unit_info
         r2["quality_flags"] = list(dict.fromkeys(flags))
         r2["processing_log"] = list(r.get("processing_log", [])) + ["unit_normalized"]
+        r2["field_provenance"] = field_prov
         normalized.append(r2)
     return normalized, unit_changes
