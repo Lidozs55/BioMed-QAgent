@@ -73,9 +73,10 @@ class ToolRegistry:
     # 特殊参数（mode/endpoint/organism/fetch_meta/dbname/sources/user_threshold）
     # 由各数据源类内部通过 kwargs.get(...) 处理默认值，故 run_datasource 直接透传 kwargs
     _DORMANT_DS_NAMES: frozenset = frozenset({
-        "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-        "ensembl", "gprofiler", "hgnc", "lincs", "openfda",
-        "opentargets", "pdc", "reactome", "ucsc_xena", "uniprot",
+        "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
+        "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
+        "lincs", "omim", "openfda", "opentargets", "pdc",
+        "reactome", "ucsc_xena", "uniprot",
     })
 
     @classmethod
@@ -1011,6 +1012,10 @@ class ToolRegistry:
             {"name": "reactome", "description": "Reactome 通路"},
             {"name": "ucsc_xena", "description": "UCSC Xena 基因组数据"},
             {"name": "uniprot", "description": "UniProt 蛋白质"},
+            {"name": "drugbank", "description": "DrugBank 药物-靶点（受控访问）"},
+            {"name": "omim", "description": "OMIM 基因-表型关联（受控访问）"},
+            {"name": "disgenet", "description": "DisGeNET 基因-疾病关联（受控访问）"},
+            {"name": "genecards", "description": "GeneCards 基因整合知识（受控访问）"},
         ],
         "parsers": [
             {"name": "pdf_table", "description": "PDF 表格提取"},

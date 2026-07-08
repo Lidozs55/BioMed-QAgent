@@ -265,6 +265,10 @@ def _register_all(registry: DataSourceRegistry) -> None:
     from app.tools.datasources.depmap import DepMapSource
     from app.tools.datasources.pdc import PDCSource
     from app.tools.datasources.lincs import LINCSSource
+    from app.tools.datasources.drugbank import DrugBankSource
+    from app.tools.datasources.omim import OMIMSource
+    from app.tools.datasources.disgenet import DisGeNETSource
+    from app.tools.datasources.genecards import GeneCardsSource
 
     sources = [
         UniProtSource(),
@@ -282,6 +286,10 @@ def _register_all(registry: DataSourceRegistry) -> None:
         DepMapSource(),
         PDCSource(),
         LINCSSource(),
+        DrugBankSource(),
+        OMIMSource(),
+        DisGeNETSource(),
+        GeneCardsSource(),
     ]
     for source in sources:
         registry.register(source)

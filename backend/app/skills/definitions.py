@@ -55,6 +55,10 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
     "reactome":         ["pathway", "signaling", "reactome"],
     "ucsc_xena":        ["genomics", "expression", "xena"],
     "uniprot":          ["protein", "annotation", "uniprot"],
+    "drugbank":         ["drug", "target", "pharmacology", "drugbank", "controlled"],
+    "omim":             ["omim", "phenotype", "mendelian", "inheritance", "gene-disease"],
+    "disgenet":         ["gene", "disease", "association", "disgenet", "controlled"],
+    "genecards":        ["genecards", "gene", "function", "summary", "integrative"],
     # parsers
     "pdf_table":        ["pdf", "table", "extract", "caption"],
     "pdf_download":     ["pdf", "download", "openaccess"],
@@ -97,9 +101,10 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
 
 # ── dormant 数据源列表 ───────────────────────────────────────────────
 _DORMANT_DS: frozenset = frozenset({
-    "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-    "ensembl", "gprofiler", "hgnc", "lincs", "openfda",
-    "opentargets", "pdc", "reactome", "ucsc_xena", "uniprot",
+    "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
+    "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
+    "lincs", "omim", "openfda", "opentargets", "pdc",
+    "reactome", "ucsc_xena", "uniprot",
 })
 
 

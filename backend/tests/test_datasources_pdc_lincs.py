@@ -109,5 +109,5 @@ class TestDormantRegistration:
         assert "lincs" in ToolRegistry._DORMANT_DS_NAMES
 
     def test_dormant_count_increased(self):
-        """从 13 增加到 15"""
-        assert len(ToolRegistry._DORMANT_DS_NAMES) == 15
+        """从 15 增加到 19"""
+        assert len(ToolRegistry._DORMANT_DS_NAMES) == 19

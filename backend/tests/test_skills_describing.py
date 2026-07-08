@@ -16,7 +16,7 @@ def test_all_manifests_have_required_fields():
     registry = get_skill_registry()
     skills = registry.list_skills()
 
-    assert len(skills) == 63, f"Expected 63 skills, got {len(skills)}"
+    assert len(skills) == 65, f"Expected 65 unique skills, got {len(skills)}"
 
     for s in skills:
         assert s.skill_id, f"skill_id is empty for {s}"
@@ -58,8 +58,9 @@ def test_dormant_skills_have_correct_version():
     register_all_skills()
     registry = get_skill_registry()
     dormant_ids = {
-        "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-        "ensembl", "gprofiler", "hgnc", "openfda", "opentargets",
+        "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
+        "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
+        "lincs", "omim", "openfda", "opentargets", "pdc",
         "reactome", "ucsc_xena", "uniprot",
     }
     for sid in dormant_ids:
@@ -75,8 +76,9 @@ def test_active_skills_have_version_active():
     register_all_skills()
     registry = get_skill_registry()
     dormant_ids = {
-        "biogrid", "cbioportal", "chembl", "depmap", "enrichr",
-        "ensembl", "gprofiler", "hgnc", "openfda", "opentargets",
+        "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
+        "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
+        "lincs", "omim", "openfda", "opentargets", "pdc",
         "reactome", "ucsc_xena", "uniprot",
     }
     for s in registry.list_skills():

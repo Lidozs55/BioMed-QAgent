@@ -1,8 +1,8 @@
 """Test 1: SkillRegistry registration — count, active/dormant, categories.
 
 Verifies:
-- register_all_skills() registers all 63 tools as skills
-- 48 active, 15 dormant
+- register_all_skills() registers all 67 entries (65 unique after dedup)
+- 46 active, 19 dormant
 - All 8 categories present
 """
 
@@ -12,18 +12,18 @@ from app.skills import get_skill_registry, register_all_skills
 def test_registry_total_count():
     """All 63 tools from _TOOLS_METADATA should be registered as skills."""
     count = register_all_skills()
-    assert count == 63, f"Expected 63 registered skills, got {count}"
-    assert get_skill_registry().count() == 63
+    assert count == 67, f"Expected 67 entries processed, got {count}"
+    assert get_skill_registry().count() == 65
 
 
 def test_active_vs_dormant_count():
-    """48 active + 15 dormant = 63 total."""
+    """46 active + 19 dormant = 65 unique."""
     registry = get_skill_registry()
     all_skills = registry.list_skills()
     active = [s for s in all_skills if s.version == "active"]
     dormant = [s for s in all_skills if s.version == "dormant"]
-    assert len(active) == 48, f"Expected 48 active, got {len(active)}"
-    assert len(dormant) == 15, f"Expected 15 dormant, got {len(dormant)}"
+    assert len(active) == 46, f"Expected 46 active, got {len(active)}"
+    assert len(dormant) == 19, f"Expected 19 dormant, got {len(dormant)}"
 
 
 def test_all_eight_categories_present():
@@ -39,7 +39,7 @@ def test_category_counts():
     """Verify per-category counts match _TOOLS_METADATA."""
     registry = get_skill_registry()
     expected = {
-        "datasources":  32,  # 17 active + 15 dormant
+        "datasources":  34,  # 15 active + 19 dormant (drugbank/disgenet moved to dormant)
         "parsers":       6,
         "cleaners":      3,
         "analysis":      7,
