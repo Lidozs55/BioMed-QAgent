@@ -149,6 +149,20 @@ class Orchestrator:
 - Darwinian Stage Gate 在 SearchAgent 内部实现（记录不足或相关性低时扩展查询重试）
 - IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80%
 
+**可重入状态机**（用户反馈后从指定阶段重试，非重跑全流程）：
+
+```python
+# POST /tasks/{task_id}/start?from_stage=clean
+# 对 completed/failed 任务生效，跳过 planning，从 from_stage 运行到 review 再 export
+orchestrator.run_resume(task, from_stage="clean", progress=progress)
+```
+
+- 可重入阶段：search / acquire / parse / clean / analyze / review
+- 从 `final_data.json` 加载已持久化的 context（entities/search_queries/...）
+- 从 `store._records` 加载已持久化的 records（前置阶段产出）
+- 从 search 重试时清空已有记录重新检索；其余阶段保留前置产出
+- 单轮执行（无多轮迭代），符合"用户显式请求重试"语义
+
 ### 4.2 ToolRegistry — 工具 facade
 
 [backend/app/tools/registry.py](backend/app/tools/registry.py) 是薄封装层，**无 subprocess、无 CLI 参数解析**，直接调用 `tools/` 下模块函数。
@@ -393,7 +407,6 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
 | acquire 阶段 stub | TCMSP 等无 API 源数据缺失 | P1 |
-| 前端 feedback UI 缺失 | 后端路由存在，无人机回路入口 | P1 |
 | optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 | openapi.yaml 空壳 | 提交材料要求可调用测试 API 文档 | P2 |
