@@ -408,7 +408,6 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 |------|------|--------|
 | optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
-| openapi.yaml 空壳 | 提交材料要求可调用测试 API 文档 | P2 |
 
 ---
 
