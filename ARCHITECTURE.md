@@ -80,7 +80,7 @@ backend/app/
 │   ├── cleaner.py           # CleanerAgent（对齐/归一/去重）
 │   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达/Hub/上游 并行+复用）
 │   ├── reviewer.py          # ReviewerAgent（LLM 质量审查）
-│   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，LLM gap 分析）
+│   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，量化 Stage Gate + LLM gap 分析）
 ├── tools/
 │   ├── registry.py          # ★ ToolRegistry facade
 │   ├── datasources/         # 15 个数据源模块
@@ -90,7 +90,7 @@ backend/app/
 │   ├── export/              # CSV/Excel/Markdown
 │   ├── io/                  # 格式互转
 │   ├── viz/                 # 火山图/热图/气泡/网络图 + 图表数据提取(Qwen-VL)
-│   └── optimization/        # Darwinian Stage Gate（dormant，未接线）
+│   └── optimization/        # Darwinian Stage Gate（stage_evaluator 已接线 IterationDecisionAgent；reflection_loop 文件版 dormant）
 ├── llm/
 │   ├── client.py            # DashScopeClient
 │   └── prompts/             # 7 个提示词模板
@@ -147,7 +147,8 @@ class Orchestrator:
 - 同步阻塞函数用 `asyncio.to_thread` 包装（BaseAgent._to_thread），避免阻塞 FastAPI 事件循环
 - 异常 → 任务 FAILED，记录到 `task.errors`，可重新 `start`
 - Darwinian Stage Gate 在 SearchAgent 内部实现（记录不足或相关性低时扩展查询重试）
-- IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80%
+- IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80% / **Stage Gate 量化评估通过（coverage≥0.8 且 confidence≥0.8 且 sources≥2 且 conflict≤0.2）** / **冲突率 >40%（需用户介入）**
+- IterationDecisionAgent 量化接线：每轮调用 `stage_evaluator.evaluate()`（内存直调，stage="clean" 阈值）获取 coverage/confidence/conflict_rate/source_diversity + gaps + suggestions，注入 LLM prompt；无 LLM 时用 `keyword_expander.expand_keywords()` 基于同义词字典构造下一轮查询
 
 **可重入状态机**（用户反馈后从指定阶段重试，非重跑全流程）：
 
@@ -406,7 +407,7 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| optimization 模块 dormant | Darwinian Stage Gate 已实现未接线，仅用 SearchAgent 内联简化版 | P2 |
+| optimization 模块 dormant | ~~stage_evaluator 未接线~~ → 已接线 IterationDecisionAgent（量化指标驱动收敛 + LLM prompt 增强 + keyword_expander fallback）；reflection_loop 文件版仍 dormant（CLI 导向，内存直调 evaluate 已覆盖核心价值） | P2→已解决 |
 | DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
 
 ---
