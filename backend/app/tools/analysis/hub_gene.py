@@ -66,7 +66,7 @@ def _fetch_string_network(genes, species, score_threshold):
         "caller_identity": "BioMedQAgent",
     }
     r = requests.get(STRING_NETWORK_URL, params=params,
-                     headers=HEADERS, timeout=120)
+                     headers=HEADERS, timeout=30)
     r.raise_for_status()
     return r.json() or []
 

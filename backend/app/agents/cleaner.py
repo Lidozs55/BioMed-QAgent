@@ -42,9 +42,8 @@ class CleanerAgent(BaseAgent):
                     pct=0.2, message="字段对齐中...")
         dict_dir = get_dictionaries_dir()
         result = await self._to_thread(self.tools.align_fields, cleaned, dict_dir)
-        if result.success and result.data:
-            cleaned = (result.data if isinstance(result.data, list)
-                       else [result.data])
+        if result.success:
+            cleaned = self._extract_records(result) or cleaned
             self._write_records(out_dir / "aligned_records.json", cleaned)
             self._emit(progress, type="stage_progress", stage="clean",
                         pct=0.4, message=f"字段对齐完成：{len(cleaned)} 条")
@@ -56,9 +55,8 @@ class CleanerAgent(BaseAgent):
                     pct=0.6, message="单位归一化中...")
         if cleaned:
             result = await self._to_thread(self.tools.normalize_units, cleaned)
-            if result.success and result.data:
-                cleaned = (result.data if isinstance(result.data, list)
-                           else [result.data])
+            if result.success:
+                cleaned = self._extract_records(result) or cleaned
                 self._write_records(out_dir / "normalized_records.json", cleaned)
                 self._emit(progress, type="stage_progress", stage="clean",
                             pct=0.8, message=f"单位归一化完成：{len(cleaned)} 条")
@@ -68,9 +66,8 @@ class CleanerAgent(BaseAgent):
         # Step 3: 去重
         if cleaned:
             result = await self._to_thread(self.tools.deduplicate, cleaned)
-            if result.success and result.data:
-                cleaned = (result.data if isinstance(result.data, list)
-                           else [result.data])
+            if result.success:
+                cleaned = self._extract_records(result) or cleaned
                 self._emit(progress, type="stage_progress", stage="clean",
                             pct=0.95, message=f"去重完成：{len(cleaned)} 条")
         self._write_records(out_dir / "deduped_records.json", cleaned)

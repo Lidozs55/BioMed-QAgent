@@ -37,7 +37,7 @@ def _post_gene_list(genes):
         "description": (None, "BioMedQAgent enrichment"),
     }
     r = requests.post(f"{ENRICHR_URL}/addList", files=payload,
-                      headers=HEADERS, timeout=60)
+                      headers=HEADERS, timeout=30)
     r.raise_for_status()
     data = r.json()
     user_list_id = data.get("userListId")
@@ -51,7 +51,7 @@ def _fetch_enrichment(user_list_id, library):
     import requests
     params = {"userListId": user_list_id, "backgroundType": library}
     r = requests.get(f"{ENRICHR_URL}/enrich", params=params,
-                     headers=HEADERS, timeout=120)
+                     headers=HEADERS, timeout=30)
     r.raise_for_status()
     data = r.json()
     return data.get(library, []) or []

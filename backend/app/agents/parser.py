@@ -45,9 +45,7 @@ class ParserAgent(BaseAgent):
                     self.tools.parse_pdf_table, pdf, out_file,
                 )
                 if result.success and result.data:
-                    parsed = (result.data if isinstance(result.data, list)
-                              else [result.data])
-                    parsed_records.extend(parsed)
+                    parsed_records.extend(self._extract_records(result))
 
         # Step 2: 自动下载搜索结果中的开放获取 PDF
         def _has_pdf(r: dict) -> bool:
@@ -70,9 +68,8 @@ class ParserAgent(BaseAgent):
                 5, task.task_id, dl_out,
             )
             downloaded = []
-            if result.success and result.data:
-                downloaded = (result.data if isinstance(result.data, list)
-                              else [result.data])
+            if result.success:
+                downloaded = self._extract_records(result)
             self._emit(progress, type="stage_progress", stage="parse",
                         pct=0.7, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
@@ -86,9 +83,7 @@ class ParserAgent(BaseAgent):
                         self.tools.parse_pdf_table, pdf_file, out_file,
                     )
                     if result.success and result.data:
-                        parsed = (result.data if isinstance(result.data, list)
-                                  else [result.data])
-                        parsed_records.extend(parsed)
+                        parsed_records.extend(self._extract_records(result))
 
         # 记录溯源：parse 阶段
         prov = self.store.get_provenance(task.task_id)

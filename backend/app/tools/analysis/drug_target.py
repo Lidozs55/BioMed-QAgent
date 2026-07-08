@@ -37,7 +37,7 @@ def _graphql(query, variables):
     import requests
     r = requests.post(OPENTARGETS_GRAPHQL_URL,
                       json={"query": query, "variables": variables},
-                      headers=HEADERS, timeout=60)
+                      headers=HEADERS, timeout=30)
     r.raise_for_status()
     return r.json()
 

@@ -144,28 +144,36 @@ class LLMReporter:
         """构建 LLM 输入上下文摘要（控制长度）。
 
         设计要点（修复 ABC 三类报告质量问题）：
-        - A: 不暴露 quality_flags 原始标记名（如 unknown_field），改为人类可读描述
-        - B: 明确区分"已检索数据源"与"无记录/失败数据源"，避免 LLM 误建议已检索的源
-        - C: 区分 planning 阶段假设实体 vs analysis 阶段实际验证实体，结论须基于后者
+        - A: 不暴露 quality_flags 原始标记名，改为人类可读描述
+        - B: 明确区分"已检索数据源"与"无记录/失败数据源"
+        - C: 区分 planning 假设实体 vs analysis 实际验证实体
         """
-        parts = []
+        parts: list[str] = []
+        parts.append(self._summarize_sources(records, review))
+        parts.append(self._summarize_entities(entities))
+        parts.append(self._summarize_records(records))
+        parts.append(self._summarize_analysis(analysis))
+        parts.append(self._summarize_review(review))
+        return "\n".join(p for p in parts if p)
 
-        # 1. 数据源统计（B 修复：明确标注已检索 + 无记录）
+    @staticmethod
+    def _summarize_sources(records: list[dict], review: dict) -> str:
+        """B 修复：明确标注已检索 + 无记录的数据源。"""
         sources_with_data: dict[str, int] = {}
-        sources_no_data: set[str] = set()
         for r in records:
             src = r.get("source_ref", {}).get("source_name", "unknown")
             sources_with_data[src] = sources_with_data.get(src, 0) + 1
         # review 中可能记录了检索失败的数据源
+        sources_no_data: set[str] = set()
+        known_sources = ("pubmed", "openalex", "semantic_scholar", "arxiv",
+                         "disgenet", "string", "tcmsp", "kegg", "pdb", "drugbank")
         for f in (review.get("key_findings", []) if review else []):
             if isinstance(f, str) and ("检索失败" in f or "无记录" in f):
-                # 粗略提取数据源名
-                for src in ("pubmed", "openalex", "semantic_scholar", "arxiv",
-                            "disgenet", "string", "tcmsp", "kegg", "pdb", "drugbank"):
+                for src in known_sources:
                     if src in f.lower() and src not in sources_with_data:
                         sources_no_data.add(src)
 
-        parts.append(f"## 数据源统计（已检索）\n共 {len(records)} 条记录。")
+        parts = [f"## 数据源统计（已检索）\n共 {len(records)} 条记录。"]
         if sources_with_data:
             parts.append("**有记录的数据源：**")
             for src, cnt in sorted(sources_with_data.items(), key=lambda x: -x[1]):
@@ -173,16 +181,23 @@ class LLMReporter:
         if sources_no_data:
             parts.append(f"\n**已检索但无记录/失败的数据源：** {', '.join(sorted(sources_no_data))}")
             parts.append("（注意：上述数据源已尝试检索，无需在建议中重复提及『引入』它们）")
+        return "\n".join(parts)
 
-        # 2. 识别实体（区分 planning 假设 vs analysis 验证 — C 修复）
-        if entities:
-            parts.append("\n## 规划阶段识别的实体（LLM 假设，需分析结果验证）")
-            for cat, items in entities.items():
-                if items:
-                    parts.append(f"- {cat}: {', '.join(items[:15])}")
+    @staticmethod
+    def _summarize_entities(entities: dict) -> str:
+        """C 修复：标注为 planning 阶段假设实体。"""
+        if not entities:
+            return ""
+        parts = ["\n## 规划阶段识别的实体（LLM 假设，需分析结果验证）"]
+        for cat, items in entities.items():
+            if items:
+                parts.append(f"- {cat}: {', '.join(items[:15])}")
+        return "\n".join(parts)
 
-        # 3. 数据记录摘要（A 修复：过滤 unknown_field，用人类可读描述）
-        parts.append("\n## 代表性数据记录（前 20 条摘要）")
+    @staticmethod
+    def _summarize_records(records: list[dict]) -> str:
+        """A 修复：过滤 unknown_field 标记名，用人类可读描述。"""
+        parts = ["\n## 代表性数据记录（前 20 条摘要）"]
         unknown_field_count = sum(
             1 for r in records if "unknown_field" in (r.get("quality_flags") or [])
         )
@@ -198,88 +213,91 @@ class LLMReporter:
                 f"\n（注：{unknown_field_count} 条记录含未对齐到标准字典的字段，"
                 "已在清洗阶段保留原值并标记，不影响分析，无需在报告中作为『问题』提出。）"
             )
+        return "\n".join(parts)
 
-        # 4. 分析结果（C 修复：突出实际验证的实体与证据）
-        if analysis:
-            parts.append("\n## 分析结果（实际验证的证据，结论应优先基于此部分）")
-            verified_entities: dict[str, list[str]] = {}
-            for atype, result in analysis.items():
-                if not isinstance(result, dict):
-                    continue
-                parts.append(f"\n### {atype}")
-                summary = result.get("summary", "")
-                if summary:
-                    parts.append(f"摘要: {summary}")
-                params = result.get("parameters", {})
-                if params:
-                    parts.append(f"参数: {json.dumps(params, ensure_ascii=False)[:200]}")
-                stats = result.get("stats_table", [])
-                if stats and isinstance(stats, list):
-                    parts.append(f"统计表（前 10 条）:")
-                    for row in stats[:10]:
-                        parts.append(f"  - {json.dumps(row, ensure_ascii=False)[:150]}")
-                # 提取实际出现在分析中的实体（证据）
-                self._collect_verified_entities(result, verified_entities)
-            if verified_entities:
-                parts.append("\n### 分析中实际验证的实体（区别于规划阶段假设）")
-                for cat, items in verified_entities.items():
-                    if items:
-                        parts.append(f"- {cat}: {', '.join(items[:20])}")
+    @staticmethod
+    def _summarize_analysis(analysis: dict) -> str:
+        """C 修复：突出实际验证的实体与证据。"""
+        if not analysis:
+            return ""
+        parts = ["\n## 分析结果（实际验证的证据，结论应优先基于此部分）"]
+        verified: dict[str, list[str]] = {}
+        for atype, result in analysis.items():
+            if not isinstance(result, dict):
+                continue
+            parts.append(f"\n### {atype}")
+            if summary := result.get("summary", ""):
+                parts.append(f"摘要: {summary}")
+            if params := result.get("parameters", {}):
+                parts.append(f"参数: {json.dumps(params, ensure_ascii=False)[:200]}")
+            if stats := result.get("stats_table", []):
+                parts.append("统计表（前 10 条）:")
+                for row in stats[:10]:
+                    parts.append(f"  - {json.dumps(row, ensure_ascii=False)[:150]}")
+            LLMReporter._collect_verified_entities(result, verified)
+        if verified:
+            parts.append("\n### 分析中实际验证的实体（区别于规划阶段假设）")
+            for cat, items in verified.items():
+                if items:
+                    parts.append(f"- {cat}: {', '.join(items[:20])}")
+        return "\n".join(parts)
 
-        # 5. 质量审查
-        if review:
-            parts.append("\n## 质量审查")
-            parts.append(f"- 总体质量: {review.get('overall_quality', '—')}")
-            parts.append(f"- 完整度: {review.get('completeness_score', '—')}")
-            findings = review.get("key_findings", [])
-            if findings:
-                parts.append("- 关键发现:")
-                for f in findings[:5]:
-                    parts.append(f"  - {f}")
-            recs = review.get("recommendations", [])
-            if recs:
-                parts.append("- 改进建议:")
-                for r in recs[:3]:
-                    parts.append(f"  - {r}")
-
+    @staticmethod
+    def _summarize_review(review: dict) -> str:
+        """质量审查摘要。"""
+        if not review:
+            return ""
+        parts = ["\n## 质量审查",
+                 f"- 总体质量: {review.get('overall_quality', '—')}",
+                 f"- 完整度: {review.get('completeness_score', '—')}"]
+        if findings := review.get("key_findings", []):
+            parts.append("- 关键发现:")
+            parts.extend(f"  - {f}" for f in findings[:5])
+        if recs := review.get("recommendations", []):
+            parts.append("- 改进建议:")
+            parts.extend(f"  - {r}" for r in recs[:3])
         return "\n".join(parts)
 
     @staticmethod
     def _collect_verified_entities(result: dict, verified: dict[str, list[str]]) -> None:
-        """从分析结果中提取实际验证的实体（基因/化合物/通路）。"""
-        # PPI 网络节点
-        nodes = result.get("nodes") or result.get("network", {}).get("nodes")
-        if isinstance(nodes, list):
-            genes = [n.get("id", "") or n.get("gene_symbol", "")
-                     for n in nodes if isinstance(n, dict)]
-            genes = [g for g in genes if g]
-            if genes:
-                verified.setdefault("genes", [])
-                for g in genes:
-                    if g not in verified["genes"]:
-                        verified["genes"].append(g)
-        # 富集通路
-        pathways = result.get("pathways") or result.get("enriched_terms")
-        if isinstance(pathways, list):
-            pw_names = [p.get("name", "") or p.get("term", "")
-                        for p in pathways if isinstance(p, dict)]
-            pw_names = [p for p in pw_names if p]
-            if pw_names:
-                verified.setdefault("pathways", [])
-                for p in pw_names:
-                    if p not in verified["pathways"]:
-                        verified["pathways"].append(p)
-        # 差异表达基因
-        deg_table = result.get("stats_table", [])
-        if isinstance(deg_table, list):
-            deg_genes = [row.get("gene", "") or row.get("gene_symbol", "")
-                         for row in deg_table if isinstance(row, dict)]
-            deg_genes = [g for g in deg_genes if g]
-            if deg_genes:
-                verified.setdefault("deg_genes", [])
-                for g in deg_genes:
-                    if g not in verified["deg_genes"]:
-                        verified["deg_genes"].append(g)
+        """从分析结果中提取实际验证的实体（基因/化合物/通路）。
+
+        统一处理三种结构：PPI 节点、富集通路、差异表达基因表。
+        """
+        # (source_keys, target_category, item_key_candidates)
+        specs = [
+            # PPI 网络节点 → genes
+            (("nodes",), "genes", ("id", "gene_symbol")),
+            # 富集通路 → pathways
+            (("pathways", "enriched_terms"), "pathways", ("name", "term")),
+            # 差异表达表 → deg_genes
+            (("stats_table",), "deg_genes", ("gene", "gene_symbol")),
+        ]
+        for src_keys, category, item_keys in specs:
+            items_raw = None
+            for sk in src_keys:
+                val = result.get(sk)
+                if sk == "nodes":
+                    val = val or result.get("network", {}).get("nodes")
+                if isinstance(val, list):
+                    items_raw = val
+                    break
+            if not items_raw:
+                continue
+            names: list[str] = []
+            for item in items_raw:
+                if not isinstance(item, dict):
+                    continue
+                for ik in item_keys:
+                    name = item.get(ik, "")
+                    if name:
+                        names.append(str(name))
+                        break
+            if names:
+                bucket = verified.setdefault(category, [])
+                for n in names:
+                    if n not in bucket:
+                        bucket.append(n)
 
     def _wrap_in_html(
         self,

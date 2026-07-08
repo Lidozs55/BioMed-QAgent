@@ -1,14 +1,22 @@
 """Search Agent — API 数据源并行检索。
 
 从 Orchestrator._stage_search 迁入，职责：
-- 文献数据源用研究目标并行检索
+- 文献数据源多查询并行检索（用 queries[:5] 而非 queries[0]，提升覆盖率）
 - 实体数据源用基因/化合物/疾病实体检索
-- Darwinian Stage Gate：记录不足时用扩展查询重试
+- 引用追溯：对高被引种子文献追溯参考文献/被引文献（系统综述能力）
+- Darwinian Stage Gate：记录不足或相关性低时用组合查询 + MeSH 重试
 - 收集 requires_crawl 信号供 AcquireAgent 使用
+- 跨查询去重（按 record_id），避免后续阶段处理重复记录
+
+改进来源：docs/literature_search_gap_analysis.md
+- P0: 多查询并行 + max_results 提升 + fallback 阈值（已实施）
+- P1: 组合查询（gene×disease, compound×disease）+ 引用追溯
+- P2: MeSH 术语查询 + 智能 fallback（数量 + 相关性双维度）
 """
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 
 from app.agents.base import BaseAgent, ProgressCallback
@@ -36,7 +44,6 @@ class SearchAgent(BaseAgent):
         sources = context.get("recommended_sources",
                               ["pubmed", "openalex", "semantic_scholar"])
         queries = context.get("search_queries", [task.research_goal])
-        primary_query = queries[0] if queries else task.research_goal
         entities = context.get("entities", {})
 
         all_records: list[dict] = []
@@ -46,42 +53,53 @@ class SearchAgent(BaseAgent):
         lit_sources = [s for s in sources if s not in self.ENTITY_SOURCES]
         entity_sources = [s for s in sources if s in self.ENTITY_SOURCES]
 
-        # Step 1: 文献数据源并行检索（用研究目标查询）
+        # Step 1: 文献数据源多查询并行检索
+        # R1 修复：用 queries[:5] 而非 queries[0]，提升覆盖率 3-5 倍
+        # R2 修复：max_results 从 task.max_sources(20) 提升到 max(..., 30)
+        search_queries = [q for q in queries[:5] if q and q.strip()]
+        if not search_queries:
+            search_queries = [task.research_goal]
+        max_results = max(task.max_sources, 30)
+
         self._emit(progress, type="stage_progress", stage="search",
-                    pct=0.1, message=f"正在检索 {len(lit_sources)} 个文献数据源...")
+                    pct=0.1, message=f"用 {len(search_queries)} 个查询并行检索 "
+                                      f"{len(lit_sources)} 个文献数据源...")
 
-        results = await self._to_thread(
-            self.tools.run_datasources_parallel,
-            lit_sources, primary_query,
-            max_results=task.max_sources,
-            task_id=task.task_id,
-        )
+        seen_record_ids: set[str] = set()
+        per_query_pct = 0.4 / max(len(search_queries), 1)
 
-        for i, (src_name, result) in enumerate(results.items()):
-            pct = 0.1 + 0.4 * (i + 1) / max(len(lit_sources), 1)
-            if result.success:
-                recs = (result.data if isinstance(result.data, list)
-                        else ([result.data] if result.data else []))
-                all_records.extend(recs)
-                msg = f"✓ {src_name}: {len(recs)} 条记录"
-                if prov and recs:
-                    rec_ids = [r.get("record_id", "") for r in recs]
-                    prov.record("search", "search_agent", tool_name=src_name,
-                               output_records=rec_ids,
-                               parameters={"query": primary_query, "source": src_name})
-                # 保留 requires_crawl 信号供 acquire 阶段使用
-                if result.signals.get("status") == "requires_crawl":
-                    context.setdefault("crawl_targets", []).append({
-                        "source": src_name,
-                        "query": primary_query,
-                        "reason": result.signals.get("reason", ""),
-                    })
-            else:
-                msg = f"✗ {src_name}: {result.error[:60]}"
-                task.errors.append(f"{src_name}: {result.error}")
+        for q_idx, query in enumerate(search_queries):
+            results = await self._to_thread(
+                self.tools.run_datasources_parallel,
+                lit_sources, query,
+                max_results=max_results,
+                task_id=task.task_id,
+            )
 
-            self._emit(progress, type="stage_progress", stage="search",
-                        pct=pct, message=msg)
+            for i, (src_name, result) in enumerate(results.items()):
+                pct = 0.1 + per_query_pct * q_idx + per_query_pct * (i + 1) / max(len(lit_sources), 1)
+                if result.success:
+                    new_recs = self._dedup_by_id(
+                        self._extract_records(result), seen_record_ids)
+                    all_records.extend(new_recs)
+                    msg = f"✓ {src_name} [查询{q_idx+1}]: {len(new_recs)} 条"
+                    if prov and new_recs:
+                        rec_ids = [r.get("record_id", "") for r in new_recs]
+                        prov.record("search", "search_agent", tool_name=src_name,
+                                   output_records=rec_ids,
+                                   parameters={"query": query, "source": src_name,
+                                               "query_idx": q_idx})
+                    if result.signals.get("status") == "requires_crawl":
+                        context.setdefault("crawl_targets", []).append({
+                            "source": src_name, "query": query,
+                            "reason": result.signals.get("reason", ""),
+                        })
+                else:
+                    msg = f"✗ {src_name} [查询{q_idx+1}]: {result.error[:50]}"
+                    task.errors.append(f"{src_name}: {result.error}")
+
+                self._emit(progress, type="stage_progress", stage="search",
+                            pct=pct, message=msg)
 
         # Step 2: 实体数据源检索（用基因/化合物/疾病实体查询）
         if entity_sources:
@@ -94,49 +112,24 @@ class SearchAgent(BaseAgent):
                 entity_sources, entity_queries, task, prov, progress)
             all_records.extend(entity_records)
 
-        # Darwinian Stage Gate: 记录不足时用更宽泛的查询重试
-        if len(all_records) < 5:
-            fallback_queries: list[str] = [q for q in queries[1:]
-                                            if q and q != primary_query]
-            diseases = entities.get("diseases", [])
-            genes = entities.get("genes", [])
-            if diseases:
-                fallback_queries.append(f"{diseases[0]} liver metastasis")
-            if genes:
-                fallback_queries.append(f"{' '.join(genes[:3])} pancreatic cancer")
-            fallback_queries.append("pancreatic cancer liver metastasis")
-            fallback_queries.append("TCM pancreatic cancer metastasis")
+        # Step 3: 引用追溯（P1 — 系统综述式扩展）
+        # 对高被引种子文献追溯参考文献/被引文献，扩展相关文献覆盖
+        citation_records = await self._trace_citations(
+            all_records, task, prov, progress)
+        all_records.extend(citation_records)
 
-            retry_sources = [s for s in
-                             ("pubmed", "openalex", "semantic_scholar", "arxiv")][:4]
-
-            seen_queries = {primary_query}
-            for q in fallback_queries[:4]:
-                if q in seen_queries:
-                    continue
-                seen_queries.add(q)
-                self._emit(progress, type="stage_progress", stage="search",
-                            pct=0.9, message=f"记录不足，使用扩展查询重试: {q[:40]}")
-                extra = await self._to_thread(
-                    self.tools.run_datasources_parallel,
-                    retry_sources, q,
-                    max_results=min(task.max_sources, 10),
-                    task_id=task.task_id,
-                )
-                for src_name, result in extra.items():
-                    if result.success:
-                        recs = (result.data if isinstance(result.data, list)
-                                else ([result.data] if result.data else []))
-                        all_records.extend(recs)
-                        if recs and prov:
-                            rec_ids = [r.get("record_id", "") for r in recs]
-                            prov.record("search", "search_agent", tool_name=src_name,
-                                       output_records=rec_ids,
-                                       parameters={"query": q, "source": src_name,
-                                                   "retry": True})
-                            self._emit(progress, type="stage_progress", stage="search",
-                                        pct=0.95,
-                                        message=f"✓ {src_name} (扩展): {len(recs)} 条")
+        # Step 4: Darwinian Stage Gate（P2 — 智能 fallback：数量 + 相关性双维度）
+        # 触发条件：记录数 < 10，或前 20 条采样相关性 < 0.3
+        relevance = self._compute_relevance(all_records, task.research_goal, entities)
+        need_fallback = len(all_records) < 10 or relevance < 0.3
+        if need_fallback:
+            gate_reason = (f"记录不足({len(all_records)}<10)"
+                           if len(all_records) < 10
+                           else f"相关性低({relevance:.0%}<30%)")
+            await self._run_fallback(
+                all_records, seen_record_ids, search_queries, queries,
+                entities, lit_sources, max_results, task, prov, progress,
+                gate_reason)
 
         task.source_count = len(set(
             r.get("source_ref", {}).get("source_name", "") for r in all_records
@@ -212,8 +205,7 @@ class SearchAgent(BaseAgent):
                     min(task.max_sources, 10), task.task_id, **kwargs,
                 )
                 if result.success:
-                    recs = (result.data if isinstance(result.data, list)
-                            else ([result.data] if result.data else []))
+                    recs = self._extract_records(result)
                     all_records.extend(recs)
                     if prov and recs:
                         rec_ids = [r.get("record_id", "") for r in recs]
@@ -230,3 +222,221 @@ class SearchAgent(BaseAgent):
                     self._emit(progress, type="stage_progress", stage="search",
                                 pct=pct, message=msg)
         return all_records
+
+    # ========== 引用追溯（P1） ==========
+
+    async def _trace_citations(self, records: list[dict], task: Task,
+                                prov, progress: ProgressCallback | None,
+                                top_n: int = 5) -> list[dict]:
+        """对高被引种子文献追溯参考文献/被引文献。
+
+        需 ≥3 篇含 openalex_id 的文献作为种子（否则跳过）。
+        Returns:
+            新文献记录列表（已按 record_id 去重，不含种子）
+        """
+        # 统计含 openalex_id 的记录数
+        oa_records = [r for r in records
+                      if r.get("fields", {}).get("openalex_id")]
+        if len(oa_records) < 3:
+            logger.info("引用追溯跳过：仅 %d 篇含 openalex_id（需≥3）",
+                        len(oa_records))
+            return []
+
+        self._emit(progress, type="stage_progress", stage="search",
+                    pct=0.7,
+                    message=f"引用追溯中（top {top_n} 高被引文献的参考文献/被引）...")
+
+        result = await self._to_thread(
+            self.tools.trace_citations, records,
+            max_results=15, task_id=task.task_id, direction="both",
+        )
+        if not result.success:
+            task.errors.append(f"citation_trace: {result.error}")
+            self._emit(progress, type="stage_progress", stage="search",
+                        pct=0.75,
+                        message=f"✗ 引用追溯失败: {result.error[:50]}")
+            return []
+
+        # 按已有 record_id 去重（种子记录已在 records 中）
+        seen_ids = {r.get("record_id", "") for r in records}
+        new_records = self._dedup_by_id(result.data or [], seen_ids)
+
+        if new_records and prov:
+            rec_ids = [r.get("record_id", "") for r in new_records]
+            prov.record("search", "search_agent", tool_name="citation_trace",
+                       output_records=rec_ids,
+                       parameters={"direction": "both", "top_n": top_n,
+                                   "seed_count": len(oa_records)})
+
+        self._emit(progress, type="stage_progress", stage="search",
+                    pct=0.75,
+                    message=f"✓ 引用追溯: 新增 {len(new_records)} 条")
+        return new_records
+
+    # ========== 智能 fallback（P2 — 数量 + 相关性双维度） ==========
+
+    def _compute_relevance(self, records: list[dict], research_goal: str,
+                            entities: dict) -> float:
+        """计算前 20 条记录与研究方向的相关性比率（0.0-1.0）。
+
+        相关性 = 含至少一个关键词的采样记录数 / 采样总数
+        关键词来源：research_goal 分词 + 实体（基因/化合物/疾病英文）
+        """
+        if not records:
+            return 0.0
+
+        # 构建关键词集合
+        keywords = self._extract_keywords(research_goal)
+        for g in entities.get("genes", []):
+            keywords.add(g.lower())
+        for c in entities.get("compounds", []):
+            keywords.add(c.lower())
+        for d in entities.get("diseases", []):
+            keywords.add(self._disease_to_en(d).lower())
+        if not keywords:
+            return 1.0  # 无关键词可判，默认相关
+
+        # 采样前 20 条，检查 title+abstract 是否含任一关键词
+        sample = records[:20]
+        matched = 0
+        for r in sample:
+            fields = r.get("fields", {})
+            text = ((fields.get("title", "") or "") + " " +
+                    (fields.get("abstract", "") or "")).lower()
+            if any(kw in text for kw in keywords):
+                matched += 1
+        return matched / len(sample)
+
+    @staticmethod
+    def _extract_keywords(text: str) -> set[str]:
+        """从文本中提取关键词（小写，长度≥3，过滤停用词）。"""
+        if not text:
+            return set()
+        stopwords = {"the", "and", "for", "with", "from", "that", "this",
+                     "are", "was", "were", "been", "have", "has", "study",
+                     "research", "analysis", "using", "based", "through",
+                     "的", "了", "在", "和", "与", "对", "及", "等", "中"}
+        words = re.split(r"[\s,;:.\-()/]+", text)
+        return {w.lower() for w in words
+                if len(w) >= 3 and w.lower() not in stopwords}
+
+    async def _run_fallback(self, all_records: list[dict],
+                             seen_record_ids: set[str],
+                             search_queries: list[str],
+                             queries: list[str],
+                             entities: dict, lit_sources: list[str],
+                             max_results: int, task: Task, prov,
+                             progress: ProgressCallback | None,
+                             reason: str) -> None:
+        """Darwinian Stage Gate fallback：组合查询 + MeSH + 未用 LLM 查询。
+
+        就地扩展 all_records（list 可变）。
+        """
+        # 1. 收集 fallback 查询
+        fallback_queries: list[str] = [
+            q for q in queries[5:]
+            if q and q.strip() and q not in search_queries
+        ]
+        combo_queries = self._build_combo_queries(entities)
+        mesh_queries = self._build_mesh_queries(entities)
+
+        self._emit(progress, type="stage_progress", stage="search",
+                    pct=0.8,
+                    message=f"扩展检索（{reason}）：{len(combo_queries)} 组合 + "
+                            f"{len(mesh_queries)} MeSH + {len(fallback_queries)} LLM")
+
+        retry_sources = [s for s in
+                         ("pubmed", "openalex", "semantic_scholar", "arxiv")
+                         if s in lit_sources or s not in self.ENTITY_SOURCES][:4]
+
+        # 2. 组合查询 + LLM 额外查询 → 全文献源
+        seen_queries = set(search_queries)
+        for q in (combo_queries + fallback_queries)[:6]:
+            if not q or q in seen_queries:
+                continue
+            seen_queries.add(q)
+            self._emit(progress, type="stage_progress", stage="search",
+                        pct=0.85, message=f"扩展查询: {q[:40]}")
+            await self._search_and_extend(
+                retry_sources, q, min(max_results, 20),
+                all_records, seen_record_ids, task, prov, progress,
+                retry=True)
+
+        # 3. MeSH 查询 → 仅 PubMed（MeSH 是 PubMed 特有字段）
+        for q in mesh_queries:
+            if q in seen_queries:
+                continue
+            seen_queries.add(q)
+            self._emit(progress, type="stage_progress", stage="search",
+                        pct=0.9, message=f"MeSH 查询(pubmed): {q[:40]}")
+            await self._search_and_extend(
+                ["pubmed"], q, min(max_results, 20),
+                all_records, seen_record_ids, task, prov, progress,
+                retry=True, mesh=True)
+
+    async def _search_and_extend(self, sources: list[str], query: str,
+                                   max_results: int,
+                                   all_records: list[dict],
+                                   seen_record_ids: set[str],
+                                   task: Task, prov,
+                                   progress: ProgressCallback | None,
+                                   retry: bool = False,
+                                   mesh: bool = False) -> None:
+        """执行单次并行检索并就地扩展 all_records（去重 + 溯源 + 进度）。"""
+        extra = await self._to_thread(
+            self.tools.run_datasources_parallel,
+            sources, query, max_results=max_results, task_id=task.task_id,
+        )
+        for src_name, result in extra.items():
+            if not result.success:
+                continue
+            new_recs = self._dedup_by_id(
+                self._extract_records(result), seen_record_ids)
+            if not new_recs:
+                continue
+            all_records.extend(new_recs)
+            if prov:
+                rec_ids = [r.get("record_id", "") for r in new_recs]
+                prov.record("search", "search_agent", tool_name=src_name,
+                           output_records=rec_ids,
+                           parameters={"query": query, "source": src_name,
+                                       "retry": retry, "mesh": mesh})
+            label = "MeSH" if mesh else ("扩展" if retry else "")
+            self._emit(progress, type="stage_progress", stage="search",
+                        pct=0.95,
+                        message=f"✓ {src_name} ({label}): {len(new_recs)} 条")
+
+    @staticmethod
+    def _build_combo_queries(entities: dict) -> list[str]:
+        """生成实体组合查询（P1 — gene×disease, compound×disease）。
+
+        策略：
+        - top 3 基因 × top 1 疾病 → "TP53 AND pancreatic cancer"
+        - top 2 化合物 × top 1 疾病 → "curcumin AND pancreatic cancer"
+        """
+        queries: list[str] = []
+        diseases = entities.get("diseases", [])
+        genes = entities.get("genes", [])
+        compounds = entities.get("compounds", [])
+        if not diseases:
+            return queries
+        disease_en = SearchAgent._disease_to_en(diseases[0])
+
+        for g in genes[:3]:
+            queries.append(f"{g} AND {disease_en}")
+        for c in compounds[:2]:
+            queries.append(f"{c} AND {disease_en}")
+        return queries
+
+    @staticmethod
+    def _build_mesh_queries(entities: dict) -> list[str]:
+        """生成 MeSH 限定查询（P2 — PubMed MeSH Terms 精准检索）。
+
+        PubMed 支持 term="{disease}"[MeSH] 语法，利用 MeSH 术语树精准匹配。
+        """
+        diseases = entities.get("diseases", [])
+        if not diseases:
+            return []
+        disease_en = SearchAgent._disease_to_en(diseases[0])
+        # "[MeSH] 限定 PubMed 仅检索 MeSH 术语匹配的文献
+        return [f'{disease_en}[MeSH]']

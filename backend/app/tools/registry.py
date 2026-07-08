@@ -187,6 +187,32 @@ class ToolRegistry:
                     results[name] = ToolResult(False, error=str(e))
         return results
 
+    def trace_citations(self, records: list[dict], max_results: int = 20,
+                         task_id: str = "T0",
+                         direction: str = "both") -> ToolResult:
+        """引用追溯 — 基于已有文献的引用网络扩展检索（OpenAlex）。
+
+        对已检索文献中高被引的 top N 篇，追溯其参考文献（referenced_works）
+        和被引文献（cited_by），用于系统综述式扩展检索。
+
+        Args:
+            records: 已检索的文献记录列表（取含 openalex_id 的 top 5 为种子）
+            max_results: 每个方向返回的最大记录数
+            task_id: 任务 ID
+            direction: "refs" | "cited_by" | "both"
+        Returns:
+            ToolResult.data = 新文献记录列表（不含种子，由调用方去重）
+        """
+        try:
+            from app.tools.datasources.citation_trace import trace_citations
+            new_records = trace_citations(
+                records, max_results, task_id, direction=direction,
+            )
+            return ToolResult(True, data=new_records or [])
+        except Exception as e:
+            logger.exception("trace_citations 失败")
+            return ToolResult(False, error=f"trace_citations: {e}")
+
     # ========== Parsers ==========
 
     def parse_pdf_table(self, pdf_path, output_file=None) -> ToolResult:
@@ -447,15 +473,19 @@ class ToolRegistry:
 
     def run_hub_gene(self, genes: list[str], task_id: str,
                      species: int = 9606, score_threshold: float = 0.4,
-                     output_file=None) -> ToolResult:
+                     output_file=None,
+                     ppi_result: dict | None = None) -> ToolResult:
         """Hub 基因识别（基于 STRING PPI 中心性分析）。
 
-        内部调用 STRING 构建网络并计算 degree/betweenness/closeness。
+        优先复用 PPI 分析结果（避免重复调用 STRING API）。
         Args:
             genes: 基因 symbol 列表
             task_id: 任务 ID
             species: NCBI taxonomy ID（默认 9606 人类）
             score_threshold: STRING combined_score 阈值
+            ppi_result: 可选，run_ppi 的返回结果。传入时从中提取
+                        degrees/betweenness/closeness/chart_data/modules，
+                        不再调用 STRING。
         Returns:
             ToolResult.data = hub_gene_result dict
         """
@@ -463,12 +493,26 @@ class ToolRegistry:
             from app.tools.analysis.hub_gene import (
                 run_hub_gene_analysis, _build_centralities,
             )
-            centralities = _build_centralities(genes, species, score_threshold)
-            if centralities is None:
-                # STRING 不可用 → 空网络
-                degrees, betweenness, closeness, chart_data, modules = {}, {}, {}, {}, 0
+
+            if ppi_result:
+                # 复用 PPI 结果，不重新调用 STRING
+                stats = ppi_result.get("stats_table", []) or []
+                degrees = {r.get("gene", ""): int(r.get("degree", 0))
+                           for r in stats if isinstance(r, dict)}
+                betweenness = {r.get("gene", ""): float(r.get("betweenness", 0.0))
+                               for r in stats if isinstance(r, dict)}
+                closeness = {r.get("gene", ""): float(r.get("closeness", 0.0))
+                             for r in stats if isinstance(r, dict)}
+                chart_data = ppi_result.get("chart_data", {}) or {}
+                params = ppi_result.get("parameters", {}) or {}
+                modules = int(params.get("modules", 0)) if isinstance(params, dict) else 0
             else:
-                degrees, betweenness, closeness, chart_data, modules, _ = centralities
+                centralities = _build_centralities(genes, species, score_threshold)
+                if centralities is None:
+                    degrees, betweenness, closeness, chart_data, modules = {}, {}, {}, {}, 0
+                else:
+                    degrees, betweenness, closeness, chart_data, modules, _ = centralities
+
             result = run_hub_gene_analysis(
                 genes, degrees, betweenness, closeness, chart_data,
                 modules, species, score_threshold, task_id,
@@ -483,20 +527,27 @@ class ToolRegistry:
     def run_upstream_regulator(self, genes: list[str], task_id: str,
                                 species: int = 9606,
                                 score_threshold: float = 0.4,
-                                output_file=None) -> ToolResult:
+                                output_file=None,
+                                ppi_edges: list | None = None) -> ToolResult:
         """上游调控因子分析（基于 STRING TF 互作）。
 
+        优先复用 PPI 边数据（避免对每个基因串行调用 STRING API）。
         Args:
             genes: 基因 symbol 列表
             task_id: 任务 ID
             species: NCBI taxonomy ID
             score_threshold: STRING 阈值
+            ppi_edges: 可选，PPI 分析的边数据列表。传入时从中提取
+                       TF 互作，不对每个基因单独调用 STRING。
         Returns:
             ToolResult.data = AnalysisResult dict（含 TF-target 网络 chart_data）
         """
         try:
             from app.tools.analysis.upstream_regulator import run_upstream_regulator
-            result = run_upstream_regulator(genes, species, score_threshold, task_id)
+            result = run_upstream_regulator(
+                genes, species, score_threshold, task_id,
+                ppi_edges=ppi_edges,
+            )
             if output_file and result:
                 self._write_json(output_file, result)
             return ToolResult(True, data=result)
@@ -895,6 +946,7 @@ class ToolRegistry:
             {"name": "drugbank", "description": "OpenTargets 药物-靶点"},
             {"name": "disgenet", "description": "DisGeNET 基因-疾病"},
             {"name": "pubchem", "description": "PubChem 化合物结构"},
+            {"name": "citation_trace", "description": "引用追溯（OpenAlex 参考文献与被引）"},
             # dormant 13 个（BaseDataSource 子类，经 DataSourceRegistry 调用）
             {"name": "biogrid", "description": "BioGRID 蛋白互作"},
             {"name": "cbioportal", "description": "cBioPortal 癌症基因组"},

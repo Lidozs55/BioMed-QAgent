@@ -1,7 +1,8 @@
 # 文献检索漏检分析与改进方案
 
-> 状态：**待实施**（本文档仅做问题分析与方案设计，暂不落地代码）
+> 状态：**P0/P1/P2(部分) 已实施**（R5 中文数据库待爬虫基础设施）
 > 创建时间：2026-07-08
+> 最后更新：2026-07-08（P1 组合查询 + 引用追溯 / P2 MeSH + 智能 fallback 落地）
 > 关联问题：LLM 报告中"引入更多数据源，比如 PubMed"建议与实际矛盾 → 暴露检索覆盖不足
 
 ---
@@ -140,11 +141,33 @@ for compound in entities["compounds"][:3]:
 
 ## 五、实施路线图
 
-| 阶段 | 内容 | 预期收益 |
-|------|------|----------|
-| 第一波 | P0：多查询并行 + 增加 max_results | 覆盖率 3-5x |
-| 第二波 | P1：组合查询 + 引用追溯 | 精度提升 + 系统综述能力 |
-| 第三波 | P2：中文数据库 + MeSH + 智能 fallback | 中文文献覆盖 + 精准检索 |
+| 阶段 | 内容 | 预期收益 | 状态 |
+|------|------|----------|------|
+| 第一波 | P0：多查询并行 + 增加 max_results | 覆盖率 3-5x | ✅ 已实施（search.py Step 1） |
+| 第二波 | P1：组合查询 + 引用追溯 | 精度提升 + 系统综述能力 | ✅ 已实施（search.py Step 3/4 + citation_trace.py） |
+| 第三波 | P2：MeSH + 智能 fallback | 精准检索 + 质量保障 | ✅ 已实施（search.py Step 4 + _build_mesh_queries） |
+| 第四波 | P2：中文数据库（CNKI/万方） | 中文文献覆盖 | ⏳ 待爬虫基础设施（AcquireAgent 对接） |
+
+### 实施细节
+
+**P1 组合查询**（[search.py:_build_combo_queries](file:///d:/Code/BioMedQAgent/backend/app/agents/search.py)）：
+- top 3 基因 × top 1 疾病 → `"TP53 AND pancreatic cancer"`
+- top 2 化合物 × top 1 疾病 → `"curcumin AND pancreatic cancer"`
+
+**P1 引用追溯**（[citation_trace.py](file:///d:/Code/BioMedQAgent/backend/app/tools/datasources/citation_trace.py)）：
+- 取已检索文献中含 openalex_id 的 top 5 高被引作为种子
+- 批量获取种子 `referenced_works`（参考文献）+ `filter=cites:Wxxx`（被引文献）
+- 新增 `ToolRegistry.trace_citations()` facade 方法
+- 在 SearchAgent Step 3 调用，需 ≥3 篇种子才触发
+
+**P2 MeSH 术语查询**（[search.py:_build_mesh_queries](file:///d:/Code/BioMedQAgent/backend/app/agents/search.py)）：
+- 疾病实体转英文后生成 `"{disease}[MeSH]"` 限定查询
+- 仅对 PubMed 执行（MeSH 是 PubMed 特有字段）
+
+**P2 智能 fallback 阈值**（[search.py:_compute_relevance](file:///d:/Code/BioMedQAgent/backend/app/agents/search.py)）：
+- 触发条件：`len(records) < 10` 或 `relevance < 0.3`
+- 相关性 = 前 20 条采样中 title/abstract 含关键词的比例
+- 关键词来源：research_goal 分词 + 实体（基因/化合物/疾病英文）
 
 ---
 

@@ -54,7 +54,7 @@ def _fetch_partners(gene, species, score_threshold):
         "caller_identity": "BioMedQAgent",
     }
     r = requests.get(STRING_NETWORK_URL, params=params,
-                     headers=HEADERS, timeout=60)
+                     headers=HEADERS, timeout=30)
     r.raise_for_status()
     edges = r.json() or []
     direct = []
@@ -78,8 +78,18 @@ def _partners_of(gene, partners_raw):
     return out
 
 
-def run_upstream_regulator(genes, species, score_threshold, task_id):
-    """构建上游 TF 调控网络；STRING 不可用时降级。"""
+def run_upstream_regulator(genes, species, score_threshold, task_id,
+                            ppi_edges=None):
+    """构建上游 TF 调控网络；STRING 不可用时降级。
+
+    Args:
+        genes: 基因 symbol 列表
+        species: NCBI taxonomy ID
+        score_threshold: STRING combined_score 阈值
+        task_id: 任务 ID
+        ppi_edges: 可选，PPI 分析的边数据列表 [{"source": str, "target": str}, ...]
+                   传入时直接从中提取互作伙伴，不再调用 STRING API（避免 N 次串行请求）
+    """
     if not genes:
         return make_result(
             task_id, "upstream_regulator",
@@ -92,17 +102,39 @@ def run_upstream_regulator(genes, species, score_threshold, task_id):
     tf_targets = {}
     had_failure = False
     succeeded_any = False
-    for gene in genes:
-        try:
-            partners = _fetch_partners(gene, species, score_threshold)
-            logger.warning(f"{gene} 互作伙伴 {len(partners)} 个")
-            pset = _partners_of(gene, partners)
-            succeeded_any = True
-            for tf in pset & COMMON_TF_SET:
-                tf_targets.setdefault(tf, set()).add(gene)
-        except Exception as e:
-            logger.warning(f"{gene} STRING 查询失败，降级: {e}")
-            had_failure = True
+
+    if ppi_edges:
+        # 复用 PPI 结果：从边数据中提取每个基因的互作伙伴（无需调用 STRING）
+        gene_set = set(genes)
+        for edge in ppi_edges:
+            src = edge.get("source", "")
+            tgt = edge.get("target", "")
+            if not src or not tgt:
+                continue
+            # 双向检查：src 是输入基因 → tgt 是伙伴；tgt 是输入基因 → src 是伙伴
+            if src in gene_set:
+                if tgt in COMMON_TF_SET:
+                    tf_targets.setdefault(tgt, set()).add(src)
+                succeeded_any = True
+            if tgt in gene_set:
+                if src in COMMON_TF_SET:
+                    tf_targets.setdefault(src, set()).add(tgt)
+                succeeded_any = True
+        logger.info("upstream_regulator: 从 PPI 边数据提取 TF 互作（%d 条边）",
+                    len(ppi_edges))
+    else:
+        # 逐基因调用 STRING API（降级路径，仅在无 PPI 结果时使用）
+        for gene in genes:
+            try:
+                partners = _fetch_partners(gene, species, score_threshold)
+                logger.warning(f"{gene} 互作伙伴 {len(partners)} 个")
+                pset = _partners_of(gene, partners)
+                succeeded_any = True
+                for tf in pset & COMMON_TF_SET:
+                    tf_targets.setdefault(tf, set()).add(gene)
+            except Exception as e:
+                logger.warning(f"{gene} STRING 查询失败，降级: {e}")
+                had_failure = True
 
     # STRING 全部失败 → 降级空网络
     if not tf_targets and had_failure and not succeeded_any:

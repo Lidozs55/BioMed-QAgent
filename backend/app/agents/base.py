@@ -93,6 +93,37 @@ class BaseAgent(ABC):
         return await asyncio.to_thread(func, *args, **kwargs)
 
     @staticmethod
+    def _extract_records(result) -> list[dict]:
+        """从 ToolResult 提取记录列表（规范化 data 字段）。
+
+        统一处理 ToolResult.data 的三种形态：
+        - None/空 → []
+        - list → 原样返回
+        - 其他（dict 等）→ 包装为单元素列表
+        """
+        if not result.data:
+            return []
+        if isinstance(result.data, list):
+            return result.data
+        return [result.data]
+
+    @staticmethod
+    def _dedup_by_id(records: list[dict], seen_ids: set[str]) -> list[dict]:
+        """按 record_id 去重，返回未出现过的记录并更新 seen_ids。
+
+        无 record_id 的记录总是保留（无法判重）。
+        """
+        unique: list[dict] = []
+        for r in records:
+            rid = r.get("record_id", "")
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            unique.append(r)
+        return unique
+
+    @staticmethod
     def _write_records(path: Path, records: list[dict]) -> None:
         """持久化记录到 JSON 文件（供溯源/调试）。"""
         path.parent.mkdir(parents=True, exist_ok=True)
