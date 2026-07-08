@@ -64,16 +64,19 @@ backend/app/
 ├── api/
 │   ├── __init__.py          # 路由聚合（统一前缀 /api/v1）
 │   └── routes/
-│       ├── tasks.py         # 任务 CRUD + 启动 + 状态 + 分析结果 + 文件上传
-│       ├── data.py          # 数据查询 + 导出 + 报告 + 重生成
+│       ├── tasks.py         # 任务 CRUD + 启动 + 状态 + 分析结果 + 文件上传 + 报告 + 文件列表
+│       ├── data.py          # 数据查询 + 导出
 │       ├── lineage.py       # 溯源图 + 单记录链路
 │       ├── ws.py            # WebSocket 实时推送
-│       └── feedback.py      # 用户反馈
+│       ├── feedback.py      # 用户反馈
+│       ├── skills.py        # 技能发现面板只读端点（list/categories/count/get/search）
+│       └── system.py        # 系统级端点：健康检查 + 工具列表
 ├── agents/
 │   ├── base.py              # BaseAgent ABC + 共享辅助方法（_set_stage/_emit/_to_thread/_extract_records/_dedup_by_id）
-│   ├── registry.py          # AgentRegistry + register_all_agents()（阶段 Agent 发现与实例化）
+│   ├── registry.py          # AgentRegistry + register_all_agents()（7 个阶段 Agent 发现与实例化）
 │   ├── orchestrator.py      # ★ 流水线编排器（planning/export 内联 + 6 阶段委托）
 │   ├── llm_reporter.py      # ★ LLM 综合研究报告生成器
+│   ├── error_decision.py    # ErrorDecisionAgent（错误决策器，非阶段 Agent，Orchestrator 直接持有）
 │   ├── search.py            # SearchAgent（文献+实体+引用追溯+Darwinian fallback）
 │   ├── acquire.py           # AcquireAgent（爬虫采集 fallback，输出 raw crawl record）
 │   ├── parser.py            # ParserAgent（PDF + LLM 提取 + 图表 Qwen-VL + 生物数据解析）
@@ -83,28 +86,32 @@ backend/app/
 │   └── iteration_decision.py # IterationDecisionAgent（多轮迭代收敛判断，量化 Stage Gate + LLM gap 分析）
 ├── tools/
 │   ├── registry.py          # ★ ToolRegistry facade
-│   ├── datasources/         # 15 个数据源模块
+│   ├── datasources/         # 15 个活跃数据源模块函数（dormant BaseDataSource 体系已移除）
 │   ├── parsers/             # PDF 表格/下载 + GEO SOFT/PDB/FASTA/网络
 │   ├── cleaners/            # 字段对齐/单位归一化/去重
 │   ├── analysis/            # PPI/富集/药物-靶点/差异表达/Hub/生存/上游
-│   ├── export/              # CSV/Excel/Markdown
+│   ├── export/              # CSV/Excel/Markdown + 多源整合 CSV（merge_csv.py）
 │   ├── io/                  # 格式互转
 │   ├── viz/                 # 火山图/热图/气泡/网络图 + 图表数据提取(Qwen-VL)
-│   └── optimization/        # Darwinian Stage Gate（stage_evaluator 已接线 IterationDecisionAgent；reflection_loop 文件版 dormant）
+│   └── optimization/        # Darwinian Stage Gate（stage_evaluator 已接线 IterationDecisionAgent；reflection_loop 保留，设计说明见 docs/reflection_loop_design_notes.md）
 ├── llm/
 │   ├── client.py            # DashScopeClient
 │   └── prompts/             # 7 个提示词模板
 ├── provenance/
 │   └── tracker.py           # ProvenanceTracker + ProvenanceNode
 ├── models/
-│   ├── task.py              # Task/TaskStatus/StageStatus（活跃）
-│   └── data_record.py       # DataRecord Pydantic（dormant，运行时用 dict）
+│   └── task.py              # Task/TaskStatus/StageStatus（活跃；数据记录运行时用裸 dict，无 Pydantic 模型）
 ├── storage/
 │   └── task_store.py        # 内存字典 + JSON 文件持久化
 ├── resources/
 │   ├── dictionaries/        # 基因/化合物/疾病/单位/字段别名 YAML
 │   ├── domain_templates/    # 中医药/肿瘤学/药理学 YAML
 │   └── schemas/             # 8 份 JSON Schema
+├── skills/                  # 技能发现面板（只读，自演化层已移除）
+│   ├── manifest.py          # SkillManifest 数据模型
+│   ├── registry.py          # SkillRegistry 注册表
+│   ├── definitions.py       # 从 ToolRegistry._TOOLS_METADATA 自动生成 SkillManifest（不再构建 executor 闭包）
+│   └── retriever.py         # SkillRetriever 检索器
 └── utils/paths.py           # 资源目录定位
 ```
 
@@ -114,7 +121,7 @@ backend/app/
 
 ### 4.1 Orchestrator — 流水线编排器
 
-[backend/app/agents/orchestrator.py](backend/app/agents/orchestrator.py) 是系统核心。**planning/export 由 Orchestrator 直接持有**（输入解析 + 结果组装，非领域逻辑）；search→acquire→parse→clean→analyze→review 6 阶段委托给 [AgentRegistry](backend/app/agents/registry.py) 注册的阶段 Agent（[base.py](backend/app/agents/base.py) 的 BaseAgent 提供共享辅助方法）。
+[backend/app/agents/orchestrator.py](backend/app/agents/orchestrator.py) 是系统核心。**planning/export 由 Orchestrator 直接持有**（输入解析 + 结果组装，非领域逻辑）；search→acquire→parse→clean→analyze→review 6 阶段委托给 [AgentRegistry](backend/app/agents/registry.py) 注册的 **7 个阶段 Agent**（[base.py](backend/app/agents/base.py) 的 BaseAgent 提供共享辅助方法）。**ErrorDecisionAgent 是错误决策器而非阶段 Agent**，不参与 AgentRegistry 注册，由 Orchestrator 直接实例化并调用 `decide()`。
 
 **多轮迭代结构**（对齐 docs/multi_round_search_iteration.md）：planning → [Round N: search→acquire→parse→clean→analyze→review → IterationDecisionAgent] → export，迭代直到收敛或达到 MAX_ROUNDS（默认 3）。
 
@@ -124,7 +131,8 @@ MAX_ROUNDS = 3
 
 class Orchestrator:
     def __init__(self, ...):
-        register_all_agents()          # 触发各 Agent 模块的 @AgentRegistry.register
+        register_all_agents()          # 触发 7 个阶段 Agent 模块的 @AgentRegistry.register
+        self._error_decision = ErrorDecisionAgent(...)  # 决策器直接持有，非注册
 
     async def run(self, task, progress) -> Task:
         context = await self._stage_planning(task, progress)   # Orchestrator 内联：LLM 提取实体
@@ -139,7 +147,7 @@ class Orchestrator:
             _, context = await self._get_agent("iteration_decision").execute(...)
             if not context["iteration_decision"]["should_continue"]:
                 break
-        await self._stage_export(task, all_records, context, ...)  # Orchestrator 内联
+        await self._stage_export(task, all_records, context, ...)  # Orchestrator 内联（export 领域逻辑已迁移至 merge_csv.py）
 ```
 
 **关键设计**：
@@ -148,7 +156,8 @@ class Orchestrator:
 - 异常 → 任务 FAILED，记录到 `task.errors`，可重新 `start`
 - Darwinian Stage Gate 在 SearchAgent 内部实现（记录不足或相关性低时扩展查询重试）
 - IterationDecisionAgent 收敛条件：新增记录 <5 / 规划实体全验证 / LLM 判断无 gap / 达最大轮数 / 重复率 >80% / **Stage Gate 量化评估通过（coverage≥0.8 且 confidence≥0.8 且 sources≥2 且 conflict≤0.2）** / **冲突率 >40%（需用户介入）**
-- IterationDecisionAgent 量化接线：每轮调用 `stage_evaluator.evaluate()`（内存直调，stage="clean" 阈值）获取 coverage/confidence/conflict_rate/source_diversity + gaps + suggestions，注入 LLM prompt；无 LLM 时用 `keyword_expander.expand_keywords()` 基于同义词字典构造下一轮查询
+- IterationDecisionAgent 量化接线：每轮通过 `self.tools.evaluate_stage()` facade 调用 `stage_evaluator.evaluate()`（stage="clean" 阈值）获取 coverage/confidence/conflict_rate/source_diversity + gaps + suggestions，注入 LLM prompt；无 LLM 时通过 `self.tools.expand_keywords()` facade 调用 `keyword_expander.expand_keywords()` 基于同义词字典构造下一轮查询
+- Orchestrator 内的辅助方法（`_set_stage`/`_emit`/`_to_thread`/`_dedup_round`）均为薄委托 BaseAgent 对应方法，避免重复实现
 
 **可重入状态机**（用户反馈后从指定阶段重试，非重跑全流程）：
 
@@ -210,21 +219,22 @@ class ToolRegistry:
     def run_hub_gene(self, gene_list, task_id, output_file) -> ToolResult
     def run_upstream_regulator(self, gene_list, task_id, output_file) -> ToolResult
     def export_csv(self, records, output_path) -> ToolResult
+    def write_merged_csv(self, records, output_path) -> ToolResult  # 多源整合 CSV（按实体类型分组，迁移自 Orchestrator 内联逻辑）
 ```
 
 - 统一返回 `ToolResult(success, data, error, signals)`，**统一工具协议层契约**：
   - `success: bool` — False 时 data 为空，error 必填
-  - `data: list[dict] | dict` — 检索/解析/清洗类返回 DataRecord 列表；分析/IO/导出类返回结果摘要 dict
+  - `data: list[dict] | dict` — 检索/解析/清洗类返回 record dict 列表；分析/IO/导出类返回结果摘要 dict
   - `error: str` — 失败信息（含工具名前缀，如 `pubmed: ...`）
   - `signals: dict` — 非记录信号，约定键 `requires_crawl`/`status`/`partial`
   - 置信度由 per-record `extraction_confidence` 承载（非 ToolResult 层）
   - 溯源事件由 Agent 调用 `ProvenanceTracker.record()`（非 ToolResult 层）
-- 数据源模块函数惰性加载并缓存
+- 数据源模块函数惰性加载并缓存（`_get_ds_func` 仅映射 15 个活跃模块函数，无 dormant 分支）
 - 并行检索用 `ThreadPoolExecutor`（最多 5 并发）
 
 ### 4.3 数据源
 
-15 个数据源模块，函数签名约定 `(query, max_results, task_id) -> list[dict]`：
+15 个活跃数据源模块函数，函数签名约定 `(query, max_results, task_id) -> list[dict]`：
 
 | 类型 | 数据源 | 查询方式 |
 |------|--------|---------|
@@ -234,10 +244,10 @@ class ToolRegistry:
 | 通路 | kegg | 通路名 + species 参数 |
 | 结构 | pdb | 研究目标查询 |
 | 中药 | tcmsp | 化合物名（接口不可用则返回 `requires_crawl` 信号）|
-| 基因/蛋白 | ncbi / uniprot(hgnc/ensembl) | 实体名 + db 参数 |
+| 基因/蛋白 | ncbi | 实体名 + db 参数 |
 | 临床 | clinicaltrials / tcga | 研究目标 / 基因 |
-| 药物 | drugbank(opentargets) / pubchem | 实体名 |
-| 基因-疾病 | disgenet | 基因/疾病 + mode 参数 |
+| 药物 | drugbank（模块函数 search_drugbank）/ pubchem | 实体名 |
+| 基因-疾病 | disgenet（模块函数 search_disgenet）| 基因/疾病 + mode 参数 |
 
 **双查询策略**：
 - 文献源（pubmed/openalex/...）：用 LLM 生成的研究目标查询
@@ -245,7 +255,7 @@ class ToolRegistry:
 
 **Darwinian Stage Gate**：记录不足 5 条时，用扩展中英文查询（疾病名+基因名+"pancreatic cancer liver metastasis" 等）在核心文献源重试。
 
-> `BaseDataSource` 插件体系与 `DataSourceRegistry` 存在于 [datasources/base_ds.py](backend/app/tools/datasources/base_ds.py) 但 **dormant**，orchestrator 不使用。
+> [base_ds.py](backend/app/tools/datasources/base_ds.py) 保留 `BaseDataSource` 抽象基类（WebCrawlerSource 仍依赖）、`RateLimiter`、`make_record`、`utc_now` 等工具函数。原 dormant 的 `DataSourceRegistry`/`_register_all` 及 17 个纯 dormant BaseDataSource 子类（biogrid/cbioportal/chembl/depmap/enrichr/genecards/gprofiler/lincs/omim/openfda/pdc/reactome/ucsc_xena/ensembl/hgnc/opentargets/uniprot）已移除。drugbank/disgenet 的 BaseDataSource 子类已删除，仅保留模块级检索函数。
 
 ### 4.4 清洗三件套
 
@@ -387,6 +397,8 @@ CREATED → PLANNING → SEARCHING → (ACQUIRING) → (PARSING) → CLEANING �
     └──────────────────────────────── FAILED（记录错误，可重新 start） ────────────────────────────┘
 ```
 
+> 阶段失败时由 ErrorDecisionAgent 决策 retry/skip/escalate/fail（非阶段 Agent，不参与 AgentRegistry 注册，由 Orchestrator 直接持有调用）。
+
 ---
 
 ## 六、数据流示例
@@ -413,7 +425,7 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 扩展点 | 方式 | 现状 |
 |--------|------|------|
-| 新增数据源 | `tools/datasources/` 添加模块函数 + `ToolRegistry._get_ds_func` 注册 | 15 活跃 |
+| 新增数据源 | `tools/datasources/` 添加模块函数 + `ToolRegistry._get_ds_func` 注册 | 15 活跃（dormant BaseDataSource 插件体系已移除）|
 | 新增解析器 | `tools/parsers/` 添加模块 + `ToolRegistry` 加 facade + `ParserAgent._BIO_PARSER_MAP` 注册 | 6 个（全接线）|
 | 新增清洗器 | `tools/cleaners/` 添加模块 + `ToolRegistry` 加 facade | 3 个 |
 | 新增分析模板 | `tools/analysis/` 添加模块 + `ToolRegistry` 加 facade | 7 个（全接线）|
@@ -427,8 +439,9 @@ T9  前端展示: 流水线状态 + 数据表格 + 统计图表 + 血缘图 + LL
 
 | 限制 | 影响 | 优先级 |
 |------|------|--------|
-| optimization 模块 dormant | ~~stage_evaluator 未接线~~ → 已接线 IterationDecisionAgent（量化指标驱动收敛 + LLM prompt 增强 + keyword_expander fallback）；reflection_loop 文件版仍 dormant（CLI 导向，内存直调 evaluate 已覆盖核心价值） | P2→已解决 |
-| DataRecord Pydantic dormant | 运行时用裸 dict，类型安全弱 | P3 |
+| optimization 模块 | ~~stage_evaluator 未接线~~ → 已接线 IterationDecisionAgent（量化指标驱动收敛 + LLM prompt 增强 + keyword_expander fallback）；reflection_loop 保留（3 个 facade：record/decide/finalize），LLM 在环反思的期望与待办见 [docs/reflection_loop_design_notes.md](docs/reflection_loop_design_notes.md) | P2→已解决 |
+| skills 自演化层已移除 | evaluator/repair/candidate/promotion/executor 5 个自演化模块已删除，skills/ 仅保留工具发现面板（manifest/registry/definitions/retriever），5 个只读 API 端点（list/categories/count/get/search）；definitions.py 不再构建 executor 闭包 | 已移除 |
+| DataRecord 类型安全 | DataRecord Pydantic 模型已移除，运行时用裸 dict，类型安全弱 | P3 |
 
 ---
 

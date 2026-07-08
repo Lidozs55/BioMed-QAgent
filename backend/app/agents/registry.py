@@ -76,7 +76,8 @@ def register_all_agents() -> None:
     import app.agents.analysis  # noqa: F401
     import app.agents.reviewer  # noqa: F401
     import app.agents.iteration_decision  # noqa: F401
-    import app.agents.error_decision  # noqa: F401  # ErrorDecisionAgent
+    # 注意：ErrorDecisionAgent 是决策器而非阶段 Agent，不参与注册，
+    # 由 Orchestrator 直接实例化并调用 decide()。
     logger.info("已注册 %d 个阶段 Agent: %s",
                 len(AgentRegistry._agents),
                 list(AgentRegistry._agents.keys()))

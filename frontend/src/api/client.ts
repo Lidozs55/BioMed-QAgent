@@ -33,11 +33,6 @@ export const api = {
 
   getTask: (id: string) => request<TaskSummary>(`/tasks/${id}`),
 
-  getTaskStatus: (id: string) => request<{
-    task_id: string; status: string; is_running: boolean;
-    stages: Record<string, any>; total_records: number; errors: string[];
-  }>(`/tasks/${id}/status`),
-
   startTask: (id: string) => request<{ status: string; task_id: string; websocket: string }>(
     `/tasks/${id}/start`, { method: 'POST' },
   ),
@@ -81,13 +76,6 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
-
-  // ===== 系统 =====
-  health: () => request<{ status: string; dashscope_configured: boolean }>('/health'),
-  listTools: () => request<Record<string, Array<{ name: string; description: string }>>>('/tools'),
-  listFiles: (id: string) => request<{ task_id: string; files: Array<{ name: string; size: number }> }>(
-    `/tasks/${id}/files`,
-  ),
 
   // ===== WebSocket =====
   wsUrl: (id: string) => {

@@ -6,9 +6,8 @@
 - 统一返回 ToolResult（.success / .data / .error / .signals），保持 orchestrator 简洁
 - 每个方法是薄封装：调用领域函数 + 异常包装为 ToolResult
 
-数据源接入分两条路径：
-- 已接入 15 个模块级函数（pubmed/openalex/...）：通过 _get_ds_func 惰性加载
-- dormant 15 个 BaseDataSource 子类（biogrid/chembl/...）：通过 DataSourceRegistry.search 调用
+数据源接入路径：通过 _get_ds_func 惰性加载各数据源的模块级检索函数
+（pubmed/openalex/drugbank/disgenet/...）。
 """
 from __future__ import annotations
 
@@ -68,17 +67,6 @@ class ToolRegistry:
     # 例外: string/kegg/disgenet/tcmsp 有额外参数（由 run_datasource 适配）
     _DS_FUNC_CACHE: dict = {}
 
-    # dormant 数据源：以 BaseDataSource 子类形式注册到 DataSourceRegistry
-    # 这些数据源的检索入口是实例方法 search(self, query, max_results, task_id, **kwargs)
-    # 特殊参数（mode/endpoint/organism/fetch_meta/dbname/sources/user_threshold）
-    # 由各数据源类内部通过 kwargs.get(...) 处理默认值，故 run_datasource 直接透传 kwargs
-    _DORMANT_DS_NAMES: frozenset = frozenset({
-        "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
-        "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
-    "cnki", "lincs", "omim", "openfda", "opentargets", "pdc",
-    "reactome", "ucsc_xena", "uniprot", "wanfang",
-})
-
     @classmethod
     def _get_ds_func(cls, name: str):
         """惰性加载并缓存数据源检索函数（仅限模块级函数形式的 15 个数据源）。"""
@@ -115,10 +103,7 @@ class ToolRegistry:
                         task_id: str = "T0", **kwargs) -> ToolResult:
         """执行单个数据源检索。
 
-        支持两类数据源：
-        - 模块级函数（15 个）：通过 _get_ds_func 加载，特殊参数在此适配
-        - BaseDataSource 子类（13 个 dormant）：通过 DataSourceRegistry.search 调用，
-          特殊参数经 **kwargs 透传，由各类内部处理默认值
+        通过 _get_ds_func 加载各数据源的模块级检索函数，特殊参数在此适配。
 
         kwargs 适配各数据源的特殊参数：
         - string: species (int, 默认 9606)
@@ -127,8 +112,6 @@ class ToolRegistry:
         - ncbi:   db (str, 默认 "gene")
         - tcga:   search_type (str, 默认 "gene")
         - tcmsp:  无额外参数（返回 None → requires_crawl 信号）
-        - dormant 数据源: mode/endpoint/organism/fetch_meta/dbname/sources/user_threshold
-                         由各类内部 kwargs.get(...) 处理，无需在此显式适配
         """
         func = self._get_ds_func(name)
         if func is not None:
@@ -155,23 +138,6 @@ class ToolRegistry:
                                                     "reason": "tcmsp 接口不可用"})
                 else:
                     records = func(query, max_results, task_id)
-                return ToolResult(True, data=records or [])
-            except Exception as e:
-                logger.exception("数据源 %s 检索失败", name)
-                return ToolResult(False, error=f"{name}: {e}")
-
-        # dormant 数据源路径：通过 DataSourceRegistry 调用 BaseDataSource 子类
-        if name in self._DORMANT_DS_NAMES:
-            try:
-                from app.tools.datasources.base_ds import get_datasource_registry
-                ds = get_datasource_registry().get(name)
-            except Exception as e:
-                logger.exception("加载 DataSourceRegistry 失败: %s", name)
-                return ToolResult(False, error=f"{name}: DataSourceRegistry 加载失败: {e}")
-            if ds is None:
-                return ToolResult(False, error=f"数据源未注册: {name}")
-            try:
-                records = ds.search(query, max_results, task_id, **kwargs)
                 return ToolResult(True, data=records or [])
             except Exception as e:
                 logger.exception("数据源 %s 检索失败", name)
@@ -960,6 +926,27 @@ class ToolRegistry:
             logger.exception("to_excel 失败")
             return ToolResult(False, error=f"to_excel: {e}")
 
+    def write_merged_csv(self, records: list[dict], output_path) -> ToolResult:
+        """多源整合 CSV 导出（按实体类型分组，字段对齐，便于研究分析）。
+
+        与 export_csv 的区别：export_csv 平铺所有记录，本方法按实体类型
+        （literature/compound/gene/interaction/pathway/expression/other）分组，
+        每组使用标准化列头，适合研究分析。
+
+        Args:
+            records: DataRecord 列表
+            output_path: 输出 CSV 路径（自动建父目录）
+        Returns:
+            ToolResult.data = {"groups": int, "rows": int}
+        """
+        try:
+            from app.tools.export.merge_csv import write_merged_csv as _write
+            groups, rows = _write(records, str(output_path))
+            return ToolResult(True, data={"groups": groups, "rows": rows})
+        except Exception as e:
+            logger.exception("merge_csv 失败")
+            return ToolResult(False, error=f"merge_csv: {e}")
+
     def export_markdown_report(self, records: list[dict], task_id: str,
                                 out_path, lineage: dict | None = None,
                                 analysis_dir=None,
@@ -1013,26 +1000,6 @@ class ToolRegistry:
             {"name": "pubchem", "description": "PubChem 化合物结构"},
             {"name": "citation_trace", "description": "引用追溯（OpenAlex 参考文献与被引）"},
             {"name": "web_crawler", "description": "通用网页爬虫（fallback，输出原始文本供 LLM 提取）"},
-            # dormant 13 个（BaseDataSource 子类，经 DataSourceRegistry 调用）
-            {"name": "biogrid", "description": "BioGRID 蛋白互作"},
-            {"name": "cbioportal", "description": "cBioPortal 癌症基因组"},
-            {"name": "chembl", "description": "ChEMBL 化合物活性"},
-            {"name": "depmap", "description": "DepMap 细胞系依赖性"},
-            {"name": "lincs", "description": "LINCS L1000 / Connectivity Map 药物扰动和重定位"},
-            {"name": "pdc", "description": "PDC/CPTAC 癌症蛋白组数据"},
-            {"name": "enrichr", "description": "Enrichr 富集分析库"},
-            {"name": "ensembl", "description": "Ensembl 基因组注释"},
-            {"name": "gprofiler", "description": "g:Profiler 功能富集"},
-            {"name": "hgnc", "description": "HGNC 基因命名"},
-            {"name": "openfda", "description": "openFDA 药品不良事件"},
-            {"name": "opentargets", "description": "OpenTargets 靶点-疾病"},
-            {"name": "reactome", "description": "Reactome 通路"},
-            {"name": "ucsc_xena", "description": "UCSC Xena 基因组数据"},
-            {"name": "uniprot", "description": "UniProt 蛋白质"},
-            {"name": "drugbank", "description": "DrugBank 药物-靶点（受控访问）"},
-            {"name": "omim", "description": "OMIM 基因-表型关联（受控访问）"},
-            {"name": "disgenet", "description": "DisGeNET 基因-疾病关联（受控访问）"},
-            {"name": "genecards", "description": "GeneCards 基因整合知识（受控访问）"},
             {"name": "cnki", "description": "CNKI/知网 中文文献检索（爬虫）"},
             {"name": "wanfang", "description": "万方 中文文献检索（爬虫）"},
         ],
@@ -1080,6 +1047,7 @@ class ToolRegistry:
             {"name": "to_csv", "description": "CSV 导出"},
             {"name": "to_excel", "description": "Excel 导出"},
             {"name": "to_report", "description": "Markdown 报告生成"},
+            {"name": "merge_csv", "description": "多源整合 CSV 导出（按实体类型分组）"},
         ],
     }
 

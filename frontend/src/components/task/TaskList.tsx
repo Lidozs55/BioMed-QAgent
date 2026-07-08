@@ -14,6 +14,7 @@ const STATUS_COLOR: Record<TaskStatus, string> = {
   cleaning: 'processing',
   analyzing: 'processing',
   reviewing: 'processing',
+  awaiting_confirmation: 'orange',
   completed: 'success',
   failed: 'error',
 };
@@ -27,6 +28,7 @@ const STATUS_LABEL: Record<string, string> = {
   cleaning: '清洗中',
   analyzing: '分析中',
   reviewing: '审查中',
+  awaiting_confirmation: '等待确认',
   completed: '已完成',
   failed: '失败',
 };

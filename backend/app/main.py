@@ -94,7 +94,6 @@ async def root():
             "list_tasks": "GET /api/v1/tasks",
             "get_task": "GET /api/v1/tasks/{task_id}",
             "start_task": "POST /api/v1/tasks/{task_id}/start",
-            "task_status": "GET /api/v1/tasks/{task_id}/status",
             "task_data": "GET /api/v1/tasks/{task_id}/data",
             "export_csv": "GET /api/v1/tasks/{task_id}/export/csv",
             "export_json": "GET /api/v1/tasks/{task_id}/export/json",
@@ -105,41 +104,6 @@ async def root():
             "health": "GET /api/v1/health",
         },
     }
-
-
-@app.get("/api/v1/health", tags=["system"])
-async def health():
-    """健康检查。"""
-    return {
-        "status": "ok",
-        "dashscope_configured": is_api_key_configured(),
-        "python_path_ok": True,
-    }
-
-
-@app.get("/api/v1/tools", tags=["system"])
-async def list_tools():
-    """列出所有可用的脚本工具。"""
-    registry = get_registry()
-    return registry.list_tools()
-
-
-@app.get("/api/v1/tasks/{task_id}/files", tags=["tasks"])
-async def list_task_files(task_id: str):
-    """列出任务输出目录中的所有文件。"""
-    from app.config import OUTPUT_DIR
-    task_dir = OUTPUT_DIR / task_id
-    if not task_dir.exists():
-        return {"task_id": task_id, "files": []}
-    files = []
-    for f in sorted(task_dir.iterdir()):
-        if f.is_file():
-            files.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            })
-    return {"task_id": task_id, "files": files}
 
 
 # ===== 全局异常处理 =====

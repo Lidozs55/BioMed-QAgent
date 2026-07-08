@@ -15,11 +15,9 @@ planning → [search → acquire → parse → clean → analyze → review] →
 from __future__ import annotations
 
 import asyncio
-import csv
 import json
 import logging
 import time
-from pathlib import Path
 
 from app.agents.base import ProgressCallback, BaseAgent
 from app.agents.error_decision import ErrorDecisionAgent
@@ -65,6 +63,9 @@ class Orchestrator:
         self.store = store or get_task_store()
         # 注册所有阶段 Agent（触发 @AgentRegistry.register）
         register_all_agents()
+        # ErrorDecisionAgent 是决策器（非阶段 Agent），直接实例化持有
+        self._error_decision = ErrorDecisionAgent(
+            llm=self.llm, tools=self.tools, store=self.store)
 
     async def run(self, task: Task,
                   progress: ProgressCallback | None = None) -> Task:
@@ -436,17 +437,8 @@ class Orchestrator:
                 logger.warning("阶段 %s 失败（第 %d 次）: %s",
                                stage_name, retry_count + 1, e)
 
-                # 获取 ErrorDecisionAgent
-                decision_agent = self._get_agent("error_decision")
-                if decision_agent is None:
-                    logger.warning("ErrorDecisionAgent 未注册，终止流水线")
-                    raise
-
-                # 类型收窄（ErrorDecisionAgent 已通过注册表实例化）
-                assert isinstance(decision_agent, ErrorDecisionAgent)
-
-                # 调用决策（ErrorDecisionAgent 的 decide() 不在 BaseAgent 接口中）
-                decision = await decision_agent.decide(  # type: ignore[attr-defined]
+                # 调用 ErrorDecisionAgent 决策（直接持有实例，非阶段 Agent）
+                decision = await self._error_decision.decide(
                     task, stage_name, e, records, context,
                     retry_count, progress)
 
@@ -500,16 +492,8 @@ class Orchestrator:
     @staticmethod
     def _dedup_round(round_records: list[dict],
                       seen_ids: set[str]) -> list[dict]:
-        """跨轮去重：过滤掉已见 record_id 的记录，更新 seen_ids。"""
-        new: list[dict] = []
-        for r in round_records:
-            rid = r.get("record_id", "")
-            if rid and rid in seen_ids:
-                continue
-            if rid:
-                seen_ids.add(rid)
-            new.append(r)
-        return new
+        """跨轮去重：委托 BaseAgent._dedup_by_id（避免与 BaseAgent 重复实现）。"""
+        return BaseAgent._dedup_by_id(round_records, seen_ids)
 
     def _get_agent(self, name: str) -> BaseAgent | None:
         """从 AgentRegistry 实例化阶段 Agent（注入 llm/tools/store）。"""
@@ -621,7 +605,11 @@ class Orchestrator:
         # Step 2: 多源整合 CSV（按实体类型分表，字段对齐，供研究分析）
         self._emit(progress, type="stage_progress", stage="export",
                     pct=0.4, message="生成多源整合 CSV...")
-        merged_csv = self._write_merged_csv(records, out_dir / "merged_data.csv")
+        merged_result = await self._to_thread(
+            self.tools.write_merged_csv, records, out_dir / "merged_data.csv")
+        if not merged_result.success:
+            raise RuntimeError(f"整合 CSV 导出失败: {merged_result.error}")
+        merged_rows = (merged_result.data or {}).get("rows", 0)
 
         # Step 3: LLM 生成综合研究报告（失败则整个任务失败，不回退旧模板）
         self._emit(progress, type="stage_progress", stage="export",
@@ -656,7 +644,7 @@ class Orchestrator:
             }, f, ensure_ascii=False, indent=2)
 
         msg = (f"导出完成：CSV({len(records)} 行) "
-               f"+ 整合CSV({merged_csv[1]} 行) + LLM研究报告 + JSON 数据")
+               f"+ 整合CSV({merged_rows} 行) + LLM研究报告 + JSON 数据")
         self._set_stage(task, "export", StageStatus.DONE, msg)
         self._emit(progress, type="stage_complete", stage="export", message=msg)
         self.store.update_task(task)
@@ -665,131 +653,14 @@ class Orchestrator:
 
     def _set_stage(self, task: Task, name: str, status: StageStatus,
                    message: str = "", **kwargs):
-        """设置任务阶段状态（仅 planning/export，其余阶段由各 Agent 自管）。"""
-        task.set_stage(name, status, message, **kwargs)
-        if status == StageStatus.RUNNING:
-            # export 阶段保持 REVIEWING 状态（随后设为 COMPLETED）
-            if name == "planning":
-                task.status = TaskStatus.PLANNING
+        """设置任务阶段状态（委托 BaseAgent._set_stage，仅 planning/export 由 Orchestrator 调用）。"""
+        BaseAgent._set_stage(self, task, name, status, message, **kwargs)
 
     def _emit(self, progress: ProgressCallback | None, **kwargs):
-        if progress:
-            progress(kwargs)
+        """推送进度事件（委托 BaseAgent._emit）。"""
+        BaseAgent._emit(self, progress, **kwargs)
 
     @staticmethod
     async def _to_thread(func, *args, **kwargs):
-        """在线程池中运行同步阻塞函数，避免阻塞事件循环。"""
-        return await asyncio.to_thread(func, *args, **kwargs)
-
-    # ========== 多源整合 CSV 生成 ==========
-
-    def _write_merged_csv(self, records: list[dict],
-                          path: Path) -> tuple[int, int]:
-        """生成多源整合 CSV — 按实体类型分组，字段对齐，便于研究分析。
-
-        与 data.csv 的区别：
-        - data.csv: 所有记录平铺，字段稀疏（适合溯源审计）
-        - merged_data.csv: 按实体类型分组，字段对齐（适合研究分析）
-
-        Returns:
-            (分组数, 总行数)
-        """
-        if not records:
-            path.write_text("", encoding="utf-8-sig")
-            return (0, 0)
-
-        groups: dict[str, list[dict]] = {}
-        for r in records:
-            etype = self._classify_record(r)
-            groups.setdefault(etype, []).append(r)
-
-        total_rows = 0
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            for group_name, group_records in sorted(groups.items()):
-                writer.writerow(
-                    [f"=== {group_name.upper()} ({len(group_records)} 条) ==="])
-                columns = self._get_group_columns(group_name, group_records)
-                writer.writerow(columns)
-                for r in group_records:
-                    fields = r.get("fields", {})
-                    src = r.get("source_ref", {})
-                    row = []
-                    for col in columns:
-                        if col == "source_name":
-                            row.append(src.get("source_name", ""))
-                        elif col == "confidence":
-                            row.append(f"{r.get('extraction_confidence', 0):.2f}")
-                        elif col == "source_url":
-                            row.append(src.get("url", src.get("doi", "")))
-                        else:
-                            val = fields.get(col, "")
-                            if isinstance(val, (list, dict)):
-                                val = json.dumps(val, ensure_ascii=False)
-                            row.append(str(val) if val is not None else "")
-                    writer.writerow(row)
-                    total_rows += 1
-                writer.writerow([])
-
-        logger.info("整合CSV写入 %d 行 → %s", total_rows, path)
-        return (len(groups), total_rows)
-
-    @staticmethod
-    def _classify_record(r: dict) -> str:
-        """根据记录字段判断实体类型。"""
-        fields = r.get("fields", {})
-        src = r.get("source_ref", {}).get("source_name", "")
-        if fields.get("title") or fields.get("pmid") or fields.get("arxiv_id"):
-            return "literature"
-        if fields.get("compound_name") or fields.get("ob") or fields.get("dl"):
-            return "compound"
-        if fields.get("gene_symbol") or fields.get("uniprot_id") or fields.get("gene_id"):
-            return "gene"
-        if fields.get("compound") and fields.get("target"):
-            return "interaction"
-        if fields.get("pathway_name") or fields.get("term") or fields.get("kegg_id"):
-            return "pathway"
-        if fields.get("log2fc") or fields.get("pvalue") or fields.get("adj_p"):
-            return "expression"
-        if src in ("pubmed", "openalex", "semantic_scholar", "arxiv"):
-            return "literature"
-        if src in ("string", "biogrid"):
-            return "interaction"
-        if src in ("kegg", "reactome"):
-            return "pathway"
-        if src in ("tcmsp", "pubchem", "drugbank"):
-            return "compound"
-        if src in ("uniprot", "hgnc", "ensembl"):
-            return "gene"
-        return "other"
-
-    @staticmethod
-    def _get_group_columns(group: str, records: list[dict]) -> list[str]:
-        """根据分组类型返回标准化列头。"""
-        base = ["source_name", "confidence", "source_url"]
-        schemas = {
-            "literature": ["title", "abstract", "authors", "year", "journal",
-                          "doi", "pmid", "arxiv_id", "keywords"],
-            "compound": ["compound_name", "herb", "ob", "dl", "smiles",
-                         "mol_weight", "formula", "cas_number"],
-            "gene": ["gene_symbol", "uniprot_id", "gene_id", "chromosome",
-                     "function", "disease"],
-            "interaction": ["compound", "target", "action", "score",
-                           "evidence", "source_db"],
-            "pathway": ["pathway_name", "term", "kegg_id", "p_value",
-                       "adj_p_value", "gene_count", "genes", "category"],
-            "expression": ["gene_symbol", "log2fc", "pvalue", "adj_p",
-                          "fc", "stat", "phenotype"],
-            "other": [],
-        }
-        cols = schemas.get(group, [])
-        if not cols:
-            seen = set(base)
-            dynamic = []
-            for r in records[:50]:
-                for k in r.get("fields", {}):
-                    if k not in seen:
-                        dynamic.append(k)
-                        seen.add(k)
-            cols = dynamic[:15]
-        return base + cols
+        """在线程池中运行同步阻塞函数（委托 BaseAgent._to_thread）。"""
+        return await BaseAgent._to_thread(func, *args, **kwargs)

@@ -175,7 +175,7 @@ function GenericAnalysisCard({ typeKey, result }: { typeKey: string; result: any
   const typeNames: Record<string, string> = {
     ppi_network: 'PPI 蛋白互作网络',
     enrichment: 'GO/KEGG 富集分析',
-    drug_target: '药物-靶点分析',
+    drug_targets: '药物-靶点分析',
     differential_expression: '差异表达分析',
     hub_gene: 'Hub 基因分析',
     upstream_regulator: '上游调控分析',

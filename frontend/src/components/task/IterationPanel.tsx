@@ -23,34 +23,25 @@ function pct(v: number | undefined): string {
   return `${Math.round(v * 100)}%`;
 }
 
-/** Stage Gate 指标阈值（与后端 _base.DEFAULT_THRESHOLDS["clean"] 对齐）*/
-const THRESHOLDS = {
-  min_coverage: 0.8,
-  min_confidence: 0.8,
-  max_conflict_rate: 0.2,
-  min_sources: 2,
-};
-
-/** 单个指标单元格：超阈值标红/达标标绿 */
+/** 单个指标单元格：依据后端 stage_gate_evaluation.passed 字段达标/未达标着色 */
 function MetricCell({
-  label, value, format, threshold, okWhen, hint,
+  label, value, format, passed, hint,
 }: {
   label: string;
   value: number | undefined;
   format: (v: number) => string;
-  threshold: string;
-  okWhen: (v: number) => boolean;
+  passed: boolean | undefined;
   hint: string;
 }) {
-  const ok = value !== undefined && okWhen(value);
+  const color = passed === undefined ? '#595959' : passed ? '#52c41a' : '#ff4d4f';
   return (
-    <Tooltip title={`${hint}（阈值 ${threshold}）`}>
+    <Tooltip title={hint}>
       <div style={{ textAlign: 'center' }}>
         <Statistic
           title={label}
           value={value !== undefined ? format(value) : '-'}
           valueStyle={{
-            color: ok ? '#52c41a' : '#ff4d4f',
+            color,
             fontSize: 18,
           }}
         />
@@ -200,8 +191,7 @@ export function IterationPanel() {
               label="覆盖率"
               value={metrics.coverage}
               format={pct}
-              threshold={`≥ ${pct(THRESHOLDS.min_coverage)}`}
-              okWhen={v => v >= THRESHOLDS.min_coverage}
+              passed={passed}
               hint="规划实体已获数据的比例"
             />
           </Col>
@@ -210,8 +200,7 @@ export function IterationPanel() {
               label="平均置信度"
               value={metrics.avg_confidence}
               format={v => v.toFixed(2)}
-              threshold={`≥ ${THRESHOLDS.min_confidence}`}
-              okWhen={v => v >= THRESHOLDS.min_confidence}
+              passed={passed}
               hint="所有记录的平均抽取置信度"
             />
           </Col>
@@ -220,8 +209,7 @@ export function IterationPanel() {
               label="冲突率"
               value={metrics.conflict_rate}
               format={pct}
-              threshold={`≤ ${pct(THRESHOLDS.max_conflict_rate)}`}
-              okWhen={v => v <= THRESHOLDS.max_conflict_rate}
+              passed={passed}
               hint="quality_flags 含 conflict/needs_review 的记录占比"
             />
           </Col>
@@ -230,8 +218,7 @@ export function IterationPanel() {
               label="数据源数"
               value={metrics.source_diversity}
               format={v => String(v)}
-              threshold={`≥ ${THRESHOLDS.min_sources}`}
-              okWhen={v => v >= THRESHOLDS.min_sources}
+              passed={passed}
               hint="不同 source_name 的数量"
             />
           </Col>
@@ -242,7 +229,7 @@ export function IterationPanel() {
       {metrics?.coverage !== undefined && (
         <Progress
           percent={Math.round(metrics.coverage * 100)}
-          status={metrics.coverage >= THRESHOLDS.min_coverage ? 'success' : 'active'}
+          status={passed === undefined ? 'active' : passed ? 'success' : 'exception'}
           format={() => `实体覆盖率 ${pct(metrics.coverage)}`}
           size="small"
           style={{ marginBottom: 12 }}

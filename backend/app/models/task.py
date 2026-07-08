@@ -117,6 +117,7 @@ class Task(BaseModel):
             "domain": self.domain,
             "errors": self.errors,
             "pending_checkpoint": self.pending_checkpoint,
+            "checkpoint_payload": self.checkpoint_payload if self.pending_checkpoint else {},
             "created_at": self.created_at,
             "completed_at": self.completed_at,
         }

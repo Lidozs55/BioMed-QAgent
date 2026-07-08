@@ -10,11 +10,12 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.agents.orchestrator import Orchestrator
 from app.api.routes.ws import broadcast
-from app.config import UPLOADS_DIR
+from app.config import OUTPUT_DIR, UPLOADS_DIR
 from app.llm.client import DashScopeClient
 from app.models.task import TaskCreate
 from app.storage.task_store import get_task_store
@@ -136,12 +137,18 @@ async def upload_file(task_id: str, file: UploadFile = File(...)) -> dict:
 
 @router.get("/{task_id}", summary="获取任务详情")
 async def get_task(task_id: str) -> dict:
-    """获取指定任务的详细信息。"""
+    """获取指定任务的详细信息。
+
+    合并了原 get_task_status 的运行态字段（is_running），
+    前端只需调用本端点即可获取任务全量状态。
+    """
     store = get_task_store()
     task = store.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
-    return task.to_summary()
+    summary = task.to_summary()
+    summary["is_running"] = task_id in _running_tasks and not _running_tasks[task_id].done()
+    return summary
 
 
 @router.delete("/{task_id}", summary="删除任务")
@@ -154,6 +161,23 @@ async def delete_task(task_id: str) -> dict:
         _running_tasks.pop(task_id, None)
     store.delete_task(task_id)
     return {"status": "deleted", "task_id": task_id}
+
+
+@router.get("/{task_id}/files", summary="列出任务输出文件")
+async def list_task_files(task_id: str):
+    """列出任务输出目录中的所有文件。"""
+    task_dir = OUTPUT_DIR / task_id
+    if not task_dir.exists():
+        return {"task_id": task_id, "files": []}
+    files = []
+    for f in sorted(task_dir.iterdir()):
+        if f.is_file():
+            files.append({
+                "name": f.name,
+                "size": f.stat().st_size,
+                "modified": f.stat().st_mtime,
+            })
+    return {"task_id": task_id, "files": files}
 
 
 @router.post("/{task_id}/start", summary="启动任务执行")
@@ -237,26 +261,6 @@ async def start_task(task_id: str,
     }
 
 
-@router.get("/{task_id}/status", summary="查询任务状态")
-async def get_task_status(task_id: str) -> dict:
-    """查询任务当前状态和各阶段进度。"""
-    store = get_task_store()
-    task = store.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
-    is_running = task_id in _running_tasks and not _running_tasks[task_id].done()
-    return {
-        "task_id": task_id,
-        "status": task.status.value,
-        "is_running": is_running,
-        "stages": {k: v.model_dump() for k, v in task.stages.items()},
-        "total_records": task.total_records,
-        "errors": task.errors,
-        "pending_checkpoint": task.pending_checkpoint,
-        "checkpoint_payload": task.checkpoint_payload if task.pending_checkpoint else {},
-    }
-
-
 class ConfirmRequest(BaseModel):
     """人工确认请求（TASK-014 人在回路）。"""
     decision: str = Field(..., description="approve 或 reject")
@@ -327,4 +331,92 @@ async def confirm_task(task_id: str, body: ConfirmRequest) -> dict:
         "task_id": task_id,
         "decision": decision,
         "from_stage": body.from_stage if decision == "reject" else None,
+    }
+
+
+@router.get("/{task_id}/report", summary="获取 HTML 报告")
+async def get_report(task_id: str) -> Response:
+    """获取任务生成的 HTML 研究报告。"""
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    html = store.get_report(task_id)
+    if not html and task.output_dir:
+        # 尝试从文件读取
+        report_path = Path(task.output_dir) / "report.html"
+        if report_path.exists():
+            with open(report_path, "r", encoding="utf-8") as f:
+                html = f.read()
+
+    if not html:
+        raise HTTPException(status_code=404, detail="报告尚未生成")
+
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@router.post("/{task_id}/regenerate-report", summary="重新生成 LLM 综合研究报告")
+async def regenerate_report(task_id: str) -> dict:
+    """对已完成的任务重新生成 LLM 综合研究报告和整合 CSV。
+
+    用途：
+    - 对已有任务重新生成报告（如调整了 prompt 或 LLM 模型后）
+    - 调试 LLM 报告生成流程
+
+    失败时直接返回 500 错误（不回退到模板）。
+    """
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    records = store._records.get(task_id, [])
+    if not records:
+        raise HTTPException(status_code=400, detail="任务无数据记录，无法生成报告")
+
+    analysis = store.get_analysis(task_id) or {}
+    entities = task.entities or {}
+
+    # 生成 LLM 综合报告（失败则抛出，不回退）
+    from app.agents.llm_reporter import LLMReporter
+    from app.llm.client import DashScopeClient
+    reporter = LLMReporter(DashScopeClient())
+    try:
+        html = await reporter.generate_report(
+            research_goal=task.research_goal,
+            records=records,
+            entities=entities,
+            analysis=analysis,
+            review={},
+            task_id=task_id,
+            domain=task.domain or "",
+        )
+    except Exception as e:
+        logger.exception("重新生成报告失败 task=%s: %s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"LLM 报告生成失败: {e}")
+
+    # 保存报告
+    store.set_report(task_id, html)
+    if task.output_dir:
+        report_path = Path(task.output_dir) / "report.html"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+    # 同时重新生成整合 CSV
+    merged_csv_rows = 0
+    try:
+        if task.output_dir:
+            merged_path = Path(task.output_dir) / "merged_data.csv"
+            from app.tools.export.merge_csv import write_merged_csv
+            _, merged_csv_rows = write_merged_csv(records, merged_path)
+    except Exception as e:
+        logger.warning("重新生成整合CSV失败 task=%s: %s", task_id, e)
+
+    return {
+        "task_id": task_id,
+        "status": "ok",
+        "report_length": len(html),
+        "merged_csv_rows": merged_csv_rows,
+        "records_count": len(records),
     }

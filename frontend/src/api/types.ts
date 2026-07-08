@@ -3,7 +3,7 @@
 export type TaskStatus =
   | 'created' | 'planning' | 'searching' | 'acquiring'
   | 'parsing' | 'cleaning' | 'analyzing' | 'reviewing'
-  | 'completed' | 'failed';
+  | 'awaiting_confirmation' | 'completed' | 'failed';
 
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 

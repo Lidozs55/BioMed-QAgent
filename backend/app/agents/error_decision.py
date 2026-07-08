@@ -10,37 +10,35 @@
 - 规则级判断优先（LLM 不可用时也能工作）
 - LLM 兜底（理解错误语义，做出更智能的决策）
 - 每阶段最多重试 2 次，避免死循环
+
+注意：ErrorDecisionAgent 是决策器而非阶段 Agent，不参与 PIPELINE 调度，
+也不通过 AgentRegistry 注册。由 Orchestrator 直接实例化并调用 decide()。
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from app.agents.base import BaseAgent, ProgressCallback
-from app.agents.registry import AgentRegistry
 from app.config import MODEL_STRONG
+from app.llm.client import DashScopeClient
 from app.models.task import Task
+from app.storage.task_store import TaskStore
+from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES_PER_STAGE = 2
 
 
-@AgentRegistry.register
-class ErrorDecisionAgent(BaseAgent):
-    name = "error_decision"
-    description = "LLM 驱动的流水线错误决策（retry / skip / escalate / fail）"
+class ErrorDecisionAgent:
+    """LLM 驱动的流水线错误决策器（非阶段 Agent，不参与 PIPELINE 调度）。"""
 
-    async def execute(self, task: Task, records: list[dict],
-                      context: dict,
-                      progress: ProgressCallback | None = None) -> tuple[list[dict], dict]:
-        """ErrorDecisionAgent 不参与流水线阶段调度，通过 decide() 直接调用。
-
-        此方法为满足 BaseAgent ABC 要求而提供，不应被直接调用。
-        """
-        raise NotImplementedError(
-            "ErrorDecisionAgent 不通过 execute() 调度，"
-            "请使用 decide() 方法进行错误决策")
+    def __init__(self, llm: DashScopeClient | None = None,
+                 tools: ToolRegistry | None = None,
+                 store: TaskStore | None = None):
+        self.llm = llm or DashScopeClient()
+        self.tools = tools
+        self.store = store
 
     async def decide(self, task: Task, stage_name: str,
                      error: Exception, records: list[dict],
@@ -68,7 +66,7 @@ class ErrorDecisionAgent(BaseAgent):
         # 1. 规则级硬性判断（无需 LLM）
         decision = self._rule_based_decision(stage_name, error, retry_count)
         if decision is not None:
-            self._emit(progress, type="error_decision",
+            BaseAgent._emit(self, progress, type="error_decision",
                         stage=stage_name, **decision)
             return decision
 
@@ -80,7 +78,7 @@ class ErrorDecisionAgent(BaseAgent):
         else:
             decision = self._fallback_decision(stage_name, error, retry_count)
 
-        self._emit(progress, type="error_decision",
+        BaseAgent._emit(self, progress, type="error_decision",
                     stage=stage_name, **decision)
         return decision
 
@@ -187,7 +185,7 @@ class ErrorDecisionAgent(BaseAgent):
 """
 
         try:
-            result = await self._to_thread(
+            result = await BaseAgent._to_thread(
                 self.llm.chat_json,
                 [{"role": "user", "content": prompt}],
                 model=MODEL_STRONG,

@@ -50,23 +50,6 @@ def _ensure_browser():
         return None
 
 
-def _shutdown_browser():
-    """关闭浏览器（进程退出时调用）。"""
-    global _browser, _playwright
-    if _browser:
-        try:
-            _browser.close()
-        except Exception:
-            pass
-    if _playwright:
-        try:
-            _playwright.stop()
-        except Exception:
-            pass
-    _browser = None
-    _playwright = None
-
-
 def crawl_with_browser(url: str, query: str = "", task_id: str = "default",
                         screenshot_dir: Path | None = None,
                         take_screenshot: bool = True) -> list[dict]:

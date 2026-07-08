@@ -17,7 +17,6 @@ const { Title, Text, Paragraph } = Typography;
 type FeedbackType = 'refine_entities' | 'retry_stage' | 'general';
 
 const STAGE_OPTIONS = [
-  { label: '规划 (planning)', value: 'planning' },
   { label: '检索 (search)', value: 'search' },
   { label: '采集 (acquire)', value: 'acquire' },
   { label: '解析 (parse)', value: 'parse' },

@@ -11,7 +11,7 @@
 
 ## 核心特性
 
-- **LLM 驱动的 8 阶段流水线**：`Orchestrator` 直接持有 planning / export，将 search / acquire / parse / clean / analyze / review 6 阶段委托给 `AgentRegistry` 注册的阶段 Agent（`BaseAgent` 子类），LLM 负责规划与审查，原生 Python 模块负责执行
+- **LLM 驱动的 8 阶段流水线**：`Orchestrator` 直接持有 planning / export，将 search / acquire / parse / clean / analyze / review 6 阶段委托给 `AgentRegistry` 注册的 7 个阶段 Agent（`BaseAgent` 子类 + IterationDecisionAgent），LLM 负责规划与审查，原生 Python 模块负责执行
 - **15 个数据源并行检索**：PubMed / OpenAlex / Semantic Scholar / arXiv / GEO / STRING / KEGG / PDB / TCMSP / NCBI / ClinicalTrials / TCGA / DrugBank / DisGeNET / PubChem
 - **双查询策略**：文献源用研究目标检索，实体源（STRING/TCMSP/DisGeNET 等）按基因/化合物/疾病实体级检索
 - **Darwinian Stage Gate**：检索记录不足时，自动用扩展中英文查询（疾病名+基因名）重试
@@ -54,18 +54,21 @@ BioMedQAgent/
 │   │   ├── api/
 │   │   │   ├── __init__.py          # 路由聚合（统一前缀 /api/v1）
 │   │   │   ├── routes/
-│   │   │   │   ├── tasks.py         # 任务 CRUD + 启动 + 状态 + 分析结果
-│   │   │   │   ├── data.py          # 数据查询 + 导出 + 报告 + 重生成
+│   │   │   │   ├── tasks.py         # 任务 CRUD + 启动 + 分析结果 + 报告 + 文件列表
+│   │   │   │   ├── data.py          # 数据查询 + 导出
 │   │   │   │   ├── lineage.py       # 溯源图 + 单记录链路
 │   │   │   │   ├── ws.py            # WebSocket 实时推送
+│   │   │   │   ├── system.py        # 健康检查 + 工具列表
+│   │   │   │   ├── skills.py        # 技能发现面板（只读）
 │   │   │   │   └── feedback.py      # 用户反馈（后端已实现，前端未接线）
 │   │   │   ├── schemas/             # Pydantic 请求/响应模型（占位）
 │   │   │   └── middleware/          # 中间件（占位）
 │   │   ├── agents/
 │   │   │   ├── base.py              # BaseAgent ABC + 共享辅助方法（_set_stage/_emit/_to_thread/_extract_records/_dedup_by_id）
-│   │   │   ├── registry.py          # AgentRegistry + register_all_agents()（阶段 Agent 发现与实例化）
+│   │   │   ├── registry.py          # AgentRegistry + register_all_agents()（7 个阶段 Agent 发现与实例化）
 │   │   │   ├── orchestrator.py      # ★ 核心：流水线编排器（planning/export 内联 + 6 阶段委托）
 │   │   │   ├── llm_reporter.py      # ★ LLM 综合研究报告生成器
+│   │   │   ├── error_decision.py    # ErrorDecisionAgent（错误决策器，非阶段 Agent，Orchestrator 直接持有）
 │   │   │   ├── search.py            # SearchAgent（文献+实体+引用追溯+Darwinian fallback）
 │   │   │   ├── acquire.py           # AcquireAgent（爬虫信号识别）
 │   │   │   ├── parser.py            # ParserAgent（PDF + LLM 提取）
@@ -74,13 +77,13 @@ BioMedQAgent/
 │   │   │   └── reviewer.py          # ReviewerAgent（LLM 质量审查）
 │   │   ├── tools/
 │   │   │   ├── registry.py          # ★ ToolRegistry facade：直接调用模块函数
-│   │   │   ├── datasources/         # 15 个数据源模块 + BaseDataSource（部分 dormant）
+│   │   │   ├── datasources/         # 15 个活跃数据源模块函数（dormant 体系已移除）
 │   │   │   ├── parsers/             # PDF 表格 / PDF 下载 / GEO SOFT / PDB / FASTA / 网络
 │   │   │   ├── cleaners/            # 字段对齐 / 单位归一化 / 去重
 │   │   │   ├── analysis/            # PPI / 富集 / 药物-靶点 / 差异表达 / Hub 基因 / 生存分析 / 上游调控
-│   │   │   ├── export/              # CSV / Excel / Markdown 报告
+│   │   │   ├── export/              # CSV / Excel / Markdown 报告 / 多源整合 CSV（merge_csv）
 │   │   │   ├── io/                  # CSV/Excel → JSON / JSON → CSV / JSON 合并
-│   │   │   ├── optimization/        # Darwinian Stage Gate 评估器/反思循环/关键词扩展（dormant）
+│   │   │   ├── optimization/        # Darwinian Stage Gate 评估器/反思循环/关键词扩展
 │   │   │   └── viz/                 # 火山图 / 热图 / 富集气泡 / 网络图 / 图表数据提取
 │   │   ├── llm/
 │   │   │   ├── client.py            # DashScopeClient：chat / chat_json / chat_vision / chat_document
@@ -88,8 +91,7 @@ BioMedQAgent/
 │   │   ├── provenance/
 │   │   │   └── tracker.py           # ★ ProvenanceTracker + ProvenanceNode（活跃）
 │   │   ├── models/
-│   │   │   ├── task.py              # ★ Task / TaskStatus / StageStatus / TaskCreate（活跃）
-│   │   │   └── data_record.py       # DataRecord Pydantic 模型（dormant，运行时用裸 dict）
+│   │   │   └── task.py              # ★ Task / TaskStatus / StageStatus / TaskCreate（活跃）
 │   │   ├── storage/
 │   │   │   └── task_store.py        # ★ 内存字典 + JSON 文件持久化
 │   │   ├── resources/
@@ -120,15 +122,15 @@ BioMedQAgent/
 │   ├── tsconfig.json
 │   └── vite.config.ts
 ├── data/                            # 运行时数据（.gitignore）
-│   ├── uploads/  parsed/  output/  cache/
-│   └── *.py                         # 数据检查/调试脚本
+│   └── uploads/  parsed/  output/  cache/
 ├── docs/
 │   ├── api/openapi.yaml             # 占位（实际 API 见 /docs）
-│   ├── agent_browser_integration.md
-│   └── multiomics_network_pharmacology_api_matrix.md
+│   ├── reflection_loop_design_notes.md  # reflection_loop 设计说明与 LLM 在环反思期望
+│   ├── multiomics_network_pharmacology_api_matrix.md
+│   └── archive/                     # 已完成/过时的设计文档归档
 ├── PROBLEM.md                       # 赛题说明
-├── ARCHITECTURE.md                  # 架构设计文档（与实际实现有差异，见下文）
-├── DASHSCOPE.md                     # DashScope API 参考
+├── ARCHITECTURE.md                  # 架构设计文档（与实际实现同步）
+├── AGENT.md                         # Agent 协作工作流规范
 └── README.md
 ```
 
@@ -193,7 +195,6 @@ npm run electron:dev
 | GET | `/api/v1/tasks/{id}` | 任务详情 |
 | DELETE | `/api/v1/tasks/{id}` | 删除任务（含取消运行）|
 | POST | `/api/v1/tasks/{id}/start` | 异步启动流水线（仅 created/failed 可启动）|
-| GET | `/api/v1/tasks/{id}/status` | 任务状态 + 各阶段进度 |
 | GET | `/api/v1/tasks/{id}/analysis` | 分析结果（PPI/富集/药物-靶点）|
 | GET | `/api/v1/tasks/{id}/data` | 数据记录（分页，可按数据源过滤）|
 | GET | `/api/v1/tasks/{id}/export/csv` | 导出 CSV（含来源标注列）|
@@ -255,7 +256,7 @@ curl -X POST http://localhost:8000/api/v1/tasks \
 └──────────────────────────────────────────────────────────────┘
 ```
 
-> 架构对齐说明：`Orchestrator` 直接持有 planning/export，6 个中间阶段由 `AgentRegistry` 注册的 `BaseAgent` 子类实现（search/acquire/parse/clean/analysis/reviewer）；存储为内存+JSON（无 SQLite）；`DataRecord` Pydantic 模型存在但运行时多用裸 dict。详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> 架构对齐说明：`Orchestrator` 直接持有 planning/export，6 个中间阶段由 `AgentRegistry` 注册的 `BaseAgent` 子类实现（search/acquire/parse/clean/analysis/reviewer）；存储为内存+JSON（无 SQLite），运行时数据记录统一用裸 dict + JSON Schema（无 Pydantic 模型）。详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
@@ -324,7 +325,7 @@ CSV 导出自动附加来源标注列：
 
 ## 多源整合 CSV
 
-`Orchestrator._write_merged_csv()` 生成按实体类型分组的整合 CSV，与平铺 `data.csv` 互补：
+`tools/export/merge_csv.py` 的 `write_merged_csv()` 生成按实体类型分组的整合 CSV，与平铺 `data.csv` 互补（由 Orchestrator 在 export 阶段经 ToolRegistry facade 调用）：
 
 | 分组 | 字段示例 |
 |------|---------|
@@ -351,7 +352,7 @@ CSV 导出自动附加来源标注列：
 | 新增领域模板 | 在 `resources/domain_templates/` 添加 YAML | 中医药/肿瘤学/药理学 |
 | 新增词典 | 在 `resources/dictionaries/` 添加 YAML | 基因/化合物/疾病/单位/字段别名 |
 
-> 注：`BaseDataSource` 插件体系（`DataSourceRegistry`）存在但 dormant（13 个子类未接线）；`BaseAgent` ABC + `AgentRegistry` 已落地，6 个阶段 Agent 已注册并在 PIPELINE 中调度。当前扩展主要通过 `ToolRegistry` facade 添加模块函数。
+> 注：`BaseAgent` ABC + `AgentRegistry` 已落地，6 个阶段 Agent 已注册并在 PIPELINE 中调度。当前扩展主要通过 `ToolRegistry` facade 添加模块函数。
 
 ---
 
@@ -359,7 +360,6 @@ CSV 导出自动附加来源标注列：
 
 - [赛题说明](PROBLEM.md)
 - [架构设计](ARCHITECTURE.md)（已与实际实现对齐，代码为准）
-- [DashScope API 参考](DASHSCOPE.md)
 - [API 交互文档](http://localhost:8000/docs)（FastAPI 自动生成，最权威）
 - `docs/api/openapi.yaml`（占位，待补充）
 

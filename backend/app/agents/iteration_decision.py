@@ -176,7 +176,7 @@ class IterationDecisionAgent(BaseAgent):
 
     def _evaluate_stage(self, records: list[dict], task: Task,
                         context: dict, round_idx: int) -> dict | None:
-        """调用 stage_evaluator.evaluate() 获取量化指标（内存直调，不走文件 facade）。
+        """调用 ToolRegistry.evaluate_stage facade 获取量化指标。
 
         使用 "clean" 阶段阈值作为跨轮迭代收敛判据（数据经清洗后覆盖率应 ≥ 0.8）。
         失败时降级为 None（纯 gap 判断），不影响主流程。
@@ -184,19 +184,19 @@ class IterationDecisionAgent(BaseAgent):
         Returns:
             EvaluationResult dict（含 metrics/passed/gaps/suggestions）或 None
         """
-        try:
-            from app.tools.optimization.stage_evaluator import evaluate
-            expected = self._entities_to_expected(context.get("entities", {}))
-            if not expected:
-                return None
-            return evaluate(
-                records=records, stage="clean",
-                iteration=round_idx, task_id=task.task_id,
-                expected_entities=expected,
-            )
-        except Exception as e:
-            logger.warning("stage_evaluator 评估失败（降级为纯 gap 判断）: %s", e)
+        expected = self._entities_to_expected(context.get("entities", {}))
+        if not expected:
             return None
+        result = self.tools.evaluate_stage(
+            records=records, stage="clean",
+            iteration=round_idx, task_id=task.task_id,
+            expected_entities=expected,
+        )
+        if not result.success:
+            logger.warning("stage_evaluator 评估失败（降级为纯 gap 判断）: %s",
+                           result.error)
+            return None
+        return result.data
 
     # ========== 规则级收敛判断 ==========
 
@@ -390,27 +390,25 @@ Stage Gate 建议：{suggestions_summary}
     async def _build_fallback_queries(self, gap: dict, task: Task,
                                        records: list[dict],
                                        context: dict) -> list[str]:
-        """无 LLM 时构造下一轮查询（达尔文接线：优先用 keyword_expander）。
+        """无 LLM 时构造下一轮查询（达尔文接线：优先用 keyword_expander facade）。
 
-        优先调用 keyword_expander.expand_keywords() 基于同义词字典 + 跨实体关联
+        优先调用 ToolRegistry.expand_keywords 基于同义词字典 + 跨实体关联
         生成精准查询；失败时降级为简单的 gap + 研究目标拼接。
         """
-        # 优先：keyword_expander（基于同义词字典 + 关联实体扩展）
-        try:
-            from app.tools.optimization.keyword_expander import (
-                expand_keywords, _build_alias_index,
-            )
-            expected = self._entities_to_expected(context.get("entities", {}))
-            if expected:
-                alias_index = await self._to_thread(
-                    _build_alias_index, str(get_dictionaries_dir()))
-                queries, _new_entities, _by_strategy = await self._to_thread(
-                    expand_keywords, records, expected, alias_index)
+        # 优先：keyword_expander facade（基于同义词字典 + 关联实体扩展）
+        expected = self._entities_to_expected(context.get("entities", {}))
+        if expected:
+            result = await self._to_thread(
+                self.tools.expand_keywords, records, expected,
+                str(get_dictionaries_dir()))
+            if result.success:
+                queries = (result.data or {}).get("queries", [])
                 if queries:
                     logger.info("keyword_expander 生成 %d 条查询", len(queries))
                     return queries[:5]
-        except Exception as e:
-            logger.warning("keyword_expander 失败，降级为简单拼接: %s", e)
+            else:
+                logger.warning("keyword_expander 失败，降级为简单拼接: %s",
+                               result.error)
 
         # 降级：gap 实体 + 研究目标简单拼接
         queries: list[str] = []
