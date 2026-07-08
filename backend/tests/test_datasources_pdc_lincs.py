@@ -110,4 +110,4 @@ class TestDormantRegistration:
 
     def test_dormant_count_increased(self):
         """从 15 增加到 19"""
-        assert len(ToolRegistry._DORMANT_DS_NAMES) == 19
+        assert len(ToolRegistry._DORMANT_DS_NAMES) == 21

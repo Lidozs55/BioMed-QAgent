@@ -196,7 +196,7 @@ class TestDormantRegistration:
 
     def test_dormant_count_increased(self):
         """从 15 增加到 19"""
-        assert len(ToolRegistry._DORMANT_DS_NAMES) == 19
+        assert len(ToolRegistry._DORMANT_DS_NAMES) == 21
 
     def test_list_all_four(self, registry):
         """DataSourceRegistry 应列出所有 4 个新数据源"""

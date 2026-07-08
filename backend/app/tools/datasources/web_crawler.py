@@ -33,6 +33,8 @@ _SOURCE_URL_BUILDERS: dict[str, callable] = {
     "tcmsp": lambda q: f"https://old.tcmsp.com/tcmspsearch.php?term={quote(q)}",
     "drugbank": lambda q: f"https://go.drugbank.com/unearth/q?searcher=drugs&query={quote(q)}",
     "disgenet": lambda q: f"https://www.disgenet.org/search?term={quote(q)}",
+    "cnki": lambda q: f"https://kns.cnki.net/kns8/defaultresult/index?kwd={quote(q)}",
+    "wanfang": lambda q: f"https://s.wanfangdata.com.cn/paper?q={quote(q)}",
 }
 
 # 各数据源 → 期望提取的字段结构（供 LLMExtractor 使用）
@@ -43,6 +45,12 @@ _SOURCE_SCHEMA_HINTS: dict[str, dict] = {
                  "action": "str", "mechanism": "str"},
     "disgenet": {"gene_symbol": "str", "disease": "str",
                  "score": "float", "source_db": "str"},
+    "cnki": {"title": "str", "authors": "list[str]", "journal": "str",
+             "year": "int", "abstract": "str", "keywords": "list[str]",
+             "doi": "str", "fund": "str"},
+    "wanfang": {"title": "str", "authors": "list[str]", "journal": "str",
+                "year": "int", "abstract": "str", "keywords": "list[str]",
+                "doi": "str", "grant": "str"},
 }
 
 # 原始内容截断长度，避免 LLM 输入过长

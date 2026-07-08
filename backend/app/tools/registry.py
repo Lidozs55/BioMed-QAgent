@@ -75,9 +75,9 @@ class ToolRegistry:
     _DORMANT_DS_NAMES: frozenset = frozenset({
         "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
         "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
-        "lincs", "omim", "openfda", "opentargets", "pdc",
-        "reactome", "ucsc_xena", "uniprot",
-    })
+    "cnki", "lincs", "omim", "openfda", "opentargets", "pdc",
+    "reactome", "ucsc_xena", "uniprot", "wanfang",
+})
 
     @classmethod
     def _get_ds_func(cls, name: str):
@@ -1016,6 +1016,8 @@ class ToolRegistry:
             {"name": "omim", "description": "OMIM 基因-表型关联（受控访问）"},
             {"name": "disgenet", "description": "DisGeNET 基因-疾病关联（受控访问）"},
             {"name": "genecards", "description": "GeneCards 基因整合知识（受控访问）"},
+            {"name": "cnki", "description": "CNKI/知网 中文文献检索（爬虫）"},
+            {"name": "wanfang", "description": "万方 中文文献检索（爬虫）"},
         ],
         "parsers": [
             {"name": "pdf_table", "description": "PDF 表格提取"},

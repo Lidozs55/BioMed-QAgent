@@ -36,7 +36,7 @@ def test_list_skills(client):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
-    assert len(data) == 65, f"Expected 65 skills, got {len(data)}"
+    assert len(data) == 67, f"Expected 67 skills, got {len(data)}"
     # Verify each entry has required keys
     for entry in data:
         assert "skill_id" in entry
@@ -49,7 +49,7 @@ def test_list_skills_filter_by_category(client):
     resp = client.get("/api/v1/skills?category=datasources")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 34, f"Expected 34 datasources, got {len(data)}"
+    assert len(data) == 36, f"Expected 36 datasources, got {len(data)}"
     for entry in data:
         assert entry["category"] == "datasources"
 
@@ -66,7 +66,7 @@ def test_list_skills_filter_by_version(client):
     resp2 = client.get("/api/v1/skills?version=dormant")
     assert resp2.status_code == 200
     data2 = resp2.json()
-    assert len(data2) == 19, f"Expected 19 dormant, got {len(data2)}"
+    assert len(data2) == 21, f"Expected 21 dormant, got {len(data2)}"
 
 
 # ── GET /api/v1/skills/{id} ──────────────────────────────────────
@@ -116,7 +116,7 @@ def test_count_skills(client):
     resp = client.get("/api/v1/skills/count")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] == 65
+    assert data["total"] == 67
     assert data["category"] is None
 
 

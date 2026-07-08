@@ -59,6 +59,8 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
     "omim":             ["omim", "phenotype", "mendelian", "inheritance", "gene-disease"],
     "disgenet":         ["gene", "disease", "association", "disgenet", "controlled"],
     "genecards":        ["genecards", "gene", "function", "summary", "integrative"],
+    "cnki":             ["cnki", "chinese", "literature", "中文", "知网", "crawl"],
+    "wanfang":          ["wanfang", "chinese", "literature", "中文", "万方", "crawl"],
     # parsers
     "pdf_table":        ["pdf", "table", "extract", "caption"],
     "pdf_download":     ["pdf", "download", "openaccess"],
@@ -101,10 +103,10 @@ _TAG_SYNONYMS: dict[str, list[str]] = {
 
 # ── dormant 数据源列表 ───────────────────────────────────────────────
 _DORMANT_DS: frozenset = frozenset({
-    "biogrid", "cbioportal", "chembl", "depmap", "disgenet", "drugbank",
+    "biogrid", "cbioportal", "chembl", "cnki", "depmap", "disgenet", "drugbank",
     "enrichr", "ensembl", "genecards", "gprofiler", "hgnc",
     "lincs", "omim", "openfda", "opentargets", "pdc",
-    "reactome", "ucsc_xena", "uniprot",
+    "reactome", "ucsc_xena", "uniprot", "wanfang",
 })
 
 
