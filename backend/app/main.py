@@ -20,6 +20,7 @@ from app.config import (
     PORT,
     is_api_key_configured,
 )
+from app.skills import register_all_skills
 from app.tools.registry import get_registry
 
 # 日志配置
@@ -38,6 +39,10 @@ async def lifespan(app: FastAPI):
     tools = registry.list_tools()
     total = sum(len(v) for v in tools.values())
     logger.info("已注册 %d 个工具", total)
+
+    # 注册所有技能到 SkillRegistry
+    n_skills = register_all_skills()
+    logger.info("已注册 %d 个技能", n_skills)
 
     if is_api_key_configured():
         logger.info("DashScope API Key 已配置（%s...）", DASHSCOPE_API_KEY[:8])

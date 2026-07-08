@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routes import tasks, data, lineage, ws, feedback
+from app.api.routes import feedback, lineage, skills, tasks, ws, data
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(tasks.router)
@@ -11,3 +11,4 @@ api_router.include_router(data.router)
 api_router.include_router(lineage.router)
 api_router.include_router(feedback.router)
 api_router.include_router(ws.router)
+api_router.include_router(skills.router)
