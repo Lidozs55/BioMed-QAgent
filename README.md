@@ -12,14 +12,21 @@
 ## 核心特性
 
 - **LLM 驱动的 8 阶段流水线**：`Orchestrator` 直接持有 planning / export，将 search / acquire / parse / clean / analyze / review 6 阶段委托给 `AgentRegistry` 注册的 7 个阶段 Agent（`BaseAgent` 子类 + IterationDecisionAgent），LLM 负责规划与审查，原生 Python 模块负责执行
+- **多轮迭代收敛**：`IterationDecisionAgent` 通过量化 Stage Gate 指标（新记录数 / 覆盖率 / 冲突率 / 去重率）+ LLM 空白分析，决定是否需要补充检索，最多 3 轮
+- **人在回路确认检查点**：当记录为空 / 审查质量为 low / 平均置信度 < 0.5 时，任务暂停至 `AWAITING_CONFIRMATION`，等待用户 approve（直接导出）或 reject（从指定阶段重试）
+- **智能错误决策**：`ErrorDecisionAgent` 规则优先（瞬态→重试 / 永久→失败 / 模糊→升级），LLM 兜底，硬回退策略（核心阶段重试 / acquire 跳过 / review 升级）
 - **15 个数据源并行检索**：PubMed / OpenAlex / Semantic Scholar / arXiv / GEO / STRING / KEGG / PDB / TCMSP / NCBI / ClinicalTrials / TCGA / DrugBank / DisGeNET / PubChem
+- **引用追溯**：通过 OpenAlex 的 `referenced_works` 与 `cited_by_count` 自动扩展参考文献链
+- **浏览器代理**：Playwright 驱动的 `browser_agent` 处理 JS 重度渲染网站（CNKI / 万方 / ChEMBL 等），`AcquireAgent` 自动路由
 - **双查询策略**：文献源用研究目标检索，实体源（STRING/TCMSP/DisGeNET 等）按基因/化合物/疾病实体级检索
 - **Darwinian Stage Gate**：检索记录不足时，自动用扩展中英文查询（疾病名+基因名）重试
 - **全链路数据溯源**：`ProvenanceTracker` 在每个阶段记录操作节点，前端以 ReactFlow DAG 可视化
 - **字段对齐 + 单位归一化 + 去重**：基于领域词典（基因/化合物/疾病/单位别名）的清洗三件套
-- **生物信息学分析**：PPI 网络（STRING）+ GO/KEGG 富集（Enrichr）+ 药物-靶点（OpenTargets）
+- **生物信息学分析**：PPI 网络（STRING）+ GO/KEGG 富集（Enrichr）+ 药物-靶点（OpenTargets）+ Hub 基因 + 上游调控 + 生存分析（TCGA）
 - **LLM 综合研究报告**：`LLMReporter` 调用 qwen-max 生成科学叙事式 HTML 报告（非数据罗列），失败即任务失败，不回退模板
 - **多源整合 CSV**：按实体类型分组（literature/compound/gene/interaction/pathway/expression），字段对齐，便于后续分析
+- **技能发现面板**：`SkillRegistry` 自动从 `ToolRegistry` 元数据生成技能清单，支持关键词 + 可选 LLM 重排序检索
+- **文件上传**：支持 PDF / 图表图片 / GEO SOFT / PDB / FASTA / 网络文件上传，parse 阶段自动处理
 - **实时进度推送**：WebSocket 推送阶段状态、进度百分比、错误信息
 
 ---
@@ -34,7 +41,7 @@
 | **多模态** | qwen-vl-max（图表识图，已封装未深度接线）|
 | **长文档** | qwen-long（PDF 全文理解，已封装未深度接线）|
 | **数据处理** | pandas / numpy / scipy / pdfplumber |
-| **网页抓取** | httpx + BeautifulSoup（用于 PDF 下载与轻量解析）|
+| **网页抓取** | httpx + BeautifulSoup + Playwright（浏览器代理，用于 JS 重度渲染网站）|
 | **存储** | 内存字典 + JSON 文件持久化（无 SQLite / Redis）|
 | **前端** | React 18 + TypeScript + Vite + Ant Design 5 |
 | **可视化** | ECharts（图表）+ @xyflow/react（数据血缘图）|
@@ -53,69 +60,77 @@ BioMedQAgent/
 │   │   ├── config.py                # 路径 + DashScope 配置 + 模型选型
 │   │   ├── api/
 │   │   │   ├── __init__.py          # 路由聚合（统一前缀 /api/v1）
-│   │   │   ├── routes/
-│   │   │   │   ├── tasks.py         # 任务 CRUD + 启动 + 分析结果 + 报告 + 文件列表
-│   │   │   │   ├── data.py          # 数据查询 + 导出
-│   │   │   │   ├── lineage.py       # 溯源图 + 单记录链路
-│   │   │   │   ├── ws.py            # WebSocket 实时推送
-│   │   │   │   ├── system.py        # 健康检查 + 工具列表
-│   │   │   │   ├── skills.py        # 技能发现面板（只读）
-│   │   │   │   └── feedback.py      # 用户反馈（后端已实现，前端未接线）
-│   │   │   ├── schemas/             # Pydantic 请求/响应模型（占位）
-│   │   │   └── middleware/          # 中间件（占位）
+│   │   │   └── routes/
+│   │   │       ├── tasks.py         # 任务 CRUD + 启动 + 上传 + 确认 + 分析结果 + 报告
+│   │   │       ├── data.py          # 数据查询 + CSV/JSON/整合 CSV 导出
+│   │   │       ├── lineage.py       # 溯源图 + 单记录链路
+│   │   │       ├── ws.py            # WebSocket 实时推送
+│   │   │       ├── system.py        # 健康检查 + 工具列表
+│   │   │       ├── skills.py        # 技能发现面板（列表/分类/详情/语义检索）
+│   │   │       └── feedback.py      # 用户反馈（后端已实现，前端未接线）
 │   │   ├── agents/
-│   │   │   ├── base.py              # BaseAgent ABC + 共享辅助方法（_set_stage/_emit/_to_thread/_extract_records/_dedup_by_id）
-│   │   │   ├── registry.py          # AgentRegistry + register_all_agents()（7 个阶段 Agent 发现与实例化）
-│   │   │   ├── orchestrator.py      # ★ 核心：流水线编排器（planning/export 内联 + 6 阶段委托）
+│   │   │   ├── base.py              # BaseAgent ABC + 共享辅助方法
+│   │   │   ├── registry.py          # AgentRegistry + register_all_agents()（7 个阶段 Agent）
+│   │   │   ├── orchestrator.py      # ★ 核心：流水线编排器（planning/export 内联 + 6 阶段委托 + 多轮迭代）
 │   │   │   ├── llm_reporter.py      # ★ LLM 综合研究报告生成器
-│   │   │   ├── error_decision.py    # ErrorDecisionAgent（错误决策器，非阶段 Agent，Orchestrator 直接持有）
+│   │   │   ├── llm_extractor.py     # LLM 原始爬取记录提取器
+│   │   │   ├── error_decision.py    # ErrorDecisionAgent（错误决策器，Orchestrator 直接持有）
+│   │   │   ├── iteration_decision.py # IterationDecisionAgent（Stage Gate + LLM 空白分析，收敛决策）
 │   │   │   ├── search.py            # SearchAgent（文献+实体+引用追溯+Darwinian fallback）
-│   │   │   ├── acquire.py           # AcquireAgent（爬虫信号识别）
-│   │   │   ├── parser.py            # ParserAgent（PDF + LLM 提取）
+│   │   │   ├── acquire.py           # AcquireAgent（浏览器代理路由 + 爬虫信号隔离）
+│   │   │   ├── parser.py            # ParserAgent（PDF + LLM 提取 + Qwen-VL 图表）
 │   │   │   ├── cleaner.py           # CleanerAgent（对齐/归一/去重）
-│   │   │   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达并行）
+│   │   │   ├── analysis.py          # AnalysisAgent（PPI/富集/药靶/差异表达/Hub/上游/生存并行）
 │   │   │   └── reviewer.py          # ReviewerAgent（LLM 质量审查）
 │   │   ├── tools/
 │   │   │   ├── registry.py          # ★ ToolRegistry facade：直接调用模块函数
-│   │   │   ├── datasources/         # 15 个活跃数据源模块函数（dormant 体系已移除）
+│   │   │   ├── browser_agent.py     # Playwright 浏览器代理（JS 重度渲染网站）
+│   │   │   ├── datasources/         # 15 个活跃数据源 + 引用追溯 + Web 爬虫
 │   │   │   ├── parsers/             # PDF 表格 / PDF 下载 / GEO SOFT / PDB / FASTA / 网络
 │   │   │   ├── cleaners/            # 字段对齐 / 单位归一化 / 去重
-│   │   │   ├── analysis/            # PPI / 富集 / 药物-靶点 / 差异表达 / Hub 基因 / 生存分析 / 上游调控
+│   │   │   ├── analysis/            # PPI / 富集 / 药物-靶点 / 差异表达 / Hub 基因 / 上游调控 / 生存分析
 │   │   │   ├── export/              # CSV / Excel / Markdown 报告 / 多源整合 CSV（merge_csv）
 │   │   │   ├── io/                  # CSV/Excel → JSON / JSON → CSV / JSON 合并
 │   │   │   ├── optimization/        # Darwinian Stage Gate 评估器/反思循环/关键词扩展
 │   │   │   └── viz/                 # 火山图 / 热图 / 富集气泡 / 网络图 / 图表数据提取
+│   │   ├── skills/                  # 技能发现层（只读，自动从 ToolRegistry 生成）
+│   │   │   ├── __init__.py          # register_all_skills + exports
+│   │   │   ├── manifest.py          # SkillManifest 数据模型
+│   │   │   ├── registry.py          # SkillRegistry（类注册，静态方法）
+│   │   │   ├── definitions.py       # 从 ToolRegistry._TOOLS_METADATA 自动生成技能清单
+│   │   │   └── retriever.py         # SkillRetriever（关键词 + 可选 LLM 重排序）
 │   │   ├── llm/
-│   │   │   ├── client.py            # DashScopeClient：chat / chat_json / chat_vision / chat_document
-│   │   │   └── prompts/             # 7 个 Agent 提示词模板（.txt）
+│   │   │   ├── client.py            # DashScopeClient：chat / chat_json / chat_vision / chat_document / chat_stream
+│   │   │   └── prompts/             # Agent 提示词模板（占位，实际 prompt 内联在代码中）
 │   │   ├── provenance/
 │   │   │   └── tracker.py           # ★ ProvenanceTracker + ProvenanceNode（活跃）
 │   │   ├── models/
-│   │   │   └── task.py              # ★ Task / TaskStatus / StageStatus / TaskCreate（活跃）
+│   │   │   └── task.py              # ★ Task / TaskStatus / StageStatus / StageInfo / TaskCreate
 │   │   ├── storage/
 │   │   │   └── task_store.py        # ★ 内存字典 + JSON 文件持久化
 │   │   ├── resources/
 │   │   │   ├── dictionaries/        # 基因/化合物/疾病/单位别名/字段别名 YAML
 │   │   │   ├── domain_templates/    # 中医药/肿瘤学/药理学 YAML
-│   │   │   └── schemas/             # 8 份 JSON Schema 数据契约
+│   │   │   └── schemas/             # JSON Schema 数据契约
 │   │   └── utils/paths.py           # 资源目录定位辅助函数
-│   ├── tests/
+│   ├── tests/                       # pytest 测试（API / E2E / 错误决策 / 技能）
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/                        # 前端应用
 │   ├── src/
-│   │   ├── App.tsx                  # 3 主 Tab 布局
+│   │   ├── App.tsx                  # 布局：侧栏（TaskInput + TaskList）+ 4 Tab 内容区
 │   │   ├── api/                     # HTTP 客户端 + 类型定义
 │   │   ├── components/
-│   │   │   ├── task/                # TaskInput / TaskList / PipelineStatus
-│   │   │   ├── data/                # DataOverview（含数据记录/统计图表/数据溯源 3 子 Tab）/ DataPreview
+│   │   │   ├── task/                # TaskInput / TaskList / PipelineStatus / IterationPanel
+│   │   │   ├── data/                # DataOverview（记录/图表/溯源 3 子 Tab）/ DataPreview
 │   │   │   ├── charts/              # ChartsView（ECharts 饼图/柱状图）
 │   │   │   ├── lineage/             # LineageGraph（ReactFlow DAG）
 │   │   │   ├── report/              # ResearchReport（LLM 报告 iframe + 分析结果）
-│   │   │   ├── feedback/            # 占位（未实现）
+│   │   │   ├── analysis/            # AnalysisView（PPI/富集/药靶/生存分析可视化）
+│   │   │   ├── feedback/            # FeedbackPanel（用户反馈面板）
 │   │   │   └── layout/              # 占位
-│   │   ├── hooks/useTaskWebSocket.ts
-│   │   ├── stores/taskStore.ts      # Zustand 状态
+│   │   ├── hooks/useTaskWebSocket.ts # WebSocket 订阅 + 自动重连 + 心跳
+│   │   ├── stores/taskStore.ts      # Zustand 状态（含迭代决策 + Stage Gate 指标）
 │   │   └── styles/global.css
 │   ├── electron/                    # Electron 桌面端（可选）
 │   ├── package.json
@@ -124,13 +139,16 @@ BioMedQAgent/
 ├── data/                            # 运行时数据（.gitignore）
 │   └── uploads/  parsed/  output/  cache/
 ├── docs/
-│   ├── api/openapi.yaml             # 占位（实际 API 见 /docs）
-│   ├── reflection_loop_design_notes.md  # reflection_loop 设计说明与 LLM 在环反思期望
+│   ├── reflection_loop_design_notes.md
 │   ├── multiomics_network_pharmacology_api_matrix.md
+│   ├── 20260708-review-optimization.md
 │   └── archive/                     # 已完成/过时的设计文档归档
+├── _validate.py                     # AST + import 链 + 工具/Agent 计数验证脚本
+├── .env.example                     # DASHSCOPE_API_KEY 占位
+├── opencode.json                    # MCP 配置（Commonly agent）
 ├── PROBLEM.md                       # 赛题说明
 ├── ARCHITECTURE.md                  # 架构设计文档（与实际实现同步）
-├── AGENT.md                         # Agent 协作工作流规范
+├── AGENTS.md                        # Agent 协作工作流规范（Commonly pod）
 └── README.md
 ```
 
@@ -192,10 +210,12 @@ npm run electron:dev
 |------|------|------|
 | POST | `/api/v1/tasks` | 创建任务（research_goal / domain_hint / max_sources / enable_analysis）|
 | GET | `/api/v1/tasks` | 任务列表（按创建时间倒序）|
-| GET | `/api/v1/tasks/{id}` | 任务详情 |
+| GET | `/api/v1/tasks/{id}` | 任务详情（含 is_running 状态）|
 | DELETE | `/api/v1/tasks/{id}` | 删除任务（含取消运行）|
-| POST | `/api/v1/tasks/{id}/start` | 异步启动流水线（仅 created/failed 可启动）|
-| GET | `/api/v1/tasks/{id}/analysis` | 分析结果（PPI/富集/药物-靶点）|
+| POST | `/api/v1/tasks/{id}/start` | 异步启动流水线（可选 `from_stage` 从指定阶段重试）|
+| POST | `/api/v1/tasks/{id}/upload` | 上传 PDF / 图表图片 / 生物数据文件 |
+| POST | `/api/v1/tasks/{id}/confirm` | 人工确认检查点（approve → 导出 / reject → 从指定阶段重试）|
+| GET | `/api/v1/tasks/{id}/analysis` | 分析结果（PPI/富集/药物-靶点/Hub 基因/上游调控/生存）|
 | GET | `/api/v1/tasks/{id}/data` | 数据记录（分页，可按数据源过滤）|
 | GET | `/api/v1/tasks/{id}/export/csv` | 导出 CSV（含来源标注列）|
 | GET | `/api/v1/tasks/{id}/export/json` | 导出 JSON |
@@ -209,6 +229,11 @@ npm run electron:dev
 | WS | `/api/v1/ws/tasks/{id}` | 实时状态推送 |
 | GET | `/api/v1/health` | 健康检查 |
 | GET | `/api/v1/tools` | 可用工具列表（按类别分组）|
+| GET | `/api/v1/skills` | 技能列表（可按类别过滤）|
+| GET | `/api/v1/skills/categories` | 技能类别列表 |
+| GET | `/api/v1/skills/count` | 技能总数 |
+| GET | `/api/v1/skills/{skill_id}` | 技能详情 |
+| POST | `/api/v1/skills/search` | 语义检索技能（关键词 + 可选 LLM 重排序）|
 
 ### 创建任务示例
 
@@ -230,56 +255,69 @@ curl -X POST http://localhost:8000/api/v1/tasks \
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │              Frontend (React + Antd)                          │
-│   流水线状态 │ 数据总览(记录/图表/溯源) │ 研究报告(LLM+分析)   │
+│   流水线状态 │ 迭代面板 │ 数据总览 │ 研究报告 │ 分析视图    │
 └─────────────────────────┬────────────────────────────────────┘
                           │ REST API + WebSocket
 ┌─────────────────────────▼────────────────────────────────────┐
 │              Backend (FastAPI)                                │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │       Orchestrator（编排器：planning/export 内联        │  │
-│  │                  + 6 阶段委托 AgentRegistry）           │  │
-│  │  planning → search → acquire → parse → clean           │  │
-│  │            → analyze → review → export                 │  │
+│  │  Orchestrator（planning/export 内联 + 6 阶段委托       │  │
+│  │    + 多轮迭代 + 人在回路确认 + ErrorDecisionAgent）     │  │
+│  │  planning → [search → acquire → parse → clean          │  │
+│  │              → analyze → review] ×N → confirm? → export│  │
 │  └───┬──────────────────────────────────────┬─────────────┘  │
-│      │ LLM 调用（规划/审查/报告）            │ 工具调用       │
+│      │ LLM 调用（规划/审查/报告/迭代决策）   │ 工具调用       │
 │  ┌───▼──────────────────┐  ┌────────────────▼────────────┐  │
 │  │  DashScopeClient      │  │  ToolRegistry facade         │  │
 │  │  (qwen-plus/max)      │  │  ├─ datasources/ (15 源)     │  │
-│  │  + LLMReporter        │  │  ├─ parsers/ (PDF/生物数据)  │  │
+│  │  + LLMReporter        │  │  ├─ browser_agent (Playwright)│ │
+│  │  + IterationDecision   │  │  ├─ parsers/ (PDF/生物数据)  │  │
 │  └───────────────────────┘  │  ├─ cleaners/ (对齐/归一/去重)│  │
-│                              │  ├─ analysis/ (PPI/富集/药靶)│  │
-│                              │  └─ export/ (CSV/Excel/MD)  │  │
-│                              └─────────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  ProvenanceTracker · TaskStore(内存+JSON) · 词典/Schema │ │
-│  └─────────────────────────────────────────────────────────┘ │
+│                              │  ├─ analysis/ (PPI/富集/药靶  │  │
+│                              │  │   /Hub/上游/生存)          │  │
+│                              │  └─ export/ (CSV/Excel/MD)   │  │
+│                              └──────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  SkillRegistry · ProvenanceTracker · TaskStore · 词典    │ │
+│  └──────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-> 架构对齐说明：`Orchestrator` 直接持有 planning/export，6 个中间阶段由 `AgentRegistry` 注册的 `BaseAgent` 子类实现（search/acquire/parse/clean/analysis/reviewer）；存储为内存+JSON（无 SQLite），运行时数据记录统一用裸 dict + JSON Schema（无 Pydantic 模型）。详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> 架构对齐说明：`Orchestrator` 直接持有 planning/export，6 个中间阶段由 `AgentRegistry` 注册的 `BaseAgent` 子类实现；多轮迭代由 `IterationDecisionAgent` 驱动（Stage Gate + LLM 空白分析），人在回路确认检查点处理低质量场景，`ErrorDecisionAgent` 处理运行时错误。存储为内存+JSON（无 SQLite）。详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
 ## 流水线阶段
 
-`Orchestrator.run()` 顺序执行 8 个阶段，每阶段通过 `progress` 回调推送 WebSocket 事件。
+`Orchestrator.run()` 执行 planning + 多轮迭代（最多 3 轮）+ export，每阶段通过 `progress` 回调推送 WebSocket 事件。
 
 | 阶段 | 实现方式 | 职责 |
 |------|---------|------|
 | 1. planning | LLM (qwen-plus) | 提取化合物/基因/疾病/通路实体，识别领域，生成检索查询与推荐数据源 |
-| 2. search | 原生模块 + 线程池 | 文献源并行检索 + 实体源按基因/化合物/疾病检索；记录不足时 Darwinian 扩展查询重试 |
-| 3. acquire | 占位（隔离 stub） | 识别 `requires_crawl` 信号并日志记录，不执行实际爬取，绝不影响后续阶段 |
-| 4. parse | 原生模块 | 解析用户上传 PDF + 自动下载开放获取论文 PDF（最多 5 篇），提取表格与 caption |
-| 5. clean | 原生模块三件套 | 字段对齐（词典）→ 单位归一化 → 去重；统计平均置信度与质量标记 |
-| 6. analyze | 原生模块（可选） | PPI 网络（STRING）+ GO/KEGG 富集（Enrichr）+ 药物-靶点（OpenTargets）|
+| 2. search | 原生模块 + 线程池 | 文献源并行检索 + 实体源按基因/化合物/疾病检索 + 引用追溯（OpenAlex）；记录不足时 Darwinian 扩展查询重试 |
+| 3. acquire | Playwright 浏览器代理 | 识别 `requires_crawl` 信号，自动路由至 `WebCrawlerSource`（轻量）或 `browser_agent`（JS 重度渲染），失败隔离不影响后续 |
+| 4. parse | 原生模块 + LLM | 解析用户上传 PDF/图片/生物数据文件 + 自动下载 OA 论文 PDF + LLM 提取原始爬取记录 + Qwen-VL 图表提取 |
+| 5. clean | 原生模块三件套 | 字段对齐（词典）→ 单位归一化 → 去重；统计平均置信度与质量标记；聚合字段级溯源 |
+| 6. analyze | 原生模块（可选） | PPI（STRING）+ GO/KEGG 富集（Enrichr）+ 药物-靶点（OpenTargets）+ Hub 基因 + 上游调控 + 生存分析（TCGA）|
 | 7. review | LLM (qwen-max) | 审查数据完整性、来源覆盖、关键发现、改进建议；输出质量评分 |
+| → 迭代决策 | IterationDecisionAgent | Stage Gate 量化指标 + LLM 空白分析，决定继续迭代或收敛 |
+| → 人在回路确认 | Orchestrator | 记录为空 / 质量 low / 置信度 < 0.5 时暂停，等待用户 approve 或 reject |
 | 8. export | 原生模块 + LLMReporter | CSV 导出 + 多源整合 CSV + LLM 综合研究报告（HTML）+ 完整 JSON 数据 |
 
 **任务状态机**：
 ```
-CREATED → PLANNING → SEARCHING → (ACQUIRING) → (PARSING) → CLEANING → (ANALYZING) → REVIEWING → COMPLETED
+CREATED → PLANNING → SEARCHING → (ACQUIRING) → (PARSING) → CLEANING → (ANALYZING) → REVIEWING
+              │                                                                    │
+              │    ┌─── 迭代（最多 3 轮）───┐                                      │
+              └──→ │ search → ... → review  │←─ IterationDecisionAgent 决定继续    │
+                   └───────────────────────┘                                      │
+                                                                                  ▼
+                                                                    ┌─── AWAITING_CONFIRMATION
+                                                                    │    （用户 approve / reject）
+                                                                    ▼
+                                                                 COMPLETED
     │                                                                                              │
-    └──────────────────────────────── FAILED（记录错误，可重新 start） ────────────────────────────┘
+    └──────────────────────────────── FAILED（记录错误，可重新 start / from_stage 重试） ──────────┘
 ```
 
 ---
@@ -352,7 +390,7 @@ CSV 导出自动附加来源标注列：
 | 新增领域模板 | 在 `resources/domain_templates/` 添加 YAML | 中医药/肿瘤学/药理学 |
 | 新增词典 | 在 `resources/dictionaries/` 添加 YAML | 基因/化合物/疾病/单位/字段别名 |
 
-> 注：`BaseAgent` ABC + `AgentRegistry` 已落地，6 个阶段 Agent 已注册并在 PIPELINE 中调度。当前扩展主要通过 `ToolRegistry` facade 添加模块函数。
+> 注：`BaseAgent` ABC + `AgentRegistry` 已落地，7 个阶段 Agent（search/acquire/parse/clean/analysis/reviewer/iteration_decision）已注册并在流水线中调度；`ErrorDecisionAgent` 由 Orchestrator 直接持有。当前扩展主要通过 `ToolRegistry` facade 添加模块函数。
 
 ---
 
@@ -360,8 +398,10 @@ CSV 导出自动附加来源标注列：
 
 - [赛题说明](PROBLEM.md)
 - [架构设计](ARCHITECTURE.md)（已与实际实现对齐，代码为准）
+- [Agent 协作规范](AGENTS.md)（Commonly pod 工作流 / 文件锁 / Git 规范）
 - [API 交互文档](http://localhost:8000/docs)（FastAPI 自动生成，最权威）
-- `docs/api/openapi.yaml`（占位，待补充）
+- [Reflection Loop 设计说明](docs/reflection_loop_design_notes.md)
+- [多组学网络药理学 API 矩阵](docs/multiomics_network_pharmacology_api_matrix.md)
 
 ---
 

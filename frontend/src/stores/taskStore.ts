@@ -35,6 +35,7 @@ interface TaskStore {
   selectTask: (id: string | null) => Promise<void>;
   createAndStartTask: (goal: string, domainHint?: string) => Promise<string | null>;
   deleteTask: (id: string) => Promise<void>;
+  confirmTask: (id: string, decision: 'approve' | 'reject', fromStage?: string) => Promise<void>;
   handleWSMessage: (msg: WSMessage) => void;
   clearMessages: () => void;
 }
@@ -118,7 +119,22 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     }
   },
 
+  confirmTask: async (id, decision, fromStage) => {
+    set({ loading: true, error: null });
+    try {
+      await api.confirmTask(id, decision, fromStage);
+      const task = await api.getTask(id);
+      set({ selectedTask: task, loading: false });
+      get().fetchTasks();
+    } catch (e) {
+      set({ loading: false, error: String(e) });
+    }
+  },
+
   handleWSMessage: (msg) => {
+    // 心跳 pong 不进入展示列表
+    if (msg.type === 'pong') return;
+
     // Handle iteration round start
     if (msg.type === 'iteration_round') {
       set({
@@ -187,8 +203,9 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         set({ currentStage: running[0] });
       }
     }
-    // 任务完成、错误或阶段完成时自动刷新 selectedTask
+    // 任务完成、错误、等待确认或阶段完成时自动刷新 selectedTask
     if (msg.type === 'task_complete' || msg.type === 'error' ||
+        msg.type === 'awaiting_confirmation' ||
         (msg.type === 'stage_complete' && msg.stage)) {
       const tid = msg.task_id || get().selectedTaskId;
       if (tid) {

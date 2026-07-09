@@ -231,7 +231,7 @@ class Orchestrator:
                 if agent is None:
                     logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
                     continue
-                decision = await self._execute_stage_with_error_handling(
+                records, context, decision = await self._execute_stage_with_error_handling(
                     task, stage_name, agent, records, context,
                     progress, stage_retries, round_idx=1)
                 if decision == "fail":
@@ -398,12 +398,12 @@ class Orchestrator:
                 continue
 
             retry_count = stage_retries.get(stage_name, 0)
-            decision = await self._execute_stage_with_error_handling(
+            records, context, decision = await self._execute_stage_with_error_handling(
                 task, stage_name, agent, records, context, progress,
                 stage_retries, round_idx)
 
             if decision is None:
-                # 正常完成: records 已被 agent.execute 更新
+                # 正常完成: records/context 已回写
                 continue
             elif decision == "skip_stage":
                 logger.info("阶段 %s 被跳过，继续流水线", stage_name)
@@ -423,8 +423,13 @@ class Orchestrator:
             records: list[dict], context: dict,
             progress: ProgressCallback | None,
             stage_retries: dict[str, int],
-            round_idx: int) -> str | None:
-        """执行单阶段，带错误决策。返回 None=成功，否则返回最终 action。"""
+            round_idx: int) -> tuple[list[dict], dict, str | None]:
+        """执行单阶段，带错误决策。
+
+        返回 (records, context, decision)：
+        - decision=None 表示成功，records/context 已被 agent.execute 更新
+        - decision=skip_stage/escalate/fail 表示错误决策结果
+        """
         max_retries_per_stage = 2
 
         while True:
@@ -432,7 +437,7 @@ class Orchestrator:
             try:
                 records, context = await agent.execute(
                     task, records, context, progress)
-                return None  # 成功
+                return records, context, None  # 成功
             except Exception as e:
                 logger.warning("阶段 %s 失败（第 %d 次）: %s",
                                stage_name, retry_count + 1, e)
@@ -458,7 +463,7 @@ class Orchestrator:
                                     stage=stage_name, action="escalate",
                                     reason=f"重试 {max_retries_per_stage} 次后跳过",
                                     message=str(e)[:200])
-                        return "escalate"
+                        return records, context, "escalate"
                     # 重试前短暂延迟（指数退避）
                     delay = min(2 ** retry_count, 8)  # 1s, 2s, 4s, 8s
                     logger.info("阶段 %s 将在 %ds 后重试", stage_name, delay)
@@ -471,7 +476,7 @@ class Orchestrator:
                     self._emit(progress, type="stage_error",
                                 stage=stage_name, action="skip",
                                 reason=reason, message=str(e)[:200])
-                    return "skip_stage"
+                    return records, context, "skip_stage"
 
                 elif action == "escalate":
                     task.errors.append(
@@ -479,7 +484,7 @@ class Orchestrator:
                     self._emit(progress, type="stage_error",
                                 stage=stage_name, action="escalate",
                                 reason=reason, message=str(e)[:200])
-                    return "escalate"
+                    return records, context, "escalate"
 
                 elif action == "fail":
                     task.errors.append(
@@ -487,7 +492,7 @@ class Orchestrator:
                     self._emit(progress, type="stage_error",
                                 stage=stage_name, action="fail",
                                 reason=reason, message=str(e)[:200])
-                    return "fail"
+                    return records, context, "fail"
 
     @staticmethod
     def _dedup_round(round_records: list[dict],

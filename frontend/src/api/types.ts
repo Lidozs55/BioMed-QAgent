@@ -24,6 +24,17 @@ export interface Entities {
   pathways: string[];
 }
 
+export interface CheckpointPayload {
+  checkpoint: string;
+  task_id: string;
+  total_records: number;
+  avg_confidence: number;
+  review_quality: string;
+  review_issues: string[];
+  review_recommendations: string[];
+  low_confidence_count: number;
+}
+
 export interface TaskSummary {
   task_id: string;
   research_goal: string;
@@ -37,6 +48,8 @@ export interface TaskSummary {
   errors: string[];
   created_at: string;
   completed_at: string | null;
+  pending_checkpoint: string | null;
+  checkpoint_payload: CheckpointPayload | Record<string, never>;
 }
 
 export interface DataRecord {
@@ -124,7 +137,7 @@ export interface WSMessage {
   type: 'task_start' | 'stage_start' | 'stage_progress' | 'stage_complete'
       | 'task_complete' | 'error' | 'snapshot' | 'pong'
       | 'iteration_round' | 'iteration_decision' | 'iteration_converged'
-      | 'stage_gate_evaluation';
+      | 'stage_gate_evaluation' | 'awaiting_confirmation';
   task_id?: string;
   stage?: string;
   message?: string;
@@ -146,6 +159,9 @@ export interface WSMessage {
   target_entities?: string[];
   convergence_signals?: string[];
   needs_user_input?: boolean;
+  // awaiting_confirmation 载荷
+  checkpoint?: string;
+  payload?: CheckpointPayload;
   // Stage Gate 量化评估载荷（stage_gate_evaluation）
   passed?: boolean;
   metrics?: StageGateMetrics;

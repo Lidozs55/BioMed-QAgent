@@ -165,7 +165,7 @@ class SearchAgent(BaseAgent):
 
     @staticmethod
     def _disease_to_en(disease: str) -> str:
-        """常见中文疾病名转英文（DisGeNET 需英文）。"""
+        """常见中文疾病名转英文（DisGeNET/PubMed MeSH 需英文）。"""
         mapping = {
             "胰腺癌": "pancreatic cancer",
             "肝转移": "liver metastasis",
@@ -173,6 +173,20 @@ class SearchAgent(BaseAgent):
             "肺癌": "lung cancer",
             "胃癌": "gastric cancer",
             "结直肠癌": "colorectal cancer",
+            "肝癌": "liver cancer",
+            "食管癌": "esophageal cancer",
+            "前列腺癌": "prostate cancer",
+            "白血病": "leukemia",
+            "淋巴瘤": "lymphoma",
+            "糖尿病": "diabetes",
+            "高血压": "hypertension",
+            "冠心病": "coronary heart disease",
+            "动脉粥样硬化": "atherosclerosis",
+            "阿尔茨海默病": "Alzheimer's disease",
+            "帕金森病": "Parkinson's disease",
+            "抑郁症": "depression",
+            "炎症性肠病": "inflammatory bowel disease",
+            "类风湿关节炎": "rheumatoid arthritis",
         }
         return mapping.get(disease, disease)
 
@@ -348,6 +362,18 @@ class SearchAgent(BaseAgent):
         retry_sources = [s for s in
                          ("pubmed", "openalex", "semantic_scholar", "arxiv")
                          if s in lit_sources or s not in self.ENTITY_SOURCES][:4]
+
+        # 兜底：若 combo + fallback + mesh 全空（无 diseases 或 LLM 查询≤5），
+        # 用实体名（基因/化合物，英文）作为查询，确保 fallback 不空转
+        if not (combo_queries or fallback_queries or mesh_queries):
+            genes = entities.get("genes", [])
+            compounds = entities.get("compounds", [])
+            combo_queries = [g for g in genes[:3]] + [c for c in compounds[:2]]
+            logger.info("fallback 兜底：无 diseases/LLM 额外查询，用实体名检索 %s",
+                        combo_queries)
+            self._emit(progress, type="stage_progress", stage="search",
+                        pct=0.82,
+                        message=f"扩展检索兜底：用 {len(combo_queries)} 个实体名查询")
 
         # 2. 组合查询 + LLM 额外查询 → 全文献源
         seen_queries = set(search_queries)

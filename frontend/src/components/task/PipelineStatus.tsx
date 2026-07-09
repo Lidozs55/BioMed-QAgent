@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
 import { IterationPanel } from '@/components/task/IterationPanel';
-import type { TaskSummary, StageInfo, StageStatus } from '@/api/types';
+import type { TaskSummary, StageInfo, StageStatus, CheckpointPayload } from '@/api/types';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -54,7 +54,7 @@ function stageStatus(status: StageStatus): 'wait' | 'process' | 'finish' | 'erro
 }
 
 export function PipelineStatus({ task }: { task: TaskSummary }) {
-  const { wsMessages, stageProgress, currentStage, roundIdx, maxRounds, iterationDecisions, convergenceReason } = useTaskStore();
+  const { wsMessages, stageProgress, currentStage, roundIdx, maxRounds, iterationDecisions, convergenceReason, confirmTask, loading } = useTaskStore();
 
   const stages = Object.values(task.stages);
   const entities = task.entities || {};
@@ -86,6 +86,65 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           </Card>
         </Col>
       </Row>
+
+      {/* ====== 人工确认检查点（awaiting_confirmation — 人在回路）====== */}
+      {task.status === 'awaiting_confirmation' && task.pending_checkpoint && (() => {
+        const cp = (task.checkpoint_payload || {}) as CheckpointPayload;
+        const hasPayload = 'checkpoint' in cp;
+        return (
+          <Alert
+            type="warning"
+            showIcon
+            icon={<WarningOutlined />}
+            style={{ marginBottom: 16 }}
+            message="任务暂停 — 等待人工确认"
+            description={
+              <div>
+                <Text>
+                  {task.pending_checkpoint === 'low_confidence'
+                    ? '检索记录不足或数据质量偏低。可确认继续导出报告，或从检索阶段重试。'
+                    : '请确认是否继续。'}
+                </Text>
+                {hasPayload && (
+                  <Row gutter={16} style={{ marginTop: 12, marginBottom: 12 }}>
+                    <Col span={6}>
+                      <Statistic title="总记录数" value={cp.total_records ?? 0} />
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="平均置信度" value={cp.avg_confidence ?? 0}
+                                 precision={3} />
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="审查质量" value={cp.review_quality ?? 'unknown'} />
+                    </Col>
+                    <Col span={6}>
+                      <Statistic title="低置信记录" value={cp.low_confidence_count ?? 0} />
+                    </Col>
+                  </Row>
+                )}
+                {hasPayload && cp.review_issues?.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <Text strong style={{ fontSize: 12 }}>质量问题：</Text>
+                    {cp.review_issues.map((issue, i) => (
+                      <Tag key={i} color="orange" style={{ fontSize: 11, marginBottom: 4, marginLeft: 4 }}>{issue}</Tag>
+                    ))}
+                  </div>
+                )}
+                <Space>
+                  <Button type="primary" loading={loading}
+                          onClick={() => confirmTask(task.task_id, 'approve')}>
+                    确认继续（导出报告）
+                  </Button>
+                  <Button loading={loading}
+                          onClick={() => confirmTask(task.task_id, 'reject', 'search')}>
+                    重试检索
+                  </Button>
+                </Space>
+              </div>
+            }
+          />
+        );
+      })()}
 
       {/* ====== Multi-Round Iteration Indicator ====== */}
       {roundIdx > 0 && (

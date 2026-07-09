@@ -168,6 +168,16 @@ class TaskStore:
                     task.status = TaskStatus(status_str)
                 except ValueError:
                     task.status = TaskStatus.COMPLETED
+                # 崩溃恢复：running 态任务在后端重启后已无进程支撑，重置为 FAILED
+                _RUNNING_STATES = {
+                    TaskStatus.PLANNING, TaskStatus.SEARCHING,
+                    TaskStatus.ACQUIRING, TaskStatus.PARSING,
+                    TaskStatus.CLEANING, TaskStatus.ANALYZING,
+                    TaskStatus.REVIEWING,
+                }
+                if task.status in _RUNNING_STATES:
+                    task.status = TaskStatus.FAILED
+                    task.errors.append("后端重启时任务处于运行态，已自动标记为失败")
                 task.domain = summary.get("domain", "")
                 task.entities = summary.get("entities", {})
                 task.total_records = summary.get("total_records", 0)
@@ -176,6 +186,9 @@ class TaskStore:
                 task.created_at = summary.get("created_at", "")
                 task.completed_at = summary.get("completed_at")
                 task.output_dir = str(task_dir)
+                # 恢复人工确认检查点数据（awaiting_confirmation 任务需依赖此数据）
+                task.pending_checkpoint = summary.get("pending_checkpoint")
+                task.checkpoint_payload = summary.get("checkpoint_payload", {})
                 # stages 重建
                 for name, info in summary.get("stages", {}).items():
                     if name in task.stages:

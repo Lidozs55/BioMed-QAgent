@@ -54,6 +54,14 @@ export const api = {
     report_length: number; merged_csv_rows: number; records_count: number;
   }>(`/tasks/${id}/regenerate-report`, { method: 'POST' }),
 
+  // ===== 人工确认（awaiting_confirmation → approve/reject）=====
+  confirmTask: (id: string, decision: 'approve' | 'reject', fromStage?: string) =>
+    request<{ status: string; task_id: string; decision: string; from_stage: string | null }>(
+      `/tasks/${id}/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, from_stage: fromStage }),
+      }),
+
   // ===== 分析结果 =====
   getAnalysis: (id: string) => request<{
     task_id: string; analysis_types: string[];
