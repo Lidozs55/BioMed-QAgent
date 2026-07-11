@@ -620,7 +620,13 @@ class Orchestrator:
 - genes 应包含已知的关键靶点基因
 - search_queries 应包含中英文检索词
 - recommended_sources 只能从以下选择：pubmed, openalex, semantic_scholar, europepmc, geo, string, kegg, pdb, tcmsp, ncbi, clinicaltrials, tcga, drugbank, disgenet, pubchem
-- europepmc 是国内网络最稳定的 OA 文献源，建议优先包含"""
+- europepmc 是国内网络最稳定的 OA 文献源，建议优先包含
+- 爬虫源（无官方 API 的数据源）会通过浏览器自动化/HTTP 爬虫采集：
+  - 涉及中药复方研究 → 推荐 tcmsp（中药成分药代动力学）
+  - 涉及基因-疾病关联 → 推荐 disgenet
+  - 涉及药物机制 → 推荐 drugbank
+  - 涉及化合物结构/活性 → 推荐 pubchem
+  这些源在 API 不可用时会自动触发爬虫 fallback，扩充数据召回"""
 
             try:
                 result = await self._to_thread(

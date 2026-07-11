@@ -1,4 +1,4 @@
-"""浏览器自动化爬虫 — JS 重站点采集核心（TASK-012 MVP）。
+"""浏览器自动化爬虫 — JS 重站点采集核心。
 
 对齐 docs/agent_browser_integration.md Method B：
 - 使用 Playwright（Chromium）渲染 JS 重站点
@@ -10,6 +10,7 @@
 - 懒加载 Playwright（首次调用时启动浏览器，避免启动时开销）
 - 单浏览器实例复用（进程级单例）
 - 超时 30s，失败返回空列表（不阻塞流水线）
+- 等待网络空闲 + 额外 2s 渲染时间，确保 JS 执行完成
 """
 from __future__ import annotations
 
@@ -41,13 +42,28 @@ def _ensure_browser():
         return None
     try:
         _playwright = sync_playwright().start()
-        _browser = _playwright.chromium.launch(headless=True)
+        _browser = _playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        )
         logger.info("Playwright Chromium 浏览器已启动")
         return _browser
     except Exception as e:
         logger.warning("Playwright 启动失败: %s", e)
         _playwright = None
         return None
+
+
+# 真实浏览器 UA（避免被反爬识别）
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
 
 
 def crawl_with_browser(url: str, query: str = "", task_id: str = "default",
@@ -61,7 +77,6 @@ def crawl_with_browser(url: str, query: str = "", task_id: str = "default",
         task_id: 任务 ID
         screenshot_dir: 截图保存目录（None 时不保存文件，仅 base64）
         take_screenshot: 是否截图（True 输出 screenshot，False 仅输出 html）
-
     Returns:
         raw crawl record 列表（长度 0 或 1）；失败时返回空列表
     """
@@ -69,12 +84,36 @@ def crawl_with_browser(url: str, query: str = "", task_id: str = "default",
     if browser is None:
         return []
 
+    page = None
     try:
-        page = browser.new_page()
+        # 注入反检测脚本 + 真实 UA
+        context = browser.new_context(
+            user_agent=_BROWSER_UA,
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
+        )
+        # 注入 stealth 脚本（隐藏 webdriver 标识）
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
+            window.chrome = {runtime: {}};
+        """)
+
+        page = context.new_page()
         page.set_default_timeout(_DEFAULT_TIMEOUT)
+
+        # 导航到目标 URL，等待 DOM 加载
         page.goto(url, wait_until="domcontentloaded")
 
-        # 等待页面渲染（给 JS 执行时间）
+        # 等待网络空闲（JS 重站点需等待 API 请求完成）
+        try:
+            page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:
+            # networkidle 可能超时（长轮询/WebSocket），不阻塞，继续
+            pass
+
+        # 额外等待 2s 确保 JS 渲染完成
         page.wait_for_timeout(2000)
 
         # 获取渲染后的 HTML
@@ -108,12 +147,19 @@ def crawl_with_browser(url: str, query: str = "", task_id: str = "default",
             record["raw_type"] = "screenshot"
 
         page.close()
+        context.close()
         logger.info("browser_crawler: 成功爬取 %s（%d 字符，screenshot=%s）",
                     url, len(raw_content), take_screenshot)
         return [record]
 
     except Exception as e:
         logger.warning("browser_crawler 爬取失败 %s: %s", url, e)
+        # 清理 page/context
+        try:
+            if page:
+                page.close()
+        except Exception:
+            pass
         return []
 
 
@@ -125,7 +171,8 @@ def _clean_html(html: str) -> tuple[str, str]:
         return html[:50000], "text"
 
     soup = BeautifulSoup(html, "lxml")
-    for tag in soup(["script", "style", "noscript", "iframe"]):
+    for tag in soup(["script", "style", "noscript", "iframe",
+                     "svg", "nav", "footer", "header"]):
         tag.decompose()
 
     tables = soup.find_all("table")
@@ -142,10 +189,28 @@ def _clean_html(html: str) -> tuple[str, str]:
 
 # JS 重站点列表（需浏览器渲染的数据源）
 JS_HEAVY_SOURCES: frozenset = frozenset({
-    "cnki", "wanfang", "chembl", "opentargets",
+    "cnki", "wanfang", "chembl", "opentargets", "pubchem", "uniprot",
 })
 
 
 def is_js_heavy_source(source: str) -> bool:
     """判断数据源是否为 JS 重站点（需浏览器渲染）。"""
     return source.lower() in JS_HEAVY_SOURCES
+
+
+def shutdown_browser():
+    """关闭浏览器单例（进程退出时调用）。"""
+    global _browser, _playwright
+    if _browser is not None:
+        try:
+            _browser.close()
+        except Exception:
+            pass
+        _browser = None
+    if _playwright is not None:
+        try:
+            _playwright.stop()
+        except Exception:
+            pass
+        _playwright = None
+    logger.info("Playwright 浏览器已关闭")

@@ -198,11 +198,11 @@ class ToolRegistry:
         """网页爬虫采集（fallback） — 对 requires_crawl 数据源执行爬取。
 
         输出 raw crawl record（含 raw_content），由 parse 阶段 LLMExtractor
-        转换为结构化 DataRecord。JS 重站点（cnki/wanfang/chembl/...）自动
-        路由到浏览器爬虫（Playwright，TASK-012）。
+        转换为结构化 DataRecord。JS 重站点（cnki/wanfang/chembl/pubchem/reactome/...）
+        自动路由到浏览器爬虫（Playwright）。
 
         Args:
-            crawl_targets: 爬虫目标列表，每项 {"source", "query", "reason"}
+            crawl_targets: 爬虫目标列表，每项 {"source", "query", "reason", "url"?}
             task_id: 任务 ID
         Returns:
             ToolResult.data = raw crawl record 列表（非 DataRecord）
@@ -214,32 +214,47 @@ class ToolRegistry:
             crawler = WebCrawlerSource()
             raw_records: list[dict] = []
             screenshot_dir = get_task_output_dir(task_id) / "screenshots"
+            success_count = 0
+            fail_count = 0
             for target in crawl_targets:
                 source = target.get("source", "web_crawler")
                 query = target.get("query", "")
                 if not query:
+                    logger.warning("crawl_web: 跳过空 query（source=%s）", source)
                     continue
                 # JS 重站点 → 浏览器爬虫（含截图，供 Qwen-VL 提取）
                 if is_js_heavy_source(source):
                     url = target.get("url") or crawler._build_url(source, query)
                     if not url:
-                        logger.info("crawl_web: %s 无 URL 构造器", source)
+                        logger.warning("crawl_web: %s 无 URL 构造器，跳过", source)
+                        fail_count += 1
                         continue
+                    logger.info("crawl_web: 浏览器爬取 %s [%s]", source, url[:80])
                     recs = crawl_with_browser(
                         url, query=query, task_id=task_id,
                         screenshot_dir=screenshot_dir,
                         take_screenshot=True)
-                    logger.info("crawl_web: %s 浏览器爬取 %d 条",
-                                source, len(recs))
+                    if recs:
+                        success_count += 1
+                        logger.info("crawl_web: %s 浏览器爬取成功（%d 条）",
+                                    source, len(recs))
+                    else:
+                        fail_count += 1
+                        logger.warning("crawl_web: %s 浏览器爬取失败（0 条）", source)
                 else:
+                    # 普通站点 → requests 爬虫
                     recs = crawler.search(query, max_results=20, task_id=task_id,
                                            source=source)
                     if recs:
+                        success_count += 1
                         logger.info("crawl_web: %s 爬取 %d 条原始记录",
                                     source, len(recs))
                     else:
-                        logger.info("crawl_web: %s 无可用内容", source)
+                        fail_count += 1
+                        logger.warning("crawl_web: %s 无可用内容", source)
                 raw_records.extend(recs)
+            logger.info("crawl_web 完成：成功 %d / 失败 %d / 共 %d 条原始记录",
+                        success_count, fail_count, len(raw_records))
             return ToolResult(True, data=raw_records)
         except Exception as e:
             logger.exception("crawl_web 失败")

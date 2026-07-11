@@ -3,7 +3,7 @@
 设计要点（对齐 docs/agent_browser_integration.md）：
 - 输出原始 HTML/文本（raw_content），不做字段提取
 - 字段提取由 parse 阶段的 LLMExtractor 完成（职责分离）
-- 限速 ≥2s、设置 UA、单页超时 ≤60s
+- 限速 ≥2s、真实浏览器 UA、Referer、超时 30s + 1 次重试
 - 失败不阻塞流水线（异常由 AcquireAgent 捕获）
 
 输出格式（raw crawl record，非 DataRecord）：
@@ -21,7 +21,10 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import quote
+import time
+from urllib.parse import quote, urlparse
+
+import requests
 
 from .base_ds import BaseDataSource, utc_now
 
@@ -35,6 +38,11 @@ _SOURCE_URL_BUILDERS: dict[str, callable] = {
     "disgenet": lambda q: f"https://www.disgenet.org/search?term={quote(q)}",
     "cnki": lambda q: f"https://kns.cnki.net/kns8/defaultresult/index?kwd={quote(q)}",
     "wanfang": lambda q: f"https://s.wanfangdata.com.cn/paper?q={quote(q)}",
+    "chembl": lambda q: f"https://www.ebi.ac.uk/chembl/g/#search_results/{quote(q)}",
+    "opentargets": lambda q: f"https://platform.opentargets.org/search?query={quote(q)}",
+    "pubchem": lambda q: f"https://pubchem.ncbi.nlm.nih.gov/#query={quote(q)}",
+    "reactome": lambda q: f"https://reactome.org/content/query?q={quote(q)}&species=Homo+sapiens",
+    "uniprot": lambda q: f"https://www.uniprot.org/uniprotkb?query={quote(q)}",
 }
 
 # 各数据源 → 期望提取的字段结构（供 LLMExtractor 使用）
@@ -51,10 +59,52 @@ _SOURCE_SCHEMA_HINTS: dict[str, dict] = {
     "wanfang": {"title": "str", "authors": "list[str]", "journal": "str",
                 "year": "int", "abstract": "str", "keywords": "list[str]",
                 "doi": "str", "grant": "str"},
+    "chembl": {"compound_name": "str", "molecule_type": "str",
+               "bioactivity": "list[dict]", "targets": "list[str]"},
+    "opentargets": {"target_gene": "str", "disease": "str",
+                    "overall_score": "float", "datatype_scores": "dict"},
+    "pubchem": {"compound_name": "str", "cid": "int", "molecular_formula": "str",
+                "molecular_weight": "float", "synonyms": "list[str]"},
+    "reactome": {"pathway_name": "str", "pathway_id": "str",
+                 "species": "str", "genes": "list[str]"},
+    "uniprot": {"protein_name": "str", "gene_name": "str", "uniprot_id": "str",
+                "organism": "str", "function": "str"},
 }
 
 # 原始内容截断长度，避免 LLM 输入过长
 _MAX_RAW_LEN = 50000
+
+# 真实浏览器 UA（避免被反爬识别）
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
+
+# 各数据源 Referer（提升反爬通过率）
+_SOURCE_REFERERS: dict[str, str] = {
+    "tcmsp": "https://old.tcmsp.com/tcmsp.php",
+    "drugbank": "https://go.drugbank.com/",
+    "disgenet": "https://www.disgenet.org/",
+    "cnki": "https://kns.cnki.net/",
+    "wanfang": "https://www.wanfangdata.com.cn/",
+    "chembl": "https://www.ebi.ac.uk/chembl/",
+    "opentargets": "https://platform.opentargets.org/",
+    "pubchem": "https://pubchem.ncbi.nlm.nih.gov/",
+    "reactome": "https://reactome.org/",
+    "uniprot": "https://www.uniprot.org/",
+}
+
+# 通用请求头
+_DEFAULT_HEADERS = {
+    "User-Agent": _BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+              "image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 class WebCrawlerSource(BaseDataSource):
@@ -89,17 +139,44 @@ class WebCrawlerSource(BaseDataSource):
                            source, query)
             return []
 
-        self.limiter.wait()
-        try:
-            resp = self.client.get(url)
-            resp.raise_for_status()
-            html = resp.text
-        except Exception as e:
-            logger.warning("web_crawler 爬取失败 %s: %s", url, e)
-            return []
+        # 构造请求头（含 Referer）
+        headers = dict(_DEFAULT_HEADERS)
+        referer = _SOURCE_REFERERS.get(source)
+        if referer:
+            headers["Referer"] = referer
 
-        # 用 BeautifulSoup 清洗 HTML：去脚本/样式，保留表格与文本
-        raw_content, raw_type = self._clean_html(html)
+        # 重试 1 次（仅对网络错误/5xx 重试，4xx 不重试）
+        raw_content, raw_type = "", "text"
+        for attempt in range(2):
+            self.limiter.wait()
+            try:
+                resp = requests.get(url, headers=headers, timeout=30,
+                                    allow_redirects=True)
+                # 4xx 不重试（反爬/不存在）
+                if 400 <= resp.status_code < 500:
+                    logger.warning("web_crawler: %s 返回 %d（客户端错误，不重试）",
+                                   url, resp.status_code)
+                    return []
+                resp.raise_for_status()
+                html = resp.text
+                raw_content, raw_type = self._clean_html(html)
+                break
+            except requests.exceptions.Timeout:
+                logger.warning("web_crawler: %s 超时（尝试 %d/2）", url, attempt + 1)
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return []
+            except requests.exceptions.ConnectionError as e:
+                logger.warning("web_crawler: %s 连接失败（尝试 %d/2）: %s",
+                               url, attempt + 1, str(e)[:80])
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return []
+            except Exception as e:
+                logger.warning("web_crawler 爬取失败 %s: %s", url, e)
+                return []
 
         if not raw_content.strip():
             logger.info("web_crawler: %s 页面内容为空", url)
@@ -140,7 +217,8 @@ class WebCrawlerSource(BaseDataSource):
 
         soup = BeautifulSoup(html, "lxml")
         # 移除脚本、样式、注释
-        for tag in soup(["script", "style", "noscript", "iframe"]):
+        for tag in soup(["script", "style", "noscript", "iframe",
+                         "svg", "nav", "footer", "header"]):
             tag.decompose()
 
         # 优先保留表格（结构化数据通常在表格中）
