@@ -3,10 +3,9 @@ import { Badge, Card, Steps, Space, Tag, Typography, Timeline, Statistic, Row, C
 import {
   CheckCircleOutlined, LoadingOutlined, ClockCircleOutlined,
   CloseCircleOutlined, BulbOutlined, WarningOutlined, ExpandOutlined,
-  SyncOutlined,
+  SyncOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import { useTaskStore } from '@/stores/taskStore';
-import { IterationPanel } from '@/components/task/IterationPanel';
 import type { TaskSummary, StageInfo, StageStatus, CheckpointPayload } from '@/api/types';
 
 const { Title, Text, Paragraph } = Typography;
@@ -54,9 +53,7 @@ function stageStatus(status: StageStatus): 'wait' | 'process' | 'finish' | 'erro
 }
 
 export function PipelineStatus({ task }: { task: TaskSummary }) {
-  const { wsMessages, stageProgress, currentStage, roundIdx, maxRounds, iterationDecisions, convergenceReason, confirmTask, loading } = useTaskStore();
-  // 优先使用 task.current_round（后端持久化，WS 重连后也能恢复）
-  const effectiveRoundIdx = task.current_round || roundIdx;
+  const { wsMessages, stageProgress, currentStage, followupRoundIdx, maxFollowupRounds, followupTasks, confirmTask, loading } = useTaskStore();
 
   const stages = Object.values(task.stages);
   const entities = task.entities || {};
@@ -148,37 +145,51 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
         );
       })()}
 
-      {/* ====== Multi-Round Iteration Indicator ====== */}
-      {effectiveRoundIdx > 0 && (
-        <Card size="small" style={{ marginBottom: 16, background: '#f6f8fa' }}>
+      {/* ====== 追查循环指示器（方案A隐性循环）====== */}
+      {followupRoundIdx > 0 && (
+        <Card size="small" style={{ marginBottom: 16, background: '#fffbe6', border: '1px solid #ffe58f' }}>
           <Space direction="vertical" style={{ width: '100%' }} size="small">
-            {/* Round counter */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Space>
-                <Badge count={effectiveRoundIdx} style={{ backgroundColor: '#1677ff' }} />
+                <Badge count={followupRoundIdx} style={{ backgroundColor: '#fa8c16' }} />
                 <Text strong>
-                  {task.status === 'completed' && convergenceReason
-                    ? `迭代完成 · ${effectiveRoundIdx}/${maxRounds} 轮`
-                    : `第 ${effectiveRoundIdx}/${maxRounds} 轮`}
+                  {task.status === 'completed'
+                    ? `追查完成 · ${followupRoundIdx}/${maxFollowupRounds} 轮`
+                    : `追查第 ${followupRoundIdx}/${maxFollowupRounds} 轮`}
                 </Text>
-                {task.status !== 'completed' && effectiveRoundIdx > 0 && (
-                  <Tag icon={<SyncOutlined spin />} color="processing">迭代中</Tag>
+                {task.status !== 'completed' && (
+                  <Tag icon={<SyncOutlined spin />} color="processing">追查中</Tag>
                 )}
               </Space>
-              {convergenceReason && (
-                <Tag icon={<CheckCircleOutlined />} color="success">{convergenceReason}</Tag>
+              {followupTasks.length === 0 && task.status !== 'completed' && (
+                <Tag icon={<CheckCircleOutlined />} color="success">已收敛</Tag>
               )}
             </div>
-            {/* Per-round decisions timeline */}
-            {iterationDecisions.length > 0 && (
+            {/* 追查任务列表 */}
+            {followupTasks.length > 0 && (
               <Timeline
-                items={iterationDecisions.map((d, i) => ({
-                  color: d.should_continue ? 'blue' : 'green',
-                  dot: d.should_continue ? <SyncOutlined /> : <CheckCircleOutlined />,
+                items={followupTasks.map((t, i) => ({
+                  color: t.priority === 'high' ? 'red' : t.priority === 'medium' ? 'orange' : 'gray',
+                  dot: <SearchOutlined />,
                   children: (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      第 {d.round} 轮 · {d.should_continue ? '继续迭代' : '收敛'} · {d.reason}
-                    </Text>
+                    <div>
+                      <Text strong style={{ fontSize: 12 }}>{t.query}</Text>
+                      {t.reason && (
+                        <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                          {t.reason}
+                        </Text>
+                      )}
+                      {t.target_entities && (t.target_entities.genes?.length || t.target_entities.compounds?.length) && (
+                        <div style={{ marginTop: 2 }}>
+                          {t.target_entities.genes?.map(g => (
+                            <Tag key={g} color="blue" style={{ fontSize: 10 }}>{g}</Tag>
+                          ))}
+                          {t.target_entities.compounds?.map(c => (
+                            <Tag key={c} color="green" style={{ fontSize: 10 }}>{c}</Tag>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   ),
                 }))}
               />
@@ -349,9 +360,6 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
           )}
         </Card>
       )}
-
-      {/* 迭代决策面板（达尔文 Stage Gate 量化指标 + 收敛决策）*/}
-      <IterationPanel />
 
       {/* 实时日志 */}
       <Card size="small" title={<Title level={5} style={{ margin: 0 }}>实时日志</Title>}>

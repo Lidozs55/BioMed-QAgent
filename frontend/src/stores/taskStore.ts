@@ -1,7 +1,7 @@
 /** 任务状态管理 — Zustand store */
 import { create } from 'zustand';
 import { api } from '@/api/client';
-import type { TaskSummary, WSMessage, StageInfo } from '@/api/types';
+import type { TaskSummary, WSMessage, FollowupTask } from '@/api/types';
 
 const MAX_WS_MESSAGES = 200;
 
@@ -16,19 +16,15 @@ interface TaskStore {
   wsMessages: WSMessage[];
   currentStage: string;
   stageProgress: number;
-  // 迭代决策最新状态（达尔文 Stage Gate 量化指标 + 收敛决策）
-  latestIterationDecision: WSMessage | null;
-  latestStageGateEvaluation: WSMessage | null;
 
   // 加载状态
   loading: boolean;
   error: string | null;
 
-  // 迭代状态 (来自 WS iteration_round / iteration_decision / iteration_converged)
-  roundIdx: number;
-  maxRounds: number;
-  iterationDecisions: Array<{ round: number; should_continue: boolean; reason: string }>;
-  convergenceReason: string;
+  // 追查循环状态（方案A隐性循环：来自 WS followup_round 事件）
+  followupRoundIdx: number;
+  maxFollowupRounds: number;
+  followupTasks: FollowupTask[];
 
   // 动作
   fetchTasks: () => Promise<void>;
@@ -48,14 +44,11 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   wsMessages: [],
   currentStage: '',
   stageProgress: 0,
-  latestIterationDecision: null,
-  latestStageGateEvaluation: null,
-  roundIdx: 0,
-  maxRounds: 3,
-  iterationDecisions: [],
-  convergenceReason: '',
   loading: false,
   error: null,
+  followupRoundIdx: 0,
+  maxFollowupRounds: 3,
+  followupTasks: [],
 
   fetchTasks: async () => {
     set({ loading: true, error: null });
@@ -69,10 +62,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   selectTask: async (id) => {
     if (!id) {
-      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null });
+      set({ selectedTaskId: null, selectedTask: null, wsMessages: [], currentStage: '', stageProgress: 0 });
       return;
     }
-    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, latestIterationDecision: null, latestStageGateEvaluation: null, error: null });
+    set({ selectedTaskId: id, wsMessages: [], currentStage: '', stageProgress: 0, error: null });
     try {
       const task = await api.getTask(id);
       set({ selectedTask: task });
@@ -82,7 +75,7 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
   },
 
   createAndStartTask: async (goal, domainHint) => {
-    set({ loading: true, error: null, wsMessages: [], roundIdx: 0, maxRounds: 3, iterationDecisions: [], convergenceReason: '' });
+    set({ loading: true, error: null, wsMessages: [], followupRoundIdx: 0, maxFollowupRounds: 3, followupTasks: [] });
     try {
       const task = await api.createTask({
         research_goal: goal,
@@ -96,7 +89,6 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
         selectedTask: task,
         loading: false,
       });
-      // 刷新列表（将新任务加入列表顶部）
       get().fetchTasks();
       return task.task_id;
     } catch (e) {
@@ -135,62 +127,13 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
     // 心跳 pong 不进入展示列表
     if (msg.type === 'pong') return;
 
-    // Handle iteration round start
-    if (msg.type === 'iteration_round') {
-      set({
-        roundIdx: msg.round ?? 0,
-        maxRounds: msg.max_rounds ?? 3,
-        currentStage: '',
-        stageProgress: 0,
-        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
-      });
-      return;
-    }
-
-    // Handle followup round (方案 A 隐性循环：追查轮次)
+    // Handle followup round (方案A隐性循环：追查轮次)
     if (msg.type === 'followup_round') {
       set({
-        roundIdx: msg.round ?? 0,
-        maxRounds: msg.max_rounds ?? 3,
+        followupRoundIdx: msg.round ?? 0,
+        maxFollowupRounds: msg.max_rounds ?? 3,
         currentStage: '',
         stageProgress: 0,
-        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
-      });
-      return;
-    }
-
-    // Handle iteration decision (per-round)
-    if (msg.type === 'iteration_decision') {
-      const decisions = [...get().iterationDecisions];
-      const idx = decisions.findIndex(d => d.round === msg.round);
-      const entry = {
-        round: msg.round ?? 0,
-        should_continue: msg.should_continue ?? false,
-        reason: msg.reason ?? '',
-      };
-      if (idx >= 0) decisions[idx] = entry;
-      else decisions.push(entry);
-      set({
-        iterationDecisions: decisions,
-        latestIterationDecision: msg,
-        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
-      });
-      return;
-    }
-
-    // Handle iteration convergence (all rounds done)
-    if (msg.type === 'iteration_converged') {
-      set({
-        convergenceReason: msg.reason ?? '',
-        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
-      });
-      return;
-    }
-
-    // Handle stage gate evaluation
-    if (msg.type === 'stage_gate_evaluation') {
-      set({
-        latestStageGateEvaluation: msg,
         wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
       });
       return;
@@ -198,25 +141,28 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
     set((state) => ({ wsMessages: [...state.wsMessages.slice(-MAX_WS_MESSAGES), msg] }));
 
-    // 新任务开始时重置迭代状态
+    // 新任务开始时重置追查状态
     if (msg.type === 'task_start') {
-      set({ roundIdx: 0, iterationDecisions: [], convergenceReason: '' });
+      set({ followupRoundIdx: 0, followupTasks: [] });
     }
     if (msg.type === 'stage_start' || msg.type === 'stage_complete') {
       set({ currentStage: msg.stage || '' });
+    }
+    // review 阶段完成时提取追查任务列表
+    if (msg.type === 'stage_complete' && msg.stage === 'review' && msg.followup_tasks) {
+      set({ followupTasks: msg.followup_tasks });
     }
     if (msg.type === 'stage_progress' && msg.pct !== undefined) {
       set({ stageProgress: msg.pct });
     }
     if (msg.type === 'snapshot' && msg.stages) {
-      // 找到当前运行中的阶段
       const running = Object.entries(msg.stages).find(([, s]) => s.status === 'running');
       if (running) {
         set({ currentStage: running[0] });
       }
-      // 从 snapshot 恢复轮次（WS 重连后不再依赖 iteration_round 事件）
+      // 从 snapshot 恢复追查轮次（WS 重连后）
       if (msg.current_round && msg.current_round > 0) {
-        set({ roundIdx: msg.current_round });
+        set({ followupRoundIdx: msg.current_round > 1 ? msg.current_round - 1 : 0 });
       }
     }
     // 任务完成、错误、等待确认或阶段完成时自动刷新 selectedTask
@@ -233,6 +179,6 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
 
   clearMessages: () => set({
     wsMessages: [], currentStage: '', stageProgress: 0,
-    latestIterationDecision: null, latestStageGateEvaluation: null,
+    followupRoundIdx: 0, followupTasks: [],
   }),
 }));
