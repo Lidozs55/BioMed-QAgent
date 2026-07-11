@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BioMedQAgent 研究流程</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f7fa; color: #2c3e50; line-height: 1.7; padding: 40px 20px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 8px; color: #1a1a2e; }
+  .subtitle { color: #7f8c8d; margin-bottom: 32px; font-size: 14px; }
+  h2 { font-size: 22px; margin: 32px 0 16px; color: #1a1a2e;
+       border-left: 4px solid #3498db; padding-left: 12px; }
+  h3 { font-size: 17px; margin: 20px 0 10px; color: #2c3e50; }
+
+  /* 流程图 */
+  .flow { display: flex; flex-direction: column; gap: 0; margin: 24px 0; }
+  .flow-row { display: flex; align-items: stretch; gap: 0; }
+  .flow-step {
+    flex: 1; background: #fff; border-radius: 8px; padding: 16px 14px;
+    border: 1px solid #e1e8ed; text-align: center; position: relative;
+    transition: box-shadow .2s;
+  }
+  .flow-step:hover { box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .flow-step .icon { font-size: 24px; margin-bottom: 6px; }
+  .flow-step .name { font-weight: 600; font-size: 14px; color: #1a1a2e; }
+  .flow-step .desc { font-size: 12px; color: #7f8c8d; margin-top: 4px; }
+  .flow-arrow {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; color: #bdc3c7; font-size: 18px;
+  }
+  .flow-step.planning { border-top: 3px solid #9b59b6; }
+  .flow-step.search { border-top: 3px solid #3498db; }
+  .flow-step.acquire { border-top: 3px solid #3498db; }
+  .flow-step.parse { border-top: 3px solid #3498db; }
+  .flow-step.clean { border-top: 3px solid #1abc9c; }
+  .flow-step.analyze { border-top: 3px solid #e67e22; }
+  .flow-step.review { border-top: 3px solid #e74c3c; }
+  .flow-step.export { border-top: 3px solid #2ecc71; }
+
+  /* 追查循环 */
+  .loop-box {
+    background: #fff; border: 2px dashed #e67e22; border-radius: 12px;
+    padding: 20px; margin: 16px 0; position: relative;
+  }
+  .loop-box::before {
+    content: "追查循环（方案A隐性循环 · 最多3轮）";
+    position: absolute; top: -12px; left: 20px; background: #fff;
+    padding: 0 8px; font-size: 13px; color: #e67e22; font-weight: 600;
+  }
+  .loop-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+               margin-top: 8px; }
+  .loop-step {
+    background: #fef9e7; border: 1px solid #f0c36d; border-radius: 6px;
+    padding: 10px 14px; font-size: 13px; text-align: center; min-width: 100px;
+  }
+  .loop-step.highlight { background: #fdebd0; border-color: #e67e22; font-weight: 600; }
+  .loop-arrow { color: #e67e22; font-size: 16px; }
+  .loop-feedback {
+    margin-top: 12px; font-size: 12px; color: #7f8c8d;
+    background: #f8f9fa; padding: 8px 12px; border-radius: 6px;
+  }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0;
+          background: #fff; border-radius: 8px; overflow: hidden;
+          box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  th { background: #2c3e50; color: #fff; text-align: left;
+       padding: 10px 14px; font-size: 13px; font-weight: 600; }
+  td { padding: 10px 14px; border-bottom: 1px solid #e1e8ed; font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f8f9fa; }
+  td code, .inline-code {
+    background: #f0f3f5; padding: 2px 6px; border-radius: 3px;
+    font-family: "Consolas", "Courier New", monospace; font-size: 12px;
+    color: #c0392b;
+  }
+
+  /* 信息卡片 */
+  .card {
+    background: #fff; border-radius: 8px; padding: 18px 20px; margin: 16px 0;
+    border-left: 4px solid #3498db; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  }
+  .card.warning { border-left-color: #e74c3c; }
+  .card.success { border-left-color: #2ecc71; }
+  .card.info { border-left-color: #9b59b6; }
+  .card ul { margin: 8px 0 0 18px; }
+  .card li { margin: 4px 0; font-size: 14px; }
+
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; margin-right: 4px;
+  }
+  .tag-core { background: #ebf5fb; color: #2980b9; }
+  .tag-followup { background: #fef9e7; color: #e67e22; }
+  .tag-optional { background: #fdecea; color: #c0392b; }
+
+  .footer { text-align: center; margin-top: 40px; color: #bdc3c7; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BioMedQAgent 研究流程</h1>
+<p class="subtitle">单轮完整流水线 + 方案A隐性追查循环 | 更新于 2026-07-11</p>
+
+<!-- ========== 总体流程 ========== -->
+<h2>总体流程</h2>
+
+<div class="flow">
+  <!-- 第一行：planning -->
+  <div class="flow-row">
+    <div class="flow-step planning">
+      <div class="icon">🧠</div>
+      <div class="name">Planning</div>
+      <div class="desc">LLM 实体识别<br>生成检索计划</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step search">
+      <div class="icon">🔍</div>
+      <div class="name">Search</div>
+      <div class="desc">文献+实体数据源<br>并行检索</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step acquire">
+      <div class="icon">📥</div>
+      <div class="name">Acquire</div>
+      <div class="desc">PDF 下载<br>全文获取</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step parse">
+      <div class="icon">📄</div>
+      <div class="name">Parse</div>
+      <div class="desc">PDF/JATS XML<br>结构化解析</div>
+    </div>
+  </div>
+  <div style="text-align:center; color:#bdc3c7; font-size:18px; margin:4px 0;">↓</div>
+  <!-- 第二行：clean → analyze → review → 追查循环 → export -->
+  <div class="flow-row">
+    <div class="flow-step clean">
+      <div class="icon">🧹</div>
+      <div class="name">Clean</div>
+      <div class="desc">去重+标准化<br>质量标记</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step analyze">
+      <div class="icon">🔬</div>
+      <div class="name">Analyze</div>
+      <div class="desc">PPI/富集/Hub<br>药物靶点</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step review">
+      <div class="icon">📋</div>
+      <div class="name">Review</div>
+      <div class="desc">LLM 质量审查<br>+ 追查任务提取</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step export">
+      <div class="icon">📊</div>
+      <div class="name">Export</div>
+      <div class="desc">CSV + LLM<br>研究报告</div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 追查循环 ========== -->
+<h2>追查循环（方案A隐性循环）</h2>
+<p style="font-size:14px; color:#7f8c8d; margin-bottom:12px;">
+  第一轮 Review 后，若报告存在薄弱点，Reviewer 自动提取追查任务，驱动针对性补检索。
+  相比旧版"多轮完整重跑"，追查更精准、更高效。
+</p>
+
+<div class="loop-box">
+  <div class="loop-flow">
+    <div class="loop-step highlight">Reviewer 提取<br>followup_tasks</div>
+    <span class="loop-arrow">→</span>
+    <div class="loop-step">Followup<br>Search</div>
+    <span class="loop-arrow">→</span>
+    <div class="loop-step">Followup<br>Parse</div>
+    <span class="loop-arrow">→</span>
+    <div class="loop-step">去重合并<br>到主记录</div>
+    <span class="loop-arrow">→</span>
+    <div class="loop-step">重跑<br>Clean→Analyze→Review</div>
+    <span class="loop-arrow">↺</span>
+  </div>
+  <div class="loop-feedback">
+    <strong>收敛保障（三重）：</strong>
+    ① Reviewer 判断无需追查 → 返回空 followup_tasks → 收敛；
+    ② 硬性上限 3 轮，防止无限循环；
+    ③ <code>query_log</code> 中已失败查询（status=not_found）不重复追查
+  </div>
+</div>
+
+<!-- ========== 各阶段说明 ========== -->
+<h2>各阶段说明</h2>
+
+<table>
+  <tr>
+    <th style="width:110px;">阶段</th>
+    <th>职责</th>
+    <th style="width:160px;">关键产出</th>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Planning</span></td>
+    <td>LLM 分析研究目标，提取基因/化合物/疾病实体，生成检索查询与推荐数据源</td>
+    <td><code>context["entities"]</code><br><code>search_queries</code></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Search</span></td>
+    <td>4 步流程：①文献多查询并行 ②实体数据源（STRING/DisGeNET 等）③引用追溯 ④Darwinian fallback（召回不足时组合查询+MeSH 扩展）</td>
+    <td>DataRecord 列表<br>（含 PMID/标题/摘要）</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Acquire</span></td>
+    <td>PDF 下载：pdf_url → Unpaywall(DOI) → EPMC fullTextXML(PMCID) 多源 fallback。Unpaywall 5s 超时 + 3 次失败自动禁用</td>
+    <td>本地 PDF / JATS XML</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Parse</span></td>
+    <td>PDF 文本提取 + JATS XML 全文解析（全文+表格）+ 爬虫 LLM 提取 + 图表 Qwen-VL 提取 + 生物数据解析</td>
+    <td>结构化 DataRecord</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Clean</span></td>
+    <td>跨源去重（PMID/DOI/标题相似度）+ 字段标准化 + 质量标记（低置信度/缺失字段）</td>
+    <td>清洗后记录</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Analyze</span></td>
+    <td>按数据类型路由：有基因→PPI/富集/Hub 基因/上游调控；有化合物→药物靶点；有表达数据→差异表达。Phase1 并行 + Phase2 复用 PPI</td>
+    <td><code>context["analysis"]</code><br>（多维度分析结果）</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Review</span></td>
+    <td>LLM 审查数据质量与完整性（质量/完整度/缺失/建议）+ <strong>追查任务提取</strong>（基于报告薄弱点 + query_log 生成 followup_tasks）</td>
+    <td><code>context["review"]</code><br><code>followup_tasks</code></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-followup">Followup</span></td>
+    <td>追查循环：复用 Search/Parse Agent（<code>followup_mode</code> 用独立 stage 名），精简数据源（文献为主），追查后重跑 Clean→Analyze→Review</td>
+    <td>补充记录 + 更新分析</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-optional">Confirm</span></td>
+    <td>人工确认点（可选）：审查质量 low 或平均置信度 &lt; 0.5 时暂停，等待用户 approve 后再 export</td>
+    <td>AWAITING_CONFIRMATION</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-core">Export</span></td>
+    <td>CSV 导出（全量平铺）+ 多源整合 CSV（按实体类型分表）+ LLM 生成综合研究报告（HTML）</td>
+    <td>data.csv / merged_data.csv<br>report.html</td>
+  </tr>
+</table>
+
+<!-- ========== 数据源 ========== -->
+<h2>数据源</h2>
+<div class="card info">
+  <strong>活跃数据源（15 个模块函数）</strong>
+  <ul>
+    <li><strong>文献检索</strong>：PubMed、Europe PMC（国内可用，OA 文献）、OpenAlex、Semantic Scholar</li>
+    <li><strong>蛋白质/基因</strong>：STRING（PPI）、DisGeNET（基因-疾病）、UniProt、PDB（结构）</li>
+    <li><strong>化合物/药物</strong>：TCMSP（中药成分）、DrugBank、PubChem</li>
+    <li><strong>通路</strong>：KEGG、Reactome</li>
+    <li><strong>其他</strong>：citation_trace（引用追溯）、web_crawler（网页爬取）</li>
+  </ul>
+</div>
+
+<!-- ========== 关键设计 ========== -->
+<h2>关键设计决策</h2>
+
+<div class="card">
+  <h3>🔄 方案A隐性循环 vs 旧版多轮迭代</h3>
+  <p style="font-size:14px; margin:8px 0;">
+    <strong>旧版</strong>：每轮跑完整 6 阶段 + IterationDecisionAgent 决策，冗余且"补齐原计划 gap"而非"扩展研究边界"。
+  </p>
+  <p style="font-size:14px; margin:8px 0;">
+    <strong>新版</strong>：单轮完整流水线后，Reviewer 识别报告薄弱点，生成精准追查任务，仅跑 search→parse + 重跑分析。
+    IterationDecisionAgent 已移除（-479 行），架构更简洁。
+  </p>
+</div>
+
+<div class="card success">
+  <h3>📝 query_log 全局记录</h3>
+  <p style="font-size:14px;">
+    SearchAgent 每个查询执行后记入 <code>context["query_log"]</code>（含 query/source/phase/status/records_count）。
+    第一轮 + followup 都记录，压缩后传给 Reviewer，使其能判断"已尝试但未找到"，在报告中标注 + 避免重复追查。
+  </p>
+</div>
+
+<div class="card warning">
+  <h3>🌐 国内网络适配</h3>
+  <ul>
+    <li>Unpaywall API 不可达 → 5s 超时 + 3 次失败禁用 + EPMC fullTextXML fallback</li>
+    <li>OpenAlex/Semantic Scholar 429 限流 → Europe PMC 作为国内可用的 OA 文献源</li>
+    <li>PMC PDF 直链反爬 → 改用 EPMC fullTextXML API 获取 JATS XML 全文</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>⚡ 性能优化</h3>
+  <ul>
+    <li>AnalysisAgent：Phase1（PPI/富集/药物靶点/差异表达）<code>asyncio.gather</code> 并行；Phase2（Hub/上游调控）复用 PPI 结果</li>
+    <li>API timeout 从 120s 降至 30s，避免单点卡死</li>
+    <li>uvicorn --reload 模式，代码变更自动重载</li>
+  </ul>
+</div>
+
+<!-- ========== 技术栈 ========== -->
+<h2>技术栈</h2>
+<table>
+  <tr><th>层级</th><th>技术</th></tr>
+  <tr><td>后端</td><td>Python + FastAPI + uvicorn + DashScope (qwen-max/qwen-long)</td></tr>
+  <tr><td>前端</td><td>React + TypeScript + Vite + Zustand</td></tr>
+  <tr><td>通信</td><td>REST API + WebSocket（实时进度推送）</td></tr>
+  <tr><td>LLM</td><td>阿里云百炼 DashScope（强制使用）</td></tr>
+  <tr><td>Agent 架构</td><td>BaseAgent(ABC) + AgentRegistry + 6 阶段 Agent + Orchestrator 编排</td></tr>
+</table>
+
+<div class="footer">
+  BioMedQAgent · 单轮完整流水线 + 方案A隐性追查循环 · 2026-07-11
+</div>
+
+</div>
+</body>
+</html>
