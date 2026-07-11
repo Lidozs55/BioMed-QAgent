@@ -90,6 +90,7 @@ async def task_websocket(websocket: WebSocket, task_id: str):
             "status": task.status.value,
             "stages": {k: v.model_dump() for k, v in task.stages.items()},
             "total_records": task.total_records,
+            "current_round": task.current_round,
         })
     except Exception:
         pass

@@ -98,6 +98,10 @@ class Orchestrator:
                 new_records = self._dedup_round(round_records, seen_ids)
                 all_records.extend(new_records)
                 round_new_counts.append(len(new_records))
+                # 运行中实时更新 total_records（供前端显示，修复"总记录数=0"bug）
+                task.total_records = len(all_records)
+                task.current_round = round_idx
+                self.store.update_task(task)
                 logger.info("第 %d 轮完成：新增 %d 条，累计 %d 条",
                             round_idx, len(new_records), len(all_records))
 
@@ -127,6 +131,29 @@ class Orchestrator:
                 next_queries = decision.get("next_round_queries", [])
                 if next_queries:
                     context["search_queries"] = next_queries
+
+                # 实体追加反馈闭环：将新发现实体合并到 context["entities"]，
+                # 下一轮 SearchAgent 的 Step2 实体数据源检索将使用扩展后的实体集
+                entities_to_add = decision.get("entities_to_add", {}) or {}
+                added_genes = entities_to_add.get("genes", []) or []
+                added_compounds = entities_to_add.get("compounds", []) or []
+                if added_genes or added_compounds:
+                    if "entities" not in context:
+                        context["entities"] = {"genes": [], "compounds": [],
+                                               "diseases": [], "pathways": []}
+                    existing_genes = set(context["entities"].get("genes", []))
+                    existing_compounds = set(
+                        context["entities"].get("compounds", []))
+                    existing_genes.update(added_genes)
+                    existing_compounds.update(added_compounds)
+                    context["entities"]["genes"] = sorted(existing_genes)
+                    context["entities"]["compounds"] = sorted(existing_compounds)
+                    logger.info("实体追加：第 %d 轮新增 %d 基因 + %d 化合物，"
+                                "累计 %d 基因 + %d 化合物",
+                                round_idx, len(added_genes), len(added_compounds),
+                                len(context["entities"]["genes"]),
+                                len(context["entities"]["compounds"]))
+
                 logger.info("进入第 %d 轮：查询=%s",
                             round_idx + 1, next_queries[:3])
 
@@ -397,7 +424,6 @@ class Orchestrator:
                 logger.warning("阶段 %s 未注册 Agent，跳过", stage_name)
                 continue
 
-            retry_count = stage_retries.get(stage_name, 0)
             records, context, decision = await self._execute_stage_with_error_handling(
                 task, stage_name, agent, records, context, progress,
                 stage_retries, round_idx)
@@ -439,9 +465,6 @@ class Orchestrator:
                     task, records, context, progress)
                 return records, context, None  # 成功
             except Exception as e:
-                logger.warning("阶段 %s 失败（第 %d 次）: %s",
-                               stage_name, retry_count + 1, e)
-
                 # 调用 ErrorDecisionAgent 决策（直接持有实例，非阶段 Agent）
                 decision = await self._error_decision.decide(
                     task, stage_name, e, records, context,
@@ -530,7 +553,7 @@ class Orchestrator:
   }},
   "domain": "tcm|oncology|pharmacology|molecular_biology|other",
   "search_queries": ["PubMed检索关键词1", "关键词2", ...],
-  "recommended_sources": ["pubmed", "geo", "string", "kegg", "pdb", "tcmsp", "openalex", "semantic_scholar", ...],
+  "recommended_sources": ["pubmed", "geo", "string", "kegg", "pdb", "tcmsp", "openalex", "semantic_scholar", "europepmc", ...],
   "analysis_plan": "建议的分析策略简述"
 }}
 
@@ -538,7 +561,8 @@ class Orchestrator:
 - compounds 应包含中药复方中的主要活性成分（如有）
 - genes 应包含已知的关键靶点基因
 - search_queries 应包含中英文检索词
-- recommended_sources 只能从以下选择：pubmed, openalex, semantic_scholar, geo, string, kegg, pdb, tcmsp, ncbi, clinicaltrials, tcga, drugbank, disgenet, pubchem"""
+- recommended_sources 只能从以下选择：pubmed, openalex, semantic_scholar, europepmc, geo, string, kegg, pdb, tcmsp, ncbi, clinicaltrials, tcga, drugbank, disgenet, pubchem
+- europepmc 是国内网络最稳定的 OA 文献源，建议优先包含"""
 
             try:
                 result = await self._to_thread(

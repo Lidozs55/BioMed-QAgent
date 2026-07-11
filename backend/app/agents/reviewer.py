@@ -85,7 +85,8 @@ class ReviewerAgent(BaseAgent):
                       "note": "API Key 未配置或无数据"}
             msg = "跳过 LLM 审查（无 API Key 或无数据）"
 
-        self._set_stage(task, "review", StageStatus.DONE, msg)
+        self._set_stage(task, "review", StageStatus.DONE, msg,
+                        records_count=len(records))
         self._emit(progress, type="stage_complete", stage="review",
                     message=msg, review=review)
         self.store.update_task(task)

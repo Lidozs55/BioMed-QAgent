@@ -131,9 +131,12 @@ class SearchAgent(BaseAgent):
                 entities, lit_sources, max_results, task, prov, progress,
                 gate_reason)
 
-        task.source_count = len(set(
+        # 多轮累积：取当前轮与历史轮的最大值，避免后续轮 0 条覆盖
+        current_sources = len(set(
             r.get("source_ref", {}).get("source_name", "") for r in all_records
+            if r.get("source_ref", {}).get("source_name", "")
         ))
+        task.source_count = max(task.source_count, current_sources)
         msg = (f"检索完成：共 {len(all_records)} 条记录，"
                f"来自 {task.source_count} 个数据源")
         self._set_stage(task, "search", StageStatus.DONE, msg,
@@ -360,7 +363,7 @@ class SearchAgent(BaseAgent):
                             f"{len(mesh_queries)} MeSH + {len(fallback_queries)} LLM")
 
         retry_sources = [s for s in
-                         ("pubmed", "openalex", "semantic_scholar", "arxiv")
+                         ("pubmed", "europepmc", "openalex", "semantic_scholar", "arxiv")
                          if s in lit_sources or s not in self.ENTITY_SOURCES][:4]
 
         # 兜底：若 combo + fallback + mesh 全空（无 diseases 或 LLM 查询≤5），

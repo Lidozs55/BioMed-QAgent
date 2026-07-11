@@ -42,6 +42,7 @@ export interface TaskSummary {
   total_records: number;
   avg_confidence: number;
   source_count: number;
+  current_round: number;
   stages: Record<string, StageInfo>;
   entities: Entities;
   domain: string;
@@ -145,6 +146,7 @@ export interface WSMessage {
   status?: TaskStatus;
   stages?: Record<string, StageInfo>;
   total_records?: number;
+  current_round?: number;
   records_count?: number;
   context?: Record<string, unknown>;
   review?: Record<string, unknown>;

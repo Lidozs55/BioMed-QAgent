@@ -55,6 +55,8 @@ function stageStatus(status: StageStatus): 'wait' | 'process' | 'finish' | 'erro
 
 export function PipelineStatus({ task }: { task: TaskSummary }) {
   const { wsMessages, stageProgress, currentStage, roundIdx, maxRounds, iterationDecisions, convergenceReason, confirmTask, loading } = useTaskStore();
+  // 优先使用 task.current_round（后端持久化，WS 重连后也能恢复）
+  const effectiveRoundIdx = task.current_round || roundIdx;
 
   const stages = Object.values(task.stages);
   const entities = task.entities || {};
@@ -147,19 +149,19 @@ export function PipelineStatus({ task }: { task: TaskSummary }) {
       })()}
 
       {/* ====== Multi-Round Iteration Indicator ====== */}
-      {roundIdx > 0 && (
+      {effectiveRoundIdx > 0 && (
         <Card size="small" style={{ marginBottom: 16, background: '#f6f8fa' }}>
           <Space direction="vertical" style={{ width: '100%' }} size="small">
             {/* Round counter */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Space>
-                <Badge count={roundIdx} style={{ backgroundColor: '#1677ff' }} />
+                <Badge count={effectiveRoundIdx} style={{ backgroundColor: '#1677ff' }} />
                 <Text strong>
                   {task.status === 'completed' && convergenceReason
-                    ? `迭代完成 · ${roundIdx}/${maxRounds} 轮`
-                    : `第 ${roundIdx}/${maxRounds} 轮`}
+                    ? `迭代完成 · ${effectiveRoundIdx}/${maxRounds} 轮`
+                    : `第 ${effectiveRoundIdx}/${maxRounds} 轮`}
                 </Text>
-                {task.status !== 'completed' && roundIdx > 0 && (
+                {task.status !== 'completed' && effectiveRoundIdx > 0 && (
                   <Tag icon={<SyncOutlined spin />} color="processing">迭代中</Tag>
                 )}
               </Space>

@@ -72,6 +72,7 @@ class Task(BaseModel):
     total_records: int = 0
     avg_confidence: float = 0.0
     source_count: int = 0
+    current_round: int = 0  # 当前迭代轮次（0=未开始，1-3=运行中）
     # 输出路径
     output_dir: str = ""
     report_html: str = ""
@@ -112,6 +113,7 @@ class Task(BaseModel):
             "total_records": self.total_records,
             "avg_confidence": round(self.avg_confidence, 3),
             "source_count": self.source_count,
+            "current_round": self.current_round,
             "stages": {k: v.model_dump() for k, v in self.stages.items()},
             "entities": self.entities,
             "domain": self.domain,

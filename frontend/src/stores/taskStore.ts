@@ -202,6 +202,10 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       if (running) {
         set({ currentStage: running[0] });
       }
+      // 从 snapshot 恢复轮次（WS 重连后不再依赖 iteration_round 事件）
+      if (msg.current_round && msg.current_round > 0) {
+        set({ roundIdx: msg.current_round });
+      }
     }
     // 任务完成、错误、等待确认或阶段完成时自动刷新 selectedTask
     if (msg.type === 'task_complete' || msg.type === 'error' ||

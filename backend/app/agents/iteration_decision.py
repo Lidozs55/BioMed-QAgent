@@ -58,6 +58,10 @@ class IterationDecisionAgent(BaseAgent):
         planned = context.get("entities", {})
         verified = self._compute_verified_entities(records, context)
         gap = self._compute_gap(planned, verified)
+        # 实体追加反馈闭环：第一轮分析中新发现的实体（PPI 节点/Hub 基因/
+        # 上游调控因子/药物靶点等），反哺到下一轮检索，扩展研究边界
+        newly_discovered = self._compute_newly_discovered(planned, verified)
+        context["newly_discovered"] = newly_discovered
 
         # 2. 量化 Stage Gate 评估（达尔文接线，原 dormant）
         evaluation = self._evaluate_stage(records, task, context, round_idx)
@@ -91,8 +95,8 @@ class IterationDecisionAgent(BaseAgent):
 
         # 4. LLM 驱动决策（规则未终止时，让 LLM 结合量化指标判断 gap 是否值得继续）
         decision = await self._llm_decide(
-            task, records, context, gap, verified, round_idx,
-            round_new_counts, evaluation, progress)
+            task, records, context, gap, verified, newly_discovered,
+            round_idx, round_new_counts, evaluation, progress)
         context["iteration_decision"] = decision
         context["stage_evaluation"] = evaluation
         self._emit(progress, type="iteration_decision",
@@ -149,6 +153,21 @@ class IterationDecisionAgent(BaseAgent):
         return {
             "genes": sorted(planned_genes - verified["genes"]),
             "compounds": sorted(planned_compounds - verified["compounds"]),
+        }
+
+    @staticmethod
+    def _compute_newly_discovered(planned: dict,
+                                    verified: dict[str, set[str]]) -> dict:
+        """计算本轮新发现的实体（verified - planned）。
+
+        这些实体来源于 PPI 网络节点、Hub 基因、上游调控因子、药物靶点等
+        分析产出，原 planning 阶段未列出。反哺到下一轮检索可扩展研究边界。
+        """
+        planned_genes = {g.upper() for g in planned.get("genes", [])}
+        planned_compounds = {c for c in planned.get("compounds", [])}
+        return {
+            "genes": sorted(verified["genes"] - planned_genes),
+            "compounds": sorted(verified["compounds"] - planned_compounds),
         }
 
     # ========== 量化 Stage Gate 评估（达尔文接线） ==========
@@ -277,22 +296,34 @@ class IterationDecisionAgent(BaseAgent):
 
     async def _llm_decide(self, task: Task, records: list[dict],
                           context: dict, gap: dict, verified: dict,
+                          newly_discovered: dict,
                           round_idx: int, round_new_counts: list[int],
                           evaluation: dict | None,
                           progress: ProgressCallback | None) -> dict:
         """调用 LLM 判断是否继续迭代，并生成下一轮查询。
 
         量化指标 + suggestions 注入 prompt，替代纯 gap 描述（达尔文接线）。
+        实体追加反馈闭环：新发现实体注入 prompt，LLM 决策哪些值得追查，
+        返回 entities_to_add 供 Orchestrator 合并到 context["entities"]。
         """
         if not self.llm.is_available():
-            # 无 LLM 时：有 gap 就继续，否则终止；用 keyword_expander 构造查询
-            should = bool(gap["genes"] or gap["compounds"])
+            # 无 LLM 时：有 gap 或新发现实体就继续
+            should = bool(gap["genes"] or gap["compounds"]
+                          or newly_discovered["genes"]
+                          or newly_discovered["compounds"])
+            # 无 LLM 时直接追加所有新发现实体
+            entities_to_add = newly_discovered if should else {
+                "genes": [], "compounds": []}
             return {
                 "should_continue": should,
-                "reason": "无 LLM，按 gap 判断" + ("（有未验证实体）" if should else "（无 gap）"),
+                "reason": "无 LLM，按 gap+新发现判断"
+                          + ("（有未验证或新发现实体）" if should else "（无 gap/新发现）"),
                 "next_round_queries": await self._build_fallback_queries(
-                    gap, task, records, context),
-                "target_entities": gap["genes"] + gap["compounds"],
+                    gap, newly_discovered, task, records, context),
+                "target_entities": (gap["genes"] + gap["compounds"]
+                                    + newly_discovered["genes"]
+                                    + newly_discovered["compounds"]),
+                "entities_to_add": entities_to_add,
                 "stage_evaluation": evaluation,
             }
 
@@ -333,9 +364,13 @@ class IterationDecisionAgent(BaseAgent):
 - 基因：{sorted(verified['genes'])}
 - 化合物：{sorted(verified['compounds'])}
 
-未验证 gap：
+未验证 gap（原计划但尚未在数据中验证的实体）：
 - 基因：{gap['genes']}
 - 化合物：{gap['compounds']}
+
+本轮新发现的实体（来源：PPI 网络节点/Hub 基因/上游调控因子/药物靶点，原计划未列出）：
+- 基因：{newly_discovered['genes']}
+- 化合物：{newly_discovered['compounds']}
 
 量化 Stage Gate 评估：{metrics_summary}
 Stage Gate 建议：{suggestions_summary}
@@ -347,8 +382,9 @@ Stage Gate 建议：{suggestions_summary}
 {{
   "should_continue": true/false,
   "reason": "决策理由",
-  "next_round_queries": ["针对未验证实体的精准查询1", "查询2"],
+  "next_round_queries": ["针对未验证或新发现实体的精准查询1", "查询2"],
   "target_entities": ["MMP9", "STAT1"],
+  "entities_to_add": {{"genes": ["值得追查的新发现基因"], "compounds": ["值得追查的新发现化合物"]}},
   "convergence_signals": ["收敛信号1"]
 }}
 
@@ -356,8 +392,10 @@ Stage Gate 建议：{suggestions_summary}
 - 若 Stage Gate 评估 passed=true 或 coverage 已高，倾向于终止
 - 若 gap 中的实体有明确的研究价值且可能通过文献检索验证，则继续
 - 若 gap 实体过于宽泛或前几轮已充分覆盖，则终止
+- 新发现的实体（如 Hub 基因、上游调控因子）若与研究目标高度相关，应纳入下一轮检索扩展研究边界
+- entities_to_add 应从新发现实体中筛选出值得追查的子集（过滤噪音），将合并到下一轮的实体检索中
 - 参考 Stage Gate suggestions 选择行动（expand_search/add_source/deepen_analysis）
-- 下一轮查询应针对 gap 实体 + 研究目标构造精准查询（如 "MMP9 pancreatic cancer mechanism"）
+- 下一轮查询应针对 gap 实体 + 新发现实体 + 研究目标构造精准查询（如 "MMP9 pancreatic cancer mechanism"）
 - 最多 5 个查询，避免冗余"""
 
         try:
@@ -367,33 +405,48 @@ Stage Gate 建议：{suggestions_summary}
                 model=MODEL_STRONG,
                 temperature=0.3,
             )
+            # 实体追加：LLM 筛选后的新发现实体子集
+            entities_to_add = result.get("entities_to_add", {}) or {}
+            if not isinstance(entities_to_add, dict):
+                entities_to_add = {}
             return {
                 "should_continue": bool(result.get("should_continue", False)),
                 "reason": result.get("reason", ""),
                 "next_round_queries": result.get("next_round_queries", []),
                 "target_entities": result.get("target_entities", []),
+                "entities_to_add": {
+                    "genes": entities_to_add.get("genes", []) or [],
+                    "compounds": entities_to_add.get("compounds", []) or [],
+                },
                 "convergence_signals": result.get("convergence_signals", []),
                 "stage_evaluation": evaluation,
             }
         except Exception as e:
             logger.warning("LLM 迭代决策失败: %s", e)
-            should = bool(gap["genes"] or gap["compounds"])
+            should = bool(gap["genes"] or gap["compounds"]
+                          or newly_discovered["genes"]
+                          or newly_discovered["compounds"])
             return {
                 "should_continue": should,
-                "reason": f"LLM 决策失败({e})，按 gap 判断",
+                "reason": f"LLM 决策失败({e})，按 gap+新发现判断",
                 "next_round_queries": await self._build_fallback_queries(
-                    gap, task, records, context),
-                "target_entities": gap["genes"] + gap["compounds"],
+                    gap, newly_discovered, task, records, context),
+                "target_entities": (gap["genes"] + gap["compounds"]
+                                    + newly_discovered["genes"]
+                                    + newly_discovered["compounds"]),
+                "entities_to_add": newly_discovered if should else {
+                    "genes": [], "compounds": []},
                 "stage_evaluation": evaluation,
             }
 
-    async def _build_fallback_queries(self, gap: dict, task: Task,
-                                       records: list[dict],
+    async def _build_fallback_queries(self, gap: dict,
+                                       newly_discovered: dict,
+                                       task: Task, records: list[dict],
                                        context: dict) -> list[str]:
         """无 LLM 时构造下一轮查询（达尔文接线：优先用 keyword_expander facade）。
 
         优先调用 ToolRegistry.expand_keywords 基于同义词字典 + 跨实体关联
-        生成精准查询；失败时降级为简单的 gap + 研究目标拼接。
+        生成精准查询；失败时降级为简单的 gap/新发现实体 + 研究目标拼接。
         """
         # 优先：keyword_expander facade（基于同义词字典 + 关联实体扩展）
         expected = self._entities_to_expected(context.get("entities", {}))
@@ -410,11 +463,17 @@ Stage Gate 建议：{suggestions_summary}
                 logger.warning("keyword_expander 失败，降级为简单拼接: %s",
                                result.error)
 
-        # 降级：gap 实体 + 研究目标简单拼接
+        # 降级：gap 实体 + 新发现实体 + 研究目标简单拼接
         queries: list[str] = []
         goal_short = task.research_goal[:20]
+        # 优先补齐原计划 gap
         for g in gap["genes"][:3]:
             queries.append(f"{g} {goal_short}")
         for c in gap["compounds"][:2]:
+            queries.append(f"{c} {goal_short}")
+        # 追加新发现实体（扩展研究边界）
+        for g in newly_discovered.get("genes", [])[:2]:
+            queries.append(f"{g} {goal_short}")
+        for c in newly_discovered.get("compounds", [])[:1]:
             queries.append(f"{c} {goal_short}")
         return queries

@@ -170,7 +170,8 @@ class AnalysisAgent(BaseAgent):
             analysis["survival"] = survival_result
 
         msg = f"分析完成：{len(analysis)} 项分析结果"
-        self._set_stage(task, "analyze", StageStatus.DONE, msg)
+        self._set_stage(task, "analyze", StageStatus.DONE, msg,
+                        records_count=len(records))
         self._emit(progress, type="stage_complete", stage="analyze",
                     message=msg, analysis=analysis)
         self.store.set_analysis(task.task_id, analysis)

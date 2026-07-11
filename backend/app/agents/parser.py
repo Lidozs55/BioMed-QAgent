@@ -76,7 +76,15 @@ class ParserAgent(BaseAgent):
             if fields.get("pdf_url"):
                 return True
             oa = fields.get("best_oa_location")
-            return isinstance(oa, dict) and bool(oa.get("pdf_url"))
+            if isinstance(oa, dict) and oa.get("pdf_url"):
+                return True
+            # 有 PMCID 的记录可通过 Europe PMC fullTextXML 获取全文（国内可用）
+            if fields.get("pmcid"):
+                return True
+            # 有 DOI 的记录可通过 Unpaywall 查询 OA PDF（可能网络不通，快速失败）
+            if fields.get("doi"):
+                return True
+            return False
 
         pdf_candidates = [r for r in records if _has_pdf(r)][:5]
 
@@ -96,8 +104,9 @@ class ParserAgent(BaseAgent):
             self._emit(progress, type="stage_progress", stage="parse",
                         pct=0.8, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
-            # Step 4: 对下载的 PDF 调用 pdf_table_parser 提取表格+caption
+            # Step 4: 对下载的 PDF/XML 调用解析器提取表格+caption+全文
             if pdf_dir.exists():
+                # 4a: PDF 文件 → pdf_table_parser
                 for pdf_file in sorted(pdf_dir.glob("*.pdf")):
                     self._emit(progress, type="stage_progress", stage="parse",
                                 pct=0.9, message=f"解析 PDF: {pdf_file.name}")
@@ -107,6 +116,16 @@ class ParserAgent(BaseAgent):
                     )
                     if result.success and result.data:
                         parsed_records.extend(self._extract_records(result))
+                # 4b: JATS XML 文件（EPMC fullTextXML）→ 解析全文为 records
+                for xml_file in sorted(pdf_dir.glob("*.xml")):
+                    self._emit(progress, type="stage_progress", stage="parse",
+                                pct=0.92,
+                                message=f"解析 JATS XML: {xml_file.name}")
+                    recs = await self._to_thread(
+                        _parse_jats_xml, xml_file, task.task_id,
+                    )
+                    if recs:
+                        parsed_records.extend(recs)
 
         # Step 5: 用户上传的图表图片 + 浏览器爬虫截图 → Qwen-VL 提取图表数据
         chart_records = await self._extract_chart_records(
@@ -327,3 +346,130 @@ class ParserAgent(BaseAgent):
         records.clear()
         records.extend(kept)
         records.extend(extracted)
+
+
+def _parse_jats_xml(xml_path: Path, task_id: str) -> list[dict]:
+    """解析 Europe PMC fullTextXML（JATS 格式）为 DataRecord 列表。
+
+    JATS XML 含结构化全文：article-title/abstract/body/sections/tables/figures。
+    本函数提取：
+    - 1 条全文 record（title + abstract + body 段落文本）
+    - 表格 records（table-wrap，含 caption + 表格内容文本）
+
+    Args:
+        xml_path: JATS XML 文件路径
+        task_id: 任务 ID
+    Returns:
+        DataRecord 列表
+    """
+    import xml.etree.ElementTree as ET
+    from app.tools.parsers._base import make_record as _make_rec
+
+    try:
+        tree = ET.parse(str(xml_path))
+    except Exception as e:
+        logger.warning("JATS XML 解析失败 %s: %s", xml_path.name, e)
+        return []
+    root = tree.getroot()
+
+    def _text(node) -> str:
+        """提取节点内所有文本（含子节点），去空白。"""
+        if node is None:
+            return ""
+        return " ".join(t.strip() for t in node.itertext() if t.strip())
+
+    def _find(node, path: str):
+        return node.find(path) if node is not None else None
+
+    # 提取标题
+    title = _text(_find(root, ".//article-title"))
+    # 提取摘要
+    abstract_parts = []
+    for abs_node in root.findall(".//abstract"):
+        for p in abs_node.findall(".//p"):
+            t = _text(p)
+            if t:
+                abstract_parts.append(t)
+        # 也可能直接是段落文本
+        if not abstract_parts:
+            t = _text(abs_node)
+            if t:
+                abstract_parts.append(t)
+    abstract = " ".join(abstract_parts)
+    # 提取正文段落
+    body_paragraphs = []
+    body = _find(root, ".//body")
+    if body is not None:
+        for p in body.findall(".//p"):
+            t = _text(p)
+            if t and len(t) > 20:  # 过滤过短片段
+                body_paragraphs.append(t)
+    body_text = "\n\n".join(body_paragraphs[:50])  # 限制段落数避免过长
+
+    # 提取 DOI/PMID/PMCID（article-meta）
+    doi = pmid = pmcid = ""
+    for aid in root.findall(".//article-id"):
+        aid_type = aid.get("pub-id-type", "")
+        val = (aid.text or "").strip()
+        if aid_type == "doi":
+            doi = val
+        elif aid_type == "pmid":
+            pmid = val
+        elif aid_type == "pmc":
+            pmcid = val
+
+    records: list[dict] = []
+
+    # 全文 record
+    if title or abstract or body_text:
+        fields = {
+            "entity_type": "FullText",
+            "title": title,
+            "abstract": abstract,
+            "body_text": body_text,
+            "doi": doi,
+            "pmid": pmid,
+            "pmcid": pmcid,
+            "source_xml": xml_path.name,
+            "content_length": len(body_text),
+        }
+        rec = _make_rec(
+            task_id=task_id, source_name="europepmc_fulltext",
+            fields=fields, file_path=str(xml_path),
+            confidence=0.9, method="jats_xml_parse",
+            accession=pmcid or doi or pmid,
+            source_type="file",
+        )
+        records.append(rec)
+
+    # 表格 records
+    for i, tw in enumerate(root.findall(".//table-wrap")):
+        caption = _text(_find(tw, "caption"))
+        # 表格内容：提取所有 cell 文本
+        cells = []
+        for cell in tw.findall(".//td") + tw.findall(".//th"):
+            t = _text(cell)
+            if t:
+                cells.append(t)
+        table_text = " | ".join(cells)
+        if not (caption or table_text):
+            continue
+        fields = {
+            "entity_type": "Table",
+            "caption": caption,
+            "table_content": table_text,
+            "table_index": i + 1,
+            "source_xml": xml_path.name,
+        }
+        rec = _make_rec(
+            task_id=task_id, source_name="europepmc_fulltext",
+            fields=fields, file_path=str(xml_path),
+            confidence=0.85, method="jats_xml_parse",
+            accession=f"{pmcid or xml_path.stem}_table{i+1}",
+            source_type="file",
+        )
+        records.append(rec)
+
+    logger.info("JATS XML %s 解析完成：1 全文 + %d 表格",
+                xml_path.name, len(records) - 1)
+    return records

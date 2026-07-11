@@ -15,7 +15,7 @@
 - **多轮迭代收敛**：`IterationDecisionAgent` 通过量化 Stage Gate 指标（新记录数 / 覆盖率 / 冲突率 / 去重率）+ LLM 空白分析，决定是否需要补充检索，最多 3 轮
 - **人在回路确认检查点**：当记录为空 / 审查质量为 low / 平均置信度 < 0.5 时，任务暂停至 `AWAITING_CONFIRMATION`，等待用户 approve（直接导出）或 reject（从指定阶段重试）
 - **智能错误决策**：`ErrorDecisionAgent` 规则优先（瞬态→重试 / 永久→失败 / 模糊→升级），LLM 兜底，硬回退策略（核心阶段重试 / acquire 跳过 / review 升级）
-- **15 个数据源并行检索**：PubMed / OpenAlex / Semantic Scholar / arXiv / GEO / STRING / KEGG / PDB / TCMSP / NCBI / ClinicalTrials / TCGA / DrugBank / DisGeNET / PubChem
+- **16 个数据源并行检索**：PubMed / EuropePMC / OpenAlex / Semantic Scholar / arXiv / GEO / STRING / KEGG / PDB / TCMSP / NCBI / ClinicalTrials / TCGA / DrugBank / DisGeNET / PubChem
 - **引用追溯**：通过 OpenAlex 的 `referenced_works` 与 `cited_by_count` 自动扩展参考文献链
 - **浏览器代理**：Playwright 驱动的 `browser_agent` 处理 JS 重度渲染网站（CNKI / 万方 / ChEMBL 等），`AcquireAgent` 自动路由
 - **双查询策略**：文献源用研究目标检索，实体源（STRING/TCMSP/DisGeNET 等）按基因/化合物/疾病实体级检索
@@ -85,7 +85,7 @@ BioMedQAgent/
 │   │   ├── tools/
 │   │   │   ├── registry.py          # ★ ToolRegistry facade：直接调用模块函数
 │   │   │   ├── browser_agent.py     # Playwright 浏览器代理（JS 重度渲染网站）
-│   │   │   ├── datasources/         # 15 个活跃数据源 + 引用追溯 + Web 爬虫
+│   │   │   ├── datasources/         # 16 个活跃数据源 + 引用追溯 + Web 爬虫
 │   │   │   ├── parsers/             # PDF 表格 / PDF 下载 / GEO SOFT / PDB / FASTA / 网络
 │   │   │   ├── cleaners/            # 字段对齐 / 单位归一化 / 去重
 │   │   │   ├── analysis/            # PPI / 富集 / 药物-靶点 / 差异表达 / Hub 基因 / 上游调控 / 生存分析
@@ -141,7 +141,9 @@ BioMedQAgent/
 ├── docs/
 │   ├── reflection_loop_design_notes.md
 │   ├── multiomics_network_pharmacology_api_matrix.md
+│   ├── pipeline_dispatch_trace.md
 │   ├── 20260708-review-optimization.md
+│   ├── api/                         # OpenAPI 规范导出
 │   └── archive/                     # 已完成/过时的设计文档归档
 ├── _validate.py                     # AST + import 链 + 工具/Agent 计数验证脚本
 ├── .env.example                     # DASHSCOPE_API_KEY 占位
@@ -269,7 +271,7 @@ curl -X POST http://localhost:8000/api/v1/tasks \
 │      │ LLM 调用（规划/审查/报告/迭代决策）   │ 工具调用       │
 │  ┌───▼──────────────────┐  ┌────────────────▼────────────┐  │
 │  │  DashScopeClient      │  │  ToolRegistry facade         │  │
-│  │  (qwen-plus/max)      │  │  ├─ datasources/ (15 源)     │  │
+│  │  (qwen-plus/max)      │  │  ├─ datasources/ (16 源)     │  │
 │  │  + LLMReporter        │  │  ├─ browser_agent (Playwright)│ │
 │  │  + IterationDecision   │  │  ├─ parsers/ (PDF/生物数据)  │  │
 │  └───────────────────────┘  │  ├─ cleaners/ (对齐/归一/去重)│  │
@@ -382,7 +384,7 @@ CSV 导出自动附加来源标注列：
 
 | 扩展点 | 扩展方式 | 现状 |
 |--------|---------|------|
-| 新增数据源 | 在 `tools/datasources/` 添加模块函数，在 `ToolRegistry._get_ds_func` 映射表注册 | 15 个活跃 |
+| 新增数据源 | 在 `tools/datasources/` 添加模块函数，在 `ToolRegistry._get_ds_func` 映射表注册 | 16 个活跃 |
 | 新增解析器 | 在 `tools/parsers/` 添加模块 + 在 `ToolRegistry` 添加 facade 方法 | 6 个 |
 | 新增清洗器 | 在 `tools/cleaners/` 添加模块 + 在 `ToolRegistry` 添加 facade 方法 | 3 个 |
 | 新增分析模板 | 在 `tools/analysis/` 添加模块 + 在 `ToolRegistry` 添加 facade 方法 | 7 个 |

@@ -78,6 +78,7 @@ class ToolRegistry:
             "openalex":          ("app.tools.datasources.openalex", "search_openalex"),
             "semantic_scholar":  ("app.tools.datasources.semantic_scholar", "search_s2"),
             "arxiv":             ("app.tools.datasources.arxiv", "search_arxiv"),
+            "europepmc":         ("app.tools.datasources.europepmc", "search_europepmc"),
             "geo":               ("app.tools.datasources.geo", "search_geo"),
             "string":            ("app.tools.datasources.string", "search_string"),
             "kegg":              ("app.tools.datasources.kegg", "search_kegg"),
