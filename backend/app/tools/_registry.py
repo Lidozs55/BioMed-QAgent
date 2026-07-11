@@ -2,6 +2,7 @@
 
 数据获取相关工具（search/parse/analyze）暂为占位，接口后续实现。
 """
+
 from __future__ import annotations
 
 from agents import function_tool
