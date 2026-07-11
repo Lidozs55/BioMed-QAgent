@@ -37,8 +37,12 @@ class SearchAgent(BaseAgent):
     async def execute(self, task: Task, records: list[dict],
                       context: dict,
                       progress: ProgressCallback | None = None) -> tuple[list[dict], dict]:
-        self._set_stage(task, "search", StageStatus.RUNNING, "正在并行检索数据源...")
-        self._emit(progress, type="stage_start", stage="search",
+        # followup_mode: 追查阶段复用 SearchAgent，用独立 stage 名避免污染主流程状态
+        is_followup = context.get("followup_mode", False)
+        stage_name = "followup_search" if is_followup else "search"
+        self._stage_name = stage_name  # 供 helper 方法引用
+        self._set_stage(task, stage_name, StageStatus.RUNNING, "正在并行检索数据源...")
+        self._emit(progress, type="stage_start", stage=stage_name,
                     message="正在并行检索多个生物医学数据源...")
 
         sources = context.get("recommended_sources",
@@ -48,6 +52,9 @@ class SearchAgent(BaseAgent):
 
         all_records: list[dict] = []
         prov = self.store.get_provenance(task.task_id)
+        # query_log 全局记录：第一轮 + followup 都存入，供 ReviewerAgent 判断
+        # 已失败查询（避免重复追查）+ 在报告中标注"已尝试但未找到"
+        query_log: list[dict] = context.setdefault("query_log", [])
 
         # 分组：文献数据源用研究目标查询；实体数据源用实体级查询
         lit_sources = [s for s in sources if s not in self.ENTITY_SOURCES]
@@ -61,7 +68,7 @@ class SearchAgent(BaseAgent):
             search_queries = [task.research_goal]
         max_results = max(task.max_sources, 30)
 
-        self._emit(progress, type="stage_progress", stage="search",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.1, message=f"用 {len(search_queries)} 个查询并行检索 "
                                       f"{len(lit_sources)} 个文献数据源...")
 
@@ -94,17 +101,32 @@ class SearchAgent(BaseAgent):
                             "source": src_name, "query": query,
                             "reason": result.signals.get("reason", ""),
                         })
+                    # 记录查询日志（成功）
+                    query_log.append({
+                        "query": query, "source": src_name,
+                        "phase": "followup" if is_followup else "round_1",
+                        "records_count": len(new_recs),
+                        "status": "found",
+                    })
                 else:
                     msg = f"✗ {src_name} [查询{q_idx+1}]: {result.error[:50]}"
                     task.errors.append(f"{src_name}: {result.error}")
+                    # 记录查询日志（失败）
+                    query_log.append({
+                        "query": query, "source": src_name,
+                        "phase": "followup" if is_followup else "round_1",
+                        "records_count": 0,
+                        "status": "not_found",
+                        "error": result.error[:100],
+                    })
 
-                self._emit(progress, type="stage_progress", stage="search",
+                self._emit(progress, type="stage_progress", stage=stage_name,
                             pct=pct, message=msg)
 
         # Step 2: 实体数据源检索（用基因/化合物/疾病实体查询）
         if entity_sources:
             entity_queries = self._build_entity_queries(entities)
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.55,
                         message=f"检索 {len(entity_sources)} 个实体数据源"
                                 f"（{len(entity_queries)} 个查询）...")
@@ -139,9 +161,9 @@ class SearchAgent(BaseAgent):
         task.source_count = max(task.source_count, current_sources)
         msg = (f"检索完成：共 {len(all_records)} 条记录，"
                f"来自 {task.source_count} 个数据源")
-        self._set_stage(task, "search", StageStatus.DONE, msg,
+        self._set_stage(task, self._stage_name, StageStatus.DONE, msg,
                         records_count=len(all_records))
-        self._emit(progress, type="stage_complete", stage="search",
+        self._emit(progress, type="stage_complete", stage=self._stage_name,
                     message=msg, records_count=len(all_records))
         self.store.update_task(task)
         return all_records, context
@@ -211,7 +233,7 @@ class SearchAgent(BaseAgent):
                 done += 1
                 pct = 0.55 + 0.25 * done / max(total, 1)
                 label = q["query"][:30]
-                self._emit(progress, type="stage_progress", stage="search",
+                self._emit(progress, type="stage_progress", stage=self._stage_name,
                             pct=pct,
                             message=f"{src_name}/{q.get('entity_type','')}: {label}")
                 kwargs: dict = {}
@@ -230,13 +252,13 @@ class SearchAgent(BaseAgent):
                                    output_records=rec_ids,
                                    parameters={"query": q["query"], "source": src_name,
                                                "entity_type": q.get("entity_type", "")})
-                    self._emit(progress, type="stage_progress", stage="search",
+                    self._emit(progress, type="stage_progress", stage=self._stage_name,
                                 pct=pct,
                                 message=f"✓ {src_name}/{label}: {len(recs)} 条")
                 else:
                     msg = f"✗ {src_name}/{label}: {result.error[:50]}"
                     task.errors.append(f"{src_name}: {result.error}")
-                    self._emit(progress, type="stage_progress", stage="search",
+                    self._emit(progress, type="stage_progress", stage=self._stage_name,
                                 pct=pct, message=msg)
         return all_records
 
@@ -259,7 +281,7 @@ class SearchAgent(BaseAgent):
                         len(oa_records))
             return []
 
-        self._emit(progress, type="stage_progress", stage="search",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.7,
                     message=f"引用追溯中（top {top_n} 高被引文献的参考文献/被引）...")
 
@@ -269,7 +291,7 @@ class SearchAgent(BaseAgent):
         )
         if not result.success:
             task.errors.append(f"citation_trace: {result.error}")
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.75,
                         message=f"✗ 引用追溯失败: {result.error[:50]}")
             return []
@@ -285,7 +307,7 @@ class SearchAgent(BaseAgent):
                        parameters={"direction": "both", "top_n": top_n,
                                    "seed_count": len(oa_records)})
 
-        self._emit(progress, type="stage_progress", stage="search",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.75,
                     message=f"✓ 引用追溯: 新增 {len(new_records)} 条")
         return new_records
@@ -357,7 +379,7 @@ class SearchAgent(BaseAgent):
         combo_queries = self._build_combo_queries(entities)
         mesh_queries = self._build_mesh_queries(entities)
 
-        self._emit(progress, type="stage_progress", stage="search",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.8,
                     message=f"扩展检索（{reason}）：{len(combo_queries)} 组合 + "
                             f"{len(mesh_queries)} MeSH + {len(fallback_queries)} LLM")
@@ -374,7 +396,7 @@ class SearchAgent(BaseAgent):
             combo_queries = [g for g in genes[:3]] + [c for c in compounds[:2]]
             logger.info("fallback 兜底：无 diseases/LLM 额外查询，用实体名检索 %s",
                         combo_queries)
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.82,
                         message=f"扩展检索兜底：用 {len(combo_queries)} 个实体名查询")
 
@@ -384,7 +406,7 @@ class SearchAgent(BaseAgent):
             if not q or q in seen_queries:
                 continue
             seen_queries.add(q)
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.85, message=f"扩展查询: {q[:40]}")
             await self._search_and_extend(
                 retry_sources, q, min(max_results, 20),
@@ -396,7 +418,7 @@ class SearchAgent(BaseAgent):
             if q in seen_queries:
                 continue
             seen_queries.add(q)
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.9, message=f"MeSH 查询(pubmed): {q[:40]}")
             await self._search_and_extend(
                 ["pubmed"], q, min(max_results, 20),
@@ -431,7 +453,7 @@ class SearchAgent(BaseAgent):
                            parameters={"query": query, "source": src_name,
                                        "retry": retry, "mesh": mesh})
             label = "MeSH" if mesh else ("扩展" if retry else "")
-            self._emit(progress, type="stage_progress", stage="search",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.95,
                         message=f"✓ {src_name} ({label}): {len(new_recs)} 条")
 

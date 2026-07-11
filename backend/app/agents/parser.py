@@ -44,8 +44,11 @@ class ParserAgent(BaseAgent):
     async def execute(self, task: Task, records: list[dict],
                       context: dict,
                       progress: ProgressCallback | None = None) -> tuple[list[dict], dict]:
-        self._set_stage(task, "parse", StageStatus.RUNNING, "检查需要解析的文件...")
-        self._emit(progress, type="stage_start", stage="parse",
+        # followup_mode: 追查阶段复用 ParserAgent，用独立 stage 名避免污染主流程状态
+        is_followup = context.get("followup_mode", False)
+        self._stage_name = "followup_parse" if is_followup else "parse"
+        self._set_stage(task, self._stage_name, StageStatus.RUNNING, "检查需要解析的文件...")
+        self._emit(progress, type="stage_start", stage=self._stage_name,
                     message="PDF解析 + 爬虫LLM提取 + 图表Qwen-VL提取 + 开放获取论文下载...")
 
         out_dir = get_task_output_dir(task.task_id)
@@ -61,7 +64,7 @@ class ParserAgent(BaseAgent):
         if uploads_dir.exists():
             pdf_files = list(uploads_dir.glob("*.pdf"))
             for pdf in pdf_files:
-                self._emit(progress, type="stage_progress", stage="parse",
+                self._emit(progress, type="stage_progress", stage=self._stage_name,
                             pct=0.4, message=f"解析上传 PDF: {pdf.name}")
                 out_file = out_dir / f"parsed_{pdf.stem}.json"
                 result = await self._to_thread(
@@ -89,7 +92,7 @@ class ParserAgent(BaseAgent):
         pdf_candidates = [r for r in records if _has_pdf(r)][:5]
 
         if pdf_candidates:
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.6,
                         message=f"尝试下载 {len(pdf_candidates)} 篇开放获取论文...")
             pdf_dir = out_dir / "pdfs"
@@ -101,14 +104,14 @@ class ParserAgent(BaseAgent):
             downloaded = []
             if result.success:
                 downloaded = self._extract_records(result)
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.8, message=f"下载完成：{len(downloaded)} 篇 PDF")
 
             # Step 4: 对下载的 PDF/XML 调用解析器提取表格+caption+全文
             if pdf_dir.exists():
                 # 4a: PDF 文件 → pdf_table_parser
                 for pdf_file in sorted(pdf_dir.glob("*.pdf")):
-                    self._emit(progress, type="stage_progress", stage="parse",
+                    self._emit(progress, type="stage_progress", stage=self._stage_name,
                                 pct=0.9, message=f"解析 PDF: {pdf_file.name}")
                     out_file = out_dir / f"parsed_{pdf_file.stem}.json"
                     result = await self._to_thread(
@@ -118,7 +121,7 @@ class ParserAgent(BaseAgent):
                         parsed_records.extend(self._extract_records(result))
                 # 4b: JATS XML 文件（EPMC fullTextXML）→ 解析全文为 records
                 for xml_file in sorted(pdf_dir.glob("*.xml")):
-                    self._emit(progress, type="stage_progress", stage="parse",
+                    self._emit(progress, type="stage_progress", stage=self._stage_name,
                                 pct=0.92,
                                 message=f"解析 JATS XML: {xml_file.name}")
                     recs = await self._to_thread(
@@ -160,9 +163,9 @@ class ParserAgent(BaseAgent):
         records.extend(parsed_records)
         records.extend(chart_records)
         records.extend(bio_records)
-        self._set_stage(task, "parse", StageStatus.DONE, msg,
+        self._set_stage(task, self._stage_name, StageStatus.DONE, msg,
                         records_count=len(records))
-        self._emit(progress, type="stage_complete", stage="parse", message=msg)
+        self._emit(progress, type="stage_complete", stage=self._stage_name, message=msg)
         self.store.update_task(task)
         return records, context
 
@@ -177,7 +180,7 @@ class ParserAgent(BaseAgent):
         if not raw_records:
             return []
 
-        self._emit(progress, type="stage_progress", stage="parse",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.15,
                     message=f"LLM 提取 {len(raw_records)} 条爬虫原始记录...")
 
@@ -185,7 +188,7 @@ class ParserAgent(BaseAgent):
         extracted: list[dict] = []
         for idx, raw in enumerate(raw_records):
             source = raw.get("crawl_source", "web_crawler")
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.15 + 0.2 * (idx + 1) / len(raw_records),
                         message=f"LLM 提取 {source} ({idx+1}/{len(raw_records)})")
             try:
@@ -195,7 +198,7 @@ class ParserAgent(BaseAgent):
                 logger.warning("LLM 提取 %s 失败（已跳过）: %s", source, e)
                 task.errors.append(f"llm_extract {source}: {e}")
 
-        self._emit(progress, type="stage_progress", stage="parse",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.35,
                     message=f"✓ LLM 提取完成：{len(extracted)} 条结构化记录")
         return extracted
@@ -234,7 +237,7 @@ class ParserAgent(BaseAgent):
         if not all_images:
             return []
 
-        self._emit(progress, type="stage_progress", stage="parse",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.55,
                     message=f"Qwen-VL 提取 {len(all_images)} 张图表"
                             f"（上传 {len(image_files)} + 爬虫截图 {len(screenshot_files)}）")
@@ -242,7 +245,7 @@ class ParserAgent(BaseAgent):
         out_dir = get_task_output_dir(task.task_id)
         chart_records: list[dict] = []
         for idx, img in enumerate(all_images):
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.55 + 0.1 * (idx + 1) / len(all_images),
                         message=f"图表提取 {img.name} ({idx+1}/{len(all_images)})")
             try:
@@ -271,7 +274,7 @@ class ParserAgent(BaseAgent):
                 task.errors.append(f"chart_extract {img.name}: {e}")
 
         if chart_records:
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.65,
                         message=f"✓ 图表提取完成：{len(chart_records)} 条")
         return chart_records
@@ -306,7 +309,7 @@ class ParserAgent(BaseAgent):
         if not parseable:
             return []
 
-        self._emit(progress, type="stage_progress", stage="parse",
+        self._emit(progress, type="stage_progress", stage=self._stage_name,
                     pct=0.7,
                     message=f"解析 {len(parseable)} 个生物数据文件...")
 
@@ -314,7 +317,7 @@ class ParserAgent(BaseAgent):
         bio_records: list[dict] = []
         for idx, (f, fmt) in enumerate(parseable):
             method_name = _BIO_PARSER_MAP[fmt]
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.7 + 0.1 * (idx + 1) / len(parseable),
                         message=f"解析 {fmt} {f.name} ({idx+1}/{len(parseable)})")
             try:
@@ -328,7 +331,7 @@ class ParserAgent(BaseAgent):
                 task.errors.append(f"bio_parse {f.name}: {e}")
 
         if bio_records:
-            self._emit(progress, type="stage_progress", stage="parse",
+            self._emit(progress, type="stage_progress", stage=self._stage_name,
                         pct=0.8,
                         message=f"✓ 生物数据解析完成：{len(bio_records)} 条")
         return bio_records

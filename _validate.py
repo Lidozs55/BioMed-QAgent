@@ -32,7 +32,6 @@ modules = [
     "app.agents.cleaner",
     "app.agents.analysis",
     "app.agents.reviewer",
-    "app.agents.iteration_decision",
     "app.agents.llm_reporter",
     "app.tools.registry",
     "app.tools.browser_agent",

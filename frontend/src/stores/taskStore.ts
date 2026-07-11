@@ -147,6 +147,18 @@ export const useTaskStore = create<TaskStore>((set, get) => ({
       return;
     }
 
+    // Handle followup round (方案 A 隐性循环：追查轮次)
+    if (msg.type === 'followup_round') {
+      set({
+        roundIdx: msg.round ?? 0,
+        maxRounds: msg.max_rounds ?? 3,
+        currentStage: '',
+        stageProgress: 0,
+        wsMessages: [...get().wsMessages, msg].slice(-MAX_WS_MESSAGES),
+      });
+      return;
+    }
+
     // Handle iteration decision (per-round)
     if (msg.type === 'iteration_decision') {
       const decisions = [...get().iterationDecisions];

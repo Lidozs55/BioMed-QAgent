@@ -44,16 +44,15 @@ class Orchestrator:
     - planning（LLM 实体识别）
     - export（CSV + LLM 研究报告）
     - 流水线编排与异常兜底
-    - 多轮迭代调度（对齐 docs/multi_round_search_iteration.md）
+    - 追查循环调度（方案 A 隐性循环：reviewer 提取追查任务 → 针对性 search→parse → 重跑分析）
 
-    多轮迭代结构：
-        planning → [Round N: search→acquire→parse→clean→analyze→review
-                    → IterationDecisionAgent] → export
-        迭代直到收敛或达到 MAX_ROUNDS
+    结构：
+        planning → [单轮 search→acquire→parse→clean→analyze→review]
+        → [追查循环（最多 MAX_FOLLOWUP_ROUNDS 轮）] → export
     """
 
-    # 多轮迭代最大轮数（对齐文档 §3.3，防止无限循环）
-    MAX_ROUNDS = 3
+    # 追查循环最大轮数（防止无限循环）
+    MAX_FOLLOWUP_ROUNDS = 3
 
     def __init__(self, llm: DashScopeClient | None = None,
                  tools: ToolRegistry | None = None,
@@ -69,7 +68,15 @@ class Orchestrator:
 
     async def run(self, task: Task,
                   progress: ProgressCallback | None = None) -> Task:
-        """执行完整流水线（多轮迭代）。"""
+        """执行完整流水线（单轮 + 追查循环）。
+
+        结构：
+            planning → [单轮完整 search→acquire→parse→clean→analyze→review]
+            → [追查循环（最多 MAX_FOLLOWUP_ROUNDS 轮）:
+                reviewer 提取 followup_tasks → followup search→parse
+                → 重跑 clean→analyze→review]
+            → 人工确认点 → export
+        """
         try:
             task.status = TaskStatus.PLANNING
             self._emit(progress, type="task_start", task_id=task.task_id,
@@ -77,85 +84,19 @@ class Orchestrator:
 
             # Stage 1: Planning — Orchestrator 直接持有（LLM 提取实体）
             context = await self._stage_planning(task, progress)
-            context["max_rounds"] = self.MAX_ROUNDS
+            context["query_log"] = []  # 全局查询日志（第一轮 + followup 都记录）
 
-            # Stage 2-7: 多轮迭代 PIPELINE — 每轮 search→...→review + 迭代决策
-            all_records: list[dict] = []
-            seen_ids: set[str] = set()
-            round_new_counts: list[int] = []
+            # Stage 2-7: 单轮完整 PIPELINE
+            all_records, context = await self._run_pipeline_round(
+                task, context, progress, round_idx=1)
+            task.total_records = len(all_records)
+            task.current_round = 1
+            self.store.update_task(task)
+            logger.info("第一轮完成：共 %d 条记录", len(all_records))
 
-            for round_idx in range(1, self.MAX_ROUNDS + 1):
-                context["round_idx"] = round_idx
-                context["round_new_counts"] = round_new_counts
-                self._emit(progress, type="iteration_round",
-                            round=round_idx, max_rounds=self.MAX_ROUNDS)
-
-                # 执行一轮完整流水线
-                round_records, context = await self._run_pipeline_round(
-                    task, context, progress, round_idx)
-
-                # 跨轮去重，累积到 all_records
-                new_records = self._dedup_round(round_records, seen_ids)
-                all_records.extend(new_records)
-                round_new_counts.append(len(new_records))
-                # 运行中实时更新 total_records（供前端显示，修复"总记录数=0"bug）
-                task.total_records = len(all_records)
-                task.current_round = round_idx
-                self.store.update_task(task)
-                logger.info("第 %d 轮完成：新增 %d 条，累计 %d 条",
-                            round_idx, len(new_records), len(all_records))
-
-                # 最后一轮无需迭代决策
-                if round_idx >= self.MAX_ROUNDS:
-                    logger.info("达到最大轮数 %d，终止迭代", self.MAX_ROUNDS)
-                    break
-
-                # 迭代决策：是否继续
-                decision_agent = self._get_agent("iteration_decision")
-                if decision_agent is None:
-                    logger.warning("IterationDecisionAgent 未注册，单轮执行")
-                    break
-                _, context = await decision_agent.execute(
-                    task, all_records, context, progress)
-                decision = context.get("iteration_decision", {})
-
-                if not decision.get("should_continue", False):
-                    logger.info("迭代收敛于第 %d 轮: %s",
-                                round_idx, decision.get("reason", ""))
-                    self._emit(progress, type="iteration_converged",
-                                round=round_idx,
-                                reason=decision.get("reason", ""))
-                    break
-
-                # 准备下一轮查询
-                next_queries = decision.get("next_round_queries", [])
-                if next_queries:
-                    context["search_queries"] = next_queries
-
-                # 实体追加反馈闭环：将新发现实体合并到 context["entities"]，
-                # 下一轮 SearchAgent 的 Step2 实体数据源检索将使用扩展后的实体集
-                entities_to_add = decision.get("entities_to_add", {}) or {}
-                added_genes = entities_to_add.get("genes", []) or []
-                added_compounds = entities_to_add.get("compounds", []) or []
-                if added_genes or added_compounds:
-                    if "entities" not in context:
-                        context["entities"] = {"genes": [], "compounds": [],
-                                               "diseases": [], "pathways": []}
-                    existing_genes = set(context["entities"].get("genes", []))
-                    existing_compounds = set(
-                        context["entities"].get("compounds", []))
-                    existing_genes.update(added_genes)
-                    existing_compounds.update(added_compounds)
-                    context["entities"]["genes"] = sorted(existing_genes)
-                    context["entities"]["compounds"] = sorted(existing_compounds)
-                    logger.info("实体追加：第 %d 轮新增 %d 基因 + %d 化合物，"
-                                "累计 %d 基因 + %d 化合物",
-                                round_idx, len(added_genes), len(added_compounds),
-                                len(context["entities"]["genes"]),
-                                len(context["entities"]["compounds"]))
-
-                logger.info("进入第 %d 轮：查询=%s",
-                            round_idx + 1, next_queries[:3])
+            # Stage 8: 追查循环（方案 A 隐性循环）
+            all_records, context = await self._run_followup_loop(
+                task, all_records, context, progress)
 
             # 人工确认点：审查后若质量低，暂停等待用户确认（TASK-014 人在回路）
             review = context.get("review", {})
@@ -174,7 +115,7 @@ class Orchestrator:
                             task.task_id)
                 return task
 
-            # Stage 8: Export — Orchestrator 直接持有（CSV + LLM 报告）
+            # Stage 9: Export — Orchestrator 直接持有（CSV + LLM 报告）
             await self._stage_export(
                 task, all_records, context,
                 context.get("review", {}), progress,
@@ -197,6 +138,123 @@ class Orchestrator:
             self._emit(progress, type="error", task_id=task.task_id,
                         message=str(e))
             return task
+
+    # ========== 追查循环（方案 A 隐性循环） ==========
+
+    async def _run_followup_loop(self, task: Task, all_records: list[dict],
+                                  context: dict,
+                                  progress: ProgressCallback | None
+                                  ) -> tuple[list[dict], dict]:
+        """追查循环：reviewer 提取 followup_tasks → 针对性 search→parse → 重跑 clean→analyze→review。
+
+        收敛保障：
+        1. reviewer 无追查任务 → 收敛
+        2. 硬性上限 MAX_FOLLOWUP_ROUNDS 轮
+        3. 已失败查询不重复追查（reviewer 内部过滤）
+        """
+        seen_ids: set[str] = {r.get("record_id", "") for r in all_records}
+
+        for followup_idx in range(1, self.MAX_FOLLOWUP_ROUNDS + 1):
+            followup_tasks = context.get("followup_tasks", [])
+            if not followup_tasks:
+                logger.info("追查循环收敛：无追查任务")
+                break
+
+            self._emit(progress, type="followup_round",
+                        round=followup_idx,
+                        max_rounds=self.MAX_FOLLOWUP_ROUNDS,
+                        tasks_count=len(followup_tasks))
+            logger.info("追查第 %d 轮：%d 个追查任务",
+                        followup_idx, len(followup_tasks))
+
+            # 构造追查 context
+            followup_queries = [t.get("query", "") for t in followup_tasks
+                                if t.get("query")]
+            # 追查目标实体合并到 context["entities"]
+            for t in followup_tasks:
+                target = t.get("target_entities", {}) or {}
+                if "entities" not in context:
+                    context["entities"] = {"genes": [], "compounds": [],
+                                           "diseases": [], "pathways": []}
+                existing_genes = set(context["entities"].get("genes", []))
+                existing_compounds = set(
+                    context["entities"].get("compounds", []))
+                existing_genes.update(target.get("genes", []) or [])
+                existing_compounds.update(target.get("compounds", []) or [])
+                context["entities"]["genes"] = sorted(existing_genes)
+                context["entities"]["compounds"] = sorted(existing_compounds)
+
+            followup_context = dict(context)
+            followup_context["followup_mode"] = True
+            followup_context["search_queries"] = followup_queries
+            # 追查用精简数据源（文献为主）
+            followup_context["recommended_sources"] = [
+                s for s in context.get("recommended_sources",
+                    ["pubmed", "europepmc"])
+                if s not in ("string", "tcmsp", "disgenet", "pdb",
+                             "kegg", "drugbank")]
+
+            # 追查 search→parse（复用 Agent，followup_mode 用独立 stage 名）
+            search_agent = self._get_agent("search")
+            parser_agent = self._get_agent("parse")
+            if search_agent is None or parser_agent is None:
+                logger.warning("追查所需 Agent 未注册，跳过追查")
+                break
+
+            try:
+                followup_records, followup_context = await search_agent.execute(
+                    task, [], followup_context, progress)
+                followup_records, followup_context = await parser_agent.execute(
+                    task, followup_records, followup_context, progress)
+            except Exception as e:
+                logger.exception("追查第 %d 轮失败: %s", followup_idx, e)
+                task.errors.append(f"追查第{followup_idx}轮失败: {e}")
+                break
+
+            # 去重后合并到 all_records
+            new_records = []
+            for r in followup_records:
+                rid = r.get("record_id", "")
+                if rid and rid not in seen_ids:
+                    seen_ids.add(rid)
+                    new_records.append(r)
+            all_records.extend(new_records)
+            task.total_records = len(all_records)
+            task.current_round = followup_idx + 1
+            self.store.update_task(task)
+            logger.info("追查第 %d 轮完成：新增 %d 条，累计 %d 条",
+                        followup_idx, len(new_records), len(all_records))
+
+            # 同步 query_log 回主 context
+            context["query_log"] = followup_context.get("query_log",
+                context.get("query_log", []))
+
+            # 重跑 clean→analyze→review（用合并后的全量记录）
+            context["followup_mode"] = False  # 重跑分析阶段用正常 stage 名
+            clean_agent = self._get_agent("clean")
+            analyze_agent = self._get_agent("analyze")
+            review_agent = self._get_agent("review")
+
+            try:
+                if clean_agent:
+                    all_records, context = await clean_agent.execute(
+                        task, all_records, context, progress)
+                if analyze_agent:
+                    all_records, context = await analyze_agent.execute(
+                        task, all_records, context, progress)
+                if review_agent:
+                    all_records, context = await review_agent.execute(
+                        task, all_records, context, progress)
+            except Exception as e:
+                logger.exception("追查后重跑分析失败: %s", e)
+                task.errors.append(f"追查后重跑分析失败: {e}")
+                break
+
+            # review 后 context["followup_tasks"] 已更新，循环将检查是否收敛
+
+        # 追查循环结束后清空 followup_tasks 避免重复
+        context["followup_tasks"] = []
+        return all_records, context
 
     # ========== 可重入状态机：用户反馈后从指定阶段重试 ==========
 

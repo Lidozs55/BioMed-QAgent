@@ -138,6 +138,7 @@ export interface WSMessage {
   type: 'task_start' | 'stage_start' | 'stage_progress' | 'stage_complete'
       | 'task_complete' | 'error' | 'snapshot' | 'pong'
       | 'iteration_round' | 'iteration_decision' | 'iteration_converged'
+      | 'followup_round'
       | 'stage_gate_evaluation' | 'awaiting_confirmation';
   task_id?: string;
   stage?: string;
