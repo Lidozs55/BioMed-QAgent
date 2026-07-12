@@ -63,31 +63,32 @@ export function useAgentStream() {
         addTrace({ kind: "error", message: event.message });
         break;
       case "skill_loaded":
-        if (event.skill_loaded) {
-          addTrace({
-            kind: "tool_call",
-            name: `Skill: ${event.skill_loaded.name}`,
-            arguments: `category: ${event.skill_loaded.category}`,
-          });
-        }
+        addTrace({
+          kind: "tool_call",
+          name: `Skill: ${event.name}`,
+          arguments: `category: ${event.category || ""}`,
+        });
         break;
       case "artifact_produced":
-        if (event.artifact_name) {
+        if (event.name) {
           addArtifact(
-            event.artifact_name,
-            event.artifact_path || "",
-            event.artifact_size || 0,
+            event.name,
+            event.path || "",
+            event.size || 0,
           );
         }
         break;
       case "file_downloaded":
-        if (event.artifact_name) {
+        if (event.name) {
           addArtifact(
-            event.artifact_name,
-            event.artifact_path || "",
-            event.artifact_size || 0,
+            event.name,
+            event.path || "",
+            event.size || 0,
           );
         }
+        break;
+      case "confirm":
+        console.warn("[confirm]", event.confirm_message);
         break;
     }
   }, []);

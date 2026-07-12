@@ -10,18 +10,18 @@ export interface WSEvent {
     | "error"
     | "skill_loaded"
     | "artifact_produced"
-    | "file_downloaded";
+    | "file_downloaded"
+    | "confirm";
   delta?: string;
   name?: string;
   arguments?: string;
   output?: string;
   final_output?: string;
   message?: string;
-  /** New event fields */
-  skill_loaded?: { name: string; category: string };
-  artifact_name?: string;
-  artifact_path?: string;
-  artifact_size?: number;
+  confirm_message?: string;
+  category?: string;
+  path?: string;
+  size?: number;
 }
 
 /** 工具调用轨迹项 */
