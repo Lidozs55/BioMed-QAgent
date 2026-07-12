@@ -18,6 +18,14 @@ class Settings:
     )
     # 默认模型
     model_name: str = os.getenv("MODEL_NAME", "qwen-plus")
+    # NCBI E-utilities identity and optional higher-quota API key
+    ncbi_email: str = os.getenv("NCBI_EMAIL", "biomed-qagent@example.com")
+    ncbi_tool: str = os.getenv("NCBI_TOOL", "BioMedQAgent")
+    ncbi_api_key: str = os.getenv("NCBI_API_KEY", "")
+    ncbi_user_agent: str = os.getenv(
+        "NCBI_USER_AGENT",
+        "BioMed-QAgent/0.1 (biomed-qagent@example.com)",
+    )
     # 后端
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
