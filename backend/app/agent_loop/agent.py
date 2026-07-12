@@ -11,6 +11,15 @@ from app.agent_loop.model import get_model
 from app.skills.registry import build_agent_config, skill_registry
 from app.tools.io import read_file, write_file, list_files
 
+try:
+    from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
+except ImportError:
+    browser_fallback_skill = None
+try:
+    from app.skills.builtin.processing.self_evolution import self_evolution_skill  # noqa: F401
+except ImportError:
+    self_evolution_skill = None
+
 INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
 
@@ -68,12 +77,24 @@ def _import_skill_modules() -> None:
         import app.skills.builtin.acquisition.xena  # noqa: F401
     except ImportError:
         pass
+    try:
+        import app.skills.builtin.acquisition.browser  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import app.skills.builtin.processing.self_evolution  # noqa: F401
+    except ImportError:
+        pass
 
 
 def create_agent() -> Agent:
     """构造主 Agent。"""
     _import_skill_modules()
     skills = skill_registry.list_enabled()
+    if browser_fallback_skill is not None:
+        skills.append(browser_fallback_skill)
+    if self_evolution_skill is not None:
+        skills.append(self_evolution_skill)
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([read_file, write_file, list_files])
     seen: set[str] = set()

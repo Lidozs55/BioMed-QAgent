@@ -6,6 +6,7 @@
   - text: LLM 文本增量（仅推送 content delta，不推送工具参数 delta）
   - tool_call: 工具调用开始（name + arguments）
   - tool_output: 工具调用结果
+  - confirm: 质量/HITL 确认提醒（tool 输出包含 quality_issues 或 needs_confirmation 时触发）
   - done: Agent loop 结束（final_output）
   - error: 异常
 
@@ -27,6 +28,41 @@ from app.agent_loop.agent import create_agent
 from app.agent_loop.context import RunContext
 
 logger = logging.getLogger(__name__)
+
+
+def _check_for_confirmation(output: object) -> str | None:
+    """检测 tool 输出中的质量/确认标记，返回确认消息或 None。
+
+    支持的标记：
+      - 顶层 dict 包含 "quality_issues" 或 "needs_confirmation" 键
+      - JSON 字符串解析后包含上述键
+    """
+    if output is None:
+        return None
+    if isinstance(output, dict):
+        if "needs_confirmation" in output:
+            return str(output["needs_confirmation"])
+        if "quality_issues" in output:
+            issues = output["quality_issues"]
+            if isinstance(issues, list):
+                return "Quality issues detected: " + "; ".join(str(i) for i in issues)
+            return str(issues)
+        return None
+    if isinstance(output, str):
+        import json
+        try:
+            parsed = json.loads(output)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if isinstance(parsed, dict):
+            if "needs_confirmation" in parsed:
+                return str(parsed["needs_confirmation"])
+            if "quality_issues" in parsed:
+                issues = parsed["quality_issues"]
+                if isinstance(issues, list):
+                    return "Quality issues detected: " + "; ".join(str(i) for i in issues)
+                return str(issues)
+    return None
 
 
 def _extract_text_delta(data) -> str | None:
@@ -86,6 +122,12 @@ async def run_agent_stream(
                         "type": "tool_output",
                         "output": str(output)[:5000],
                     }
+                    confirm_msg = _check_for_confirmation(output)
+                    if confirm_msg:
+                        yield {
+                            "type": "confirm",
+                            "content": confirm_msg,
+                        }
 
         # 最终输出
         yield {"type": "done", "final_output": result.final_output}
