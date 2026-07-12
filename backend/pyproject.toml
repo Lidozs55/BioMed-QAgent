@@ -28,3 +28,7 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = [
+    "live: tests that make explicit network requests to official services",
+]

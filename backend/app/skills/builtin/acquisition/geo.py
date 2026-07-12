@@ -1,294 +1,275 @@
-"""GEO acquisition skill — search metadata and download raw files from NCBI GEO."""
+"""Thin Agent Tool adapters for typed GEO discovery and acquisition."""
+
 from __future__ import annotations
 
-import gzip
 import json
 import logging
-import urllib.parse
-import urllib.request
-from pathlib import Path
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any
 
-import GEOparse
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import DataLevel, Database, SourceRecord
+from app.integrations.acquisition import acquire_source
+from app.integrations.ncbi.discovery import (
+    describe_geo_series,
+    search_geo_series,
+)
+from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
+from app.integrations.ncbi.parsers import resolve_geo_supplementary_assets
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+
 
 logger = logging.getLogger(__name__)
 
-_GEO_SEARCH_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-_GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo"
+
+def _geo_record_json(record: Any) -> dict[str, Any]:
+    payload = record.model_dump(mode="json")
+    payload.update({
+        "platform_count": len(record.platform_ids),
+        "pubmed_id": "; ".join(record.pubmed_ids),
+    })
+    return payload
 
 
-def _geo_search_url(term: str, max_results: int = 20) -> str:
-    return (
-        f"{_GEO_SEARCH_BASE}?db=gds&term={urllib.parse.quote(term)}"
-        f"&retmax={max_results}&retmode=json"
-    )
+def _https_ftp_root(value: str, accession: str) -> str:
+    root = value.strip()
+    if root.startswith("ftp://ftp.ncbi.nlm.nih.gov/"):
+        root = "https://" + root.removeprefix("ftp://")
+    if not root:
+        prefix = accession[:-3] + "nnn"
+        root = (
+            f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{accession}/"
+        )
+    return root.rstrip("/") + "/"
 
 
-def _fetch_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+async def search_geo_adapter(
+    run_ctx: RunContext,
+    term: str,
+    max_results: int,
+    *,
+    services: NcbiServices,
+) -> str:
+    """Adapt typed GEO series results without treating numeric UIDs as accessions."""
 
-
-def _build_matrix_url(accession: str) -> str:
-    prefix = accession[:5].lower()
-    return (
-        f"{_GEO_FTP_BASE}/series/{prefix}nnn/{accession}"
-        f"/matrix/{accession}_series_matrix.txt.gz"
-    )
-
-
-def _build_soft_url(accession: str) -> str:
-    prefix = accession[:5].lower()
-    family = "gse" if accession.lower().startswith("gse") else "gsm"
-    return (
-        f"{_GEO_FTP_BASE}/{family}data/{prefix}nnn"
-        f"/{accession}/{accession}_family.soft.gz"
-    )
-
-
-def _download(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)
-    if dest.exists():
-        dest.unlink()
-    tmp.rename(dest)
-
-
-def _decompress_gz(path: Path) -> Path:
-    out = path.with_suffix("")
-    with gzip.open(path, "rb") as src, open(out, "wb") as dst:
-        dst.write(src.read())
-    return out
-
-
-@function_tool
-def search_geo(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
-    run_ctx: RunContext = ctx.context
     try:
-        url = _geo_search_url(term, max_results=max_results)
-        data = _fetch_json(url)
+        result = await search_geo_series(services.eutils, term, max_results)
+        records = [_geo_record_json(record) for record in result.records]
+        run_ctx.log_query(term, "geo", "completed", len(records))
+        return json.dumps({
+            "source": "geo",
+            "term": term,
+            "query_translation": result.query_translation,
+            "total_count": result.total_count,
+            "accessions": [record["accession"] for record in records],
+            "records": records,
+        }, ensure_ascii=False)
     except Exception as exc:
-        run_ctx.log_query(term, "geo", "error", 0)
+        logger.exception("GEO search failed for term=%r", term)
+        run_ctx.log_query(term, "geo", "failed", 0)
         return json.dumps({
             "source": "geo",
             "term": term,
             "accessions": [],
             "records": [],
             "error": str(exc),
-        })
-
-    ids = data.get("esearchresult", {}).get("idlist", [])
-    run_ctx.log_query(term, "geo", "ok", len(ids))
-
-    records: list[dict[str, Any]] = []
-    for geo_id in ids[:max_results]:
-        try:
-            gse = GEOparse.get_GEO(geo_id, silent=True, destdir=run_ctx.work_dir.raw)
-        except Exception:
-            continue
-        records.append({
-            "accession": getattr(gse, "accession", geo_id),
-            "title": getattr(gse, "title", ""),
-            "summary": getattr(gse, "summary", "") or getattr(gse, "abstract", ""),
-            "organism": getattr(gse, "organism", ""),
-            "platform_count": len(getattr(gse, "platforms", {}) or {}),
-            "sample_count": len(getattr(gse, "sample", {}) or {}),
-            "pubmed_id": getattr(gse, "pubmed_id", ""),
-        })
-
-    return json.dumps({
-        "source": "geo",
-        "term": term,
-        "accessions": [r["accession"] for r in records],
-        "records": records,
-    })
+        }, ensure_ascii=False)
 
 
-@function_tool
-def describe_geo(ctx: RunContextWrapper[Any], accession: str) -> str:
-    run_ctx: RunContext = ctx.context
+async def describe_geo_adapter(
+    run_ctx: RunContext,
+    accession: str,
+    *,
+    services: NcbiServices,
+) -> str:
+    """Resolve and serialize one GSE record through NCBI E-utilities."""
+
     try:
-        gse = GEOparse.get_GEO(accession, silent=True, destdir=run_ctx.work_dir.raw)
+        record = await describe_geo_series(services.eutils, accession)
+        payload = _geo_record_json(record)
+        payload.update({
+            "overall_design": "",
+            "platforms": [
+                {"id": value, "title": "", "organism": ""}
+                for value in record.platform_ids
+            ],
+            "supplementary_file_urls": [],
+        })
+        return json.dumps(
+            {"source": "geo", **payload},
+            ensure_ascii=False,
+        )
     except Exception as exc:
+        logger.exception("GEO description failed for accession=%r", accession)
         return json.dumps({
-            "source": "geo",
-            "accession": accession,
-            "error": str(exc),
-        })
-
-    platforms = []
-    if hasattr(gse, "platforms") and gse.platforms:
-        for k, v in gse.platforms.items():
-            platforms.append({
-                "id": k,
-                "title": getattr(v, "title", ""),
-                "organism": getattr(v, "organism", ""),
-            })
-
-    samples = []
-    if hasattr(gse, "sample") and gse.sample:
-        for k, v in list(gse.sample.items())[:10]:
-            samples.append({
-                "id": k,
-                "title": getattr(v, "title", ""),
-                "organism": getattr(v, "organism", ""),
-            })
-
-    supp = []
-    if hasattr(gse, "supplementary_files") and gse.supplementary_files:
-        supp = [str(f) for f in gse.supplementary_files]
-
-    return json.dumps({
-        "source": "geo",
-        "accession": accession,
-        "title": getattr(gse, "title", ""),
-        "summary": getattr(gse, "summary", "") or getattr(gse, "abstract", ""),
-        "overall_design": getattr(gse, "overall_design", ""),
-        "organism": getattr(gse, "organism", ""),
-        "platforms": platforms,
-        "sample_count": len(getattr(gse, "sample", {}) or {}),
-        "pubmed_ids": getattr(gse, "pubmed_id", ""),
-        "supplementary_file_urls": supp,
-    })
+            "source": "geo", "accession": accession, "error": str(exc)
+        }, ensure_ascii=False)
 
 
-@function_tool
-def download_geo(ctx: RunContextWrapper[Any], accession: str, file_type: str = "matrix") -> str:
-    run_ctx: RunContext = ctx.context
-    file_type = file_type.lower().strip()
-    url: str = ""
-    local_files: list[str] = []
-    format_hint: str = ""
+async def _resolve_download(
+    accession: str,
+    file_type: str,
+    filename: str | None,
+    services: NcbiServices,
+) -> tuple[SourceRecord, str, DataLevel]:
+    record = await describe_geo_series(services.eutils, accession)
+    root = _https_ftp_root(record.ftp_root, record.accession)
+    normalized_type = file_type.lower().strip()
 
-    if file_type == "matrix":
-        url = _build_matrix_url(accession)
-        filename = f"{accession}_series_matrix.txt.gz"
-        dest = run_ctx.work_dir.raw / filename
-        try:
-            _download(url, dest)
-        except Exception as exc:
-            return json.dumps({
-                "source": "geo",
-                "accession": accession,
-                "error": str(exc),
-            })
-        _decompress_gz(dest)
-        local_files = [
-            str(run_ctx.work_dir.raw_file(filename)),
-            str(run_ctx.work_dir.raw_file(filename.replace(".gz", ""))),
-        ]
-        format_hint = "geo_series_matrix"
-
-    elif file_type == "soft":
-        url = _build_soft_url(accession)
-        filename = f"{accession}_family.soft.gz"
-        dest = run_ctx.work_dir.raw / filename
-        try:
-            _download(url, dest)
-        except Exception as exc:
-            return json.dumps({
-                "source": "geo",
-                "accession": accession,
-                "error": str(exc),
-            })
-        _decompress_gz(dest)
-        local_files = [
-            str(run_ctx.work_dir.raw_file(filename)),
-            str(run_ctx.work_dir.raw_file(filename.replace(".gz", ""))),
-        ]
-        format_hint = "geo_soft"
-
-    elif file_type == "suppl":
-        try:
-            gse = GEOparse.get_GEO(accession, silent=True, destdir=run_ctx.work_dir.raw)
-        except Exception as exc:
-            return json.dumps({
-                "source": "geo",
-                "accession": accession,
-                "error": str(exc),
-            })
-
-        supp_files = getattr(gse, "supplementary_files", [])
-        target = None
-        for f in supp_files:
-            lower = str(f).lower()
-            if lower.endswith((".txt", ".tsv", ".csv", ".txt.gz", ".tsv.gz", ".csv.gz")):
-                target = str(f)
-                break
-
-        if not target:
-            return json.dumps({
-                "source": "geo",
-                "accession": accession,
-                "error": "no supplementary files found",
-            })
-
-        filename = Path(target).name
-        dest = run_ctx.work_dir.raw / filename
-        try:
-            _download(target, dest)
-        except Exception as exc:
-            return json.dumps({
-                "source": "geo",
-                "accession": accession,
-                "error": str(exc),
-            })
-        _decompress_gz(dest)
-        local_files = [str(run_ctx.work_dir.raw_file(filename))]
-        if dest.with_suffix("").exists():
-            local_files.append(str(run_ctx.work_dir.raw_file(dest.with_suffix("").name)))
-        url = target
-        format_hint = "geo_supplementary"
-
+    if normalized_type == "matrix":
+        selected_filename = filename or f"{record.accession}_series_matrix.txt.gz"
+        url = f"{root}matrix/{selected_filename}"
+    elif normalized_type == "soft":
+        selected_filename = filename or f"{record.accession}_family.soft.gz"
+        url = f"{root}soft/{selected_filename}"
+    elif normalized_type == "suppl":
+        listing_url = f"{root}suppl/"
+        response = await services.http.get(listing_url, follow_redirects=False)
+        response.raise_for_status()
+        candidates = resolve_geo_supplementary_assets(response.content, listing_url)
+        if filename:
+            candidates = [item for item in candidates if item.filename == filename]
+        if not candidates:
+            raise LookupError("no matching GEO supplementary file found")
+        if len(candidates) > 1 and filename is None:
+            raise ValueError("multiple supplementary files found; specify filename")
+        selected_filename = candidates[0].filename
+        url = candidates[0].url
     else:
-        return json.dumps({
-            "source": "geo",
-            "accession": accession,
-            "error": f"unsupported file_type: {file_type}",
-        })
+        raise ValueError(f"unsupported file_type: {file_type}")
 
-    if local_files:
-        run_ctx.add_raw_asset(local_files[0])
-
-    source_record = SourceRecord(
-        source="geo",
-        accession=accession,
-        source_url=url,
-        local_files=local_files,
-        format_hint=format_hint,
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "ftp.ncbi.nlm.nih.gov":
+        raise ValueError("GEO download must resolve to official NCBI HTTPS")
+    source = SourceRecord(
+        source_id=f"src_geo_{record.accession.lower()}_{normalized_type}",
+        database=Database.GEO,
+        accession=record.accession,
+        url=url,
+        title=record.title,
+        retrieved_at=datetime.now(timezone.utc),
     )
-    run_ctx.add_source(source_record)
+    return source, selected_filename, DataLevel.REPOSITORY_PROCESSED
 
-    return json.dumps({
-        "source": "geo",
-        "accession": accession,
-        "source_url": url,
-        "local_files": local_files,
-        "format_hint": format_hint,
-        "retrieved_at": source_record.retrieved_at.isoformat(),
-    })
+
+async def download_geo_adapter(
+    run_ctx: RunContext,
+    accession: str,
+    file_type: str,
+    *,
+    services: NcbiServices,
+    filename: str | None = None,
+    max_size_mb: int = 100,
+    expected_size: int | None = None,
+    expected_sha256: str | None = None,
+) -> str:
+    """Download one official GEO file and return its immutable SourceAsset JSON."""
+
+    try:
+        source, selected_filename, data_level = await _resolve_download(
+            accession, file_type, filename, services
+        )
+        result = await acquire_source(
+            source=source,
+            filename=selected_filename,
+            workdir=run_ctx.work_dir,
+            cache=services.cache,
+            http=services.http,
+            data_level=data_level,
+            max_bytes=max_size_mb * 1024 * 1024,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+        )
+        payload: dict[str, Any] = {
+            "source": "geo",
+            "accession": source.accession,
+            "source_url": source.url,
+            "attempt": result.attempt.model_dump(mode="json"),
+            "asset": (
+                result.asset.model_dump(mode="json") if result.asset else None
+            ),
+        }
+        if result.asset:
+            path = run_ctx.work_dir.root / result.asset.relative_path
+            run_ctx.add_source(source)
+            run_ctx.add_raw_asset(str(path))
+            payload["local_files"] = [str(path)]
+            payload["format_hint"] = file_type.lower().strip()
+        else:
+            payload["error"] = result.attempt.error_message
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception("GEO download failed for accession=%r", accession)
+        return json.dumps({
+            "source": "geo", "accession": accession, "error": str(exc)
+        }, ensure_ascii=False)
+
+
+@function_tool(
+    name_override="search_geo",
+    description_override="Search NCBI GEO and return typed GSE series records.",
+)
+async def search_geo(
+    ctx: RunContextWrapper[Any], term: str, max_results: int = 20
+) -> str:
+    async with open_ncbi_services() as services:
+        return await search_geo_adapter(
+            ctx.context, term, max_results, services=services
+        )
+
+
+@function_tool(
+    name_override="describe_geo",
+    description_override="Describe one GEO series accession using NCBI metadata.",
+)
+async def describe_geo(ctx: RunContextWrapper[Any], accession: str) -> str:
+    async with open_ncbi_services() as services:
+        return await describe_geo_adapter(ctx.context, accession, services=services)
+
+
+@function_tool(
+    name_override="download_geo",
+    description_override=(
+        "Download a GEO matrix, SOFT, or supplementary file as an immutable "
+        "repository-processed SourceAsset. Compressed files remain compressed."
+    ),
+)
+async def download_geo(
+    ctx: RunContextWrapper[Any],
+    accession: str,
+    file_type: str = "matrix",
+    filename: str | None = None,
+    max_size_mb: int = 100,
+) -> str:
+    async with open_ncbi_services() as services:
+        return await download_geo_adapter(
+            ctx.context,
+            accession,
+            file_type,
+            services=services,
+            filename=filename,
+            max_size_mb=max_size_mb,
+        )
 
 
 geo_skill = SkillDef(
     name="geo",
     category=SkillCategory.ACQUISITION,
-    description="Search, describe, and download GEO (NCBI Gene Expression Omnibus) datasets. Use when user asks about GEO series, gene expression data, or needs raw GEO files.",
+    description=(
+        "Search, describe, and download GEO (NCBI Gene Expression Omnibus) "
+        "datasets. Use when user asks about GEO series or gene expression data."
+    ),
     instructions=(
-        "Use the geo tools to search NCBI GEO by keyword, inspect dataset metadata, "
-        "and download raw series matrix or SOFT files. "
-        "Prefer search_geo to find datasets, describe_geo to inspect metadata, "
-        "and download_geo to retrieve files. "
-        "All downloads go to the task raw directory and are tracked in provenance."
+        "Use search_geo to find GSE accessions, describe_geo to inspect typed "
+        "metadata, and download_geo to retrieve verified compressed source assets. "
+        "For supplementary listings containing several files, specify filename."
     ),
     tools=[search_geo, describe_geo, download_geo],
     supported_sources=["geo", "ncbi_geo"],
-    version="0.1.0",
+    version="0.2.0",
 )
 
 skill_registry.register(geo_skill)
