@@ -5,11 +5,12 @@ import { ChatPanel } from "./components/ChatPanel";
 import { ToolTrace } from "./components/ToolTrace";
 
 export default function App() {
-  const { connect } = useAgentStream();
+  const { connect, disconnect } = useAgentStream();
 
   useEffect(() => {
     connect();
-  }, [connect]);
+    return () => disconnect();
+  }, [connect, disconnect]);
 
   return (
     <div className="app">
