@@ -495,28 +495,7 @@ backend/app/skills/
 - [ ] **P1** 定时运行真实数据源集成测试
 - [ ] **P0** README 提供安装、配置、启动和测试命令
 
-## 14. 七人协作建议
-
-| 负责人 | 范围 |
-| --- | --- |
-| Agent 框架负责人 | Main Agent、Runner、RunContext、SDK 能力和 Skill 加载 |
-| Skill 仓库负责人 | SkillDef、Registry、内置/后天 Skill、演化日志 |
-| 论文与 Discovery | PubMed/Europe PMC、论文理解、论文内数据定位 |
-| 数据获取 | GEO、GDC、UCSC Xena、RCSB PDB、浏览器降级 |
-| 数据处理 | 文件解析、清洗、字段对齐、合并和导出 |
-| 前端与 API | 数据库选择、WebSocket、运行轨迹和 Artifact |
-| 测试与案例 | fixture、质量指标、CI、主案例、演示和材料 |
-
-协作规则：
-
-- [ ] **P0** 先确定 Tool 输入输出，再并行开发
-- [ ] **P0** 每个数据源 Tool 自带离线 fixture
-- [ ] **P0** 默认测试不依赖真实网络
-- [ ] **P0** 每个模块至少有一名跨模块 reviewer
-- [ ] **P0** 每周形成一个可运行的端到端闭环
-- [ ] **P0** TODO 只有在代码、测试和演示证据齐全时才能勾选完成
-
-## 15. 推荐迭代顺序
+## 14. 推荐迭代顺序
 
 ### Sprint 0：修好现有 SDK 闭环
 
@@ -566,7 +545,7 @@ backend/app/skills/
 - [ ] 技术报告、PPT/PDF 和演示缓存
 - [ ] 本地复现检查
 
-## 16. MVP 完成标准
+## 15. MVP 完成标准
 
 - [ ] 用户可以输入主题并选择数据库
 - [ ] Main Agent 按需加载 Skill，而不是加载整个 Skill 仓库
@@ -587,7 +566,7 @@ backend/app/skills/
 - [ ] 主案例可以在个人电脑上稳定复现
 - [ ] 后端和前端验证命令通过
 
-## 17. 后续扩展
+## 16. 后续扩展
 
 ### P1
 
