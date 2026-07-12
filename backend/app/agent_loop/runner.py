@@ -30,6 +30,7 @@ from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import create_agent, get_loaded_skill_names
 from app.agent_loop.context import RunContext
+from app.agent_loop.model import ModelConfigurationError, require_model_credentials
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -99,26 +100,27 @@ async def run_agent_stream(
 ) -> AsyncIterator[dict]:
     """流式运行 Agent loop，yield 前端可消费的事件 dict。"""
     ctx = RunContext(task_id=task_id)
-    agent = create_agent(databases=databases)
-
-    # ── skill_loaded 事件 ──
-    skill_names = get_loaded_skill_names()
-    for name in skill_names:
-        skill = getattr(agent, "_skills", None)
-        category = "unknown"
-        # Derive category from name.  The skill registry is already loaded;
-        # we import the registry here for a lightweight lookup.
-        from app.skills.registry import skill_registry as _reg
-        skill_def = _reg.get(name)
-        if skill_def is not None:
-            category = skill_def.category.value
-        yield {
-            "type": "skill_loaded",
-            "name": name,
-            "category": category,
-        }
 
     try:
+        require_model_credentials()
+        agent = create_agent(databases=databases)
+
+        # ── skill_loaded 事件 ──
+        skill_names = get_loaded_skill_names()
+        for name in skill_names:
+            category = "unknown"
+            # Derive category from name.  The skill registry is already loaded;
+            # we import the registry here for a lightweight lookup.
+            from app.skills.registry import skill_registry as _reg
+            skill_def = _reg.get(name)
+            if skill_def is not None:
+                category = skill_def.category.value
+            yield {
+                "type": "skill_loaded",
+                "name": name,
+                "category": category,
+            }
+
         result = Runner.run_streamed(agent, user_input, context=ctx)
         async for event in result.stream_events():
             # LLM 原始流式事件 — 仅提取文本 delta
@@ -157,7 +159,10 @@ async def run_agent_stream(
 
         # ── 扫描产物目录，yield file_downloaded / artifact_produced 事件 ──
         tasks_base = Path(settings.output_dir) / "tasks" / task_id
-        for sub, event_type in [("raw", "file_downloaded"), ("artifacts", "artifact_produced")]:
+        for sub, event_type in [
+            ("source_assets", "file_downloaded"),
+            ("artifacts", "artifact_produced"),
+        ]:
             sub_dir = tasks_base / sub
             if sub_dir.exists():
                 for file_path in sorted(sub_dir.rglob("*")):
@@ -177,6 +182,12 @@ async def run_agent_stream(
                             "size": size,
                         }
 
+    except ModelConfigurationError as error:
+        yield {
+            "type": "error",
+            "code": error.code,
+            "message": str(error),
+        }
     except Exception as e:
         logger.exception("Agent loop 执行失败")
         yield {"type": "error", "message": str(e)}
