@@ -1,597 +1,306 @@
 # BioMed-QAgent 开发 TODO
 
-> 架构依据：[ARCHITECTURE.md](ARCHITECTURE.md)
+> 当前执行依据：[ARCHITECTURE.md](ARCHITECTURE.md) 与
+> [Backend Data Closure Design](superpowers/specs/2026-07-12-backend-data-closure-design.md)。
 
-## 0. 项目目标
+## 0. 当前目标
 
-用户输入研究主题，并可选择允许检索的数据库。系统基于 Qwen 和 OpenAI Agents SDK 自动完成：
+优先完成一个真实、可重复、可追溯的后端闭环：
 
-1. 检索和理解相关论文；
-2. 整理数据库、查询方向、accession 和补充材料线索；
-3. 从允许的数据库检索并下载原始数据；
-4. 解析本地文件；
-5. 清洗、字段对齐和多来源合并；
-6. 输出 CSV、字段说明、来源清单和处理记录；
-7. 可选执行数据分析和可视化。
+```text
+主题
+    -> PubMed PMID 34180400
+    -> GEO GSE178352
+    -> 下载真实 processed counts
+    -> 解析和标准化
+    -> 生成完整产物包
+    -> Validation Gate
+    -> Artifact API 下载
+```
 
-系统不输出缺少数据依据的科研或临床结论。
+Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 ## 1. 优先级
 
 | 优先级 | 含义 |
 | --- | --- |
-| P0 | 完成初赛可演示闭环所必需 |
-| P1 | 明显提升可靠性、数据覆盖或展示效果 |
-| P2 | 加分项或后续扩展 |
-
-## 2. 架构约定
-
-- [ ] **P0** 保留 OpenAI Agents SDK 作为运行核心
-  - 使用 `Agent`、`Runner`、Function Tool、RunContext 和 Streaming；
-  - 需要时使用 Session、Guardrail 和 HITL；
-  - 不自研平行 Agent Runtime。
-- [ ] **P0** 默认使用一个 Main Agent
-  - 不强制多 Agent；
-  - 只有 Prompt 或 Tool 集合过大时才使用 `Agent.as_tool()` 拆分专家 Agent。
-- [ ] **P0** 使用统一 Skill 仓库
-  - Skill 按需加载；
-  - Skill 是 instructions 与 Tool 的能力包；
-  - Tool 由 SDK 直接执行；
-  - 不实现通用 SkillExecutor。
-- [ ] **P0** 区分内置 Skill 和后天 Skill
-  - `skills/builtin/` 存放团队维护的 Skill；
-  - `skills/learned/` 存放自迭代产生的 Skill。
-- [ ] **P0** 一个网站对应一个或多个 Tool，而不是默认对应一个 Skill
-  - 网站检索、查看元数据、下载分别建 Tool；
-  - 同类网站可以归入同一个 Skill。
-- [ ] **P0** Skill 按四类组织
-  - `discovery`：论文检索与理解；
-  - `acquisition`：数据库检索与原始文件下载；
-  - `processing`：解析、清洗、对齐和合并；
-  - `analysis`：分析和可视化，加分项。
-- [ ] **P0** 下载与解析严格分离
-  - 下载 Tool 不读取数据内容并生成业务记录；
-  - 下载 Tool 只保存原始文件、来源和下载元数据；
-  - Processing Skill 从本地 raw 文件开始工作。
-
-## 3. 当前状态
-
-### 3.1 已有骨架
-
-- [x] **P0** DashScope/Qwen OpenAI-compatible 模型接入骨架
-- [x] **P0** OpenAI Agents SDK Main Agent 骨架
-- [x] **P0** `Runner.run_streamed()` 流式运行骨架
-- [x] **P0** SDK Function Tool 与 Tool 注册表骨架
-- [x] **P0** `RunContext` 共享状态骨架
-- [x] **P0** SkillRegistry 占位实现
-- [x] **P0** FastAPI WebSocket 接口骨架
-- [x] **P0** React 对话与 Tool Trace 页面骨架
-- [x] **P0** `.env.example` 与 Qwen 基础配置
-
-### 3.2 必须先修正
-
-- [ ] **P0** 修正 Main Agent 产品提示词
-  - 最终目标改为结构化数据和来源记录；
-  - 移除必须生成研究报告、分析结果和结论的要求；
-  - 明确分析为可选加分项。
-- [ ] **P0** 修正 OpenAI Agents SDK 流式事件映射
-  - 仅把文本 delta 推送为助手消息；
-  - 正确处理 `run_item_stream_event`；
-  - 正确推送 `tool_called` 和 `tool_output`；
-  - 不把工具参数 delta 当成文本。
-- [ ] **P0** 修正前端 WebSocket 所有权
-  - 同一个连接实例负责连接、发送和关闭；
-  - 修复页面显示已连接但发送端没有连接的问题。
-- [ ] **P0** 修正前端构建配置
-  - 修正 TypeScript `ignoreDeprecations`；
-  - 确保 `src/lib/utils.ts` 被 Git 跟踪；
-  - 统一使用 npm 或 pnpm 的一种锁文件和命令。
-- [ ] **P0** 限制文件 Tool 只能访问当前任务工作目录
-  - 拒绝绝对路径；
-  - 拒绝 `..` 路径穿越；
-  - 拒绝工作目录外符号链接。
-- [ ] **P0** 使用 `uv.lock` 固定 SDK 和后端依赖
-
-## 4. 用户输入与任务工作目录
-
-### 4.1 用户输入
-
-- [x] **P0** 定义最小输入
-  - `topic`：唯一必填字段；
-  - `preferred_sources`：允许检索的数据库；
-  - `keywords`：可选；
-  - `target_fields`：可选；
-  - `time_range`：可选。
-- [ ] **P0** 未指定数据库时加载默认数据库集合
-  - > 注：`SkillRegistry.get_acquisition_skills(None)` 已支持，待 RunContext 接入
-- [ ] **P0** 用户指定数据库时过滤 acquisition Tool
-  - > 注：`SkillRegistry.get_acquisition_skills(user_sources)` 已支持，待 RunContext 接入
-- [ ] **P0** Discovery Skill 可以建议新数据库，但扩大范围前必须确认
-- [ ] **P1** 前端允许设置物种、疾病、基因、蛋白、药物和数据类型等过滤条件
-
-### 4.2 RunContext
-
-- [ ] **P0** 扩展 `RunContext`
-  - `task_id`
-  - `topic`
-  - `preferred_sources`
-  - `plan`
-  - `sources`
-  - `raw_assets`
-  - `parsed_datasets`
-  - `records`
-  - `artifacts`
-  - `warnings`
-  - `query_log`
-  - > 注：`context.py` 当前被 TASK-001 锁定，待解锁后扩展
-- [ ] **P0** 不在 Context 中保存大文件内容
-- [ ] **P0** Context 只保存本地路径和轻量元数据
-
-### 4.3 工作目录
-
-- [x] **P0** 每个任务创建独立目录
-
-```text
-data/tasks/<task_id>/
-├── raw/
-├── parsed/
-├── normalized/
-├── artifacts/
-└── logs/
-```
-
-- [ ] **P0** `raw/` 中的下载文件保持不变
-- [ ] **P0** 解析、清洗和导出产物不得覆盖原始文件
-
-## 5. Skill 仓库
-
-### 5.1 目录
-
-- [x] **P0** 调整为统一仓库
-
-```text
-backend/app/skills/
-├── registry.py
-├── builtin/
-│   ├── discovery/
-│   ├── acquisition/
-│   ├── processing/
-│   └── analysis/
-└── learned/
-    ├── discovery/
-    ├── acquisition/
-    ├── processing/
-    └── analysis/
-```
-
-### 5.2 SkillDef
-
-- [x] **P0** 扩展 `SkillDef`
-  - `name`
-  - `category`
-  - `description`
-  - `instructions`
-  - `tools`
-  - `supported_sources`
-  - `version`
-  - `enabled`
-  - 可选 `input_model`、`output_model` 和 examples
-- [x] **P0** description 简洁说明何时使用 Skill
-- [x] **P0** description 不包含开发日志和历史使用记录
-- [x] **P0** 每个 Skill 建议暴露不超过约 20 个 Tool
-- [x] **P1** 超过 30 个 Tool 时强制评审是否拆分
-
-### 5.3 注册与按需加载
-
-- [x] **P0** SkillRegistry 支持注册、查询和列出 Skill
-- [x] **P0** 支持按 category 筛选
-- [x] **P0** 支持按 supported source 筛选
-- [x] **P0** 支持 enabled/disabled
-- [x] **P0** 根据用户数据库选择过滤 acquisition Skill 和 Tool
-- [ ] **P0** `create_agent()` 接收本次任务选中的 Skill
-  - 合并 Skill instructions；
-  - 合并并去重 Skill Tools；
-  - 不把整个仓库全部加载给 Agent。
-  - > 注：`build_agent_config()` 已实现合并/去重逻辑，待 `agent.py` 解锁后接入 `create_agent()`
-- [x] **P0** 简单 Tool 在 Skill 加载后由 Main Agent 直接调用
-- [ ] **P1** 需要专家上下文时把 Skill 构造成 `Agent.as_tool()`
-
-## 6. Discovery：论文检索与理解
-
-论文不仅用于背景调研，还用于发现数据库、accession、补充材料和可提取数据，属于核心能力。
-
-### 6.1 论文检索
-
-- [ ] **P0** 实现 `literature_search` Skill
-- [ ] **P0** 接入 PubMed 或 Europe PMC
-- [ ] **P0** 根据研究主题生成关键词和布尔检索式
-- [ ] **P0** 保存实际查询式、时间、返回顺序和来源 URL
-- [ ] **P0** 对 DOI、PMID、PMCID 和标题去重
-- [ ] **P0** 返回题目、摘要、作者、期刊、时间、DOI/PMID/PMCID 和开放获取状态
-- [ ] **P1** 同时接入 PubMed 与 Europe PMC 并合并结果
-- [ ] **P1** 接入 Crossref 或 OpenAlex 补充元数据
-
-### 6.2 论文理解与数据方向
-
-- [ ] **P0** 实现 `literature_understanding` Skill
-- [ ] **P0** 从摘要、方法和数据可用性声明中识别
-  - 数据库名称；
-  - accession；
-  - 数据类型；
-  - 物种和疾病；
-  - 检索关键词；
-  - 论文补充材料链接；
-  - 数据下载页面。
-- [ ] **P0** 总结相关论文采用的数据检索方向
-- [ ] **P0** 将建议限制在用户允许或默认启用的数据源中
-- [ ] **P0** 输出候选数据库、查询式、accession 和选择理由
-- [ ] **P1** 对未启用数据源生成用户确认请求
-
-### 6.3 论文文件和论文内数据
-
-- [ ] **P0** 下载开放获取 PDF、全文 XML 和补充材料
-- [ ] **P0** 保存 DOI/PMID/PMCID、下载 URL 和本地文件
-- [ ] **P0** 论文下载仍属于 acquisition，不直接解析
-- [ ] **P0** Processing 支持从全文 XML/HTML 和 CSV、TSV、Excel 等机器可读补充材料提取数据
-- [ ] **P1** 支持 PDF 表格提取
-- [ ] **P1** 支持图像、图表和扫描表格识别
-- [ ] **P1** 对图表坐标轴、单位、图例和数据点执行校验
-- [ ] **P1** 对低可信度论文数据请求人工确认
-- [ ] **P0** 论文提取结果记录页码、表格号、图像区域或补充材料文件名
-
-## 7. Acquisition：数据库检索与下载
-
-### 7.1 统一约定
-
-- [ ] **P0** 每个大网站至少实现以下网站级 Tool
-  - search；
-  - describe/metadata；
-  - download。
-- [ ] **P0** 下载 Tool 统一返回
-  - `source`
-  - `accession`
-  - `source_url`
-  - `local_files`
-  - `checksum`
-  - `mime_type`
-  - `format_hint`
-  - `retrieved_at`
-  - `warnings`
-- [ ] **P0** 下载 Tool 只写入 `task/raw/`
-- [ ] **P0** 下载 Tool 不调用解析器
-- [ ] **P0** 下载 Tool 不生成清洗后的 DataRecord
-- [ ] **P0** 记录成功、部分成功、失败和浏览器降级状态
-- [ ] **P0** 设置超时、重试、最大文件大小和并发限制
-
-### 7.2 GEO
-
-- [ ] **P0** 实现 GEO 数据集检索 Tool
-- [ ] **P0** 返回 accession、标题、摘要、物种、平台、样本数和关联论文
-- [ ] **P0** 支持下载 Series Matrix
-- [ ] **P0** 支持下载 SOFT 或补充文件
-- [ ] **P0** 保存 GEO 页面和实际下载 URL
-- [ ] **P1** 支持按 GSE、GSM、GPL 等标识符进一步获取文件
-
-### 7.3 GDC
-
-- [ ] **P0** 实现 GDC 项目、病例和文件检索 Tool
-- [ ] **P0** 支持按癌种、项目、数据类型和工作流过滤
-- [ ] **P0** 支持下载 manifest 或目标公开文件
-- [ ] **P0** 保存项目、case/file ID 和数据类别元数据
-
-### 7.4 UCSC Xena
-
-- [ ] **P0** 实现 cohort 与 dataset 检索 Tool
-- [ ] **P0** 支持下载公开矩阵和表型/临床元数据
-- [ ] **P0** 保存 hub、cohort、dataset 和下载 URL
-
-### 7.5 RCSB PDB
-
-- [ ] **P0** 实现结构条目检索 Tool
-- [ ] **P0** 支持按蛋白、基因、物种和关键词检索
-- [ ] **P0** 支持下载 PDB 或 mmCIF
-- [ ] **P0** 保存 PDB ID、结构元数据和来源 URL
-
-### 7.6 浏览器降级
-
-- [ ] **P0** 实现通用浏览器自动化 Tool
-- [ ] **P0** 仅在 API/脚本不可用、网站未知或页面交互必要时启用
-- [ ] **P0** 支持导航、输入、点击、等待和文件下载
-- [ ] **P0** 记录目标 URL、关键操作、下载结果和错误
-- [ ] **P0** 下载文件仍写入 `task/raw/`
-- [ ] **P0** 不绕过登录、付费、验证码或明确访问控制
-
-## 8. Processing：解析、清洗与对齐
-
-### 8.1 文件识别和解析
-
-- [x] **P0** 根据扩展名、MIME 和文件内容识别格式
-- [x] **P0** 解析 CSV 和 TSV
-- [ ] **P0** 解析 Excel
-  - > 注：需 openpyxl 依赖，暂缓
-- [x] **P0** 解析 JSON
-- [x] **P0** 解析 HTML 表格
-- [ ] **P0** 解析 GEO Series Matrix 或 SOFT 的最小字段
-  - > 注：待 acquisition 实现 GEO 下载后接入
-- [ ] **P0** 解析 PDB/mmCIF 基础结构元数据
-  - > 注：待 acquisition 实现 PDB 下载后接入
-- [ ] **P1** 解析 HDF5、压缩矩阵和其他组学格式
-- [ ] **P1** 解析 PDF 正文和表格
-- [ ] **P1** 多模态解析图表和图像
-
-### 8.2 ParsedDataset
-
-- [x] **P0** 解析结果统一包含
-  - 数据集 ID；
-  - 原始文件路径；
-  - 表、Sheet 或区块名称；
-  - 字段名和推断类型；
-  - 数据行；
-  - 来源定位；
-  - 解析器名称和版本；
-  - warnings。
-- [ ] **P0** 解析结果写入 `task/parsed/`
-  - > 注：ParsedDataset 模型已就绪，待 workdir + runner 接入写入
-
-### 8.3 清洗
-
-- [x] **P0** 缺失值统计
-- [x] **P0** 精确重复检测
-- [x] **P0** 字符串和日期格式规范化
-- [x] **P0** 字段类型检查
-- [x] **P0** 异常格式标记
-- [x] **P0** 清洗规则记录影响行数
-- [x] **P0** 不静默删除或覆盖原始记录
-- [ ] **P1** 近似重复检测
-
-### 8.4 字段对齐与合并
-
-- [ ] **P0** 字段名标准化
-- [ ] **P0** 单位识别与转换
-- [ ] **P0** 生成字段映射表
-- [ ] **P0** 支持纵向合并
-- [ ] **P0** 支持按主键连接
-- [ ] **P0** 保留来源列和冲突值
-- [ ] **P0** 无法可靠判断的字段映射请求人工确认
-- [ ] **P1** 实体名称归一化
-- [ ] **P1** 来源冲突检测
-
-## 9. Analysis：加分项
-
-- [ ] **P1** 描述性统计摘要
-- [ ] **P1** 数据分布和缺失情况可视化
-- [ ] **P1** 简单表格预览和字段筛选
-- [ ] **P2** 差异表达分析
-- [ ] **P2** 富集分析
-- [ ] **P2** PPI 或网络分析
-- [ ] **P2** 热图、火山图、网络图等可视化
-- [ ] **P1** Analysis Skill 只读取 normalized 数据
-- [ ] **P1** Analysis Skill 不修改 raw 和 parsed 文件
-- [ ] **P1** 输出中区分数据统计与科研结论
-
-## 10. 后天 Skill 与自迭代
-
-### 10.1 触发与生成
-
-- [ ] **P1** 预置 Tool 无法处理网站时调用浏览器 Tool
-- [ ] **P1** 浏览器成功完成可重复任务后生成网站 Tool 或后天 Skill 代码
-- [ ] **P1** 后天 Skill 保存到 `skills/learned/<category>/<name>/`
-- [ ] **P1** 后天 Skill 具有完整 description
-- [ ] **P1** 后天 Skill 不覆盖同名内置 Skill
-- [ ] **P1** 后天 Skill 默认可禁用
-- [ ] **P1** 不引入 SiteRecipe DSL
-
-### 10.2 EVOLUTION.md
-
-- [ ] **P1** 每个后天 Skill 创建 `EVOLUTION.md`
-- [ ] **P1** 记录生成或修改时间
-- [ ] **P1** 记录目标网站和任务目标
-- [ ] **P1** 记录来源 task/run
-- [ ] **P1** 记录生成或修改原因
-- [ ] **P1** 记录浏览器成功步骤摘要
-- [ ] **P1** 记录下载文件类型和数量
-- [ ] **P1** 记录验证方法和结果
-- [ ] **P1** 记录后续使用成功和失败情况
-- [ ] **P1** 记录人工修改和已知限制
-- [ ] **P1** EVOLUTION.md 默认不加载到 Agent 上下文
-
-### 10.3 代码验证
-
-- [ ] **P1** 后天 Python 代码通过语法检查
-- [ ] **P1** 至少用相同目标重放一次
-- [ ] **P1** 检查输出文件存在、非空且类型符合预期
-- [ ] **P1** 检查代码不读取密钥或任务目录外文件
-- [ ] **P1** 检查代码不包含任意系统命令执行
-- [ ] **P1** 人工启用、禁用和删除后天 Skill
-
-## 11. 输出与来源追踪
-
-- [x] **P0** 输出主数据 CSV
-- [x] **P0** 输出字段说明
-- [x] **P0** 输出来源清单
-- [x] **P0** 输出下载记录
-  - > 注：SourceRecord 模型含 local_files/checksum/mime_type/format_hint/retrieved_at，导出为 source_list.csv
-- [x] **P0** 输出处理记录
-- [x] **P0** 输出 warnings 和未解决问题
-- [x] **P0** 每条最终记录至少关联原始数据源和 raw 文件
-- [x] **P0** 每个转换记录 Tool、参数和影响记录数
-- [x] **P0** 论文提取数据记录 DOI/PMID 和原始位置
-- [ ] **P1** 支持 Excel、Parquet 或 JSON 辅助产物
-- [ ] **P1** 支持从最终记录反查原始文件
-- [ ] **P1** 输出可视化 Artifact
-
-## 12. API 与前端
-
-### 12.1 WebSocket
-
-- [ ] **P0** 接收主题和数据库选择
-- [ ] **P0** 推送 Agent 文本增量
-- [ ] **P0** 推送 Skill 加载事件
-- [ ] **P0** 推送 Tool 调用和结果
-- [ ] **P0** 推送下载文件和 Artifact 事件
-- [ ] **P0** 推送人工确认请求
-- [ ] **P0** 推送完成和失败事件
+| P0 | 后端真实闭环和可信产物必需 |
+| P1 | Agent/API 集成和前端正式使用必需 |
+| P2 | 第二案例、更多数据库和比赛加分项 |
+
+## 2. 已批准架构决策
+
+- [x] **P0** 保留 OpenAI Agents SDK 作为 Agent Runtime
+- [x] **P0** 保留一个 Main Agent 和按需 Skill 加载
+- [x] **P0** 保留 builtin/learned 统一 Skill 仓库
+- [x] **P0** Skill 按 discovery、acquisition、processing、analysis 分类
+- [x] **P0** 一个网站对应多个 Tool，不强制一个网站一个 Skill
+- [x] **P0** 下载与解析严格分离
+- [x] **P0** 新增确定性 Pipeline Runner
+- [x] **P0** Agent 只生成 TaskSpecification，不直接拼装产物
+- [x] **P0** 产物必须通过 Validation Gate 才能进入 artifacts/
+- [x] **P0** 固定真实案例采用 GSE178352 + PMID 34180400
+- [x] **P0** 默认 CI 使用真实数据 fixture，live 测试下载完整官方文件
+- [x] **P1** 后端契约稳定后使用 shadcn 重写前端任务工作台
+
+## 3. 已有基础与审计结论
+
+### 3.1 可复用基础
+
+- [x] OpenAI Agents SDK Agent/Runner/Function Tool 骨架
+- [x] DashScope/Qwen OpenAI-compatible 模型适配骨架
+- [x] FastAPI、HTTP 路由和 WebSocket 骨架
+- [x] RunContext 与独立任务目录骨架
+- [x] SkillRegistry 与四类 Skill 目录
+- [x] 文件 Tool 绝对路径、`..` 和目录逃逸防护
+- [x] CSV/TSV/JSON/HTML 等解析原语
+- [x] 清洗、字段对齐和 CSV 导出原语
+- [x] Artifact 列表和安全下载路由原语
+- [x] 现有测试在占位模型 Key 下为 99 passed
+
+### 3.2 未通过验收的现状
+
+- [ ] **P0** 干净环境不配置模型 Key 时测试仍可运行
+- [ ] **P0** 真实 Agent Demo 在总超时内产生终态
+- [ ] **P0** GEO 查询返回真实 GSE accession，而不是把数值 GDS ID 传给 GEOparse
+- [ ] **P0** Xena 不再因固定 URL 返回 403
+- [ ] **P0** 数据库 API 启动后稳定列出数据库，不依赖模块导入顺序
+- [ ] **P0** 数据库 API 不混入 analysis/self-evolution 等非数据库 Skill
+- [ ] **P0** WebSocket 事件前后端使用同一 schema
+- [ ] **P0** 前端连接与发送使用同一 client 实例
+- [ ] **P0** task_id 从创建、执行到 Artifact 下载完整贯通
+- [ ] **P0** 真实流程输出可追溯产物，而非 mock 数据
+- [ ] **P0** 主数据只包含一种记录粒度
+- [ ] **P0** 每个最终值能回溯到 raw 行列位置
+- [ ] **P0** warnings 与 metrics 计数一致
+- [ ] **P0** 正式产物实际位于任务 artifacts/ 并可通过 API 下载
+- [ ] **P1** 建立前端单元测试和 lint
+
+上述条目通过测试和产物证据前，不得重新勾选为完成。
+
+## 4. Phase 1A：契约与目录
+
+### 4.1 领域契约
+
+- [ ] **P0** 定义 `TaskRequest`
+- [ ] **P0** 定义 `TaskSpecification`
+- [ ] **P0** 定义 `DatasetSelection`
+- [ ] **P0** 重构 `SourceRecord`
+- [ ] **P0** 定义 `RawAsset`
+- [ ] **P0** 完善 `ParsedDataset`
+- [ ] **P0** 定义 `Artifact`
+- [ ] **P0** 定义结构化 Pipeline error
+- [ ] **P0** API 边界拒绝未知字段
+- [ ] **P0** task_id 和相对路径执行安全校验
+
+### 4.2 工作目录
+
+- [ ] **P0** 统一使用 `data/output/tasks/<task_id>/`
+- [ ] **P0** 包含 raw、parsed、normalized、staging、artifacts、logs
+- [ ] **P0** RawAsset 路径只能位于 raw/
+- [ ] **P0** 原始文件不可被覆盖
+- [ ] **P0** Artifact 只能从 staging 验证后提升
+- [ ] **P0** API 只公开 artifacts/
+
+### 4.3 TDD 验收
+
+- [ ] **P0** 每个新契约先写失败测试
+- [ ] **P0** 覆盖空 topic、非法 task_id、未知字段和路径逃逸
+- [ ] **P0** 覆盖 RawAsset checksum、size 和状态约束
+- [ ] **P0** 覆盖 staging 未验证时不可下载
+
+## 5. Phase 1B：固定真实数据
+
+### 5.1 Fixture
+
+- [ ] **P0** 下载官方 `GSE178352_tximportCounts.txt.gz`
+- [ ] **P0** 记录官方 URL、时间和完整文件 SHA-256
+- [ ] **P0** 生成体量受控的真实 fixture
+- [ ] **P0** fixture manifest 记录保留行列和提取命令
+- [ ] **P0** fixture 自身保存 SHA-256
+- [ ] **P0** 保存 PMID 34180400 的真实 PubMed 响应 fixture
+- [ ] **P0** 保存 GSE178352 的真实 GEO 元数据 fixture
+- [ ] **P0** fixture 不包含伪造 accession、PMID 或表达值
+
+### 5.2 PubMed
+
+- [ ] **P0** 搜索结果包含 PMID、PMCID、DOI、标题、作者、期刊和摘要
+- [ ] **P0** 实际查询式、时间、顺序和 URL 可导出
+- [ ] **P0** PMID 34180400 关联到 GSE178352
+- [ ] **P0** 超时和上游错误返回结构化失败
+- [ ] **P0** 离线 client 使用 fixture，不调用网络
+
+### 5.3 GEO
+
+- [ ] **P0** 修复 GEO 数值搜索 ID 到 accession/metadata 的转换
+- [ ] **P0** `search_geo` 对 breast cancer 返回非空真实 accession
+- [ ] **P0** `describe_geo("GSE178352")` 返回 12 个样本和关联 PMID
+- [ ] **P0** 获取 processed counts 的真实下载 URL
+- [ ] **P0** 下载只返回 RawAsset，不调用解析器
+- [ ] **P0** 下载采用流式写入、临时文件和原子重命名
+- [ ] **P0** 下载记录 status、size、SHA-256、MIME 和时间
+- [ ] **P0** 设置连接、读取、总时长和最大文件限制
+- [ ] **P0** 失败文件不得标记 success
+
+## 6. Phase 1C：Processing
+
+### 6.1 Counts Parser
+
+- [ ] **P0** 只接受 RawAsset
+- [ ] **P0** 解压到 parsed/，保留原始 `.gz`
+- [ ] **P0** 解析制表符 counts matrix
+- [ ] **P0** 验证 12 个预期 GSM 样本列
+- [ ] **P0** 记录 parser 名称与版本
+- [ ] **P0** 输出 ParsedDataset 元数据
+
+### 6.2 标准化
+
+- [ ] **P0** `main_data.csv` 一行表示 gene + sample
+- [ ] **P0** 生成稳定 record_id
+- [ ] **P0** 保存 dataset_id、source_id、asset_id
+- [ ] **P0** expression_value 保存数值类型
+- [ ] **P0** 保存 source_row 和 source_column
+- [ ] **P0** 文献、数据集和样本元数据分表
+- [ ] **P0** 不生成原文件中不存在的 log2FC、p-value 或 subtype
+
+### 6.3 清洗与字段映射
+
+- [ ] **P0** 检测空 gene_id 和 sample_id
+- [ ] **P0** 检测重复 gene/sample 键
+- [ ] **P0** 检测非数值表达值
+- [ ] **P0** 不确定值进入 warning，不静默删除
+- [ ] **P0** field_mapping 记录 raw 字段、标准字段和转换规则
+- [ ] **P0** processing log 记录 rows_before/rows_after
+
+## 7. Phase 1D：Artifact Builder
+
+- [ ] **P0** 生成 `run_manifest.json`
+- [ ] **P0** 生成 `main_data.csv`
+- [ ] **P0** 生成 `literature.csv`
+- [ ] **P0** 生成 `dataset_catalog.csv`
+- [ ] **P0** 生成 `sample_metadata.csv`
+- [ ] **P0** 生成 `field_descriptions.csv`
+- [ ] **P0** 生成 `field_mapping.csv`
+- [ ] **P0** 生成 `source_list.csv`
+- [ ] **P0** 生成 `download_log.csv`
+- [ ] **P0** 生成 `processing_log.csv`
+- [ ] **P0** 生成 `quality_report.csv`
+- [ ] **P0** 生成 `warnings.csv`
+- [ ] **P0** CSV 中结构化参数使用合法 JSON
+- [ ] **P0** 所有 Artifact 记录大小与 SHA-256
+- [ ] **P0** Artifact 输出顺序稳定，可重复比较
+
+## 8. Phase 1E：Validation Gate
+
+- [ ] **P0** 验证 main_data source_id 完整关联
+- [ ] **P0** 验证 main_data asset_id 完整关联
+- [ ] **P0** 验证 raw 文件存在且 checksum 一致
+- [ ] **P0** 验证所有主表字段都有字段说明
+- [ ] **P0** 验证每条记录有 raw 行列位置
+- [ ] **P0** 最多抽样 100 个值回溯 raw 并精确比较
+- [ ] **P0** 验证 processing log 完整
+- [ ] **P0** 验证 warnings 与 metrics 一致
+- [ ] **P0** 验证必需 Artifact 非空
+- [ ] **P0** 失败报告写入 logs/validation_report.json
+- [ ] **P0** 任一失败时不发布 artifacts/
+- [ ] **P0** 通过后原子提升 staging 为 artifacts/
+
+## 9. Phase 1F：Pipeline Runner
+
+- [ ] **P0** 实现固定阶段状态机
+- [ ] **P0** 每个阶段消费和返回明确类型
+- [ ] **P0** 阶段失败时停止下游阶段
+- [ ] **P0** 网络、模型、解析和完整任务独立超时
+- [ ] **P0** 每个任务保证 completed 或 failed 终态
+- [ ] **P0** 正式流程失败时禁止自动切换 mock success
+- [ ] **P0** 支持离线 fixture 模式
+- [ ] **P0** 支持显式 live 模式
+- [ ] **P0** mock 模式必须显式标记且不能通过 live 验收
+
+## 10. Phase 1 测试
+
+### 10.1 默认快速测试
+
+- [ ] **P0** 无 DashScope Key 可 import app 和创建确定性 Pipeline
+- [ ] **P0** 默认 pytest 不访问外网
+- [ ] **P0** 领域契约单元测试
+- [ ] **P0** GEO ID 转换回归测试
+- [ ] **P0** 下载 checksum 和中断测试
+- [ ] **P0** parser 与 long-form 测试
+- [ ] **P0** 清洗、字段映射和行数测试
+- [ ] **P0** 全部 Validation Gate 规则测试
+- [ ] **P0** 完整 fixture Pipeline 集成测试
+- [ ] **P0** Artifact API 列表和下载测试
+- [ ] **P0** 产物 schema 与值追溯测试
+
+### 10.2 Live 测试
+
+- [ ] **P0** pytest `live` marker 默认不运行
+- [ ] **P0** 实时获取 PMID 34180400
+- [ ] **P0** 实时获取 GSE178352 元数据
+- [ ] **P0** 实时下载完整 4.4 MB counts 文件
+- [ ] **P0** 校验样本 ID、checksum 和 parser
+- [ ] **P0** 最小 Qwen TaskSpecification 测试
+- [ ] **P0** 完整 live 流程在总超时内产生终态
+
+## 11. Phase 2：Agent 与 API
+
+- [ ] **P1** Agent 使用结构化 TaskSpecification
+- [ ] **P1** Pipeline 暴露为单一 SDK Function Tool
+- [ ] **P1** 数据库过滤不加载未选择 acquisition Tool
+- [ ] **P1** Agent 不直接调用 export Tool 生成最终产物
+- [ ] **P1** `POST /api/v1/tasks` 创建 task_id
+- [ ] **P1** TaskRequest API 校验
+- [ ] **P1** Task status 返回当前 stage 和终态
+- [ ] **P1** Artifact API 只列出已验证文件
+- [ ] **P1** 支持任务取消
+- [ ] **P1** 统一 WebSocket event envelope
+- [ ] **P1** 统一 task_id、sequence、timestamp、payload
+- [ ] **P1** 事件覆盖创建、计划、阶段、工具、警告、Artifact 和终态
+- [ ] **P1** API/WebSocket 契约集成测试
+
+## 12. Phase 3：shadcn 前端重写
+
+后端事件与 Artifact 契约稳定后开始。
+
+- [ ] **P1** 使用 shadcn Form 创建任务
+- [ ] **P1** 数据库选择只显示真实数据库
+- [ ] **P1** 计划确认 Card/Dialog
+- [ ] **P1** 阶段 Timeline/Progress
+- [ ] **P1** 结果使用 Tabs 分离主数据、来源、处理和警告
+- [ ] **P1** 使用 Table 展示紧凑预览
+- [ ] **P1** Artifact 下载列表
+- [ ] **P1** 单一 task/event client
 - [ ] **P1** 自动重连和任务恢复
+- [ ] **P1** Vitest + React Testing Library
+- [ ] **P1** ESLint 和 TypeScript 严格检查
+- [ ] **P1** 真实浏览器覆盖创建、执行、失败和下载流程
 
-### 12.2 HTTP API
+## 13. Phase 4：扩展能力
 
-- [ ] **P0** 获取可选数据库和默认选择
-- [ ] **P0** 查询任务状态
-- [ ] **P0** 获取 Artifact 列表
-- [ ] **P0** 下载 Artifact
-- [ ] **P1** 提交人工确认结果
-- [ ] **P1** 取消任务
+- [ ] **P2** 开放获取 PDF 和补充材料
+- [ ] **P2** PDF 表格与定位信息
+- [ ] **P2** 图表提取、坐标轴、单位、图例和置信度校验
+- [ ] **P2** GDC search/metadata/download live 测试
+- [ ] **P2** PDB search/metadata/download live 测试
+- [ ] **P2** Xena 403 修复与 live 测试
+- [ ] **P2** 第二个真实多数据库案例
+- [ ] **P2** 描述性统计和可视化
+- [ ] **P2** learned Skill 语法、重放和人工启用流程
 
-### 12.3 前端
+## 14. Phase 1 完成标准
 
-- [ ] **P0** 输入研究主题
-- [ ] **P0** 显示数据库列表并允许勾选
-- [ ] **P0** 区分默认、用户选择和 Agent 建议的数据源
-- [ ] **P0** 展示 Agent 文本
-- [ ] **P0** 展示 Skill 和 Tool 运行轨迹
-- [ ] **P0** 展示已下载文件
-- [ ] **P0** 展示和下载 CSV、来源清单和处理记录
-- [ ] **P1** 展示字段说明和表格预览
-- [ ] **P1** 展示人工确认界面
-- [ ] **P1** 展示分析和可视化结果
+以下条件必须在同一轮新鲜验证中全部满足：
 
-## 13. 测试、安全与复现
-
-### 13.1 SDK 与 Agent
-
-- [ ] **P0** Qwen 普通文本测试
-- [ ] **P0** Qwen 流式文本测试
-- [ ] **P0** 单 Tool 调用测试
-- [ ] **P0** 连续 Tool 调用测试
-- [ ] **P0** 结构化输出测试
-- [ ] **P0** SDK 事件映射测试
-- [ ] **P0** 最大轮数、超时和模型错误测试
-
-### 13.2 Skill
-
-- [ ] **P0** Skill 注册和查询测试
-- [ ] **P0** 按 category 筛选测试
-- [ ] **P0** 按数据库筛选测试
-- [ ] **P0** enabled/disabled 测试
-- [ ] **P0** 按需加载后不出现未选择数据源的 Tool
-- [ ] **P0** Main Agent 选择正确 Skill 的代表性测试
-
-### 13.3 Acquisition
-
-- [ ] **P0** 每个网站分别测试 search、describe 和 download
-- [ ] **P0** 断言下载 Tool 不调用解析器
-- [ ] **P0** 断言下载文件写入 raw 目录
-- [ ] **P0** API 失败和浏览器降级测试
-- [ ] **P0** 超时、重试、限流和下载大小测试
-- [ ] **P0** SSRF、危险协议和云元数据地址测试
-
-### 13.4 Processing
-
-- [ ] **P0** 使用本地 raw fixture 测试解析
-- [ ] **P0** 字段类型测试
-- [ ] **P0** 缺失、重复、单位和字段对齐测试
-- [ ] **P0** 来源追踪测试
-- [ ] **P0** CSV 导出测试
-- [ ] **P0** 清洗前后记录数和规则回归测试
-
-### 13.5 工程
-
-- [x] **P0** Backend pytest
-- [x] **P0** Frontend TypeScript check
-- [x] **P0** Frontend build
-- [ ] **P1** Frontend component tests
-- [ ] **P1** CI 自动运行离线测试
-- [ ] **P1** 定时运行真实数据源集成测试
-- [x] **P0** README 提供安装、配置、启动和测试命令
-
-## 14. 推荐迭代顺序
-
-### Sprint 0：修好现有 SDK 闭环
-
-- [ ] 修正 Main Agent Prompt
-- [ ] 修正 SDK 流式事件
-- [ ] 修正前端 WebSocket
-- [ ] 修正文件路径安全
-- [ ] 建立 Backend/Frontend 基础测试
-
-验收：前端输入主题后，Agent 可以调用占位 Tool，并正确显示文本和 Tool Trace。
-
-### Sprint 1：论文与一个真实数据库
-
-- [ ] 完成 Skill 仓库最小实现
-- [ ] 完成 PubMed 或 Europe PMC
-- [ ] 完成 GEO 检索和下载
-- [ ] 完成任务 raw 目录和下载记录
-- [ ] 完成 CSV/TSV 解析和 CSV 导出
-
-验收：自然语言主题可以产生论文线索、GEO 原始文件、CSV 和来源清单。
-
-### Sprint 2：多数据库和数据处理
-
-- [ ] 完成 GDC、UCSC Xena 和 RCSB PDB
-- [ ] 完成论文补充材料获取
-- [ ] 完成 Excel、JSON、HTML 和专业格式解析
-- [ ] 完成清洗、字段对齐和多来源合并
-- [ ] 前端展示数据库选择和 Artifact
-
-验收：至少两个数据库的数据可以合并，并追溯至原始文件。
-
-### Sprint 3：浏览器、自迭代和质量
-
-- [ ] 完成浏览器降级案例
-- [ ] 生成并保存一个后天 Skill 或网站 Tool
-- [ ] 写入并展示 EVOLUTION.md 记录
-- [ ] 完成人工确认和质量问题展示
-- [ ] 完成第二案例或异常案例
-
-验收：未知或变化网站可以通过浏览器下载数据，并将成功流程沉淀到 learned Skill。
-
-### Sprint 4：加分项和比赛材料
-
-- [ ] 论文表格或图表数据提取案例
-- [ ] 一个 Analysis Skill 和可视化案例
-- [ ] 对照实验与指标
-- [ ] 技术报告、PPT/PDF 和演示缓存
-- [ ] 本地复现检查
-
-## 15. MVP 完成标准
-
-- [ ] 用户可以输入主题并选择数据库
-- [ ] Main Agent 按需加载 Skill，而不是加载整个 Skill 仓库
-- [ ] 系统可以检索和理解相关论文
-- [ ] 系统可以从论文识别数据库、accession 或补充材料
-- [ ] 系统接入至少一个文献源
-- [ ] 系统接入至少两个专业数据库，其中包含 GEO
-- [ ] 每个专业数据库具有独立 search/describe/download Tool
-- [ ] 下载 Tool 不负责解析
-- [ ] API/脚本失败时至少有一个浏览器降级案例
-- [ ] 系统至少解析两种文件格式
-- [ ] 系统完成缺失、重复和字段格式检查
-- [ ] 系统完成字段对齐和至少一次多来源合并
-- [ ] 系统输出主数据 CSV
-- [ ] 系统输出字段说明、来源清单、下载记录和处理记录
-- [ ] 每条最终记录可以追溯到原始数据源和本地 raw 文件
-- [ ] 前端展示 Agent、Skill、Tool 和 Artifact
-- [ ] 主案例可以在个人电脑上稳定复现
-- [ ] 后端和前端验证命令通过
-
-## 16. 后续扩展
-
-### P1
-
-- 更多论文源和全文获取方式
-- PDF 表格和图表解析
-- 更多专业数据库
-- 人工确认和中断恢复
-- 后天 Skill 使用统计和自动修复建议
-- 内容哈希缓存和重复下载复用
-
-### P2
-
-- 差异表达、富集和网络分析
-- 高精度图表数据提取
-- 多模态交叉校验
-- 向量检索和本地知识索引
-- 多任务并行
-- 后天 Skill 自动评测和版本回滚
-- 知识图谱或影响力分析
+- [ ] 默认 pytest 无真实 Key 通过
+- [ ] pinned fixture Pipeline 生成全部 12 个必需文件
+- [ ] 主数据只包含 gene + sample 粒度
+- [ ] 每条记录关联 source_id、asset_id 和 raw 行列位置
+- [ ] 100 个抽样值全部可从 raw 精确复算
+- [ ] 所有字段有说明，所有下载有 checksum
+- [ ] cleaning、mapping 和 processing 记录完整
+- [ ] Validation Gate 通过才发布 artifacts/
+- [ ] Artifact API 可列出并下载完整产物包
+- [ ] live PubMed + GEO 流程在超时内完成
+- [ ] 真实失败不会转换成 mock success
+- [ ] 文档和 TODO 不包含无证据的完成声明
