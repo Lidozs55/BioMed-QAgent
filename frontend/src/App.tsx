@@ -2,10 +2,11 @@ import { useEffect } from "react";
 import { useAgentStream } from "./hooks/useAgentStream";
 import { useAPI } from "./hooks/useAPI";
 import { useAgentStore } from "./stores/agentStore";
-import { Sidebar } from "./components/Sidebar";
-import { ChatPanel } from "./components/ChatPanel";
-import { ToolTrace } from "./components/ToolTrace";
-import { ThemeToggle } from "./components/ThemeToggle";
+import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
+import { SessionSidebar } from "@/components/SessionSidebar";
+import { ChatPanel } from "@/components/ChatPanel";
+import { ToolTrace } from "@/components/ToolTrace";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function App() {
   const { connect, disconnect } = useAgentStream();
@@ -26,18 +27,21 @@ export default function App() {
   }, [fetchDatabases, setDatabases]);
 
   return (
-    <div className="app">
-      <Sidebar />
-      <div className="app-main">
-        <div className="app-header">
-          <span>BioMed QAgent v1 — Agent Loop 架构（基于 openai-agents-python）</span>
+    <SidebarProvider defaultOpen={true}>
+      <SessionSidebar />
+      <SidebarInset>
+        <header className="flex items-center justify-between border-b px-4 py-2">
+          <SidebarTrigger />
+          <h1 className="text-lg font-semibold">BioMed Q-Agent</h1>
           <ThemeToggle />
-        </div>
-        <div className="app-content">
-          <ChatPanel />
+        </header>
+        <main className="flex flex-1 overflow-hidden">
+          <div className="flex-1">
+            <ChatPanel />
+          </div>
           <ToolTrace />
-        </div>
-      </div>
-    </div>
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
