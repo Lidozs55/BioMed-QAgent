@@ -7,13 +7,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 from typing import Any
 
 from Bio import Entrez
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
+from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -184,13 +191,249 @@ def search_pubmed(
         }, ensure_ascii=False)
 
 
+# ---------------------------------------------------------------------------
+# Supplementary material link parser
+# ---------------------------------------------------------------------------
+
+class _SupplementaryLinkParser(HTMLParser):
+    """Parse PMC article HTML and extract links to supplementary material files.
+
+    Collects all ``<a>`` tags, then filters for URLs that look like
+    supplementary downloads: .xlsx, .csv, .tsv, .txt, .zip, .xls, .docx, .pdf
+    in a /bin/ path, or whose link text matches supplementary keywords.
+    """
+
+    _SUPP_EXTENSIONS: tuple[str, ...] = (
+        ".xlsx", ".csv", ".tsv", ".txt", ".zip", ".xls", ".docx", ".pdf",
+    )
+    _SUPP_KEYWORDS: re.Pattern = re.compile(
+        r"supplementary|supplemental|additional\s*file|supporting|"
+        r"table\s*s\d|figure\s*s\d|appendix|data\s*file",
+        re.IGNORECASE,
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._links: list[tuple[str, str]] = []
+        self._current_href: str | None = None
+        self._text_parts: list[str] = []
+        self._in_link: bool = False
+
+    # -- parser callbacks ---------------------------------------------------
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            attrs_dict = dict(attrs)
+            href = attrs_dict.get("href", "")
+            if href:
+                self._current_href = href
+                self._text_parts = []
+                self._in_link = True
+
+    def handle_data(self, data: str) -> None:
+        if self._in_link:
+            self._text_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._in_link:
+            text = "".join(self._text_parts).strip()
+            if self._current_href is not None:
+                self._links.append((self._current_href, text))
+            self._current_href = None
+            self._text_parts = []
+            self._in_link = False
+
+    # -- filtering ----------------------------------------------------------
+
+    def _is_supplementary(self, href: str, text: str) -> bool:
+        href_lower = href.lower()
+        if not any(href_lower.endswith(ext) for ext in self._SUPP_EXTENSIONS):
+            return False
+        # PMC supplementary files are typically served from /bin/
+        if "/bin/" in href:
+            return True
+        combined = f"{href} {text}".lower()
+        return bool(self._SUPP_KEYWORDS.search(combined))
+
+    def get_supplementary_links(self) -> list[tuple[str, str]]:
+        """Return (href, text) tuples for links that look supplementary."""
+        return [
+            (href, text) for href, text in self._links
+            if self._is_supplementary(href, text)
+        ]
+
+
+# ---------------------------------------------------------------------------
+# download_supplementary tool
+# ---------------------------------------------------------------------------
+
+@function_tool(
+    name_override="download_supplementary",
+    description_override=(
+        "Download open-access supplementary materials for a PubMed article "
+        "given its PMID. Finds supplementary files (.xlsx, .csv, .tsv, .txt, "
+        ".zip, .xls, .docx, .pdf) from the PMC open-access article page, "
+        "downloads them to the task work directory, and returns metadata JSON."
+    ),
+)
+def download_supplementary(
+    ctx: RunContextWrapper[Any],
+    pmid: str,
+    max_size_mb: int = 50,
+) -> str:
+    """Download supplementary materials from PMC for a given PMID.
+
+    Steps
+    -----
+    1. Efetch PubMed XML -> extract PMCID.
+    2. Scrape PMC article page for supplementary file links.
+    3. Download each file to ``run_ctx.work_dir.raw/``.
+    4. Record a ``SourceRecord`` via ``run_ctx.add_source()``.
+    """
+    run_ctx: RunContext = ctx.context
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    # ---- 1. Fetch PubMed record & extract PMCID ------------------------------
+    try:
+        handle = Entrez.efetch(db="pubmed", id=pmid, rettype="xml")
+        xml_data = handle.read()
+        handle.close()
+    except Exception as exc:
+        logger.exception("PubMed efetch failed for PMID=%s", pmid)
+        return json.dumps({
+            "source": "pubmed",
+            "accession": pmid,
+            "error": f"Failed to fetch PubMed record: {exc}",
+        }, ensure_ascii=False)
+
+    root = ET.fromstring(xml_data)
+    pmcid = ""
+    article_ids = root.find(".//PubmedData/ArticleIdList")
+    if article_ids is not None:
+        for aid in article_ids.findall("ArticleId"):
+            if aid.get("IdType") == "pmc" and aid.text:
+                pmcid = aid.text.strip()
+                break
+
+    if not pmcid:
+        return json.dumps({
+            "source": "pubmed",
+            "accession": pmid,
+            "error": "No PMCID found — article is not in the PMC open-access subset",
+        }, ensure_ascii=False)
+
+    # ---- 2. Scrape PMC article page for supplementary links -------------------
+    pmc_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
+
+    try:
+        req = urllib.request.Request(
+            pmc_url,
+            headers={"User-Agent": "BioMed-QAgent/0.1 (biomed-qagent@example.com)"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.exception("Failed to fetch PMC page for PMCID=%s", pmcid)
+        return json.dumps({
+            "source": "pubmed",
+            "accession": pmid,
+            "source_url": pmc_url,
+            "error": f"Failed to fetch PMC article page: {exc}",
+        }, ensure_ascii=False)
+
+    parser = _SupplementaryLinkParser()
+    parser.feed(html)
+    supp_links = parser.get_supplementary_links()
+
+    if not supp_links:
+        return json.dumps({
+            "source": "pubmed",
+            "accession": pmid,
+            "source_url": pmc_url,
+            "error": "No supplementary files found on the PMC article page",
+        }, ensure_ascii=False)
+
+    # ---- 3. Download each file to raw/ ----------------------------------------
+    raw_dir = run_ctx.work_dir.raw
+    downloaded: list[str] = []
+    errors: list[str] = []
+
+    for link_href, _link_text in supp_links:
+        # Resolve relative URLs
+        if link_href.startswith("/"):
+            file_url = f"https://www.ncbi.nlm.nih.gov{link_href}"
+        elif link_href.startswith(("http://", "https://")):
+            file_url = link_href
+        else:
+            file_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/{link_href}"
+
+        filename = os.path.basename(link_href.split("?")[0])
+        if not filename:
+            filename = f"supplementary_{pmcid}_{len(downloaded)}"
+        local_path = raw_dir / filename
+
+        try:
+            req = urllib.request.Request(
+                file_url,
+                headers={"User-Agent": "BioMed-QAgent/0.1 (biomed-qagent@example.com)"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                content = resp.read()
+                if len(content) > max_size_bytes:
+                    errors.append(
+                        f"Skipped {filename}: {len(content)} bytes exceeds "
+                        f"{max_size_mb} MB limit"
+                    )
+                    continue
+                local_path.write_bytes(content)
+                downloaded.append(str(local_path))
+            # Brief pause between downloads to be respectful of NCBI servers
+            time.sleep(0.5)
+        except Exception as exc:
+            errors.append(f"Failed to download {filename}: {exc}")
+
+    if not downloaded:
+        return json.dumps({
+            "source": "pubmed",
+            "accession": pmid,
+            "source_url": pmc_url,
+            "error": "Failed to download any supplementary files",
+            "details": errors,
+        }, ensure_ascii=False)
+
+    # ---- 4. Track via SourceRecord --------------------------------------------
+    source_record = SourceRecord(
+        source="pubmed",
+        accession=pmid,
+        source_url=pmc_url,
+        local_files=downloaded,
+        format_hint="supplementary",
+    )
+    run_ctx.add_source(source_record)
+    for f in downloaded:
+        run_ctx.add_raw_asset(f)
+
+    result: dict[str, object] = {
+        "source": "pubmed",
+        "accession": pmid,
+        "source_url": pmc_url,
+        "local_files": downloaded,
+        "format_hint": "supplementary",
+    }
+    if errors:
+        result["warnings"] = errors
+
+    return json.dumps(result, ensure_ascii=False)
+
+
 pubmed_skill = SkillDef(
     name="pubmed",
     category=SkillCategory.DISCOVERY,
     description=(
-        "Search PubMed/NCBI for biomedical literature. Use when the user "
-        "needs to find research papers, abstracts, or authors in the life "
-        "sciences domain."
+        "Search PubMed/NCBI for biomedical literature and download "
+        "supplementary materials. Use when the user needs to find research "
+        "papers, abstracts, authors, or supplementary data files in the "
+        "life sciences domain."
     ),
     instructions=(
         "Use the `search_pubmed` tool to query PubMed with a free-text search "
@@ -199,11 +442,14 @@ pubmed_skill = SkillDef(
         "date, DOI, PMID, PMCID, and an `is_open_access` boolean. "
         "`total_count` reflects PubMed's own hit count (may exceed the number "
         "of returned records due to `max_results`). "
-        "On failure, the response includes an `error` field."
+        "Use the `download_supplementary` tool to download supplementary "
+        "material files (.xlsx, .csv, .tsv, .txt, .zip, .xls, .docx, .pdf) "
+        "for a given PMID from the PMC open-access article page. "
+        "On failure, responses include an `error` field."
     ),
-    tools=[search_pubmed],
+    tools=[search_pubmed, download_supplementary],
     supported_sources=["pubmed", "ncbi"],
-    version="0.1.0",
+    version="0.2.0",
 )
 
 skill_registry.register(pubmed_skill)

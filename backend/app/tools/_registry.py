@@ -25,6 +25,18 @@ def _import_skill_modules() -> None:
         import app.skills.builtin.acquisition.geo  # noqa: F401
     except ImportError:
         pass
+    try:
+        import app.skills.builtin.acquisition.pdb  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import app.skills.builtin.acquisition.gdc  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import app.skills.builtin.acquisition.xena  # noqa: F401
+    except ImportError:
+        pass
 
 
 def get_all_tools() -> list:
