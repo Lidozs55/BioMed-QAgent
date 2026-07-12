@@ -64,15 +64,15 @@ export function ToolTrace() {
 			</SheetTrigger>
 			<SheetContent side="right">
 				<SheetHeader>
-					<SheetTitle>Tool Trace</SheetTitle>
+					<SheetTitle>工具追踪</SheetTitle>
 					<SheetDescription>
-						{isConnected ? "Connected" : "Disconnected"}
+						{isConnected ? "已连接" : "未连接"}
 					</SheetDescription>
 				</SheetHeader>
 				<ScrollArea className="-mx-6 flex-1 px-6">
 					{traces.length === 0 ? (
 						<div className="py-8 text-center text-xs text-muted-foreground">
-							No tool calls yet
+							尚无工具调用
 						</div>
 					) : (
 						<div className="flex flex-col gap-3 py-2">
@@ -127,7 +127,7 @@ export function ToolTrace() {
 						disabled={traces.length === 0}
 					>
 						<Trash2Icon data-icon="inline-start" />
-						Clear Trace
+						清除
 					</Button>
 				</SheetFooter>
 			</SheetContent>

@@ -1,5 +1,6 @@
 import { useAgentStore } from "@/stores/agentStore";
 import { useAPI } from "@/hooks/useAPI";
+import { useState, useEffect } from "react";
 import {
   FileTextIcon,
   FileJsonIcon,
@@ -26,6 +27,14 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
 
 
 /** Format bytes to human-readable size */
@@ -66,6 +75,15 @@ function isCSV(filename: string): boolean {
   return ext === "csv";
 }
 
+/** Simple CSV parser — split by newlines, then by commas */
+function parseCSV(text: string): { headers: string[]; rows: string[][] } {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length === 0) return { headers: [], rows: [] };
+  const headers = lines[0].split(",").map((h) => h.trim());
+  const rows = lines.slice(1).map((line) => line.split(",").map((c) => c.trim()));
+  return { headers, rows };
+}
+
 /** Parse traces to extract source provenance data */
 let _sourceId = 0;
 
@@ -91,7 +109,7 @@ function parseSourceManifest(
     const toolName =
       prevItem?.kind === "tool_call" ? prevItem.name : item.name;
 
-    if (!toolName || !toolName.toLowerCase().includes("search")) continue;
+    if (toolName?.toLowerCase().includes("search") !== true) continue;
 
     try {
       const parsed = JSON.parse(item.output);
@@ -151,6 +169,114 @@ function triggerDownload(url: string, filename: string) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+/** Inline CSV preview component — fetches and renders CSV data */
+function CsvPreview({
+  artifactUrl,
+}: {
+  artifactUrl: string;
+}) {
+  const [csvData, setCsvData] = useState<{
+    headers: string[];
+    rows: string[][];
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(false);
+
+    fetch(artifactUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error("fetch failed");
+        return res.text();
+      })
+      .then((text) => {
+        if (!cancelled) {
+          setCsvData(parseCSV(text));
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(true);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactUrl]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+        <Spinner />
+        加载中...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-muted-foreground">
+        <FileTextIcon className="size-6 opacity-30" />
+        <span>无法加载 CSV 数据</span>
+      </div>
+    );
+  }
+
+  if (!csvData || csvData.headers.length === 0) {
+    return (
+      <div className="py-4 text-center text-sm text-muted-foreground">
+        无数据
+      </div>
+    );
+  }
+
+  const displayRows = csvData.rows.slice(0, 100);
+
+  return (
+    <div className="max-h-64 overflow-auto rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {csvData.headers.map((header, idx) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: CSV headers have no IDs
+              <TableHead key={idx} className="text-xs">
+                {header}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {displayRows.map((row, rowIdx) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: CSV rows have no IDs
+            <TableRow key={rowIdx}>
+              {row.map((cell, cellIdx) => (
+                <TableCell
+                  // biome-ignore lint/suspicious/noArrayIndexKey: CSV cells have no IDs
+                  key={`${rowIdx}-${cellIdx}`}
+                  className="text-xs"
+                >
+                  {cell}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {csvData.rows.length > 100 && (
+        <div className="px-2 py-1 text-xs text-muted-foreground">
+          仅显示前 100 行（共 {csvData.rows.length} 行）
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function ResultsViewer() {
@@ -241,7 +367,7 @@ export default function ResultsViewer() {
                   </CardDescription>
                 </CardHeader>
 
-                {/* CSV Preview Section — placeholder since we lack inline content */}
+                {/* CSV Preview Section — real inline table */}
                 {isCsvFile && (
                   <CardContent>
                     <Accordion>
@@ -250,26 +376,12 @@ export default function ResultsViewer() {
                           CSV 预览
                         </AccordionTrigger>
                         <AccordionContent>
-                          <div className="flex flex-col items-center gap-3 py-4 text-center text-xs text-muted-foreground">
-                            <FileTextIcon className="size-6 opacity-30" />
-                            <span>点击下载后查看完整数据</span>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() =>
-                                triggerDownload(
-                                  getArtifactUrl(taskId ?? "", artifact.name),
-                                  artifact.name,
-                                )
-                              }
-                            >
-                              <DownloadIcon
-                                data-icon="inline-start"
-                                className="size-3"
-                              />
-                              下载
-                            </Button>
-                          </div>
+                          <CsvPreview
+                            artifactUrl={getArtifactUrl(
+                              taskId ?? "",
+                              artifact.name,
+                            )}
+                          />
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>

@@ -2,9 +2,15 @@ import { useState, useEffect } from "react";
 import { useAgentStore } from "../stores/agentStore";
 import { useAgentStream } from "../hooks/useAgentStream";
 import { useAPI } from "../hooks/useAPI";
-import { Bot, User } from "lucide-react";
+import {
+  Bot,
+  User,
+  DownloadIcon,
+  FileTextIcon,
+  FileJsonIcon,
+} from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { Message, MessageAvatar, MessageContent } from "@/components/ui/message";
@@ -19,9 +25,12 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { DatabaseSelector } from "./DatabaseSelector";
-import ResearchPipeline from "./ResearchPipeline";
-import ResultsViewer from "./ResultsViewer";
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
 import {
   Card,
   CardHeader,
@@ -30,14 +39,50 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { DatabaseSelector } from "./DatabaseSelector";
+import ResearchPipeline from "./ResearchPipeline";
+import ResultsViewer from "./ResultsViewer";
 
 type TabMode = "setup" | "chat" | "results";
+
+/** Format bytes to human-readable size */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/** Get file extension from filename */
+function getExtension(name: string): string {
+  const idx = name.lastIndexOf(".");
+  if (idx === -1) return "";
+  return name.slice(idx + 1).toLowerCase();
+}
+
+/** Choose icon based on file extension */
+function getFileIcon(name: string) {
+  const ext = getExtension(name);
+  switch (ext) {
+    case "csv":
+    case "txt":
+    case "md":
+    case "tsv":
+      return FileTextIcon;
+    case "json":
+    case "jsonl":
+      return FileJsonIcon;
+    default:
+      return FileTextIcon;
+  }
+}
 
 /** 研究工作台 — 设置 / 对话 / 结果 三模式切换。 */
 export function ChatPanel() {
   const { messages, isRunning, isConnected, taskId } = useAgentStore();
+  const artifacts = useAgentStore((s) => s.artifacts);
   const { send } = useAgentStream();
-  const { fetchArtifacts } = useAPI();
+  const { fetchArtifacts, getArtifactUrl } = useAPI();
   const [input, setInput] = useState("");
 
   const [activeTab, setActiveTab] = useState<TabMode>(() => {
@@ -195,13 +240,75 @@ export function ChatPanel() {
                       </MessageScrollerItem>
                     ))}
 
+                    {/* Inline artifact cards */}
+                    {artifacts.length > 0 && (
+                      <MessageScrollerItem messageId="artifacts">
+                        <Accordion>
+                          {artifacts.map((artifact) => {
+                            const Icon = getFileIcon(artifact.name);
+                            const ext = getExtension(artifact.name);
+                            return (
+                              <AccordionItem key={artifact.name} value={artifact.name}>
+                                <AccordionTrigger>
+                                  <div className="flex items-center gap-2">
+                                    <Icon className="size-4 shrink-0 text-muted-foreground" />
+                                    <span className="truncate text-sm">
+                                      {artifact.name}
+                                    </span>
+                                    <Badge variant="outline" className="ml-1 shrink-0">
+                                      {formatSize(artifact.size)}
+                                    </Badge>
+                                    {ext && (
+                                      <Badge variant="secondary" className="shrink-0">
+                                        {ext.toUpperCase()}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </AccordionTrigger>
+                                <AccordionContent>
+                                  <Card size="sm">
+                                    <CardHeader>
+                                      <CardTitle className="text-sm">
+                                        {artifact.name}
+                                      </CardTitle>
+                                      <CardDescription>
+                                        产物文件 · {formatSize(artifact.size)}
+                                      </CardDescription>
+                                    </CardHeader>
+                                    <CardFooter>
+                                      <a
+                                        href={getArtifactUrl(
+                                          taskId ?? "",
+                                          artifact.name,
+                                        )}
+                                        download={artifact.name}
+                                        className={buttonVariants({
+                                          variant: "outline",
+                                          size: "sm",
+                                        })}
+                                      >
+                                        <DownloadIcon
+                                          data-icon="inline-start"
+                                        />
+                                        下载文件
+                                      </a>
+                                    </CardFooter>
+                                  </Card>
+                                </AccordionContent>
+                              </AccordionItem>
+                            );
+                          })}
+                        </Accordion>
+                      </MessageScrollerItem>
+                    )}
+
                     {isRunning && (
                       <MessageScrollerItem messageId="thinking">
                         <Marker role="status">
                           <MarkerIcon>
                             <Spinner />
                           </MarkerIcon>
-                          <MarkerContent>Thinking...</MarkerContent>
+                          <MarkerContent>思考中...</MarkerContent>
                         </Marker>
                       </MessageScrollerItem>
                     )}
