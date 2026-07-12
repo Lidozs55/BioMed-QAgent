@@ -402,15 +402,16 @@ backend/app/skills/
 
 ## 11. 输出与来源追踪
 
-- [ ] **P0** 输出主数据 CSV
-- [ ] **P0** 输出字段说明
-- [ ] **P0** 输出来源清单
-- [ ] **P0** 输出下载记录
-- [ ] **P0** 输出处理记录
-- [ ] **P0** 输出 warnings 和未解决问题
-- [ ] **P0** 每条最终记录至少关联原始数据源和 raw 文件
-- [ ] **P0** 每个转换记录 Tool、参数和影响记录数
-- [ ] **P0** 论文提取数据记录 DOI/PMID 和原始位置
+- [x] **P0** 输出主数据 CSV
+- [x] **P0** 输出字段说明
+- [x] **P0** 输出来源清单
+- [x] **P0** 输出下载记录
+  - > 注：SourceRecord 模型含 local_files/checksum/mime_type/format_hint/retrieved_at，导出为 source_list.csv
+- [x] **P0** 输出处理记录
+- [x] **P0** 输出 warnings 和未解决问题
+- [x] **P0** 每条最终记录至少关联原始数据源和 raw 文件
+- [x] **P0** 每个转换记录 Tool、参数和影响记录数
+- [x] **P0** 论文提取数据记录 DOI/PMID 和原始位置
 - [ ] **P1** 支持 Excel、Parquet 或 JSON 辅助产物
 - [ ] **P1** 支持从最终记录反查原始文件
 - [ ] **P1** 输出可视化 Artifact
