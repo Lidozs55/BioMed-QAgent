@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "../../node_modules/.generated/tailwind-overrides.css";
 @import "@fontsource-variable/inter";
 
 /* ===== 全局样式 ===== */
