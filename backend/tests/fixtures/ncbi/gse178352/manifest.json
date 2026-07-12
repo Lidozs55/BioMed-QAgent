@@ -1,0 +1,208 @@
+{
+  "builder_version": "1.0",
+  "case_id": "pmid34180400_gse178352",
+  "extraction_command": "uv run python scripts/build_gse178352_fixture.py --output-dir tests/fixtures/ncbi/gse178352",
+  "fixture_data_field_count": 38,
+  "fixture_header_field_count": 37,
+  "fixture_row_count": 4,
+  "fixture_sha256": {
+    "geo_esearch.json": "92f094ab59902de4375dc412c714f7899c497d3953aca884ed4de866876795fd",
+    "geo_esummary.json": "18a0251cafc54549998f1ba78b0a4d1334b282a72a76f9c50a1d7465b9b63754",
+    "geo_suppl_listing.html": "821112eebf885c288d7ae743f4cd4eb4dcc61d05a0e098c2f3f81a1e82127d58",
+    "pubmed_34180400.xml": "7b058519e3562a6c2666ff3a632636c3dd041c81e8393a409a2834fc304b7f54",
+    "pubmed_esearch.json": "cb11033b42fe31efd0e535319c44acb74194f36314418b68097ec299d63632b6",
+    "tximport_counts_slice.tsv": "cf2c89bdd58206bbfd28ca6b36aa7bb04b2df5b398df5f72d49c414c59b24ece"
+  },
+  "fixture_size_bytes": {
+    "geo_esearch.json": 455,
+    "geo_esummary.json": 2889,
+    "geo_suppl_listing.html": 602,
+    "pubmed_34180400.xml": 126560,
+    "pubmed_esearch.json": 181,
+    "tximport_counts_slice.tsv": 2002
+  },
+  "relations": [
+    {
+      "evidence_source": "geo_esummary.json",
+      "evidence_value": "34180400",
+      "from": "PMID:34180400",
+      "to": "GEO:GSE178352"
+    }
+  ],
+  "retained_data_columns": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37
+  ],
+  "retained_source_lines": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "retrieved_at": "2026-07-12T08:00:00+00:00",
+  "sample_accessions": [
+    "GSM5388281",
+    "GSM5388275",
+    "GSM5388272",
+    "GSM5388278",
+    "GSM5388276",
+    "GSM5388279",
+    "GSM5388273",
+    "GSM5388270",
+    "GSM5388274",
+    "GSM5388271",
+    "GSM5388277",
+    "GSM5388280"
+  ],
+  "schema_version": "1.0",
+  "sources": {
+    "geo_esearch": {
+      "media_type": "application/json",
+      "request_parameters": {
+        "db": [
+          "gds"
+        ],
+        "email": [
+          "biomed-qagent@example.com"
+        ],
+        "retmode": [
+          "json"
+        ],
+        "term": [
+          "GSE178352[Accession]"
+        ],
+        "tool": [
+          "BioMedQAgent"
+        ]
+      },
+      "sha256": "92f094ab59902de4375dc412c714f7899c497d3953aca884ed4de866876795fd",
+      "size_bytes": 455,
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=GSE178352%5BAccession%5D&retmode=json&tool=BioMedQAgent&email=biomed-qagent%40example.com"
+    },
+    "geo_esummary": {
+      "media_type": "application/json",
+      "request_parameters": {
+        "db": [
+          "gds"
+        ],
+        "email": [
+          "biomed-qagent@example.com"
+        ],
+        "id": [
+          "200178352"
+        ],
+        "retmode": [
+          "json"
+        ],
+        "tool": [
+          "BioMedQAgent"
+        ]
+      },
+      "sha256": "18a0251cafc54549998f1ba78b0a4d1334b282a72a76f9c50a1d7465b9b63754",
+      "size_bytes": 2889,
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=gds&id=200178352&retmode=json&tool=BioMedQAgent&email=biomed-qagent%40example.com"
+    },
+    "geo_supplementary_listing": {
+      "media_type": "text/html",
+      "request_parameters": {},
+      "sha256": "821112eebf885c288d7ae743f4cd4eb4dcc61d05a0e098c2f3f81a1e82127d58",
+      "size_bytes": 602,
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/"
+    },
+    "pubmed": {
+      "media_type": "application/xml",
+      "request_parameters": {
+        "db": [
+          "pubmed"
+        ],
+        "email": [
+          "biomed-qagent@example.com"
+        ],
+        "id": [
+          "34180400"
+        ],
+        "retmode": [
+          "xml"
+        ],
+        "tool": [
+          "BioMedQAgent"
+        ]
+      },
+      "sha256": "7b058519e3562a6c2666ff3a632636c3dd041c81e8393a409a2834fc304b7f54",
+      "size_bytes": 126560,
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=34180400&retmode=xml&tool=BioMedQAgent&email=biomed-qagent%40example.com"
+    },
+    "pubmed_esearch": {
+      "media_type": "application/json",
+      "request_parameters": {
+        "db": [
+          "pubmed"
+        ],
+        "email": [
+          "biomed-qagent@example.com"
+        ],
+        "retmax": [
+          "1"
+        ],
+        "retmode": [
+          "json"
+        ],
+        "term": [
+          "34180400[PMID]"
+        ],
+        "tool": [
+          "BioMedQAgent"
+        ]
+      },
+      "sha256": "cb11033b42fe31efd0e535319c44acb74194f36314418b68097ec299d63632b6",
+      "size_bytes": 181,
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=34180400%5BPMID%5D&retmax=1&retmode=json&tool=BioMedQAgent&email=biomed-qagent%40example.com"
+    },
+    "tximport_counts": {
+      "data_level": "repository_processed",
+      "logical_file": "GSE178352_tximportCounts.txt",
+      "media_type": "application/gzip",
+      "request_parameters": {},
+      "sha256": "71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55",
+      "size_bytes": 4597797,
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/GSE178352_tximportCounts.txt.gz"
+    }
+  }
+}
