@@ -96,14 +96,16 @@
 
 ### 4.1 用户输入
 
-- [ ] **P0** 定义最小输入
+- [x] **P0** 定义最小输入
   - `topic`：唯一必填字段；
   - `preferred_sources`：允许检索的数据库；
   - `keywords`：可选；
   - `target_fields`：可选；
   - `time_range`：可选。
 - [ ] **P0** 未指定数据库时加载默认数据库集合
+  - > 注：`SkillRegistry.get_acquisition_skills(None)` 已支持，待 RunContext 接入
 - [ ] **P0** 用户指定数据库时过滤 acquisition Tool
+  - > 注：`SkillRegistry.get_acquisition_skills(user_sources)` 已支持，待 RunContext 接入
 - [ ] **P0** Discovery Skill 可以建议新数据库，但扩大范围前必须确认
 - [ ] **P1** 前端允许设置物种、疾病、基因、蛋白、药物和数据类型等过滤条件
 
@@ -121,12 +123,13 @@
   - `artifacts`
   - `warnings`
   - `query_log`
+  - > 注：`context.py` 当前被 TASK-001 锁定，待解锁后扩展
 - [ ] **P0** 不在 Context 中保存大文件内容
 - [ ] **P0** Context 只保存本地路径和轻量元数据
 
 ### 4.3 工作目录
 
-- [ ] **P0** 每个任务创建独立目录
+- [x] **P0** 每个任务创建独立目录
 
 ```text
 data/tasks/<task_id>/
