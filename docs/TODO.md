@@ -496,13 +496,13 @@ backend/app/skills/
 
 ### 13.5 工程
 
-- [ ] **P0** Backend pytest
-- [ ] **P0** Frontend TypeScript check
-- [ ] **P0** Frontend build
+- [x] **P0** Backend pytest
+- [x] **P0** Frontend TypeScript check
+- [x] **P0** Frontend build
 - [ ] **P1** Frontend component tests
 - [ ] **P1** CI 自动运行离线测试
 - [ ] **P1** 定时运行真实数据源集成测试
-- [ ] **P0** README 提供安装、配置、启动和测试命令
+- [x] **P0** README 提供安装、配置、启动和测试命令
 
 ## 14. 推荐迭代顺序
 
