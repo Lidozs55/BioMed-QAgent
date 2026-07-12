@@ -1,4 +1,4 @@
-"""domain 包 — 任务领域模型（用户输入、任务记录、状态机、事件、输出）。"""
+"""domain 包 — 任务领域模型（用户输入、任务记录、状态机、事件、输出、处理）。"""
 from app.domain.events import EventFactory, EventType, TaskEvent
 from app.domain.output import (
     DataRecord,
@@ -8,6 +8,7 @@ from app.domain.output import (
     SourceRecord,
     WarningEntry,
 )
+from app.domain.processing import CleaningReport, ParsedDataset
 from app.domain.task import (
     InvalidTaskTransition,
     TaskRecord,
@@ -31,4 +32,6 @@ __all__ = [
     "ProcessingStep",
     "SourceRecord",
     "WarningEntry",
+    "CleaningReport",
+    "ParsedDataset",
 ]
