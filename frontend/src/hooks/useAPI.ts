@@ -10,14 +10,23 @@ export interface DatabaseRecord {
 export interface TaskStatus {
   task_id: string;
   status: string;
-  directories?: string[];
+  current_stage: string | null;
+  validation_status: string | null;
+  artifact_count: number;
+}
+
+export interface CreatedTask {
+  task_id: string;
+  status: string;
 }
 
 /** Artifact record returned by the API */
 export interface ArtifactRecord {
+  artifact_id: string;
   name: string;
   size: number;
-  path: string;
+  sha256: string;
+  media_type: string;
 }
 
 /**
@@ -27,33 +36,62 @@ export interface ArtifactRecord {
 export function useAPI() {
   const BASE = "/api/v1";
 
-  async function request<T>(url: string): Promise<T> {
-    const res = await fetch(url);
+  const request = useCallback(async function request<T>(
+    url: string,
+    init?: RequestInit,
+  ): Promise<T> {
+    const res = await fetch(url, init);
     if (!res.ok) {
       throw new Error(`API error ${res.status}: ${res.statusText}`);
     }
     return res.json() as Promise<T>;
-  }
+  }, []);
 
   /** Fetch available databases */
-  const fetchDatabases = (): Promise<DatabaseRecord[]> =>
+  const fetchDatabases = useCallback((): Promise<DatabaseRecord[]> =>
     request<{ databases: DatabaseRecord[] }>(`${BASE}/databases`).then(
       (data) => data.databases,
-    );
+    ), [request]);
+
+  const createTask = useCallback(
+    (topic: string, databases: string[]): Promise<CreatedTask> =>
+      request<CreatedTask>(`${BASE}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic, databases, mode: "fixture" }),
+      }),
+    [request],
+  );
 
   /** Fetch task status by ID */
-  const fetchTaskStatus = (taskId: string): Promise<TaskStatus> =>
-    request<TaskStatus>(`${BASE}/tasks/${encodeURIComponent(taskId)}`);
+  const fetchTaskStatus = useCallback(
+    (taskId: string): Promise<TaskStatus> =>
+      request<TaskStatus>(`${BASE}/tasks/${encodeURIComponent(taskId)}`),
+    [request],
+  );
 
   /** Fetch artifacts for a task */
-  const fetchArtifacts = (taskId: string): Promise<ArtifactRecord[]> =>
-    request<{ artifacts: ArtifactRecord[] }>(
-      `${BASE}/tasks/${encodeURIComponent(taskId)}/artifacts`,
-    ).then((data) => data.artifacts);
+  const fetchArtifacts = useCallback(
+    (taskId: string): Promise<ArtifactRecord[]> =>
+      request<{ artifacts: ArtifactRecord[] }>(
+        `${BASE}/tasks/${encodeURIComponent(taskId)}/artifacts`,
+      ).then((data) => data.artifacts),
+    [request],
+  );
 
   /** Build the download URL for an artifact */
-  const getArtifactUrl = (taskId: string, artifactName: string): string =>
-    `${BASE}/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactName)}`;
+  const getArtifactUrl = useCallback(
+    (taskId: string, artifactId: string): string =>
+      `${BASE}/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifactId)}`,
+    [],
+  );
 
-  return { fetchDatabases, fetchTaskStatus, fetchArtifacts, getArtifactUrl };
+  return {
+    createTask,
+    fetchDatabases,
+    fetchTaskStatus,
+    fetchArtifacts,
+    getArtifactUrl,
+  };
 }
+import { useCallback } from "react";

@@ -258,7 +258,7 @@ export default function ResultsViewer() {
                               size="sm"
                               onClick={() =>
                                 triggerDownload(
-                                  getArtifactUrl(taskId ?? "", artifact.name),
+                                  getArtifactUrl(taskId ?? "", artifact.artifactId),
                                   artifact.name,
                                 )
                               }
@@ -282,7 +282,7 @@ export default function ResultsViewer() {
                     size="sm"
                     onClick={() =>
                       triggerDownload(
-                        getArtifactUrl(taskId ?? "", artifact.name),
+                        getArtifactUrl(taskId ?? "", artifact.artifactId),
                         artifact.name,
                       )
                     }

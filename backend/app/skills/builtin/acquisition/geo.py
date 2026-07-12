@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 from typing import Any
 
+import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
@@ -25,12 +28,54 @@ from app.skills.registry import SkillCategory, SkillDef, skill_registry
 logger = logging.getLogger(__name__)
 
 
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    fallback = 0.25 * (2 ** (attempt - 1))
+    if response is None:
+        return fallback
+    value = response.headers.get("Retry-After")
+    if not value:
+        return fallback
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            now = datetime.now(retry_at.tzinfo or timezone.utc)
+            return max(0.0, (retry_at - now).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+
+
+async def _get_geo_listing(
+    http: httpx.AsyncClient,
+    url: str,
+    *,
+    attempts: int = 3,
+) -> httpx.Response:
+    """Fetch small GEO directory metadata with bounded transient retries."""
+
+    for attempt in range(1, attempts + 1):
+        response: httpx.Response | None = None
+        try:
+            response = await http.get(url, follow_redirects=False)
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+            return response
+        except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError):
+            if attempt == attempts:
+                raise
+            await asyncio.sleep(_retry_delay(response, attempt))
+    raise RuntimeError("unreachable")
+
+
 def _geo_record_json(record: Any) -> dict[str, Any]:
     payload = record.model_dump(mode="json")
-    payload.update({
-        "platform_count": len(record.platform_ids),
-        "pubmed_id": "; ".join(record.pubmed_ids),
-    })
+    payload.update(
+        {
+            "platform_count": len(record.platform_ids),
+            "pubmed_id": "; ".join(record.pubmed_ids),
+        }
+    )
     return payload
 
 
@@ -40,9 +85,7 @@ def _https_ftp_root(value: str, accession: str) -> str:
         root = "https://" + root.removeprefix("ftp://")
     if not root:
         prefix = accession[:-3] + "nnn"
-        root = (
-            f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{accession}/"
-        )
+        root = f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{accession}/"
     return root.rstrip("/") + "/"
 
 
@@ -59,24 +102,30 @@ async def search_geo_adapter(
         result = await search_geo_series(services.eutils, term, max_results)
         records = [_geo_record_json(record) for record in result.records]
         run_ctx.log_query(term, "geo", "completed", len(records))
-        return json.dumps({
-            "source": "geo",
-            "term": term,
-            "query_translation": result.query_translation,
-            "total_count": result.total_count,
-            "accessions": [record["accession"] for record in records],
-            "records": records,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "source": "geo",
+                "term": term,
+                "query_translation": result.query_translation,
+                "total_count": result.total_count,
+                "accessions": [record["accession"] for record in records],
+                "records": records,
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         logger.exception("GEO search failed for term=%r", term)
         run_ctx.log_query(term, "geo", "failed", 0)
-        return json.dumps({
-            "source": "geo",
-            "term": term,
-            "accessions": [],
-            "records": [],
-            "error": str(exc),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "source": "geo",
+                "term": term,
+                "accessions": [],
+                "records": [],
+                "error": str(exc),
+            },
+            ensure_ascii=False,
+        )
 
 
 async def describe_geo_adapter(
@@ -90,23 +139,26 @@ async def describe_geo_adapter(
     try:
         record = await describe_geo_series(services.eutils, accession)
         payload = _geo_record_json(record)
-        payload.update({
-            "overall_design": "",
-            "platforms": [
-                {"id": value, "title": "", "organism": ""}
-                for value in record.platform_ids
-            ],
-            "supplementary_file_urls": [],
-        })
+        payload.update(
+            {
+                "overall_design": "",
+                "platforms": [
+                    {"id": value, "title": "", "organism": ""}
+                    for value in record.platform_ids
+                ],
+                "supplementary_file_urls": [],
+            }
+        )
         return json.dumps(
             {"source": "geo", **payload},
             ensure_ascii=False,
         )
     except Exception as exc:
         logger.exception("GEO description failed for accession=%r", accession)
-        return json.dumps({
-            "source": "geo", "accession": accession, "error": str(exc)
-        }, ensure_ascii=False)
+        return json.dumps(
+            {"source": "geo", "accession": accession, "error": str(exc)},
+            ensure_ascii=False,
+        )
 
 
 async def _resolve_download(
@@ -127,7 +179,7 @@ async def _resolve_download(
         url = f"{root}soft/{selected_filename}"
     elif normalized_type == "suppl":
         listing_url = f"{root}suppl/"
-        response = await services.http.get(listing_url, follow_redirects=False)
+        response = await _get_geo_listing(services.http, listing_url)
         response.raise_for_status()
         candidates = resolve_geo_supplementary_assets(response.content, listing_url)
         if filename:
@@ -188,9 +240,7 @@ async def download_geo_adapter(
             "accession": source.accession,
             "source_url": source.url,
             "attempt": result.attempt.model_dump(mode="json"),
-            "asset": (
-                result.asset.model_dump(mode="json") if result.asset else None
-            ),
+            "asset": (result.asset.model_dump(mode="json") if result.asset else None),
         }
         if result.asset:
             path = run_ctx.work_dir.root / result.asset.relative_path
@@ -203,9 +253,10 @@ async def download_geo_adapter(
         return json.dumps(payload, ensure_ascii=False)
     except Exception as exc:
         logger.exception("GEO download failed for accession=%r", accession)
-        return json.dumps({
-            "source": "geo", "accession": accession, "error": str(exc)
-        }, ensure_ascii=False)
+        return json.dumps(
+            {"source": "geo", "accession": accession, "error": str(exc)},
+            ensure_ascii=False,
+        )
 
 
 @function_tool(

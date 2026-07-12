@@ -27,6 +27,9 @@ export function useAgentStream() {
       storeRef.current;
 
     switch (event.type) {
+      case "task_started":
+        if (event.task_id) storeRef.current.setTaskId(event.task_id);
+        break;
       case "text":
         if (event.delta) appendAssistantText(event.delta);
         break;
@@ -72,20 +75,13 @@ export function useAgentStream() {
       case "artifact_produced":
         if (event.name) {
           addArtifact(
+            event.artifact_id || event.name,
             event.name,
-            event.path || "",
             event.size || 0,
           );
         }
         break;
       case "file_downloaded":
-        if (event.name) {
-          addArtifact(
-            event.name,
-            event.path || "",
-            event.size || 0,
-          );
-        }
         break;
       case "confirm":
         addMessage("assistant", event.confirm_message || event.message || "");
@@ -95,7 +91,9 @@ export function useAgentStream() {
 
   // 保持 handleEvent ref 最新，供 WebSocket 回调使用
   const handleEventRef = useRef(handleEvent);
-  handleEventRef.current = handleEvent;
+  useEffect(() => {
+    handleEventRef.current = handleEvent;
+  }, [handleEvent]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;

@@ -1,7 +1,7 @@
 """Runner 封装 — 流式运行 Agent loop，事件分发到 WebSocket。
- 
+
 将 openai-agents-python 的 Runner.run_streamed 事件转换为前端可消费的 WSMessage。
- 
+
 事件类型：
   - text: LLM 文本增量（仅推送 content delta，不推送工具参数 delta）
   - skill_loaded: 技能加载通知（name + category）
@@ -12,26 +12,28 @@
   - file_downloaded: 下载完成的文件（name + path + size）
   - artifact_produced: 生成的产物文件（name + path + size）
   - error: 异常
- 
+
 SDK 参考：
   RawResponsesStreamEvent(type="raw_response_event") — 底层 LLM 原始流式事件
   RunItemStreamEvent(type="run_item_stream_event") — 包装 RunItem 的高层事件
     name="tool_called" → 工具调用
     name="tool_output" → 工具输出
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 from typing import AsyncIterator
 
-from agents import Agent, Runner
+from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import create_agent, get_loaded_skill_names
 from app.agent_loop.context import RunContext
 from app.agent_loop.model import ModelConfigurationError, require_model_credentials
 from app.config import settings
+from app.domain.contracts import RunManifest
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,7 @@ def _check_for_confirmation(output: object) -> str | None:
         return None
     if isinstance(output, str):
         import json
+
         try:
             parsed = json.loads(output)
         except (json.JSONDecodeError, TypeError):
@@ -66,7 +69,9 @@ def _check_for_confirmation(output: object) -> str | None:
             if "quality_issues" in parsed:
                 issues = parsed["quality_issues"]
                 if isinstance(issues, list):
-                    return "Quality issues detected: " + "; ".join(str(i) for i in issues)
+                    return "Quality issues detected: " + "; ".join(
+                        str(i) for i in issues
+                    )
                 return str(issues)
     return None
 
@@ -112,6 +117,7 @@ async def run_agent_stream(
             # Derive category from name.  The skill registry is already loaded;
             # we import the registry here for a lightweight lookup.
             from app.skills.registry import skill_registry as _reg
+
             skill_def = _reg.get(name)
             if skill_def is not None:
                 category = skill_def.category.value
@@ -134,8 +140,12 @@ async def run_agent_stream(
             if isinstance(event, RunItemStreamEvent):
                 if event.name == "tool_called":
                     raw_item = getattr(event.item, "raw_item", None)
-                    tool_name = getattr(raw_item, "name", "unknown") if raw_item else "unknown"
-                    args_json = getattr(raw_item, "arguments", "{}") if raw_item else "{}"
+                    tool_name = (
+                        getattr(raw_item, "name", "unknown") if raw_item else "unknown"
+                    )
+                    args_json = (
+                        getattr(raw_item, "arguments", "{}") if raw_item else "{}"
+                    )
                     yield {
                         "type": "tool_call",
                         "name": tool_name,
@@ -154,33 +164,40 @@ async def run_agent_stream(
                             "content": confirm_msg,
                         }
 
-        # 最终输出
-        yield {"type": "done", "final_output": result.final_output}
-
         # ── 扫描产物目录，yield file_downloaded / artifact_produced 事件 ──
         tasks_base = Path(settings.output_dir) / "tasks" / task_id
-        for sub, event_type in [
-            ("source_assets", "file_downloaded"),
-            ("artifacts", "artifact_produced"),
-        ]:
-            sub_dir = tasks_base / sub
-            if sub_dir.exists():
-                for file_path in sorted(sub_dir.rglob("*")):
-                    if file_path.is_file():
-                        try:
-                            size = file_path.stat().st_size
-                        except OSError:
-                            size = 0
-                        try:
-                            rel = file_path.relative_to(tasks_base)
-                        except ValueError:
-                            rel = file_path
-                        yield {
-                            "type": event_type,
-                            "name": file_path.name,
-                            "path": str(rel).replace("\\", "/"),
-                            "size": size,
-                        }
+        source_dir = tasks_base / "source_assets"
+        if source_dir.exists():
+            for file_path in sorted(source_dir.rglob("*")):
+                if file_path.is_file():
+                    yield {
+                        "type": "file_downloaded",
+                        "name": file_path.name,
+                        "path": file_path.relative_to(tasks_base).as_posix(),
+                        "size": file_path.stat().st_size,
+                    }
+
+        manifest_path = tasks_base / "artifacts" / "run_manifest.json"
+        if manifest_path.is_file():
+            manifest = RunManifest.model_validate_json(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            yield {
+                "type": "artifact_produced",
+                "artifact_id": "run_manifest",
+                "name": "run_manifest.json",
+                "size": manifest_path.stat().st_size,
+            }
+            for artifact in manifest.artifacts:
+                yield {
+                    "type": "artifact_produced",
+                    "artifact_id": artifact.artifact_id,
+                    "name": artifact.name,
+                    "size": artifact.size_bytes,
+                }
+
+        # 产物事件发送完成后才发送终态，避免前端提前读取不完整结果。
+        yield {"type": "done", "final_output": result.final_output}
 
     except ModelConfigurationError as error:
         yield {

@@ -23,7 +23,7 @@ export function SessionSidebar() {
   const databases = useAgentStore((s) => s.databases)
   const selectedDatabases = useAgentStore((s) => s.selectedDatabases)
   const pipelineStage = useAgentStore((s) => s.pipelineStage)
-  const setCurrentSession = useAgentStore((s) => s.setCurrentSession)
+  const loadSession = useAgentStore((s) => s.loadSession)
 
   const currentSession = sessions.find((s) => s.taskId === currentSessionId)
   const selectedDbNames = databases
@@ -60,7 +60,7 @@ export function SessionSidebar() {
                   <SidebarMenuItem key={session.taskId}>
                     <SidebarMenuButton
                       isActive={session.taskId === currentSessionId}
-                      onClick={() => setCurrentSession(session.taskId)}
+                      onClick={() => loadSession(session.taskId)}
                     >
                       <Database className="size-4 shrink-0" />
                       <span className="truncate">{session.topic}</span>

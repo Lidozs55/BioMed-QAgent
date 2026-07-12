@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAgentStore } from '@/stores/agentStore'
+import { migratePersistedAgentState, useAgentStore } from '@/stores/agentStore'
 
 describe('agentStore', () => {
   beforeEach(() => {
@@ -66,5 +66,46 @@ describe('agentStore', () => {
     expect(state.sessions[0].taskId).toBe('task-1')
     // PipelineStage resets to idle
     expect(state.pipelineStage).toBe('idle')
+  })
+
+  it('drops legacy artifacts without artifactId during persisted-state migration', () => {
+    const migrated = migratePersistedAgentState({
+      sessions: [{
+        taskId: 'legacy',
+        topic: 'Legacy',
+        databases: ['geo'],
+        createdAt: 1,
+        messageCount: 0,
+        messages: [],
+        traces: [],
+        artifacts: [{ name: 'main_data.csv', path: 'artifacts/main_data.csv', size: 1 }],
+        pipelineStage: 'done',
+      }],
+    })
+
+    expect(migrated.sessions[0].artifacts).toEqual([])
+  })
+
+  it('loadSession restores task data and current session selection', () => {
+    useAgentStore.setState({
+      sessions: [{
+        taskId: 'task-history',
+        topic: 'History',
+        databases: ['pubmed', 'geo'],
+        createdAt: 1,
+        messageCount: 1,
+        messages: [{ id: 'm1', role: 'user', content: 'History' }],
+        traces: [],
+        artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
+        pipelineStage: 'done',
+      }],
+    })
+
+    useAgentStore.getState().loadSession('task-history')
+    const state = useAgentStore.getState()
+    expect(state.taskId).toBe('task-history')
+    expect(state.currentSessionId).toBe('task-history')
+    expect(state.messages[0].content).toBe('History')
+    expect(state.artifacts[0].artifactId).toBe('artifact_1')
   })
 })

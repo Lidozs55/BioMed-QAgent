@@ -37,7 +37,7 @@ type TabMode = "setup" | "chat" | "results";
 export function ChatPanel() {
   const { messages, isRunning, isConnected, taskId } = useAgentStore();
   const { send } = useAgentStream();
-  const { fetchArtifacts } = useAPI();
+  const { createTask, fetchArtifacts } = useAPI();
   const [input, setInput] = useState("");
 
   const [activeTab, setActiveTab] = useState<TabMode>(() => {
@@ -52,9 +52,11 @@ export function ChatPanel() {
         .then((arts) => {
           if (arts) {
             const store = useAgentStore.getState();
-            arts.forEach((a) => {
-              store.addArtifact(a.name, a.path ?? "", a.size);
-            });
+            store.setArtifacts(arts.map((a) => ({
+              artifactId: a.artifact_id,
+              name: a.name,
+              size: a.size,
+            })));
           }
         })
         .catch(() => {});
@@ -68,6 +70,52 @@ export function ChatPanel() {
     send(trimmed, selected);
     setInput("");
     setActiveTab("chat");
+  };
+
+  const handleFixtureRun = async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isRunning) return;
+    const store = useAgentStore.getState();
+    const selected = store.selectedDatabases;
+    if (
+      selected.length !== 2 ||
+      !selected.includes("pubmed") ||
+      !selected.includes("geo")
+    ) {
+      store.addTrace({
+        kind: "error",
+        message: "固定验收案例只能选择 PubMed 和 GEO。",
+      });
+      return;
+    }
+    store.addMessage("user", trimmed);
+    store.setRunning(true);
+    store.setPipelineStage("discovery");
+    setActiveTab("chat");
+    try {
+      const created = await createTask(trimmed, selected);
+      store.setTaskId(created.task_id);
+      store.setPipelineStage("done");
+      store.addMessage(
+        "assistant",
+        `确定性 Pipeline 已完成，任务 ${created.task_id} 的产物已通过验证。`,
+      );
+      const arts = await fetchArtifacts(created.task_id);
+      store.setArtifacts(arts.map((a) => ({
+        artifactId: a.artifact_id,
+        name: a.name,
+        size: a.size,
+      })));
+      setActiveTab("results");
+    } catch (error) {
+      store.setPipelineStage("error");
+      store.addTrace({
+        kind: "error",
+        message: error instanceof Error ? error.message : "任务执行失败",
+      });
+    } finally {
+      store.setRunning(false);
+    }
   };
 
   const handleChatSend = () => {
@@ -127,6 +175,14 @@ export function ChatPanel() {
                 className="w-full"
               >
                 开始研究
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleFixtureRun}
+                disabled={isRunning || !input.trim()}
+                className="w-full"
+              >
+                运行固定验收案例
               </Button>
               {!isConnected && (
                 <p className="text-xs text-muted-foreground">

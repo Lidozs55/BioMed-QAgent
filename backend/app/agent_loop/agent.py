@@ -3,6 +3,7 @@
 管理者模式：主 Agent 配备全部工具，LLM 自主决定调用顺序与循环。
 替代 v0 的 Orchestrator 固定流水线。
 """
+
 from __future__ import annotations
 
 from agents import Agent
@@ -14,6 +15,7 @@ from app.skills.registry import (
     skill_registry,
 )
 from app.tools.io import read_file, write_file, list_files
+from app.pipeline.tool import run_research_pipeline
 
 try:
     from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
@@ -28,7 +30,7 @@ INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
 
 ## 你的核心职责
-根据用户的研究主题，自主规划并执行以下环节（顺序由你决定，可反复迭代）：
+根据用户的研究主题生成结构化数据需求，并把正式任务交给确定性 Pipeline 执行：
 1. 文献检索 — 调用 search_pubmed 等工具发现相关文献与数据来源线索
 2. 数据识别 — 从文献中识别数据库名称、accession、补充材料链接等
 3. 数据获取 — 从允许的数据库中检索并下载原始数据文件
@@ -36,9 +38,10 @@ INSTRUCTIONS = """\
 5. 文件管理 — 调用 read_file/write_file/list_files 管理本地任务目录
 
 ## 工作方式
+- 正式产物必须调用 `run_research_pipeline` 生成；不要自行拼装或直接写最终 CSV
 - 你在一个 Agent loop 中运行：每次工具调用后，结果会回传给你，你决定下一步
-- 每个任务有独立的工作目录 data/tasks/<task_id>/，分为 raw/（原始文件）、
-  parsed/（解析结果）、normalized/（清洗后数据）、artifacts/（最终产物）、logs/（记录）
+- 每个任务有独立的工作目录 data/output/tasks/<task_id>/，包含 source_assets/、
+  download_tmp/、parsed/、normalized/、staging/、artifacts/、state/ 和 logs/
 - 下载与解析严格分离：下载工具只保存原始文件，不读取内容；解析工具从本地文件开始工作
 
 ## 输出要求（核心产物）
@@ -51,7 +54,7 @@ INSTRUCTIONS = """\
 
 分析（统计、可视化等）为可选加分项，不生成缺少数据依据的科研或临床结论。
 
-如果你的工具链尚不完整，优先完成已有工具能产出的部分，并在 artifacts/ 目录保存阶段性成果。
+当前确定性闭环仅支持显式 fixture 案例（PubMed + GEO）。其他数据库不得伪装成正式成功产物。
 """
 
 
@@ -122,8 +125,7 @@ def create_agent(databases: list[str] | None = None) -> Agent:
         acq_skills = skill_registry.get_acquisition_skills(databases)
         all_enabled = skill_registry.list_enabled()
         non_acq_skills = [
-            s for s in all_enabled
-            if s.category != SkillCategory.ACQUISITION
+            s for s in all_enabled if s.category != SkillCategory.ACQUISITION
         ]
         skills: list = acq_skills + non_acq_skills
     else:
@@ -137,7 +139,7 @@ def create_agent(databases: list[str] | None = None) -> Agent:
     _loaded_skill_names = [s.name for s in skills]
 
     instructions_suffix, tools = build_agent_config(skills)
-    tools.extend([read_file, write_file, list_files])
+    tools.extend([run_research_pipeline, read_file, write_file, list_files])
     seen: set[str] = set()
     unique_tools: list = []
     for t in tools:

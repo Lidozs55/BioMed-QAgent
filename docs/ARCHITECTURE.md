@@ -367,7 +367,7 @@ FastAPI 提供：
 - `GET /api/v1/tasks/{task_id}/artifacts`
 - `GET /api/v1/tasks/{task_id}/artifacts/{artifact_id}`
 
-WebSocket 事件使用统一 envelope：
+确定性 Pipeline 已将事件按统一 envelope 写入 `logs/events.jsonl`：
 
 ```json
 {
@@ -382,9 +382,10 @@ WebSocket 事件使用统一 envelope：
 }
 ```
 
-事件先持久化再推送，sequence 在单任务内严格递增并支持断线续读。任务支持
-stage_failed、stage_skipped、取消和恢复事件，并且只能进入一个终态。各 payload
-使用判别联合 Pydantic schema，不接受任意 dict。
+当前 fixture Pipeline 保证 sequence 在单任务内严格递增，各 payload 使用判别联合
+Pydantic schema。将相同 envelope 推送到 WebSocket、按 sequence 续读、任务取消与
+进程恢复仍是后续工作；现有 Agent WebSocket 暂时保留旧流式事件，不能宣称已完成
+上述能力。
 
 ## 9. 前端目标架构
 
@@ -435,3 +436,21 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 - 将 mock 产物当作正式案例；
 - 自动生成缺乏数据依据的科研或临床结论；
 - 后端事件和 Artifact 契约稳定前重写前端。
+
+## 12. 当前实现证据（2026-07-12）
+
+- 默认离线后端测试：`228 passed, 1 deselected`；默认不访问网络。
+- live 验收：PMID 34180400、GSE178352 元数据和官方
+  `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
+  `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
+- fixture 闭环：48 条 gene + sample 记录（4 genes × 12 samples），全部通过精确
+  SourceLocator 回溯，生成 14 个正式文件。
+- API：显式 `mode=fixture` 创建任务，任务状态和 Artifact 均使用类型化契约，下载
+  只接受 manifest 注册的 `artifact_id`。
+- Agent：OpenAI Agents SDK 保留为 Runtime，正式产物通过单一
+  `run_research_pipeline` Function Tool 进入确定性 Pipeline。
+- 前端：保留用户提交的 shadcn 工作台，引入确定性 fixture 入口和 Artifact 下载；
+  Vitest、TypeScript、ESLint、production build 与真实浏览器主流程已通过。
+
+未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是任务锁、取消、
+恢复、统一 WebSocket envelope、第二个真实案例和 GDC/PDB/Xena live 验收。

@@ -134,24 +134,24 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
 
               {dbs.map((db) => (
                 <Tooltip key={db.id}>
-                  <TooltipTrigger>
-                    <ToggleGroupItem
+                  <TooltipTrigger
+                    render={<ToggleGroupItem
                       value={db.id}
                       variant="outline"
                       size="default"
                       className="w-full justify-between gap-2"
+                    />}
+                  >
+                    <span className="truncate">{db.name}</span>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "shrink-0 text-[0.625rem] h-5 px-1.5",
+                        cfg.className,
+                      )}
                     >
-                      <span className="truncate">{db.name}</span>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "shrink-0 text-[0.625rem] h-5 px-1.5",
-                          cfg.className,
-                        )}
-                      >
-                        {cfg.label}
-                      </Badge>
-                    </ToggleGroupItem>
+                      {cfg.label}
+                    </Badge>
                   </TooltipTrigger>
                   <TooltipContent side="left">{db.description}</TooltipContent>
                 </Tooltip>

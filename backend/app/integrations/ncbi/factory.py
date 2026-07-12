@@ -43,10 +43,14 @@ async def open_ncbi_services(
     """Open production services, while allowing fixture-owned dependencies."""
 
     owned_http = http is None
-    session = http or httpx.AsyncClient()
+    session = http or httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+    )
     try:
         yield NcbiServices(
-            eutils=NcbiEutilsClient(http=session, config=config or ncbi_client_config()),
+            eutils=NcbiEutilsClient(
+                http=session, config=config or ncbi_client_config()
+            ),
             http=session,
             cache=ContentCache(
                 cache_root or Path(settings.output_dir) / "cache" / "ncbi"
