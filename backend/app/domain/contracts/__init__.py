@@ -19,6 +19,15 @@ from app.domain.contracts.ids import (
     make_record_id,
     make_source_id,
 )
+from app.domain.contracts.pipeline import (
+    ArtifactManifestEntry,
+    ErrorDetail,
+    ParsedDataset,
+    RunManifest,
+    StageAttempt,
+    ValidationSummary,
+    WarningRecord,
+)
 from app.domain.contracts.source import (
     DownloadAttempt,
     FileAsset,
@@ -36,6 +45,7 @@ from app.domain.contracts.task import (
 
 __all__ = [
     "AttemptStatus",
+    "ArtifactManifestEntry",
     "ContractModel",
     "DataLevel",
     "Database",
@@ -43,17 +53,23 @@ __all__ = [
     "DownloadAttempt",
     "DownloadStatus",
     "ErrorCode",
+    "ErrorDetail",
     "FileAsset",
+    "ParsedDataset",
     "QuerySpecification",
     "RequestedOutput",
+    "RunManifest",
     "SourceAsset",
     "SourceLocator",
     "SourceRecord",
     "SourceRelation",
     "StageName",
+    "StageAttempt",
     "TaskRequest",
     "TaskSpecification",
     "TaskState",
+    "ValidationSummary",
+    "WarningRecord",
     "WarningSeverity",
     "asset_id_from_sha256",
     "generate_prefixed_uuid",
