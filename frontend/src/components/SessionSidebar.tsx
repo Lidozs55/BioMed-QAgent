@@ -61,6 +61,7 @@ export function SessionSidebar() {
                     <SidebarMenuButton
                       isActive={session.taskId === currentSessionId}
                       onClick={() => setCurrentSession(session.taskId)}
+                      tooltip={session.topic}
                     >
                       <Database className="size-4 shrink-0" />
                       <span className="truncate">{session.topic}</span>
