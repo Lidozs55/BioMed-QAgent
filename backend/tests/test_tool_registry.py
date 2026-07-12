@@ -18,13 +18,14 @@ def test_get_all_tools_has_io_tools() -> None:
     assert "list_files" in names
 
 
-def test_get_all_tools_has_placeholder_tools() -> None:
-    """数据获取工具（search/parse/analyze）应为占位但已注册。"""
+def test_get_all_tools_has_skill_tools() -> None:
+    """数据获取工具应来自已注册的 skill，而非旧占位符。"""
     tools = get_all_tools()
     names = {getattr(t, "name", str(t)) for t in tools}
-    assert "search_literature" in names
-    assert "parse_pdf" in names
-    assert "analyze_records" in names
+    assert "search_pubmed" in names
+    assert "search_literature" not in names
+    assert "parse_pdf" not in names
+    assert "analyze_records" not in names
 
 
 def test_all_tools_have_name() -> None:
