@@ -31,7 +31,7 @@ export default function App() {
       <SessionSidebar />
       <SidebarInset>
         <header className="flex items-center justify-between border-b px-4 py-2">
-          <SidebarTrigger />
+          <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="text-lg font-semibold">BioMed Q-Agent</h1>
           <ThemeToggle />
         </header>

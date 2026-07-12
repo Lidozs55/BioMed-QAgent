@@ -88,7 +88,7 @@ export function useAgentStream() {
         }
         break;
       case "confirm":
-        console.warn("[confirm]", event.confirm_message);
+        addMessage("assistant", event.confirm_message || event.message || "");
         break;
     }
   }, []);
