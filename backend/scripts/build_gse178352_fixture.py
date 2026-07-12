@@ -45,6 +45,10 @@ GEO_SUMMARY_URL = (
 GEO_SUPPL_LISTING_URL = (
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/"
 )
+GEO_SOFT_URL = (
+    "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/"
+    "soft/GSE178352_family.soft.gz"
+)
 COUNTS_URL = (
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/"
     "suppl/GSE178352_tximportCounts.txt.gz"
@@ -53,6 +57,8 @@ COUNTS_SIZE = 4_597_797
 COUNTS_SHA256 = (
     "71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55"
 )
+SOFT_SIZE = 2_986
+SOFT_SHA256 = "cc68bf34f789bce16121adb306a8ea1a80c08c19874d62920813e3265ea39c88"
 USER_AGENT = "BioMed-QAgent/0.1 fixture-builder (research data verification)"
 
 
@@ -115,6 +121,7 @@ def build_fixture(output_dir: Path, retrieved_at: datetime) -> Path:
         ("geo_esearch.json", GEO_SEARCH_URL),
         ("geo_esummary.json", GEO_SUMMARY_URL),
         ("geo_suppl_listing.html", GEO_SUPPL_LISTING_URL),
+        ("gse178352_family.soft.gz", GEO_SOFT_URL),
         ("counts.gz", COUNTS_URL),
     ):
         downloaded[name] = (url, download(url))
@@ -127,6 +134,9 @@ def build_fixture(output_dir: Path, retrieved_at: datetime) -> Path:
         )
     if sha256_bytes(counts_bytes) != COUNTS_SHA256:
         raise RuntimeError("official counts SHA-256 changed")
+    soft_bytes = downloaded["gse178352_family.soft.gz"][1]
+    if len(soft_bytes) != SOFT_SIZE or sha256_bytes(soft_bytes) != SOFT_SHA256:
+        raise RuntimeError("official family SOFT bytes changed")
 
     slice_bytes = extract_gzip_lines(counts_bytes, line_count=5)
 
@@ -136,6 +146,7 @@ def build_fixture(output_dir: Path, retrieved_at: datetime) -> Path:
         "geo_esearch.json": downloaded["geo_esearch.json"][1],
         "geo_esummary.json": downloaded["geo_esummary.json"][1],
         "geo_suppl_listing.html": downloaded["geo_suppl_listing.html"][1],
+        "gse178352_family.soft.gz": soft_bytes,
         "tximport_counts_slice.tsv": slice_bytes,
     }
     fixture_sha256 = {
@@ -153,6 +164,9 @@ def build_fixture(output_dir: Path, retrieved_at: datetime) -> Path:
             GEO_SUPPL_LISTING_URL,
             downloaded["geo_suppl_listing.html"][1],
             "text/html",
+        ),
+        "geo_family_soft": source_metadata(
+            GEO_SOFT_URL, soft_bytes, "application/gzip"
         ),
         "pubmed": source_metadata(
             PUBMED_URL, downloaded["pubmed_34180400.xml"][1], "application/xml"

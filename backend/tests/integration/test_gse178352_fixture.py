@@ -77,6 +77,7 @@ def test_fixture_manifest_verifies_every_fixture_file() -> None:
         "geo_esearch.json",
         "geo_esummary.json",
         "geo_suppl_listing.html",
+        "gse178352_family.soft.gz",
         "pubmed_34180400.xml",
         "pubmed_esearch.json",
         "tximport_counts_slice.tsv",
@@ -122,6 +123,17 @@ def test_discovery_and_listing_fixtures_contain_pinned_identifiers() -> None:
 
     assert pubmed_search["esearchresult"]["idlist"] == ["34180400"]
     assert "GSE178352_tximportCounts.txt.gz" in listing
+
+
+def test_soft_fixture_proves_counts_alias_to_gsm_mapping() -> None:
+    soft = gzip.decompress(
+        (FIXTURE_DIR / "gse178352_family.soft.gz").read_bytes()
+    ).decode("utf-8")
+
+    assert "^SAMPLE = GSM5388270" in soft
+    assert "!Sample_description = Sample A1" in soft
+    assert "^SAMPLE = GSM5388281" in soft
+    assert "!Sample_description = Sample B7" in soft
 
 
 def test_manifest_records_case_relationship_and_sample_evidence() -> None:

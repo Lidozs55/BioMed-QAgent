@@ -9,6 +9,7 @@
     "geo_esearch.json": "92f094ab59902de4375dc412c714f7899c497d3953aca884ed4de866876795fd",
     "geo_esummary.json": "18a0251cafc54549998f1ba78b0a4d1334b282a72a76f9c50a1d7465b9b63754",
     "geo_suppl_listing.html": "821112eebf885c288d7ae743f4cd4eb4dcc61d05a0e098c2f3f81a1e82127d58",
+    "gse178352_family.soft.gz": "cc68bf34f789bce16121adb306a8ea1a80c08c19874d62920813e3265ea39c88",
     "pubmed_34180400.xml": "7b058519e3562a6c2666ff3a632636c3dd041c81e8393a409a2834fc304b7f54",
     "pubmed_esearch.json": "cb11033b42fe31efd0e535319c44acb74194f36314418b68097ec299d63632b6",
     "tximport_counts_slice.tsv": "cf2c89bdd58206bbfd28ca6b36aa7bb04b2df5b398df5f72d49c414c59b24ece"
@@ -17,6 +18,7 @@
     "geo_esearch.json": 455,
     "geo_esummary.json": 2889,
     "geo_suppl_listing.html": 602,
+    "gse178352_family.soft.gz": 2986,
     "pubmed_34180400.xml": 126560,
     "pubmed_esearch.json": 181,
     "tximport_counts_slice.tsv": 2002
@@ -138,6 +140,13 @@
       "sha256": "18a0251cafc54549998f1ba78b0a4d1334b282a72a76f9c50a1d7465b9b63754",
       "size_bytes": 2889,
       "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=gds&id=200178352&retmode=json&tool=BioMedQAgent&email=biomed-qagent%40example.com"
+    },
+    "geo_family_soft": {
+      "media_type": "application/gzip",
+      "request_parameters": {},
+      "sha256": "cc68bf34f789bce16121adb306a8ea1a80c08c19874d62920813e3265ea39c88",
+      "size_bytes": 2986,
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/soft/GSE178352_family.soft.gz"
     },
     "geo_supplementary_listing": {
       "media_type": "text/html",
