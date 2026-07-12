@@ -1,67 +1,96 @@
-"""任务工作目录工具 — 每个任务创建独立目录结构。
+"""Safe task-local directory layout for deterministic pipeline runs."""
 
-对应 TODO.md Section 4.3：
-    data/tasks/<task_id>/
-    ├── raw/          # 不修改的下载文件
-    ├── parsed/       # 解析结果
-    ├── normalized/   # 清洗、对齐后的数据
-    ├── artifacts/    # CSV、来源清单、说明和可视化
-    └── logs/         # Tool 调用、下载和 Skill 演化记录
-
-raw/ 中的下载文件保持不变；解析、清洗和导出产物不得覆盖原始文件。
-"""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
 
-# 工作目录子目录名
-_SUBDIRS = ("raw", "parsed", "normalized", "artifacts", "logs")
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_SUBDIRS = (
+    "source_assets",
+    "download_tmp",
+    "parsed",
+    "normalized",
+    "staging",
+    "artifacts",
+    "state",
+    "logs",
+)
+
+
+def _validate_id(value: str, field_name: str) -> str:
+    if not _SAFE_ID.fullmatch(value):
+        raise ValueError(f"{field_name} must be a safe path identifier")
+    return value
+
+
+def _safe_child(root: Path, relative: str) -> Path:
+    if not relative:
+        raise ValueError("path must not be blank")
+    root_resolved = root.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError("path must remain inside its task directory") from exc
+    return candidate
 
 
 @dataclass(frozen=True)
 class TaskWorkDir:
-    """任务工作目录路径集合。"""
+    """Immutable set of task paths; content files remain stage-owned."""
 
     root: Path
-    raw: Path
+    source_assets: Path
+    download_tmp: Path
     parsed: Path
     normalized: Path
+    staging: Path
     artifacts: Path
+    state: Path
     logs: Path
 
+    @property
+    def raw(self) -> Path:
+        """Deprecated compatibility alias for pre-pipeline acquisition Skills."""
+
+        return self.source_assets
+
+    def source_asset_file(self, filename: str) -> Path:
+        return _safe_child(self.source_assets, filename)
+
     def raw_file(self, filename: str) -> Path:
-        """返回 raw 目录下的文件路径。"""
-        return self.raw / filename
+        """Deprecated compatibility helper; use ``source_asset_file``."""
+
+        return self.source_asset_file(filename)
+
+    def download_temp_file(self, filename: str) -> Path:
+        return _safe_child(self.download_tmp, filename)
 
     def artifact_file(self, filename: str) -> Path:
-        """返回 artifacts 目录下的文件路径。"""
-        return self.artifacts / filename
+        return _safe_child(self.artifacts, filename)
+
+    def staging_run(self, run_id: str) -> Path:
+        run_path = _safe_child(self.staging, _validate_id(run_id, "run_id"))
+        run_path.mkdir(parents=True, exist_ok=True)
+        return run_path
 
 
 def create_task_workdir(task_id: str, base_dir: str | None = None) -> TaskWorkDir:
-    """为任务创建独立工作目录，包含 raw/parsed/normalized/artifacts/logs 子目录。
+    """Create the approved isolated directory structure for one task."""
 
-    Args:
-        task_id: 任务 ID（必须已通过 TaskRecord 校验）。
-        base_dir: 基目录。None 时使用 settings.output_dir/tasks。
-    """
+    safe_task_id = _validate_id(task_id, "task_id")
     base = Path(base_dir) if base_dir else Path(settings.output_dir) / "tasks"
-    root = base / task_id
+    root = base / safe_task_id
 
-    paths = {}
-    for sub in _SUBDIRS:
-        d = root / sub
-        d.mkdir(parents=True, exist_ok=True)
-        paths[sub] = d
+    paths: dict[str, Path] = {}
+    for subdir in _SUBDIRS:
+        path = root / subdir
+        path.mkdir(parents=True, exist_ok=True)
+        paths[subdir] = path
 
-    return TaskWorkDir(
-        root=root,
-        raw=paths["raw"],
-        parsed=paths["parsed"],
-        normalized=paths["normalized"],
-        artifacts=paths["artifacts"],
-        logs=paths["logs"],
-    )
+    return TaskWorkDir(root=root, **paths)

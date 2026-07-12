@@ -177,17 +177,14 @@ function CsvPreview({
 }: {
   artifactUrl: string;
 }) {
-  const [csvData, setCsvData] = useState<{
-    headers: string[];
-    rows: string[][];
+  const [requestState, setRequestState] = useState<{
+    artifactUrl: string;
+    csvData: { headers: string[]; rows: string[][] } | null;
+    error: boolean;
   } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(false);
 
     fetch(artifactUrl)
       .then((res) => {
@@ -196,14 +193,16 @@ function CsvPreview({
       })
       .then((text) => {
         if (!cancelled) {
-          setCsvData(parseCSV(text));
-          setLoading(false);
+          setRequestState({
+            artifactUrl,
+            csvData: parseCSV(text),
+            error: false,
+          });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setError(true);
-          setLoading(false);
+          setRequestState({ artifactUrl, csvData: null, error: true });
         }
       });
 
@@ -212,7 +211,7 @@ function CsvPreview({
     };
   }, [artifactUrl]);
 
-  if (loading) {
+  if (requestState?.artifactUrl !== artifactUrl) {
     return (
       <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
         <Spinner />
@@ -221,7 +220,7 @@ function CsvPreview({
     );
   }
 
-  if (error) {
+  if (requestState.error) {
     return (
       <div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-muted-foreground">
         <FileTextIcon className="size-6 opacity-30" />
@@ -229,6 +228,8 @@ function CsvPreview({
       </div>
     );
   }
+
+  const { csvData } = requestState;
 
   if (!csvData || csvData.headers.length === 0) {
     return (
@@ -379,7 +380,7 @@ export default function ResultsViewer() {
                           <CsvPreview
                             artifactUrl={getArtifactUrl(
                               taskId ?? "",
-                              artifact.name,
+                              artifact.artifactId,
                             )}
                           />
                         </AccordionContent>
@@ -394,7 +395,7 @@ export default function ResultsViewer() {
                     size="sm"
                     onClick={() =>
                       triggerDownload(
-                        getArtifactUrl(taskId ?? "", artifact.name),
+                        getArtifactUrl(taskId ?? "", artifact.artifactId),
                         artifact.name,
                       )
                     }

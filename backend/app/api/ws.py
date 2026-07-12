@@ -1,12 +1,15 @@
 """WebSocket 端点 — 接收用户输入，流式推送 Agent loop 事件。"""
+
 from __future__ import annotations
 
 import json
 import logging
+import re
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.agent_loop.runner import run_agent_stream
+from app.domain.contracts import generate_prefixed_uuid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -47,9 +50,17 @@ async def agent_ws(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "error", "message": "输入为空"})
                 continue
 
-            task_id = msg.get("task_id", "default")
+            task_id = msg.get("task_id") or generate_prefixed_uuid("task")
+            if not isinstance(task_id, str) or not re.fullmatch(
+                r"[A-Za-z0-9_-]{1,128}", task_id
+            ):
+                await websocket.send_json({"type": "error", "message": "无效 task_id"})
+                continue
             databases = msg.get("databases", None)
-            async for event in run_agent_stream(user_input, task_id, databases=databases):
+            await websocket.send_json({"type": "task_started", "task_id": task_id})
+            async for event in run_agent_stream(
+                user_input, task_id, databases=databases
+            ):
                 await websocket.send_json(event)
 
     except WebSocketDisconnect:

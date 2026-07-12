@@ -21,6 +21,8 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
+from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
+from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,60 @@ def _parse_pubmed_record(article: ET.Element) -> dict[str, Any]:
     }
 
 
+async def search_pubmed_adapter(
+    run_ctx: RunContext,
+    query: str,
+    max_results: int,
+    *,
+    services: NcbiServices,
+) -> str:
+    """Adapt typed PubMed discovery output to the existing Skill JSON wire shape."""
+
+    try:
+        result = await discover_pubmed(services.eutils, query, max_results)
+        run_ctx.log_query(
+            query=query,
+            source="pubmed",
+            status="completed",
+            records_count=len(result.records),
+        )
+        records = [{
+            "title": record.title,
+            "abstract": record.abstract,
+            "authors": "; ".join(record.authors),
+            "journal": record.journal,
+            "pub_date": (
+                record.published_at.isoformat() if record.published_at else ""
+            ),
+            "doi": record.doi or "",
+            "pmid": record.pmid,
+            "pmcid": record.pmcid or "",
+            "is_open_access": bool(record.pmcid),
+            "source_url": record.source_url,
+        } for record in result.records]
+        return json.dumps(
+            {
+                "source": "pubmed",
+                "query": result.query,
+                "query_translation": result.query_translation,
+                "total_count": result.total_count,
+                "records": records,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        logger.exception("PubMed search failed for query=%r", query)
+        run_ctx.log_query(query, "pubmed", "failed", 0)
+        return json.dumps({
+            "source": "pubmed",
+            "query": query,
+            "query_translation": "",
+            "total_count": 0,
+            "records": [],
+            "error": str(exc),
+        }, ensure_ascii=False)
+
+
 @function_tool(
     name_override="search_pubmed",
     description_override=(
@@ -119,7 +175,7 @@ def _parse_pubmed_record(article: ET.Element) -> dict[str, Any]:
         "journal, publication date, DOI, PMID, PMCID, and open access status."
     ),
 )
-def search_pubmed(
+async def search_pubmed(
     ctx: RunContextWrapper[RunContext],
     query: str,
     max_results: int = 20,
@@ -131,64 +187,10 @@ def search_pubmed(
         query: Free-text search query for PubMed.
         max_results: Maximum number of records to fetch (default 20).
     """
-    run_ctx: RunContext = ctx.context
-
-    try:
-        handle = Entrez.esearch(
-            db="pubmed",
-            term=query,
-            retmax=max_results,
+    async with open_ncbi_services() as services:
+        return await search_pubmed_adapter(
+            ctx.context, query, max_results, services=services
         )
-        search_results = Entrez.read(handle)
-        handle.close()
-
-        id_list = search_results.get("IdList", [])
-        total_count = int(search_results.get("Count", 0))
-        records: list[dict[str, Any]] = []
-
-        if id_list:
-            fetch_handle = Entrez.efetch(
-                db="pubmed",
-                id=",".join(id_list),
-                rettype="xml",
-            )
-            xml_data = fetch_handle.read()
-            fetch_handle.close()
-
-            root = ET.fromstring(xml_data)
-            articles = root.findall(".//PubmedArticle")
-            for article in articles:
-                records.append(_parse_pubmed_record(article))
-
-        run_ctx.log_query(
-            query=query,
-            source="pubmed",
-            status="completed",
-            records_count=len(records),
-        )
-
-        return json.dumps({
-            "source": "pubmed",
-            "query": query,
-            "total_count": total_count,
-            "records": records,
-        }, ensure_ascii=False)
-
-    except Exception as exc:
-        logger.exception("PubMed search failed for query=%r", query)
-        run_ctx.log_query(
-            query=query,
-            source="pubmed",
-            status="failed",
-            records_count=0,
-        )
-        return json.dumps({
-            "source": "pubmed",
-            "query": query,
-            "total_count": 0,
-            "records": [],
-            "error": str(exc),
-        }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

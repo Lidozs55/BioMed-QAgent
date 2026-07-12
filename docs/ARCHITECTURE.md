@@ -1,389 +1,456 @@
-# BioMed-QAgent 架构设计
+# BioMed-QAgent 架构
 
-## 1. 项目定位
+> 本文描述当前批准的目标架构。详细数据契约与验收条件见
+> [Backend Data Closure Design](superpowers/specs/2026-07-12-backend-data-closure-design.md)。
 
-BioMed-QAgent 是基于 Qwen 与 OpenAI Agents SDK 的生物医学数据检索、下载、整理和呈现系统。
+## 1. 产品目标
 
-用户提供研究主题，并可限制允许检索的数据库。系统负责：
+用户输入一个研究主题，并可限制允许检索的数据库。系统自动完成：
 
-1. 检索和理解相关论文，整理可能的数据来源与检索方向；
-2. 从用户允许或默认启用的数据库中检索并下载原始数据；
-3. 解析本地文件，完成清洗、字段对齐和多来源合并；
-4. 输出结构化数据、来源清单和处理记录；
-5. 可选执行数据分析和可视化，但不生成缺少数据依据的科研或临床结论。
+1. 检索和理解相关论文；
+2. 识别数据库、accession 和补充材料线索；
+3. 下载并校验原始数据；
+4. 解析、清洗、字段对齐和整合；
+5. 输出可分析、可追溯、可复用的结构化数据包。
 
-主产物是合并后的 CSV 及其来源和处理记录，而不是自然语言研究报告。
+核心交付物是经过验证的 CSV、来源清单和处理记录，不是自然语言研究
+结论。分析和可视化是可选加分项。
 
-## 2. 已确认的架构原则
+## 2. 当前架构结论
 
-- OpenAI Agents SDK 是运行核心，继续使用 `Agent`、`Runner`、Function Tool、RunContext、Streaming、Session、Guardrail 和 HITL 等能力。
-- 默认使用一个 Main Agent，不强制拆分多 Agent，也不自研另一套 Agent Runtime。
-- 系统不是强制的“全 Skill 架构”。Skill 是按需加载的能力包，Tool 是实际执行单元。
-- 所有 Skill 存放在统一 Skill 仓库中，按类别组织，并区分内置 Skill 与后天生成的 Skill。
-- 一个网站通常对应一个或多个 Tool，而不是一个 Skill；同类网站及相近工作流可以归入同一个 Skill。
-- Skill 宜少而清晰。每个 Skill 建议暴露约 20 个以内 Tool，超过 30 个必须拆分或重新评估。
-- 下载与解析严格分离：下载 Tool 只检索、下载并记录元数据，不解析下载文件。
-- 未知网站优先调用通用浏览器自动化 Tool；成功后可以生成后天 Skill 或网站 Tool 代码并保存演化记录。
-- 用户指定数据库时不得静默访问未选择的数据库；论文调研可以提出建议，但扩大范围需要用户同意。
-
-### 2.1 OpenAI Agents SDK 能力与项目边界
-
-OpenAI Agents SDK 已经提供本项目需要的 Agent 运行骨架，因此没有必要再实现一套平行框架：
-
-- `Agent` 与 `Runner` 管理模型调用循环、Tool 调用、最大轮次和最终结果；
-- Function Tool 把 Python 函数暴露为带参数 Schema 的可调用工具；
-- `RunContextWrapper` 在 Agent、Tool 和生命周期 Hook 之间传递任务级依赖与状态；
-- `Runner.run_streamed()` 和 `stream_events()` 提供模型输出、Tool 调用和 Agent 更新事件；
-- Session 可维护多轮历史，Guardrail 可校验输入、输出或 Tool 调用；
-- HITL 可在敏感 Tool 执行前暂停，批准或拒绝后恢复运行；
-- Handoff 与 `Agent.as_tool()` 支持按需拆分专家 Agent；
-- 内置 tracing 可记录模型生成、Tool、Handoff 和 Guardrail，但使用非 OpenAI 模型时需要单独配置或关闭上传。
-
-本项目当前通过 `AsyncOpenAI(base_url=DashScope)` 和 `OpenAIChatCompletionsModel` 接入 Qwen，并关闭 OpenAI tracing。Chat Completions 兼容路径与 Responses 路径的功能并不完全相同，因此只采用当前模型链路已验证支持的 SDK 能力。
-
-SDK 不原生定义本项目所说的 Skill 仓库、数据库适配规范、任务文件目录或 Skill 自迭代流程。这些是建立在 SDK Function Tool 之上的项目层组织能力，不应扩展成另一套 Agent Runtime。
-
-官方资料：
-
-- [Agents](https://openai.github.io/openai-agents-python/agents/)
-- [Running agents](https://openai.github.io/openai-agents-python/running_agents/)
-- [Tools](https://openai.github.io/openai-agents-python/tools/)
-- [Streaming](https://openai.github.io/openai-agents-python/streaming/)
-- [Models and non-OpenAI providers](https://openai.github.io/openai-agents-python/models/)
-- [Human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
-- [Tracing](https://openai.github.io/openai-agents-python/tracing/)
-
-## 3. 当前运行架构
+保留 OpenAI Agents SDK，不自研 Agent Runtime，也不推翻统一 Skill 仓库。
+新增确定性 Pipeline，解决 Agent 可以跳步骤、遗漏来源或直接生成不可信 CSV
+的问题。
 
 ```text
-Frontend
-   │ WebSocket
-   ▼
-FastAPI
-   ▼
-Runner.run_streamed()
-   ▼
-Main Agent
-   ├── 根据主题和数据库限制制定计划
-   ├── 从 SkillRegistry 按需加载 Skill
-   ├── 调用 Skill 提供的 SDK Function Tool
-   └── 通过 RunContext 共享任务状态
-          │
-          ▼
-   任务本地工作目录
-   raw → parsed → normalized → artifacts
+React/shadcn Frontend
+        |
+        | HTTP + WebSocket events
+        v
+FastAPI Task API
+        |
+        v
+OpenAI Agents SDK Main Agent
+        |
+        | TaskSpecification
+        v
+Deterministic Pipeline Runner
+        |
+        +-- Discovery
+        +-- Acquisition
+        +-- Processing
+        +-- Artifact Builder
+        `-- Validation Gate
+                 |
+                 v
+        validated artifacts/
 ```
 
-现有 `backend/app/agent_loop/`、`backend/app/tools/`、`backend/app/skills/` 和 WebSocket 结构继续保留并渐进扩展。
+### 2.1 Agent 的职责
 
-不引入以下强制层：
+- 理解用户主题和过滤条件；
+- 生成 PubMed、GEO 等检索参数；
+- 选择已启用 Skill 和数据库；
+- 生成结构化 `TaskSpecification`；
+- 调用 Pipeline Function Tool；
+- 解释 Pipeline 返回的结构化错误或警告。
 
-- 独立 `AgentRuntime` Port；
-- 通用 `SkillExecutor`；
-- `domain/application/ports/infrastructure` 四层架构；
-- Tool 必须经过 SkillExecutor 才能调用的限制；
-- 自研持久化工作流平台。
+Agent 不直接拼装最终 CSV，也不能绕过 Validation Gate。
 
-## 4. Agent、Skill 与 Tool
+### 2.2 Pipeline 的职责
 
-### 4.1 Main Agent
+- 强制执行完整的数据阶段；
+- 校验每个阶段的输入输出契约；
+- 固化下载、解析、追溯和导出行为；
+- 为模型、网络、解析和完整任务设置独立超时；
+- 只发布通过验证的 Artifact；
+- 失败时保证终态事件，不使用 mock 伪装成功。
 
-Main Agent 负责：
+### 2.3 Skill 和 Tool 的职责
 
-- 理解用户主题和限制；
-- 判断是否先检索论文；
-- 选择需要加载的 Skill；
-- 生成查询式和执行顺序；
-- 调用 Tool 并根据结果决定下一步；
-- 在 API 失败时决定是否使用浏览器降级；
-- 检查是否已经生成要求的结构化产物；
-- 在关键歧义或高风险操作前请求用户确认。
-
-简单任务可以直接调用已加载 Skill 中的 Tool。只有在单一 Agent 的 Prompt 或 Tool 集合过大时，才考虑使用 `Agent.as_tool()` 拆出专家 Agent。
-
-### 4.2 Skill
-
-Skill 是可发现、可选择、可加载的能力包。它主要包含：
-
-- `name`：唯一名称；
-- `category`：所属类别；
-- `description`：供 Agent 判断何时使用；
-- `instructions`：加载时附加给 Agent 的说明；
-- `tools`：允许调用的 SDK Function Tool；
-- `supported_sources`：支持的数据源或网站；
-- `version`：版本；
-- `enabled`：是否可用；
-- 可选输入、输出模型和示例。
-
-Skill 的 `description` 用于运行时选择。开发历史、使用效果和修复记录不放进 description，而由后天 Skill 的演化日志保存，避免无关内容进入模型上下文。
-
-Skill 被加载后，Tool 仍由 OpenAI Agents SDK 直接执行，不经过额外执行引擎。
-
-### 4.3 Tool
-
-Tool 是 Agent 可以调用的底层或中层操作，包括但不限于：
-
-- 关键词、文本和本地文件搜索；
-- 数据库检索；
-- 原始文件下载；
-- 浏览器点击、输入、等待和下载；
-- CSV、Excel、JSON、PDF、图表等文件解析；
-- 缺失值、重复值和字段检查；
-- 字段对齐、单位转换和多表合并；
-- CSV、来源清单和可视化导出。
-
-Tool 应有明确输入输出、可独立测试，并通过 `RunContextWrapper` 访问任务工作目录和共享状态。
-
-### 4.4 网站与 Skill 的关系
-
-- 一个已适配网站至少提供网站级 Tool，例如 `search_geo`、`describe_geo_dataset`、`download_geo_dataset`。
-- 一个网站可以有多个 Tool，因为检索、查看元数据和下载是不同操作。
-- 不建议一个网站建立一个 Skill；同类网站可以共享一个 Skill。
-- 例如 `omics_data_acquisition` Skill 可以组织 GEO、GDC 和 UCSC Xena Tool，`structure_data_acquisition` Skill 可以组织 RCSB PDB Tool。
-
-## 5. Skill 仓库
+统一 Skill 仓库继续按四类组织：
 
 ```text
 backend/app/skills/
-├── registry.py
-├── builtin/
-│   ├── discovery/
-│   │   ├── literature_search/
-│   │   └── literature_understanding/
-│   ├── acquisition/
-│   │   ├── biomedical_literature/
-│   │   ├── omics_databases/
-│   │   ├── structure_databases/
-│   │   └── browser_fallback/
-│   ├── processing/
-│   │   ├── tabular_parsing/
-│   │   ├── paper_data_extraction/
-│   │   ├── data_cleaning/
-│   │   └── schema_alignment/
-│   └── analysis/
-│       ├── statistics/
-│       └── visualization/
-└── learned/
-    ├── discovery/
-    ├── acquisition/
-    ├── processing/
-    └── analysis/
+|-- builtin/
+|   |-- discovery/
+|   |-- acquisition/
+|   |-- processing/
+|   `-- analysis/
+`-- learned/
+    |-- discovery/
+    |-- acquisition/
+    |-- processing/
+    `-- analysis/
 ```
 
-目录是人工维护和代码组织方式，`category` 是运行时检索字段。二者同时保留。
+- Skill 是 instructions 与 Tool 的能力包；
+- 一个网站可以有多个 Tool，不要求一个网站一个 Skill；
+- 网站 Tool 分为 search、describe/metadata、download；
+- download 记录 `DownloadAttempt`，成功校验后才返回 `SourceAsset`；
+- processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
+- learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
-### 5.1 四类 Skill
+## 3. 核心数据契约
 
-#### Discovery
+契约使用 Pydantic v2，统一继承 `ContractModel`，显式设置
+`ConfigDict(extra="forbid", validate_default=True)`。集合使用
+`default_factory`，所有序列化对象包含 `schema_version`。对象只保存路径和轻量
+元数据，不把大型表格放入 Context。
 
-负责论文检索、论文理解、关键词扩展和数据来源方向发现。
+### 3.1 TaskRequest
 
-论文相关能力是核心能力，不是附属功能：
+用户提交的需求：
 
-- 检索 PubMed、Europe PMC 等文献源；
-- 阅读题目、摘要、数据可用性声明和方法部分；
-- 识别数据库名称、accession、补充材料和目标数据类型；
-- 总结其他论文采用的数据检索方向；
-- 为后续 acquisition 生成候选数据库、查询式和标识符。
+- `topic`：唯一必填业务字段；
+- `databases`：默认 `pubmed`、`geo`；
+- `keywords`：可选关键词；
+- `target_fields`：可选目标字段；
+- `time_range`：可选时间范围。
 
-#### Acquisition
+### 3.2 TaskSpecification
 
-负责检索数据库、获取元数据和下载原始文件。
+Agent 生成的数据需求描述，包含：
 
-第一批重点网站：
+- 原始主题；
+- `QuerySpecification` 列表，区分用户、Agent 和 Pipeline 查询；
+- 候选或固定数据集 accession；
+- 请求的输出类型。
 
-- GEO；
-- GDC；
-- UCSC Xena；
-- RCSB PDB；
-- PubMed / Europe PMC 论文全文和补充材料；
-- 通用浏览器自动化降级。
+它不是任意代码或自由执行步骤。
 
-Acquisition 只产生原始文件和下载记录，不产生解析后的 DataRecord。
+`DatasetSelection` 明确定义 `dataset_id`、database、accession、source_id 和选择
+理由。
 
-#### Processing
+### 3.3 SourceRecord 与 SourceRelation
 
-负责本地原始文件处理，包括：
+描述论文、数据库记录或下载页面：
 
-- 文件类型识别；
-- CSV、TSV、Excel、JSON、HTML 表格解析；
-- PDF 正文、表格、图像、图表和补充材料解析；
-- GEO Series Matrix、SOFT、表达矩阵、PDB/mmCIF 等专业格式解析；
-- 缺失、重复和异常格式检查；
-- 字段对齐、单位转换、实体规范化和多来源合并；
-- 生成结构化 CSV、字段说明和处理记录。
+- `source_id`
+- `database`
+- `accession`
+- `url`
+- `title`
+- `retrieved_at`
 
-#### Analysis
+`SourceRelation` 使用证据字段表示论文到数据集、数据集到 BioProject/SRA 等关系，
+不依赖 CSV 内不可验证的 ID 数组。
 
-分析属于加分项，后于数据闭环实现，包括：
+### 3.4 DownloadAttempt、FileAsset 与 SourceAsset
 
-- 描述性统计；
-- 差异分析；
-- 富集、网络等生物信息分析；
-- 表格预览和可视化。
+`DownloadAttempt` 记录每次成功、部分成功或失败下载：
 
-分析 Skill 只能消费已经解析和清洗的数据，不直接下载或修改原始文件。
+- `attempt_id`
+- `source_id`
+- `url`
+- `status`
+- `bytes_received`
+- `error_code` / `error_message`
+- `started_at` / `finished_at`
 
-## 6. 端到端数据流
+只有完整下载并校验成功后才创建不可变 `SourceAsset`：
+
+- `asset_id`
+- `source_id`
+- `successful_attempt_id`
+- `relative_path`
+- `sha256`
+- `media_type`
+- `size_bytes`
+- `data_level`
+
+`data_level` 区分 `raw_sequence`、`submitter_processed`、
+`repository_processed` 和 `metadata`。GSE178352 tximport counts 属于 repository
+processed，不称作原始测序数据。路径必须解析在任务 `source_assets/` 内。
+
+所有阶段文件统一使用 `FileAsset`，记录 kind、路径、SHA-256、大小、media type、
+schema version 和生成步骤。
+
+### 3.5 ParsedDataset 与 SourceLocator
+
+描述解析后的本地表格：
+
+- `dataset_id`
+- `source_id`
+- `asset_id`
+- `relative_path`
+- `columns`
+- `row_count`
+- `parser_name`
+- `parser_version`
+
+`SourceLocator` 精确定义：
+
+- 解压后的 logical file；
+- 以 1 为基准、包含表头/注释/空行的物理文本行号；
+- 以 0 为基准的列索引；
+- 原始列名与原始 token。
+
+固定案例对全部 source-derived expression value 执行回溯；一般任务验证全部结构
+外键，并按配置抽样数值。
+
+### 3.6 StageAttempt、Artifact 与 RunManifest
+
+每次阶段执行创建独立 `StageAttempt`，包含输入摘要、参数摘要、输出摘要、attempt
+序号和状态。阶段操作幂等；恢复时只复用摘要一致的成功输出。
+
+描述通过验证的最终文件：
+
+- `artifact_id`
+- `name`
+- `relative_path`
+- `media_type`
+- `size_bytes`
+- `sha256`
+- `generated_by`
+
+`RunManifest`、Warning、Error 和事件 payload 都有正式 Pydantic schema。ID 生成、
+枚举、外键和 schema version 在设计规格中固定。
+
+## 4. Pipeline
+
+### 4.1 Discovery
+
+负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
+候选、实际查询式、结果顺序和来源 URL。
+
+Discovery 不生成最终科研数据行。
+
+PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
+请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
+
+### 4.2 Acquisition
+
+负责下载和校验：
+
+- 流式下载；
+- 协议、大小和超时限制；
+- 未完成字节写入 `download_tmp/`；
+- 每次尝试记录 DownloadAttempt；
+- 保留下载到的官方压缩文件；
+- 计算 SHA-256 和字节数；
+- 完整成功后创建 SourceAsset；
+- 部分或失败文件永不交给 Parser。
+
+成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
+参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
+
+### 4.3 Processing
+
+只读取成功的 `SourceAsset`：
 
 ```text
-用户主题 + 允许数据库列表
-        ↓
-Main Agent
-        ↓
-Discovery Skill：论文检索与理解
-        ↓
-数据库、查询式、accession、补充材料候选
-        ↓
-Acquisition Skill：API/脚本检索与下载
-        ↓ 失败或未知网站
-Browser Fallback Tool
-        ↓
-task/raw/ 原始文件 + 下载记录
-        ↓
-Processing Skill：解析 → 清洗 → 对齐 → 合并
-        ↓
-task/artifacts/ CSV + 来源 + 字段说明 + 处理记录
-        ↓
-Analysis Skill（可选）
+decompress
+    -> parse
+    -> validate schema
+    -> clean
+    -> field mapping
+    -> normalize
+    -> write ParsedDataset
 ```
 
-### 6.1 下载输出约定
+每一步记录输入、输出、工具版本、参数摘要、处理前后行数、警告和时间。样本和
+gene ID 规范化同时保留 raw value、canonical value 与规则。
 
-下载 Tool 统一返回类似信息：
+### 4.4 Artifact Builder
+
+Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数据和最终科研
+数据必须分表保存。
+
+### 4.5 Validation Gate
+
+以下条件全部满足后才把 staging 原子提升为 `artifacts/`：
+
+- `main_data.csv` 每个 `source_id` 都存在；
+- `dataset_id` 和 `sample_id` 外键完整；
+- 每个 `asset_id` 都存在于 source asset 记录，并关联成功 DownloadAttempt；
+- source asset 存在且 SHA-256 一致；
+- 主数据所有字段都有字段说明；
+- 每个源数据派生测量有精确 SourceLocator；
+- 固定案例全量回溯表达值；一般任务全量检查结构并默认抽样 100 个值；
+- processing log 含完整输入输出和行数；
+- CSV 编码和列数稳定；
+- warnings 与 metrics 计数一致；
+- 所有必需 Artifact 存在且非空。
+
+失败报告写入 `logs/validation_report.json`，无效文件不得出现在 Artifact API。
+发布使用任务锁、独立 staging、文件 flush、manifest 验证和同文件系统原子 rename；
+发布成功后才产生 artifact 和 completed 事件。
+
+## 5. 任务目录
 
 ```text
-source
-accession
-source_url
-local_files
-checksum
-mime_type
-format_hint
-retrieved_at
-warnings
+data/output/tasks/<task_id>/
+|-- source_assets/# 不可变来源文件
+|-- download_tmp/ # 不完整下载
+|-- parsed/       # 解析结果
+|-- normalized/   # 清洗和字段对齐结果
+|-- staging/      # 按 run_id 隔离的候选产物
+|-- artifacts/    # 已通过验证的交付物
+|-- state/        # 任务锁和恢复状态
+`-- logs/         # stage attempts、事件、验证和诊断记录
 ```
 
-`format_hint` 只用于帮助 Agent 选择解析 Skill，不代表文件已解析。
+API 只公开 `artifacts/`。
 
-### 6.2 任务工作目录
+## 6. 标准产物包
 
 ```text
-data/tasks/<task_id>/
-├── raw/          # 不修改的下载文件
-├── parsed/       # 解析结果
-├── normalized/   # 清洗、对齐后的数据
-├── artifacts/    # CSV、来源清单、说明和可视化
-└── logs/         # Tool 调用、下载和 Skill 演化记录
+artifacts/
+|-- run_manifest.json
+|-- main_data.csv
+|-- literature.csv
+|-- dataset_catalog.csv
+|-- sample_metadata.csv
+|-- field_descriptions.csv
+|-- field_mapping.csv
+|-- source_list.csv
+|-- source_relations.csv
+|-- source_assets.csv
+|-- download_log.csv
+|-- processing_log.csv
+|-- quality_report.csv
+`-- warnings.csv
 ```
 
-## 7. 后天 Skill 与自迭代
+### 6.1 main_data.csv
 
-### 7.1 触发条件
-
-当出现以下情况时可以启动自迭代：
-
-- 已知数据库 API 或预置 Tool 失效；
-- 用户允许访问的数据库尚未适配；
-- 页面必须通过浏览器交互才能检索或下载；
-- Agent 使用浏览器成功完成了可重复的数据获取流程。
-
-### 7.2 最小流程
+只能包含一种行粒度。GSE178352 案例中一行表示一个基因在一个样本中的表达
+测量：
 
 ```text
-调用 browser_fallback
-        ↓
-完成页面检索与文件下载
-        ↓
-根据成功轨迹生成网站 Tool 或后天 Skill 代码
-        ↓
-保存到 skills/learned/<category>/<name>/
-        ↓
-写入 description 和 EVOLUTION.md
-        ↓
-至少执行一次相同目标的重放验证
-        ↓
-人工启用或保持 disabled
+record_id,dataset_id,source_id,asset_id,gene_id_raw,gene_id,
+gene_id_namespace,gene_id_version,sample_id,measurement_type,
+value_semantics,value_scale,is_normalized,is_integer_expected,
+expression_value,expression_unit,source_logical_file,source_line_number,
+source_column_index,source_column_name,source_raw_value
 ```
 
-不引入 SiteRecipe 格式，也不要求复杂的自动晋升平台。
+论文元数据进入 `literature.csv`，数据集元数据进入 `dataset_catalog.csv`。
 
-### 7.3 内置与后天 Skill
+### 6.2 追溯文件
 
-- `builtin/`：团队手工维护、默认可信、随源码发布；
-- `learned/`：Agent 在运行中生成或更新，必须保留来源和效果记录；
-- 后天 Skill 默认不覆盖同名内置 Skill；
-- 后天 Skill 可以被禁用、修改或删除；
-- 对代码类后天 Skill，至少需要语法检查、一次重放验证和人工启用。
+- `source_list.csv`：来源与 accession；
+- `source_relations.csv`：来源间关系和证据；
+- `source_assets.csv`：成功资产、data level、checksum 和成功 attempt；
+- `download_log.csv`：每次下载尝试、字节数、状态和错误；
+- `field_mapping.csv`：原字段到标准字段的映射；
+- `processing_log.csv`：所有处理步骤；
+- `quality_report.csv`：验证规则及通过/失败数；
+- `run_manifest.json`：输入、计划、版本、时间和 Artifact 列表。
 
-### 7.4 EVOLUTION.md
+CSV 中的结构化单元格使用有效 JSON，不使用 Python 字典字符串。
 
-Skill 的 description 足以支持运行时选择，但不足以说明自动生成代码的来源和效果。每个后天 Skill 使用一个简短 `EVOLUTION.md`，记录：
+## 7. 固定真实验收案例
 
-- 生成或修改时间；
-- 目标网站和任务目标；
-- 触发生成的 task/run；
-- 生成或修改原因；
-- 浏览器成功步骤摘要；
-- 实际下载的文件类型和数量；
-- 验证方法与结果；
-- 后续使用次数、成功/失败情况；
-- 人工修改说明和已知限制。
+Phase 1 固定案例：
 
-该日志默认不加载进 Agent 上下文，只用于维护、复盘和评估。
+- Topic：`breast cancer gene expression under Hsp70 inhibition`
+- PubMed：PMID `34180400`
+- GEO：`GSE178352`
+- 样本数：12
+- 处理后计数文件：`GSE178352_tximportCounts.txt.gz`
+- GEO：`https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352`
 
-## 8. 用户数据库限制
+默认测试使用记录来源与裁剪范围的真实 fixture；标记为 `live` 的集成测试下载
+完整官方文件并验证 checksum、样本标识和解析兼容性。
 
-- 用户可以显式选择允许检索的数据库；
-- 未选择时使用默认数据库集合；
-- SkillRegistry 根据用户选择过滤 acquisition Tool；
-- Discovery 可以建议新数据库，但不能直接绕过选择；
-- 如果建议的数据源不在允许列表中，Main Agent 请求用户确认后再加载对应 Skill；
-- 前端应展示默认启用、用户启用和 Agent 建议三种状态。
+Mock Demo 仅作为开发烟雾测试，不能满足正式验收，也不能在真实流程失败后自动
+转为成功。
 
-## 9. 输出与来源追踪
+## 8. API 与事件
 
-MVP 至少输出：
+FastAPI 提供：
 
-- 主数据 CSV；
-- 字段说明；
-- 来源清单；
-- 下载记录；
-- 数据处理记录；
-- 异常和警告；
-- 可选分析和可视化产物。
+- `POST /api/v1/tasks`
+- `GET /api/v1/tasks/{task_id}`
+- `GET /api/v1/tasks/{task_id}/artifacts`
+- `GET /api/v1/tasks/{task_id}/artifacts/{artifact_id}`
 
-每个最终记录至少关联原始数据源和本地 raw 文件。论文中提取的数据还应尽量记录 DOI/PMID、页码、表格、图像或补充材料位置。
+确定性 Pipeline 已将事件按统一 envelope 写入 `logs/events.jsonl`：
 
-## 10. 错误处理与安全
+```json
+{
+  "schema_version": "1.0",
+  "event_id": "event-...",
+  "type": "stage_started",
+  "task_id": "task-...",
+  "stage_attempt_id": "stage-attempt-...",
+  "sequence": 1,
+  "timestamp": "2026-07-12T00:00:00Z",
+  "payload": {}
+}
+```
 
-- API 或脚本失败后才能选择浏览器降级，并保留失败原因；
-- 浏览器 Tool 不绕过登录、付费、验证码或网站明确的访问控制；
-- 文件 Tool 只能访问当前任务目录；
-- 下载必须限制协议、文件大小和超时；
-- Tool 错误作为结构化结果返回 Agent，由 Agent 决定重试、降级或停止；
-- 后天代码不得读取密钥、任意执行系统命令或访问任务目录之外的文件。
+当前 fixture Pipeline 保证 sequence 在单任务内严格递增，各 payload 使用判别联合
+Pydantic schema。将相同 envelope 推送到 WebSocket、按 sequence 续读、任务取消与
+进程恢复仍是后续工作；现有 Agent WebSocket 暂时保留旧流式事件，不能宣称已完成
+上述能力。
 
-## 11. 测试策略
+## 9. 前端目标架构
 
-- Tool 单元测试：使用固定响应和本地样本，不依赖模型；
-- 数据库集成测试：分别覆盖检索、元数据和下载，不混入解析；
-- Processing 测试：使用已保存的 raw fixture；
-- Skill 测试：检查按类别和数据源发现、按需加载及 Tool 数量；
-- Agent 测试：检查选择正确 Skill、遵守数据库限制和生成要求产物；
-- 自迭代测试：检查后天 Skill 保存位置、EVOLUTION.md、语法和重放结果；
-- 前端测试：检查数据库选择、运行轨迹和 Artifact 下载。
+前端在后端契约稳定后重写为任务工作台，而不是聊天窗口加日志：
 
-## 12. 非目标
+```text
+任务创建
+    -> 计划确认
+    -> 阶段 Timeline
+    -> 结果 Tabs
+         |-- 主数据
+         |-- 文献与数据集
+         |-- 来源与下载
+         |-- 处理记录
+         `-- 警告与质量
+```
 
-MVP 不实现：
+使用 shadcn 的 Form、Card、Tabs、Table、Badge、Progress、Dialog、Sheet 和
+Toast。全局只保留一个任务/Event client，避免连接与发送属于不同实例。
 
-- 强制全 Skill 执行链；
-- 通用 SkillExecutor；
-- 一个网站一个 Skill；
+## 10. 开发阶段
+
+### Phase 1：后端真实闭环
+
+PubMed + GEO、数据契约、固定真实案例、Pipeline、Artifact Builder、Validation
+Gate、离线和 live 测试。
+
+### Phase 2：Agent 与 API
+
+结构化 TaskSpecification、Pipeline Function Tool、任务 API、统一事件、超时和
+取消。
+
+### Phase 3：shadcn 前端重写
+
+任务创建、计划确认、执行状态、结果表格和 Artifact 下载。
+
+### Phase 4：扩展能力
+
+先增加 PDF/补充材料，再按同一契约接入 GDC、PDB、Xena。任何来源只有在
+search、metadata、download 的 live 测试通过后才能标记为支持。
+
+## 11. 非目标
+
+- 替换 OpenAI Agents SDK；
+- 通用 Workflow Engine；
 - SiteRecipe DSL；
-- 后天 Skill 无验证自动启用；
-- 强制多 Agent 或 Handoff；
-- 自研 Agent Runtime；
-- 复杂向量缓存和知识库；
-- 科研影响力分析或自动生成科研结论。
+- Agent 或 learned Skill 绕过 Validation Gate；
+- 将 mock 产物当作正式案例；
+- 自动生成缺乏数据依据的科研或临床结论；
+- 后端事件和 Artifact 契约稳定前重写前端。
+
+## 12. 当前实现证据（2026-07-12）
+
+- 默认离线后端测试：`228 passed, 1 deselected`；默认不访问网络。
+- live 验收：PMID 34180400、GSE178352 元数据和官方
+  `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
+  `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
+- fixture 闭环：48 条 gene + sample 记录（4 genes × 12 samples），全部通过精确
+  SourceLocator 回溯，生成 14 个正式文件。
+- API：显式 `mode=fixture` 创建任务，任务状态和 Artifact 均使用类型化契约，下载
+  只接受 manifest 注册的 `artifact_id`。
+- Agent：OpenAI Agents SDK 保留为 Runtime，正式产物通过单一
+  `run_research_pipeline` Function Tool 进入确定性 Pipeline。
+- 前端：保留用户提交的 shadcn 工作台，引入确定性 fixture 入口和 Artifact 下载；
+  Vitest、TypeScript、ESLint、production build 与真实浏览器主流程已通过。
+
+未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是任务锁、取消、
+恢复、统一 WebSocket envelope、第二个真实案例和 GDC/PDB/Xena live 验收。

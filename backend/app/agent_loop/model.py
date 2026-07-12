@@ -1,34 +1,67 @@
-"""模型适配 — DashScope (Qwen) 通过 OpenAI 兼容接口接入 openai-agents-python。
+"""Lazy DashScope model adapter for the OpenAI Agents SDK."""
 
-DashScope 提供 OpenAI 兼容的 Chat Completions 端点，因此使用
-OpenAIChatCompletionsModel + AsyncOpenAI 客户端，无需第三方适配器。
-"""
 from __future__ import annotations
 
-from openai import AsyncOpenAI
+from typing import Any
+
 from agents import OpenAIChatCompletionsModel, set_tracing_disabled
+from agents.models.interface import Model
+from openai import AsyncOpenAI
 
 from app.config import settings
 
 
-def _build_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
+class ModelConfigurationError(RuntimeError):
+    """Stable execution-boundary error for missing model configuration."""
+
+    code = "configuration_error"
+
+
+def require_model_credentials() -> None:
+    """Validate credentials only when execution is about to call the model."""
+
+    if not settings.dashscope_api_key:
+        raise ModelConfigurationError(
+            "DASHSCOPE_API_KEY is required to run the model"
+        )
+
+
+def _build_delegate() -> OpenAIChatCompletionsModel:
+    require_model_credentials()
+    client = AsyncOpenAI(
         api_key=settings.dashscope_api_key,
         base_url=settings.dashscope_base_url,
     )
-
-
-def get_model() -> OpenAIChatCompletionsModel:
-    """构造 DashScope 兼容的 Model 实例。
-
-    关闭内置 tracing（需 OpenAI 平台 key），后续可接入自定义 tracing processor。
-    """
-    if not settings.dashscope_api_key:
-        # 允许无 key 启动（便于前端骨架联调），实际 Agent 运行时会报错
-        pass
-    set_tracing_disabled(True)
-    client = _build_client()
     return OpenAIChatCompletionsModel(
         model=settings.model_name,
         openai_client=client,
     )
+
+
+class LazyDashScopeModel(Model):
+    """Agents SDK model that creates its HTTP client on first model call."""
+
+    def __init__(self) -> None:
+        self._delegate: OpenAIChatCompletionsModel | None = None
+
+    def _get_delegate(self) -> OpenAIChatCompletionsModel:
+        if self._delegate is None:
+            self._delegate = _build_delegate()
+        return self._delegate
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._get_delegate().get_response(*args, **kwargs)
+
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:
+        return self._get_delegate().stream_response(*args, **kwargs)
+
+    async def close(self) -> None:
+        if self._delegate is not None:
+            await self._delegate.close()
+
+
+def get_model() -> LazyDashScopeModel:
+    """Return a model adapter without constructing a credentialed client."""
+
+    set_tracing_disabled(True)
+    return LazyDashScopeModel()

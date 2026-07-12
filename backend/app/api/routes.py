@@ -6,15 +6,28 @@ Endpoints:
     GET /api/v1/tasks/{task_id}/artifacts → list artifact files
     GET /api/v1/tasks/{task_id}/artifacts/{filename:path} → download artifact
 """
+
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import re
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from app.config import settings
-from app.skills.registry import skill_registry
+from app.domain.contracts import (
+    ContractModel,
+    Database,
+    RunManifest,
+    generate_prefixed_uuid,
+)
+from app.pipeline.pinned_case import run_pinned_fixture
+from app.skills.registry import SkillCategory, skill_registry
 
 router = APIRouter(prefix="/api/v1")
 
@@ -40,9 +53,37 @@ def _display_name(skill_name: str) -> str:
     return _SKILL_DISPLAY_NAMES.get(skill_name, skill_name.replace("_", " ").title())
 
 
+def _load_database_skills() -> None:
+    """Register the stable user-selectable database integrations."""
+    import app.skills.builtin.acquisition.gdc  # noqa: F401
+    import app.skills.builtin.acquisition.geo  # noqa: F401
+    import app.skills.builtin.acquisition.pdb  # noqa: F401
+    import app.skills.builtin.acquisition.xena  # noqa: F401
+    import app.skills.builtin.discovery.pubmed  # noqa: F401
+
+
 def _tasks_base() -> Path:
     """Return the base directory for task data."""
     return Path(settings.output_dir) / "tasks"
+
+
+class CreateTaskRequest(ContractModel):
+    topic: str = Field(min_length=1)
+    databases: list[Database]
+    mode: Literal["fixture"] = "fixture"
+
+    @field_validator("topic", mode="before")
+    @classmethod
+    def strip_topic(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_fixture_sources(self) -> "CreateTaskRequest":
+        if set(self.databases) != {Database.PUBMED, Database.GEO}:
+            raise ValueError("fixture mode supports exactly pubmed and geo")
+        if len(self.databases) != 2:
+            raise ValueError("fixture databases must not contain duplicates")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -53,15 +94,25 @@ def _tasks_base() -> Path:
 @router.get("/databases")
 async def get_databases() -> dict:
     """List all available databases derived from enabled skills."""
-    skills = skill_registry.list_enabled()
+    _load_database_skills()
+    skills = [
+        skill
+        for skill in skill_registry.list_enabled()
+        if skill.supported_sources
+        and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
+        and skill.name != "browser_fallback"
+        and skill.name in {"pubmed", "geo"}
+    ]
     databases = []
     for skill in skills:
-        databases.append({
-            "id": skill.name,
-            "name": _display_name(skill.name),
-            "category": skill.category.value,
-            "description": skill.description,
-        })
+        databases.append(
+            {
+                "id": skill.name,
+                "name": _display_name(skill.name),
+                "category": skill.category.value,
+                "description": skill.description,
+            }
+        )
     return {"databases": databases}
 
 
@@ -80,19 +131,45 @@ def _task_status(task_dir: Path) -> str:
     return "running"
 
 
+@router.post("/tasks", status_code=201)
+async def create_task(request: CreateTaskRequest) -> dict:
+    """Run the approved deterministic fixture pipeline as an explicit mode."""
+
+    task_id = generate_prefixed_uuid("task")
+    fixture_dir = (
+        Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
+    )
+    manifest = await asyncio.to_thread(
+        run_pinned_fixture,
+        task_id=task_id,
+        base_dir=_tasks_base(),
+        fixture_dir=fixture_dir,
+        topic=request.topic,
+    )
+    return {"task_id": task_id, "status": manifest.task_state.value}
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str) -> dict:
-    """Return task status and directory paths."""
-    task_dir = _tasks_base() / task_id
-    status = _task_status(task_dir)
-
-    directories: dict[str, str] = {}
-    for sub in ("raw", "parsed", "normalized", "artifacts", "logs"):
-        sub_path = task_dir / sub
-        if sub_path.exists():
-            directories[sub] = str(sub_path)
-
-    return {"task_id": task_id, "status": status, "directories": directories}
+    """Return typed state derived from the persisted valid manifest."""
+    loaded = _load_validated_manifest(task_id)
+    if loaded is None:
+        task_dir = _tasks_base() / task_id
+        return {
+            "task_id": task_id,
+            "status": _task_status(task_dir),
+            "current_stage": None,
+            "validation_status": None,
+            "artifact_count": 0,
+        }
+    manifest, _ = loaded
+    return {
+        "task_id": task_id,
+        "status": manifest.task_state.value,
+        "current_stage": "validation",
+        "validation_status": manifest.validation.status,
+        "artifact_count": len(manifest.artifacts) + 1,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -102,36 +179,107 @@ async def get_task(task_id: str) -> dict:
 
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str) -> dict:
-    """List all artifact files in a task's artifacts directory."""
-    artifacts_dir = _tasks_base() / task_id / "artifacts"
-    if not artifacts_dir.exists():
+    """List only files registered by a valid completed run manifest."""
+    loaded = _load_validated_manifest(task_id)
+    if loaded is None:
         return {"artifacts": []}
-
-    artifacts = []
-    for file_path in sorted(artifacts_dir.rglob("*")):
-        if file_path.is_file():
-            rel_path = file_path.relative_to(artifacts_dir)
-            artifacts.append({
-                "name": file_path.name,
-                "size": file_path.stat().st_size,
-                "path": str(rel_path).replace("\\", "/"),
-            })
+    manifest, artifacts_dir = loaded
+    manifest_path = artifacts_dir / "run_manifest.json"
+    artifacts = [
+        {
+            "artifact_id": "run_manifest",
+            "name": "run_manifest.json",
+            "size": manifest_path.stat().st_size,
+            "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "media_type": "application/json",
+        }
+    ]
+    for entry in manifest.artifacts:
+        file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
+        if (
+            file_path.stat().st_size != entry.size_bytes
+            or _file_sha256(file_path) != entry.sha256
+        ):
+            raise HTTPException(
+                status_code=409, detail="Artifact integrity check failed"
+            )
+        artifacts.append(
+            {
+                "artifact_id": entry.artifact_id,
+                "name": entry.name,
+                "size": entry.size_bytes,
+                "sha256": entry.sha256,
+                "media_type": entry.media_type,
+            }
+        )
     return {"artifacts": artifacts}
 
 
-@router.get("/tasks/{task_id}/artifacts/{filename:path}")
-async def get_artifact_file(task_id: str, filename: str):
-    """Stream an artifact file as a download response."""
-    artifacts_dir = (_tasks_base() / task_id / "artifacts").resolve()
-    file_path = (artifacts_dir / filename).resolve()
+@router.get("/tasks/{task_id}/artifacts/{artifact_id}")
+async def get_artifact_file(task_id: str, artifact_id: str):
+    """Resolve an artifact ID through the valid manifest and stream it."""
+    loaded = _load_validated_manifest(task_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    manifest, artifacts_dir = loaded
+    if artifact_id == "run_manifest":
+        file_path = artifacts_dir / "run_manifest.json"
+        media_type = "application/json"
+    else:
+        entry = next(
+            (item for item in manifest.artifacts if item.artifact_id == artifact_id),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
+        if (
+            file_path.stat().st_size != entry.size_bytes
+            or _file_sha256(file_path) != entry.sha256
+        ):
+            raise HTTPException(
+                status_code=409, detail="Artifact integrity check failed"
+            )
+        media_type = entry.media_type
+    return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)
 
-    # Security: prevent directory traversal
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _verified_artifact_path(artifacts_dir: Path, relative_path: str) -> Path:
+    prefix = "artifacts/"
+    if not relative_path.startswith(prefix):
+        raise HTTPException(status_code=409, detail="Invalid artifact manifest path")
+    file_path = (artifacts_dir / relative_path[len(prefix) :]).resolve()
     try:
-        file_path.relative_to(artifacts_dir)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied")
+        file_path.relative_to(artifacts_dir.resolve())
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409, detail="Invalid artifact manifest path"
+        ) from error
+    if not file_path.is_file():
+        raise HTTPException(status_code=409, detail="Registered artifact is missing")
+    return file_path
 
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(str(file_path), filename=file_path.name)
+def _load_validated_manifest(task_id: str) -> tuple[RunManifest, Path] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    artifacts_dir = (_tasks_base() / task_id / "artifacts").resolve()
+    manifest_path = artifacts_dir / "run_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = RunManifest.model_validate_json(manifest_path.read_text("utf-8"))
+    except (OSError, ValidationError, ValueError) as error:
+        raise HTTPException(
+            status_code=409, detail="Artifact manifest is invalid"
+        ) from error
+    if (
+        manifest.validation.status != "valid"
+        or manifest.task_state.value != "completed"
+    ):
+        raise HTTPException(status_code=409, detail="Artifacts are not validated")
+    return manifest, artifacts_dir

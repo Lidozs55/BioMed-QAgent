@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 /** WS 事件类型 */
 export interface WSEvent {
   type:
+    | "task_started"
     | "text"
     | "tool_call"
     | "tool_output"
@@ -23,6 +24,8 @@ export interface WSEvent {
   category?: string;
   path?: string;
   size?: number;
+  task_id?: string;
+  artifact_id?: string;
 }
 
 /** 工具调用轨迹项 */
@@ -50,7 +53,7 @@ export interface Session {
   messageCount: number;
   messages: ChatMessage[];
   traces: TraceItem[];
-  artifacts: { name: string; path: string; size: number }[];
+  artifacts: { artifactId: string; name: string; size: number }[];
   pipelineStage: PipelineStage;
 }
 
@@ -73,7 +76,7 @@ interface AgentState {
   /** New state fields */
   databases: { id: string; name: string; category: string; description: string }[];
   selectedDatabases: string[];
-  artifacts: { name: string; path: string; size: number }[];
+  artifacts: { artifactId: string; name: string; size: number }[];
   taskId: string | null;
 
   /** Session sidebar */
@@ -94,7 +97,8 @@ interface AgentState {
   /** New actions */
   setDatabases: (dbs: { id: string; name: string; category: string; description: string }[]) => void;
   setSelectedDatabases: (ids: string[]) => void;
-  addArtifact: (name: string, path: string, size: number) => void;
+  addArtifact: (artifactId: string, name: string, size: number) => void;
+  setArtifacts: (artifacts: { artifactId: string; name: string; size: number }[]) => void;
   setTaskId: (id: string) => void;
 
   /** Session actions */
@@ -111,6 +115,19 @@ interface AgentState {
 
 let idCounter = 0;
 const nextId = () => `id-${++idCounter}`;
+
+export function migratePersistedAgentState(persistedState: unknown) {
+  const state = (persistedState ?? {}) as { sessions?: Session[] };
+  return {
+    ...state,
+    sessions: (state.sessions ?? []).map((session) => ({
+      ...session,
+      artifacts: (session.artifacts ?? []).filter(
+        (artifact) => typeof artifact.artifactId === "string",
+      ),
+    })),
+  };
+}
 
 export const useAgentStore = create<AgentState>()(
   persist(
@@ -179,10 +196,13 @@ export const useAgentStore = create<AgentState>()(
 
       setDatabases: (dbs) => set({ databases: dbs }),
       setSelectedDatabases: (ids) => set({ selectedDatabases: ids }),
-      addArtifact: (name, path, size) =>
+      addArtifact: (artifactId, name, size) =>
         set((s) => ({
-          artifacts: [...s.artifacts, { name, path, size }],
+          artifacts: s.artifacts.some((item) => item.artifactId === artifactId)
+            ? s.artifacts
+            : [...s.artifacts, { artifactId, name, size }],
         })),
+      setArtifacts: (artifacts) => set({ artifacts }),
       setTaskId: (id) => set({ taskId: id }),
 
       /** Save current state into sessions array */
@@ -217,9 +237,12 @@ export const useAgentStore = create<AgentState>()(
           if (existingIdx >= 0) {
             const updated = [...s.sessions];
             updated[existingIdx] = session;
-            return { sessions: updated };
+            return { sessions: updated, currentSessionId: state.taskId };
           }
-          return { sessions: [...s.sessions, session] };
+          return {
+            sessions: [...s.sessions, session],
+            currentSessionId: state.taskId,
+          };
         });
       },
 
@@ -281,6 +304,8 @@ export const useAgentStore = create<AgentState>()(
     }),
     {
       name: "biomed-sessions",
+      version: 1,
+      migrate: migratePersistedAgentState,
       partialize: (state) => ({ sessions: state.sessions }),
     }
   )

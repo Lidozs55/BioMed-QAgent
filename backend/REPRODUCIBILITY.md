@@ -38,7 +38,8 @@ cd backend
 cp .env.example .env  # if .env.example exists; otherwise create manually
 ```
 
-Required environment variables:
+Agent 对话模式需要以下变量；离线 fixture Pipeline、默认测试和浏览器验收不需要
+模型 Key：
 
 | Variable | Value | Where to obtain |
 |---|---|---|
@@ -59,7 +60,7 @@ Required environment variables:
 ```bash
 cd backend
 uv sync                           # install Python dependencies
-uv run uvicorn app.server:app --reload
+uv run uvicorn app.main:app --reload
 # → API docs at http://127.0.0.1:8000/docs
 ```
 
@@ -73,33 +74,41 @@ pnpm dev                          # → dev server at http://localhost:5173
 
 ---
 
-## 4. Demo Pipeline
+## 4. Validated Fixture Pipeline
 
-Run the end-to-end demo (no real API keys needed — uses mock data as
-fallback):
+Start the backend, then create the approved deterministic task explicitly:
 
 ```bash
-cd backend
-uv run python scripts/demo_workflow.py
+curl -X POST http://127.0.0.1:8000/api/v1/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"breast cancer gene expression","databases":["pubmed","geo"],"mode":"fixture"}'
 ```
 
-Output is written to `data/demo_output/` and includes:
+The response contains `task_id`. Output is written to
+`data/output/tasks/<task_id>/artifacts/` and includes:
 
 | File | Description |
 |---|---|
 | `main_data.csv` | Merged and cleaned data records |
-| `source_list.csv` | Provenance manifest (source, accession, URL, local files) |
+| `literature.csv` | PubMed literature metadata |
+| `dataset_catalog.csv` | GEO dataset metadata |
+| `sample_metadata.csv` | Twelve GSM samples and normalized labels |
+| `source_list.csv` | Source provenance manifest |
+| `source_assets.csv` | Immutable source asset and checksum |
 | `field_descriptions.csv` | Column names, types, descriptions, units |
+| `field_mapping.csv` | Source-to-canonical field mapping |
+| `source_relations.csv` | PMID-to-GSE evidence relation |
+| `download_log.csv` | Acquisition attempt and byte count |
 | `processing_log.csv` | Step-by-step processing history |
 | `warnings.csv` | Issues encountered during the pipeline |
-| `metrics.json` | Per-stage metrics (time, downloads, rows, warnings) |
+| `quality_report.csv` | Validation checks and failure counts |
+| `run_manifest.json` | Typed task, validation and Artifact manifest |
 
 ---
 
 ## 5. Expected Output
 
-When running the full pipeline for a topic like *"breast cancer gene
-expression"*, the system should:
+For the approved fixture, the system:
 
 1. **Search PubMed** — find relevant papers with titles, abstracts,
    authors, DOIs, and PMIDs.
@@ -109,18 +118,30 @@ expression"*, the system should:
    supplementary data.
 4. **Parse and clean** — extract structured tables, normalize field
    names, and align data types.
-5. **Export CSV outputs** — produce the five CSVs listed above in the
+5. **Export validated outputs** — produce the structured files listed above in the
    `artifacts/` directory.
 
-Example output summary printed by the demo:
+Expected validated summary:
 
 ```
-Sources found:     2  (pubmed, geo)
-Files downloaded:  2
-Rows processed:    84
-Warnings:          1
-Errors:            0
+Sources:           2  (PubMed, GEO)
+Datasets:          1  (GSE178352)
+Samples:           12
+Rows:              48 (4 genes x 12 samples)
+Artifacts:         14
+Validation:        valid
+Lineage failures:  0
 ```
+
+Run verification from `backend/`:
+
+```bash
+uv run pytest -q
+RUN_NCBI_LIVE=1 uv run pytest -m live tests/live/test_gse178352_live.py -q
+```
+
+On PowerShell, set the live flag with
+`$env:RUN_NCBI_LIVE='1'` before the second command.
 
 ---
 
@@ -128,19 +149,19 @@ Errors:            0
 
 ### API Rate Limits
 
-- **NCBI Entrez**: Maximum 3 requests/second without an API key.
-  Set `NCBI_EMAIL` in `.env` to increase to 10/sec. Use
-  `time.sleep(0.34)` between calls as a safe default.
+- **NCBI Entrez**: Maximum 3 requests/second without an API key and 10/second
+  with `NCBI_API_KEY`. The client enforces this limit globally and retries
+  bounded 429/5xx responses.
 - **NCBI Entrez** also enforces a daily limit (typically ~3000
   requests). The pipeline respects `max_results` to control volume.
 
 ### Large GEO Datasets
 
 - GEO series matrix files for large studies (100+ samples) can be
-  50–500 MB. The download step uses a `max_size_mb` guard (default
-  50 MB). Increase if needed.
-- GEOparse may be slow for large SOFT files; prefer series matrix
-  downloads when possible.
+  50–500 MB. Downloads use an explicit `max_size_mb` guard; increase it only
+  after reviewing the expected source file.
+- Acquisition stores compressed source assets without parsing them. Processing
+  consumes only successfully verified `SourceAsset` records.
 
 ### DashScope API
 

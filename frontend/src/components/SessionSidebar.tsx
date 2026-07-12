@@ -37,9 +37,9 @@ export function SessionSidebar() {
   const pipelineStage = useAgentStore((s) => s.pipelineStage)
   const artifacts = useAgentStore((s) => s.artifacts)
   const taskId = useAgentStore((s) => s.taskId)
-  const setCurrentSession = useAgentStore((s) => s.setCurrentSession)
   const reset = useAgentStore((s) => s.reset)
   const deleteSession = useAgentStore((s) => s.deleteSession)
+  const loadSession = useAgentStore((s) => s.loadSession)
 
   const { getArtifactUrl } = useAPI()
 
@@ -105,7 +105,7 @@ export function SessionSidebar() {
                   <SidebarMenuItem key={session.taskId}>
                     <SidebarMenuButton
                       isActive={session.taskId === currentSessionId}
-                      onClick={() => setCurrentSession(session.taskId)}
+                      onClick={() => loadSession(session.taskId)}
                       tooltip={session.topic}
                     >
                       <Database className="size-4 shrink-0" />
@@ -184,7 +184,7 @@ export function SessionSidebar() {
                       render={
                         // biome-ignore lint/a11y/useAnchorContent: children rendered by SidebarMenuButton's useRender merge
                         <a
-                          href={getArtifactUrl(taskId ?? "", artifact.name)}
+                          href={getArtifactUrl(taskId ?? "", artifact.artifactId)}
                           download={artifact.name}
                           aria-label={`下载 ${artifact.name}`}
                         />

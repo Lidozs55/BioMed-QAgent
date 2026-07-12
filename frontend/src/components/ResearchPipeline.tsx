@@ -121,7 +121,8 @@ export default function ResearchPipeline() {
 				clearTimeout(failsafeTimer.current);
 				failsafeTimer.current = null;
 			}
-			setFailsafeActive(false);
+			const resetTimer = setTimeout(() => setFailsafeActive(false), 0);
+			return () => clearTimeout(resetTimer);
 		}
 
 		return () => {
