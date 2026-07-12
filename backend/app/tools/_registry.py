@@ -54,6 +54,14 @@ def _import_skill_modules() -> None:
         import app.skills.builtin.processing.self_evolution  # noqa: F401
     except ImportError:
         pass
+    try:
+        import app.skills.builtin.processing.extract_tables  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import app.skills.builtin.analysis.stats  # noqa: F401
+    except ImportError:
+        pass
 
 
 def get_all_tools() -> list:
