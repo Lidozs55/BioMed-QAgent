@@ -134,7 +134,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
 
               {dbs.map((db) => (
                 <Tooltip key={db.id}>
-                  <TooltipTrigger>
+                  <TooltipTrigger render={<span />}>
                     <ToggleGroupItem
                       value={db.id}
                       variant="outline"
