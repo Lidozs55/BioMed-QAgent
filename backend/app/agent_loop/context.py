@@ -44,6 +44,7 @@ class RunContext:
     warnings: list[dict] = field(default_factory=list)
 
     query_log: list[dict] = field(default_factory=list)
+    query_log_summary: str = ""
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -81,3 +82,23 @@ class RunContext:
             "status": status,
             "records_count": records_count,
         })
+
+    def query_log_size(self) -> int:
+        """估算 query_log 的字符总量（触发压缩判断用）。"""
+        import json
+        return len(json.dumps(self.query_log, ensure_ascii=False))
+
+    def compress_log(self, keep_recent: int, summary: str) -> int:
+        """用摘要替换旧查询记录，保留最近 keep_recent 条。返回被压缩的条数。"""
+        total = len(self.query_log)
+        if total <= keep_recent:
+            return 0
+        compressed = total - keep_recent
+        if self.query_log_summary:
+            self.query_log_summary = (
+                f"{self.query_log_summary}\n\n[后续摘要]\n{summary}"
+            )
+        else:
+            self.query_log_summary = summary
+        self.query_log = self.query_log[-keep_recent:]
+        return compressed

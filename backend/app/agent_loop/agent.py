@@ -8,6 +8,7 @@ from __future__ import annotations
 from agents import Agent
 
 from app.agent_loop.model import get_model
+from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.skills.registry import (
     SkillCategory,
     build_agent_config,
@@ -52,6 +53,12 @@ INSTRUCTIONS = """\
 分析（统计、可视化等）为可选加分项，不生成缺少数据依据的科研或临床结论。
 
 如果你的工具链尚不完整，优先完成已有工具能产出的部分，并在 artifacts/ 目录保存阶段性成果。
+
+## 上下文管理
+- 所有检索查询会记录到 RunContext.query_log
+- 当查询日志累计较长（约 8000 字符，通常对应 15-20 条查询）时，调用 compress_query_log 工具压缩旧记录
+- 压缩后仅保留最近 5 条完整记录，更早的记录转为摘要
+- 上下文管理子 Agent 后续会扩展更多能力（如压缩 records、注入背景等）
 """
 
 
@@ -138,6 +145,7 @@ def create_agent(databases: list[str] | None = None) -> Agent:
 
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([read_file, write_file, list_files])
+    tools.append(build_compress_query_log_tool())
     seen: set[str] = set()
     unique_tools: list = []
     for t in tools:
