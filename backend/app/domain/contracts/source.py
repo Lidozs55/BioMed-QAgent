@@ -122,3 +122,17 @@ class SourceLocator(ContractModel):
     @classmethod
     def validate_logical_file(cls, value: str) -> str:
         return _validate_relative_path(value)
+
+
+class AcquisitionResult(ContractModel):
+    attempt: DownloadAttempt
+    asset: SourceAsset | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "AcquisitionResult":
+        succeeded = self.attempt.status is DownloadStatus.SUCCEEDED
+        if succeeded != (self.asset is not None):
+            raise ValueError("successful attempts require an asset and failures forbid one")
+        if self.asset and self.asset.successful_attempt_id != self.attempt.attempt_id:
+            raise ValueError("asset must reference its successful attempt")
+        return self

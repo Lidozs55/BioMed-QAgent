@@ -58,6 +58,7 @@ from app.domain.contracts.pipeline import (
     WarningRecord,
 )
 from app.domain.contracts.source import (
+    AcquisitionResult,
     DownloadAttempt,
     FileAsset,
     SourceAsset,
@@ -74,6 +75,7 @@ from app.domain.contracts.task import (
 
 __all__ = [
     "AttemptStatus",
+    "AcquisitionResult",
     "ArtifactManifestEntry",
     "ArtifactProducedPayload",
     "CancelRequestedPayload",
