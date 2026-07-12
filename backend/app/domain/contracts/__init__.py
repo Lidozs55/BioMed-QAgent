@@ -12,6 +12,13 @@ from app.domain.contracts.enums import (
     TaskState,
     WarningSeverity,
 )
+from app.domain.contracts.discovery import (
+    GeoAssetCandidate,
+    GeoSampleRecord,
+    GeoSeriesRecord,
+    LiteratureRecord,
+    NcbiSearchPage,
+)
 from app.domain.contracts.events import (
     ArtifactProducedPayload,
     CancelRequestedPayload,
@@ -77,7 +84,12 @@ __all__ = [
     "ErrorCode",
     "ErrorDetail",
     "EventEnvelope",
+    "GeoAssetCandidate",
+    "GeoSampleRecord",
+    "GeoSeriesRecord",
     "FileAsset",
+    "LiteratureRecord",
+    "NcbiSearchPage",
     "ParsedDataset",
     "PipelineEventType",
     "PlanReadyPayload",
