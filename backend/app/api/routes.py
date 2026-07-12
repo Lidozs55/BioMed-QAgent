@@ -8,12 +8,16 @@ Endpoints:
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 
 from app.config import settings
+from app.domain.contracts import RunManifest
 from app.skills.registry import skill_registry
 
 router = APIRouter(prefix="/api/v1")
@@ -87,7 +91,10 @@ async def get_task(task_id: str) -> dict:
     status = _task_status(task_dir)
 
     directories: dict[str, str] = {}
-    for sub in ("raw", "parsed", "normalized", "artifacts", "logs"):
+    for sub in (
+        "source_assets", "download_tmp", "parsed", "normalized", "staging",
+        "artifacts", "state", "logs",
+    ):
         sub_path = task_dir / sub
         if sub_path.exists():
             directories[sub] = str(sub_path)
@@ -102,36 +109,86 @@ async def get_task(task_id: str) -> dict:
 
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str) -> dict:
-    """List all artifact files in a task's artifacts directory."""
-    artifacts_dir = _tasks_base() / task_id / "artifacts"
-    if not artifacts_dir.exists():
+    """List only files registered by a valid completed run manifest."""
+    loaded = _load_validated_manifest(task_id)
+    if loaded is None:
         return {"artifacts": []}
-
-    artifacts = []
-    for file_path in sorted(artifacts_dir.rglob("*")):
-        if file_path.is_file():
-            rel_path = file_path.relative_to(artifacts_dir)
-            artifacts.append({
-                "name": file_path.name,
-                "size": file_path.stat().st_size,
-                "path": str(rel_path).replace("\\", "/"),
-            })
+    manifest, artifacts_dir = loaded
+    manifest_path = artifacts_dir / "run_manifest.json"
+    artifacts = [{
+        "artifact_id": "run_manifest",
+        "name": "run_manifest.json",
+        "size": manifest_path.stat().st_size,
+        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "media_type": "application/json",
+    }]
+    for entry in manifest.artifacts:
+        file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
+        if file_path.stat().st_size != entry.size_bytes or _file_sha256(file_path) != entry.sha256:
+            raise HTTPException(status_code=409, detail="Artifact integrity check failed")
+        artifacts.append({
+            "artifact_id": entry.artifact_id,
+            "name": entry.name,
+            "size": entry.size_bytes,
+            "sha256": entry.sha256,
+            "media_type": entry.media_type,
+        })
     return {"artifacts": artifacts}
 
 
-@router.get("/tasks/{task_id}/artifacts/{filename:path}")
-async def get_artifact_file(task_id: str, filename: str):
-    """Stream an artifact file as a download response."""
-    artifacts_dir = (_tasks_base() / task_id / "artifacts").resolve()
-    file_path = (artifacts_dir / filename).resolve()
+@router.get("/tasks/{task_id}/artifacts/{artifact_id}")
+async def get_artifact_file(task_id: str, artifact_id: str):
+    """Resolve an artifact ID through the valid manifest and stream it."""
+    loaded = _load_validated_manifest(task_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    manifest, artifacts_dir = loaded
+    if artifact_id == "run_manifest":
+        file_path = artifacts_dir / "run_manifest.json"
+        media_type = "application/json"
+    else:
+        entry = next(
+            (item for item in manifest.artifacts if item.artifact_id == artifact_id),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        file_path = _verified_artifact_path(artifacts_dir, entry.relative_path)
+        if file_path.stat().st_size != entry.size_bytes or _file_sha256(file_path) != entry.sha256:
+            raise HTTPException(status_code=409, detail="Artifact integrity check failed")
+        media_type = entry.media_type
+    return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)
 
-    # Security: prevent directory traversal
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _verified_artifact_path(artifacts_dir: Path, relative_path: str) -> Path:
+    prefix = "artifacts/"
+    if not relative_path.startswith(prefix):
+        raise HTTPException(status_code=409, detail="Invalid artifact manifest path")
+    file_path = (artifacts_dir / relative_path[len(prefix):]).resolve()
     try:
-        file_path.relative_to(artifacts_dir)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Access denied")
+        file_path.relative_to(artifacts_dir.resolve())
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail="Invalid artifact manifest path") from error
+    if not file_path.is_file():
+        raise HTTPException(status_code=409, detail="Registered artifact is missing")
+    return file_path
 
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(str(file_path), filename=file_path.name)
+def _load_validated_manifest(task_id: str) -> tuple[RunManifest, Path] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    artifacts_dir = (_tasks_base() / task_id / "artifacts").resolve()
+    manifest_path = artifacts_dir / "run_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = RunManifest.model_validate_json(manifest_path.read_text("utf-8"))
+    except (OSError, ValidationError, ValueError) as error:
+        raise HTTPException(status_code=409, detail="Artifact manifest is invalid") from error
+    if manifest.validation.status != "valid" or manifest.task_state.value != "completed":
+        raise HTTPException(status_code=409, detail="Artifacts are not validated")
+    return manifest, artifacts_dir
