@@ -41,6 +41,24 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface Session {
+  taskId: string;
+  topic: string;
+  databases: string[];
+  createdAt: number;
+  messageCount: number;
+}
+
+export type PipelineStage =
+  | "idle"
+  | "setup"
+  | "discovery"
+  | "acquisition"
+  | "processing"
+  | "analysis"
+  | "done"
+  | "error";
+
 interface AgentState {
   messages: ChatMessage[];
   traces: TraceItem[];
@@ -52,6 +70,13 @@ interface AgentState {
   selectedDatabases: string[];
   artifacts: { name: string; path: string; size: number }[];
   taskId: string | null;
+
+  /** Session sidebar */
+  sessions: Session[];
+  currentSessionId: string | null;
+
+  /** Pipeline progress */
+  pipelineStage: PipelineStage;
 
   /** Existing actions */
   addMessage: (role: "user" | "assistant", content: string) => void;
@@ -66,6 +91,14 @@ interface AgentState {
   setSelectedDatabases: (ids: string[]) => void;
   addArtifact: (name: string, path: string, size: number) => void;
   setTaskId: (id: string) => void;
+
+  /** Session actions */
+  addSession: (taskId: string, topic: string, databases: string[]) => void;
+  setCurrentSession: (sessionId: string) => void;
+  removeSession: (sessionId: string) => void;
+
+  /** Pipeline actions */
+  setPipelineStage: (stage: PipelineStage) => void;
 }
 
 let idCounter = 0;
@@ -80,6 +113,9 @@ export const useAgentStore = create<AgentState>((set) => ({
   selectedDatabases: [],
   artifacts: [],
   taskId: null,
+  sessions: [],
+  currentSessionId: null,
+  pipelineStage: "idle",
 
   addMessage: (role, content) =>
     set((s) => ({
@@ -113,6 +149,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       artifacts: [],
       isRunning: false,
       taskId: s.taskId,
+      pipelineStage: "idle",
     })),
 
   setDatabases: (dbs) => set({ databases: dbs }),
@@ -122,4 +159,20 @@ export const useAgentStore = create<AgentState>((set) => ({
       artifacts: [...s.artifacts, { name, path, size }],
     })),
   setTaskId: (id) => set({ taskId: id }),
+
+  addSession: (taskId, topic, databases) =>
+    set((s) => {
+      const session: Session = { taskId, topic, databases, createdAt: Date.now(), messageCount: 0 };
+      return { sessions: [...s.sessions, session], currentSessionId: taskId };
+    }),
+
+  setCurrentSession: (sessionId) => set({ currentSessionId: sessionId }),
+
+  removeSession: (sessionId) =>
+    set((s) => ({
+      sessions: s.sessions.filter((se) => se.taskId !== sessionId),
+      currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
+    })),
+
+  setPipelineStage: (stage) => set({ pipelineStage: stage }),
 }));

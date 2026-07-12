@@ -5,6 +5,7 @@ import { useAgentStore } from "./stores/agentStore";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { ToolTrace } from "./components/ToolTrace";
+import { ThemeToggle } from "./components/ThemeToggle";
 
 export default function App() {
   const { connect, disconnect } = useAgentStream();
@@ -29,7 +30,8 @@ export default function App() {
       <Sidebar />
       <div className="app-main">
         <div className="app-header">
-          BioMed QAgent v1 — Agent Loop 架构（基于 openai-agents-python）
+          <span>BioMed QAgent v1 — Agent Loop 架构（基于 openai-agents-python）</span>
+          <ThemeToggle />
         </div>
         <div className="app-content">
           <ChatPanel />
