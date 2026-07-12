@@ -8,7 +8,11 @@ from __future__ import annotations
 from agents import Agent
 
 from app.agent_loop.model import get_model
-from app.skills.registry import build_agent_config, skill_registry
+from app.skills.registry import (
+    SkillCategory,
+    build_agent_config,
+    skill_registry,
+)
 from app.tools.io import read_file, write_file, list_files
 
 try:
@@ -49,6 +53,15 @@ INSTRUCTIONS = """\
 
 如果你的工具链尚不完整，优先完成已有工具能产出的部分，并在 artifacts/ 目录保存阶段性成果。
 """
+
+
+# Module-level store for skill names loaded in the most recent create_agent() call.
+_loaded_skill_names: list[str] = []
+
+
+def get_loaded_skill_names() -> list[str]:
+    """Return skill names loaded in the last create_agent() invocation."""
+    return list(_loaded_skill_names)
 
 
 def _import_skill_modules() -> None:
@@ -95,14 +108,34 @@ def _import_skill_modules() -> None:
         pass
 
 
-def create_agent() -> Agent:
-    """构造主 Agent。"""
+def create_agent(databases: list[str] | None = None) -> Agent:
+    """构造主 Agent。
+
+    Args:
+        databases: 用户选择的数据库列表。None 时加载所有已启用的技能；
+                   给定列表时，仅加载匹配的 acquisition 技能 + 全部非 acquisition 技能。
+    """
+    global _loaded_skill_names
     _import_skill_modules()
-    skills = skill_registry.list_enabled()
+
+    if databases is not None:
+        acq_skills = skill_registry.get_acquisition_skills(databases)
+        all_enabled = skill_registry.list_enabled()
+        non_acq_skills = [
+            s for s in all_enabled
+            if s.category != SkillCategory.ACQUISITION
+        ]
+        skills: list = acq_skills + non_acq_skills
+    else:
+        skills = skill_registry.list_enabled()
+
     if browser_fallback_skill is not None:
         skills.append(browser_fallback_skill)
     if self_evolution_skill is not None:
         skills.append(self_evolution_skill)
+
+    _loaded_skill_names = [s.name for s in skills]
+
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([read_file, write_file, list_files])
     seen: set[str] = set()

@@ -23,7 +23,7 @@ export function useAgentStream() {
   }, []);
 
   const handleEvent = useCallback((event: WSEvent) => {
-    const { addMessage, appendAssistantText, addTrace, setRunning } =
+    const { addMessage, appendAssistantText, addTrace, setRunning, addArtifact } =
       storeRef.current;
 
     switch (event.type) {
@@ -61,6 +61,33 @@ export function useAgentStream() {
       case "error":
         setRunning(false);
         addTrace({ kind: "error", message: event.message });
+        break;
+      case "skill_loaded":
+        if (event.skill_loaded) {
+          addTrace({
+            kind: "tool_call",
+            name: `Skill: ${event.skill_loaded.name}`,
+            arguments: `category: ${event.skill_loaded.category}`,
+          });
+        }
+        break;
+      case "artifact_produced":
+        if (event.artifact_name) {
+          addArtifact(
+            event.artifact_name,
+            event.artifact_path || "",
+            event.artifact_size || 0,
+          );
+        }
+        break;
+      case "file_downloaded":
+        if (event.artifact_name) {
+          addArtifact(
+            event.artifact_name,
+            event.artifact_path || "",
+            event.artifact_size || 0,
+          );
+        }
         break;
     }
   }, []);
@@ -114,13 +141,15 @@ export function useAgentStream() {
   }, []);
 
   const send = useCallback(
-    (input: string) => {
+    (input: string, databases?: string[]) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       storeRef.current.addMessage("user", input);
       storeRef.current.setRunning(true);
-      ws.send(JSON.stringify({ type: "run", input }));
+      const payload: Record<string, unknown> = { type: "run", input };
+      if (databases && databases.length > 0) payload.databases = databases;
+      ws.send(JSON.stringify(payload));
     },
     []
   );

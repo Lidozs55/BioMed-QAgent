@@ -17,13 +17,16 @@ async def agent_ws(websocket: WebSocket) -> None:
     """Agent loop WebSocket 端点。
 
     客户端 → 服务端消息格式：
-        {"type": "run", "input": "研究目标文本", "task_id": "optional-task-id"}
+        {"type": "run", "input": "研究目标文本", "task_id": "optional-task-id", "databases": ["geo", "gdc"]}
 
     服务端 → 客户端事件格式：
+        {"type": "skill_loaded", "name": "...", "category": "..."}
         {"type": "text", "delta": "..."}
         {"type": "tool_call", "name": "...", "arguments": "..."}
         {"type": "tool_output", "output": "..."}
         {"type": "done", "final_output": "..."}
+        {"type": "file_downloaded", "name": "...", "path": "...", "size": N}
+        {"type": "artifact_produced", "name": "...", "path": "...", "size": N}
         {"type": "error", "message": "..."}
     """
     await websocket.accept()
@@ -45,7 +48,8 @@ async def agent_ws(websocket: WebSocket) -> None:
                 continue
 
             task_id = msg.get("task_id", "default")
-            async for event in run_agent_stream(user_input, task_id):
+            databases = msg.get("databases", None)
+            async for event in run_agent_stream(user_input, task_id, databases=databases):
                 await websocket.send_json(event)
 
     except WebSocketDisconnect:

@@ -6,6 +6,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -22,6 +23,7 @@ app.add_middleware(
 )
 
 # 路由
+app.include_router(routes_router)
 app.include_router(ws_router)
 
 

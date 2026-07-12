@@ -1,15 +1,18 @@
 """Runner 封装 — 流式运行 Agent loop，事件分发到 WebSocket。
-
+ 
 将 openai-agents-python 的 Runner.run_streamed 事件转换为前端可消费的 WSMessage。
-
+ 
 事件类型：
   - text: LLM 文本增量（仅推送 content delta，不推送工具参数 delta）
+  - skill_loaded: 技能加载通知（name + category）
   - tool_call: 工具调用开始（name + arguments）
   - tool_output: 工具调用结果
   - confirm: 质量/HITL 确认提醒（tool 输出包含 quality_issues 或 needs_confirmation 时触发）
   - done: Agent loop 结束（final_output）
+  - file_downloaded: 下载完成的文件（name + path + size）
+  - artifact_produced: 生成的产物文件（name + path + size）
   - error: 异常
-
+ 
 SDK 参考：
   RawResponsesStreamEvent(type="raw_response_event") — 底层 LLM 原始流式事件
   RunItemStreamEvent(type="run_item_stream_event") — 包装 RunItem 的高层事件
@@ -19,13 +22,15 @@ SDK 参考：
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import AsyncIterator
 
 from agents import Agent, Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from app.agent_loop.agent import create_agent
+from app.agent_loop.agent import create_agent, get_loaded_skill_names
 from app.agent_loop.context import RunContext
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +95,28 @@ def _extract_text_delta(data) -> str | None:
 async def run_agent_stream(
     user_input: str,
     task_id: str = "default",
+    databases: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     """流式运行 Agent loop，yield 前端可消费的事件 dict。"""
     ctx = RunContext(task_id=task_id)
-    agent = create_agent()
+    agent = create_agent(databases=databases)
+
+    # ── skill_loaded 事件 ──
+    skill_names = get_loaded_skill_names()
+    for name in skill_names:
+        skill = getattr(agent, "_skills", None)
+        category = "unknown"
+        # Derive category from name.  The skill registry is already loaded;
+        # we import the registry here for a lightweight lookup.
+        from app.skills.registry import skill_registry as _reg
+        skill_def = _reg.get(name)
+        if skill_def is not None:
+            category = skill_def.category.value
+        yield {
+            "type": "skill_loaded",
+            "name": name,
+            "category": category,
+        }
 
     try:
         result = Runner.run_streamed(agent, user_input, context=ctx)
@@ -131,6 +154,28 @@ async def run_agent_stream(
 
         # 最终输出
         yield {"type": "done", "final_output": result.final_output}
+
+        # ── 扫描产物目录，yield file_downloaded / artifact_produced 事件 ──
+        tasks_base = Path(settings.output_dir) / "tasks" / task_id
+        for sub, event_type in [("raw", "file_downloaded"), ("artifacts", "artifact_produced")]:
+            sub_dir = tasks_base / sub
+            if sub_dir.exists():
+                for file_path in sorted(sub_dir.rglob("*")):
+                    if file_path.is_file():
+                        try:
+                            size = file_path.stat().st_size
+                        except OSError:
+                            size = 0
+                        try:
+                            rel = file_path.relative_to(tasks_base)
+                        except ValueError:
+                            rel = file_path
+                        yield {
+                            "type": event_type,
+                            "name": file_path.name,
+                            "path": str(rel).replace("\\", "/"),
+                            "size": size,
+                        }
 
     except Exception as e:
         logger.exception("Agent loop 执行失败")

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAgentStore } from "../stores/agentStore";
 import { useAgentStream } from "../hooks/useAgentStream";
-import { Bot, User } from "lucide-react";
+import { useAPI } from "../hooks/useAPI";
+import { Bot, User, ChevronDown } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -20,14 +21,30 @@ import { Textarea } from "@/components/ui/textarea";
 
 /** 对话面板 — 基于 shadcn Message / MessageScroller / Marker 重构。 */
 export function ChatPanel() {
-  const { messages, isRunning, isConnected } = useAgentStore();
+  const { messages, isRunning, isConnected, databases, selectedDatabases, taskId } =
+    useAgentStore();
   const { send } = useAgentStream();
+  const { fetchArtifacts } = useAPI();
   const [input, setInput] = useState("");
+  const [dbOpen, setDbOpen] = useState(false);
+
+  // Fetch artifacts when a task completes
+  useEffect(() => {
+    if (taskId && !isRunning) {
+      fetchArtifacts(taskId).then((arts) => {
+        if (arts) {
+          const store = useAgentStore.getState();
+          arts.forEach((a) => { store.addArtifact(a.name, a.path ?? "", a.size); });
+        }
+      }).catch(() => {});
+    }
+  }, [taskId, isRunning, fetchArtifacts]);
 
   const handleSend = () => {
     const trimmed = input.trim();
     if (!trimmed || isRunning) return;
-    send(trimmed);
+    const selected = useAgentStore.getState().selectedDatabases;
+    send(trimmed, selected);
     setInput("");
   };
 
@@ -37,6 +54,26 @@ export function ChatPanel() {
       handleSend();
     }
   };
+
+  const toggleDb = (id: string) => {
+    const store = useAgentStore.getState();
+    const current = store.selectedDatabases;
+    const next = current.includes(id)
+      ? current.filter((x) => x !== id)
+      : [...current, id];
+    store.setSelectedDatabases(next);
+  };
+
+  const toggleAllDbs = () => {
+    const store = useAgentStore.getState();
+    if (store.selectedDatabases.length === store.databases.length) {
+      store.setSelectedDatabases([]);
+    } else {
+      store.setSelectedDatabases(store.databases.map((db) => db.id));
+    }
+  };
+
+  const allSelected = databases.length > 0 && selectedDatabases.length === databases.length;
 
   return (
     <MessageScrollerProvider autoScroll>
@@ -97,6 +134,61 @@ export function ChatPanel() {
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>
+
+        {/* 数据源选择器 */}
+        {databases.length > 0 && (
+          <div className="shrink-0 border-t px-4 py-2">
+            <button
+              type="button"
+              onClick={() => setDbOpen(!dbOpen)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown
+                size={14}
+                className={`transition-transform ${dbOpen ? "rotate-0" : "-rotate-90"}`}
+              />
+              数据源{" "}
+              {selectedDatabases.length > 0 && `(${selectedDatabases.length})`}
+            </button>
+            {dbOpen && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                <label
+                  className={`flex items-center gap-1 text-xs cursor-pointer px-2 py-0.5 rounded border transition-colors ${
+                    allSelected
+                      ? "bg-primary/10 border-primary/30"
+                      : "hover:bg-muted"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAllDbs}
+                    className="size-3 accent-primary"
+                  />
+                  全部
+                </label>
+                {databases.map((db) => (
+                  <label
+                    key={db.id}
+                    className={`flex items-center gap-1 text-xs cursor-pointer px-2 py-0.5 rounded border transition-colors ${
+                      selectedDatabases.includes(db.id)
+                        ? "bg-primary/10 border-primary/30"
+                        : "hover:bg-muted"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedDatabases.includes(db.id)}
+                      onChange={() => toggleDb(db.id)}
+                      className="size-3 accent-primary"
+                    />
+                    {db.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="shrink-0 border-t p-4">
           <div className="flex gap-2">
