@@ -60,7 +60,7 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 ### 3.2 未通过验收的现状
 
-- [ ] **P0** 干净环境不配置模型 Key 时测试仍可运行
+- [x] **P0** 干净环境不配置模型 Key 时测试仍可运行（164 passed，2026-07-12）
 - [ ] **P0** 真实 Agent Demo 在总超时内产生终态
 - [ ] **P0** GEO 查询返回真实 GSE accession，而不是把数值 GDS ID 传给 GEOparse
 - [ ] **P0** Xena 不再因固定 URL 返回 403
@@ -80,34 +80,39 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 ## 4. Phase 1A：契约与目录
 
+当前状态：新的权威边界位于 `backend/app/domain/contracts/`。旧 Tool 仍使用的
+dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐个替换后才能删除。
+
 ### 4.1 领域契约
 
-- [ ] **P0** 定义 `TaskRequest`
-- [ ] **P0** 定义 `TaskSpecification`
-- [ ] **P0** 定义 `QuerySpecification`
-- [ ] **P0** 定义 `DatasetSelection`
-- [ ] **P0** 重构 `SourceRecord`
-- [ ] **P0** 定义 `SourceRelation`
-- [ ] **P0** 定义 `DownloadAttempt`
-- [ ] **P0** 定义统一 `FileAsset`
-- [ ] **P0** 定义只表示成功文件的 `SourceAsset`
-- [ ] **P0** 定义 `DataLevel`，区分 raw sequence 与 repository processed
-- [ ] **P0** 定义精确 `SourceLocator`
-- [ ] **P0** 完善 `ParsedDataset`
-- [ ] **P0** 定义幂等 `StageAttempt`
-- [ ] **P0** 定义 `Artifact`
-- [ ] **P0** 定义 `RunManifest`、Warning、Error 和任务状态枚举
-- [ ] **P0** 定义 requested output 和 event payload 判别联合
-- [ ] **P0** 统一 `ContractModel(extra="forbid", validate_default=True)`
-- [ ] **P0** 集合字段使用 default_factory
-- [ ] **P0** 固定 schema version 与 ID 生成规则
-- [ ] **P0** task_id 和相对路径执行安全校验
+- [x] **P0** 定义 `TaskRequest`
+- [x] **P0** 定义 `TaskSpecification`
+- [x] **P0** 定义 `QuerySpecification`
+- [x] **P0** 定义 `DatasetSelection`
+- [ ] **P0** 迁移并删除旧输出层 `SourceRecord` dataclass
+- [x] **P0** 定义权威 `SourceRecord` 契约（旧输出 dataclass 尚待迁移）
+- [x] **P0** 定义 `SourceRelation`
+- [x] **P0** 定义 `DownloadAttempt`
+- [x] **P0** 定义统一 `FileAsset`
+- [x] **P0** 定义只表示成功文件的 `SourceAsset`
+- [x] **P0** 定义 `DataLevel`，区分 raw sequence 与 repository processed
+- [x] **P0** 定义精确 `SourceLocator`
+- [ ] **P0** 将旧 Tool 迁移到 on-disk `ParsedDataset` 契约
+- [x] **P0** 定义 on-disk `ParsedDataset` 契约（旧内存模型尚待迁移）
+- [x] **P0** 定义幂等执行所需的 `StageAttempt` 契约
+- [x] **P0** 定义 `ArtifactManifestEntry`
+- [x] **P0** 定义 `RunManifest`、Warning、Error 和任务状态枚举
+- [x] **P0** 定义 requested output 和 event payload 判别联合
+- [x] **P0** 统一 `ContractModel(extra="forbid", validate_default=True)`
+- [x] **P0** 集合字段使用 default_factory
+- [x] **P0** 固定 schema version 与 ID 生成规则
+- [x] **P0** task_id 和相对路径执行安全校验
 
 ### 4.2 工作目录
 
-- [ ] **P0** 统一使用 `data/output/tasks/<task_id>/`
-- [ ] **P0** 包含 source_assets、download_tmp、parsed、normalized、staging、artifacts、state、logs
-- [ ] **P0** SourceAsset 路径只能位于 source_assets/
+- [x] **P0** 统一使用 `data/output/tasks/<task_id>/`
+- [x] **P0** 包含 source_assets、download_tmp、parsed、normalized、staging、artifacts、state、logs
+- [x] **P0** SourceAsset 路径只能位于 source_assets/
 - [ ] **P0** 来源文件不可被覆盖
 - [ ] **P0** Artifact 只能从 staging 验证后提升
 - [ ] **P0** API 只公开 artifacts/
@@ -117,10 +122,10 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 ### 4.3 TDD 验收
 
-- [ ] **P0** 每个新契约先写失败测试
-- [ ] **P0** 覆盖空 topic、非法 task_id、未知字段和路径逃逸
+- [x] **P0** 每个新契约先写失败测试
+- [x] **P0** 覆盖空 topic、非法 task_id、未知字段和路径逃逸
 - [ ] **P0** 覆盖 failed/partial attempt 不产生 SourceAsset
-- [ ] **P0** 覆盖 SourceAsset checksum、size、data level 和路径约束
+- [x] **P0** 覆盖 SourceAsset checksum、size、data level 和路径约束
 - [ ] **P0** 覆盖 dataset/sample/source/asset 外键
 - [ ] **P0** 覆盖 staging 未验证时不可下载
 
@@ -262,8 +267,8 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 - [ ] **P0** 无 DashScope Key 可 import app 和创建确定性 Pipeline
 - [ ] **P0** 默认 pytest 不访问外网
-- [ ] **P0** 领域契约单元测试
-- [ ] **P0** extra forbid、default_factory、schema version 和 ID 测试
+- [x] **P0** 领域契约单元测试
+- [x] **P0** extra forbid、default_factory、schema version 和 ID 测试
 - [ ] **P0** dataset/sample/source/asset 外键测试
 - [ ] **P0** GEO ID 转换回归测试
 - [ ] **P0** NCBI 限速、批量与重试测试
