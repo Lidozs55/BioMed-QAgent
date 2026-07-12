@@ -19,16 +19,40 @@ from app.domain.contracts.ids import (
     make_record_id,
     make_source_id,
 )
+from app.domain.contracts.source import (
+    DownloadAttempt,
+    FileAsset,
+    SourceAsset,
+    SourceLocator,
+    SourceRecord,
+    SourceRelation,
+)
+from app.domain.contracts.task import (
+    DatasetSelection,
+    QuerySpecification,
+    TaskRequest,
+    TaskSpecification,
+)
 
 __all__ = [
     "AttemptStatus",
     "ContractModel",
     "DataLevel",
     "Database",
+    "DatasetSelection",
+    "DownloadAttempt",
     "DownloadStatus",
     "ErrorCode",
+    "FileAsset",
+    "QuerySpecification",
     "RequestedOutput",
+    "SourceAsset",
+    "SourceLocator",
+    "SourceRecord",
+    "SourceRelation",
     "StageName",
+    "TaskRequest",
+    "TaskSpecification",
     "TaskState",
     "WarningSeverity",
     "asset_id_from_sha256",
