@@ -144,7 +144,7 @@ data/tasks/<task_id>/
 
 ### 5.1 目录
 
-- [ ] **P0** 调整为统一仓库
+- [x] **P0** 调整为统一仓库
 
 ```text
 backend/app/skills/
@@ -163,7 +163,7 @@ backend/app/skills/
 
 ### 5.2 SkillDef
 
-- [ ] **P0** 扩展 `SkillDef`
+- [x] **P0** 扩展 `SkillDef`
   - `name`
   - `category`
   - `description`
@@ -173,23 +173,24 @@ backend/app/skills/
   - `version`
   - `enabled`
   - 可选 `input_model`、`output_model` 和 examples
-- [ ] **P0** description 简洁说明何时使用 Skill
-- [ ] **P0** description 不包含开发日志和历史使用记录
-- [ ] **P0** 每个 Skill 建议暴露不超过约 20 个 Tool
-- [ ] **P1** 超过 30 个 Tool 时强制评审是否拆分
+- [x] **P0** description 简洁说明何时使用 Skill
+- [x] **P0** description 不包含开发日志和历史使用记录
+- [x] **P0** 每个 Skill 建议暴露不超过约 20 个 Tool
+- [x] **P1** 超过 30 个 Tool 时强制评审是否拆分
 
 ### 5.3 注册与按需加载
 
-- [ ] **P0** SkillRegistry 支持注册、查询和列出 Skill
-- [ ] **P0** 支持按 category 筛选
-- [ ] **P0** 支持按 supported source 筛选
-- [ ] **P0** 支持 enabled/disabled
-- [ ] **P0** 根据用户数据库选择过滤 acquisition Skill 和 Tool
+- [x] **P0** SkillRegistry 支持注册、查询和列出 Skill
+- [x] **P0** 支持按 category 筛选
+- [x] **P0** 支持按 supported source 筛选
+- [x] **P0** 支持 enabled/disabled
+- [x] **P0** 根据用户数据库选择过滤 acquisition Skill 和 Tool
 - [ ] **P0** `create_agent()` 接收本次任务选中的 Skill
   - 合并 Skill instructions；
   - 合并并去重 Skill Tools；
   - 不把整个仓库全部加载给 Agent。
-- [ ] **P0** 简单 Tool 在 Skill 加载后由 Main Agent 直接调用
+  - > 注：`build_agent_config()` 已实现合并/去重逻辑，待 `agent.py` 解锁后接入 `create_agent()`
+- [x] **P0** 简单 Tool 在 Skill 加载后由 Main Agent 直接调用
 - [ ] **P1** 需要专家上下文时把 Skill 构造成 `Agent.as_tool()`
 
 ## 6. Discovery：论文检索与理解
