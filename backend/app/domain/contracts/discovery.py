@@ -103,3 +103,17 @@ class GeoAssetCandidate(ContractModel):
     url: str = Field(min_length=1)
     media_type: str = Field(min_length=1)
     data_level: DataLevel
+
+
+class PubMedSearchResult(ContractModel):
+    query: str = Field(min_length=1)
+    query_translation: str = ""
+    total_count: int = Field(ge=0)
+    records: list[LiteratureRecord] = Field(default_factory=list)
+
+
+class GeoSearchResult(ContractModel):
+    query: str = Field(min_length=1)
+    query_translation: str = ""
+    total_count: int = Field(ge=0)
+    records: list[GeoSeriesRecord] = Field(default_factory=list)

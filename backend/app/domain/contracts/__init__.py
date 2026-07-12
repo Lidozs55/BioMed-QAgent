@@ -15,9 +15,11 @@ from app.domain.contracts.enums import (
 from app.domain.contracts.discovery import (
     GeoAssetCandidate,
     GeoSampleRecord,
+    GeoSearchResult,
     GeoSeriesRecord,
     LiteratureRecord,
     NcbiSearchPage,
+    PubMedSearchResult,
 )
 from app.domain.contracts.events import (
     ArtifactProducedPayload,
@@ -86,10 +88,12 @@ __all__ = [
     "EventEnvelope",
     "GeoAssetCandidate",
     "GeoSampleRecord",
+    "GeoSearchResult",
     "GeoSeriesRecord",
     "FileAsset",
     "LiteratureRecord",
     "NcbiSearchPage",
+    "PubMedSearchResult",
     "ParsedDataset",
     "PipelineEventType",
     "PlanReadyPayload",
