@@ -87,14 +87,16 @@ backend/app/skills/
 - Skill 是 instructions 与 Tool 的能力包；
 - 一个网站可以有多个 Tool，不要求一个网站一个 Skill；
 - 网站 Tool 分为 search、describe/metadata、download；
-- download 只返回 `RawAsset`，不解析数据；
-- processing 只接受本地 `RawAsset` 或 `ParsedDataset`；
+- download 记录 `DownloadAttempt`，成功校验后才返回 `SourceAsset`；
+- processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
 - learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
 ## 3. 核心数据契约
 
-契约使用 Pydantic v2，在 API 边界拒绝未知字段。对象保存路径和轻量元数据，
-不把大型表格放入 Context。
+契约使用 Pydantic v2，统一继承 `ContractModel`，显式设置
+`ConfigDict(extra="forbid", validate_default=True)`。集合使用
+`default_factory`，所有序列化对象包含 `schema_version`。对象只保存路径和轻量
+元数据，不把大型表格放入 Context。
 
 ### 3.1 TaskRequest
 
@@ -111,13 +113,16 @@ backend/app/skills/
 Agent 生成的数据需求描述，包含：
 
 - 原始主题；
-- 各数据库实际查询式；
+- `QuerySpecification` 列表，区分用户、Agent 和 Pipeline 查询；
 - 候选或固定数据集 accession；
 - 请求的输出类型。
 
 它不是任意代码或自由执行步骤。
 
-### 3.3 SourceRecord
+`DatasetSelection` 明确定义 `dataset_id`、database、accession、source_id 和选择
+理由。
+
+### 3.3 SourceRecord 与 SourceRelation
 
 描述论文、数据库记录或下载页面：
 
@@ -128,21 +133,40 @@ Agent 生成的数据需求描述，包含：
 - `title`
 - `retrieved_at`
 
-### 3.4 RawAsset
+`SourceRelation` 使用证据字段表示论文到数据集、数据集到 BioProject/SRA 等关系，
+不依赖 CSV 内不可验证的 ID 数组。
 
-描述不可变的原始文件：
+### 3.4 DownloadAttempt、FileAsset 与 SourceAsset
+
+`DownloadAttempt` 记录每次成功、部分成功或失败下载：
+
+- `attempt_id`
+- `source_id`
+- `url`
+- `status`
+- `bytes_received`
+- `error_code` / `error_message`
+- `started_at` / `finished_at`
+
+只有完整下载并校验成功后才创建不可变 `SourceAsset`：
 
 - `asset_id`
 - `source_id`
+- `successful_attempt_id`
 - `relative_path`
 - `sha256`
-- `mime_type`
+- `media_type`
 - `size_bytes`
-- `status`
+- `data_level`
 
-`relative_path` 必须解析在当前任务的 `raw/` 内。
+`data_level` 区分 `raw_sequence`、`submitter_processed`、
+`repository_processed` 和 `metadata`。GSE178352 tximport counts 属于 repository
+processed，不称作原始测序数据。路径必须解析在任务 `source_assets/` 内。
 
-### 3.5 ParsedDataset
+所有阶段文件统一使用 `FileAsset`，记录 kind、路径、SHA-256、大小、media type、
+schema version 和生成步骤。
+
+### 3.5 ParsedDataset 与 SourceLocator
 
 描述解析后的本地表格：
 
@@ -155,7 +179,20 @@ Agent 生成的数据需求描述，包含：
 - `parser_name`
 - `parser_version`
 
-### 3.6 Artifact
+`SourceLocator` 精确定义：
+
+- 解压后的 logical file；
+- 以 1 为基准、包含表头/注释/空行的物理文本行号；
+- 以 0 为基准的列索引；
+- 原始列名与原始 token。
+
+固定案例对全部 source-derived expression value 执行回溯；一般任务验证全部结构
+外键，并按配置抽样数值。
+
+### 3.6 StageAttempt、Artifact 与 RunManifest
+
+每次阶段执行创建独立 `StageAttempt`，包含输入摘要、参数摘要、输出摘要、attempt
+序号和状态。阶段操作幂等；恢复时只复用摘要一致的成功输出。
 
 描述通过验证的最终文件：
 
@@ -167,6 +204,9 @@ Agent 生成的数据需求描述，包含：
 - `sha256`
 - `generated_by`
 
+`RunManifest`、Warning、Error 和事件 payload 都有正式 Pydantic schema。ID 生成、
+枚举、外键和 schema version 在设计规格中固定。
+
 ## 4. Pipeline
 
 ### 4.1 Discovery
@@ -176,21 +216,28 @@ Agent 生成的数据需求描述，包含：
 
 Discovery 不生成最终科研数据行。
 
+PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
+请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
+
 ### 4.2 Acquisition
 
 负责下载和校验：
 
 - 流式下载；
 - 协议、大小和超时限制；
-- 写入 `raw/`；
-- 保留原始压缩文件；
+- 未完成字节写入 `download_tmp/`；
+- 每次尝试记录 DownloadAttempt；
+- 保留下载到的官方压缩文件；
 - 计算 SHA-256 和字节数；
-- 记录成功、部分成功、失败和重试；
-- 返回 `RawAsset`。
+- 完整成功后创建 SourceAsset；
+- 部分或失败文件永不交给 Parser。
+
+成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
+参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
 
 ### 4.3 Processing
 
-只读取 `RawAsset`：
+只读取成功的 `SourceAsset`：
 
 ```text
 decompress
@@ -202,7 +249,8 @@ decompress
     -> write ParsedDataset
 ```
 
-每一步记录输入、输出、工具版本、参数、处理前后行数、警告和时间。
+每一步记录输入、输出、工具版本、参数摘要、处理前后行数、警告和时间。样本和
+gene ID 规范化同时保留 raw value、canonical value 与规则。
 
 ### 4.4 Artifact Builder
 
@@ -214,28 +262,33 @@ Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数
 以下条件全部满足后才把 staging 原子提升为 `artifacts/`：
 
 - `main_data.csv` 每个 `source_id` 都存在；
-- 每个 `asset_id` 都存在于下载记录；
-- raw 文件存在且 SHA-256 一致；
+- `dataset_id` 和 `sample_id` 外键完整；
+- 每个 `asset_id` 都存在于 source asset 记录，并关联成功 DownloadAttempt；
+- source asset 存在且 SHA-256 一致；
 - 主数据所有字段都有字段说明；
-- 每个值记录 raw 行列位置；
-- 最多抽样 100 个值回溯至 raw 并精确相等；
+- 每个源数据派生测量有精确 SourceLocator；
+- 固定案例全量回溯表达值；一般任务全量检查结构并默认抽样 100 个值；
 - processing log 含完整输入输出和行数；
 - CSV 编码和列数稳定；
 - warnings 与 metrics 计数一致；
 - 所有必需 Artifact 存在且非空。
 
 失败报告写入 `logs/validation_report.json`，无效文件不得出现在 Artifact API。
+发布使用任务锁、独立 staging、文件 flush、manifest 验证和同文件系统原子 rename；
+发布成功后才产生 artifact 和 completed 事件。
 
 ## 5. 任务目录
 
 ```text
 data/output/tasks/<task_id>/
-|-- raw/          # 不可变下载文件
+|-- source_assets/# 不可变来源文件
+|-- download_tmp/ # 不完整下载
 |-- parsed/       # 解析结果
 |-- normalized/   # 清洗和字段对齐结果
-|-- staging/      # 未通过验证的候选产物
+|-- staging/      # 按 run_id 隔离的候选产物
 |-- artifacts/    # 已通过验证的交付物
-`-- logs/         # 事件、验证和诊断记录
+|-- state/        # 任务锁和恢复状态
+`-- logs/         # stage attempts、事件、验证和诊断记录
 ```
 
 API 只公开 `artifacts/`。
@@ -252,6 +305,8 @@ artifacts/
 |-- field_descriptions.csv
 |-- field_mapping.csv
 |-- source_list.csv
+|-- source_relations.csv
+|-- source_assets.csv
 |-- download_log.csv
 |-- processing_log.csv
 |-- quality_report.csv
@@ -264,8 +319,11 @@ artifacts/
 测量：
 
 ```text
-record_id,dataset_id,source_id,asset_id,gene_id,sample_id,
-expression_value,expression_unit,source_row,source_column
+record_id,dataset_id,source_id,asset_id,gene_id_raw,gene_id,
+gene_id_namespace,gene_id_version,sample_id,measurement_type,
+value_semantics,value_scale,is_normalized,is_integer_expected,
+expression_value,expression_unit,source_logical_file,source_line_number,
+source_column_index,source_column_name,source_raw_value
 ```
 
 论文元数据进入 `literature.csv`，数据集元数据进入 `dataset_catalog.csv`。
@@ -273,7 +331,9 @@ expression_value,expression_unit,source_row,source_column
 ### 6.2 追溯文件
 
 - `source_list.csv`：来源与 accession；
-- `download_log.csv`：文件、URL、大小、checksum 和状态；
+- `source_relations.csv`：来源间关系和证据；
+- `source_assets.csv`：成功资产、data level、checksum 和成功 attempt；
+- `download_log.csv`：每次下载尝试、字节数、状态和错误；
 - `field_mapping.csv`：原字段到标准字段的映射；
 - `processing_log.csv`：所有处理步骤；
 - `quality_report.csv`：验证规则及通过/失败数；
@@ -305,22 +365,26 @@ FastAPI 提供：
 - `POST /api/v1/tasks`
 - `GET /api/v1/tasks/{task_id}`
 - `GET /api/v1/tasks/{task_id}/artifacts`
-- `GET /api/v1/tasks/{task_id}/artifacts/{path}`
+- `GET /api/v1/tasks/{task_id}/artifacts/{artifact_id}`
 
 WebSocket 事件使用统一 envelope：
 
 ```json
 {
+  "schema_version": "1.0",
+  "event_id": "event-...",
   "type": "stage_started",
   "task_id": "task-...",
+  "stage_attempt_id": "stage-attempt-...",
   "sequence": 1,
   "timestamp": "2026-07-12T00:00:00Z",
   "payload": {}
 }
 ```
 
-所有任务必须产生 `task_completed` 或 `task_failed` 终态。事件字段不再由前后端
-分别猜测。
+事件先持久化再推送，sequence 在单任务内严格递增并支持断线续读。任务支持
+stage_failed、stage_skipped、取消和恢复事件，并且只能进入一个终态。各 payload
+使用判别联合 Pydantic schema，不接受任意 dict。
 
 ## 9. 前端目标架构
 
