@@ -70,4 +70,4 @@ async def agent_ws(websocket: WebSocket) -> None:
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
-            pass
+            logger.debug("WebSocket 发送错误事件时连接已断开", exc_info=True)

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from app.config import settings
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 
@@ -36,7 +36,7 @@ class RunContext:
     preferred_sources: list[str] = field(default_factory=list)
     plan: str = ""
 
-    sources: list = field(default_factory=list)
+    sources: list[Any] = field(default_factory=list)
     raw_assets: list[str] = field(default_factory=list)
     parsed_datasets: list[str] = field(default_factory=list)
     records: list[dict] = field(default_factory=list)
@@ -60,7 +60,7 @@ class RunContext:
         """兼容旧版：返回 artifacts 目录路径。"""
         return self._work_dir.artifacts
 
-    def add_source(self, source) -> None:
+    def add_source(self, source: Any) -> None:
         """记录一个数据来源（SourceRecord）。"""
         self.sources.append(source)
 

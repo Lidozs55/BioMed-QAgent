@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator
 
 
 # ---------------------------------------------------------------------------

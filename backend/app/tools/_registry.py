@@ -5,19 +5,19 @@
 
 from __future__ import annotations
 
-from agents import function_tool
-
-from app.skills.registry import build_agent_config, skill_registry
+from app.skills.registry import SkillDef, build_agent_config, skill_registry
 from app.tools.io import read_file, write_file, list_files
 
+browser_fallback_skill: SkillDef | None = None
 try:
     from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
 except ImportError:
-    browser_fallback_skill = None
+    pass
+self_evolution_skill: SkillDef | None = None
 try:
     from app.skills.builtin.processing.self_evolution import self_evolution_skill  # noqa: F401
 except ImportError:
-    self_evolution_skill = None
+    pass
 
 
 def _import_skill_modules() -> None:

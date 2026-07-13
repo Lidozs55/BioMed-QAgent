@@ -44,14 +44,14 @@ def _call(tool, ctx: ToolContext, **kwargs) -> str:
 
 
 def test_write_file_relative_path_succeeds() -> None:
-    """Writing with a relative path should create the file inside output_dir."""
+    """Writing with a relative path should create the file inside task root."""
     rc = RunContext(task_id="test_write_rel")
     ctx = _make_ctx(rc, "write_file")
 
     result = _call(write_file, ctx, path="hello.txt", content="hello world")
 
     assert "已写入" in result
-    written = rc.output_dir / "hello.txt"
+    written = rc.work_dir.root / "hello.txt"
     assert written.exists()
     assert written.read_text(encoding="utf-8") == "hello world"
 
@@ -91,7 +91,7 @@ def test_write_file_creates_parent_dirs() -> None:
     )
 
     assert "已写入" in result
-    nested = rc.output_dir / "sub" / "deep" / "nested.txt"
+    nested = rc.work_dir.root / "sub" / "deep" / "nested.txt"
     assert nested.exists()
     assert nested.read_text(encoding="utf-8") == "nested content"
 
@@ -112,6 +112,32 @@ def test_read_file_returns_content() -> None:
     result = _call(read_file, read_ctx, path="data.txt")
 
     assert result == "some content"
+
+
+def test_read_file_from_source_assets() -> None:
+    """Reading a file in source_assets/ (downloaded by a skill) should succeed
+    now that the sandbox boundary has been widened to the task root."""
+    rc = RunContext(task_id="test_read_raw")
+    # Simulate a file downloaded by a skill into source_assets/
+    raw_file = rc.work_dir.source_assets / "downloaded.csv"
+    raw_file.write_text("gene,log2fc\nBRCA1,1.5", encoding="utf-8")
+
+    ctx = _make_ctx(rc, "read_file")
+    result = _call(read_file, ctx, path="source_assets/downloaded.csv")
+
+    assert "BRCA1" in result
+
+
+def test_read_file_from_parsed() -> None:
+    """Reading a file in parsed/ (produced by a processing skill) should succeed."""
+    rc = RunContext(task_id="test_read_parsed")
+    parsed_file = rc.work_dir.parsed / "table1.csv"
+    parsed_file.write_text("a,b\n1,2", encoding="utf-8")
+
+    ctx = _make_ctx(rc, "read_file")
+    result = _call(read_file, ctx, path="parsed/table1.csv")
+
+    assert "a,b" in result
 
 
 def test_read_file_not_found() -> None:
@@ -151,10 +177,10 @@ def test_list_files_with_subdir() -> None:
     """Listing a subdirectory with files should return relative paths."""
     rc = RunContext(task_id="test_list_subdir")
 
-    # Create some files
-    (rc.output_dir / "sub").mkdir(exist_ok=True)
-    (rc.output_dir / "sub" / "a.txt").write_text("a")
-    (rc.output_dir / "sub" / "b.txt").write_text("b")
+    # Create some files under task root
+    (rc.work_dir.root / "sub").mkdir(exist_ok=True)
+    (rc.work_dir.root / "sub" / "a.txt").write_text("a")
+    (rc.work_dir.root / "sub" / "b.txt").write_text("b")
 
     ctx = _make_ctx(rc, "list_files")
     result = _call(list_files, ctx, subdir="sub")
@@ -166,7 +192,7 @@ def test_list_files_with_subdir() -> None:
 def test_list_files_root_dir() -> None:
     """Listing the root (empty subdir) when files exist."""
     rc = RunContext(task_id="test_list_root")
-    (rc.output_dir / "root_file.txt").write_text("hello")
+    (rc.work_dir.root / "root_file.txt").write_text("hello")
 
     ctx = _make_ctx(rc, "list_files")
     result = _call(list_files, ctx, subdir="")

@@ -21,28 +21,6 @@ logger = logging.getLogger(__name__)
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-_DB_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("GEO", re.compile(r"\bGEO\b", re.IGNORECASE)),
-    ("GDC", re.compile(r"\bGDC\b", re.IGNORECASE)),
-    ("TCGA", re.compile(r"\bTCGA\b", re.IGNORECASE)),
-    ("Xena", re.compile(r"\bXena\b", re.IGNORECASE)),
-    ("PDB", re.compile(r"\bPDB\b", re.IGNORECASE)),
-    ("ArrayExpress", re.compile(r"\bArrayExpress\b", re.IGNORECASE)),
-    ("SRA", re.compile(r"\bSRA\b", re.IGNORECASE)),
-    ("EGA", re.compile(r"\bEGA\b", re.IGNORECASE)),
-    ("dbGaP", re.compile(r"\bdbGaP\b", re.IGNORECASE)),
-    ("PRIDE", re.compile(r"\bPRIDE\b", re.IGNORECASE)),
-    ("MetaboLights", re.compile(r"\bMetaboLights\b", re.IGNORECASE)),
-    ("GEO (GSE pattern)", re.compile(r"\bGSE\d{4,}\b")),
-    ("GEO (GSM pattern)", re.compile(r"\bGSM\d{4,}\b")),
-    ("GEO (GPL pattern)", re.compile(r"\bGPL\d{4,}\b")),
-    ("SRA/ENA accession", re.compile(r"\bSR[APX]\d{6,}\b")),
-    ("PDB accession", re.compile(r"\bPDB\s+\w{4}\b", re.IGNORECASE)),
-    ("ArrayExpress accession", re.compile(r"\bE-MTAB-\d+\b")),
-    ("ENA project", re.compile(r"\bPRJ[EDN]\w+\b")),
-    ("dbGaP accession", re.compile(r"\bphs\d+\b")),
-]
-
 _ACCESSION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("GSE", re.compile(r"\bGSE\d{4,}\b")),
     ("GSM", re.compile(r"\bGSM\d{4,}\b")),
@@ -62,7 +40,7 @@ _DATA_TYPES: list[str] = [
 
 _SPECIES: list[str] = [
     "human", "mouse", "rat", "zebrafish", "drosophila",
-    "c. elegans", "yeast", "fruit fly", "arabidopsis", "mouse",
+    "c. elegans", "yeast", "fruit fly", "arabidopsis",
 ]
 
 _KEYWORDS: list[str] = [
@@ -169,7 +147,7 @@ _ACCESSION_PATTERNS_BY_DB: dict[str, re.Pattern] = {
     "GEO": re.compile(r"\b(GSE\d{4,}|GSM\d{4,}|GPL\d{4,})\b"),
     "GDC": re.compile(r"\bGDC_\w+\b"),
     "TCGA": re.compile(r"\b(TCGA-[A-Z0-9]{2,}-[A-Z0-9]+)\b"),
-    "PDB": re.compile(r"\b\w{4}\b"),  # placeholder; PDB accession matched above
+    "PDB": re.compile(r"\b[0-9][A-Za-z0-9]{3}\b"),  # PDB ID: digit + 3 alnum
     "ArrayExpress": re.compile(r"\bE-MTAB-\d+\b"),
     "SRA": re.compile(r"\bSR[APX]\d{6,}\b"),
     "EGA": re.compile(r"\b(EGAD\d+|EGAS\d+)\b"),
@@ -239,14 +217,25 @@ def analyze_papers(
     all_databases: list[str] = []
     all_accessions: list[str] = []
     all_data_types: list[str] = []
+    errors: list[dict[str, Any]] = []
 
-    for rec in records:
-        finding = _analyze_record(rec)
-        findings.append(finding)
-        for db in finding["databases_found"]:
-            all_databases.append(db["name"])
-            all_accessions.extend(db["accessions"])
-        all_data_types.extend(finding["data_types"])
+    try:
+        for rec in records:
+            try:
+                finding = _analyze_record(rec)
+            except Exception as exc:
+                errors.append({"record": rec, "error": str(exc)})
+                continue
+            findings.append(finding)
+            for db in finding["databases_found"]:
+                all_databases.append(db["name"])
+                all_accessions.extend(db["accessions"])
+            all_data_types.extend(finding["data_types"])
+    except Exception as exc:
+        return json.dumps(
+            {"status": "error", "error": str(exc), "partial_findings": findings},
+            ensure_ascii=False,
+        )
 
     databases_referenced = list(dict.fromkeys(all_databases))
     primary_data_types = list(dict.fromkeys(all_data_types))
@@ -254,6 +243,7 @@ def analyze_papers(
     result = {
         "papers_analyzed": len(records),
         "findings": findings,
+        "errors": errors,
         "summary": {
             "databases_referenced": databases_referenced,
             "total_accessions_found": len(all_accessions),

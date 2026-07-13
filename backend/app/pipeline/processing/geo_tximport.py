@@ -5,9 +5,7 @@ from __future__ import annotations
 import csv
 import gzip
 import hashlib
-import io
 import re
-from pathlib import Path
 
 from pydantic import Field
 

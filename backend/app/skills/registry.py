@@ -86,7 +86,7 @@ class SkillRegistry:
         """按名称查询 Skill。"""
         return self._skills.get(name)
 
-    def list(self) -> list[str]:
+    def names(self) -> list[str]:
         """列出所有已注册 Skill 名称。"""
         return list(self._skills.keys())
 

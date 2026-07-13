@@ -6,7 +6,6 @@ as reusable learned skills, including EVOLUTION.md lifecycle tracking.
 from __future__ import annotations
 
 import importlib
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
