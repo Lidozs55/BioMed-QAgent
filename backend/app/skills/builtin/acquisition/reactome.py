@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -28,6 +29,21 @@ logger = logging.getLogger(__name__)
 
 _REACTOME_API_BASE = "https://reactome.org/ContentService"
 _REACTOME_PAGE_BASE = "https://reactome.org/content/detail"
+
+# 匹配 Reactome 搜索结果中的高亮 span 标签
+_HIGHLIGHT_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    """移除 Reactome 搜索结果中的 HTML 高亮标签。
+
+    Reactome ContentService 搜索 API 会在 name/summation 字段中返回
+    形如 ``<span class="highlighting">apoptosis</span>`` 的高亮标签,
+    需要清洗后才能呈现给用户。
+    """
+    if not text:
+        return ""
+    return _HIGHLIGHT_RE.sub("", text).strip()
 
 
 @function_tool
@@ -53,9 +69,10 @@ def search_reactome(
     """
     run_ctx: RunContext = ctx.context
     encoded_term = quote(term)
+    # Reactome ContentService search/query 使用 startIndex/pageSize 分页
     api_url = (
         f"{_REACTOME_API_BASE}/search/query?query={encoded_term}"
-        f"&species=Homo+sapiens&start=0&rows={max_results}"
+        f"&species=Homo+sapiens&startIndex=0&pageSize={max_results}"
     )
 
     # Tier 1: API
@@ -63,22 +80,29 @@ def search_reactome(
     if result.ok:
         try:
             data = json.loads(result.content)
-            entries = data.get("entries", [])
+            # 响应结构: {results: [{entries: [...], typeName, ...}], numberOfMatches, ...}
+            # results 按 typeName 分组,每组含 entries 列表;需拍平并截断到 max_results
+            groups = data.get("results", [])
+            entries: list[dict] = []
+            for group in groups:
+                entries.extend(group.get("entries", []))
             records = [
                 {
                     "pathway_id": e.get("stId", ""),
-                    "name": e.get("name", ""),
-                    "species": e.get("species", ""),
-                    "summary": e.get("summary", ""),
+                    "name": _strip_html(e.get("name", "")),
+                    "species": ", ".join(e.get("species", [])) if isinstance(e.get("species"), list) else str(e.get("species", "")),
+                    "summary": _strip_html(e.get("summation", "")),
+                    "type": e.get("exactType", e.get("type", "")),
                     "url": f"{_REACTOME_PAGE_BASE}/{e.get('stId', '')}",
                 }
-                for e in entries
+                for e in entries[:max_results]
             ]
             run_ctx.log_query(term, "reactome", "ok", len(records))
             return json.dumps({
                 "source": "reactome",
                 "term": term,
                 "count": len(records),
+                "total_matches": data.get("numberOfMatches", len(records)),
                 "records": records,
                 "method_used": "api",
             }, ensure_ascii=False)
@@ -131,16 +155,24 @@ def get_pathway(
         On failure: JSON with status="requires_crawl".
     """
     run_ctx: RunContext = ctx.context
-    api_url = f"{_REACTOME_API_BASE}/data/pathway/{pathway_id}"
+    # Reactome ContentService 详情端点:/data/query/{stId}(不是 /data/pathway/)
+    api_url = f"{_REACTOME_API_BASE}/data/query/{pathway_id}"
 
     # Tier 1: API
     result = api_fetch(api_url)
     if result.ok:
         try:
             data = json.loads(result.content)
+            # name 字段在某些端点返回数组(如 ['Hemostasis', 'Blood coagulation']),
+            # 取首项作为主名;speciesName 是字符串
+            raw_name = data.get("name", "")
+            if isinstance(raw_name, list):
+                name = raw_name[0] if raw_name else ""
+            else:
+                name = str(raw_name)
             record = {
                 "pathway_id": data.get("stId", pathway_id),
-                "name": data.get("name", ""),
+                "name": name,
                 "species": data.get("speciesName", ""),
                 "has_diagram": data.get("hasDiagram", False),
                 "url": f"{_REACTOME_PAGE_BASE}/{data.get('stId', pathway_id)}",
