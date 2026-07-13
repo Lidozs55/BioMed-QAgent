@@ -26,6 +26,7 @@ from app.domain.contracts import (
     RuntimeEventType,
     StartRunRequest,
     StartTaskRequest,
+    TaskCreatedPayload,
     TaskMode,
     TaskPage,
     TaskRunAccepted,
@@ -41,6 +42,29 @@ from app.domain.contracts import (
 
 
 NOW = datetime(2026, 7, 13, tzinfo=timezone.utc)
+
+RUNTIME_PAYLOADS = [
+    RunQueuedPayload(request_id="req_123", input="question"),
+    RunStartedPayload(),
+    RunFinalizingPayload(),
+    RunCompletedPayload(),
+    RunFailedPayload(error="model unavailable"),
+    RunCancelRequestedPayload(reason="user requested"),
+    RunCancelledPayload(reason="user requested"),
+    RunInterruptedPayload(reason="process restarted"),
+    AssistantDeltaPayload(delta="partial answer"),
+    ToolStartedPayload(tool_call_id="call_123", tool_name="search_literature"),
+    ToolCompletedPayload(
+        tool_call_id="call_123",
+        tool_name="search_literature",
+        output="3 results",
+    ),
+    ConversationCompactedPayload(
+        covered_through_run_id="run_122",
+        summary_digest="ab" * 32,
+    ),
+    WarningPayload(message="compaction failed", code="compaction_failed"),
+]
 
 
 def test_event_envelope_accepts_v2_run_linkage() -> None:
@@ -177,35 +201,14 @@ def test_runtime_snapshot_and_pages_are_typed() -> None:
 
 
 def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
-    payloads = [
-        RunQueuedPayload(request_id="req_123", input="question"),
-        RunStartedPayload(),
-        RunFinalizingPayload(),
-        RunCompletedPayload(),
-        RunFailedPayload(error="model unavailable"),
-        RunCancelRequestedPayload(reason="user requested"),
-        RunCancelledPayload(reason="user requested"),
-        RunInterruptedPayload(reason="process restarted"),
-        AssistantDeltaPayload(delta="partial answer"),
-        ToolStartedPayload(tool_call_id="call_123", tool_name="search_literature"),
-        ToolCompletedPayload(
-            tool_call_id="call_123",
-            tool_name="search_literature",
-            output="3 results",
-        ),
-        ConversationCompactedPayload(
-            covered_through_run_id="run_122",
-            summary_digest="ab" * 32,
-        ),
-        WarningPayload(message="compaction failed", code="compaction_failed"),
-    ]
-
-    assert {payload.type for payload in payloads} == set(RuntimeEventType) | {
+    assert {payload.type for payload in RUNTIME_PAYLOADS} == set(
+        RuntimeEventType
+    ) | {
         PipelineEventType.TOOL_COMPLETED,
         PipelineEventType.WARNING,
     }
 
-    for sequence, payload in enumerate(payloads, start=1):
+    for sequence, payload in enumerate(RUNTIME_PAYLOADS, start=1):
         envelope = EventEnvelope(
             schema_version="2.0",
             event_id=f"event_{sequence}",
@@ -219,16 +222,66 @@ def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
         parsed = EventEnvelope.model_validate_json(envelope.model_dump_json())
         assert type(parsed.payload) is type(payload)
 
+@pytest.mark.parametrize(
+    "payload",
+    RUNTIME_PAYLOADS,
+    ids=lambda payload: payload.type.value,
+)
+def test_every_runtime_scoped_payload_requires_run_id(payload: object) -> None:
     with pytest.raises(ValidationError, match="run_id"):
         EventEnvelope(
             schema_version="2.0",
             event_id="event_missing_run",
-            type=RuntimeEventType.RUN_STARTED,
+            type=payload.type,
             task_id="task_123",
             sequence=20,
             timestamp=NOW,
-            payload=RunStartedPayload(),
+            payload=payload,
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    RUNTIME_PAYLOADS,
+    ids=lambda payload: payload.type.value,
+)
+@pytest.mark.parametrize("schema_version", [None, "1.0"], ids=["omitted", "v1"])
+def test_every_runtime_scoped_payload_requires_schema_v2(
+    payload: object,
+    schema_version: str | None,
+) -> None:
+    envelope = {
+        "event_id": "event_wrong_schema",
+        "type": payload.type,
+        "task_id": "task_123",
+        "run_id": "run_123",
+        "sequence": 20,
+        "timestamp": NOW,
+        "payload": payload,
+    }
+    if schema_version is not None:
+        envelope["schema_version"] = schema_version
+
+    with pytest.raises(ValidationError, match="schema_version 2.0"):
+        EventEnvelope.model_validate(envelope)
+
+
+@pytest.mark.parametrize("schema_version", [None, "1.0"], ids=["omitted", "v1"])
+def test_any_run_linkage_requires_schema_v2(schema_version: str | None) -> None:
+    envelope = {
+        "event_id": "event_wrong_schema",
+        "type": PipelineEventType.TASK_CREATED,
+        "task_id": "task_123",
+        "run_id": "run_123",
+        "sequence": 1,
+        "timestamp": NOW,
+        "payload": TaskCreatedPayload(topic="breast cancer"),
+    }
+    if schema_version is not None:
+        envelope["schema_version"] = schema_version
+
+    with pytest.raises(ValidationError, match="schema_version 2.0"):
+        EventEnvelope.model_validate(envelope)
 
 
 def test_runtime_id_helpers_use_canonical_prefixes() -> None:

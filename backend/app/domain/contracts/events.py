@@ -277,19 +277,22 @@ class EventEnvelope(ContractModel):
             raise ValueError("event type must match payload type")
         if self.type in _STAGE_EVENTS and not self.stage_attempt_id:
             raise ValueError("stage events require stage_attempt_id")
-        if isinstance(self.type, RuntimeEventType) and not self.run_id:
-            raise ValueError("run-scoped events require run_id")
+        runtime_scoped = (
+            isinstance(self.type, RuntimeEventType)
+            or (
+                isinstance(self.payload, ToolCompletedPayload)
+                and self.payload.tool_call_id is not None
+            )
+            or (
+                isinstance(self.payload, WarningPayload)
+                and self.payload.warning is None
+            )
+        )
         if (
-            isinstance(self.payload, ToolCompletedPayload)
-            and self.payload.tool_call_id is not None
-            and not self.run_id
-        ):
-            raise ValueError("run-scoped events require run_id")
-        if (
-            isinstance(self.payload, WarningPayload)
-            and self.payload.warning is None
-            and not self.run_id
-        ):
+            self.run_id is not None or runtime_scoped
+        ) and self.schema_version != "2.0":
+            raise ValueError("run linkage and runtime events require schema_version 2.0")
+        if runtime_scoped and not self.run_id:
             raise ValueError("run-scoped events require run_id")
         return self
 

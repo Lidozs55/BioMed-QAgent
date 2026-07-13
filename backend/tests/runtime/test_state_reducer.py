@@ -145,6 +145,40 @@ def test_reducer_rejects_duplicate_and_unknown_runs() -> None:
         )
 
 
+def test_reducer_rejects_second_run_while_first_is_active() -> None:
+    with pytest.raises(ValueError, match="active run"):
+        reduce_task_event(
+            queued_snapshot(),
+            runtime_event(
+                2,
+                RunQueuedPayload(request_id="req_456", input="second turn"),
+                run_id="run_456",
+            ),
+        )
+
+
+def test_reducer_accepts_new_run_after_prior_run_is_terminal() -> None:
+    snapshot = queued_snapshot()
+    for sequence, payload in enumerate(
+        [RunStartedPayload(), RunFinalizingPayload(), RunCompletedPayload()],
+        start=2,
+    ):
+        snapshot = reduce_task_event(snapshot, runtime_event(sequence, payload))
+
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            5,
+            RunQueuedPayload(request_id="req_456", input="second turn"),
+            run_id="run_456",
+        ),
+    )
+
+    assert len(snapshot.runs) == 2
+    assert snapshot.task.active_run_id == "run_456"
+    assert snapshot.task.status is RunStatus.QUEUED
+
+
 def test_terminal_run_is_immutable() -> None:
     snapshot = queued_snapshot()
     for sequence, payload in enumerate(

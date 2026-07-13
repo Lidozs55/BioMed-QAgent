@@ -86,6 +86,8 @@ def reduce_task_event(
             raise ValueError("run-scoped events require run_id")
         if any(run.run_id == event.run_id for run in snapshot.runs):
             raise ValueError(f"run_id already exists: {event.run_id}")
+        if any(run.status not in _TERMINAL_STATUSES for run in snapshot.runs):
+            raise ValueError("cannot queue a run while another active run exists")
         runs.append(
             RunRecord(
                 run_id=event.run_id,
