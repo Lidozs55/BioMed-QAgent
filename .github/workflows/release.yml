@@ -70,20 +70,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ----- Frontend setup -----
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        # No ``version`` input -- uses the version specified in
-        # ``packageManager`` field of package.json (if present), otherwise
-        # the latest stable pnpm.
-
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          version: 9
+        # Uses pnpm 9.x (matches the lockfileVersion: 9.0 format).
+        # The ``packageManager`` field in package.json also pins this.
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
           # Cache pnpm's global store to speed up subsequent runs.
           cache: 'pnpm'
           cache-dependency-path: frontend/pnpm-lock.yaml
@@ -198,7 +199,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
