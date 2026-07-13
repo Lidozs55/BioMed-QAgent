@@ -36,6 +36,15 @@ class Settings:
     task_page_size: int = int(os.getenv("TASK_PAGE_SIZE", "30"))
     task_page_max_size: int = int(os.getenv("TASK_PAGE_MAX_SIZE", "100"))
     task_message_page_size: int = int(os.getenv("TASK_MESSAGE_PAGE_SIZE", "100"))
+    # Runtime concurrency and live-event backpressure
+    runtime_max_active_runs: int = int(os.getenv("RUNTIME_MAX_ACTIVE_RUNS", "4"))
+    runtime_sync_worker_threads: int = int(
+        os.getenv("RUNTIME_SYNC_WORKER_THREADS", "4")
+    )
+    runtime_run_queue_size: int = int(os.getenv("RUNTIME_RUN_QUEUE_SIZE", "100"))
+    runtime_subscriber_queue_size: int = int(
+        os.getenv("RUNTIME_SUBSCRIBER_QUEUE_SIZE", "1000")
+    )
 
 
 settings = Settings()

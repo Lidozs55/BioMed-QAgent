@@ -1,4 +1,5 @@
 """配置测试 — 验证 Settings 加载和默认值。"""
+
 from __future__ import annotations
 
 from app.config import Settings, settings
@@ -11,7 +12,10 @@ def test_settings_has_dashscope_api_key() -> None:
 
 def test_settings_has_dashscope_base_url() -> None:
     assert hasattr(settings, "dashscope_base_url")
-    assert "dashscope" in settings.dashscope_base_url or "compatible-mode" in settings.dashscope_base_url
+    assert (
+        "dashscope" in settings.dashscope_base_url
+        or "compatible-mode" in settings.dashscope_base_url
+    )
 
 
 def test_settings_has_model_name() -> None:
@@ -35,5 +39,15 @@ def test_settings_has_output_dir() -> None:
 def test_settings_is_frozen() -> None:
     """Settings 是 frozen dataclass，不可变。"""
     import pytest
+
     with pytest.raises(Exception):
         settings.host = "0.0.0.0"  # type: ignore[misc]
+
+
+def test_runtime_concurrency_defaults_are_bounded() -> None:
+    configured = Settings()
+
+    assert configured.runtime_max_active_runs == 4
+    assert configured.runtime_sync_worker_threads == 4
+    assert configured.runtime_run_queue_size == 100
+    assert configured.runtime_subscriber_queue_size == 1000
