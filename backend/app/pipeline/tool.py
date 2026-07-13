@@ -39,6 +39,7 @@ async def run_research_pipeline(
         base_dir=run_context.work_dir.root.parent,
         fixture_dir=fixture_dir,
         topic=topic,
+        cancellation_requested=run_context.cancellation_requested,
     )
     return json.dumps(
         {

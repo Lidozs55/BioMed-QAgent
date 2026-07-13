@@ -10,6 +10,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
@@ -183,6 +184,19 @@ _ARTIFACT_COLUMNS = {
 }
 
 
+class CancellationToken(Protocol):
+    def is_set(self) -> bool: ...
+
+
+class PipelineCancelledError(RuntimeError):
+    """Raised at a fixture stage boundary after cooperative cancellation."""
+
+
+def _check_cancelled(cancellation_requested: CancellationToken | None) -> None:
+    if cancellation_requested is not None and cancellation_requested.is_set():
+        raise PipelineCancelledError("fixture pipeline was cancelled")
+
+
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
@@ -348,6 +362,7 @@ def run_pinned_fixture(
     base_dir: Path,
     fixture_dir: Path,
     topic: str = "breast cancer gene expression under Hsp70 inhibition",
+    cancellation_requested: CancellationToken | None = None,
 ) -> RunManifest:
     started_at = datetime.now(timezone.utc)
     workdir = create_task_workdir(task_id, base_dir=str(base_dir))
@@ -355,6 +370,7 @@ def run_pinned_fixture(
     if any(staging.iterdir()):
         shutil.rmtree(staging)
         staging.mkdir(parents=True)
+    _check_cancelled(cancellation_requested)
 
     fixture_manifest = json.loads((fixture_dir / "manifest.json").read_text("utf-8"))
     retrieved_at = datetime.fromisoformat(fixture_manifest["retrieved_at"])
@@ -365,6 +381,7 @@ def run_pinned_fixture(
     geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo.accession}"
     pubmed_source_id = make_source_id(Database.PUBMED, literature.pmid, pubmed_url)
     geo_source_id = make_source_id(Database.GEO, geo.accession, geo_url)
+    _check_cancelled(cancellation_requested)
 
     compressed = gzip.compress(
         (fixture_dir / "tximport_counts_slice.tsv").read_bytes(), mtime=0
@@ -393,6 +410,7 @@ def run_pinned_fixture(
         successful_attempt_id=attempt_id,
         data_level=DataLevel.REPOSITORY_PROCESSED,
     )
+    _check_cancelled(cancellation_requested)
     parsed = process_geo_tximport_counts(
         source_asset=source_asset,
         dataset_id=dataset_id,
@@ -403,6 +421,7 @@ def run_pinned_fixture(
     shutil.copy2(
         workdir.root / parsed.file_asset.relative_path, staging / "main_data.csv"
     )
+    _check_cancelled(cancellation_requested)
 
     sources = [
         SourceRecord(
@@ -564,6 +583,7 @@ def run_pinned_fixture(
     _write_csv(
         staging / "quality_report.csv", _ARTIFACT_COLUMNS["quality_report.csv"], []
     )
+    _check_cancelled(cancellation_requested)
 
     validation, checks = _validate_package(
         staging, source_path, workdir.logs / "validation_report.json"
@@ -573,6 +593,7 @@ def run_pinned_fixture(
     )
     if validation.status != "valid":
         raise ValueError("pinned fixture failed validation")
+    _check_cancelled(cancellation_requested)
 
     entries = []
     for path in sorted(staging.iterdir(), key=lambda item: item.name):
@@ -670,6 +691,7 @@ def run_pinned_fixture(
     )
     if any(workdir.artifacts.iterdir()):
         raise FileExistsError("artifacts directory is not empty")
+    _check_cancelled(cancellation_requested)
     workdir.artifacts.rmdir()
     os.replace(staging, workdir.artifacts)
 

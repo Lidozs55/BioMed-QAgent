@@ -9,6 +9,9 @@ from datetime import datetime, timezone
 import pytest
 
 from app.domain.contracts import (
+    AssistantDeltaPayload,
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     RunCancelRequestedPayload,
     RunCancelledPayload,
     RunFinalizingPayload,
@@ -732,6 +735,7 @@ async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> 
     async with application.router.lifespan_context(application):
         manager = application.state.task_manager
         assert manager.repository is application.state.task_repository
+        assert isinstance(manager.run_executor, main_module.AgentRunExecutor)
         assert manager.event_hub is application.state.event_hub
         assert manager.max_active_runs == 2
         assert manager.max_queued_runs == 5
@@ -1286,3 +1290,89 @@ async def test_close_waits_for_in_flight_admission_before_repository_shutdown(
     finally:
         release_admission.set()
         await asyncio.gather(submission, close_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_execution_activity_is_sequenced_through_manager(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        await execution.emit(AssistantDeltaPayload(delta="durable answer"))
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_activity"))
+        accepted = await manager.submit_run(
+            "task_activity",
+            StartRunRequest(request_id="req_activity", input="answer me"),
+        )
+        await manager.wait_until_idle()
+
+        events = await repository.list_events("task_activity")
+        assert isinstance(events[2].payload, AssistantDeltaPayload)
+        assert [event.sequence for event in events] == list(range(1, 6))
+        assert events[2].run_id == accepted.run_id
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_suppresses_artifact_when_cancel_wins_emitter_lock(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    execution_ready = asyncio.Event()
+    release_artifact = asyncio.Event()
+    execution_seen = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_artifact.wait()
+        await execution.emit(
+            ArtifactProducedPayload(
+                artifact=ArtifactManifestEntry(
+                    artifact_id="artifact_cancel_race",
+                    name="cancelled.csv",
+                    relative_path="artifacts/cancelled.csv",
+                    media_type="text/csv",
+                    size_bytes=1,
+                    sha256="ab" * 32,
+                    generated_by_step_id="step_cancel_race",
+                )
+            )
+        )
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_artifact_cancel"))
+        accepted = await manager.submit_run(
+            "task_artifact_cancel",
+            StartRunRequest(request_id="req_artifact_cancel", input="cancel artifact"),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+
+        cancellation = asyncio.create_task(
+            manager.cancel_run("task_artifact_cancel", accepted.run_id)
+        )
+        await asyncio.wait_for(
+            execution_seen.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_artifact.set()
+        await asyncio.wait_for(cancellation, timeout=1)
+
+        events = await repository.list_events("task_artifact_cancel")
+        assert not any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    finally:
+        release_artifact.set()
+        await manager.close()

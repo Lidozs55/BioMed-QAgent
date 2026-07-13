@@ -12,6 +12,7 @@ from typing import Literal, Protocol
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
+    ArtifactProducedPayload,
     RunCancelRequestedPayload,
     RunCancelledPayload,
     RunCompletedPayload,
@@ -43,6 +44,9 @@ class StreamingRunResult(Protocol):
     ) -> None: ...
 
 
+RunEventEmitter = Callable[[object], Awaitable[TaskSnapshot]]
+
+
 @dataclass(slots=True)
 class RunExecution:
     """Run identity, context, and cancellation coordination for an executor."""
@@ -52,6 +56,7 @@ class RunExecution:
     request_id: str
     input: str
     context: RunContext
+    _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
     _streaming_result: StreamingRunResult | None = field(
         default=None,
         init=False,
@@ -79,6 +84,13 @@ class RunExecution:
             raise RuntimeError("streaming result is already attached")
         self._streaming_result = result
         self._stream_ready.set()
+
+    async def emit(self, payload: object) -> TaskSnapshot:
+        """Persist one Run activity event through manager serialization."""
+
+        if self._event_emitter is None:
+            raise RuntimeError("run execution has no event emitter")
+        return await self._event_emitter(payload)
 
     async def wait_for_streaming_result(self) -> StreamingRunResult | None:
         if self._streaming_result is not None or self._drained.is_set():
@@ -568,12 +580,18 @@ class TaskManager:
                 return
             await self._append_status(accepted, RunStartedPayload())
             try:
+                context = self._context_factory(accepted.task_id)
                 execution = RunExecution(
                     task_id=accepted.task_id,
                     run_id=accepted.run_id,
                     request_id=accepted.request_id,
                     input=queued.input,
-                    context=self._context_factory(accepted.task_id),
+                    context=context,
+                    _event_emitter=lambda payload: self._emit_activity(
+                        accepted,
+                        context,
+                        payload,
+                    ),
                 )
             except Exception as error:
                 await self._append_status(
@@ -619,6 +637,24 @@ class TaskManager:
             ):
                 self._running.pop((accepted.task_id, accepted.run_id), None)
 
+    async def _emit_activity(
+        self,
+        accepted: TaskRunAccepted,
+        context: RunContext,
+        payload: object,
+    ) -> TaskSnapshot:
+        lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
+        async with lock:
+            if (
+                isinstance(payload, ArtifactProducedPayload)
+                and context.cancellation_requested.is_set()
+            ):
+                snapshot = await self.repository.get_snapshot(accepted.task_id)
+                if snapshot is None:
+                    raise LookupError(accepted.task_id)
+                return snapshot
+            return await self._append_status(accepted, payload)
+
     async def _append_status(
         self,
         accepted: TaskRunAccepted,
@@ -644,6 +680,7 @@ class TaskManager:
 
 __all__ = [
     "RunExecution",
+    "RunEventEmitter",
     "RunExecutor",
     "StreamingRunResult",
     "RunQueueFullError",

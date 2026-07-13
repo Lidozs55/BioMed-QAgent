@@ -22,20 +22,230 @@ SDK 参考：
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 from pathlib import Path
+from collections.abc import Awaitable, Callable, Mapping
 from typing import AsyncIterator
 
 from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from app.agent_loop.agent import create_agent, get_loaded_skill_names
+from app.agent_loop.agent import build_agent
 from app.agent_loop.context import RunContext
 from app.agent_loop.model import ModelConfigurationError, require_model_credentials
 from app.config import settings
-from app.domain.contracts import RunManifest
+from app.domain.contracts import (
+    AssistantDeltaPayload,
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
+    RunManifest,
+    ToolCompletedPayload,
+    ToolStartedPayload,
+)
+from app.runtime.compaction import ConversationCompactor
 
 logger = logging.getLogger(__name__)
+
+ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
+ASSISTANT_FLUSH_MAX_BYTES = 1024
+
+
+class _AssistantTextBuffer:
+    def __init__(
+        self,
+        emit: Callable[[object], Awaitable[object]],
+        *,
+        max_bytes: int = ASSISTANT_FLUSH_MAX_BYTES,
+        flush_interval: float = ASSISTANT_FLUSH_INTERVAL_SECONDS,
+    ) -> None:
+        self._emit = emit
+        self._max_bytes = max_bytes
+        self._flush_interval = flush_interval
+        self._parts: list[str] = []
+        self._byte_count = 0
+        self._started_at: float | None = None
+
+    async def add(self, delta: str) -> None:
+        for character in delta:
+            character_bytes = len(character.encode("utf-8"))
+            if self._parts and self._byte_count + character_bytes > self._max_bytes:
+                await self.flush()
+            if not self._parts:
+                self._started_at = asyncio.get_running_loop().time()
+            self._parts.append(character)
+            self._byte_count += character_bytes
+            if self._byte_count == self._max_bytes:
+                await self.flush()
+
+    def seconds_until_flush(self) -> float | None:
+        if self._started_at is None:
+            return None
+        elapsed = asyncio.get_running_loop().time() - self._started_at
+        return max(0.0, self._flush_interval - elapsed)
+
+    async def flush(self) -> None:
+        if not self._parts:
+            return
+        delta = "".join(self._parts)
+        self._parts.clear()
+        self._byte_count = 0
+        self._started_at = None
+        await self._emit(AssistantDeltaPayload(delta=delta))
+
+
+def _value(item: object, name: str, default: object = None) -> object:
+    if isinstance(item, Mapping):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _tool_identity(item: object) -> tuple[str, str | None]:
+    raw_item = _value(item, "raw_item", item)
+    call_id = _value(raw_item, "call_id") or _value(raw_item, "id")
+    if not isinstance(call_id, str) or not call_id:
+        raise ValueError("tool stream item is missing call_id")
+    name = _value(raw_item, "name")
+    return call_id, name if isinstance(name, str) and name else None
+
+
+def _load_artifact_payloads(output_dir: Path, task_id: str) -> list[object]:
+    manifest_path = output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
+    if not manifest_path.is_file():
+        return []
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = RunManifest.model_validate_json(manifest_bytes)
+    manifest_entry = ArtifactManifestEntry(
+        artifact_id="run_manifest",
+        name="run_manifest.json",
+        relative_path="artifacts/run_manifest.json",
+        media_type="application/json",
+        size_bytes=len(manifest_bytes),
+        sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        generated_by_step_id="step_artifact_builder_v1",
+    )
+    return [
+        ArtifactProducedPayload(artifact=manifest_entry),
+        *(
+            ArtifactProducedPayload(artifact=artifact)
+            for artifact in manifest.artifacts
+        ),
+    ]
+
+
+class AgentRunExecutor:
+    """Execute one manager-owned Run against its durable SDK session."""
+
+    def __init__(self, repository, *, compactor=None) -> None:
+        self._repository = repository
+        self._compactor = compactor or ConversationCompactor(repository)
+
+    @staticmethod
+    async def _consume_events(
+        execution,
+        result,
+        text_buffer: _AssistantTextBuffer,
+    ) -> None:
+        iterator = result.stream_events().__aiter__()
+        pending_event: asyncio.Task | None = None
+        tool_names: dict[str, str] = {}
+        try:
+            while True:
+                if pending_event is None:
+                    pending_event = asyncio.create_task(iterator.__anext__())
+                done, _ = await asyncio.wait(
+                    {pending_event},
+                    timeout=text_buffer.seconds_until_flush(),
+                )
+                if not done:
+                    await text_buffer.flush()
+                    continue
+                completed = pending_event
+                pending_event = None
+                try:
+                    event = completed.result()
+                except StopAsyncIteration:
+                    return
+                if isinstance(event, RawResponsesStreamEvent):
+                    text_delta = _extract_text_delta(event.data)
+                    if text_delta:
+                        await text_buffer.add(text_delta)
+                    continue
+                if not isinstance(event, RunItemStreamEvent):
+                    continue
+                if event.name == "tool_called":
+                    await text_buffer.flush()
+                    call_id, tool_name = _tool_identity(event.item)
+                    resolved_name = tool_name or "unknown"
+                    tool_names[call_id] = resolved_name
+                    await execution.emit(
+                        ToolStartedPayload(
+                            tool_call_id=call_id,
+                            tool_name=resolved_name,
+                        )
+                    )
+                elif event.name == "tool_output":
+                    await text_buffer.flush()
+                    call_id, tool_name = _tool_identity(event.item)
+                    raw_item = _value(event.item, "raw_item", event.item)
+                    status = _value(raw_item, "status")
+                    is_error = bool(
+                        _value(event.item, "is_error", False)
+                        or _value(raw_item, "is_error", False)
+                        or status in {"error", "failed"}
+                    )
+                    await execution.emit(
+                        ToolCompletedPayload(
+                            tool_call_id=call_id,
+                            tool_name=tool_name or tool_names.get(call_id, "unknown"),
+                            output=str(_value(event.item, "output", "")),
+                            is_error=is_error,
+                        )
+                    )
+        finally:
+            if pending_event is not None and not pending_event.done():
+                pending_event.cancel()
+                await asyncio.gather(pending_event, return_exceptions=True)
+
+    async def __call__(self, execution) -> None:
+        task_session = self._repository.task_session(execution.task_id)
+        build = build_agent()
+        text_buffer = _AssistantTextBuffer(execution.emit)
+        try:
+            preparation = await self._compactor.prepare(
+                execution.task_id,
+                model_handle=build.model,
+                emit=execution.emit,
+                session=task_session,
+            )
+            result = Runner.run_streamed(
+                build.agent,
+                execution.input,
+                context=execution.context,
+                session=preparation.session,
+            )
+            execution.set_streaming_result(result)
+            try:
+                await self._consume_events(execution, result, text_buffer)
+            finally:
+                await text_buffer.flush()
+            output_dir = getattr(self._repository, "output_dir", None)
+            if (
+                output_dir is not None
+                and not execution.context.cancellation_requested.is_set()
+            ):
+                payloads = await asyncio.to_thread(
+                    _load_artifact_payloads,
+                    Path(output_dir),
+                    execution.task_id,
+                )
+                for payload in payloads:
+                    if execution.context.cancellation_requested.is_set():
+                        break
+                    await execution.emit(payload)
+        finally:
+            await build.model.close()
 
 
 def _check_for_confirmation(output: object) -> str | None:
@@ -105,14 +315,15 @@ async def run_agent_stream(
 ) -> AsyncIterator[dict]:
     """流式运行 Agent loop，yield 前端可消费的事件 dict。"""
     ctx = RunContext(task_id=task_id)
+    build = None
 
     try:
         require_model_credentials()
-        agent = create_agent(databases=databases)
+        build = build_agent(databases=databases)
+        agent = build.agent
 
         # ── skill_loaded 事件 ──
-        skill_names = get_loaded_skill_names()
-        for name in skill_names:
+        for name in build.skill_names:
             category = "unknown"
             # Derive category from name.  The skill registry is already loaded;
             # we import the registry here for a lightweight lookup.
@@ -208,3 +419,6 @@ async def run_agent_stream(
     except Exception as e:
         logger.exception("Agent loop 执行失败")
         yield {"type": "error", "message": str(e)}
+    finally:
+        if build is not None:
+            await build.model.close()

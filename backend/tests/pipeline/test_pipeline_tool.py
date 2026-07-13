@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agents.tool_context import ToolContext
 
+import app.pipeline.tool as pipeline_tool_module
 from app.agent_loop.context import RunContext
 from app.pipeline.tool import run_research_pipeline
 from app.tools.workdir import create_task_workdir
@@ -83,3 +85,46 @@ async def test_pipeline_function_tool_rejects_unimplemented_fixture_sources(
     assert not (
         tmp_path / "tasks" / "task_tool_invalid" / "artifacts" / "run_manifest.json"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_forwards_run_cancellation_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = RunContext(task_id="task_tool_cancel_token")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        context.task_id,
+        base_dir=str(tmp_path / "tasks"),
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_cancel",
+        tool_arguments="{}",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_fixture(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            task_id=context.task_id,
+            task_state=SimpleNamespace(value="completed"),
+            validation=SimpleNamespace(status="valid"),
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(pipeline_tool_module, "run_pinned_fixture", fake_fixture)
+
+    await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "cancellation token",
+                "databases": ["pubmed", "geo"],
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    assert captured["cancellation_requested"] is context.cancellation_requested

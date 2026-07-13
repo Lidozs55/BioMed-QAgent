@@ -12,12 +12,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agent_loop.runner import AgentRunExecutor
 from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
 from app.runtime.hub import EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
-from app.runtime.manager import RunExecution, TaskManager
+from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
 
 logging.basicConfig(
@@ -28,12 +29,6 @@ logging.basicConfig(
 
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": "1.0.0", "arch": "agent_loop"}
-
-
-async def _execution_not_configured(execution: RunExecution) -> None:
-    raise RuntimeError(
-        f"runtime execution is not configured for run {execution.run_id}"
-    )
 
 
 def create_app(configured: Settings = settings) -> FastAPI:
@@ -63,7 +58,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
         )
         manager = TaskManager(
             repository,
-            run_executor=_execution_not_configured,
+            run_executor=AgentRunExecutor(repository),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,

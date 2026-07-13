@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -31,8 +32,15 @@ async def test_runner_emits_manifest_artifact_ids_before_done(
                 yield None
 
     monkeypatch.setattr(runner_module, "require_model_credentials", lambda: None)
-    monkeypatch.setattr(runner_module, "create_agent", lambda databases=None: object())
-    monkeypatch.setattr(runner_module, "get_loaded_skill_names", lambda: [])
+    monkeypatch.setattr(
+        runner_module,
+        "build_agent",
+        lambda databases=None: SimpleNamespace(
+            agent=object(),
+            skill_names=(),
+            model=SimpleNamespace(close=AsyncMock()),
+        ),
+    )
     monkeypatch.setattr(
         runner_module.Runner, "run_streamed", lambda *a, **k: FakeResult()
     )

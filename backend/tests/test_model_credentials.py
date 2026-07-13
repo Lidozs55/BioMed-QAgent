@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -55,7 +56,9 @@ async def test_runner_stops_before_sdk_boundary_without_key(
     tmp_path: Path,
 ) -> None:
     configure_model(monkeypatch, "")
-    monkeypatch.setattr(runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path)))
+    monkeypatch.setattr(
+        runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path))
+    )
     sdk_called = False
 
     def fail_if_called(*args, **kwargs):
@@ -68,11 +71,13 @@ async def test_runner_stops_before_sdk_boundary_without_key(
     events = [event async for event in runner_module.run_agent_stream("test")]
 
     assert sdk_called is False
-    assert events == [{
-        "type": "error",
-        "code": "configuration_error",
-        "message": "DASHSCOPE_API_KEY is required to run the model",
-    }]
+    assert events == [
+        {
+            "type": "error",
+            "code": "configuration_error",
+            "message": "DASHSCOPE_API_KEY is required to run the model",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -81,7 +86,9 @@ async def test_runner_reaches_sdk_boundary_with_configured_key(
     tmp_path: Path,
 ) -> None:
     configure_model(monkeypatch, "configured")
-    monkeypatch.setattr(runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path)))
+    monkeypatch.setattr(
+        runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path))
+    )
     sdk_called = False
 
     class FakeResult:
@@ -96,10 +103,53 @@ async def test_runner_reaches_sdk_boundary_with_configured_key(
         sdk_called = True
         return FakeResult()
 
+    model = SimpleNamespace(close=AsyncMock())
     monkeypatch.setattr(runner_module.Runner, "run_streamed", fake_run_streamed)
-    monkeypatch.setattr(runner_module, "get_loaded_skill_names", lambda: [])
+    monkeypatch.setattr(
+        runner_module,
+        "build_agent",
+        lambda databases=None: SimpleNamespace(
+            agent=object(),
+            skill_names=(),
+            model=model,
+        ),
+    )
 
     events = [event async for event in runner_module.run_agent_stream("test")]
 
     assert sdk_called is True
     assert events == [{"type": "done", "final_output": "complete"}]
+
+
+@pytest.mark.asyncio
+async def test_legacy_runner_closes_build_model_when_stream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    model = SimpleNamespace(close=AsyncMock())
+    agent = SimpleNamespace(model=model)
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+
+    class FakeResult:
+        async def stream_events(self):
+            raise RuntimeError("legacy stream failed")
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "require_model_credentials", lambda: None)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "settings",
+        SimpleNamespace(output_dir=str(tmp_path)),
+    )
+
+    events = [event async for event in runner_module.run_agent_stream("test")]
+
+    assert events == [{"type": "error", "message": "legacy stream failed"}]
+    model.close.assert_awaited_once_with()
