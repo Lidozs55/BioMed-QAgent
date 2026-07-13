@@ -3,12 +3,13 @@ import { useAgentStore } from "../stores/agentStore";
 import { useAgentStream } from "../hooks/useAgentStream";
 import { useAPI } from "../hooks/useAPI";
 import {
-  Bot,
-  User,
   DownloadIcon,
+  FileCodeIcon,
+  FileCsvIcon,
   FileTextIcon,
-  FileJsonIcon,
-} from "lucide-react";
+  RobotIcon,
+  UserIcon,
+} from "@phosphor-icons/react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -65,13 +66,14 @@ function getFileIcon(name: string) {
   const ext = getExtension(name);
   switch (ext) {
     case "csv":
+    case "tsv":
+      return FileCsvIcon;
     case "txt":
     case "md":
-    case "tsv":
       return FileTextIcon;
     case "json":
     case "jsonl":
-      return FileJsonIcon;
+      return FileCodeIcon;
     default:
       return FileTextIcon;
   }
@@ -280,9 +282,9 @@ export function ChatPanel() {
                             <Avatar>
                               <AvatarFallback>
                                 {msg.role === "user" ? (
-                                  <User className="size-4" />
+                                  <UserIcon className="size-4" />
                                 ) : (
-                                  <Bot className="size-4" />
+                                  <RobotIcon className="size-4" />
                                 )}
                               </AvatarFallback>
                             </Avatar>

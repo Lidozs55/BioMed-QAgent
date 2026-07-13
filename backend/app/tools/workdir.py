@@ -84,7 +84,9 @@ def create_task_workdir(task_id: str, base_dir: str | None = None) -> TaskWorkDi
     """Create the approved isolated directory structure for one task."""
 
     safe_task_id = _validate_id(task_id, "task_id")
-    base = Path(base_dir) if base_dir else Path(settings.output_dir) / "tasks"
+    base = (
+        Path(base_dir) if base_dir else Path(settings.output_dir) / "tasks"
+    ).resolve()
     root = base / safe_task_id
 
     paths: dict[str, Path] = {}

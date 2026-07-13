@@ -437,9 +437,9 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 - 自动生成缺乏数据依据的科研或临床结论；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
-## 12. 当前实现证据（2026-07-12）
+## 12. 当前实现证据（2026-07-13）
 
-- 默认离线后端测试：`228 passed, 1 deselected`；默认不访问网络。
+- 默认离线后端测试：`235 passed, 1 deselected`；默认不访问网络。
 - live 验收：PMID 34180400、GSE178352 元数据和官方
   `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
   `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。

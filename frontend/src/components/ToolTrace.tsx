@@ -1,4 +1,4 @@
-import { TerminalIcon, Trash2Icon } from "lucide-react";
+import { TerminalIcon, TrashIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -126,7 +126,7 @@ export function ToolTrace() {
 						}}
 						disabled={traces.length === 0}
 					>
-						<Trash2Icon data-icon="inline-start" />
+						<TrashIcon data-icon="inline-start" />
 						清除
 					</Button>
 				</SheetFooter>

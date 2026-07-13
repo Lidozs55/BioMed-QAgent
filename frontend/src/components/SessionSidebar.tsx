@@ -20,12 +20,19 @@ import {
   SidebarGroupLabel,
   SidebarGroupContent,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuItem,
   SidebarMenuButton,
   SidebarFooter,
   SidebarHeader,
 } from "@/components/ui/sidebar"
-import { FlaskConical, Database, PlusCircle, Trash2, DownloadIcon } from "lucide-react"
+import {
+  DatabaseIcon,
+  DownloadIcon,
+  FlaskIcon,
+  PlusCircleIcon,
+  TrashIcon,
+} from "@phosphor-icons/react"
 
 export function SessionSidebar() {
   const sessions = useAgentStore((s) => s.sessions)
@@ -64,7 +71,7 @@ export function SessionSidebar() {
     <Sidebar>
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 pt-2">
-          <FlaskConical className="size-5 text-sidebar-foreground" />
+          <FlaskIcon className="size-5 text-sidebar-foreground" />
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground">
               BioMed QAgent
@@ -87,7 +94,7 @@ export function SessionSidebar() {
               reset()
             }}
           >
-            <PlusCircle className="size-4" />
+            <PlusCircleIcon data-icon="inline-start" />
             新建研究
           </Button>
         </div>
@@ -108,23 +115,21 @@ export function SessionSidebar() {
                       onClick={() => loadSession(session.taskId)}
                       tooltip={session.topic}
                     >
-                      <Database className="size-4 shrink-0" />
+                      <DatabaseIcon />
                       <span className="truncate">{session.topic}</span>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="ml-auto size-6 shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDeleteTarget({
-                            taskId: session.taskId,
-                            topic: session.topic,
-                          })
-                        }}
-                      >
-                        <Trash2 className="size-3.5 text-sidebar-foreground/50" />
-                      </Button>
                     </SidebarMenuButton>
+                    <SidebarMenuAction
+                      showOnHover
+                      aria-label={`删除 ${session.topic}`}
+                      onClick={() => {
+                        setDeleteTarget({
+                          taskId: session.taskId,
+                          topic: session.topic,
+                        })
+                      }}
+                    >
+                      <TrashIcon />
+                    </SidebarMenuAction>
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>
@@ -154,13 +159,13 @@ export function SessionSidebar() {
                   <span
                     className={cn(
                       "size-2 shrink-0 rounded-full",
-                      pipelineStage === "done" && "bg-emerald-500",
-                      pipelineStage === "error" && "bg-red-500",
+                      pipelineStage === "done" && "bg-primary",
+                      pipelineStage === "error" && "bg-destructive",
                       pipelineStage === "idle" && "bg-sidebar-foreground/30",
                       pipelineStage !== "done" &&
                         pipelineStage !== "error" &&
                         pipelineStage !== "idle" &&
-                        "bg-amber-500"
+                        "bg-muted-foreground"
                     )}
                   />
                   <span className="text-xs capitalize text-sidebar-foreground/70">
@@ -195,7 +200,7 @@ export function SessionSidebar() {
                       <span className="ml-auto shrink-0 text-xs text-sidebar-foreground/50">
                         {formatSize(artifact.size)}
                       </span>
-                      <DownloadIcon className="size-3 shrink-0 text-sidebar-foreground/50" />
+                      <DownloadIcon />
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
@@ -213,7 +218,7 @@ export function SessionSidebar() {
               <span
                 className={cn(
                   "size-2 shrink-0 rounded-full",
-                  isConnected ? "bg-emerald-500" : "bg-red-500"
+                  isConnected ? "bg-primary" : "bg-destructive"
                 )}
               />
               <span className="text-xs text-sidebar-foreground/70">
@@ -232,12 +237,7 @@ export function SessionSidebar() {
                     ? "destructive"
                     : "secondary"
               }
-              className={cn(
-                "text-xs",
-                isRunning && "bg-amber-500 hover:bg-amber-600 text-white",
-                pipelineStage === "error" && "bg-red-500 hover:bg-red-600 text-white",
-                !isRunning && pipelineStage !== "error" && "bg-emerald-500 hover:bg-emerald-600 text-white"
-              )}
+              className="text-xs"
             >
               {isRunning
                 ? "运行中"

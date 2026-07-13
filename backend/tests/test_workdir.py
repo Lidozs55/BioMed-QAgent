@@ -29,6 +29,31 @@ def test_create_task_workdir_idempotent(tmp_path: Path) -> None:
     assert wd1.root == wd2.root
 
 
+def test_create_task_workdir_resolves_relative_base_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    wd = create_task_workdir("test_task_relative", base_dir="data/tasks")
+
+    expected_root = (tmp_path / "data" / "tasks" / "test_task_relative").resolve()
+    assert wd.root == expected_root
+    assert all(
+        path.is_absolute()
+        for path in (
+            wd.root,
+            wd.source_assets,
+            wd.download_tmp,
+            wd.parsed,
+            wd.normalized,
+            wd.staging,
+            wd.artifacts,
+            wd.state,
+            wd.logs,
+        )
+    )
+
+
 def test_different_tasks_have_isolated_dirs(tmp_path: Path) -> None:
     wd1 = create_task_workdir("task_a", base_dir=str(tmp_path))
     wd2 = create_task_workdir("task_b", base_dir=str(tmp_path))

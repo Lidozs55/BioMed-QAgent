@@ -11,7 +11,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
 
 interface DatabaseSelectorProps {
   /** Optional callback when a database is toggled. */
@@ -22,32 +21,29 @@ type CategoryKey = "discovery" | "acquisition" | "processing"
 
 const CATEGORY_CONFIG: Record<
   CategoryKey,
-  { label: string; className: string }
+  { label: string; variant: "secondary" | "outline" | "ghost" }
 > = {
   discovery: {
     label: "发现",
-    className:
-      "bg-blue-500/10 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400",
+    variant: "secondary",
   },
   acquisition: {
     label: "采集",
-    className:
-      "bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400",
+    variant: "outline",
   },
   processing: {
     label: "处理",
-    className:
-      "bg-amber-500/10 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400",
+    variant: "ghost",
   },
 }
 
 function resolveCategory(
   category: string,
-): { label: string; className: string } {
+): { label: string; variant: "secondary" | "outline" | "ghost" } {
   return (
     CATEGORY_CONFIG[category as CategoryKey] ?? {
       label: category,
-      className: "",
+      variant: "outline",
     }
   )
 }
@@ -128,7 +124,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
               {groupIdx > 0 && <Separator className="my-1" />}
 
               {/* Category section header */}
-              <span className="px-2 pt-1 text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">
+              <span className="px-2 pt-1 text-[0.625rem] font-semibold text-muted-foreground">
                 {cfg.label}
               </span>
 
@@ -143,13 +139,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
                     />}
                   >
                     <span className="truncate">{db.name}</span>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "shrink-0 text-[0.625rem] h-5 px-1.5",
-                        cfg.className,
-                      )}
-                    >
+                    <Badge variant={cfg.variant}>
                       {cfg.label}
                     </Badge>
                   </TooltipTrigger>

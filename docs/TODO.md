@@ -60,7 +60,7 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 
 ### 3.2 未通过验收的现状
 
-- [x] **P0** 干净环境不配置模型 Key 时测试仍可运行（228 passed，2026-07-12）
+- [x] **P0** 干净环境不配置模型 Key 时测试仍可运行（235 passed，2026-07-13）
 - [ ] **P0** 真实 Agent Demo 在总超时内产生终态
 - [x] **P0** GEO 查询返回真实 GSE accession，而不是把数值 GDS ID 传给 GEOparse
 - [ ] **P0** Xena 不再因固定 URL 返回 403
@@ -343,7 +343,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 以下条件必须在同一轮新鲜验证中全部满足：
 
-- [x] 默认 pytest 无真实 Key 通过（228 passed，1 live deselected，2026-07-12）
+- [x] 默认 pytest 无真实 Key 通过（235 passed，1 live deselected，2026-07-13）
 - [x] pinned fixture Pipeline 生成全部 14 个必需文件及正式 RunManifest
 - [x] 主数据只包含 gene + sample 粒度
 - [x] dataset_id、sample_id、source_id 和 asset_id 外键全部有效

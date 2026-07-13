@@ -2,13 +2,14 @@ import { useAgentStore } from "@/stores/agentStore";
 import { useAPI } from "@/hooks/useAPI";
 import { useState, useEffect } from "react";
 import {
-  FileTextIcon,
-  FileJsonIcon,
-  FileArchiveIcon,
-  DownloadIcon,
   DatabaseIcon,
-  FileQuestionIcon,
-} from "lucide-react";
+  DownloadIcon,
+  FileArchiveIcon,
+  FileCodeIcon,
+  FileCsvIcon,
+  FileDashedIcon,
+  FileTextIcon,
+} from "@phosphor-icons/react";
 import {
   Card,
   CardHeader,
@@ -56,15 +57,16 @@ function getFileTypeInfo(name: string) {
   const ext = getExtension(name);
   switch (ext) {
     case "csv":
+      return { Icon: FileCsvIcon, label: ext.toUpperCase() };
     case "txt":
     case "md":
     case "tsv":
       return { Icon: FileTextIcon, label: ext.toUpperCase() };
     case "json":
     case "jsonl":
-      return { Icon: FileJsonIcon, label: ext.toUpperCase() };
+      return { Icon: FileCodeIcon, label: ext.toUpperCase() };
     default:
-      if (ext) return { Icon: FileQuestionIcon, label: ext.toUpperCase() };
+      if (ext) return { Icon: FileDashedIcon, label: ext.toUpperCase() };
       return { Icon: FileArchiveIcon, label: "FILE" };
   }
 }
@@ -400,10 +402,7 @@ export default function ResultsViewer() {
                       )
                     }
                   >
-                    <DownloadIcon
-                      data-icon="inline-start"
-                      className="size-3"
-                    />
+                    <DownloadIcon data-icon="inline-start" />
                     下载
                   </Button>
                 </CardFooter>

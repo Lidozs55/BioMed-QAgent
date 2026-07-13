@@ -1,4 +1,10 @@
-import { BarChart3, CheckCircle, Cog, Database, Search } from "lucide-react";
+import {
+	ChartBarIcon,
+	CheckCircleIcon,
+	DatabaseIcon,
+	GearIcon,
+	MagnifyingGlassIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -27,7 +33,7 @@ const STAGES: StageDef[] = [
 		label: "文献检索",
 		toolMatches: (name: string) =>
 			["search_literature", "read_file", "list_files"].includes(name),
-		icon: Search,
+		icon: MagnifyingGlassIcon,
 	},
 	{
 		label: "数据获取",
@@ -35,7 +41,7 @@ const STAGES: StageDef[] = [
 			name === "parse_pdf" ||
 			name.startsWith("download_") ||
 			name.startsWith("fetch_"),
-		icon: Database,
+		icon: DatabaseIcon,
 	},
 	{
 		label: "数据处理",
@@ -44,18 +50,18 @@ const STAGES: StageDef[] = [
 			name.startsWith("clean_") ||
 			name.startsWith("merge_") ||
 			name.startsWith("transform_"),
-		icon: Cog,
+		icon: GearIcon,
 	},
 	{
 		label: "数据分析",
 		toolMatches: (name: string) =>
 			name === "analyze_records" || name === "write_file",
-		icon: BarChart3,
+		icon: ChartBarIcon,
 	},
 	{
 		label: "完成",
 		toolMatches: () => false,
-		icon: CheckCircle,
+		icon: CheckCircleIcon,
 	},
 ];
 
