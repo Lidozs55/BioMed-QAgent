@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from app.domain.contracts import (
+    AssistantDeltaPayload,
+    ConversationCompactedPayload,
+    EventEnvelope,
+    MessagePage,
+    MessageRecord,
+    MessageRole,
+    PipelineEventType,
+    RunCancelRequestedPayload,
+    RunCancelledPayload,
+    RunCompletedPayload,
+    RunFailedPayload,
+    RunFinalizingPayload,
+    RunInterruptedPayload,
+    RunQueuedPayload,
+    RunRecord,
+    RunStartedPayload,
+    RunStatus,
+    RuntimeEventType,
+    StartRunRequest,
+    StartTaskRequest,
+    TaskMode,
+    TaskPage,
+    TaskRunAccepted,
+    TaskSnapshot,
+    TaskSummary,
+    ToolCompletedPayload,
+    ToolStartedPayload,
+    WarningPayload,
+    generate_message_id,
+    generate_run_id,
+    generate_task_id,
+)
+
+
+NOW = datetime(2026, 7, 13, tzinfo=timezone.utc)
+
+
+def test_event_envelope_accepts_v2_run_linkage() -> None:
+    event = EventEnvelope.model_validate(
+        {
+            "schema_version": "2.0",
+            "event_id": "event_123",
+            "type": "task_created",
+            "task_id": "task_123",
+            "run_id": "run_123",
+            "sequence": 1,
+            "timestamp": NOW,
+            "payload": {"type": "task_created", "topic": "breast cancer"},
+        }
+    )
+
+    assert event.schema_version == "2.0"
+    assert event.run_id == "run_123"
+
+
+def test_event_envelope_keeps_legacy_fixture_json_valid() -> None:
+    event = EventEnvelope.model_validate(
+        {
+            "event_id": "event_legacy",
+            "type": "task_created",
+            "task_id": "task_legacy",
+            "sequence": 1,
+            "timestamp": NOW,
+            "payload": {"type": "task_created", "topic": "legacy fixture"},
+        }
+    )
+
+    assert event.schema_version == "1.0"
+    assert event.run_id is None
+
+
+def test_fixture_stage_events_still_require_stage_attempt_id() -> None:
+    with pytest.raises(ValidationError, match="stage_attempt_id"):
+        EventEnvelope.model_validate(
+            {
+                "event_id": "event_stage",
+                "type": PipelineEventType.STAGE_STARTED,
+                "task_id": "task_fixture",
+                "sequence": 2,
+                "timestamp": NOW,
+                "payload": {
+                    "type": PipelineEventType.STAGE_STARTED,
+                    "stage": "discovery",
+                    "attempt": 1,
+                },
+            }
+        )
+
+
+def test_runtime_enums_are_stable_wire_values() -> None:
+    assert {status.value for status in RunStatus} == {
+        "queued",
+        "running",
+        "finalizing",
+        "cancel_requested",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+    }
+    assert {mode.value for mode in TaskMode} == {"agent", "fixture"}
+    assert {role.value for role in MessageRole} == {
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    }
+
+
+def test_start_requests_trim_input_and_acceptance_is_queued() -> None:
+    start_task = StartTaskRequest(
+        request_id="req_123",
+        input="  compare TP53 datasets  ",
+    )
+    start_run = StartRunRequest(
+        request_id="req_456",
+        input="  narrow to breast cancer  ",
+    )
+    accepted = TaskRunAccepted(
+        request_id=start_task.request_id,
+        task_id="task_123",
+        run_id="run_123",
+    )
+
+    assert start_task.mode is TaskMode.AGENT
+    assert start_task.input == "compare TP53 datasets"
+    assert start_run.input == "narrow to breast cancer"
+    assert accepted.status is RunStatus.QUEUED
+
+    with pytest.raises(ValidationError, match="input"):
+        StartRunRequest(request_id="req_blank", input="   ")
+
+
+def test_runtime_snapshot_and_pages_are_typed() -> None:
+    run = RunRecord(
+        run_id="run_123",
+        task_id="task_123",
+        request_id="req_123",
+        status=RunStatus.RUNNING,
+        input="compare TP53 datasets",
+        created_at=NOW,
+        updated_at=NOW,
+        started_at=NOW,
+    )
+    summary = TaskSummary(
+        task_id="task_123",
+        mode=TaskMode.AGENT,
+        title="TP53 datasets",
+        status=RunStatus.RUNNING,
+        active_run_id=run.run_id,
+        created_at=NOW,
+        updated_at=NOW,
+        latest_sequence=2,
+    )
+    message = MessageRecord(
+        message_id="message_123",
+        task_id=summary.task_id,
+        run_id=run.run_id,
+        ordinal=1,
+        role=MessageRole.USER,
+        content=run.input,
+        created_at=NOW,
+    )
+    snapshot = TaskSnapshot(task=summary, runs=[run], messages=[message])
+
+    assert TaskPage(tasks=[summary]).tasks == [summary]
+    assert MessagePage(messages=[message]).messages == [message]
+    assert snapshot.older_messages_cursor is None
+
+
+def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
+    payloads = [
+        RunQueuedPayload(request_id="req_123", input="question"),
+        RunStartedPayload(),
+        RunFinalizingPayload(),
+        RunCompletedPayload(),
+        RunFailedPayload(error="model unavailable"),
+        RunCancelRequestedPayload(reason="user requested"),
+        RunCancelledPayload(reason="user requested"),
+        RunInterruptedPayload(reason="process restarted"),
+        AssistantDeltaPayload(delta="partial answer"),
+        ToolStartedPayload(tool_call_id="call_123", tool_name="search_literature"),
+        ToolCompletedPayload(
+            tool_call_id="call_123",
+            tool_name="search_literature",
+            output="3 results",
+        ),
+        ConversationCompactedPayload(
+            covered_through_run_id="run_122",
+            summary_digest="ab" * 32,
+        ),
+        WarningPayload(message="compaction failed", code="compaction_failed"),
+    ]
+
+    assert {payload.type for payload in payloads} == set(RuntimeEventType) | {
+        PipelineEventType.TOOL_COMPLETED,
+        PipelineEventType.WARNING,
+    }
+
+    for sequence, payload in enumerate(payloads, start=1):
+        envelope = EventEnvelope(
+            schema_version="2.0",
+            event_id=f"event_{sequence}",
+            type=payload.type,
+            task_id="task_123",
+            run_id="run_123",
+            sequence=sequence,
+            timestamp=NOW,
+            payload=payload,
+        )
+        parsed = EventEnvelope.model_validate_json(envelope.model_dump_json())
+        assert type(parsed.payload) is type(payload)
+
+    with pytest.raises(ValidationError, match="run_id"):
+        EventEnvelope(
+            schema_version="2.0",
+            event_id="event_missing_run",
+            type=RuntimeEventType.RUN_STARTED,
+            task_id="task_123",
+            sequence=20,
+            timestamp=NOW,
+            payload=RunStartedPayload(),
+        )
+
+
+def test_runtime_id_helpers_use_canonical_prefixes() -> None:
+    assert generate_task_id().startswith("task_")
+    assert generate_run_id().startswith("run_")
+    assert generate_message_id().startswith("message_")
