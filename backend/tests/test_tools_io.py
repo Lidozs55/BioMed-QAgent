@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
@@ -34,6 +35,12 @@ def _make_ctx(run_ctx: RunContext, tool_name: str) -> ToolContext:
 def _call(tool, ctx: ToolContext, **kwargs) -> str:
     """Synchronously invoke a FunctionTool's on_invoke_tool."""
     return asyncio.run(tool.on_invoke_tool(ctx, json.dumps(kwargs)))
+
+
+# Platform-specific absolute path: on Windows use a drive letter,
+# on Linux/macOS use a root-absolute path.
+_ABS_PATH = "C:/foo.txt" if os.name == "nt" else "/foo.txt"
+_ABS_PATH_2 = "D:/secret.txt" if os.name == "nt" else "/secret.txt"
 
 
 # ── write_file tests ────────────────────────────────────────────────
@@ -57,7 +64,7 @@ def test_write_file_absolute_path_rejected() -> None:
     rc = RunContext(task_id="test_write_abs")
     ctx = _make_ctx(rc, "write_file")
 
-    result = _call(write_file, ctx, path="C:/foo.txt", content="bad")
+    result = _call(write_file, ctx, path=_ABS_PATH, content="bad")
 
     assert "路径错误" in result
     assert "绝对路径" in result
@@ -125,7 +132,7 @@ def test_read_file_absolute_rejected() -> None:
     rc = RunContext(task_id="test_read_abs")
     ctx = _make_ctx(rc, "read_file")
 
-    result = _call(read_file, ctx, path="D:/secret.txt")
+    result = _call(read_file, ctx, path=_ABS_PATH_2)
 
     assert "路径错误" in result
 

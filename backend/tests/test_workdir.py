@@ -1,6 +1,7 @@
 """工作目录工具测试 — 验证任务工作目录创建和路径结构。"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -87,7 +88,12 @@ def test_workdir_is_frozen(tmp_path: Path) -> None:
         wd.root = tmp_path / "other"  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("task_id", ["../escape", "C:/escape", "with space", ""])
+# On Windows, "C:/escape" is an unsafe absolute path.
+# On Linux/macOS, "/escape" serves the same purpose.
+_UNSAFE_TASK_ID = "C:/escape" if os.name == "nt" else "/escape"
+
+
+@pytest.mark.parametrize("task_id", ["../escape", _UNSAFE_TASK_ID, "with space", ""])
 def test_create_task_workdir_rejects_unsafe_task_ids(
     tmp_path: Path, task_id: str
 ) -> None:
@@ -95,7 +101,11 @@ def test_create_task_workdir_rejects_unsafe_task_ids(
         create_task_workdir(task_id, base_dir=str(tmp_path))
 
 
-@pytest.mark.parametrize("filename", ["../escape.csv", "/absolute.csv", "C:/escape.csv"])
+# Same cross-platform approach for path traversal tests.
+_UNSAFE_FILENAME = "C:/escape.csv" if os.name == "nt" else "/escape.csv"
+
+
+@pytest.mark.parametrize("filename", ["../escape.csv", "/absolute.csv", _UNSAFE_FILENAME])
 def test_file_helpers_reject_paths_outside_their_directory(
     tmp_path: Path, filename: str
 ) -> None:
