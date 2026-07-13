@@ -1,4 +1,4 @@
-"""UCSC Xena acquisition skill — search and download public genomics datasets from the Xena data hub."""
+"""UCSC Xena acquisition skill — search and download genomics data from the Xena hub."""
 from __future__ import annotations
 
 import gzip
@@ -141,10 +141,6 @@ def _download(url: str, dest: Path) -> None:
     """Download a file to dest via urllib, using a .part temp file."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "BioMed-QAgent/0.1"},
-    )
     urllib.request.urlretrieve(url, tmp)
     if dest.exists():
         dest.unlink()

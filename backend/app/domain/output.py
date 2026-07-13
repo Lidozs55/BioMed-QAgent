@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -28,7 +28,7 @@ class SourceRecord:
     checksum: str | None = None
     mime_type: str | None = None
     format_hint: str | None = None  # 帮助 Agent 选择解析 Skill
-    retrieved_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    retrieved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     warnings: list[str] = field(default_factory=list)
 
 
@@ -66,7 +66,7 @@ class ProcessingStep:
     params: dict  # 调用参数
     affected_count: int  # 影响记录数
     description: str = ""  # 操作描述
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -109,13 +109,18 @@ class OutputBundle:
     field_descriptions: list[FieldDescription] = field(default_factory=list)
     warnings: list[WarningEntry] = field(default_factory=list)
 
-    def add_warning(self, severity: str, message: str, source: str | None = None, context: str | None = None) -> None:
+    def add_warning(
+        self, severity: str, message: str,
+        source: str | None = None, context: str | None = None,
+    ) -> None:
         """添加一条警告。"""
         self.warnings.append(WarningEntry(
             severity=severity, message=message, source=source, context=context,
         ))
 
-    def add_processing_step(self, tool: str, params: dict, affected_count: int, description: str = "") -> None:
+    def add_processing_step(
+        self, tool: str, params: dict, affected_count: int, description: str = "",
+    ) -> None:
         """添加一条处理记录，自动递增步骤序号。"""
         step_num = len(self.processing_steps) + 1
         self.processing_steps.append(ProcessingStep(

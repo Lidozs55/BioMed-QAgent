@@ -3,10 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import app.api.routes as routes_module
 import httpx
 import pytest
-
-import app.api.routes as routes_module
 from app.main import app
 
 

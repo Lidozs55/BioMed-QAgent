@@ -211,11 +211,11 @@ def run_differential_expression(
 
         # Count significant DEGs
         sig_up = int(sum(
-            1 for fc, p in zip(log2fc_list, pval_list)
+            1 for fc, p in zip(log2fc_list, pval_list, strict=False)
             if float(p) <= pval_threshold and float(fc) >= log2fc_threshold
         ))
         sig_down = int(sum(
-            1 for fc, p in zip(log2fc_list, pval_list)
+            1 for fc, p in zip(log2fc_list, pval_list, strict=False)
             if float(p) <= pval_threshold and float(fc) <= -log2fc_threshold
         ))
 
@@ -231,7 +231,7 @@ def run_differential_expression(
                         float(pv) <= pval_threshold and abs(float(fc)) >= log2fc_threshold
                     ),
                 }
-                for g, fc, pv in zip(genes, log2fc_list, pval_list)
+                for g, fc, pv in zip(genes, log2fc_list, pval_list, strict=False)
             ],
             key=lambda x: x["pvalue"],
         )[:top_n]
@@ -243,31 +243,31 @@ def run_differential_expression(
         # Non-significant
         ns_mask = [
             not (pv <= pval_threshold and abs(fc) >= log2fc_threshold)
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, ns_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, ns_mask) if m],
+            [fc for fc, m in zip(log2fc_list, ns_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, ns_mask, strict=False) if m],
             s=8, c="grey", alpha=0.5, label="NS",
         )
         # Up-regulated
         up_mask = [
             pv <= pval_threshold and fc >= log2fc_threshold
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, up_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, up_mask) if m],
+            [fc for fc, m in zip(log2fc_list, up_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, up_mask, strict=False) if m],
             s=12, c="red", alpha=0.7, label=f"Up ({sig_up})",
         )
         # Down-regulated
         down_mask = [
             pv <= pval_threshold and fc <= -log2fc_threshold
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, down_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, down_mask) if m],
+            [fc for fc, m in zip(log2fc_list, down_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, down_mask, strict=False) if m],
             s=12, c="blue", alpha=0.7, label=f"Down ({sig_down})",
         )
         ax.axhline(-np.log10(pval_threshold), color="grey", linestyle="--", linewidth=0.8)

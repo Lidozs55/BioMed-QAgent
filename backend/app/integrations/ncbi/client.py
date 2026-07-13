@@ -7,7 +7,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -93,7 +93,7 @@ def parse_retry_after(value: str | None, *, now: datetime) -> float:
         except (TypeError, ValueError, OverflowError):
             return 0.0
         if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=timezone.utc)
+            retry_at = retry_at.replace(tzinfo=UTC)
         return max(0.0, (retry_at - now).total_seconds())
 
 
@@ -106,7 +106,7 @@ class NcbiEutilsClient:
         limiter: AsyncRateLimiter | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
-        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._http = http
         self.config = config

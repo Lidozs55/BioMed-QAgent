@@ -25,4 +25,35 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      // In CI, any Rollup warning (circular deps, eval, etc.) aborts the build.
+      onwarn(warning, defaultHandler) {
+        // Allow circular-dependency warnings that originate inside
+        // node_modules -- these are third-party library internals we
+        // cannot fix, not project code issues.
+        if (
+          process.env.CI &&
+          warning.code === "CIRCULAR_DEPENDENCY" &&
+          warning.message?.includes("node_modules")
+        ) {
+          return; // silently skip
+        }
+        // Allow chunk-size advisory warnings -- these are informational
+        // hints about bundle size, not correctness issues. Without
+        // manualChunks Vite auto-splits, which is sufficient for a
+        // desktop app bundled by PyInstaller.
+        if (
+          process.env.CI &&
+          warning.message?.includes("chunk size")
+        ) {
+          return;
+        }
+        if (process.env.CI) {
+          throw new Error(`Build warning: ${warning.message}`);
+        }
+        defaultHandler(warning);
+      },
+    },
+  },
 });

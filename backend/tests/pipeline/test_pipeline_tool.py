@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 from agents.tool_context import ToolContext
-
 from app.agent_loop.context import RunContext
 from app.pipeline.tool import run_research_pipeline
 from app.tools.workdir import create_task_workdir

@@ -5,10 +5,8 @@
 
 from __future__ import annotations
 
-from agents import function_tool
-
 from app.skills.registry import build_agent_config, skill_registry
-from app.tools.io import read_file, write_file, list_files
+from app.tools.io import list_files, read_file, write_file
 
 try:
     from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
@@ -22,46 +20,28 @@ except ImportError:
 
 def _import_skill_modules() -> None:
     """尝试导入技能模块，失败时不阻塞。"""
-    try:
+    from contextlib import suppress
+
+    with suppress(ImportError):
         import app.skills.builtin.discovery.pubmed  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.discovery.understanding  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.geo  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.pdb  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.gdc  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.xena  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.browser  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.processing.self_evolution  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.processing.extract_tables  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.analysis.stats  # noqa: F401
-    except ImportError:
-        pass
 
 
 def get_all_tools() -> list:

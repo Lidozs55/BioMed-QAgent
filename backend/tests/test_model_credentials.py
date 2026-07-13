@@ -3,10 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 import app.agent_loop.model as model_module
 import app.agent_loop.runner as runner_module
+import pytest
 from app.agent_loop.agent import create_agent
 from app.agent_loop.model import (
     LazyDashScopeModel,

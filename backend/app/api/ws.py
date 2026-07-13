@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -20,7 +21,8 @@ async def agent_ws(websocket: WebSocket) -> None:
     """Agent loop WebSocket 端点。
 
     客户端 → 服务端消息格式：
-        {"type": "run", "input": "研究目标文本", "task_id": "optional-task-id", "databases": ["geo", "gdc"]}
+        {"type": "run", "input": "研究目标文本",
+         "task_id": "optional-task-id", "databases": ["geo", "gdc"]}
 
     服务端 → 客户端事件格式：
         {"type": "skill_loaded", "name": "...", "category": "..."}
@@ -67,7 +69,5 @@ async def agent_ws(websocket: WebSocket) -> None:
         logger.info("WebSocket 客户端断开")
     except Exception as e:
         logger.exception("WebSocket 异常")
-        try:
+        with contextlib.suppress(Exception):
             await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass

@@ -1,0 +1,296 @@
+# =============================================================================
+# BioMed-QAgent -- CI/CD Release Pipeline
+# =============================================================================
+#
+# Trigger:  push a Git tag matching ``v*``  (e.g. v0.1.0, v0.1.0-alpha)
+#           Also runnable manually via the Actions tab (workflow_dispatch).
+#
+# Pipeline:  3 jobs, runs top-to-bottom, each blocks the next:
+#
+#   1. quality-gate   -- lint + type-check + test + build (FE + BE)
+#   2. package        -- PyInstaller on Windows / macOS / Linux (matrix)
+#   3. release        -- create GitHub Release with 3 executables
+#
+# Quality rule:
+#   ANY warning (not just errors) in frontend tests / lint / type-check /
+#   Vite build, or in backend ruff / pytest, causes the pipeline to abort.
+#   This is enforced by:
+#     - ESLint ``--max-warnings 0``
+#     - TypeScript ``noUnusedLocals`` + ``noUnusedParameters``
+#     - Vite ``onwarn`` handler that throws in CI (CI env var is auto-set)
+#     - pytest ``filterwarnings = ["error", ...]``
+#     - ruff exits non-zero on any violation
+#
+# ---------------------------------------------------------------------------
+
+name: Build & Release
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+on:
+  push:
+    tags:
+      # Only fire for version tags: v0.1.0, v0.1.0-alpha, v0.1.0-beta, etc.
+      - 'v*'
+  workflow_dispatch:
+    # Manual run from the Actions tab -- useful for testing the pipeline
+    # without creating a real tag.  The release job is skipped in this
+    # mode (see its ``if:`` condition).
+
+# The release job needs ``contents: write`` to create a GitHub Release.
+# Scoping at the workflow level is the simplest approach.
+permissions:
+  contents: write
+
+jobs:
+
+  # ===========================================================================
+  # Job 1 -- Quality Gate
+  # ===========================================================================
+  # Runs on Ubuntu (fastest, cheapest runner).  If this job fails, the
+  # entire pipeline stops -- no packaging, no release.
+  #
+  # Frontend checks (all must pass, zero warnings allowed):
+  #   1. ESLint             -- pnpm lint        (--max-warnings 0)
+  #   2. TypeScript check   -- pnpm tsc          (tsc --noEmit, strict)
+  #   3. Unit tests          -- pnpm test         (Vitest)
+  #   4. Production build    -- pnpm build        (tsc -b + vite build)
+  #
+  # Backend checks (all must pass, zero warnings allowed):
+  #   5. Ruff lint           -- uv run ruff check (any violation = fail)
+  #   6. Unit tests          -- uv run pytest     (warnings treated as errors)
+  #
+  # The frontend ``dist/`` produced in step 4 is uploaded as an artifact
+  # so the packaging jobs can download it without rebuilding.
+  # ===========================================================================
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----- Frontend setup -----
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        # No ``version`` input -- uses the version specified in
+        # ``packageManager`` field of package.json (if present), otherwise
+        # the latest stable pnpm.
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # Cache pnpm's global store to speed up subsequent runs.
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+        # ``--frozen-lockfile`` ensures the lockfile is respected --
+        # CI fails if pnpm-lock.yaml is out of sync with package.json.
+
+      # --- Frontend quality checks (any warning = pipeline aborts) ---
+
+      - name: ESLint (zero warnings)
+        working-directory: frontend
+        run: pnpm lint
+        # package.json script: ``eslint . --max-warnings 0``
+        # Even a single warning exits non-zero.
+
+      - name: TypeScript type check
+        working-directory: frontend
+        run: pnpm tsc
+        # Runs ``tsc --noEmit`` with strict settings.
+        # tsconfig.app.json has ``noUnusedLocals`` and
+        # ``noUnusedParameters`` enabled, so unused code is an error.
+
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: pnpm test
+        # Runs ``vitest run`` (non-watch mode).
+
+      - name: Build frontend (warnings as errors in CI)
+        working-directory: frontend
+        run: pnpm build
+        # ``pnpm build`` = ``tsc -b && vite build``.
+        # GitHub Actions auto-sets the ``CI`` environment variable.
+        # vite.config.ts has an ``onwarn`` handler that throws when
+        # ``process.env.CI`` is truthy, so any Rollup warning
+        # (circular deps, eval, etc.) becomes a build failure.
+
+      # Upload the built frontend so packaging jobs can reuse it
+      # without rebuilding (saves ~2 min per platform x 3 platforms).
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1   # short-lived -- only needed for this run
+
+      # ----- Backend setup -----
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        # Installs uv from astral-sh; adds it to PATH.
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+        # ``--frozen`` uses uv.lock as-is -- fails if the lockfile
+        # is out of sync with pyproject.toml.
+        # This installs all production + dev dependencies (pytest, ruff).
+
+      # --- Backend quality checks (any warning = pipeline aborts) ---
+
+      - name: Ruff lint (zero violations)
+        working-directory: backend
+        run: uv run ruff check app/ tests/ launcher.py
+        # Ruff checks PEP 8, pyflakes, isort, pyupgrade, bugbear,
+        # and simplify rules.  Any violation exits non-zero.
+
+      - name: Backend unit tests (warnings as errors)
+        working-directory: backend
+        run: uv run pytest
+        # pyproject.toml sets ``filterwarnings = ["error", ...]`` so
+        # every Python warning becomes a test failure.  Only a few
+        # well-understood third-party deprecations are explicitly ignored.
+
+  # ===========================================================================
+  # Job 2 -- Package (cross-platform matrix)
+  # ===========================================================================
+  # Runs on 3 OS runners in parallel.  Each runner:
+  #   1. Downloads the frontend dist artifact from Job 1
+  #   2. Installs backend deps + PyInstaller
+  #   3. Runs ``pyinstaller biomed_qagent.spec`` to produce a single
+  #      executable for that platform
+  #   4. Renames and uploads the executable
+  #
+  # ``fail-fast: false`` ensures all 3 platforms attempt the build even
+  # if one fails -- useful for diagnosing platform-specific issues.
+  # ===========================================================================
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: quality-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            ext: .exe          # Windows executable extension
+          - os: macos-latest
+            platform: macos
+            ext: ''            # macOS executables have no extension
+          - os: ubuntu-latest
+            platform: linux
+            ext: ''            # Linux executables have no extension
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Install PyInstaller
+        working-directory: backend
+        run: uv pip install pyinstaller
+        # Installed into the project's .venv (created by ``uv sync``)
+        # so PyInstaller can discover all project dependencies.
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          # Placed where biomed_qagent.spec expects it:
+          path: backend/frontend_dist
+
+      - name: Build with PyInstaller
+        working-directory: backend
+        run: uv run --no-sync pyinstaller biomed_qagent.spec --noconfirm
+        # ``--no-sync`` prevents uv from re-syncing the project,
+        # which would remove PyInstaller (not in the lockfile).
+        # ``--noconfirm`` overwrites any previous build/ directory.
+
+      - name: Rename executable for release
+        shell: bash
+        run: |
+          cd backend/dist
+          mv "BioMed-QAgent${{ matrix.ext }}" \
+             "BioMed-QAgent-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}"
+        # Result: BioMed-QAgent-v0.1.0-windows.exe
+        #         BioMed-QAgent-v0.1.0-macos
+        #         BioMed-QAgent-v0.1.0-linux
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BioMed-QAgent-${{ github.ref_name }}-${{ matrix.platform }}
+          path: backend/dist/BioMed-QAgent-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}
+          retention-days: 7
+
+  # ===========================================================================
+  # Job 3 -- Release
+  # ===========================================================================
+  # Downloads all 3 platform executables and creates a GitHub Release.
+  # Only runs when triggered by a tag push (skipped for workflow_dispatch).
+  #
+  # Prerelease detection:
+  #   Tags containing ``-`` (e.g. v0.1.0-alpha, v0.1.0-beta) are marked
+  #   as prereleases.  Tags without ``-`` (e.g. v0.1.0) are stable.
+  # ===========================================================================
+
+  release:
+    name: Create GitHub Release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          # No ``name`` specified -- downloads ALL artifacts produced
+          # by the matrix job into ``artifacts/<artifact-name>/``.
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -name "BioMed-QAgent-*" -exec cp {} release-files/ \;
+          echo "=== Release files ==="
+          ls -la release-files/
+        # Flattens the artifact directory structure so all executables
+        # are in a single ``release-files/`` directory.
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: BioMed-QAgent ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-files/*
+          # Mark as prerelease if the tag contains a hyphen
+          # (e.g. v0.1.0-alpha, v0.1.0-beta, v0.1.0-rc.1).
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Fail if no files were matched -- prevents empty releases.
+          fail_on_unmatched_files: true

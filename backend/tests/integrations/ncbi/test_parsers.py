@@ -12,7 +12,6 @@ from app.integrations.ncbi.parsers import (
     resolve_geo_supplementary_assets,
 )
 
-
 FIXTURE_DIR = (
     Path(__file__).parents[2] / "fixtures" / "ncbi" / "gse178352"
 )

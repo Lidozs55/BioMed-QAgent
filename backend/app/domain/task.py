@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import re
-from enum import Enum
+from enum import StrEnum
 
-from pydantic import BaseModel, field_validator, model_validator
-
+from pydantic import BaseModel, field_validator
 
 # ---------------------------------------------------------------------------
 # 用户输入
@@ -75,7 +74,7 @@ class TaskRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """任务生命周期状态。"""
 
     CREATED = "created"

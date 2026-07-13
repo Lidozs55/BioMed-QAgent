@@ -20,7 +20,6 @@ from app.domain.contracts.enums import (
 from app.domain.contracts.source import FileAsset, _validate_relative_path
 from app.domain.contracts.task import TaskRequest, TaskSpecification
 
-
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -62,7 +61,7 @@ class ParsedDataset(ContractModel):
     parser_version: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_file_asset(self) -> "ParsedDataset":
+    def validate_file_asset(self) -> ParsedDataset:
         if self.file_asset.kind != "parsed":
             raise ValueError("ParsedDataset file_asset kind must be parsed")
         return self
@@ -87,7 +86,7 @@ class StageAttempt(ContractModel):
         return None if value is None else _validate_sha256(value)
 
     @model_validator(mode="after")
-    def validate_status_fields(self) -> "StageAttempt":
+    def validate_status_fields(self) -> StageAttempt:
         if self.finished_at is not None and self.started_at is None:
             raise ValueError("finished_at requires started_at")
         if (
@@ -140,7 +139,7 @@ class ValidationSummary(ContractModel):
         return _validate_relative_path(value)
 
     @model_validator(mode="after")
-    def validate_counts(self) -> "ValidationSummary":
+    def validate_counts(self) -> ValidationSummary:
         if self.failed_count > self.checked_count:
             raise ValueError("failed_count must not exceed checked_count")
         if self.status == "valid" and self.failed_count != 0:
@@ -183,7 +182,7 @@ class RunManifest(ContractModel):
         return value
 
     @model_validator(mode="after")
-    def validate_time_order(self) -> "RunManifest":
+    def validate_time_order(self) -> RunManifest:
         if self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
         return self

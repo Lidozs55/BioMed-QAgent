@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 
 import pytest
-
 from app.skills.registry import (
     HARD_MAX_TOOLS,
     SUGGESTED_MAX_TOOLS,

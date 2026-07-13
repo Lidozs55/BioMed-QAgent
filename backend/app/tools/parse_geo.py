@@ -48,7 +48,7 @@ def parse_geo_matrix(
     header: list[str] = []
     data_lines: list[str] = []
 
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for line in f:
             stripped = line.rstrip("\n\r")
             if not stripped:
@@ -152,7 +152,7 @@ def parse_geo_soft(
     ds_id = dataset_id or path.stem
     warnings: list[str] = []
 
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         file_lines = f.readlines()
 
     # 查找第一个 table 块
@@ -164,13 +164,15 @@ def parse_geo_soft(
         stripped = line.rstrip("\n\r")
 
         # 检测 table_begin
-        if stripped.startswith("!dataset_table_begin") or stripped.startswith("!sample_table_begin"):
+        if stripped.startswith("!dataset_table_begin") or \
+            stripped.startswith("!sample_table_begin"):
             in_table = True
             table_lines = []
             continue
 
         # 检测 table_end — 提取列头并退出
-        if stripped.startswith("!dataset_table_end") or stripped.startswith("!sample_table_end"):
+        if stripped.startswith("!dataset_table_end") or \
+            stripped.startswith("!sample_table_end"):
             if table_lines:
                 columns = _extract_soft_header(table_lines, stripped)
             in_table = False
@@ -224,7 +226,8 @@ def parse_geo_soft(
         capture_data = False
         for line in file_lines:
             stripped = line.rstrip("\n\r")
-            if stripped.startswith("!dataset_table_end") or stripped.startswith("!sample_table_end"):
+            if stripped.startswith("!dataset_table_end") or \
+            stripped.startswith("!sample_table_end"):
                 capture_data = True
                 continue
             if capture_data:

@@ -113,7 +113,7 @@ def parse_csv(
     if delimiter is None:
         delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
 
-    with open(path, "r", newline="", encoding="utf-8-sig") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, delimiter=delimiter)
         field_names = reader.fieldnames or []
         rows = list(reader)
@@ -147,7 +147,7 @@ def parse_json(file_path: str, dataset_id: str | None = None) -> ParsedDataset:
     - 对象 {key: [v1, v2]} → 转置为行
     """
     path = Path(file_path)
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         data = json.load(f)
 
     ds_id = dataset_id or path.stem
@@ -206,7 +206,7 @@ def parse_html_tables(file_path: str, dataset_id: str | None = None) -> list[Par
     path = Path(file_path)
     ds_id = dataset_id or path.stem
 
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         html_content = f.read()
 
     class TableParser(HTMLParser):
@@ -226,7 +226,8 @@ def parse_html_tables(file_path: str, dataset_id: str | None = None) -> list[Par
                 self._current_cell = []
 
         def handle_endtag(self, tag: str) -> None:
-            if tag in ("td", "th") and self._current_row is not None and self._current_cell is not None:
+            if tag in ("td", "th") and self._current_row is not None \
+            and self._current_cell is not None:
                 self._current_row.append("".join(self._current_cell).strip())
                 self._current_cell = None
             elif tag == "tr" and self._current_row is not None and self._current_table is not None:
@@ -273,7 +274,9 @@ def parse_html_tables(file_path: str, dataset_id: str | None = None) -> list[Par
 # ---------------------------------------------------------------------------
 
 
-def parse_file(file_path: str, dataset_id: str | None = None) -> ParsedDataset | list[ParsedDataset]:
+def parse_file(
+    file_path: str, dataset_id: str | None = None,
+) -> ParsedDataset | list[ParsedDataset]:
     """根据文件格式自动选择解析器。
 
     HTML 返回 list[ParsedDataset]（可能多个表格），其他格式返回单个 ParsedDataset。

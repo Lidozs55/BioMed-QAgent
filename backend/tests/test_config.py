@@ -1,7 +1,7 @@
 """配置测试 — 验证 Settings 加载和默认值。"""
 from __future__ import annotations
 
-from app.config import Settings, settings
+from app.config import settings
 
 
 def test_settings_has_dashscope_api_key() -> None:
@@ -35,5 +35,5 @@ def test_settings_has_output_dir() -> None:
 def test_settings_is_frozen() -> None:
     """Settings 是 frozen dataclass，不可变。"""
     import pytest
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         settings.host = "0.0.0.0"  # type: ignore[misc]

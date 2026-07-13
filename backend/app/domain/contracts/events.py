@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -165,7 +165,7 @@ class EventEnvelope(ContractModel):
     payload: EventPayload
 
     @model_validator(mode="after")
-    def validate_envelope(self) -> "EventEnvelope":
+    def validate_envelope(self) -> EventEnvelope:
         if self.type is not self.payload.type:
             raise ValueError("event type must match payload type")
         if self.type in _STAGE_EVENTS and not self.stage_attempt_id:
@@ -189,6 +189,6 @@ def build_event(
         task_id=task_id,
         stage_attempt_id=stage_attempt_id,
         sequence=sequence,
-        timestamp=timestamp or datetime.now(timezone.utc),
+        timestamp=timestamp or datetime.now(UTC),
         payload=payload,
     )

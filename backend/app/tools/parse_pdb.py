@@ -68,7 +68,7 @@ def parse_pdb(
     ]
     rows: list[dict[str, Any]] = []
 
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         for line in f:
             if line.startswith("ATOM  ") or line.startswith("HETATM"):
                 try:
@@ -140,7 +140,7 @@ def _parse_mmcif_atom_site_loop(file_path: str) -> tuple[list[str], list[dict[st
     Returns:
         (列名列表, 行数据列表) 元组。
     """
-    with open(file_path, "r", encoding="utf-8-sig") as f:
+    with open(file_path, encoding="utf-8-sig") as f:
         lines = f.readlines()
 
     # 查找 _atom_site 循环段
@@ -211,7 +211,7 @@ def _parse_mmcif_atom_site_loop(file_path: str) -> tuple[list[str], list[dict[st
         tokens = data_line.split()
         if len(tokens) >= max(selected_indices, default=-1) + 1:
             row: dict[str, Any] = {}
-            for col_name, idx in zip(selected_columns, selected_indices):
+            for col_name, idx in zip(selected_columns, selected_indices, strict=False):
                 row[col_name] = tokens[idx] if idx < len(tokens) else ""
             rows.append(row)
 

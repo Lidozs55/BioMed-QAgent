@@ -12,7 +12,6 @@ from app.pipeline.processing.geo_tximport import (
 )
 from app.tools.workdir import create_task_workdir
 
-
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 )

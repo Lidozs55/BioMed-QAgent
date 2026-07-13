@@ -4,13 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
     search_geo_series,
     search_pubmed,
 )
-
 
 FIXTURE_DIR = (
     Path(__file__).parents[2] / "fixtures" / "ncbi" / "gse178352"

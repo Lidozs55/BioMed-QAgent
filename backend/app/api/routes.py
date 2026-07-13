@@ -78,7 +78,7 @@ class CreateTaskRequest(ContractModel):
         return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def validate_fixture_sources(self) -> "CreateTaskRequest":
+    def validate_fixture_sources(self) -> CreateTaskRequest:
         if set(self.databases) != {Database.PUBMED, Database.GEO}:
             raise ValueError("fixture mode supports exactly pubmed and geo")
         if len(self.databases) != 2:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ SUGGESTED_MAX_TOOLS = 20
 HARD_MAX_TOOLS = 30
 
 
-class SkillCategory(str, Enum):
+class SkillCategory(StrEnum):
     """Skill 四大类别。"""
 
     DISCOVERY = "discovery"

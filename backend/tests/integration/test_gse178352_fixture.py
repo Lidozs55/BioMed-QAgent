@@ -4,11 +4,10 @@ import csv
 import gzip
 import hashlib
 import json
-from pathlib import Path
 import urllib.error
+from pathlib import Path
 
 from scripts.build_gse178352_fixture import download, extract_gzip_lines
-
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 FULL_COUNTS_SHA256 = (
@@ -27,7 +26,7 @@ def test_fixture_download_retries_http_429() -> None:
     delays: list[float] = []
 
     class Response:
-        def __enter__(self) -> "Response":
+        def __enter__(self) -> Response:
             return self
 
         def __exit__(self, *args: object) -> None:

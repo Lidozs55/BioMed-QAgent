@@ -6,7 +6,6 @@ from pathlib import Path
 
 from app.pipeline.pinned_case import run_pinned_fixture
 
-
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 )

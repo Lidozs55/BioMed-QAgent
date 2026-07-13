@@ -15,14 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
-from pathlib import Path
 
-import pytest
-
+from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.tools.io import list_files, read_file, write_file
-from agents.tool_context import ToolContext
 
 
 def _make_ctx(run_ctx: RunContext, tool_name: str) -> ToolContext:

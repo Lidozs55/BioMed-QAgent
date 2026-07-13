@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
-
 from app.domain.contracts import (
-    DataLevel,
     Database,
+    DataLevel,
     DownloadStatus,
     ErrorCode,
     SourceRecord,
@@ -21,8 +20,7 @@ from app.integrations.acquisition import acquire_source
 from app.tools.content_cache import ContentCache
 from app.tools.workdir import create_task_workdir
 
-
-NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 12, tzinfo=UTC)
 URL = (
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/"
     "suppl/GSE178352_tximportCounts.txt.gz"

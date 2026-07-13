@@ -1,6 +1,15 @@
 """Authoritative, versioned contracts for the deterministic backend pipeline."""
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.discovery import (
+    GeoAssetCandidate,
+    GeoSampleRecord,
+    GeoSearchResult,
+    GeoSeriesRecord,
+    LiteratureRecord,
+    NcbiSearchPage,
+    PubMedSearchResult,
+)
 from app.domain.contracts.enums import (
     AttemptStatus,
     Database,
@@ -11,15 +20,6 @@ from app.domain.contracts.enums import (
     StageName,
     TaskState,
     WarningSeverity,
-)
-from app.domain.contracts.discovery import (
-    GeoAssetCandidate,
-    GeoSampleRecord,
-    GeoSearchResult,
-    GeoSeriesRecord,
-    LiteratureRecord,
-    NcbiSearchPage,
-    PubMedSearchResult,
 )
 from app.domain.contracts.events import (
     ArtifactProducedPayload,

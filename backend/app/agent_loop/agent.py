@@ -10,13 +10,13 @@ from agents import Agent
 
 from app.agent_loop.model import get_model
 from app.agent_loop.summarizer import build_compress_query_log_tool
+from app.pipeline.tool import run_research_pipeline
 from app.skills.registry import (
     SkillCategory,
     build_agent_config,
     skill_registry,
 )
-from app.tools.io import read_file, write_file, list_files
-from app.pipeline.tool import run_research_pipeline
+from app.tools.io import list_files, read_file, write_file
 
 try:
     from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
@@ -59,7 +59,8 @@ INSTRUCTIONS = """\
 
 ## 上下文管理
 - 所有检索查询会记录到 RunContext.query_log
-- 当查询日志累计较长（约 8000 字符，通常对应 15-20 条查询）时，调用 compress_query_log 工具压缩旧记录
+- 当查询日志累计较长（约 8000 字符，通常对应 15-20 条查询）时，
+  调用 compress_query_log 工具压缩旧记录
 - 压缩后仅保留最近 5 条完整记录，更早的记录转为摘要
 - 上下文管理子 Agent 后续会扩展更多能力（如压缩 records、注入背景等）
 
@@ -78,46 +79,28 @@ def get_loaded_skill_names() -> list[str]:
 
 def _import_skill_modules() -> None:
     """尝试导入技能模块，失败时不阻塞。"""
-    try:
+    from contextlib import suppress
+
+    with suppress(ImportError):
         import app.skills.builtin.discovery.pubmed  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.discovery.understanding  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.geo  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.pdb  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.gdc  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.xena  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.acquisition.browser  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.processing.self_evolution  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.processing.extract_tables  # noqa: F401
-    except ImportError:
-        pass
-    try:
+    with suppress(ImportError):
         import app.skills.builtin.analysis.stats  # noqa: F401
-    except ImportError:
-        pass
 
 
 def create_agent(databases: list[str] | None = None) -> Agent:

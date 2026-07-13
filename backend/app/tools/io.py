@@ -16,7 +16,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 
-def _resolve_safe_path(path: str, run_ctx: "RunContext") -> Path:
+def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
     """将用户提供的路径解析为任务目录内的安全路径。
 
     安全策略：
@@ -38,7 +38,7 @@ def _resolve_safe_path(path: str, run_ctx: "RunContext") -> Path:
     try:
         resolved.relative_to(output_dir)
     except ValueError:
-        raise ValueError(f"路径穿越被拒绝: {path}（目标在工作目录之外）")
+        raise ValueError(f"路径穿越被拒绝: {path}（目标在工作目录之外）") from None
 
     # 安全检查 3：如果路径存在且是符号链接，检查 real 目标
     if resolved.exists() and resolved.is_symlink():
@@ -46,7 +46,7 @@ def _resolve_safe_path(path: str, run_ctx: "RunContext") -> Path:
         try:
             real_target.relative_to(output_dir)
         except ValueError:
-            raise ValueError(f"符号链接指向工作目录外被拒绝: {path} -> {real_target}")
+            raise ValueError(f"符号链接指向工作目录外被拒绝: {path} -> {real_target}") from None
 
     return resolved
 

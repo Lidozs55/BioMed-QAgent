@@ -8,36 +8,36 @@ import hashlib
 import json
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
-    DataLevel,
+    ArtifactProducedPayload,
+    AttemptStatus,
     Database,
+    DataLevel,
     DatasetSelection,
+    PlanReadyPayload,
     QuerySpecification,
     RequestedOutput,
     RunManifest,
+    SourceAsset,
+    SourceRecord,
     StageAttempt,
     StageCompletedPayload,
     StageName,
     StageStartedPayload,
-    AttemptStatus,
-    ArtifactProducedPayload,
-    PlanReadyPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
-    SourceAsset,
-    SourceRecord,
     TaskRequest,
     TaskSpecification,
     TaskState,
     ValidationSummary,
     asset_id_from_sha256,
+    build_event,
     make_dataset_id,
     make_source_id,
-    build_event,
 )
 from app.integrations.ncbi.parsers import parse_geo_esummary, parse_pubmed_xml
 from app.pipeline.processing.geo_tximport import (
@@ -46,7 +46,6 @@ from app.pipeline.processing.geo_tximport import (
     process_geo_tximport_counts,
 )
 from app.tools.workdir import create_task_workdir
-
 
 _ARTIFACT_COLUMNS = {
     "literature.csv": [
@@ -349,7 +348,7 @@ def run_pinned_fixture(
     fixture_dir: Path,
     topic: str = "breast cancer gene expression under Hsp70 inhibition",
 ) -> RunManifest:
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     workdir = create_task_workdir(task_id, base_dir=str(base_dir))
     staging = workdir.staging_run("run_pinned_fixture")
     if any(staging.iterdir()):
@@ -552,7 +551,7 @@ def run_pinned_fixture(
                 "parameters": json.dumps({"measurement": "counts"}, sort_keys=True),
                 "status": "succeeded",
                 "started_at": started_at.isoformat(),
-                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
                 "warnings": "[]",
             }
         ],
@@ -625,7 +624,7 @@ def run_pinned_fixture(
             RequestedOutput.SAMPLE_METADATA,
         ],
     )
-    finished_stages_at = datetime.now(timezone.utc)
+    finished_stages_at = datetime.now(UTC)
     stage_attempts = [
         StageAttempt(
             stage_attempt_id=f"stage_attempt_{stage.value}_1",
@@ -663,7 +662,7 @@ def run_pinned_fixture(
         pipeline_version="0.1.0",
         model_name=None,
         started_at=started_at,
-        finished_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(UTC),
     )
     (staging / "run_manifest.json").write_text(
         manifest.model_dump_json(indent=2) + "\n", "utf-8"

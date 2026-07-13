@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
 import app.api.ws as ws_module
 from app.main import app
+from fastapi.testclient import TestClient
 
 
 def test_websocket_assigns_unique_task_id_before_agent_events(monkeypatch) -> None:

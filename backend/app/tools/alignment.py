@@ -12,7 +12,6 @@ from typing import Any
 
 from app.domain.processing import ParsedDataset
 
-
 # ---------------------------------------------------------------------------
 # 字段名规范化
 # ---------------------------------------------------------------------------
@@ -246,9 +245,9 @@ def merge_datasets(
     output_fields = list(field_mapping.keys())
     output_fields.append("_source")
 
-    # 构建每数据集的列映射: original_name → output_name
+   # 构建每数据集的列映射: original_name → output_name
     ds_column_maps: list[dict[str, str]] = []
-    for ds_idx, ds in enumerate(datasets):
+    for ds_idx, _ds in enumerate(datasets):  # noqa: B007
         col_map: dict[str, str] = {}
         for norm_name, originals in field_mapping.items():
             if ds_idx < len(originals) and originals[ds_idx]:

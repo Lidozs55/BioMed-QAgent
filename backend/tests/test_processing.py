@@ -5,8 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from app.domain.processing import CleaningReport, ParsedDataset
+from app.domain.processing import ParsedDataset
 from app.tools.cleaning import (
     check_field_types,
     clean_dataset,
@@ -22,7 +21,6 @@ from app.tools.processing import (
     parse_html_tables,
     parse_json,
 )
-
 
 # ---------------------------------------------------------------------------
 # 格式识别

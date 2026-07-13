@@ -4,8 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from app.tools.workdir import TaskWorkDir, create_task_workdir
+from app.tools.workdir import create_task_workdir
 
 
 def test_create_task_workdir_creates_all_subdirs(tmp_path: Path) -> None:
@@ -84,7 +83,7 @@ def test_artifact_file_path(tmp_path: Path) -> None:
 def test_workdir_is_frozen(tmp_path: Path) -> None:
     """TaskWorkDir 是 frozen dataclass，不可变。"""
     wd = create_task_workdir("test_task_005", base_dir=str(tmp_path))
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         wd.root = tmp_path / "other"  # type: ignore[misc]
 
 

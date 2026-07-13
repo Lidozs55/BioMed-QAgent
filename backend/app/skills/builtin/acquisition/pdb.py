@@ -122,7 +122,6 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     Returns title, deposition date, resolution, experimental method,
     authors, citation info, polymer entities, and ligand/non-polymer info.
     """
-    run_ctx: RunContext = ctx.context
     pdb_id = pdb_id.strip().lower()
     url = f"{_DATA_API}{pdb_id}"
 
@@ -226,7 +225,11 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
 pdb_skill = SkillDef(
     name="pdb",
     category=SkillCategory.ACQUISITION,
-    description="Search, describe, and download protein structures from RCSB PDB. Use when user asks about protein structures, 3D models, PDB IDs, or needs structural biology data.",
+    description=(
+        "Search, describe, and download protein structures from RCSB PDB. "
+        "Use when user asks about protein structures, 3D models, PDB IDs, "
+        "or needs structural biology data."
+    ),
     instructions=(
         "Use the pdb tools to search RCSB PDB by keyword, inspect structure metadata, "
         "and download PDB or mmCIF files. "

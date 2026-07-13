@@ -201,9 +201,10 @@ def _empty_finding(record: dict[str, Any]) -> dict[str, Any]:
     description_override=(
         "Analyze paper abstracts and titles to extract structured data clues: "
         "database names, accession numbers, data types, species, supplementary "
-        "material links, and actionable query suggestions. Input is a JSON string "
-        "of the form {\"records\": [{\"title\": ..., \"abstract\": ..., \"doi\": ..., \"pmid\": ...}]}. "
-        "Returns structured JSON with findings per paper plus a cross-paper summary."
+       "material links, and actionable query suggestions. Input is a JSON string "
+        "of the form {\"records\": [{\"title\": ..., \"abstract\": ..., "
+        "\"doi\": ..., \"pmid\": ...}]}. "
+       "Returns structured JSON with findings per paper plus a cross-paper summary."
     ),
 )
 def analyze_papers(
@@ -214,7 +215,8 @@ def analyze_papers(
 
     Args:
         ctx: Run context (injected by the SDK, not exposed to the LLM).
-        papers_json: JSON string like ``{"records": [{"title":..., "abstract":..., "doi":..., "pmid":...}]}``.
+        papers_json: JSON string like
+            ``{"records": [{"title":..., "abstract":..., "doi":..., "pmid":...}]}``.
     """
     run_ctx: RunContext = ctx.context
 

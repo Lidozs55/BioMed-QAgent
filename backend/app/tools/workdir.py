@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.config import settings
 
-
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SUBDIRS = (
     "source_assets",

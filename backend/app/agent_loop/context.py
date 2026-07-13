@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.config import settings
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 

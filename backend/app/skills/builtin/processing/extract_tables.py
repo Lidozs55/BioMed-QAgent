@@ -15,11 +15,9 @@ from __future__ import annotations
 import csv
 import json
 import logging
-import os
 import re
 import unicodedata
 import zlib
-from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -170,7 +168,11 @@ def _detect_delimited_rows(text: str) -> list[list[str]]:
         # Use the mode as expected columns
         from collections import Counter
         mode_count = Counter(col_counts).most_common(1)[0][0]
-        rows = [r for r in rows if len(r) == mode_count or (mode_count - 1 <= len(r) <= mode_count + 1)]
+        rows = [
+            r for r in rows
+            if len(r) == mode_count
+            or (mode_count - 1 <= len(r) <= mode_count + 1)
+        ]
 
     return rows
 
@@ -396,7 +398,10 @@ def extract_pdf_tables(
     for idx, table in enumerate(tables, 1):
         csv_name = f"{stem}_table_{idx}.csv"
         csv_path = parsed_dir / csv_name
-        header = table.get("header") or [f"col_{j}" for j in range(len(table["rows"][0]) if table["rows"] else 1)]
+        header = table.get("header") or [
+            f"col_{j}" for j
+            in range(len(table["rows"][0]) if table["rows"] else 1)
+        ]
         rows = table.get("rows", [])
 
         # Sanitize: ensure all row lengths match header
@@ -507,10 +512,6 @@ def extract_pdf_metadata(
     # ── authors ───────────────────────────────────────────────────────
     # Heuristic: line after title, or look for common author-list patterns
     authors = ""
-    author_patterns = [
-        r"([A-Z][a-z]+\s+[A-Z]\.\s*[A-Z]?(?:[a-z]*\s+)*)",
-        r"([A-Z][a-z]+,\s*[A-Z]\.)",
-    ]
     author_lines: list[str] = []
     for line in lines[1:15]:  # first 15 lines typically contain authors
         stripped = line.strip()

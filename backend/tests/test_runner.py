@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from app.agent_loop.runner import _extract_text_delta
 
-
 # ── Helper factories ────────────────────────────────────────────────
 
 

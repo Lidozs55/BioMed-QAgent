@@ -44,13 +44,13 @@ def parse_excel(
     Raises:
         ImportError: openpyxl 未安装时。
         FileNotFoundError: 文件不存在时。
-    """
+   """
     try:
         import openpyxl
     except ImportError:
         raise ImportError(
-            "解析 Excel 文件需要 openpyxl 库。请执行: pip install openpyxl"
-        )
+            "解析 Excel 文件需要 openpyxl 库。请执行: pip install openpyxl",
+        ) from None
 
     path = Path(file_path)
     if not path.exists():

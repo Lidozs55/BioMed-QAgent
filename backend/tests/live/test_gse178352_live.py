@@ -7,13 +7,11 @@ import os
 from pathlib import Path
 
 import pytest
-
 from app.agent_loop.context import RunContext
 from app.integrations.ncbi.factory import open_ncbi_services
 from app.skills.builtin.acquisition.geo import download_geo_adapter, search_geo_adapter
 from app.skills.builtin.discovery.pubmed import search_pubmed_adapter
 from app.tools.workdir import create_task_workdir
-
 
 pytestmark = [
     pytest.mark.live,

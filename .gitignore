@@ -74,6 +74,7 @@ logs/
 
 # ===== 测试与覆盖率 =====
 .pytest_cache/
+.pytest_tmp/
 .coverage
 .coverage.*
 htmlcov/
@@ -90,3 +91,4 @@ coverage.xml
 *.bak
 .sisyphus/
 opencode.json
+fix_ruff.py

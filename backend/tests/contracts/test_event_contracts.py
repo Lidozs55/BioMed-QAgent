@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
-
 from app.domain.contracts import (
     AttemptStatus,
     ErrorCode,
@@ -20,9 +18,9 @@ from app.domain.contracts import (
     ToolCalledPayload,
     build_event,
 )
+from pydantic import ValidationError
 
-
-NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 12, tzinfo=UTC)
 SHA256 = "aa" * 32
 
 

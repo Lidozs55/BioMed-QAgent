@@ -12,14 +12,12 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
+from app.api.routes import router as routes_router
+from app.api.ws import router as ws_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
-from app.api.routes import router as routes_router
-from app.api.ws import router as ws_router
-
 
 # ---------------------------------------------------------------------------
 # dist/ resolution

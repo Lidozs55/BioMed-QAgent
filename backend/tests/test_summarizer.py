@@ -1,9 +1,9 @@
 """summarizer 与 RunContext 压缩逻辑的最小测试（不依赖 LLM）。"""
 from app.agent_loop.context import RunContext
 from app.agent_loop.summarizer import (
-    build_compress_query_log_tool,
-    KEEP_RECENT,
     COMPRESS_THRESHOLD_CHARS,
+    KEEP_RECENT,
+    build_compress_query_log_tool,
 )
 
 

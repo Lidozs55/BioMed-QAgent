@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import app.skills.builtin.acquisition.geo as geo_module
 import httpx
 import pytest
-
-import app.skills.builtin.acquisition.geo as geo_module
 from app.agent_loop.context import RunContext
+from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
     download_geo_adapter,
@@ -18,10 +18,8 @@ from app.skills.builtin.discovery.pubmed import (
     search_pubmed,
     search_pubmed_adapter,
 )
-from app.integrations.ncbi.factory import NcbiServices
 from app.tools.content_cache import ContentCache
 from app.tools.workdir import create_task_workdir
-
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 

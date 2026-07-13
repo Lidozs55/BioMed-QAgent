@@ -1,4 +1,4 @@
-"""GDC acquisition skill — search, describe, and download raw files from NCI Genomic Data Commons."""
+"""GDC acquisition skill — search, describe, and download from NCI Genomic Data Commons."""
 from __future__ import annotations
 
 import json
@@ -204,7 +204,6 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
             state                   – "open" or "legacy"
             error                   – present only on failure
     """
-    run_ctx: RunContext = ctx.context
     try:
         url = _build_url(f"/projects/{project_id}", {
             "format": "json",
@@ -390,7 +389,7 @@ def download_gdc(
     ]
 
     download_limit = min(len(file_hits), 5)
-    for idx, fh in enumerate(file_hits[:download_limit]):
+    for _idx, fh in enumerate(file_hits[:download_limit]):
         file_uuid: str = fh.get("file_id", "")
         file_name: str = fh.get("file_name", "") or f"{file_uuid}.tsv"
         download_url = f"{_GDC_API_BASE}/data/{file_uuid}"

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -55,7 +54,6 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     visible body text (up to 5000 characters). Use this as a last-resort
     tool when API endpoints are unavailable.
     """
-    run_ctx: RunContext = ctx.context
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         resp = await client.get(url, headers={"User-Agent": _BROWSER_UA})
@@ -92,21 +90,20 @@ async def download_from_page(
     """
     run_ctx: RunContext = ctx.context
 
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        async with client.stream(
-            "GET", url, headers={"User-Agent": _BROWSER_UA},
-        ) as resp:
-            status_code = resp.status_code
-            content_type = resp.headers.get("content-type", "")
-            mime_type = content_type.split(";")[0].strip() if content_type else None
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client, client.stream(
+        "GET", url, headers={"User-Agent": _BROWSER_UA},
+    ) as resp:
+        status_code = resp.status_code
+        content_type = resp.headers.get("content-type", "")
+        mime_type = content_type.split(";")[0].strip() if content_type else None
 
-            dest = run_ctx.work_dir.raw / filename
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            bytes_received = 0
-            with open(dest, "wb") as f:
-                async for chunk in resp.aiter_bytes():
-                    f.write(chunk)
-                    bytes_received += len(chunk)
+        dest = run_ctx.work_dir.raw / filename
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        bytes_received = 0
+        with open(dest, "wb") as f:
+            async for chunk in resp.aiter_bytes():
+                f.write(chunk)
+                bytes_received += len(chunk)
 
     logger.info(
         "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",

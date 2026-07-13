@@ -16,8 +16,8 @@ import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from typing import Any
 
-from Bio import Entrez
 from agents import RunContextWrapper, function_tool
+from Bio import Entrez
 
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord

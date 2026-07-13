@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import app.api.routes as routes_module
 import httpx
 import pytest
-
-import app.api.routes as routes_module
 from app.main import app
 from app.pipeline.pinned_case import run_pinned_fixture
-
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
