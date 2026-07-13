@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -146,6 +147,53 @@ async def test_second_active_run_in_same_task_is_rejected(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_same_task_conflict_precedes_full_queue_error(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_active":
+            active_started.set()
+            await release_active.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        max_queued_runs=1,
+    )
+    await manager.start()
+    try:
+        for task_id in ("task_active", "task_waiting", "task_distinct"):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        await manager.submit_run(
+            "task_active",
+            StartRunRequest(request_id="req_active", input="active"),
+        )
+        await asyncio.wait_for(active_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_waiting",
+            StartRunRequest(request_id="req_waiting", input="waiting"),
+        )
+
+        with pytest.raises(manager_module.TaskRunConflictError):
+            await manager.submit_run(
+                "task_active",
+                StartRunRequest(request_id="req_conflict", input="conflict"),
+            )
+        with pytest.raises(manager_module.RunQueueFullError):
+            await manager.submit_run(
+                "task_distinct",
+                StartRunRequest(request_id="req_distinct", input="distinct"),
+            )
+    finally:
+        release_active.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_queue_limit_rejects_excess_and_retains_fifo_order(tmp_path) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
@@ -200,6 +248,96 @@ async def test_queue_limit_rejects_excess_and_retains_fifo_order(tmp_path) -> No
         assert started == ["task_0", "task_1", "task_2"]
     finally:
         release_first.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_releases_exactly_one_logical_queue_slot(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+    next_waiter_started = asyncio.Event()
+    release_next_waiter = asyncio.Event()
+    executed: list[str] = []
+
+    async def run(execution) -> None:
+        executed.append(execution.task_id)
+        if execution.task_id == "task_active":
+            active_started.set()
+            await release_active.wait()
+        elif execution.task_id == "task_waiting_001":
+            next_waiter_started.set()
+            await release_next_waiter.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        max_queued_runs=100,
+    )
+    await manager.start()
+    try:
+        task_ids = (
+            ["task_active"]
+            + [f"task_waiting_{number:03d}" for number in range(100)]
+            + [
+                "task_replacement",
+                "task_after_dequeue_one",
+                "task_after_dequeue_two",
+            ]
+        )
+        for task_id in task_ids:
+            await repository.save_snapshot(empty_snapshot(task_id))
+
+        await manager.submit_run(
+            "task_active",
+            StartRunRequest(request_id="req_active_100", input="active"),
+        )
+        await asyncio.wait_for(active_started.wait(), timeout=1)
+        waiting = []
+        for number in range(100):
+            waiting.append(
+                await manager.submit_run(
+                    f"task_waiting_{number:03d}",
+                    StartRunRequest(
+                        request_id=f"req_waiting_{number:03d}",
+                        input=f"waiting {number}",
+                    ),
+                )
+            )
+
+        await manager.cancel_run(
+            "task_waiting_000",
+            waiting[0].run_id,
+        )
+        await manager.submit_run(
+            "task_replacement",
+            StartRunRequest(request_id="req_replacement", input="replacement"),
+        )
+
+        release_active.set()
+        await asyncio.wait_for(next_waiter_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_after_dequeue_one",
+            StartRunRequest(request_id="req_after_one", input="after one"),
+        )
+        with pytest.raises(manager_module.RunQueueFullError):
+            await manager.submit_run(
+                "task_after_dequeue_two",
+                StartRunRequest(request_id="req_after_two", input="after two"),
+            )
+
+        release_next_waiter.set()
+        await manager.wait_until_idle()
+        assert "task_waiting_000" not in executed
+        assert "task_replacement" in executed
+        assert "task_after_dequeue_one" in executed
+    finally:
+        release_active.set()
+        release_next_waiter.set()
         await manager.close()
 
 
@@ -608,6 +746,155 @@ async def test_running_cancel_waits_for_late_stream_and_retry_is_idempotent(
         release_stream.set()
         await manager.close()
         await hub.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_retry_survives_drained_terminal_append_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_started = asyncio.Event()
+
+    class FakeStreamingResult:
+        def __init__(self) -> None:
+            self.cancel_calls: list[str] = []
+            self.cancel_called = asyncio.Event()
+
+        def cancel(self, mode: str) -> None:
+            self.cancel_calls.append(mode)
+            self.cancel_called.set()
+
+        async def stream_events(self):
+            await self.cancel_called.wait()
+            if False:
+                yield None
+
+    streaming_result = FakeStreamingResult()
+
+    async def run(execution) -> None:
+        execution.set_streaming_result(streaming_result)
+        executor_started.set()
+        async for _ in streaming_result.stream_events():
+            pass
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_cancel_append"))
+        accepted = await manager.submit_run(
+            "task_cancel_append",
+            StartRunRequest(request_id="req_cancel_append", input="cancel"),
+        )
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+        real_append_event = repository.append_event
+        terminal_append_entered = asyncio.Event()
+        release_terminal_failure = asyncio.Event()
+        failed_once = False
+
+        async def fail_first_terminal_append(event):
+            nonlocal failed_once
+            if isinstance(event.payload, RunCancelledPayload) and not failed_once:
+                failed_once = True
+                terminal_append_entered.set()
+                await release_terminal_failure.wait()
+                raise OSError("simulated terminal append failure")
+            return await real_append_event(event)
+
+        monkeypatch.setattr(repository, "append_event", fail_first_terminal_append)
+        first_cancel = asyncio.create_task(
+            manager.cancel_run("task_cancel_append", accepted.run_id)
+        )
+        await asyncio.wait_for(terminal_append_entered.wait(), timeout=1)
+        retry_cancel = asyncio.create_task(
+            manager.cancel_run("task_cancel_append", accepted.run_id)
+        )
+        release_terminal_failure.set()
+
+        with pytest.raises(OSError, match="terminal append failure"):
+            await first_cancel
+        cancelled = await retry_cancel
+
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        assert streaming_result.cancel_calls == ["after_turn"]
+        events = await repository.list_events("task_cancel_append")
+        assert (
+            sum(isinstance(event.payload, RunCancelledPayload) for event in events) == 1
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_finalization_failure_and_runs_next_item(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_executed = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_worker_failure":
+            first_started.set()
+            await release_first.wait()
+        elif execution.task_id == "task_worker_next":
+            second_executed.set()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    try:
+        for task_id in ("task_worker_failure", "task_worker_next"):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        real_append_event = repository.append_event
+        failed_once = False
+
+        async def fail_first_finalizing_append(event):
+            nonlocal failed_once
+            if (
+                event.task_id == "task_worker_failure"
+                and isinstance(event.payload, RunFinalizingPayload)
+                and not failed_once
+            ):
+                failed_once = True
+                raise OSError("simulated finalization append failure")
+            return await real_append_event(event)
+
+        monkeypatch.setattr(repository, "append_event", fail_first_finalizing_append)
+        caplog.set_level(logging.ERROR, logger="app.runtime.manager")
+        await manager.submit_run(
+            "task_worker_failure",
+            StartRunRequest(request_id="req_worker_failure", input="first"),
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_worker_next",
+            StartRunRequest(request_id="req_worker_next", input="second"),
+        )
+
+        release_first.set()
+        await asyncio.wait_for(second_executed.wait(), timeout=1)
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot("task_worker_failure")
+        completed = await repository.get_snapshot("task_worker_next")
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert "simulated finalization append failure" in (failed.runs[-1].error or "")
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert "run worker failed" in caplog.text
+    finally:
+        release_first.set()
+        await manager.close()
 
 
 @pytest.mark.asyncio
