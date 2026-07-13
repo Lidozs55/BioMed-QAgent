@@ -11,6 +11,8 @@ class Database(StrEnum):
     GDC = "gdc"
     UCSC_XENA = "ucsc_xena"
     PDB = "pdb"
+    REACTOME = "reactome"
+    PUBCHEM = "pubchem"
 
 
 class DataLevel(StrEnum):
