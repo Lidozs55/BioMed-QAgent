@@ -44,7 +44,7 @@ from app.domain.contracts import (
     ToolCompletedPayload,
     ToolStartedPayload,
 )
-from app.runtime.compaction import ConversationCompactor
+from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +110,26 @@ def _tool_identity(item: object) -> tuple[str, str | None]:
     return call_id, name if isinstance(name, str) and name else None
 
 
-def _load_artifact_payloads(output_dir: Path, task_id: str) -> list[object]:
+def _artifact_manifest_fingerprint(output_dir: Path, task_id: str) -> str | None:
+    manifest_path = output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+
+def _load_artifact_payloads(
+    output_dir: Path,
+    task_id: str,
+    *,
+    previous_fingerprint: str | None = None,
+) -> list[object]:
     manifest_path = output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
     if not manifest_path.is_file():
         return []
     manifest_bytes = manifest_path.read_bytes()
+    manifest_fingerprint = hashlib.sha256(manifest_bytes).hexdigest()
+    if manifest_fingerprint == previous_fingerprint:
+        return []
     manifest = RunManifest.model_validate_json(manifest_bytes)
     manifest_entry = ArtifactManifestEntry(
         artifact_id="run_manifest",
@@ -212,13 +227,30 @@ class AgentRunExecutor:
         task_session = self._repository.task_session(execution.task_id)
         build = build_agent()
         text_buffer = _AssistantTextBuffer(execution.emit)
+        output_dir_value = getattr(self._repository, "output_dir", None)
+        output_dir = Path(output_dir_value) if output_dir_value is not None else None
         try:
+            previous_manifest_fingerprint = (
+                await asyncio.to_thread(
+                    _artifact_manifest_fingerprint,
+                    output_dir,
+                    execution.task_id,
+                )
+                if output_dir is not None
+                else None
+            )
             preparation = await self._compactor.prepare(
                 execution.task_id,
                 model_handle=build.model,
                 emit=execution.emit,
                 session=task_session,
+                cancellation_requested=execution.context.cancellation_requested,
+                commit=execution.commit_compaction,
             )
+            if execution.context.cancellation_requested.is_set():
+                raise CompactionCancelledError(
+                    "conversation compaction was cancelled before Agent Run"
+                )
             result = Runner.run_streamed(
                 build.agent,
                 execution.input,
@@ -230,15 +262,15 @@ class AgentRunExecutor:
                 await self._consume_events(execution, result, text_buffer)
             finally:
                 await text_buffer.flush()
-            output_dir = getattr(self._repository, "output_dir", None)
             if (
                 output_dir is not None
                 and not execution.context.cancellation_requested.is_set()
             ):
                 payloads = await asyncio.to_thread(
                     _load_artifact_payloads,
-                    Path(output_dir),
+                    output_dir,
                     execution.task_id,
+                    previous_fingerprint=previous_manifest_fingerprint,
                 )
                 for payload in payloads:
                     if execution.context.cancellation_requested.is_set():

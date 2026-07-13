@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -26,6 +29,33 @@ from app.runtime.compaction import (
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+
+def history_digest(items: list[dict]) -> str:
+    encoded = json.dumps(
+        items,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def valid_summary_record(
+    items: list[dict],
+    *,
+    covered_index: int,
+    summary: str = "existing summary",
+) -> dict:
+    covered_items = items[: (covered_index + 1) * 2]
+    return {
+        "schema_version": "1.0",
+        "summary": summary,
+        "summary_digest": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
+        "covered_through_run_id": f"run_{covered_index}",
+        "covered_run_ids": [f"run_{index}" for index in range(covered_index + 1)],
+        "covered_history_digest": history_digest(covered_items),
+    }
 
 
 def completed_snapshot(task_id: str, count: int) -> TaskSnapshot:
@@ -139,17 +169,10 @@ async def test_compaction_failure_keeps_marker_and_uses_latest_twenty_runs() -> 
         for index in range(27)
         for item in (
             {"role": "user", "content": f"question {index}"},
-            {"role": "assistant", "content": "x" * 3_000},
+            {"role": "assistant", "content": "x" * 11_000},
         )
     ]
-    initial_summary = {
-        "schema_version": "1.0",
-        "summary": "existing summary",
-        "summary_digest": "ab" * 32,
-        "covered_through_run_id": "run_0",
-        "covered_run_ids": ["run_0"],
-        "covered_history_digest": "cd" * 32,
-    }
+    initial_summary = valid_summary_record(items, covered_index=20)
 
     class Session:
         session_settings = None
@@ -204,10 +227,196 @@ async def test_compaction_failure_keeps_marker_and_uses_latest_twenty_runs() -> 
     assert isinstance(emitted[0], WarningPayload)
     assert emitted[0].code == "compaction_failed"
     effective = await preparation.session.get_items()
-    assert effective[0]["role"] == "system"
-    assert effective[1]["content"] == "question 7"
+    assert effective[0]["content"] == "question 7"
     assert effective[-2]["content"] == "question 26"
-    assert len(effective) == 1 + COMPACTION_FAILURE_RUNS * 2
+    assert len(effective) == COMPACTION_FAILURE_RUNS * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("corruption", "expected_fragment"),
+    [
+        ("malformed_json", "malformed summary"),
+        ("schema_version", "schema_version"),
+        ("summary_digest", "summary_digest"),
+        ("covered_through_run_id", "coverage"),
+        ("covered_run_ids", "covered_run_ids"),
+        ("covered_history_digest", "covered_history_digest"),
+    ],
+)
+async def test_invalid_summary_marker_warns_and_uses_raw_latest_twenty(
+    corruption: str,
+    expected_fragment: str,
+) -> None:
+    items = [
+        item
+        for index in range(25)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": f"answer {index}"},
+        )
+    ]
+    marker = valid_summary_record(items, covered_index=4)
+    if corruption == "schema_version":
+        marker["schema_version"] = "2.0"
+    elif corruption == "summary_digest":
+        marker["summary_digest"] = "00" * 32
+    elif corruption == "covered_through_run_id":
+        marker["covered_through_run_id"] = "run_missing"
+    elif corruption == "covered_run_ids":
+        marker["covered_run_ids"] = ["run_4"]
+    elif corruption == "covered_history_digest":
+        marker["covered_history_digest"] = "00" * 32
+
+    class Session:
+        session_settings = None
+
+        async def get_items(self):
+            return list(items)
+
+        async def add_items(self, new_items):
+            items.extend(new_items)
+
+        async def pop_item(self):
+            return None
+
+        async def clear_session(self):
+            items.clear()
+
+    class Repository:
+        session = Session()
+        saved: list[dict] = []
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 25)
+
+        async def load_conversation_summary(self, task_id: str):
+            if corruption == "malformed_json":
+                raise json.JSONDecodeError("malformed summary", "{", 1)
+            return dict(marker)
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            self.saved.append(summary)
+
+    emitted: list[object] = []
+
+    async def emit(payload: object):
+        emitted.append(payload)
+
+    repository = Repository()
+    preparation = await ConversationCompactor(repository).prepare(
+        "task_invalid_marker",
+        model_handle=object(),
+        emit=emit,
+    )
+
+    assert repository.saved == []
+    assert preparation.fallback is True
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], WarningPayload)
+    assert emitted[0].code == "compaction_failed"
+    assert expected_fragment in emitted[0].message
+    effective = await preparation.session.get_items()
+    assert len(effective) == COMPACTION_FAILURE_RUNS * 2
+    assert effective[0]["content"] == "question 5"
+    assert effective[-2]["content"] == "question 24"
+    assert all(item.get("role") != "system" for item in effective)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alignment", ["ambiguous", "impossible"])
+async def test_non_unique_history_alignment_falls_back_without_coverage(
+    alignment: str,
+) -> None:
+    first_input = "duplicate" if alignment == "ambiguous" else "missing"
+    items = [
+        {"role": "user", "content": first_input},
+        {"role": "assistant", "content": "answer"},
+        *[
+            item
+            for index in range(1, 7)
+            for item in (
+                {"role": "user", "content": f"question {index}"},
+                {"role": "assistant", "content": "x" * 11_000},
+            )
+        ],
+    ]
+    snapshot = completed_snapshot("task_alignment", 7)
+    if alignment == "ambiguous":
+        duplicate_runs = [
+            snapshot.runs[0].model_copy(
+                update={
+                    "run_id": "run_cancelled",
+                    "input": "duplicate",
+                    "status": RunStatus.CANCELLED,
+                }
+            ),
+            snapshot.runs[0].model_copy(
+                update={"run_id": "run_completed", "input": "duplicate"}
+            ),
+        ]
+        snapshot = snapshot.model_copy(
+            update={"runs": duplicate_runs + snapshot.runs[1:]}
+        )
+
+    class Session:
+        session_settings = None
+
+        async def get_items(self):
+            return list(items)
+
+        async def add_items(self, new_items):
+            items.extend(new_items)
+
+        async def pop_item(self):
+            return None
+
+        async def clear_session(self):
+            items.clear()
+
+    class Repository:
+        session = Session()
+        saved: list[dict] = []
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return snapshot
+
+        async def load_conversation_summary(self, task_id: str):
+            return {}
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            self.saved.append(summary)
+
+    summarized = False
+    emitted: list[object] = []
+
+    async def summarize(**kwargs):
+        nonlocal summarized
+        summarized = True
+        return "must not be used"
+
+    async def emit(payload: object):
+        emitted.append(payload)
+
+    repository = Repository()
+    preparation = await ConversationCompactor(
+        repository,
+        summarize=summarize,
+    ).prepare("task_alignment", model_handle=object(), emit=emit)
+
+    assert summarized is False
+    assert repository.saved == []
+    assert preparation.fallback is True
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], WarningPayload)
+    assert "alignment" in emitted[0].message
+    assert await preparation.session.get_items() == items[-40:]
 
 
 @pytest.mark.asyncio
@@ -284,3 +493,194 @@ async def test_default_summarizer_uses_same_model_without_tools(
     assert captured["agent"].model is model
     assert captured["agent"].tools == []
     assert captured["kwargs"] == {"max_turns": 1}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_preparation_never_starts_summarizer_or_commit() -> None:
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+    cancellation_requested = asyncio.Event()
+    cancellation_requested.set()
+    summarized = False
+    committed = False
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        session = Session()
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, task_id: str):
+            return {}
+
+    async def summarize(**kwargs):
+        nonlocal summarized
+        summarized = True
+        return "summary"
+
+    async def commit(record, payload):
+        nonlocal committed
+        committed = True
+        return True
+
+    async def emit(payload):
+        raise AssertionError("cancelled preparation must not emit")
+
+    with pytest.raises(compaction_module.CompactionCancelledError):
+        await ConversationCompactor(
+            Repository(),
+            summarize=summarize,
+        ).prepare(
+            "task_cancelled_prepare",
+            model_handle=object(),
+            emit=emit,
+            cancellation_requested=cancellation_requested,
+            commit=commit,
+        )
+
+    assert summarized is False
+    assert committed is False
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_summarizer_is_blocked_prevents_commit() -> None:
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+    cancellation_requested = asyncio.Event()
+    summarizer_started = asyncio.Event()
+    release_summarizer = asyncio.Event()
+    saved: list[dict] = []
+    emitted: list[object] = []
+    committed = False
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        session = Session()
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, task_id: str):
+            return {}
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            saved.append(summary)
+
+    async def summarize(**kwargs):
+        summarizer_started.set()
+        await release_summarizer.wait()
+        return "blocked summary"
+
+    async def commit(record, payload):
+        nonlocal committed
+        committed = True
+        return True
+
+    async def emit(payload):
+        emitted.append(payload)
+
+    preparation = asyncio.create_task(
+        ConversationCompactor(
+            Repository(),
+            summarize=summarize,
+        ).prepare(
+            "task_cancelled_summary",
+            model_handle=object(),
+            emit=emit,
+            cancellation_requested=cancellation_requested,
+            commit=commit,
+        )
+    )
+    await asyncio.wait_for(summarizer_started.wait(), timeout=1)
+    cancellation_requested.set()
+    release_summarizer.set()
+
+    with pytest.raises(compaction_module.CompactionCancelledError):
+        await preparation
+
+    assert committed is False
+    assert saved == []
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_delegates_marker_and_event_to_commit_callback() -> None:
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+    committed: list[tuple[dict, object]] = []
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        session = Session()
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, task_id: str):
+            return {}
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            raise AssertionError("manager callback must own summary persistence")
+
+    async def summarize(**kwargs):
+        return "delegated summary"
+
+    async def commit(record, payload):
+        committed.append((dict(record), payload))
+        return True
+
+    async def emit(payload):
+        raise AssertionError("manager callback must own compacted event emission")
+
+    preparation = await ConversationCompactor(
+        Repository(),
+        summarize=summarize,
+    ).prepare(
+        "task_delegated_commit",
+        model_handle=object(),
+        emit=emit,
+        commit=commit,
+    )
+
+    assert preparation.compacted is True
+    assert len(committed) == 1
+    record, payload = committed[0]
+    assert record["covered_through_run_id"] == "run_1"
+    assert isinstance(payload, ConversationCompactedPayload)

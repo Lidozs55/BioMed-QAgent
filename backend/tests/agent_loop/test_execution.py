@@ -16,11 +16,21 @@ from app.domain.contracts import (
     ToolStartedPayload,
 )
 from app.pipeline.pinned_case import run_pinned_fixture
+from app.runtime.compaction import CompactionCancelledError
 from app.runtime.manager import RunExecution
 
 
 class NoopCompactor:
-    async def prepare(self, task_id, *, model_handle, emit, session):
+    async def prepare(
+        self,
+        task_id,
+        *,
+        model_handle,
+        emit,
+        session,
+        cancellation_requested,
+        commit,
+    ):
         return SimpleNamespace(session=session)
 
 
@@ -387,15 +397,27 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
         input="continue",
         context=SimpleNamespace(cancellation_requested=asyncio.Event()),
         _event_emitter=AsyncMock(),
+        _compaction_committer=AsyncMock(return_value=True),
     )
     order: list[str] = []
 
     class Compactor:
-        async def prepare(self, task_id, *, model_handle, emit, session):
+        async def prepare(
+            self,
+            task_id,
+            *,
+            model_handle,
+            emit,
+            session,
+            cancellation_requested,
+            commit,
+        ):
             order.append("prepare")
             assert task_id == execution.task_id
             assert model_handle is model
             assert session is original_session
+            assert cancellation_requested is execution.context.cancellation_requested
+            assert commit == execution.commit_compaction
             return SimpleNamespace(session=effective_session)
 
     class FakeResult:
@@ -420,16 +442,49 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
 
 
 @pytest.mark.asyncio
+async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancellation_requested = asyncio.Event()
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    execution = RunExecution(
+        task_id="task_cancelled_compaction",
+        run_id="run_cancelled_compaction",
+        request_id="request_cancelled_compaction",
+        input="do not start",
+        context=SimpleNamespace(cancellation_requested=cancellation_requested),
+        _event_emitter=AsyncMock(),
+        _compaction_committer=AsyncMock(return_value=False),
+    )
+
+    class Compactor:
+        async def prepare(self, task_id, **kwargs):
+            cancellation_requested.set()
+            return SimpleNamespace(session=object())
+
+    def run_streamed(*args, **kwargs):
+        raise AssertionError("SDK Run must not start after cancellation")
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
+
+    with pytest.raises(CompactionCancelledError):
+        await runner_module.AgentRunExecutor(
+            SimpleNamespace(task_session=lambda task_id: object()),
+            compactor=Compactor(),
+        )(execution)
+
+    model.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_executor_emits_manifest_artifact_ids_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output_dir = tmp_path / "output"
-    manifest = run_pinned_fixture(
-        task_id="task_artifacts",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    )
+    manifest = None
     emitted: list[object] = []
 
     async def emit(payload: object):
@@ -445,6 +500,70 @@ async def test_executor_emits_manifest_artifact_ids_after_success(
         run_id="run_artifacts",
         request_id="request_artifacts",
         input="build artifacts",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+
+    class FakeResult:
+        async def stream_events(self):
+            nonlocal manifest
+            manifest = run_pinned_fixture(
+                task_id="task_artifacts",
+                base_dir=output_dir / "tasks",
+                fixture_dir=FIXTURE_DIR,
+            )
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+    repository = SimpleNamespace(
+        output_dir=output_dir,
+        task_session=lambda task_id: object(),
+    )
+
+    await make_executor(repository)(execution)
+
+    artifact_payloads = [
+        payload for payload in emitted if isinstance(payload, ArtifactProducedPayload)
+    ]
+    assert manifest is not None
+    assert artifact_payloads[0].artifact.artifact_id == "run_manifest"
+    assert {payload.artifact.artifact_id for payload in artifact_payloads[1:]} == {
+        artifact.artifact_id for artifact in manifest.artifacts
+    }
+
+
+@pytest.mark.asyncio
+async def test_executor_does_not_reemit_unchanged_manifest_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    run_pinned_fixture(
+        task_id="task_unchanged_artifacts",
+        base_dir=output_dir / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    emitted: list[object] = []
+
+    async def emit(payload: object):
+        emitted.append(payload)
+
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+    execution = RunExecution(
+        task_id="task_unchanged_artifacts",
+        run_id="run_unchanged_artifacts",
+        request_id="request_unchanged_artifacts",
+        input="continue without artifacts",
         context=SimpleNamespace(cancellation_requested=asyncio.Event()),
         _event_emitter=emit,
     )
@@ -467,10 +586,79 @@ async def test_executor_emits_manifest_artifact_ids_after_success(
 
     await make_executor(repository)(execution)
 
-    artifact_payloads = [
-        payload for payload in emitted if isinstance(payload, ArtifactProducedPayload)
-    ]
-    assert artifact_payloads[0].artifact.artifact_id == "run_manifest"
-    assert {payload.artifact.artifact_id for payload in artifact_payloads[1:]} == {
-        artifact.artifact_id for artifact in manifest.artifacts
+    assert not any(isinstance(payload, ArtifactProducedPayload) for payload in emitted)
+
+
+@pytest.mark.asyncio
+async def test_executor_changed_manifest_keeps_stable_artifact_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = "task_changed_artifacts"
+    output_dir = tmp_path / "output"
+    manifest = run_pinned_fixture(
+        task_id=task_id,
+        base_dir=output_dir / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    expected_ids = {
+        "run_manifest",
+        *(artifact.artifact_id for artifact in manifest.artifacts),
     }
+    emitted: list[object] = []
+
+    async def emit(payload: object):
+        emitted.append(payload)
+
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+    execution = RunExecution(
+        task_id=task_id,
+        run_id="run_changed_artifacts",
+        request_id="request_changed_artifacts",
+        input="change artifacts",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+
+    class FakeResult:
+        async def stream_events(self):
+            changed = manifest.model_copy(
+                update={
+                    "request": manifest.request.model_copy(
+                        update={"topic": "changed artifact topic"}
+                    )
+                }
+            )
+            manifest_path = (
+                output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
+            )
+            manifest_path.write_text(
+                changed.model_dump_json(indent=2) + "\n",
+                encoding="utf-8",
+            )
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+    repository = SimpleNamespace(
+        output_dir=output_dir,
+        task_session=lambda task_id: object(),
+    )
+
+    await make_executor(repository)(execution)
+
+    artifact_ids = {
+        payload.artifact.artifact_id
+        for payload in emitted
+        if isinstance(payload, ArtifactProducedPayload)
+    }
+    assert artifact_ids == expected_ids

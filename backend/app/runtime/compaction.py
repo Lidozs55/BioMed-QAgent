@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from agents import Agent, Runner
@@ -33,6 +35,18 @@ _TERMINAL_RUN_STATUSES = {
 
 Summarize = Callable[..., Awaitable[str]]
 EventEmitter = Callable[[object], Awaitable[object]]
+CompactionCommit = Callable[
+    [Mapping[str, Any], ConversationCompactedPayload],
+    Awaitable[bool],
+]
+
+
+class HistoryAlignmentError(ValueError):
+    """Raised when raw conversational groups have no unique Run mapping."""
+
+
+class CompactionCancelledError(RuntimeError):
+    """Raised when cancellation wins before a new Agent Run starts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,21 +140,51 @@ def _split_session_runs(
 def _align_runs(snapshot, items: list[TResponseInputItem]) -> list[_ConversationRun]:
     groups = _split_session_runs(items)
     records = [run for run in snapshot.runs if run.status in _TERMINAL_RUN_STATUSES]
+    inputs = [
+        _content_text(_item_value(group[0], "content", "")).strip() for group in groups
+    ]
+
+    @lru_cache(maxsize=None)
+    def mapping_count(group_index: int, record_index: int) -> int:
+        if group_index == len(groups):
+            return 1
+        if record_index == len(records):
+            return 0
+        count = mapping_count(group_index, record_index + 1)
+        if records[record_index].input == inputs[group_index]:
+            count += mapping_count(group_index + 1, record_index + 1)
+        return min(count, 2)
+
+    count = mapping_count(0, 0)
+    if count == 0:
+        raise HistoryAlignmentError("conversation history alignment is impossible")
+    if count > 1:
+        raise HistoryAlignmentError("conversation history alignment is ambiguous")
+
     aligned: list[_ConversationRun] = []
-    record_offset = 0
-    for group in groups:
-        user_input = _content_text(_item_value(group[0], "content", "")).strip()
-        for index in range(record_offset, len(records)):
-            record = records[index]
-            if record.input == user_input:
-                aligned.append(_ConversationRun(record.run_id, group))
-                record_offset = index + 1
+    record_index = 0
+    for group_index, group in enumerate(groups):
+        while record_index < len(records):
+            matches = records[record_index].input == inputs[group_index]
+            suffix_count = (
+                mapping_count(group_index + 1, record_index + 1) if matches else 0
+            )
+            if suffix_count:
+                aligned.append(_ConversationRun(records[record_index].run_id, group))
+                record_index += 1
                 break
+            record_index += 1
     return aligned
 
 
 def _flatten(runs: list[_ConversationRun]) -> list[TResponseInputItem]:
     return [copy.deepcopy(item) for run in runs for item in run.items]
+
+
+def _flatten_groups(
+    groups: list[tuple[TResponseInputItem, ...]],
+) -> list[TResponseInputItem]:
+    return [copy.deepcopy(item) for group in groups for item in group]
 
 
 def _history_characters(runs: list[_ConversationRun]) -> int:
@@ -219,15 +263,27 @@ class ConversationCompactor:
         model_handle: object,
         emit: EventEmitter,
         session: Session | None = None,
+        cancellation_requested: asyncio.Event | None = None,
+        commit: CompactionCommit | None = None,
     ) -> CompactionPreparation:
+        self._raise_if_cancelled(cancellation_requested)
         task_session = session or self._repository.task_session(task_id)
         items = await task_session.get_items()
         snapshot = await self._repository.get_snapshot(task_id)
         if snapshot is None:
             raise LookupError(task_id)
-        summary_record = await self._repository.load_conversation_summary(task_id)
-        runs = _align_runs(snapshot, items)
-        previous_summary, covered_index = self._summary_coverage(summary_record, runs)
+        groups = _split_session_runs(items)
+        try:
+            runs = _align_runs(snapshot, items)
+            summary_record = await self._repository.load_conversation_summary(task_id)
+            previous_summary, covered_index = self._summary_coverage(
+                summary_record,
+                runs,
+            )
+        except CompactionCancelledError:
+            raise
+        except Exception as error:
+            return await self._fallback(task_session, groups, emit, error)
         unsummarized = runs[covered_index + 1 :]
 
         if (
@@ -250,11 +306,13 @@ class ConversationCompactor:
         to_cover = unsummarized[:-RAW_RUNS_AFTER_COMPACTION]
         retained = unsummarized[-RAW_RUNS_AFTER_COMPACTION:]
         try:
+            self._raise_if_cancelled(cancellation_requested)
             summary = await self._summarize(
                 model_handle=model_handle,
                 history=_flatten(to_cover),
                 previous_summary=previous_summary,
             )
+            self._raise_if_cancelled(cancellation_requested)
             if not isinstance(summary, str) or not summary.strip():
                 raise ValueError("conversation summarizer returned no text")
             summary = summary.strip()
@@ -269,35 +327,23 @@ class ConversationCompactor:
                 "covered_run_ids": [run.run_id for run in all_covered],
                 "covered_history_digest": _digest_items(_flatten(all_covered)),
             }
-            await self._repository.save_conversation_summary(task_id, record)
-        except Exception as error:
-            await emit(
-                WarningPayload(
-                    message=f"conversation compaction failed: {error}",
-                    code="compaction_failed",
-                )
-            )
-            fallback_runs = unsummarized[-COMPACTION_FAILURE_RUNS:]
-            effective: list[TResponseInputItem] = []
-            if previous_summary is not None:
-                effective.append(
-                    _summary_item(
-                        previous_summary,
-                        str(summary_record["covered_through_run_id"]),
-                    )
-                )
-            effective.extend(_flatten(fallback_runs))
-            return CompactionPreparation(
-                session=_EffectiveSession(task_session, effective),
-                fallback=True,
-            )
-
-        await emit(
-            ConversationCompactedPayload(
+            payload = ConversationCompactedPayload(
                 covered_through_run_id=record["covered_through_run_id"],
                 summary_digest=record["summary_digest"],
             )
-        )
+            if commit is None:
+                await self._repository.save_conversation_summary(task_id, record)
+            elif not await commit(record, payload):
+                raise CompactionCancelledError(
+                    "conversation compaction commit was cancelled"
+                )
+        except CompactionCancelledError:
+            raise
+        except Exception as error:
+            return await self._fallback(task_session, groups, emit, error)
+
+        if commit is None:
+            await emit(payload)
         effective = [
             _summary_item(summary, covered_through),
             *_flatten(retained),
@@ -308,22 +354,60 @@ class ConversationCompactor:
         )
 
     @staticmethod
+    def _raise_if_cancelled(cancellation_requested: asyncio.Event | None) -> None:
+        if cancellation_requested is not None and cancellation_requested.is_set():
+            raise CompactionCancelledError("conversation compaction was cancelled")
+
+    @staticmethod
     def _summary_coverage(
         record: Mapping[str, Any],
         runs: list[_ConversationRun],
     ) -> tuple[str | None, int]:
         if not record:
             return None, -1
+        if record.get("schema_version") != "1.0":
+            raise ValueError("conversation summary schema_version is invalid")
         summary = record.get("summary")
         covered_run_id = record.get("covered_through_run_id")
         if not isinstance(summary, str) or not summary:
             raise ValueError("conversation summary is missing text")
+        expected_summary_digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+        if record.get("summary_digest") != expected_summary_digest:
+            raise ValueError("conversation summary summary_digest is invalid")
         if not isinstance(covered_run_id, str) or not covered_run_id:
             raise ValueError("conversation summary is missing coverage")
         for index, run in enumerate(runs):
             if run.run_id == covered_run_id:
+                covered = runs[: index + 1]
+                expected_ids = [covered_run.run_id for covered_run in covered]
+                if record.get("covered_run_ids") != expected_ids:
+                    raise ValueError("conversation summary covered_run_ids are invalid")
+                expected_history_digest = _digest_items(_flatten(covered))
+                if record.get("covered_history_digest") != expected_history_digest:
+                    raise ValueError(
+                        "conversation summary covered_history_digest is invalid"
+                    )
                 return summary, index
         raise ValueError("conversation summary coverage is not in durable history")
+
+    @staticmethod
+    async def _fallback(
+        task_session: Session,
+        groups: list[tuple[TResponseInputItem, ...]],
+        emit: EventEmitter,
+        error: Exception,
+    ) -> CompactionPreparation:
+        await emit(
+            WarningPayload(
+                message=f"conversation compaction failed: {error}",
+                code="compaction_failed",
+            )
+        )
+        effective = _flatten_groups(groups[-COMPACTION_FAILURE_RUNS:])
+        return CompactionPreparation(
+            session=_EffectiveSession(task_session, effective),
+            fallback=True,
+        )
 
 
 __all__ = [
@@ -331,5 +415,6 @@ __all__ = [
     "COMPACTION_FAILURE_RUNS",
     "RAW_RUNS_AFTER_COMPACTION",
     "CompactionPreparation",
+    "CompactionCancelledError",
     "ConversationCompactor",
 ]

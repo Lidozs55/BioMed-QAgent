@@ -12,6 +12,7 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     ArtifactManifestEntry,
     ArtifactProducedPayload,
+    ConversationCompactedPayload,
     RunCancelRequestedPayload,
     RunCancelledPayload,
     RunFinalizingPayload,
@@ -1375,4 +1376,85 @@ async def test_manager_suppresses_artifact_when_cancel_wins_emitter_lock(
         assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     finally:
         release_artifact.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_compaction_commit_restores_previous_marker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    save_entered = asyncio.Event()
+    release_save = asyncio.Event()
+    execution_seen = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        task_id = "task_compaction_cancel"
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, {})
+        real_save = repository.save_conversation_summary
+        save_calls = 0
+
+        async def blocking_save(saved_task_id, summary):
+            nonlocal save_calls
+            save_calls += 1
+            await real_save(saved_task_id, summary)
+            if save_calls == 1:
+                save_entered.set()
+                await release_save.wait()
+
+        monkeypatch.setattr(repository, "save_conversation_summary", blocking_save)
+        accepted = await manager.submit_run(
+            task_id,
+            StartRunRequest(request_id="req_compaction_cancel", input="compact"),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+        record = {
+            "schema_version": "1.0",
+            "summary": "new summary",
+            "summary_digest": "ab" * 32,
+            "covered_through_run_id": "run_old",
+            "covered_run_ids": ["run_old"],
+            "covered_history_digest": "cd" * 32,
+        }
+        payload = ConversationCompactedPayload(
+            covered_through_run_id="run_old",
+            summary_digest="ab" * 32,
+        )
+
+        commit = asyncio.create_task(execution_seen.commit_compaction(record, payload))
+        await asyncio.wait_for(save_entered.wait(), timeout=1)
+        cancellation = asyncio.create_task(manager.cancel_run(task_id, accepted.run_id))
+        await asyncio.wait_for(
+            execution_seen.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_save.set()
+
+        assert await asyncio.wait_for(commit, timeout=1) is False
+        assert await repository.load_conversation_summary(task_id) == {}
+        events = await repository.list_events(task_id)
+        assert not any(
+            isinstance(event.payload, ConversationCompactedPayload) for event in events
+        )
+
+        release_executor.set()
+        cancelled = await asyncio.wait_for(cancellation, timeout=1)
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+    finally:
+        release_save.set()
+        release_executor.set()
         await manager.close()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
@@ -13,6 +13,7 @@ from typing import Literal, Protocol
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     ArtifactProducedPayload,
+    ConversationCompactedPayload,
     RunCancelRequestedPayload,
     RunCancelledPayload,
     RunCompletedPayload,
@@ -45,6 +46,10 @@ class StreamingRunResult(Protocol):
 
 
 RunEventEmitter = Callable[[object], Awaitable[TaskSnapshot]]
+RunCompactionCommit = Callable[
+    [Mapping[str, object], ConversationCompactedPayload],
+    Awaitable[bool],
+]
 
 
 @dataclass(slots=True)
@@ -57,6 +62,10 @@ class RunExecution:
     input: str
     context: RunContext
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
+    _compaction_committer: RunCompactionCommit | None = field(
+        default=None,
+        repr=False,
+    )
     _streaming_result: StreamingRunResult | None = field(
         default=None,
         init=False,
@@ -91,6 +100,17 @@ class RunExecution:
         if self._event_emitter is None:
             raise RuntimeError("run execution has no event emitter")
         return await self._event_emitter(payload)
+
+    async def commit_compaction(
+        self,
+        record: Mapping[str, object],
+        payload: ConversationCompactedPayload,
+    ) -> bool:
+        """Commit summary state and its event under manager serialization."""
+
+        if self._compaction_committer is None:
+            raise RuntimeError("run execution has no compaction committer")
+        return await self._compaction_committer(record, payload)
 
     async def wait_for_streaming_result(self) -> StreamingRunResult | None:
         if self._streaming_result is not None or self._drained.is_set():
@@ -360,6 +380,9 @@ class TaskManager:
         *,
         reason: str | None = None,
     ) -> TaskSnapshot:
+        live_execution = self._running.get((task_id, run_id))
+        if live_execution is not None:
+            live_execution.context.cancellation_requested.set()
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)
@@ -592,6 +615,14 @@ class TaskManager:
                         context,
                         payload,
                     ),
+                    _compaction_committer=lambda record, payload: (
+                        self._commit_compaction(
+                            accepted,
+                            context,
+                            record,
+                            payload,
+                        )
+                    ),
                 )
             except Exception as error:
                 await self._append_status(
@@ -655,6 +686,37 @@ class TaskManager:
                 return snapshot
             return await self._append_status(accepted, payload)
 
+    async def _commit_compaction(
+        self,
+        accepted: TaskRunAccepted,
+        context: RunContext,
+        record: Mapping[str, object],
+        payload: ConversationCompactedPayload,
+    ) -> bool:
+        lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
+        async with lock:
+            if context.cancellation_requested.is_set():
+                return False
+            previous = await self.repository.load_conversation_summary(accepted.task_id)
+            if context.cancellation_requested.is_set():
+                return False
+            await self.repository.save_conversation_summary(accepted.task_id, record)
+            if context.cancellation_requested.is_set():
+                await self.repository.save_conversation_summary(
+                    accepted.task_id,
+                    previous,
+                )
+                return False
+            try:
+                await self._append_status(accepted, payload)
+            except BaseException:
+                await self.repository.save_conversation_summary(
+                    accepted.task_id,
+                    previous,
+                )
+                raise
+            return True
+
     async def _append_status(
         self,
         accepted: TaskRunAccepted,
@@ -681,6 +743,7 @@ class TaskManager:
 __all__ = [
     "RunExecution",
     "RunEventEmitter",
+    "RunCompactionCommit",
     "RunExecutor",
     "StreamingRunResult",
     "RunQueueFullError",
