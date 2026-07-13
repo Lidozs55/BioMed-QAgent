@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -138,6 +139,88 @@ class _QueuedRun:
     input: str
 
 
+def _run_key(accepted: TaskRunAccepted) -> tuple[str, str]:
+    return accepted.task_id, accepted.run_id
+
+
+class _RemovableRunQueue:
+    """Bounded FIFO with keyed removal and asyncio-compatible join accounting."""
+
+    def __init__(self, maxsize: int) -> None:
+        self.maxsize = maxsize
+        self._items: deque[_QueuedRun] = deque()
+        self._keys: set[tuple[str, str]] = set()
+        self._not_empty = asyncio.Event()
+        self._finished = asyncio.Event()
+        self._finished.set()
+        self._unfinished_tasks = 0
+
+    def qsize(self) -> int:
+        return len(self._items)
+
+    def empty(self) -> bool:
+        return not self._items
+
+    def full(self) -> bool:
+        return len(self._items) >= self.maxsize
+
+    def put_nowait(self, item: _QueuedRun) -> None:
+        key = _run_key(item.accepted)
+        if key in self._keys:
+            raise ValueError(f"run is already queued: {item.accepted.run_id}")
+        if self.full():
+            raise asyncio.QueueFull
+        self._items.append(item)
+        self._keys.add(key)
+        self._unfinished_tasks += 1
+        self._finished.clear()
+        self._not_empty.set()
+
+    async def get(self) -> _QueuedRun:
+        while not self._items:
+            self._not_empty.clear()
+            await self._not_empty.wait()
+        item = self._items.popleft()
+        self._keys.remove(_run_key(item.accepted))
+        if not self._items:
+            self._not_empty.clear()
+        return item
+
+    def remove(self, key: tuple[str, str]) -> _QueuedRun | None:
+        if key not in self._keys:
+            return None
+        item = next(
+            candidate
+            for candidate in self._items
+            if _run_key(candidate.accepted) == key
+        )
+        self._items.remove(item)
+        self._keys.remove(key)
+        if not self._items:
+            self._not_empty.clear()
+        self.task_done()
+        return item
+
+    def task_done(self) -> None:
+        if self._unfinished_tasks <= 0:
+            raise ValueError("task_done() called too many times")
+        self._unfinished_tasks -= 1
+        if self._unfinished_tasks == 0:
+            self._finished.set()
+
+    async def join(self) -> None:
+        await self._finished.wait()
+
+    def drain(self) -> list[_QueuedRun]:
+        items = list(self._items)
+        self._items.clear()
+        self._keys.clear()
+        self._not_empty.clear()
+        for _ in items:
+            self.task_done()
+        return items
+
+
 class TaskManager:
     """Persist Run lifecycle state and execute cross-task work concurrently."""
 
@@ -163,8 +246,7 @@ class TaskManager:
         self._context_factory = context_factory or (
             lambda task_id: RunContext(task_id=task_id)
         )
-        self._queue: asyncio.Queue[_QueuedRun] = asyncio.Queue()
-        self._waiting_run_keys: set[tuple[str, str]] = set()
+        self._queue = _RemovableRunQueue(max_queued_runs)
         self._semaphore = asyncio.Semaphore(max_active_runs)
         self._admission_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
@@ -204,11 +286,7 @@ class TaskManager:
                     await asyncio.gather(*self._workers, return_exceptions=True)
                     self._workers.clear()
                     self._running.clear()
-                    while not self._queue.empty():
-                        queued = self._queue.get_nowait()
-                        self._release_waiting_slot(queued.accepted)
-                        self._queue.task_done()
-                    self._waiting_run_keys.clear()
+                    self._queue.drain()
                     self._started = False
             finally:
                 await self.repository.close()
@@ -237,7 +315,7 @@ class TaskManager:
                         task_id,
                         snapshot.task.active_run_id,
                     )
-                if len(self._waiting_run_keys) >= self.max_queued_runs:
+                if self._queue.full():
                     raise RunQueueFullError(self.max_queued_runs)
                 accepted = TaskRunAccepted(
                     request_id=request.request_id,
@@ -253,12 +331,7 @@ class TaskManager:
                         input=request.input,
                     ),
                 )
-                self._reserve_waiting_slot(accepted)
-                try:
-                    await self.repository.append_event(event)
-                except BaseException:
-                    self._release_waiting_slot(accepted)
-                    raise
+                await self.repository.append_event(event)
                 try:
                     await self.event_hub.publish(event)
                     await self.repository.record_request(accepted)
@@ -292,8 +365,20 @@ class TaskManager:
                 raise LookupError(run_id)
             if run.status is not RunStatus.QUEUED:
                 if run.status is RunStatus.CANCELLED:
+                    self._queue.remove((task_id, run_id))
                     self._running.pop((task_id, run_id), None)
                     return snapshot
+                if run.status is RunStatus.CANCEL_REQUESTED and run.started_at is None:
+                    accepted = TaskRunAccepted(
+                        request_id=run.request_id,
+                        task_id=task_id,
+                        run_id=run_id,
+                    )
+                    return await self._append_status(
+                        accepted,
+                        RunCancelledPayload(reason=reason),
+                        after_persist=lambda _: self._queue.remove((task_id, run_id)),
+                    )
                 if run.status not in {
                     RunStatus.RUNNING,
                     RunStatus.FINALIZING,
@@ -323,12 +408,13 @@ class TaskManager:
                 await self._append_status(
                     accepted,
                     RunCancelRequestedPayload(reason=reason),
+                    after_persist=lambda _: self._queue.remove((task_id, run_id)),
                 )
                 cancelled = await self._append_status(
                     accepted,
                     RunCancelledPayload(reason=reason),
+                    after_persist=lambda _: self._queue.remove((task_id, run_id)),
                 )
-                self._release_waiting_slot(accepted)
                 return cancelled
 
         await execution.cancel_after_turn()
@@ -341,14 +427,18 @@ class TaskManager:
                 candidate for candidate in snapshot.runs if candidate.run_id == run_id
             )
             if run.status is RunStatus.CANCELLED:
+                self._running.pop((task_id, run_id), None)
                 return snapshot
             if run.status is not RunStatus.CANCEL_REQUESTED:
                 raise RuntimeError(f"run {run_id} left cancellation state")
             cancelled = await self._append_status(
                 accepted,
                 RunCancelledPayload(reason=reason),
+                after_persist=lambda _: self._running.pop(
+                    (task_id, run_id),
+                    None,
+                ),
             )
-            self._running.pop((task_id, run_id), None)
             return cancelled
 
     async def wait_until_idle(self) -> None:
@@ -397,13 +487,14 @@ class TaskManager:
                 )
 
         for _, _, _, queued_run in sorted(queued):
-            self._reserve_waiting_slot(queued_run.accepted)
-            self._queue.put_nowait(queued_run)
+            try:
+                self._queue.put_nowait(queued_run)
+            except asyncio.QueueFull as error:
+                raise RunQueueFullError(self.max_queued_runs) from error
 
     async def _worker(self) -> None:
         while True:
             queued = await self._queue.get()
-            self._release_waiting_slot(queued.accepted)
             try:
                 async with self._semaphore:
                     await self._execute(queued)
@@ -413,21 +504,6 @@ class TaskManager:
                 await self._handle_worker_failure(queued, error)
             finally:
                 self._queue.task_done()
-
-    def _reserve_waiting_slot(self, accepted: TaskRunAccepted) -> None:
-        key = (accepted.task_id, accepted.run_id)
-        if key in self._waiting_run_keys:
-            return
-        if len(self._waiting_run_keys) >= self.max_queued_runs:
-            raise RunQueueFullError(self.max_queued_runs)
-        self._waiting_run_keys.add(key)
-
-    def _release_waiting_slot(self, accepted: TaskRunAccepted) -> bool:
-        key = (accepted.task_id, accepted.run_id)
-        if key not in self._waiting_run_keys:
-            return False
-        self._waiting_run_keys.remove(key)
-        return True
 
     async def _handle_worker_failure(
         self,
@@ -490,15 +566,22 @@ class TaskManager:
             )
             if run.status is not RunStatus.QUEUED:
                 return
-            execution = RunExecution(
-                task_id=accepted.task_id,
-                run_id=accepted.run_id,
-                request_id=accepted.request_id,
-                input=queued.input,
-                context=self._context_factory(accepted.task_id),
-            )
-            self._running[(accepted.task_id, accepted.run_id)] = execution
             await self._append_status(accepted, RunStartedPayload())
+            try:
+                execution = RunExecution(
+                    task_id=accepted.task_id,
+                    run_id=accepted.run_id,
+                    request_id=accepted.request_id,
+                    input=queued.input,
+                    context=self._context_factory(accepted.task_id),
+                )
+            except Exception as error:
+                await self._append_status(
+                    accepted,
+                    RunFailedPayload(error=str(error) or type(error).__name__),
+                )
+                raise
+            self._running[(accepted.task_id, accepted.run_id)] = execution
 
         try:
             retain_cancellation = False
@@ -536,7 +619,13 @@ class TaskManager:
             ):
                 self._running.pop((accepted.task_id, accepted.run_id), None)
 
-    async def _append_status(self, accepted: TaskRunAccepted, payload) -> TaskSnapshot:
+    async def _append_status(
+        self,
+        accepted: TaskRunAccepted,
+        payload,
+        *,
+        after_persist: Callable[[TaskSnapshot], None] | None = None,
+    ) -> TaskSnapshot:
         snapshot = await self.repository.get_snapshot(accepted.task_id)
         if snapshot is None:
             raise LookupError(accepted.task_id)
@@ -547,6 +636,8 @@ class TaskManager:
             payload=payload,
         )
         updated = await self.repository.append_event(event)
+        if after_persist is not None:
+            after_persist(updated)
         await self.event_hub.publish(event)
         return updated
 

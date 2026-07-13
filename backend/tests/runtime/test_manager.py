@@ -23,6 +23,7 @@ from app.domain.contracts import (
     build_event,
 )
 from app.config import Settings
+from app.agent_loop.context import RunContext
 from app.runtime.repository import TaskRepository
 from app.runtime.hub import EventHub
 
@@ -342,6 +343,68 @@ async def test_cancelled_waiter_releases_exactly_one_logical_queue_slot(
 
 
 @pytest.mark.asyncio
+async def test_cancel_replacement_churn_keeps_physical_fifo_bounded(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_churn_active":
+            active_started.set()
+            await release_active.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        max_queued_runs=3,
+    )
+    await manager.start()
+    try:
+        for task_id in (
+            "task_churn_active",
+            "task_churn_anchor_a",
+            "task_churn_anchor_b",
+            "task_churn_replace",
+        ):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        await manager.submit_run(
+            "task_churn_active",
+            StartRunRequest(request_id="req_churn_active", input="active"),
+        )
+        await asyncio.wait_for(active_started.wait(), timeout=1)
+        for suffix in ("a", "b"):
+            await manager.submit_run(
+                f"task_churn_anchor_{suffix}",
+                StartRunRequest(
+                    request_id=f"req_churn_anchor_{suffix}",
+                    input=f"anchor {suffix}",
+                ),
+            )
+        current = await manager.submit_run(
+            "task_churn_replace",
+            StartRunRequest(request_id="req_churn_0", input="churn 0"),
+        )
+
+        for iteration in range(1, 11):
+            await manager.cancel_run("task_churn_replace", current.run_id)
+            current = await manager.submit_run(
+                "task_churn_replace",
+                StartRunRequest(
+                    request_id=f"req_churn_{iteration}",
+                    input=f"churn {iteration}",
+                ),
+            )
+            assert manager._queue.qsize() <= manager.max_queued_runs
+    finally:
+        release_active.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_queued_cancellation_is_ordered_and_skips_executor(tmp_path) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
@@ -390,6 +453,93 @@ async def test_queued_cancellation_is_ordered_and_skips_executor(tmp_path) -> No
     finally:
         release_active.set()
         await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blocked_payload_type",
+    [RunCancelRequestedPayload, RunCancelledPayload],
+    ids=["cancel_requested", "cancelled"],
+)
+async def test_queued_cancelled_during_publish_still_removes_waiting_entry(
+    tmp_path,
+    monkeypatch,
+    blocked_payload_type,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+    cancelled_publish_entered = asyncio.Event()
+    blocked_once = False
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_publish_active":
+            active_started.set()
+            await release_active.wait()
+
+    real_publish = hub.publish
+
+    async def block_cancelled_publish(event) -> None:
+        nonlocal blocked_once
+        if isinstance(event.payload, blocked_payload_type) and not blocked_once:
+            blocked_once = True
+            cancelled_publish_entered.set()
+            await asyncio.Event().wait()
+        await real_publish(event)
+
+    monkeypatch.setattr(hub, "publish", block_cancelled_publish)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        max_queued_runs=1,
+        event_hub=hub,
+    )
+    await manager.start()
+    try:
+        for task_id in (
+            "task_publish_active",
+            "task_publish_cancel",
+            "task_publish_replacement",
+        ):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        await manager.submit_run(
+            "task_publish_active",
+            StartRunRequest(request_id="req_publish_active", input="active"),
+        )
+        await asyncio.wait_for(active_started.wait(), timeout=1)
+        queued = await manager.submit_run(
+            "task_publish_cancel",
+            StartRunRequest(request_id="req_publish_cancel", input="cancel"),
+        )
+
+        cancellation = asyncio.create_task(
+            manager.cancel_run("task_publish_cancel", queued.run_id)
+        )
+        await asyncio.wait_for(cancelled_publish_entered.wait(), timeout=1)
+        cancellation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancellation
+
+        cancelled = await repository.get_snapshot("task_publish_cancel")
+        assert cancelled is not None
+        assert cancelled.runs[-1].status in {
+            RunStatus.CANCEL_REQUESTED,
+            RunStatus.CANCELLED,
+        }
+        await manager.submit_run(
+            "task_publish_replacement",
+            StartRunRequest(request_id="req_publish_replacement", input="replacement"),
+        )
+        retried = await manager.cancel_run("task_publish_cancel", queued.run_id)
+        assert retried.runs[-1].status is RunStatus.CANCELLED
+        assert manager._queue.qsize() == 1
+    finally:
+        release_active.set()
+        await manager.close()
+        await hub.close()
 
 
 @pytest.mark.asyncio
@@ -827,6 +977,107 @@ async def test_cancel_retry_survives_drained_terminal_append_failure(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_terminal_retry_clears_retained_coordination(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    executor_started = asyncio.Event()
+    release_stream = asyncio.Event()
+    both_waiting_for_drain = asyncio.Event()
+    terminal_publish_entered = asyncio.Event()
+    terminal_publisher = None
+    drain_waiters = 0
+
+    class FakeStreamingResult:
+        def __init__(self) -> None:
+            self.cancel_calls: list[str] = []
+            self.cancel_called = asyncio.Event()
+
+        def cancel(self, mode: str) -> None:
+            self.cancel_calls.append(mode)
+            self.cancel_called.set()
+
+        async def stream_events(self):
+            await self.cancel_called.wait()
+            await release_stream.wait()
+            if False:
+                yield None
+
+    streaming_result = FakeStreamingResult()
+
+    async def run(execution) -> None:
+        execution.set_streaming_result(streaming_result)
+        executor_started.set()
+        async for _ in streaming_result.stream_events():
+            pass
+
+    real_wait_until_drained = manager_module.RunExecution.wait_until_drained
+
+    async def count_drain_waiters(execution) -> None:
+        nonlocal drain_waiters
+        drain_waiters += 1
+        if drain_waiters == 2:
+            both_waiting_for_drain.set()
+        await real_wait_until_drained(execution)
+
+    monkeypatch.setattr(
+        manager_module.RunExecution,
+        "wait_until_drained",
+        count_drain_waiters,
+    )
+    real_publish = hub.publish
+
+    async def block_terminal_publish(event) -> None:
+        nonlocal terminal_publisher
+        if isinstance(event.payload, RunCancelledPayload):
+            terminal_publisher = asyncio.current_task()
+            terminal_publish_entered.set()
+            await asyncio.Event().wait()
+        await real_publish(event)
+
+    monkeypatch.setattr(hub, "publish", block_terminal_publish)
+    manager = manager_module.TaskManager(repository, run_executor=run, event_hub=hub)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_terminal_retry"))
+        accepted = await manager.submit_run(
+            "task_terminal_retry",
+            StartRunRequest(request_id="req_terminal_retry", input="cancel"),
+        )
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+        cancellations = [
+            asyncio.create_task(
+                manager.cancel_run("task_terminal_retry", accepted.run_id)
+            )
+            for _ in range(2)
+        ]
+        await asyncio.wait_for(both_waiting_for_drain.wait(), timeout=1)
+        release_stream.set()
+        await asyncio.wait_for(terminal_publish_entered.wait(), timeout=1)
+        assert terminal_publisher is not None
+        terminal_publisher.cancel()
+        results = await asyncio.gather(*cancellations, return_exceptions=True)
+
+        assert (
+            sum(isinstance(result, asyncio.CancelledError) for result in results) == 1
+        )
+        assert any(
+            isinstance(result, TaskSnapshot)
+            and result.runs[-1].status is RunStatus.CANCELLED
+            for result in results
+        )
+        assert ("task_terminal_retry", accepted.run_id) not in manager._running
+        assert streaming_result.cancel_calls == ["after_turn"]
+    finally:
+        release_stream.set()
+        await manager.close()
+        await hub.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_survives_finalization_failure_and_runs_next_item(
     tmp_path,
     monkeypatch,
@@ -894,6 +1145,63 @@ async def test_worker_survives_finalization_failure_and_runs_next_item(
         assert "run worker failed" in caplog.text
     finally:
         release_first.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_context_setup_failure_terminalizes_before_worker_continues(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    setup_failed = asyncio.Event()
+    second_executed = asyncio.Event()
+    executor_tasks: list[str] = []
+
+    def create_context(task_id: str) -> RunContext:
+        if task_id == "task_setup_failure":
+            setup_failed.set()
+            raise RuntimeError("simulated context setup failure")
+        return RunContext(task_id=task_id)
+
+    async def run(execution) -> None:
+        executor_tasks.append(execution.task_id)
+        second_executed.set()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        context_factory=create_context,
+    )
+    await manager.start()
+    try:
+        for task_id in ("task_setup_failure", "task_setup_next"):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        first = await manager.submit_run(
+            "task_setup_failure",
+            StartRunRequest(request_id="req_setup_failure", input="first"),
+        )
+        await asyncio.wait_for(setup_failed.wait(), timeout=1)
+        await manager.submit_run(
+            "task_setup_next",
+            StartRunRequest(request_id="req_setup_next", input="second"),
+        )
+
+        await asyncio.wait_for(second_executed.wait(), timeout=1)
+        await manager.wait_until_idle()
+        failed = await repository.get_snapshot("task_setup_failure")
+        completed = await repository.get_snapshot("task_setup_next")
+
+        assert failed is not None
+        assert failed.runs[-1].run_id == first.run_id
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert "simulated context setup failure" in (failed.runs[-1].error or "")
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert executor_tasks == ["task_setup_next"]
+        assert manager._queue.qsize() == 0
+    finally:
         await manager.close()
 
 
