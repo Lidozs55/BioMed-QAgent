@@ -1,6 +1,7 @@
 import { useAgentStore } from "@/stores/agentStore";
 import { useAPI } from "@/hooks/useAPI";
 import { useState, useEffect } from "react";
+import Papa from "papaparse";
 import {
   DatabaseIcon,
   DownloadIcon,
@@ -77,13 +78,25 @@ function isCSV(filename: string): boolean {
   return ext === "csv";
 }
 
-/** Simple CSV parser — split by newlines, then by commas */
-function parseCSV(text: string): { headers: string[]; rows: string[][] } {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const headers = lines[0].split(",").map((h) => h.trim());
-  const rows = lines.slice(1).map((line) => line.split(",").map((c) => c.trim()));
-  return { headers, rows };
+/** Parse at most 100 preview rows with standard CSV quoting rules. */
+function parseCSV(text: string): {
+  headers: string[];
+  rows: string[][];
+  truncated: boolean;
+} {
+  const parsed = Papa.parse<string[]>(text, {
+    preview: 101,
+    skipEmptyLines: "greedy",
+  });
+  if (parsed.errors.length > 0) {
+    throw new Error(parsed.errors[0].message);
+  }
+  const [headers = [], ...rows] = parsed.data;
+  return {
+    headers: headers.map((header) => header.trim()),
+    rows: rows.map((row) => row.map((cell) => cell.trim())),
+    truncated: parsed.meta.truncated,
+  };
 }
 
 /** Parse traces to extract source provenance data */
@@ -181,7 +194,11 @@ function CsvPreview({
 }) {
   const [requestState, setRequestState] = useState<{
     artifactUrl: string;
-    csvData: { headers: string[]; rows: string[][] } | null;
+    csvData: {
+      headers: string[];
+      rows: string[][];
+      truncated: boolean;
+    } | null;
     error: boolean;
   } | null>(null);
 
@@ -273,9 +290,9 @@ function CsvPreview({
           ))}
         </TableBody>
       </Table>
-      {csvData.rows.length > 100 && (
+      {csvData.truncated && (
         <div className="px-2 py-1 text-xs text-muted-foreground">
-          仅显示前 100 行（共 {csvData.rows.length} 行）
+          仅显示前 100 行
         </div>
       )}
     </div>

@@ -9,7 +9,7 @@ import { ToolTrace } from "@/components/ToolTrace";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export default function App() {
-  const { connect, disconnect } = useAgentStream();
+  const { connect, disconnect, send } = useAgentStream();
   const { fetchDatabases } = useAPI();
   const setDatabases = useAgentStore((s) => s.setDatabases);
 
@@ -37,7 +37,7 @@ export default function App() {
         </header>
         <main className="flex flex-1 overflow-hidden">
           <div className="flex-1">
-            <ChatPanel />
+            <ChatPanel send={send} />
           </div>
           <ToolTrace />
         </main>

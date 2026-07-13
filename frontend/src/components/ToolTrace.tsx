@@ -45,6 +45,7 @@ function getKindLabel(kind: string) {
 export function ToolTrace() {
 	const traces = useAgentStore((s) => s.traces);
 	const isConnected = useAgentStore((s) => s.isConnected);
+	const isRunning = useAgentStore((s) => s.isRunning);
 	const reset = useAgentStore((s) => s.reset);
 	const [open, setOpen] = useState(false);
 
@@ -124,7 +125,7 @@ export function ToolTrace() {
 							reset();
 							setOpen(false);
 						}}
-						disabled={traces.length === 0}
+						disabled={isRunning || traces.length === 0}
 					>
 						<TrashIcon data-icon="inline-start" />
 						清除

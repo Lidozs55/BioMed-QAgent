@@ -13,6 +13,7 @@ describe('agentStore', () => {
       selectedDatabases: [],
       artifacts: [],
       taskId: null,
+      fixtureError: null,
       sessions: [],
       currentSessionId: null,
       pipelineStage: 'idle',
@@ -107,5 +108,37 @@ describe('agentStore', () => {
     expect(state.currentSessionId).toBe('task-history')
     expect(state.messages[0].content).toBe('History')
     expect(state.artifacts[0].artifactId).toBe('artifact_1')
+  })
+
+  it('deleting the active session also clears its working state', () => {
+    useAgentStore.setState({
+      sessions: [{
+        taskId: 'task-active',
+        topic: 'Active',
+        databases: ['pubmed', 'geo'],
+        createdAt: 1,
+        messageCount: 1,
+        messages: [{ id: 'm1', role: 'user', content: 'Active' }],
+        traces: [],
+        artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
+        pipelineStage: 'done',
+      }],
+      currentSessionId: 'task-active',
+      taskId: 'task-active',
+      messages: [{ id: 'm1', role: 'user', content: 'Active' }],
+      artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
+      selectedDatabases: ['pubmed', 'geo'],
+      pipelineStage: 'done',
+    })
+
+    useAgentStore.getState().deleteSession('task-active')
+    useAgentStore.getState().reset()
+
+    const state = useAgentStore.getState()
+    expect(state.sessions).toEqual([])
+    expect(state.currentSessionId).toBeNull()
+    expect(state.taskId).toBeNull()
+    expect(state.messages).toEqual([])
+    expect(state.artifacts).toEqual([])
   })
 })

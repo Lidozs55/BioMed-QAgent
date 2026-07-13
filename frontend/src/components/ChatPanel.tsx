@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useAgentStore } from "../stores/agentStore";
-import { useAgentStream } from "../hooks/useAgentStream";
 import { useAPI } from "../hooks/useAPI";
 import {
   DownloadIcon,
@@ -9,7 +8,9 @@ import {
   FileTextIcon,
   RobotIcon,
   UserIcon,
+  WarningCircleIcon,
 } from "@phosphor-icons/react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -47,6 +48,10 @@ import ResultsViewer from "./ResultsViewer";
 
 type TabMode = "setup" | "chat" | "results";
 
+interface ChatPanelProps {
+  send: (input: string, databases?: string[]) => void;
+}
+
 /** Format bytes to human-readable size */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -80,10 +85,11 @@ function getFileIcon(name: string) {
 }
 
 /** 研究工作台 — 设置 / 对话 / 结果 三模式切换。 */
-export function ChatPanel() {
+export function ChatPanel({ send }: ChatPanelProps) {
   const { messages, isRunning, isConnected, taskId } = useAgentStore();
   const artifacts = useAgentStore((s) => s.artifacts);
-  const { send } = useAgentStream();
+  const fixtureError = useAgentStore((s) => s.fixtureError);
+  const setFixtureError = useAgentStore((s) => s.setFixtureError);
   const { createTask, fetchArtifacts, getArtifactUrl } = useAPI();
   const [input, setInput] = useState("");
 
@@ -97,7 +103,7 @@ export function ChatPanel() {
     if (taskId && !isRunning) {
       fetchArtifacts(taskId)
         .then((arts) => {
-          if (arts) {
+          if (arts && useAgentStore.getState().taskId === taskId) {
             const store = useAgentStore.getState();
             store.setArtifacts(arts.map((a) => ({
               artifactId: a.artifact_id,
@@ -122,6 +128,7 @@ export function ChatPanel() {
   const handleFixtureRun = async () => {
     const trimmed = input.trim();
     if (!trimmed || isRunning) return;
+    setFixtureError(null);
     const store = useAgentStore.getState();
     const selected = store.selectedDatabases;
     if (
@@ -129,12 +136,11 @@ export function ChatPanel() {
       !selected.includes("pubmed") ||
       !selected.includes("geo")
     ) {
-      store.addTrace({
-        kind: "error",
-        message: "固定验收案例只能选择 PubMed 和 GEO。",
-      });
+      const message = "固定验收案例只能选择 PubMed 和 GEO。";
+      setFixtureError(message);
       return;
     }
+    store.prepareNewTask(selected);
     store.addMessage("user", trimmed);
     store.setRunning(true);
     store.setPipelineStage("discovery");
@@ -148,18 +154,20 @@ export function ChatPanel() {
         `确定性 Pipeline 已完成，任务 ${created.task_id} 的产物已通过验证。`,
       );
       const arts = await fetchArtifacts(created.task_id);
-      store.setArtifacts(arts.map((a) => ({
-        artifactId: a.artifact_id,
-        name: a.name,
-        size: a.size,
-      })));
-      setActiveTab("results");
+      if (useAgentStore.getState().taskId === created.task_id) {
+        store.setArtifacts(arts.map((a) => ({
+          artifactId: a.artifact_id,
+          name: a.name,
+          size: a.size,
+        })));
+        setActiveTab("results");
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "任务执行失败";
       store.setPipelineStage("error");
-      store.addTrace({
-        kind: "error",
-        message: error instanceof Error ? error.message : "任务执行失败",
-      });
+      store.addTrace({ kind: "error", message });
+      setFixtureError(message);
+      setActiveTab("setup");
     } finally {
       store.setRunning(false);
     }
@@ -210,10 +218,16 @@ export function ChatPanel() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="输入研究目标..."
-                disabled={!isConnected}
+                disabled={isRunning}
                 className="min-h-20 resize-none"
               />
-              <DatabaseSelector />
+              <DatabaseSelector onToggle={() => setFixtureError(null)} />
+              {fixtureError && (
+                <Alert variant="destructive">
+                  <WarningCircleIcon />
+                  <AlertDescription>{fixtureError}</AlertDescription>
+                </Alert>
+              )}
             </CardContent>
             <CardFooter className="flex flex-col gap-2">
               <Button

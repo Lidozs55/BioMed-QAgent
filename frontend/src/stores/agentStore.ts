@@ -78,6 +78,7 @@ interface AgentState {
   selectedDatabases: string[];
   artifacts: { artifactId: string; name: string; size: number }[];
   taskId: string | null;
+  fixtureError: string | null;
 
   /** Session sidebar */
   sessions: Session[];
@@ -100,6 +101,8 @@ interface AgentState {
   addArtifact: (artifactId: string, name: string, size: number) => void;
   setArtifacts: (artifacts: { artifactId: string; name: string; size: number }[]) => void;
   setTaskId: (id: string) => void;
+  setFixtureError: (message: string | null) => void;
+  prepareNewTask: (databases: string[]) => void;
 
   /** Session actions */
   addSession: (taskId: string, topic: string, databases: string[]) => void;
@@ -140,6 +143,7 @@ export const useAgentStore = create<AgentState>()(
       selectedDatabases: [],
       artifacts: [],
       taskId: null,
+      fixtureError: null,
       sessions: [],
       currentSessionId: null,
       pipelineStage: "idle",
@@ -178,7 +182,7 @@ export const useAgentStore = create<AgentState>()(
         set({ isRunning: v });
       },
 
-      reset: () => {
+      prepareNewTask: (databases) => {
         if (get().taskId) {
           get().saveCurrentSession();
         }
@@ -187,12 +191,15 @@ export const useAgentStore = create<AgentState>()(
           traces: [],
           artifacts: [],
           isRunning: false,
-          selectedDatabases: [],
+          selectedDatabases: databases,
           taskId: null,
+          fixtureError: null,
           pipelineStage: "idle" as PipelineStage,
           currentSessionId: null,
         });
       },
+
+      reset: () => get().prepareNewTask([]),
 
       setDatabases: (dbs) => set({ databases: dbs }),
       setSelectedDatabases: (ids) => set({ selectedDatabases: ids }),
@@ -204,6 +211,7 @@ export const useAgentStore = create<AgentState>()(
         })),
       setArtifacts: (artifacts) => set({ artifacts }),
       setTaskId: (id) => set({ taskId: id }),
+      setFixtureError: (message) => set({ fixtureError: message }),
 
       /** Save current state into sessions array */
       saveCurrentSession: () => {
@@ -259,16 +267,34 @@ export const useAgentStore = create<AgentState>()(
           taskId: session.taskId,
           pipelineStage: session.pipelineStage,
           currentSessionId: taskId,
+          fixtureError: null,
         });
       },
 
       /** Delete a session from state and localStorage */
       deleteSession: (taskId) =>
-        set((s) => ({
-          sessions: s.sessions.filter((se) => se.taskId !== taskId),
-          currentSessionId:
-            s.currentSessionId === taskId ? null : s.currentSessionId,
-        })),
+        set((s) => {
+          const sessions = s.sessions.filter((se) => se.taskId !== taskId);
+          if (s.taskId !== taskId) {
+            return {
+              sessions,
+              currentSessionId:
+                s.currentSessionId === taskId ? null : s.currentSessionId,
+            };
+          }
+          return {
+            sessions,
+            currentSessionId: null,
+            taskId: null,
+            messages: [],
+            traces: [],
+            artifacts: [],
+            selectedDatabases: [],
+            pipelineStage: "idle" as PipelineStage,
+            isRunning: false,
+            fixtureError: null,
+          };
+        }),
 
       addSession: (taskId, topic, databases) => {
         get().saveCurrentSession();

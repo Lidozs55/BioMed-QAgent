@@ -93,6 +93,7 @@ export function SessionSidebar() {
             onClick={() => {
               reset()
             }}
+            disabled={isRunning}
           >
             <PlusCircleIcon data-icon="inline-start" />
             新建研究
@@ -114,6 +115,7 @@ export function SessionSidebar() {
                       isActive={session.taskId === currentSessionId}
                       onClick={() => loadSession(session.taskId)}
                       tooltip={session.topic}
+                      disabled={isRunning}
                     >
                       <DatabaseIcon />
                       <span className="truncate">{session.topic}</span>
@@ -121,6 +123,7 @@ export function SessionSidebar() {
                     <SidebarMenuAction
                       showOnHover
                       aria-label={`删除 ${session.topic}`}
+                      disabled={isRunning}
                       onClick={() => {
                         setDeleteTarget({
                           taskId: session.taskId,

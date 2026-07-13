@@ -51,6 +51,7 @@ function resolveCategory(
 export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
   const databases = useAgentStore((s) => s.databases)
   const selectedDatabases = useAgentStore((s) => s.selectedDatabases)
+  const isRunning = useAgentStore((s) => s.isRunning)
   const setSelectedDatabases = useAgentStore((s) => s.setSelectedDatabases)
 
   // Group databases by category, preserving insertion order.
@@ -78,11 +79,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
   }
 
   const handleToggleAll = () => {
-    if (allSelected) {
-      setSelectedDatabases([])
-    } else {
-      setSelectedDatabases(databases.map((d) => d.id))
-    }
+    handleValueChange(allSelected ? [] : databases.map((database) => database.id))
   }
 
   // ── Empty state ──────────────────────────────────────────────
@@ -99,7 +96,12 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
     <div className="flex flex-col gap-3">
       {/* Header row: toggle-all button + selection count */}
       <div className="flex items-center justify-between">
-        <Button variant="outline" size="sm" onClick={handleToggleAll}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleToggleAll}
+          disabled={isRunning}
+        >
           {allSelected ? "取消全选" : "全选"}
         </Button>
         <span className="text-xs text-muted-foreground">
@@ -112,6 +114,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
         value={selectedDatabases}
         onValueChange={handleValueChange}
         multiple
+        disabled={isRunning}
         orientation="vertical"
         spacing={0}
         className="w-full"

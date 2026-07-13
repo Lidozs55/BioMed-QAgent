@@ -47,7 +47,6 @@ export function useAgentStream() {
         });
         break;
       case "done": {
-        setRunning(false);
         if (event.final_output && event.final_output.trim()) {
           const msgs = storeRef.current.messages;
           const last = msgs[msgs.length - 1];
@@ -59,11 +58,14 @@ export function useAgentStream() {
             addMessage("assistant", event.final_output);
           }
         }
+        storeRef.current.setPipelineStage("done");
+        setRunning(false);
         break;
       }
       case "error":
-        setRunning(false);
         addTrace({ kind: "error", message: event.message });
+        storeRef.current.setPipelineStage("error");
+        setRunning(false);
         break;
       case "skill_loaded":
         addTrace({
@@ -144,10 +146,13 @@ export function useAgentStream() {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
+      const selectedDatabases = databases ?? storeRef.current.selectedDatabases;
+      storeRef.current.prepareNewTask(selectedDatabases);
       storeRef.current.addMessage("user", input);
+      storeRef.current.setPipelineStage("setup");
       storeRef.current.setRunning(true);
       const payload: Record<string, unknown> = { type: "run", input };
-      if (databases && databases.length > 0) payload.databases = databases;
+      if (selectedDatabases.length > 0) payload.databases = selectedDatabases;
       ws.send(JSON.stringify(payload));
     },
     []
