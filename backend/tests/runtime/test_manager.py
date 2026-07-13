@@ -24,10 +24,12 @@ from app.domain.contracts import (
     TaskMode,
     TaskSnapshot,
     TaskSummary,
+    WarningPayload,
     build_event,
 )
 from app.config import Settings
 from app.agent_loop.context import RunContext
+from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.repository import TaskRepository
 from app.runtime.hub import EventHub
 
@@ -1456,5 +1458,397 @@ async def test_cancellation_during_compaction_commit_restores_previous_marker(
         assert cancelled.runs[-1].status is RunStatus.CANCELLED
     finally:
         release_save.set()
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_compaction_append_failure_restores_previous_marker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    execution_seen = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        task_id = "task_compaction_append_failure"
+        previous = {"marker": "previous"}
+        record = {
+            "schema_version": "1.0",
+            "summary": "new summary",
+            "summary_digest": "ab" * 32,
+            "covered_through_run_id": "run_old",
+            "covered_run_ids": ["run_old"],
+            "covered_history_digest": "cd" * 32,
+        }
+        payload = ConversationCompactedPayload(
+            covered_through_run_id="run_old",
+            summary_digest="ab" * 32,
+        )
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, previous)
+        real_append = repository.append_event
+
+        async def fail_compaction_append(event):
+            if isinstance(event.payload, ConversationCompactedPayload):
+                raise RuntimeError("durable append failed")
+            return await real_append(event)
+
+        monkeypatch.setattr(repository, "append_event", fail_compaction_append)
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_append_failure",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+
+        with pytest.raises(RuntimeError, match="durable append failed"):
+            await execution_seen.commit_compaction(record, payload)
+
+        assert await repository.load_conversation_summary(task_id) == previous
+        events = await repository.list_events(task_id)
+        assert not any(
+            isinstance(event.payload, ConversationCompactedPayload) for event in events
+        )
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_live_publish_retains_durable_compaction_on_restart(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    publish_entered = asyncio.Event()
+    release_publish = asyncio.Event()
+    execution_seen = None
+
+    class BlockingCompactionHub(EventHub):
+        async def publish(self, event) -> None:
+            if isinstance(event.payload, ConversationCompactedPayload):
+                publish_entered.set()
+                await release_publish.wait()
+            await super().publish(event)
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        event_hub=BlockingCompactionHub(),
+    )
+    await manager.start()
+    task_id = "task_compaction_publish_cancel"
+    previous = {"marker": "previous"}
+    record = {
+        "schema_version": "1.0",
+        "summary": "new summary",
+        "summary_digest": "ab" * 32,
+        "covered_through_run_id": "run_old",
+        "covered_run_ids": ["run_old"],
+        "covered_history_digest": "cd" * 32,
+    }
+    payload = ConversationCompactedPayload(
+        covered_through_run_id="run_old",
+        summary_digest="ab" * 32,
+    )
+    try:
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, previous)
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_publish_cancel",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+
+        commit = asyncio.create_task(execution_seen.commit_compaction(record, payload))
+        await asyncio.wait_for(publish_entered.wait(), timeout=1)
+        durable_events = await repository.list_events(task_id)
+        assert (
+            sum(
+                isinstance(event.payload, ConversationCompactedPayload)
+                for event in durable_events
+            )
+            == 1
+        )
+
+        commit.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await commit
+
+        stored = await repository.load_conversation_summary(task_id)
+        compacted = next(
+            event.payload
+            for event in durable_events
+            if isinstance(event.payload, ConversationCompactedPayload)
+        )
+        assert stored == record
+        assert stored["summary_digest"] == compacted.summary_digest
+        assert stored["covered_through_run_id"] == compacted.covered_through_run_id
+    finally:
+        release_publish.set()
+        release_executor.set()
+        await manager.close()
+        await repository.close()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        assert await reopened.load_conversation_summary(task_id) == record
+        replay = await reopened.list_events(task_id)
+        assert (
+            sum(
+                isinstance(event.payload, ConversationCompactedPayload)
+                for event in replay
+            )
+            == 1
+        )
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_compaction_live_publish_failure_keeps_durable_commit(
+    tmp_path,
+    caplog,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    execution_seen = None
+
+    class FailingCompactionHub(EventHub):
+        async def publish(self, event) -> None:
+            if isinstance(event.payload, ConversationCompactedPayload):
+                raise RuntimeError("live fan-out failed")
+            await super().publish(event)
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        event_hub=FailingCompactionHub(),
+    )
+    await manager.start()
+    try:
+        task_id = "task_compaction_publish_failure"
+        record = {
+            "schema_version": "1.0",
+            "summary": "new summary",
+            "summary_digest": "ab" * 32,
+            "covered_through_run_id": "run_old",
+            "covered_run_ids": ["run_old"],
+            "covered_history_digest": "cd" * 32,
+        }
+        payload = ConversationCompactedPayload(
+            covered_through_run_id="run_old",
+            summary_digest="ab" * 32,
+        )
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, {"marker": "previous"})
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_publish_failure",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+
+        with caplog.at_level(logging.ERROR, logger="app.runtime.manager"):
+            committed = await execution_seen.commit_compaction(record, payload)
+
+        assert committed is True
+        assert await repository.load_conversation_summary(task_id) == record
+        events = await repository.list_events(task_id)
+        assert (
+            sum(
+                isinstance(event.payload, ConversationCompactedPayload)
+                for event in events
+            )
+            == 1
+        )
+        assert "failed to publish durable compaction event" in caplog.text
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_suppresses_compaction_warning_when_cancel_wins_lock(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    warning_ready = asyncio.Event()
+    release_warning = asyncio.Event()
+    cancel_persisted = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    real_append = repository.append_event
+
+    async def append_event(event):
+        snapshot = await real_append(event)
+        if isinstance(event.payload, RunCancelRequestedPayload):
+            cancel_persisted.set()
+        return snapshot
+
+    async def fail_summary_load(task_id: str):
+        raise RuntimeError("summary marker unavailable")
+
+    monkeypatch.setattr(repository, "append_event", append_event)
+    monkeypatch.setattr(
+        repository,
+        "load_conversation_summary",
+        fail_summary_load,
+    )
+
+    async def run(execution) -> None:
+        async def delayed_emit(payload):
+            if isinstance(payload, WarningPayload):
+                warning_ready.set()
+                await release_warning.wait()
+            return await execution.emit(payload)
+
+        try:
+            await ConversationCompactor(repository).prepare(
+                execution.task_id,
+                model_handle=object(),
+                emit=delayed_emit,
+                cancellation_requested=execution.context.cancellation_requested,
+                commit=execution.commit_compaction,
+            )
+        except CompactionCancelledError:
+            cancellation_seen.set()
+            raise
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        task_id = "task_compaction_warning_cancel"
+        await repository.save_snapshot(empty_snapshot(task_id))
+        accepted = await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_warning_cancel",
+                input="cancel warning fallback",
+            ),
+        )
+        await asyncio.wait_for(warning_ready.wait(), timeout=1)
+
+        cancellation = asyncio.create_task(manager.cancel_run(task_id, accepted.run_id))
+        await asyncio.wait_for(cancel_persisted.wait(), timeout=1)
+        release_warning.set()
+        cancelled = await asyncio.wait_for(cancellation, timeout=1)
+
+        assert cancellation_seen.is_set()
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        events = await repository.list_events(task_id)
+        assert not any(isinstance(event.payload, WarningPayload) for event in events)
+        assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    finally:
+        release_warning.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_retains_compaction_warning_when_warning_wins_lock(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    warning_persisted = asyncio.Event()
+    release_executor = asyncio.Event()
+    real_append = repository.append_event
+
+    async def append_event(event):
+        snapshot = await real_append(event)
+        if isinstance(event.payload, WarningPayload):
+            warning_persisted.set()
+        return snapshot
+
+    async def fail_summary_load(task_id: str):
+        raise RuntimeError("summary marker unavailable")
+
+    monkeypatch.setattr(repository, "append_event", append_event)
+    monkeypatch.setattr(
+        repository,
+        "load_conversation_summary",
+        fail_summary_load,
+    )
+
+    async def run(execution) -> None:
+        await ConversationCompactor(repository).prepare(
+            execution.task_id,
+            model_handle=object(),
+            emit=execution.emit,
+            cancellation_requested=execution.context.cancellation_requested,
+            commit=execution.commit_compaction,
+        )
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        task_id = "task_compaction_warning_first"
+        await repository.save_snapshot(empty_snapshot(task_id))
+        accepted = await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_warning_first",
+                input="warn before cancel",
+            ),
+        )
+        await asyncio.wait_for(warning_persisted.wait(), timeout=1)
+
+        cancellation = asyncio.create_task(manager.cancel_run(task_id, accepted.run_id))
+        release_executor.set()
+        await asyncio.wait_for(cancellation, timeout=1)
+
+        events = await repository.list_events(task_id)
+        warnings = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, WarningPayload)
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].code == "compaction_failed"
+        assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    finally:
         release_executor.set()
         await manager.close()

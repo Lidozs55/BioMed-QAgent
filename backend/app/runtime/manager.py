@@ -14,6 +14,7 @@ from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     ArtifactProducedPayload,
     ConversationCompactedPayload,
+    EventEnvelope,
     RunCancelRequestedPayload,
     RunCancelledPayload,
     RunCompletedPayload,
@@ -26,6 +27,7 @@ from app.domain.contracts import (
     StartRunRequest,
     TaskRunAccepted,
     TaskSnapshot,
+    WarningPayload,
     build_event,
     generate_run_id,
 )
@@ -676,9 +678,12 @@ class TaskManager:
     ) -> TaskSnapshot:
         lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
         async with lock:
-            if (
+            if context.cancellation_requested.is_set() and (
                 isinstance(payload, ArtifactProducedPayload)
-                and context.cancellation_requested.is_set()
+                or (
+                    isinstance(payload, WarningPayload)
+                    and payload.code == "compaction_failed"
+                )
             ):
                 snapshot = await self.repository.get_snapshot(accepted.task_id)
                 if snapshot is None:
@@ -708,22 +713,32 @@ class TaskManager:
                 )
                 return False
             try:
-                await self._append_status(accepted, payload)
+                _, event = await self._persist_status(accepted, payload)
             except BaseException:
                 await self.repository.save_conversation_summary(
                     accepted.task_id,
                     previous,
                 )
                 raise
+            try:
+                await self.event_hub.publish(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "failed to publish durable compaction event for task %s run %s",
+                    accepted.task_id,
+                    accepted.run_id,
+                )
             return True
 
-    async def _append_status(
+    async def _persist_status(
         self,
         accepted: TaskRunAccepted,
         payload,
         *,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
-    ) -> TaskSnapshot:
+    ) -> tuple[TaskSnapshot, EventEnvelope]:
         snapshot = await self.repository.get_snapshot(accepted.task_id)
         if snapshot is None:
             raise LookupError(accepted.task_id)
@@ -736,6 +751,20 @@ class TaskManager:
         updated = await self.repository.append_event(event)
         if after_persist is not None:
             after_persist(updated)
+        return updated, event
+
+    async def _append_status(
+        self,
+        accepted: TaskRunAccepted,
+        payload,
+        *,
+        after_persist: Callable[[TaskSnapshot], None] | None = None,
+    ) -> TaskSnapshot:
+        updated, event = await self._persist_status(
+            accepted,
+            payload,
+            after_persist=after_persist,
+        )
         await self.event_hub.publish(event)
         return updated
 

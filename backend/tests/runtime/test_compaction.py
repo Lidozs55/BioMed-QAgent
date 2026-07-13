@@ -629,6 +629,79 @@ async def test_cancellation_while_summarizer_is_blocked_prevents_commit() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["load", "summarizer"])
+async def test_cancellation_while_failure_is_blocked_never_falls_back(
+    failure_stage: str,
+) -> None:
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+    cancellation_requested = asyncio.Event()
+    failure_blocked = asyncio.Event()
+    release_failure = asyncio.Event()
+    saved: list[dict] = []
+    emitted: list[object] = []
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        session = Session()
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, task_id: str):
+            if failure_stage == "load":
+                failure_blocked.set()
+                await release_failure.wait()
+                raise RuntimeError("marker load failed")
+            return {}
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            saved.append(summary)
+
+    async def summarize(**kwargs):
+        assert failure_stage == "summarizer"
+        failure_blocked.set()
+        await release_failure.wait()
+        raise RuntimeError("summarizer failed")
+
+    async def emit(payload):
+        emitted.append(payload)
+
+    preparation = asyncio.create_task(
+        ConversationCompactor(
+            Repository(),
+            summarize=summarize,
+        ).prepare(
+            "task_cancelled_failure",
+            model_handle=object(),
+            emit=emit,
+            cancellation_requested=cancellation_requested,
+        )
+    )
+    await asyncio.wait_for(failure_blocked.wait(), timeout=1)
+    cancellation_requested.set()
+    release_failure.set()
+
+    with pytest.raises(compaction_module.CompactionCancelledError):
+        await preparation
+
+    assert saved == []
+    assert emitted == []
+
+
+@pytest.mark.asyncio
 async def test_compaction_delegates_marker_and_event_to_commit_callback() -> None:
     items = [
         item

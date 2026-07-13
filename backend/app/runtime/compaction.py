@@ -283,7 +283,14 @@ class ConversationCompactor:
         except CompactionCancelledError:
             raise
         except Exception as error:
-            return await self._fallback(task_session, groups, emit, error)
+            self._raise_if_cancelled(cancellation_requested)
+            return await self._fallback(
+                task_session,
+                groups,
+                emit,
+                error,
+                cancellation_requested,
+            )
         unsummarized = runs[covered_index + 1 :]
 
         if (
@@ -340,7 +347,14 @@ class ConversationCompactor:
         except CompactionCancelledError:
             raise
         except Exception as error:
-            return await self._fallback(task_session, groups, emit, error)
+            self._raise_if_cancelled(cancellation_requested)
+            return await self._fallback(
+                task_session,
+                groups,
+                emit,
+                error,
+                cancellation_requested,
+            )
 
         if commit is None:
             await emit(payload)
@@ -390,19 +404,22 @@ class ConversationCompactor:
                 return summary, index
         raise ValueError("conversation summary coverage is not in durable history")
 
-    @staticmethod
     async def _fallback(
+        self,
         task_session: Session,
         groups: list[tuple[TResponseInputItem, ...]],
         emit: EventEmitter,
         error: Exception,
+        cancellation_requested: asyncio.Event | None,
     ) -> CompactionPreparation:
+        self._raise_if_cancelled(cancellation_requested)
         await emit(
             WarningPayload(
                 message=f"conversation compaction failed: {error}",
                 code="compaction_failed",
             )
         )
+        self._raise_if_cancelled(cancellation_requested)
         effective = _flatten_groups(groups[-COMPACTION_FAILURE_RUNS:])
         return CompactionPreparation(
             session=_EffectiveSession(task_session, effective),
