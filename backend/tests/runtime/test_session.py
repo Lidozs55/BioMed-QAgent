@@ -89,6 +89,37 @@ async def test_session_rejects_an_incomplete_committed_operation(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message_field", "corrupt_value"),
+    [
+        ("task_id", "task_other"),
+        ("ordinal", 99),
+        (None, "not-a-message-record"),
+    ],
+)
+async def test_session_rejects_a_corrupt_committed_message_projection(
+    tmp_path,
+    message_field,
+    corrupt_value,
+) -> None:
+    session = DurableTaskSession("task_123", tmp_path / "tasks")
+    await session.add_items([user_item("question")])
+    record = json.loads(session.path.read_text("utf-8"))
+    if message_field is None:
+        record["message"] = corrupt_value
+    else:
+        record["message"][message_field] = corrupt_value
+    session.path.write_text(
+        json.dumps(record, separators=(",", ":")) + "\n",
+        "utf-8",
+    )
+
+    reopened = DurableTaskSession("task_123", tmp_path / "tasks")
+    with pytest.raises(SessionCorruptionError, match="message"):
+        await reopened.get_items()
+
+
+@pytest.mark.asyncio
 async def test_message_pages_use_immutable_ordinals_and_opaque_cursors(
     tmp_path,
 ) -> None:
@@ -187,6 +218,30 @@ async def test_session_appends_do_not_replay_the_full_journal_each_time(
         user_item("message 24"),
     ]
     assert full_scans == 1
+
+
+@pytest.mark.asyncio
+async def test_session_appends_mutate_one_private_cache_list_in_place(
+    tmp_path,
+) -> None:
+    session = DurableTaskSession("task_123", tmp_path / "tasks")
+    await session.add_items([user_item("message 0")])
+    assert session._replay_cache is not None
+    cached_active = session._replay_cache.active
+
+    for number in range(1, 10):
+        await session.add_items([user_item(f"message {number}")])
+        assert session._replay_cache is not None
+        assert session._replay_cache.active is cached_active
+
+    await session.pop_item()
+    assert session._replay_cache is not None
+    assert session._replay_cache.active is cached_active
+
+    await session.clear_session()
+    assert session._replay_cache is not None
+    assert session._replay_cache.active is cached_active
+    assert cached_active == []
 
 
 @pytest.mark.asyncio

@@ -18,7 +18,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
-from app.runtime.event_store import EventStore
+from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 
 
@@ -84,6 +84,72 @@ async def test_single_thread_executor_serializes_work_off_the_event_loop() -> No
 
     assert set(worker_threads) == {worker_threads[0]}
     assert worker_threads[0] != caller_thread
+
+
+@pytest.mark.asyncio
+async def test_index_close_is_idempotent_and_rejects_later_work(tmp_path) -> None:
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+
+    await index.close()
+    await index.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await index.list_tasks()
+
+
+@pytest.mark.asyncio
+async def test_index_close_serializes_and_rejects_concurrent_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+    entered = threading.Event()
+    release = threading.Event()
+    real_close = index._close_sync
+
+    def blocking_close() -> None:
+        entered.set()
+        if not release.wait(timeout=2):
+            raise RuntimeError("close was not released")
+        real_close()
+
+    monkeypatch.setattr(index, "_close_sync", blocking_close)
+    closing = asyncio.create_task(index.close())
+    assert await asyncio.to_thread(entered.wait, 2)
+    work_started = asyncio.Event()
+
+    async def start_work():
+        work_started.set()
+        return await index.list_tasks()
+
+    concurrent_work = asyncio.create_task(start_work())
+    await work_started.wait()
+    assert not concurrent_work.done()
+
+    release.set()
+    await closing
+    with pytest.raises(RuntimeError, match="closed"):
+        await concurrent_work
+
+
+@pytest.mark.asyncio
+async def test_index_close_shuts_down_executor_when_connection_close_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    index = TaskIndex(tmp_path / "tasks")
+
+    def fail_close() -> None:
+        raise OSError("simulated connection close failure")
+
+    monkeypatch.setattr(index, "_close_sync", fail_close)
+    with pytest.raises(OSError, match="simulated connection close failure"):
+        await index.close()
+
+    assert index.executor._closed is True
+    await index.close()
 
 
 @pytest.mark.asyncio
@@ -184,7 +250,7 @@ async def test_index_request_idempotency_returns_the_original_acceptance(
 
 
 @pytest.mark.asyncio
-async def test_index_rebuild_preserves_an_unpublished_request_reservation(
+async def test_index_rebuild_removes_an_orphan_request_reservation(
     tmp_path,
 ) -> None:
     tasks_dir = tmp_path / "tasks"
@@ -203,9 +269,84 @@ async def test_index_rebuild_preserves_an_unpublished_request_reservation(
     try:
         await reopened.rebuild()
 
-        assert await reopened.find_request("req_crash") == accepted
+        assert await reopened.find_request("req_crash") is None
     finally:
         await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_index_rebuild_rejects_conflicting_authoritative_request_ids(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    for task_id, run_id in (("task_first", "run_first"), ("task_second", "run_second")):
+        state_dir = tasks_dir / task_id / "state"
+        state_dir.mkdir(parents=True)
+        persisted = snapshot(
+            task_id,
+            request_id="req_conflict",
+            run_id=run_id,
+        )
+        (state_dir / "task_snapshot.json").write_text(
+            persisted.model_dump_json(indent=2) + "\n",
+            "utf-8",
+        )
+
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        with pytest.raises(ValueError, match="conflicting.*request_id"):
+            await index.rebuild()
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_rebuild_rejects_snapshot_ahead_of_event_journal(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    persisted = snapshot("task_ahead")
+    persisted = persisted.model_copy(
+        update={
+            "task": persisted.task.model_copy(update={"latest_sequence": 1}),
+        }
+    )
+    state_dir = tasks_dir / "task_ahead" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "task_snapshot.json").write_text(
+        persisted.model_dump_json(indent=2) + "\n",
+        "utf-8",
+    )
+
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        with pytest.raises(CorruptEventLogError, match="latest_sequence"):
+            await index.rebuild()
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_rebuild_rejects_snapshot_in_the_wrong_task_directory(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    state_dir = tasks_dir / "task_directory" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "task_snapshot.json").write_text(
+        snapshot("task_snapshot").model_dump_json(indent=2) + "\n",
+        "utf-8",
+    )
+
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        with pytest.raises(ValueError, match="directory.*task_id"):
+            await index.rebuild()
+    finally:
+        await index.close()
 
 
 @pytest.mark.asyncio

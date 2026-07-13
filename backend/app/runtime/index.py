@@ -21,7 +21,7 @@ from app.domain.contracts import (
     TaskSnapshot,
     TaskSummary,
 )
-from app.runtime.event_store import EventStore
+from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.state import reduce_task_event
 
 
@@ -109,25 +109,38 @@ class TaskIndex:
         self._owns_executor = executor is None
         self._connection: sqlite3.Connection | None = None
         self._thread_id: int | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._closing = False
+        self._closed = False
 
     async def initialize(self) -> None:
-        await self.executor.run(self._initialize_sync)
+        await self._run(self._initialize_sync)
 
     async def close(self) -> None:
-        await self.executor.run(self._close_sync)
-        if self._owns_executor:
-            await self.executor.close()
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+            try:
+                await self.executor.run(self._close_sync)
+            finally:
+                try:
+                    if self._owns_executor:
+                        await self.executor.close()
+                finally:
+                    self._closing = False
+                    self._closed = True
 
     async def upsert_snapshot(self, snapshot: TaskSnapshot) -> None:
-        await self.executor.run(self._upsert_snapshot_sync, snapshot)
+        await self._run(self._upsert_snapshot_sync, snapshot)
 
     async def record_request(self, accepted: TaskRunAccepted) -> TaskRunAccepted:
-        return await self.executor.run(self._record_request_sync, accepted)
+        return await self._run(self._record_request_sync, accepted)
 
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
         if not request_id:
             raise ValueError("request_id must not be blank")
-        return await self.executor.run(self._find_request_sync, request_id)
+        return await self._run(self._find_request_sync, request_id)
 
     async def list_tasks(
         self,
@@ -140,10 +153,16 @@ class TaskIndex:
         if page_limit < 1 or page_limit > maximum:
             raise ValueError(f"limit must be between 1 and {maximum}")
         boundary = _decode_cursor(cursor) if cursor else None
-        return await self.executor.run(self._list_tasks_sync, page_limit, boundary)
+        return await self._run(self._list_tasks_sync, page_limit, boundary)
 
     async def rebuild(self) -> None:
-        await self.executor.run(self._rebuild_sync)
+        await self._run(self._rebuild_sync)
+
+    async def _run(self, function: Callable[..., _T], *args: Any) -> _T:
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("task index is closed")
+            return await self.executor.run(function, *args)
 
     def _initialize_sync(self) -> None:
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +219,8 @@ class TaskIndex:
     def _write_snapshot(
         connection: sqlite3.Connection,
         snapshot: TaskSnapshot,
+        *,
+        include_requests: bool = True,
     ) -> None:
         task = snapshot.task
         connection.execute(
@@ -227,16 +248,17 @@ class TaskIndex:
                 task.latest_sequence,
             ),
         )
-        connection.executemany(
-            """
-            INSERT OR IGNORE INTO request_ids (request_id, task_id, run_id)
-            VALUES (?, ?, ?)
-            """,
-            [
-                (run.request_id, snapshot.task.task_id, run.run_id)
-                for run in snapshot.runs
-            ],
-        )
+        if include_requests:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO request_ids (request_id, task_id, run_id)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (run.request_id, snapshot.task.task_id, run.run_id)
+                    for run in snapshot.runs
+                ],
+            )
 
     def _record_request_sync(
         self,
@@ -333,6 +355,7 @@ class TaskIndex:
 
     def _rebuild_sync(self) -> None:
         snapshots: list[TaskSnapshot] = []
+        authoritative_requests: dict[str, tuple[str, str]] = {}
         event_store = EventStore(self.tasks_dir)
         if self.tasks_dir.exists():
             for task_dir in sorted(self.tasks_dir.iterdir()):
@@ -344,15 +367,52 @@ class TaskIndex:
                 snapshot = TaskSnapshot.model_validate_json(
                     snapshot_path.read_text("utf-8")
                 )
-                for event in event_store.read(
+                if task_dir.name != snapshot.task.task_id:
+                    raise ValueError(
+                        "task directory name does not match snapshot task_id: "
+                        f"{task_dir.name} != {snapshot.task.task_id}"
+                    )
+                events = event_store.read(
                     snapshot.task.task_id,
                     after_sequence=snapshot.task.latest_sequence,
-                ):
+                )
+                journal_latest = event_store.latest_sequence(snapshot.task.task_id)
+                if snapshot.task.latest_sequence > journal_latest:
+                    raise CorruptEventLogError(
+                        "snapshot latest_sequence exceeds journal latest_sequence "
+                        f"for task {snapshot.task.task_id}: "
+                        f"{snapshot.task.latest_sequence} > {journal_latest}"
+                    )
+                for event in events:
                     snapshot = reduce_task_event(snapshot, event)
                 snapshots.append(snapshot)
+                for run in snapshot.runs:
+                    mapping = (snapshot.task.task_id, run.run_id)
+                    existing = authoritative_requests.get(run.request_id)
+                    if existing is not None and existing != mapping:
+                        raise ValueError(
+                            "conflicting authoritative request_id mapping: "
+                            f"{run.request_id}"
+                        )
+                    authoritative_requests[run.request_id] = mapping
 
         connection = self._get_connection()
         with connection:
             connection.execute("DELETE FROM task_summaries")
+            connection.execute("DELETE FROM request_ids")
             for snapshot in snapshots:
-                self._write_snapshot(connection, snapshot)
+                self._write_snapshot(
+                    connection,
+                    snapshot,
+                    include_requests=False,
+                )
+            connection.executemany(
+                """
+                INSERT INTO request_ids (request_id, task_id, run_id)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (request_id, task_id, run_id)
+                    for request_id, (task_id, run_id) in authoritative_requests.items()
+                ],
+            )

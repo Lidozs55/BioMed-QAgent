@@ -13,6 +13,7 @@ from typing import Any
 
 from agents.items import TResponseInputItem
 from agents.memory.session_settings import SessionSettings
+from pydantic import ValidationError
 
 from app.config import settings as default_settings
 from app.domain.contracts import (
@@ -202,7 +203,7 @@ class DurableTaskSession:
                 and self._replay_cache.signature == signature
             ):
                 return (
-                    list(self._replay_cache.active),
+                    self._replay_cache.active,
                     self._replay_cache.highest_ordinal,
                 )
             active: list[dict[str, Any]] = []
@@ -223,6 +224,25 @@ class DurableTaskSession:
                         raise SessionCorruptionError(
                             "session add record requires an item"
                         )
+                    if "message" not in record:
+                        raise SessionCorruptionError(
+                            "session add record requires a message projection"
+                        )
+                    message_value = record["message"]
+                    if message_value is not None:
+                        try:
+                            message = MessageRecord.model_validate(message_value)
+                        except ValidationError as error:
+                            raise SessionCorruptionError(
+                                "session message projection is invalid"
+                            ) from error
+                        if (
+                            message.task_id != self.session_id
+                            or message.ordinal != ordinal
+                        ):
+                            raise SessionCorruptionError(
+                                "session message task_id and ordinal must match add"
+                            )
                     highest_ordinal = ordinal
                     active.append(record)
                 elif operation == "pop":
@@ -255,7 +275,7 @@ class DurableTaskSession:
     ) -> None:
         self._replay_cache = _ReplayCache(
             signature=self._file_signature(),
-            active=list(active),
+            active=active,
             highest_ordinal=highest_ordinal,
         )
 
@@ -322,4 +342,5 @@ class DurableTaskSession:
                     }
                 ],
             )
-            self._remember([], highest_ordinal)
+            active.clear()
+            self._remember(active, highest_ordinal)

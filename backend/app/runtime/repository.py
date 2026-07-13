@@ -20,7 +20,7 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
 )
-from app.runtime.event_store import EventStore
+from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import reduce_task_event
@@ -244,6 +244,12 @@ class TaskRepository:
             return None
         snapshot = TaskSnapshot.model_validate_json(snapshot_path.read_text("utf-8"))
         latest_sequence = self.events.latest_sequence(task_id)
+        if snapshot.task.latest_sequence > latest_sequence:
+            raise CorruptEventLogError(
+                "snapshot latest_sequence exceeds journal latest_sequence "
+                f"for task {task_id}: "
+                f"{snapshot.task.latest_sequence} > {latest_sequence}"
+            )
         events = (
             self.events.read(
                 task_id,

@@ -378,3 +378,21 @@ async def test_repository_revalidates_a_journal_changed_outside_its_checkpoint(
             )
     finally:
         await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_rejects_snapshot_ahead_of_event_journal(tmp_path) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    persisted = empty_snapshot()
+    persisted = persisted.model_copy(
+        update={
+            "task": persisted.task.model_copy(update={"latest_sequence": 1}),
+        }
+    )
+    await repository.save_snapshot(persisted)
+    try:
+        with pytest.raises(CorruptEventLogError, match="latest_sequence"):
+            await repository.get_snapshot("task_123")
+    finally:
+        await repository.close()
