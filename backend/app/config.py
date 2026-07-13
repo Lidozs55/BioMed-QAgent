@@ -1,4 +1,5 @@
 """配置 — DashScope (Qwen) OpenAI 兼容模式。"""
+
 from __future__ import annotations
 
 import os
@@ -31,6 +32,10 @@ class Settings:
     port: int = int(os.getenv("PORT", "8000"))
     # 数据产物目录
     output_dir: str = os.getenv("OUTPUT_DIR", "data/output")
+    # Durable task/session pagination
+    task_page_size: int = int(os.getenv("TASK_PAGE_SIZE", "30"))
+    task_page_max_size: int = int(os.getenv("TASK_PAGE_MAX_SIZE", "100"))
+    task_message_page_size: int = int(os.getenv("TASK_MESSAGE_PAGE_SIZE", "100"))
 
 
 settings = Settings()
