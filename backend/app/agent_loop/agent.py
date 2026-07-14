@@ -148,9 +148,10 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
 
     skill_names = tuple(skill.name for skill in skills)
 
+    model = get_model()
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([run_research_pipeline, read_file, write_file, list_files])
-    tools.append(build_compress_query_log_tool())
+    tools.append(build_compress_query_log_tool(model))
     seen: set[str] = set()
     unique_tools: list = []
     for t in tools:
@@ -163,7 +164,6 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
         if instructions_suffix
         else INSTRUCTIONS
     )
-    model = get_model()
     agent = Agent(
         name="BioMedResearcher",
         instructions=merged_instructions,

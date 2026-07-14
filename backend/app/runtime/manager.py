@@ -636,9 +636,14 @@ class TaskManager:
 
         try:
             retain_cancellation = False
-            error: Exception | None = None
+            error: BaseException | None = None
             try:
                 await self.run_executor(execution)
+            except asyncio.CancelledError as caught:
+                worker_task = asyncio.current_task()
+                if worker_task is not None and worker_task.cancelling() > 0:
+                    raise
+                error = caught
             except Exception as caught:
                 error = caught
             finally:

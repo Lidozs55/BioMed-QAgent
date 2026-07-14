@@ -6,7 +6,9 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -800,28 +802,194 @@ async def test_event_reconciliation_requires_exact_envelope_identity() -> None:
         timestamp=NOW,
         payload=AssistantDeltaPayload(delta="same payload"),
     )
-    persisted = build_event(
-        task_id="task_exact_event",
-        run_id="run_exact_event",
-        sequence=1,
-        timestamp=NOW,
-        payload=AssistantDeltaPayload(delta="same payload"),
-    )
-    assert persisted.event_id != expected.event_id
+    persisted_exact = type(expected).model_validate_json(expected.model_dump_json())
+    assert persisted_exact is not expected
 
     class Repository:
+        events = [persisted_exact]
+
         async def list_events(self, *args, **kwargs):
-            return [persisted]
+            return self.events
 
     async def run(execution) -> None:
         return None
 
+    repository = Repository()
     manager = importlib.import_module("app.runtime.manager").TaskManager(
-        Repository(),
+        repository,
         run_executor=run,
     )
 
-    assert await manager._event_is_durable(expected) is False
+    assert await manager._event_is_durable(expected) is True
+
+    mismatches = {
+        "task_id": expected.model_copy(update={"task_id": "task_other"}),
+        "run_id": expected.model_copy(update={"run_id": "run_other"}),
+        "sequence": expected.model_copy(update={"sequence": 2}),
+        "timestamp": expected.model_copy(
+            update={"timestamp": NOW + timedelta(seconds=1)}
+        ),
+        "payload": expected.model_copy(
+            update={"payload": AssistantDeltaPayload(delta="different payload")}
+        ),
+    }
+    for field, persisted in mismatches.items():
+        assert persisted.event_id == expected.event_id
+        repository.events = [persisted]
+        assert await manager._event_is_durable(expected) is False, field
+
+
+@pytest.mark.asyncio
+async def test_executor_cancelled_error_after_cancel_keeps_single_worker_alive(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    runner_module = importlib.import_module("app.agent_loop.runner")
+    repository = TaskRepository(tmp_path / "output")
+    first_started = asyncio.Event()
+    first_cancelled = asyncio.Event()
+    second_executed = asyncio.Event()
+    models: list[object] = []
+
+    class CancelledStreamingResult:
+        def cancel(self, mode: str) -> None:
+            assert mode == "after_turn"
+            first_cancelled.set()
+
+        async def stream_events(self):
+            await first_cancelled.wait()
+            raise asyncio.CancelledError
+            if False:
+                yield None
+
+    class CompletedStreamingResult:
+        def cancel(self, mode: str) -> None:
+            raise AssertionError("completed Run must not be cancelled")
+
+        async def stream_events(self):
+            second_executed.set()
+            if False:
+                yield None
+
+    class NoopCompactor:
+        async def prepare(self, task_id, **kwargs):
+            return SimpleNamespace(session=kwargs["session"])
+
+    streaming_result = CancelledStreamingResult()
+
+    def build_agent(databases=None):
+        model = SimpleNamespace(close=AsyncMock())
+        models.append(model)
+        return SimpleNamespace(agent=object(), skill_names=(), model=model)
+
+    def run_streamed(agent, input, **kwargs):
+        if input == "first":
+            first_started.set()
+            return streaming_result
+        return CompletedStreamingResult()
+
+    monkeypatch.setattr(runner_module, "build_agent", build_agent)
+    monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
+    executor = runner_module.AgentRunExecutor(
+        repository,
+        compactor=NoopCompactor(),
+    )
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=executor,
+        max_active_runs=1,
+    )
+    await manager.start()
+    try:
+        for task_id in ("task_executor_cancelled", "task_after_cancel"):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        first = await manager.submit_run(
+            "task_executor_cancelled",
+            StartRunRequest(request_id="req_executor_cancelled", input="first"),
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_after_cancel",
+            StartRunRequest(request_id="req_after_cancel", input="second"),
+        )
+
+        cancelled = await asyncio.wait_for(
+            manager.cancel_run("task_executor_cancelled", first.run_id),
+            timeout=1,
+        )
+        await asyncio.wait_for(second_executed.wait(), timeout=1)
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot("task_after_cancel")
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert len(manager._workers) == 1
+        assert not manager._workers[0].done()
+        assert len(models) == 2
+        for model in models:
+            model.close.assert_awaited_once_with()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_unrequested_executor_cancelled_error_fails_run_and_keeps_worker(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_executed = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_unrequested_cancelled_error":
+            first_started.set()
+            await release_first.wait()
+            raise asyncio.CancelledError
+        second_executed.set()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    try:
+        for task_id in (
+            "task_unrequested_cancelled_error",
+            "task_after_executor_error",
+        ):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        await manager.submit_run(
+            "task_unrequested_cancelled_error",
+            StartRunRequest(request_id="req_unrequested_cancel", input="first"),
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_after_executor_error",
+            StartRunRequest(request_id="req_after_executor_error", input="second"),
+        )
+
+        release_first.set()
+        await asyncio.wait_for(second_executed.wait(), timeout=1)
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot("task_unrequested_cancelled_error")
+        completed = await repository.get_snapshot("task_after_executor_error")
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert failed.runs[-1].error == "CancelledError"
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert len(manager._workers) == 1
+        assert not manager._workers[0].done()
+    finally:
+        release_first.set()
+        await manager.close()
 
 
 @pytest.mark.asyncio
