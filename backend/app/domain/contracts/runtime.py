@@ -41,6 +41,7 @@ class RunRecord(ContractModel):
 class TaskSummary(ContractModel):
     task_id: str = Field(min_length=1)
     mode: TaskMode
+    databases: list[str] = Field(default_factory=list)
     title: str = Field(min_length=1)
     status: RunStatus
     active_run_id: str | None = Field(default=None, min_length=1)
@@ -89,8 +90,23 @@ class _StartRequest(ContractModel):
         return normalized
 
 
+def validate_task_databases(mode: TaskMode, databases: list[str]) -> None:
+    """Enforce mode-specific database selection at every admission boundary."""
+
+    if mode is TaskMode.FIXTURE and (
+        len(databases) != 2 or set(databases) != {"pubmed", "geo"}
+    ):
+        raise ValueError("fixture tasks require exactly pubmed and geo")
+
+
 class StartTaskRequest(_StartRequest):
+    databases: list[str] = Field(default_factory=list)
     mode: TaskMode = TaskMode.AGENT
+
+    @model_validator(mode="after")
+    def validate_databases(self) -> Self:
+        validate_task_databases(self.mode, self.databases)
+        return self
 
 
 class StartRunRequest(_StartRequest):

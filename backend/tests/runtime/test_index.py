@@ -32,6 +32,7 @@ def snapshot(
     request_id: str | None = None,
     run_id: str | None = None,
     created_at: datetime = NOW,
+    databases: list[str] | None = None,
 ) -> TaskSnapshot:
     runs = []
     if request_id is not None and run_id is not None:
@@ -51,6 +52,7 @@ def snapshot(
         task=TaskSummary(
             task_id=task_id,
             mode=TaskMode.AGENT,
+            databases=[] if databases is None else databases,
             title=f"Task {task_id}",
             status=status,
             active_run_id=(
@@ -69,6 +71,100 @@ def snapshot(
         ),
         runs=runs,
     )
+
+
+@pytest.mark.asyncio
+async def test_index_persists_selected_databases_across_reopen_and_rebuild(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        await index.upsert_snapshot(
+            snapshot("task_selected", databases=["geo", "pubmed"])
+        )
+        listed = await index.list_tasks()
+        assert listed.tasks[0].databases == ["geo", "pubmed"]
+    finally:
+        await index.close()
+
+    state_dir = tasks_dir / "task_selected" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "task_snapshot.json").write_text(
+        snapshot(
+            "task_selected",
+            databases=["geo", "pubmed"],
+        ).model_dump_json(indent=2)
+        + "\n",
+        "utf-8",
+    )
+    reopened = TaskIndex(tasks_dir)
+    await reopened.initialize()
+    try:
+        await reopened.rebuild()
+        rebuilt = await reopened.list_tasks()
+        assert rebuilt.tasks[0].databases == ["geo", "pubmed"]
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_index_migrates_legacy_summary_table_with_empty_databases(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir(parents=True)
+    path = tasks_dir / "task_index.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE task_summaries (
+                task_id TEXT PRIMARY KEY,
+                mode TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                active_run_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                latest_sequence INTEGER NOT NULL
+            );
+            CREATE TABLE request_ids (
+                request_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO task_summaries (
+                task_id, mode, title, status, active_run_id,
+                created_at, updated_at, latest_sequence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "task_legacy_index",
+                "agent",
+                "Legacy index",
+                "completed",
+                None,
+                NOW.isoformat(),
+                NOW.isoformat(),
+                0,
+            ),
+        )
+
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        page = await index.list_tasks()
+        assert page.tasks[0].databases == []
+        await index.upsert_snapshot(snapshot("task_legacy_index", databases=["geo"]))
+        updated = await index.list_tasks()
+        assert updated.tasks[0].databases == ["geo"]
+    finally:
+        await index.close()
 
 
 @pytest.mark.asyncio

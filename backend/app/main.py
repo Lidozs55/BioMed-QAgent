@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agent_loop.runner import AgentRunExecutor
+from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
@@ -58,7 +58,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
         )
         manager = TaskManager(
             repository,
-            run_executor=AgentRunExecutor(repository),
+            run_executor=ModeDispatchRunExecutor(repository),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,

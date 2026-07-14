@@ -40,16 +40,23 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     ArtifactManifestEntry,
     ArtifactProducedPayload,
+    EventEnvelope,
     RunManifest,
+    TaskMode,
     ToolCompletedPayload,
     ToolStartedPayload,
 )
+from app.domain.contracts.runtime import validate_task_databases
+from app.pipeline.pinned_case import run_pinned_fixture
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 
 logger = logging.getLogger(__name__)
 
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
+OFFICIAL_FIXTURE_DIR = (
+    Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
+)
 
 
 class _AssistantTextBuffer:
@@ -225,7 +232,7 @@ class AgentRunExecutor:
 
     async def __call__(self, execution) -> None:
         task_session = self._repository.task_session(execution.task_id)
-        build = build_agent()
+        build = build_agent(execution.databases)
         text_buffer = _AssistantTextBuffer(execution.emit)
         output_dir_value = getattr(self._repository, "output_dir", None)
         output_dir = Path(output_dir_value) if output_dir_value is not None else None
@@ -278,6 +285,60 @@ class AgentRunExecutor:
                     await execution.emit(payload)
         finally:
             await build.model.close()
+
+
+def _load_fixture_events(path: Path) -> list[EventEnvelope]:
+    return [
+        EventEnvelope.model_validate_json(line)
+        for line in path.read_text("utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+class FixtureRunExecutor:
+    """Run the official pinned fixture and bridge its v1 audit events."""
+
+    def __init__(self, repository, *, fixture_dir: Path = OFFICIAL_FIXTURE_DIR) -> None:
+        self._repository = repository
+        self._fixture_dir = fixture_dir
+
+    async def __call__(self, execution) -> None:
+        validate_task_databases(execution.mode, execution.databases)
+        await asyncio.to_thread(
+            run_pinned_fixture,
+            task_id=execution.task_id,
+            base_dir=self._repository.tasks_dir,
+            fixture_dir=self._fixture_dir,
+            topic=execution.input,
+            cancellation_requested=execution.context.cancellation_requested,
+        )
+        legacy_events = await asyncio.to_thread(
+            _load_fixture_events,
+            self._repository.tasks_dir / execution.task_id / "logs" / "events.jsonl",
+        )
+        for event in legacy_events:
+            await execution.emit(
+                event.payload,
+                stage_attempt_id=event.stage_attempt_id,
+                timestamp=event.timestamp,
+            )
+
+
+class ModeDispatchRunExecutor:
+    """Delegate authoritative Task modes to their focused executors."""
+
+    def __init__(self, repository) -> None:
+        self.agent_executor = AgentRunExecutor(repository)
+        self.fixture_executor = FixtureRunExecutor(repository)
+
+    async def __call__(self, execution) -> None:
+        if execution.mode is TaskMode.AGENT:
+            await self.agent_executor(execution)
+            return
+        if execution.mode is TaskMode.FIXTURE:
+            await self.fixture_executor(execution)
+            return
+        raise ValueError(f"unsupported task mode: {execution.mode}")
 
 
 def _check_for_confirmation(output: object) -> str | None:

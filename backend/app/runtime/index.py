@@ -174,6 +174,7 @@ class TaskIndex:
             CREATE TABLE IF NOT EXISTS task_summaries (
                 task_id TEXT PRIMARY KEY,
                 mode TEXT NOT NULL,
+                databases TEXT NOT NULL DEFAULT '[]',
                 title TEXT NOT NULL,
                 status TEXT NOT NULL,
                 active_run_id TEXT,
@@ -192,6 +193,15 @@ class TaskIndex:
             );
             """
         )
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(task_summaries)")
+        }
+        if "databases" not in columns:
+            connection.execute(
+                "ALTER TABLE task_summaries "
+                "ADD COLUMN databases TEXT NOT NULL DEFAULT '[]'"
+            )
         connection.commit()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -226,11 +236,12 @@ class TaskIndex:
         connection.execute(
             """
             INSERT INTO task_summaries (
-                task_id, mode, title, status, active_run_id,
+                task_id, mode, databases, title, status, active_run_id,
                 created_at, updated_at, latest_sequence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 mode = excluded.mode,
+                databases = excluded.databases,
                 title = excluded.title,
                 status = excluded.status,
                 active_run_id = excluded.active_run_id,
@@ -240,6 +251,7 @@ class TaskIndex:
             (
                 task.task_id,
                 task.mode.value,
+                json.dumps(task.databases, separators=(",", ":")),
                 task.title,
                 task.status.value,
                 task.active_run_id,
@@ -345,6 +357,7 @@ class TaskIndex:
         return TaskSummary(
             task_id=row["task_id"],
             mode=row["mode"],
+            databases=json.loads(row["databases"]),
             title=row["title"],
             status=row["status"],
             active_run_id=row["active_run_id"],

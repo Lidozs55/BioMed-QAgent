@@ -7,7 +7,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Protocol
 
 from app.agent_loop.context import RunContext
@@ -25,12 +25,17 @@ from app.domain.contracts import (
     RunStatus,
     RunStartedPayload,
     StartRunRequest,
+    StartTaskRequest,
+    TaskMode,
     TaskRunAccepted,
     TaskSnapshot,
+    TaskSummary,
     WarningPayload,
     build_event,
     generate_run_id,
+    generate_task_id,
 )
+from app.domain.contracts.runtime import validate_task_databases
 from app.runtime.hub import EventHub
 from app.runtime.repository import TaskRepository
 
@@ -47,7 +52,16 @@ class StreamingRunResult(Protocol):
     ) -> None: ...
 
 
-RunEventEmitter = Callable[[object], Awaitable[TaskSnapshot]]
+class RunEventEmitter(Protocol):
+    async def __call__(
+        self,
+        payload: object,
+        *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> TaskSnapshot: ...
+
+
 RunCompactionCommit = Callable[
     [Mapping[str, object], ConversationCompactedPayload],
     Awaitable[bool],
@@ -63,6 +77,8 @@ class RunExecution:
     request_id: str
     input: str
     context: RunContext
+    mode: TaskMode = TaskMode.AGENT
+    databases: list[str] = field(default_factory=list)
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
     _compaction_committer: RunCompactionCommit | None = field(
         default=None,
@@ -96,12 +112,24 @@ class RunExecution:
         self._streaming_result = result
         self._stream_ready.set()
 
-    async def emit(self, payload: object) -> TaskSnapshot:
+    async def emit(
+        self,
+        payload: object,
+        *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> TaskSnapshot:
         """Persist one Run activity event through manager serialization."""
 
         if self._event_emitter is None:
             raise RuntimeError("run execution has no event emitter")
-        return await self._event_emitter(payload)
+        if stage_attempt_id is None and timestamp is None:
+            return await self._event_emitter(payload)
+        return await self._event_emitter(
+            payload,
+            stage_attempt_id=stage_attempt_id,
+            timestamp=timestamp,
+        )
 
     async def commit_compaction(
         self,
@@ -165,6 +193,14 @@ class RunQueueFullError(RuntimeError):
     def __init__(self, maximum: int) -> None:
         self.maximum = maximum
         super().__init__(f"run queue is full ({maximum} waiting runs)")
+
+
+class FixtureTaskContinuationError(RuntimeError):
+    """Raised when a caller attempts to continue an immutable fixture Task."""
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"fixture task {task_id} cannot be continued")
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +372,9 @@ class TaskManager:
         async with self._admission_lock:
             if not self._started or self._closing:
                 raise RuntimeError("task manager is not running")
+            candidate = await self.repository.get_snapshot(task_id)
+            if candidate is not None and candidate.task.mode is TaskMode.FIXTURE:
+                raise FixtureTaskContinuationError(task_id)
             existing = await self.repository.find_request(request.request_id)
             if existing is not None:
                 return existing
@@ -344,6 +383,8 @@ class TaskManager:
                 snapshot = await self.repository.get_snapshot(task_id)
                 if snapshot is None:
                     raise LookupError(task_id)
+                if snapshot.task.mode is TaskMode.FIXTURE:
+                    raise FixtureTaskContinuationError(task_id)
                 if snapshot.task.active_run_id is not None:
                     raise TaskRunConflictError(
                         task_id,
@@ -356,24 +397,71 @@ class TaskManager:
                     task_id=task_id,
                     run_id=generate_run_id(),
                 )
-                event = build_event(
-                    task_id=task_id,
-                    run_id=accepted.run_id,
-                    sequence=snapshot.task.latest_sequence + 1,
-                    payload=RunQueuedPayload(
-                        request_id=request.request_id,
-                        input=request.input,
-                    ),
+                return await self._admit_run_locked(
+                    snapshot,
+                    accepted,
+                    request.input,
                 )
-                await self.repository.append_event(event)
-                try:
-                    await self.event_hub.publish(event)
-                    await self.repository.record_request(accepted)
-                finally:
-                    self._queue.put_nowait(
-                        _QueuedRun(accepted=accepted, input=request.input)
-                    )
-                return accepted
+
+    async def create_task(self, request: StartTaskRequest) -> TaskRunAccepted:
+        if not self._started or self._closing:
+            raise RuntimeError("task manager is not running")
+        async with self._admission_lock:
+            if not self._started or self._closing:
+                raise RuntimeError("task manager is not running")
+            existing = await self.repository.find_request(request.request_id)
+            if existing is not None:
+                return existing
+            validate_task_databases(request.mode, request.databases)
+            if self._queue.full():
+                raise RunQueueFullError(self.max_queued_runs)
+
+            accepted = TaskRunAccepted(
+                request_id=request.request_id,
+                task_id=generate_task_id(),
+                run_id=generate_run_id(),
+            )
+            created_at = datetime.now(timezone.utc)
+            snapshot = TaskSnapshot(
+                task=TaskSummary(
+                    task_id=accepted.task_id,
+                    mode=request.mode,
+                    databases=list(request.databases),
+                    title=request.input,
+                    status=RunStatus.QUEUED,
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+            await self.repository.save_snapshot(snapshot)
+            return await self._admit_run_locked(
+                snapshot,
+                accepted,
+                request.input,
+            )
+
+    async def _admit_run_locked(
+        self,
+        snapshot: TaskSnapshot,
+        accepted: TaskRunAccepted,
+        input_value: str,
+    ) -> TaskRunAccepted:
+        event = build_event(
+            task_id=accepted.task_id,
+            run_id=accepted.run_id,
+            sequence=snapshot.task.latest_sequence + 1,
+            payload=RunQueuedPayload(
+                request_id=accepted.request_id,
+                input=input_value,
+            ),
+        )
+        await self.repository.append_event(event)
+        try:
+            await self.repository.record_request(accepted)
+            await self.event_hub.publish(event)
+        finally:
+            self._queue.put_nowait(_QueuedRun(accepted=accepted, input=input_value))
+        return accepted
 
     async def cancel_run(
         self,
@@ -612,10 +700,18 @@ class TaskManager:
                     request_id=accepted.request_id,
                     input=queued.input,
                     context=context,
-                    _event_emitter=lambda payload: self._emit_activity(
-                        accepted,
-                        context,
-                        payload,
+                    mode=snapshot.task.mode,
+                    databases=list(snapshot.task.databases),
+                    _event_emitter=(
+                        lambda payload, *, stage_attempt_id=None, timestamp=None: (
+                            self._emit_activity(
+                                accepted,
+                                context,
+                                payload,
+                                stage_attempt_id=stage_attempt_id,
+                                timestamp=timestamp,
+                            )
+                        )
                     ),
                     _compaction_committer=lambda record, payload: (
                         self._commit_compaction(
@@ -680,6 +776,9 @@ class TaskManager:
         accepted: TaskRunAccepted,
         context: RunContext,
         payload: object,
+        *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> TaskSnapshot:
         lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
         async with lock:
@@ -694,7 +793,12 @@ class TaskManager:
                 if snapshot is None:
                     raise LookupError(accepted.task_id)
                 return snapshot
-            return await self._append_status(accepted, payload)
+            return await self._append_status(
+                accepted,
+                payload,
+                stage_attempt_id=stage_attempt_id,
+                timestamp=timestamp,
+            )
 
     async def _commit_compaction(
         self,
@@ -768,6 +872,9 @@ class TaskManager:
         self,
         accepted: TaskRunAccepted,
         payload: object,
+        *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> EventEnvelope:
         snapshot = await self.repository.get_snapshot(accepted.task_id)
         if snapshot is None:
@@ -777,6 +884,8 @@ class TaskManager:
             run_id=accepted.run_id,
             sequence=snapshot.task.latest_sequence + 1,
             payload=payload,
+            stage_attempt_id=stage_attempt_id,
+            timestamp=timestamp,
         )
 
     async def _event_is_durable(self, expected: EventEnvelope) -> bool:
@@ -792,9 +901,16 @@ class TaskManager:
         accepted: TaskRunAccepted,
         payload,
         *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
     ) -> tuple[TaskSnapshot, EventEnvelope]:
-        event = await self._build_status_event(accepted, payload)
+        event = await self._build_status_event(
+            accepted,
+            payload,
+            stage_attempt_id=stage_attempt_id,
+            timestamp=timestamp,
+        )
         updated = await self.repository.append_event(event)
         if after_persist is not None:
             after_persist(updated)
@@ -805,11 +921,15 @@ class TaskManager:
         accepted: TaskRunAccepted,
         payload,
         *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
     ) -> TaskSnapshot:
         updated, event = await self._persist_status(
             accepted,
             payload,
+            stage_attempt_id=stage_attempt_id,
+            timestamp=timestamp,
             after_persist=after_persist,
         )
         await self.event_hub.publish(event)
@@ -817,6 +937,7 @@ class TaskManager:
 
 
 __all__ = [
+    "FixtureTaskContinuationError",
     "RunExecution",
     "RunEventEmitter",
     "RunCompactionCommit",

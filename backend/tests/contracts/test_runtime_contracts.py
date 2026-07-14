@@ -155,12 +155,62 @@ def test_start_requests_trim_input_and_acceptance_is_queued() -> None:
     )
 
     assert start_task.mode is TaskMode.AGENT
+    assert start_task.databases == []
     assert start_task.input == "compare TP53 datasets"
     assert start_run.input == "narrow to breast cancer"
     assert accepted.status is RunStatus.QUEUED
 
     with pytest.raises(ValidationError, match="input"):
         StartRunRequest(request_id="req_blank", input="   ")
+
+
+def test_fixture_start_request_requires_exact_pubmed_geo_selection() -> None:
+    request = StartTaskRequest(
+        request_id="req_fixture",
+        input="fixture topic",
+        databases=["geo", "pubmed"],
+        mode=TaskMode.FIXTURE,
+    )
+
+    assert request.databases == ["geo", "pubmed"]
+
+
+@pytest.mark.parametrize(
+    "databases",
+    [
+        [],
+        ["pubmed"],
+        ["geo"],
+        ["pubmed", "pubmed", "geo"],
+        ["pubmed", "geo", "pdb"],
+        ["PubMed", "geo"],
+    ],
+)
+def test_fixture_start_request_rejects_inexact_database_selection(
+    databases: list[str],
+) -> None:
+    with pytest.raises(ValidationError, match="exactly pubmed and geo"):
+        StartTaskRequest(
+            request_id="req_fixture_invalid",
+            input="fixture topic",
+            databases=databases,
+            mode=TaskMode.FIXTURE,
+        )
+
+
+def test_task_summary_defaults_databases_for_legacy_snapshots() -> None:
+    summary = TaskSummary.model_validate(
+        {
+            "task_id": "task_legacy",
+            "mode": "agent",
+            "title": "Legacy task",
+            "status": "completed",
+            "created_at": NOW,
+            "updated_at": NOW,
+        }
+    )
+
+    assert summary.databases == []
 
 
 def test_runtime_snapshot_and_pages_are_typed() -> None:
@@ -201,9 +251,7 @@ def test_runtime_snapshot_and_pages_are_typed() -> None:
 
 
 def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
-    assert {payload.type for payload in RUNTIME_PAYLOADS} == set(
-        RuntimeEventType
-    ) | {
+    assert {payload.type for payload in RUNTIME_PAYLOADS} == set(RuntimeEventType) | {
         PipelineEventType.TOOL_COMPLETED,
         PipelineEventType.WARNING,
     }
@@ -221,6 +269,7 @@ def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
         )
         parsed = EventEnvelope.model_validate_json(envelope.model_dump_json())
         assert type(parsed.payload) is type(payload)
+
 
 @pytest.mark.parametrize(
     "payload",

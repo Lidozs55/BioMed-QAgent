@@ -63,6 +63,7 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
         request_id="request_123",
         input="continue the analysis",
         context=context,
+        databases=["geo"],
     )
     captured: dict[str, object] = {}
 
@@ -78,12 +79,17 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
         captured["kwargs"] = kwargs
         return result
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    def build_selected_agent(databases=None):
+        captured["databases"] = databases
+        return build
+
+    monkeypatch.setattr(runner_module, "build_agent", build_selected_agent)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
 
     await make_executor(repository)(execution)
 
     assert captured == {
+        "databases": ["geo"],
         "args": (agent, "continue the analysis"),
         "kwargs": {"context": context, "session": session},
     }

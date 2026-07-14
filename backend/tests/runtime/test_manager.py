@@ -25,6 +25,7 @@ from app.domain.contracts import (
     RunStartedPayload,
     RunStatus,
     StartRunRequest,
+    StartTaskRequest,
     TaskMode,
     TaskSnapshot,
     TaskSummary,
@@ -42,17 +43,232 @@ from app.runtime import repository as repository_module
 NOW = datetime(2026, 7, 13, tzinfo=timezone.utc)
 
 
-def empty_snapshot(task_id: str) -> TaskSnapshot:
+def empty_snapshot(
+    task_id: str,
+    *,
+    mode: TaskMode = TaskMode.AGENT,
+    databases: list[str] | None = None,
+) -> TaskSnapshot:
     return TaskSnapshot(
         task=TaskSummary(
             task_id=task_id,
-            mode=TaskMode.AGENT,
+            mode=mode,
+            databases=[] if databases is None else databases,
             title=task_id,
             status=RunStatus.COMPLETED,
             created_at=NOW,
             updated_at=NOW,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_create_admits_one_authoritative_task(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+
+    async def run(execution) -> None:
+        executor_started.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    request = StartTaskRequest(
+        request_id="req_create_same",
+        input="create exactly once",
+        databases=["geo"],
+    )
+    callers_ready = 0
+    callers_lock = asyncio.Lock()
+    both_ready = asyncio.Event()
+
+    async def create_after_barrier():
+        nonlocal callers_ready
+        async with callers_lock:
+            callers_ready += 1
+            if callers_ready == 2:
+                both_ready.set()
+        await both_ready.wait()
+        return await manager.create_task(request)
+
+    try:
+        first, duplicate = await asyncio.gather(
+            create_after_barrier(),
+            create_after_barrier(),
+        )
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+
+        assert duplicate == first
+        snapshot = await repository.get_snapshot(first.task_id)
+        assert snapshot is not None
+        assert len(snapshot.runs) == 1
+        assert snapshot.runs[0].run_id == first.run_id
+        assert await repository.find_request(request.request_id) == first
+        events = await repository.list_events(first.task_id)
+        assert sum(isinstance(event.payload, RunQueuedPayload) for event in events) == 1
+        task_directories = [
+            path for path in repository.tasks_dir.iterdir() if path.is_dir()
+        ]
+        assert task_directories == [repository.tasks_dir / first.task_id]
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.input == "active":
+            active_started.set()
+            await release_active.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+        max_queued_runs=1,
+    )
+    await manager.start()
+    try:
+        await manager.create_task(
+            StartTaskRequest(request_id="req_create_active", input="active")
+        )
+        await asyncio.wait_for(active_started.wait(), timeout=1)
+        await manager.create_task(
+            StartTaskRequest(request_id="req_create_waiting", input="waiting")
+        )
+
+        with pytest.raises(manager_module.RunQueueFullError):
+            await manager.create_task(
+                StartTaskRequest(request_id="req_create_rejected", input="rejected")
+            )
+
+        page = await repository.list_tasks()
+        assert len(page.tasks) == 2
+        assert await repository.find_request("req_create_rejected") is None
+        assert (
+            len([path for path in repository.tasks_dir.iterdir() if path.is_dir()]) == 2
+        )
+    finally:
+        release_active.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_revalidates_constructed_fixture_request(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        raise AssertionError("invalid fixture request must not execute")
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    request = StartTaskRequest.model_construct(
+        request_id="req_fixture_bypass",
+        input="fixture bypass",
+        databases=["pubmed"],
+        mode=TaskMode.FIXTURE,
+    )
+    try:
+        with pytest.raises(ValueError, match="exactly pubmed and geo"):
+            await manager.create_task(request)
+
+        assert (await repository.list_tasks()).tasks == []
+        assert await repository.find_request(request.request_id) is None
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_task_selection_is_persisted_and_reused_by_continuations(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executions: list[object] = []
+
+    async def run(execution) -> None:
+        executions.append(execution)
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_selected_first",
+                input="selected first",
+                databases=["geo", "pubmed"],
+            )
+        )
+        await manager.wait_until_idle()
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.task.databases == ["geo", "pubmed"]
+
+        await manager.submit_run(
+            accepted.task_id,
+            StartRunRequest(
+                request_id="req_selected_continuation",
+                input="continue selected",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        assert [execution.mode for execution in executions] == [
+            TaskMode.AGENT,
+            TaskMode.AGENT,
+        ]
+        assert [execution.databases for execution in executions] == [
+            ["geo", "pubmed"],
+            ["geo", "pubmed"],
+        ]
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_run_rejects_fixture_task_with_typed_conflict(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(
+            empty_snapshot(
+                "task_fixture_continuation",
+                mode=TaskMode.FIXTURE,
+                databases=["pubmed", "geo"],
+            )
+        )
+
+        with pytest.raises(manager_module.FixtureTaskContinuationError):
+            await manager.submit_run(
+                "task_fixture_continuation",
+                StartRunRequest(
+                    request_id="req_fixture_continuation",
+                    input="continue fixture",
+                ),
+            )
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio
@@ -731,6 +947,7 @@ async def test_startup_recovers_queued_and_interrupts_in_flight_runs_once(
 @pytest.mark.asyncio
 async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> None:
     main_module = importlib.import_module("app.main")
+    runner_module = importlib.import_module("app.agent_loop.runner")
     configured = Settings(
         output_dir=str(tmp_path / "output"),
         runtime_max_active_runs=2,
@@ -743,7 +960,11 @@ async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> 
     async with application.router.lifespan_context(application):
         manager = application.state.task_manager
         assert manager.repository is application.state.task_repository
-        assert isinstance(manager.run_executor, main_module.AgentRunExecutor)
+        assert isinstance(manager.run_executor, main_module.ModeDispatchRunExecutor)
+        assert isinstance(
+            manager.run_executor.agent_executor,
+            runner_module.AgentRunExecutor,
+        )
         assert manager.event_hub is application.state.event_hub
         assert manager.max_active_runs == 2
         assert manager.max_queued_runs == 5
