@@ -16,6 +16,7 @@ Three-tier fallback chain:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -84,16 +85,18 @@ class RateLimiter:
     def __init__(self, min_interval: float = _RATE_LIMIT_SECONDS) -> None:
         self._min_interval = min_interval
         self._last_request_time: float = 0.0
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
         """Block until the minimum interval has elapsed since the last request."""
-        now = time.monotonic()
-        elapsed = now - self._last_request_time
-        if elapsed < self._min_interval:
-            sleep_time = self._min_interval - elapsed
-            logger.debug("RateLimiter sleeping %.2fs", sleep_time)
-            time.sleep(sleep_time)
-        self._last_request_time = time.monotonic()
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                sleep_time = self._min_interval - elapsed
+                logger.debug("RateLimiter sleeping %.2fs", sleep_time)
+                time.sleep(sleep_time)
+            self._last_request_time = time.monotonic()
 
 
 # Module-level rate limiter instance for shared use

@@ -6,6 +6,8 @@ and requires_crawl signal mechanism.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -80,6 +82,28 @@ def test_rate_limiter_no_wait_after_interval() -> None:
     with patch("app.tools.crawler.time.sleep") as mock_sleep:
         limiter.wait()
         mock_sleep.assert_not_called()
+
+
+def test_rate_limiter_serializes_concurrent_callers() -> None:
+    limiter = RateLimiter(min_interval=0.05)
+    barrier = threading.Barrier(3)
+    completed_at: list[float] = []
+
+    def wait_once() -> None:
+        barrier.wait()
+        limiter.wait()
+        completed_at.append(time.monotonic())
+
+    threads = [threading.Thread(target=wait_once) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert all(not thread.is_alive() for thread in threads)
+    completed_at.sort()
+    assert completed_at[1] - completed_at[0] >= 0.04
+    assert completed_at[2] - completed_at[1] >= 0.04
 
 
 # ---------------------------------------------------------------------------

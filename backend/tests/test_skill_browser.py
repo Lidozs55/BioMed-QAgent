@@ -343,6 +343,76 @@ def test_download_publication_is_atomic_and_no_clobber(tmp_path: Path) -> None:
     assert not temp.exists()
 
 
+def test_concurrent_same_filename_downloads_publish_immutable_winner(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> tuple[list[dict], bytes, list[Path]]:
+        first_writer_paused = asyncio.Event()
+        winner_published = asyncio.Event()
+
+        async def losing_bytes():
+            yield b"loser-start"
+            first_writer_paused.set()
+            await winner_published.wait()
+            yield b"-late-mutation"
+
+        async def winning_bytes():
+            yield b"winner"
+
+        responses = []
+        for iterator in (losing_bytes, winning_bytes):
+            response = AsyncMock()
+            response.status_code = 200
+            response.headers = {"content-type": "application/octet-stream"}
+            response.aiter_bytes = iterator
+            stream_cm = AsyncMock()
+            stream_cm.__aenter__.return_value = response
+            client = MagicMock()
+            client.stream.return_value = stream_cm
+            client_cm = AsyncMock()
+            client_cm.__aenter__.return_value = client
+            responses.append(client_cm)
+
+        ctx = _make_ctx(task_id="same_filename_race", tmp_path=tmp_path)
+        args = json.dumps({
+            "url": "https://example.com/data",
+            "filename": "shared.bin",
+        })
+
+        async def run_winner() -> str:
+            await first_writer_paused.wait()
+            result = await download_from_page.on_invoke_tool(ctx, args)
+            winner_published.set()
+            return result
+
+        with (
+            patch(
+                "app.skills.builtin.acquisition.browser._rate_limiter.wait",
+                return_value=None,
+            ),
+            patch(
+                "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+                side_effect=responses,
+            ),
+        ):
+            loser_task = asyncio.create_task(download_from_page.on_invoke_tool(ctx, args))
+            winner_task = asyncio.create_task(run_winner())
+            raw_results = await asyncio.gather(loser_task, winner_task)
+
+        destination = ctx.context.work_dir.source_asset_file("shared.bin")
+        return (
+            [json.loads(result) for result in raw_results],
+            destination.read_bytes(),
+            list(ctx.context.work_dir.download_tmp.iterdir()),
+        )
+
+    results, final_bytes, leftovers = asyncio.run(exercise())
+
+    assert sum("error" not in result for result in results) == 1
+    assert final_bytes == b"winner"
+    assert leftovers == []
+
+
 def test_download_rate_limit_keeps_event_loop_responsive(tmp_path: Path) -> None:
     loop_progressed = threading.Event()
     wait_observed_progress = False

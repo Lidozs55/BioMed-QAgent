@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from agents import RunContextWrapper, function_tool
@@ -126,7 +127,7 @@ async def download_from_page(
     await asyncio.to_thread(_rate_limiter.wait)
     temp_path = None
     try:
-        temp_target = run_ctx.work_dir.download_temp_file(f"{filename}.part")
+        temp_target = run_ctx.work_dir.download_temp_file(f"{uuid4().hex}.part")
         dest = run_ctx.work_dir.source_asset_file(filename)
         if dest.exists():
             raise FileExistsError(f"source asset already exists: {filename}")
