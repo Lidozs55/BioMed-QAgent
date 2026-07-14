@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI, WebSocketDisconnect
 
 import app.api.ws as ws_module
+import app.api.ws_events as ws_events_module
 from app.domain.contracts import RunStatus, TaskMode, TaskSnapshot, TaskSummary
 from app.domain.contracts import (
     AssistantDeltaPayload,
@@ -27,6 +28,17 @@ from app.runtime.repository import TaskRepository
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
 _DISCONNECT = object()
+
+
+class ObservedLock(asyncio.Lock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocked_acquire_entered = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        if self.locked():
+            self.blocked_acquire_entered.set()
+        return await super().acquire()
 
 
 class FakeWebSocket:
@@ -197,6 +209,22 @@ async def start_socket(
     )
     endpoint = asyncio.create_task(ws_module.agent_ws(websocket))
     await asyncio.wait_for(websocket.accepted.wait(), timeout=1)
+    return websocket, endpoint
+
+
+async def start_event_socket(
+    application: FastAPI,
+    send_lock: ObservedLock,
+    first_message: object,
+) -> tuple[FakeWebSocket, asyncio.Task[None]]:
+    websocket = FakeWebSocket(application)
+    endpoint = asyncio.create_task(
+        ws_events_module._run_event_session(
+            websocket,
+            send_lock,
+            first_message,
+        )
+    )
     return websocket, endpoint
 
 
@@ -612,6 +640,149 @@ async def test_connection_serializes_live_events_controls_and_close(
             assert await websocket.receive_frame() == event.model_dump(mode="json")
             assert await websocket.receive_frame() == {"type": "pong"}
             assert websocket.maximum_active_sends == 1
+        finally:
+            websocket.release_event_send.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.parametrize("command_type", ["subscribe", "unsubscribe"])
+@pytest.mark.asyncio
+async def test_queued_control_command_preserves_overflow_close(
+    tmp_path: Path,
+    command_type: str,
+) -> None:
+    async with websocket_runtime(
+        tmp_path,
+        subscriber_queue_size=1,
+    ) as (application, repository, hub):
+        active_task_id = "task_overflow_control"
+        target_task_id = (
+            "task_overflow_target" if command_type == "subscribe" else active_task_id
+        )
+        await repository.save_snapshot(running_snapshot(active_task_id))
+        if target_task_id != active_task_id:
+            await repository.save_snapshot(running_snapshot(target_task_id))
+
+        send_lock = ObservedLock()
+        websocket, endpoint = await start_event_socket(
+            application,
+            send_lock,
+            {
+                "type": "subscribe",
+                "task_id": active_task_id,
+                "after_sequence": 0,
+            },
+        )
+        try:
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            websocket.block_next_event = True
+            first = await append_delta(repository, active_task_id, 1)
+            await hub.publish(first)
+            await asyncio.wait_for(websocket.event_send_entered.wait(), timeout=1)
+
+            command: dict[str, object]
+            if command_type == "subscribe":
+                command = {
+                    "type": "subscribe",
+                    "task_id": target_task_id,
+                    "after_sequence": 0,
+                }
+            else:
+                command = {
+                    "type": "unsubscribe",
+                    "task_id": target_task_id,
+                }
+            command_received = await websocket.send_command(command)
+            await asyncio.wait_for(command_received.wait(), timeout=1)
+            await asyncio.wait_for(
+                send_lock.blocked_acquire_entered.wait(),
+                timeout=1,
+            )
+
+            for sequence in (2, 3):
+                event = await append_delta(repository, active_task_id, sequence)
+                await hub.publish(event)
+            assert hub.subscriber_count == 0
+
+            websocket.release_event_send.set()
+            await websocket.wait_until_closed()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+            frames = []
+            while not websocket.outbound.empty():
+                frames.append(websocket.outbound.get_nowait())
+            assert websocket.close_code == 1013
+            assert all(frame.get("code") != "internal_error" for frame in frames)
+        finally:
+            websocket.release_event_send.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.parametrize("command_type", ["subscribe", "unsubscribe"])
+@pytest.mark.asyncio
+async def test_queued_control_command_preserves_hub_shutdown_close(
+    tmp_path: Path,
+    command_type: str,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        active_task_id = "task_shutdown_control"
+        target_task_id = (
+            "task_shutdown_target" if command_type == "subscribe" else active_task_id
+        )
+        await repository.save_snapshot(running_snapshot(active_task_id))
+        if target_task_id != active_task_id:
+            await repository.save_snapshot(running_snapshot(target_task_id))
+
+        send_lock = ObservedLock()
+        websocket, endpoint = await start_event_socket(
+            application,
+            send_lock,
+            {
+                "type": "subscribe",
+                "task_id": active_task_id,
+                "after_sequence": 0,
+            },
+        )
+        try:
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            websocket.block_next_event = True
+            first = await append_delta(repository, active_task_id, 1)
+            await hub.publish(first)
+            await asyncio.wait_for(websocket.event_send_entered.wait(), timeout=1)
+
+            command: dict[str, object]
+            if command_type == "subscribe":
+                command = {
+                    "type": "subscribe",
+                    "task_id": target_task_id,
+                    "after_sequence": 0,
+                }
+            else:
+                command = {
+                    "type": "unsubscribe",
+                    "task_id": target_task_id,
+                }
+            command_received = await websocket.send_command(command)
+            await asyncio.wait_for(command_received.wait(), timeout=1)
+            await asyncio.wait_for(
+                send_lock.blocked_acquire_entered.wait(),
+                timeout=1,
+            )
+
+            await hub.close()
+            websocket.release_event_send.set()
+            await websocket.wait_until_closed()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+            frames = []
+            while not websocket.outbound.empty():
+                frames.append(websocket.outbound.get_nowait())
+            assert websocket.close_code == 1012
+            assert all(frame.get("code") != "internal_error" for frame in frames)
         finally:
             websocket.release_event_send.set()
             await stop_socket(websocket, endpoint)

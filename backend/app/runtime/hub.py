@@ -45,6 +45,10 @@ class EventSubscription:
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def overflowed(self) -> bool:
+        return self._overflowed
+
     async def subscribe_task(self, task_id: str) -> None:
         if not task_id:
             raise ValueError("task_id must not be blank")
@@ -99,7 +103,7 @@ class EventSubscription:
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RuntimeError("subscription is closed")
+            raise SubscriptionClosedError("subscription is closed")
 
 
 class EventHub:

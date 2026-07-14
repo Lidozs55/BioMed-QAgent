@@ -145,13 +145,6 @@ async def _run_event_session(
 
     if _SessionEnd.CLIENT_DISCONNECT in outcomes:
         return
-    if failure is not None:
-        logger.error(
-            "Durable event WebSocket session failed",
-            exc_info=(type(failure), failure, failure.__traceback__),
-        )
-        await _send_internal_error_and_close(websocket, send_lock)
-        return
     if _SessionEnd.SUBSCRIBER_OVERFLOW in outcomes:
         await _close_websocket(
             websocket,
@@ -167,6 +160,13 @@ async def _run_event_session(
             code=1012,
             reason="event hub shutdown",
         )
+        return
+    if failure is not None:
+        logger.error(
+            "Durable event WebSocket session failed",
+            exc_info=(type(failure), failure, failure.__traceback__),
+        )
+        await _send_internal_error_and_close(websocket, send_lock)
 
 
 async def _receive_event_commands(
@@ -195,9 +195,13 @@ async def _receive_event_commands(
             elif isinstance(command, _PingCommand):
                 await _send_control(connection, {"type": "pong"})
             elif isinstance(command, _SubscribeCommand):
-                await _subscribe(connection, command)
+                outcome = await _subscribe(connection, command)
+                if outcome is not None:
+                    return outcome
             else:
-                await _unsubscribe(connection, command.task_id)
+                outcome = await _unsubscribe(connection, command.task_id)
+                if outcome is not None:
+                    return outcome
             message = _NO_MESSAGE
     except WebSocketDisconnect:
         return _SessionEnd.CLIENT_DISCONNECT
@@ -225,7 +229,7 @@ def _parse_event_command(message: object) -> _EventCommand | None:
 async def _subscribe(
     connection: _EventConnection,
     command: _SubscribeCommand,
-) -> None:
+) -> _SessionEnd | None:
     snapshot = await connection.repository.get_snapshot(command.task_id)
     if snapshot is None:
         await _send_control(
@@ -240,7 +244,10 @@ async def _subscribe(
         return
 
     async with connection.send_lock:
-        await connection.subscription.subscribe_task(command.task_id)
+        try:
+            await connection.subscription.subscribe_task(command.task_id)
+        except SubscriptionClosedError:
+            return _closed_subscription_end(connection.subscription)
         connection.active_task_ids.add(command.task_id)
         watermark = max(
             connection.last_sent.get(command.task_id, 0),
@@ -255,12 +262,26 @@ async def _subscribe(
             if event.sequence <= connection.last_sent[command.task_id]:
                 continue
             await _send_event_locked(connection, event)
+    return None
 
 
-async def _unsubscribe(connection: _EventConnection, task_id: str) -> None:
+async def _unsubscribe(
+    connection: _EventConnection,
+    task_id: str,
+) -> _SessionEnd | None:
     async with connection.send_lock:
-        await connection.subscription.unsubscribe_task(task_id)
+        try:
+            await connection.subscription.unsubscribe_task(task_id)
+        except SubscriptionClosedError:
+            return _closed_subscription_end(connection.subscription)
         connection.active_task_ids.discard(task_id)
+    return None
+
+
+def _closed_subscription_end(subscription: EventSubscription) -> _SessionEnd:
+    if subscription.overflowed:
+        return _SessionEnd.SUBSCRIBER_OVERFLOW
+    return _SessionEnd.HUB_SHUTDOWN
 
 
 async def _send_live_events(connection: _EventConnection) -> _SessionEnd:
