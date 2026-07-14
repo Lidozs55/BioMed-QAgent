@@ -200,7 +200,7 @@ def test_download_from_page_success(tmp_path: Path) -> None:
     # Verify provenance tracking
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "browser_fallback"
+    assert rc.sources[0].database.value == "browser"
     assert rc.sources[0].accession == "test_data.pdf"
     # log_query should record success
     assert len(rc.query_log) == 1

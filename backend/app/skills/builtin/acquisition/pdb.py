@@ -5,13 +5,14 @@ import json
 import logging
 import shutil
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -208,12 +209,14 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
     local_files = [str(run_ctx.work_dir.raw_file(filename))]
     run_ctx.add_raw_asset(local_files[0])
 
+    retrieved_at = datetime.now(UTC)
     source_record = SourceRecord(
-        source="pdb",
+        source_id=make_source_id(Database.PDB, pdb_id.upper(), url),
+        database=Database.PDB,
         accession=pdb_id.upper(),
-        source_url=url,
-        local_files=local_files,
-        format_hint=format_hint,
+        url=url,
+        title=f"PDB structure {pdb_id.upper()}",
+        retrieved_at=retrieved_at,
     )
     run_ctx.add_source(source_record)
 
@@ -223,7 +226,7 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
         "source_url": url,
         "local_files": local_files,
         "format_hint": format_hint,
-        "retrieved_at": source_record.retrieved_at.isoformat(),
+        "retrieved_at": retrieved_at.isoformat(),
     }, ensure_ascii=False)
 
 

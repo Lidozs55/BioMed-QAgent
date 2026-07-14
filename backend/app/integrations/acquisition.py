@@ -29,9 +29,22 @@ from app.tools.workdir import TaskWorkDir
 
 _ALLOWED_HOSTS = frozenset(
     {
+        # NCBI (PubMed, GEO, PMC)
         "ftp.ncbi.nlm.nih.gov",
         "eutils.ncbi.nlm.nih.gov",
         "www.ncbi.nlm.nih.gov",
+        # GDC
+        "api.gdc.cancer.gov",
+        # RCSB PDB
+        "files.rcsb.org",
+        "search.rcsb.org",
+        "data.rcsb.org",
+        # PubChem
+        "pubchem.ncbi.nlm.nih.gov",
+        # Reactome
+        "reactome.org",
+        # UCSC Xena (S3)
+        "toil-xena-hub.s3.us-east-1.amazonaws.com",
     }
 )
 _MAX_REDIRECTS = 5

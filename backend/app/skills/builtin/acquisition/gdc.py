@@ -6,13 +6,14 @@ import logging
 import shutil
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,8 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
         })
         data = _fetch_json(url)
     except Exception as exc:
+        # /projects/{id} returns HTTP 404 with {"message": "... not found"}
+        # for unknown projects — surfaced here as a network-level exception.
         run_ctx.log_query(project_id, "gdc", "failed", 0)
         return json.dumps({
             "source": "gdc",
@@ -224,8 +227,10 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
             "error": str(exc),
         }, ensure_ascii=False)
 
-    hits: list[dict[str, Any]] = data.get("data", {}).get("hits", [])
-    if not hits:
+    # /projects/{project_id} returns the project object directly under "data"
+    # (NOT a hits[] array like the /projects collection endpoint).
+    project_data: dict[str, Any] = data.get("data") or {}
+    if not project_data or "project_id" not in project_data:
         run_ctx.log_query(project_id, "gdc", "failed", 0)
         return json.dumps({
             "source": "gdc",
@@ -233,34 +238,33 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
             "error": f"project '{project_id}' not found",
         }, ensure_ascii=False)
 
-    hit = hits[0]
-    summary: dict[str, Any] = hit.get("summary", {}) or {}
+    summary: dict[str, Any] = project_data.get("summary", {}) or {}
 
     data_categories: list[dict[str, Any]] = []
-    for dc in (hit.get("summary", {}).get("data_categories", []) or []):
+    for dc in (summary.get("data_categories", []) or []):
         data_categories.append({
             "category": dc.get("data_category", ""),
             "file_count": dc.get("file_count", 0),
         })
 
     exp_strategies: list[str] = []
-    for es in (hit.get("summary", {}).get("experimental_strategies", []) or []):
+    for es in (summary.get("experimental_strategies", []) or []):
         exp_strategies.append(es.get("experimental_strategy", ""))
 
     run_ctx.log_query(project_id, "gdc", "succeeded", 1)
     return json.dumps({
         "source": "gdc",
-        "project_id": hit.get("project_id", project_id),
-        "name": hit.get("name", ""),
-        "disease_type": hit.get("disease_type", []),
-        "primary_site": hit.get("primary_site", []),
-        "program": (hit.get("program") or {}).get("name", ""),
+        "project_id": project_data.get("project_id", project_id),
+        "name": project_data.get("name", ""),
+        "disease_type": project_data.get("disease_type", []),
+        "primary_site": project_data.get("primary_site", []),
+        "program": (project_data.get("program") or {}).get("name", ""),
         "case_count": summary.get("case_count", 0),
         "file_count": summary.get("file_count", 0),
         "data_categories": data_categories,
         "experimental_strategies": exp_strategies,
-        "dbgap_accession": hit.get("dbgap_accession_number", ""),
-        "state": hit.get("state", ""),
+        "dbgap_accession": project_data.get("dbgap_accession_number", ""),
+        "state": project_data.get("state", ""),
     }, ensure_ascii=False)
 
 
@@ -423,12 +427,14 @@ def download_gdc(
     if local_files:
         run_ctx.add_raw_asset(local_files[0])
 
+    retrieved_at = datetime.now(UTC)
     source_record = SourceRecord(
-        source="gdc",
+        source_id=make_source_id(Database.GDC, project_id, url),
+        database=Database.GDC,
         accession=project_id,
-        source_url=url,
-        local_files=local_files,
-        format_hint=format_hint,
+        url=url,
+        title=f"GDC project {project_id} ({data_type})",
+        retrieved_at=retrieved_at,
     )
     run_ctx.add_source(source_record)
 
@@ -441,7 +447,7 @@ def download_gdc(
         "format_hint": format_hint,
         "file_count": total_files,
         "downloaded": download_limit,
-        "retrieved_at": source_record.retrieved_at.isoformat(),
+        "retrieved_at": retrieved_at.isoformat(),
     }, ensure_ascii=False)
 
 
