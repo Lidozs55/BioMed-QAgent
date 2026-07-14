@@ -302,6 +302,64 @@ def test_download_stream_exception_removes_partial_file(tmp_path: Path) -> None:
     assert list(ctx.context.work_dir.source_assets.iterdir()) == []
 
 
+def test_download_cancellation_removes_partial_file(tmp_path: Path) -> None:
+    async def exercise() -> tuple[list[Path], list[Path]]:
+        partial_written = asyncio.Event()
+
+        async def cancellable_stream():
+            yield b"partial"
+            partial_written.set()
+            await asyncio.Event().wait()
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "application/octet-stream"}
+        mock_resp.aiter_bytes = cancellable_stream
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__.return_value = mock_resp
+        mock_client = MagicMock()
+        mock_client.stream.return_value = mock_stream_cm
+        mock_client_cm = AsyncMock()
+        mock_client_cm.__aenter__.return_value = mock_client
+        ctx = _make_ctx(task_id="test_browser_cancel", tmp_path=tmp_path)
+
+        with (
+            patch(
+                "app.skills.builtin.acquisition.browser._rate_limiter.wait",
+                return_value=None,
+            ),
+            patch(
+                "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+                return_value=mock_client_cm,
+            ),
+        ):
+            task = asyncio.create_task(download_from_page.on_invoke_tool(
+                ctx,
+                json.dumps({
+                    "url": "https://example.com/data",
+                    "filename": "data.bin",
+                }),
+            ))
+            await partial_written.wait()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("cancelled download must propagate cancellation")
+
+        return (
+            list(ctx.context.work_dir.download_tmp.iterdir()),
+            list(ctx.context.work_dir.source_assets.iterdir()),
+        )
+
+    partials, assets = asyncio.run(exercise())
+
+    assert partials == []
+    assert assets == []
+
+
 def test_download_does_not_overwrite_existing_asset(tmp_path: Path) -> None:
     ctx = _make_ctx(task_id="test_browser_existing", tmp_path=tmp_path)
     existing = ctx.context.work_dir.source_asset_file("data.bin")

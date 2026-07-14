@@ -193,8 +193,6 @@ async def download_from_page(
             "retrieved_at": source_record.retrieved_at.isoformat(),
         }, ensure_ascii=False)
     except Exception as exc:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
         run_ctx.log_query(filename, "browser_fallback", "failed", 0)
         return json.dumps({
             "source": "browser_fallback",
@@ -202,6 +200,9 @@ async def download_from_page(
             "source_url": url,
             "error": str(exc),
         }, ensure_ascii=False)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 browser_fallback_skill = SkillDef(
