@@ -117,7 +117,22 @@ class TaskRepository:
     async def append_event(self, event: EventEnvelope) -> TaskSnapshot:
         lock = self._task_locks.setdefault(event.task_id, asyncio.Lock())
         async with lock:
-            snapshot = await asyncio.to_thread(self._append_event_sync, event)
+            append_task = asyncio.create_task(
+                asyncio.to_thread(self._append_event_sync, event)
+            )
+            try:
+                snapshot = await asyncio.shield(append_task)
+            except asyncio.CancelledError:
+                while not append_task.done():
+                    try:
+                        await asyncio.shield(append_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if not append_task.cancelled():
+                    append_task.exception()
+                raise
             await self.index.upsert_snapshot(snapshot)
             return snapshot
 

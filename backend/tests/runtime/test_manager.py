@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -32,6 +34,7 @@ from app.agent_loop.context import RunContext
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.repository import TaskRepository
 from app.runtime.hub import EventHub
+from app.runtime import repository as repository_module
 
 
 NOW = datetime(2026, 7, 13, tzinfo=timezone.utc)
@@ -1498,14 +1501,14 @@ async def test_compaction_append_failure_restores_previous_marker(
         )
         await repository.save_snapshot(empty_snapshot(task_id))
         await repository.save_conversation_summary(task_id, previous)
-        real_append = repository.append_event
+        real_append = repository.events.append
 
-        async def fail_compaction_append(event):
+        def fail_compaction_append(event) -> None:
             if isinstance(event.payload, ConversationCompactedPayload):
                 raise RuntimeError("durable append failed")
-            return await real_append(event)
+            real_append(event)
 
-        monkeypatch.setattr(repository, "append_event", fail_compaction_append)
+        monkeypatch.setattr(repository.events, "append", fail_compaction_append)
         await manager.submit_run(
             task_id,
             StartRunRequest(
@@ -1527,6 +1530,259 @@ async def test_compaction_append_failure_restores_previous_marker(
     finally:
         release_executor.set()
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_compaction_snapshot_failure_keeps_journal_marker_on_restart(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    execution_seen = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_compaction_snapshot_failure"
+    record = {
+        "schema_version": "1.0",
+        "summary": "new summary",
+        "summary_digest": "ab" * 32,
+        "covered_through_run_id": "run_old",
+        "covered_run_ids": ["run_old"],
+        "covered_history_digest": "cd" * 32,
+    }
+    payload = ConversationCompactedPayload(
+        covered_through_run_id="run_old",
+        summary_digest="ab" * 32,
+    )
+    summary_path = (
+        output_dir / "tasks" / task_id / "state" / "conversation_summary.json"
+    )
+    try:
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, {"marker": "previous"})
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_snapshot_failure",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+        real_atomic_write = repository_module.atomic_write_json
+        projection_failed = False
+
+        def fail_compaction_projection(path, value) -> None:
+            nonlocal projection_failed
+            if path.name == "task_snapshot.json" and not projection_failed:
+                projection_failed = True
+                raise OSError("snapshot projection failed")
+            real_atomic_write(path, value)
+
+        monkeypatch.setattr(
+            repository_module,
+            "atomic_write_json",
+            fail_compaction_projection,
+        )
+
+        with pytest.raises(OSError, match="snapshot projection failed"):
+            await execution_seen.commit_compaction(record, payload)
+
+        assert json.loads(summary_path.read_text("utf-8")) == record
+        durable_events = await repository.list_events(task_id)
+        compacted = [
+            event
+            for event in durable_events
+            if isinstance(event.payload, ConversationCompactedPayload)
+        ]
+        assert len(compacted) == 1
+        assert compacted[0].payload.summary_digest == record["summary_digest"]
+    finally:
+        await manager.close()
+        release_executor.set()
+        await repository.close()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        recovered = await reopened.get_snapshot(task_id)
+        assert recovered is not None
+        replay = await reopened.list_events(task_id)
+        compacted = [
+            event
+            for event in replay
+            if isinstance(event.payload, ConversationCompactedPayload)
+        ]
+        assert len(compacted) == 1
+        assert recovered.task.latest_sequence == compacted[0].sequence
+        assert await reopened.load_conversation_summary(task_id) == record
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_partial_append_waits_for_thread_and_keeps_commit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    projection_entered = threading.Event()
+    release_projection = threading.Event()
+    projection_finished = threading.Event()
+    execution_seen = None
+    manager_probe = None
+    repository_probe = None
+    commit = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_compaction_partial_cancel"
+    record = {
+        "schema_version": "1.0",
+        "summary": "new summary",
+        "summary_digest": "ab" * 32,
+        "covered_through_run_id": "run_old",
+        "covered_run_ids": ["run_old"],
+        "covered_history_digest": "cd" * 32,
+    }
+    payload = ConversationCompactedPayload(
+        covered_through_run_id="run_old",
+        summary_digest="ab" * 32,
+    )
+    summary_path = (
+        output_dir / "tasks" / task_id / "state" / "conversation_summary.json"
+    )
+    try:
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, {"marker": "previous"})
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_partial_cancel",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+        real_atomic_write = repository_module.atomic_write_json
+        projection_blocked = False
+
+        def block_compaction_projection(path, value) -> None:
+            nonlocal projection_blocked
+            if path.name == "task_snapshot.json" and not projection_blocked:
+                projection_blocked = True
+                projection_entered.set()
+                if not release_projection.wait(timeout=3):
+                    raise TimeoutError("projection release timed out")
+                real_atomic_write(path, value)
+                projection_finished.set()
+                return
+            real_atomic_write(path, value)
+
+        monkeypatch.setattr(
+            repository_module,
+            "atomic_write_json",
+            block_compaction_projection,
+        )
+
+        commit = asyncio.create_task(execution_seen.commit_compaction(record, payload))
+        await asyncio.wait_for(
+            asyncio.to_thread(projection_entered.wait),
+            timeout=1,
+        )
+        commit.cancel()
+        await asyncio.sleep(0)
+
+        manager_lock = manager._task_locks[task_id]
+        repository_lock = repository._task_locks[task_id]
+        manager_probe = asyncio.create_task(manager_lock.acquire())
+        repository_probe = asyncio.create_task(repository_lock.acquire())
+        await asyncio.sleep(0.05)
+
+        assert not commit.done()
+        assert not manager_probe.done()
+        assert not repository_probe.done()
+
+        release_projection.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(commit, timeout=1)
+        await asyncio.wait_for(manager_probe, timeout=1)
+        manager_lock.release()
+        await asyncio.wait_for(repository_probe, timeout=1)
+        repository_lock.release()
+        assert projection_finished.is_set()
+
+        assert json.loads(summary_path.read_text("utf-8")) == record
+        durable_events = await repository.list_events(task_id)
+        compacted = [
+            event
+            for event in durable_events
+            if isinstance(event.payload, ConversationCompactedPayload)
+        ]
+        assert len(compacted) == 1
+        assert compacted[0].payload.summary_digest == record["summary_digest"]
+    finally:
+        release_projection.set()
+        if commit is not None:
+            await asyncio.gather(commit, return_exceptions=True)
+        if manager_probe is not None and manager_probe.done():
+            if not manager_probe.cancelled() and manager_probe.exception() is None:
+                lock = manager._task_locks[task_id]
+                if lock.locked():
+                    lock.release()
+        elif manager_probe is not None:
+            manager_probe.cancel()
+        if repository_probe is not None and repository_probe.done():
+            if (
+                not repository_probe.cancelled()
+                and repository_probe.exception() is None
+            ):
+                lock = repository._task_locks[task_id]
+                if lock.locked():
+                    lock.release()
+        elif repository_probe is not None:
+            repository_probe.cancel()
+        await manager.close()
+        release_executor.set()
+        await repository.close()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        recovered = await reopened.get_snapshot(task_id)
+        assert recovered is not None
+        replay = await reopened.list_events(task_id)
+        assert (
+            sum(
+                isinstance(event.payload, ConversationCompactedPayload)
+                for event in replay
+            )
+            == 1
+        )
+        assert await reopened.load_conversation_summary(task_id) == record
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio

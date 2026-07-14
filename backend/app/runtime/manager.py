@@ -712,14 +712,21 @@ class TaskManager:
                     previous,
                 )
                 return False
+            event: EventEnvelope | None = None
             try:
-                _, event = await self._persist_status(accepted, payload)
+                event = await self._build_status_event(accepted, payload)
+                await self.repository.append_event(event)
             except BaseException:
-                await self.repository.save_conversation_summary(
-                    accepted.task_id,
-                    previous,
+                event_durable = event is not None and await self._event_is_durable(
+                    event
                 )
+                if not event_durable:
+                    await self.repository.save_conversation_summary(
+                        accepted.task_id,
+                        previous,
+                    )
                 raise
+            assert event is not None
             try:
                 await self.event_hub.publish(event)
             except asyncio.CancelledError:
@@ -732,6 +739,35 @@ class TaskManager:
                 )
             return True
 
+    async def _build_status_event(
+        self,
+        accepted: TaskRunAccepted,
+        payload: object,
+    ) -> EventEnvelope:
+        snapshot = await self.repository.get_snapshot(accepted.task_id)
+        if snapshot is None:
+            raise LookupError(accepted.task_id)
+        return build_event(
+            task_id=accepted.task_id,
+            run_id=accepted.run_id,
+            sequence=snapshot.task.latest_sequence + 1,
+            payload=payload,
+        )
+
+    async def _event_is_durable(self, expected: EventEnvelope) -> bool:
+        events = await self.repository.list_events(
+            expected.task_id,
+            after_sequence=expected.sequence - 1,
+            limit=1,
+        )
+        return any(
+            event.task_id == expected.task_id
+            and event.run_id == expected.run_id
+            and event.sequence == expected.sequence
+            and event.payload == expected.payload
+            for event in events
+        )
+
     async def _persist_status(
         self,
         accepted: TaskRunAccepted,
@@ -739,15 +775,7 @@ class TaskManager:
         *,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
     ) -> tuple[TaskSnapshot, EventEnvelope]:
-        snapshot = await self.repository.get_snapshot(accepted.task_id)
-        if snapshot is None:
-            raise LookupError(accepted.task_id)
-        event = build_event(
-            task_id=accepted.task_id,
-            run_id=accepted.run_id,
-            sequence=snapshot.task.latest_sequence + 1,
-            payload=payload,
-        )
+        event = await self._build_status_event(accepted, payload)
         updated = await self.repository.append_event(event)
         if after_persist is not None:
             after_persist(updated)
