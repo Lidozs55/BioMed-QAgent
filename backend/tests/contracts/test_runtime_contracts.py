@@ -245,7 +245,15 @@ def test_runtime_snapshot_and_pages_are_typed() -> None:
     )
     snapshot = TaskSnapshot(task=summary, runs=[run], messages=[message])
 
-    assert TaskPage(tasks=[summary]).tasks == [summary]
+    page = TaskPage(active_items=[summary], items=[])
+
+    assert page.tasks == [summary]
+    assert page.model_dump(mode="json") == {
+        "schema_version": "1.0",
+        "active_items": [summary.model_dump(mode="json")],
+        "items": [],
+        "next_cursor": None,
+    }
     assert MessagePage(messages=[message]).messages == [message]
     assert snapshot.older_messages_cursor is None
 

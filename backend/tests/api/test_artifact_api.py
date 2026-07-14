@@ -1,77 +1,236 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import json
 from pathlib import Path
-from types import SimpleNamespace
+from typing import AsyncIterator
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
-import app.api.routes as routes_module
-from app.main import app
+from app.config import Settings
+from app.domain.contracts import RunStatus, TaskMode, TaskSnapshot, TaskSummary
+from app.main import create_app
 from app.pipeline.pinned_case import run_pinned_fixture
 
 
-FIXTURE_DIR = (
-    Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
-)
+FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
+
+@asynccontextmanager
+async def api_client(
+    tmp_path: Path,
+) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient]]:
+    application = create_app(Settings(output_dir=str(tmp_path / "isolated-output")))
+    async with application.router.lifespan_context(application):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application),
+            base_url="http://test",
+        ) as client:
+            yield application, client
+
+
+def authoritative_snapshot(task_id: str) -> TaskSnapshot:
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id=task_id,
+            mode=TaskMode.FIXTURE,
+            databases=["pubmed", "geo"],
+            title=task_id,
+            status=RunStatus.COMPLETED,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+
+
+async def seed_fixture(application: FastAPI, task_id: str) -> object:
+    repository = application.state.task_repository
+    await repository.save_snapshot(authoritative_snapshot(task_id))
+    return await asyncio.to_thread(
+        run_pinned_fixture,
+        task_id=task_id,
+        base_dir=repository.tasks_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
 
 
 @pytest.mark.asyncio
-async def test_artifact_api_lists_manifest_entries_and_downloads_by_artifact_id(
-    tmp_path: Path, monkeypatch
+async def test_artifact_api_uses_repository_root_and_preserves_success_wire(
+    tmp_path: Path,
 ) -> None:
-    output_dir = tmp_path / "output"
-    manifest = run_pinned_fixture(
-        task_id="task_api",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    )
-    monkeypatch.setattr(routes_module, "settings", SimpleNamespace(output_dir=str(output_dir)))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        manifest = await seed_fixture(application, "task_api")
+
         response = await client.get("/api/v1/tasks/task_api/artifacts")
         artifacts = response.json()["artifacts"]
-        main_entry = next(entry for entry in artifacts if entry["name"] == "main_data.csv")
+        main_entry = next(
+            entry for entry in artifacts if entry["name"] == "main_data.csv"
+        )
         download = await client.get(
             f"/api/v1/tasks/task_api/artifacts/{main_entry['artifact_id']}"
         )
+        filename_lookup = await client.get(
+            "/api/v1/tasks/task_api/artifacts/main_data.csv"
+        )
 
+    assert repository.tasks_dir == tmp_path / "isolated-output" / "tasks"
     assert response.status_code == 200
-    assert len(artifacts) == len(manifest.artifacts) + 1
+    assert [entry["artifact_id"] for entry in artifacts] == [
+        "run_manifest",
+        *[entry.artifact_id for entry in manifest.artifacts],
+    ]
+    assert all(
+        set(entry) == {"artifact_id", "name", "size", "sha256", "media_type"}
+        for entry in artifacts
+    )
     assert main_entry["artifact_id"].startswith("artifact_")
-    assert "path" not in main_entry
     assert download.status_code == 200
     assert download.headers["content-disposition"].endswith('filename="main_data.csv"')
     assert download.content.startswith(b"record_id,dataset_id,source_id")
+    assert filename_lookup.status_code == 404
+    assert filename_lookup.json() == {"detail": "Artifact not found"}
 
 
 @pytest.mark.asyncio
-async def test_artifact_api_rejects_unregistered_filename_and_invalid_manifest(
-    tmp_path: Path, monkeypatch
+async def test_artifact_api_requires_authoritative_task_and_handles_no_manifest(
+    tmp_path: Path,
 ) -> None:
-    output_dir = tmp_path / "output"
-    run_pinned_fixture(
-        task_id="task_api_invalid",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    )
-    monkeypatch.setattr(routes_module, "settings", SimpleNamespace(output_dir=str(output_dir)))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        assert (await client.get(
-            "/api/v1/tasks/task_api_invalid/artifacts/main_data.csv"
-        )).status_code == 404
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await asyncio.to_thread(
+            run_pinned_fixture,
+            task_id="task_orphan",
+            base_dir=repository.tasks_dir,
+            fixture_dir=FIXTURE_DIR,
+        )
+        orphan_list = await client.get("/api/v1/tasks/task_orphan/artifacts")
+        orphan_download = await client.get(
+            "/api/v1/tasks/task_orphan/artifacts/run_manifest"
+        )
 
+        await repository.save_snapshot(authoritative_snapshot("task_empty"))
+        empty_list = await client.get("/api/v1/tasks/task_empty/artifacts")
+        empty_download = await client.get(
+            "/api/v1/tasks/task_empty/artifacts/run_manifest"
+        )
+
+    assert orphan_list.status_code == orphan_download.status_code == 404
+    assert orphan_list.json() == orphan_download.json() == {"detail": "Task not found"}
+    assert empty_list.status_code == 200
+    assert empty_list.json() == {"artifacts": []}
+    assert empty_download.status_code == 404
+    assert empty_download.json() == {"detail": "Artifact not found"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("corruption", "expected_detail"),
+    [
+        ("invalid_json", "Artifact manifest is invalid"),
+        ("invalid_schema", "Artifact manifest is invalid"),
+        ("unvalidated", "Artifacts are not validated"),
+        ("traversal", "Artifact manifest is invalid"),
+        ("missing_file", "Registered artifact is missing"),
+        ("size_mismatch", "Artifact integrity check failed"),
+        ("hash_mismatch", "Artifact integrity check failed"),
+    ],
+)
+async def test_artifact_api_preserves_manifest_and_integrity_conflicts(
+    tmp_path: Path,
+    corruption: str,
+    expected_detail: str,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await seed_fixture(application, "task_corrupt")
+        artifacts_dir = repository.tasks_dir / "task_corrupt" / "artifacts"
+        manifest_path = artifacts_dir / "run_manifest.json"
+        payload = json.loads(manifest_path.read_text("utf-8"))
+        entry = payload["artifacts"][0]
+        artifact_path = artifacts_dir / entry["relative_path"].removeprefix(
+            "artifacts/"
+        )
+
+        if corruption == "invalid_json":
+            manifest_path.write_text("{", "utf-8")
+        elif corruption == "invalid_schema":
+            payload["unexpected"] = True
+            manifest_path.write_text(json.dumps(payload), "utf-8")
+        elif corruption == "unvalidated":
+            payload["validation"]["status"] = "invalid"
+            payload["validation"]["failed_count"] = 1
+            manifest_path.write_text(json.dumps(payload), "utf-8")
+        elif corruption == "traversal":
+            entry["relative_path"] = "artifacts/../../escape.csv"
+            manifest_path.write_text(json.dumps(payload), "utf-8")
+        elif corruption == "missing_file":
+            artifact_path.unlink()
+        elif corruption == "size_mismatch":
+            artifact_path.write_bytes(artifact_path.read_bytes() + b"x")
+        elif corruption == "hash_mismatch":
+            content = bytearray(artifact_path.read_bytes())
+            content[0] ^= 1
+            artifact_path.write_bytes(content)
+
+        response = await client.get("/api/v1/tasks/task_corrupt/artifacts")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": expected_detail}
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_hides_unknown_ids_and_unsafe_tasks(tmp_path: Path) -> None:
+    async with api_client(tmp_path) as (application, client):
+        await seed_fixture(application, "task_known")
+        unknown = await client.get(
+            "/api/v1/tasks/task_known/artifacts/artifact_unknown"
+        )
+        unsafe_list = await client.get("/api/v1/tasks/bad.task/artifacts")
+        unsafe_download = await client.get(
+            "/api/v1/tasks/bad.task/artifacts/run_manifest"
+        )
+
+    assert unknown.status_code == 404
+    assert unknown.json() == {"detail": "Artifact not found"}
+    assert unsafe_list.status_code == unsafe_download.status_code == 404
+    assert unsafe_list.json() == unsafe_download.json() == {"detail": "Task not found"}
+
+
+@pytest.mark.asyncio
+async def test_unexpected_manifest_storage_error_remains_500(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with api_client(tmp_path) as (application, _):
+        repository = application.state.task_repository
+        await seed_fixture(application, "task_storage_error")
         manifest_path = (
-            output_dir / "tasks" / "task_api_invalid" / "artifacts" / "run_manifest.json"
+            repository.tasks_dir
+            / "task_storage_error"
+            / "artifacts"
+            / "run_manifest.json"
         )
-        text = manifest_path.read_text("utf-8").replace(
-            '"status": "valid"', '"status": "invalid"'
-        )
-        manifest_path.write_text(text, "utf-8")
+        real_read_text = Path.read_text
 
-        assert (await client.get(
-            "/api/v1/tasks/task_api_invalid/artifacts"
-        )).status_code == 409
+        def fail_manifest_read(path: Path, *args, **kwargs) -> str:
+            if path == manifest_path:
+                raise OSError("simulated storage failure")
+            return real_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_manifest_read)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=application,
+                raise_app_exceptions=False,
+            ),
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/api/v1/tasks/task_storage_error/artifacts")
+
+    assert response.status_code == 500

@@ -344,13 +344,13 @@ class TaskIndex:
         if has_more and selected_inactive:
             last = selected_inactive[-1]
             next_cursor = _encode_cursor(last["created_at"], last["task_id"])
-        selected_rows = [*active_rows, *selected_inactive]
-        selected_rows.sort(
-            key=lambda row: (row["created_at"], row["task_id"]),
-            reverse=True,
+        active_items = [self._summary_from_row(row) for row in active_rows]
+        items = [self._summary_from_row(row) for row in selected_inactive]
+        return TaskPage(
+            active_items=active_items,
+            items=items,
+            next_cursor=next_cursor,
         )
-        tasks = [self._summary_from_row(row) for row in selected_rows]
-        return TaskPage(tasks=tasks, next_cursor=next_cursor)
 
     @staticmethod
     def _summary_from_row(row: sqlite3.Row) -> TaskSummary:

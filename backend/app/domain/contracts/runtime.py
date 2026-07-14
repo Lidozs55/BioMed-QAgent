@@ -68,8 +68,19 @@ class TaskSnapshot(ContractModel):
 
 
 class TaskPage(ContractModel):
-    tasks: list[TaskSummary] = Field(default_factory=list)
+    active_items: list[TaskSummary] = Field(default_factory=list)
+    items: list[TaskSummary] = Field(default_factory=list)
     next_cursor: str | None = None
+
+    @property
+    def tasks(self) -> list[TaskSummary]:
+        """Compatibility view for runtime consumers; not part of the wire model."""
+
+        return sorted(
+            [*self.active_items, *self.items],
+            key=lambda task: (task.created_at, task.task_id),
+            reverse=True,
+        )
 
 
 class MessagePage(ContractModel):
@@ -80,6 +91,14 @@ class MessagePage(ContractModel):
 class _StartRequest(ContractModel):
     request_id: str = Field(min_length=1)
     input: str
+
+    @field_validator("request_id")
+    @classmethod
+    def validate_request_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id must not be blank")
+        return normalized
 
     @field_validator("input")
     @classmethod

@@ -273,9 +273,14 @@ async def test_index_pages_65_inactive_tasks_without_duplicates(tmp_path) -> Non
         second = await index.list_tasks(cursor=first.next_cursor)
         third = await index.list_tasks(cursor=second.next_cursor)
 
-        assert [len(first.tasks), len(second.tasks), len(third.tasks)] == [30, 30, 5]
+        assert [
+            len(first.items),
+            len(second.items),
+            len(third.items),
+        ] == [30, 30, 5]
+        assert first.active_items == second.active_items == third.active_items == []
         task_ids = [
-            task.task_id for page in (first, second, third) for task in page.tasks
+            task.task_id for page in (first, second, third) for task in page.items
         ]
         assert len(task_ids) == len(set(task_ids)) == 65
         assert task_ids == sorted(task_ids, reverse=True)
@@ -312,10 +317,12 @@ async def test_index_returns_all_active_tasks_plus_inactive_page(tmp_path) -> No
         second = await index.list_tasks(limit=30, cursor=first.next_cursor)
 
         active_ids = {"task_active_0", "task_active_1"}
-        assert active_ids <= {task.task_id for task in first.tasks}
-        assert active_ids <= {task.task_id for task in second.tasks}
-        assert len(first.tasks) == 32
-        assert len(second.tasks) == 7
+        assert {task.task_id for task in first.active_items} == active_ids
+        assert {task.task_id for task in second.active_items} == active_ids
+        assert len(first.items) == 30
+        assert len(second.items) == 5
+        assert active_ids.isdisjoint(task.task_id for task in first.items)
+        assert active_ids.isdisjoint(task.task_id for task in second.items)
     finally:
         await index.close()
 
