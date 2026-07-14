@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 import app.agent_loop.runner as runner_module
 import app.runtime.manager as manager_module
+from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     EventEnvelope,
     RunStatus,
+    StageName,
+    StageStartedPayload,
     StartRunRequest,
     StartTaskRequest,
+    TaskCompletedPayload,
+    TaskCreatedPayload,
     TaskMode,
+    ValidationSummary,
+    build_event,
 )
+from app.pipeline.pinned_case import PipelineCancelledError
 from app.runtime.repository import TaskRepository
 
 
@@ -106,3 +117,252 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
         assert len(unchanged.runs) == 1
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_executor_cancellation_sets_token_and_drains_sync_worker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_exited = threading.Event()
+    worker_effects: list[str] = []
+
+    def controlled_fixture(*, cancellation_requested, **kwargs) -> None:
+        worker_started.set()
+        release_worker.wait()
+        try:
+            assert cancellation_requested.is_set()
+            worker_effects.append("worker finished")
+        finally:
+            worker_exited.set()
+
+    monkeypatch.setattr(runner_module, "run_pinned_fixture", controlled_fixture)
+    context = RunContext(task_id="task_fixture_executor_cancel")
+    execution = manager_module.RunExecution(
+        task_id=context.task_id,
+        run_id="run_fixture_executor_cancel",
+        request_id="req_fixture_executor_cancel",
+        input="cancel controlled fixture",
+        context=context,
+        mode=TaskMode.FIXTURE,
+        databases=["pubmed", "geo"],
+    )
+    executor = runner_module.FixtureRunExecutor(
+        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        fixture_dir=tmp_path / "fixture",
+    )
+    executor_task = asyncio.create_task(executor(execution))
+    try:
+        assert await asyncio.wait_for(
+            asyncio.to_thread(worker_started.wait, 1),
+            timeout=2,
+        )
+        executor_task.cancel()
+        await asyncio.sleep(0)
+
+        assert context.cancellation_requested.is_set()
+        assert not executor_task.done()
+
+        release_worker.set()
+        with pytest.raises(asyncio.CancelledError):
+            await executor_task
+        assert worker_exited.is_set()
+        effects_after_cancellation = list(worker_effects)
+        await asyncio.sleep(0)
+        assert worker_effects == effects_after_cancellation == ["worker finished"]
+    finally:
+        release_worker.set()
+        await asyncio.gather(executor_task, return_exceptions=True)
+        assert await asyncio.wait_for(
+            asyncio.to_thread(worker_exited.wait, 1),
+            timeout=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_manager_close_drains_fixture_worker_before_repository_close(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_exited = threading.Event()
+    close_observations: list[bool] = []
+
+    def controlled_fixture(*, cancellation_requested, **kwargs) -> None:
+        worker_started.set()
+        release_worker.wait()
+        try:
+            assert cancellation_requested.is_set()
+        finally:
+            worker_exited.set()
+
+    monkeypatch.setattr(runner_module, "run_pinned_fixture", controlled_fixture)
+    repository = TaskRepository(tmp_path / "output")
+    real_close = repository.close
+
+    async def observed_close() -> None:
+        close_observations.append(worker_exited.is_set())
+        await real_close()
+
+    monkeypatch.setattr(repository, "close", observed_close)
+    contexts: list[RunContext] = []
+
+    def create_context(task_id: str) -> RunContext:
+        context = RunContext(task_id=task_id)
+        contexts.append(context)
+        return context
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=tmp_path / "fixture",
+        ),
+        context_factory=create_context,
+    )
+    await manager.start()
+    await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_close",
+            input="close controlled fixture",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    assert await asyncio.wait_for(
+        asyncio.to_thread(worker_started.wait, 1),
+        timeout=2,
+    )
+    close_task = asyncio.create_task(manager.close())
+    try:
+        done, _ = await asyncio.wait({close_task}, timeout=0.05)
+        assert close_task not in done
+        assert len(contexts) == 1
+        assert contexts[0].cancellation_requested.is_set()
+        assert close_observations == []
+
+        release_worker.set()
+        await asyncio.wait_for(close_task, timeout=1)
+        assert worker_exited.is_set()
+        assert close_observations == [True]
+    finally:
+        release_worker.set()
+        await asyncio.gather(close_task, return_exceptions=True)
+        assert await asyncio.wait_for(
+            asyncio.to_thread(worker_exited.wait, 1),
+            timeout=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    context = RunContext(task_id="task_fixture_cancel_before_load")
+    loader_called = False
+
+    def cancel_before_bridge(*, cancellation_requested, **kwargs) -> None:
+        cancellation_requested.set()
+
+    def load_events(path):
+        nonlocal loader_called
+        loader_called = True
+        return []
+
+    monkeypatch.setattr(runner_module, "run_pinned_fixture", cancel_before_bridge)
+    monkeypatch.setattr(runner_module, "_load_fixture_events", load_events)
+    execution = manager_module.RunExecution(
+        task_id=context.task_id,
+        run_id="run_fixture_cancel_before_load",
+        request_id="req_fixture_cancel_before_load",
+        input="cancel before fixture bridge",
+        context=context,
+        mode=TaskMode.FIXTURE,
+        databases=["pubmed", "geo"],
+    )
+    executor = runner_module.FixtureRunExecutor(
+        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        fixture_dir=tmp_path / "fixture",
+    )
+
+    with pytest.raises(PipelineCancelledError):
+        await executor(execution)
+
+    assert not loader_called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_after", [1, 2])
+async def test_fixture_bridge_stops_before_event_after_cancellation(
+    tmp_path,
+    monkeypatch,
+    cancel_after: int,
+) -> None:
+    context = RunContext(task_id=f"task_fixture_bridge_cancel_{cancel_after}")
+    validation = ValidationSummary(
+        status="valid",
+        checked_count=1,
+        failed_count=0,
+        report_path="logs/validation_report.json",
+    )
+    legacy_events = [
+        build_event(
+            task_id=context.task_id,
+            sequence=1,
+            payload=TaskCreatedPayload(topic="fixture bridge cancellation"),
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=2,
+            payload=StageStartedPayload(stage=StageName.DISCOVERY, attempt=1),
+            stage_attempt_id="stage_attempt_discovery_1",
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=3,
+            payload=TaskCompletedPayload(validation=validation),
+        ),
+    ]
+    emitted: list[str] = []
+
+    def complete_fixture(**kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(runner_module, "run_pinned_fixture", complete_fixture)
+    monkeypatch.setattr(
+        runner_module,
+        "_load_fixture_events",
+        lambda path: legacy_events,
+    )
+
+    async def emit(payload, **kwargs):
+        emitted.append(payload.type.value)
+        if len(emitted) == cancel_after:
+            context.cancellation_requested.set()
+        return SimpleNamespace()
+
+    execution = manager_module.RunExecution(
+        task_id=context.task_id,
+        run_id=f"run_fixture_bridge_cancel_{cancel_after}",
+        request_id=f"req_fixture_bridge_cancel_{cancel_after}",
+        input="cancel during fixture bridge",
+        context=context,
+        mode=TaskMode.FIXTURE,
+        databases=["pubmed", "geo"],
+        _event_emitter=emit,
+    )
+    executor = runner_module.FixtureRunExecutor(
+        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        fixture_dir=tmp_path / "fixture",
+    )
+
+    with pytest.raises(PipelineCancelledError):
+        await executor(execution)
+
+    assert emitted == [
+        event.payload.type.value for event in legacy_events[:cancel_after]
+    ]

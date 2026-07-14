@@ -90,10 +90,11 @@ class _StartRequest(ContractModel):
         return normalized
 
 
-def validate_task_databases(mode: TaskMode, databases: list[str]) -> None:
+def validate_task_databases(mode: TaskMode | str, databases: list[str]) -> None:
     """Enforce mode-specific database selection at every admission boundary."""
 
-    if mode is TaskMode.FIXTURE and (
+    normalized_mode = TaskMode(mode)
+    if normalized_mode is TaskMode.FIXTURE and (
         len(databases) != 2 or set(databases) != {"pubmed", "geo"}
     ):
         raise ValueError("fixture tasks require exactly pubmed and geo")

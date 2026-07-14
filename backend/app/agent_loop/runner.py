@@ -25,9 +25,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from functools import partial
 from pathlib import Path
 from collections.abc import Awaitable, Callable, Mapping
-from typing import AsyncIterator
+from typing import AsyncIterator, TypeVar
 
 from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
@@ -47,7 +48,7 @@ from app.domain.contracts import (
     ToolStartedPayload,
 )
 from app.domain.contracts.runtime import validate_task_databases
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.pinned_case import PipelineCancelledError, run_pinned_fixture
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
     Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
 )
+_FixtureSyncResult = TypeVar("_FixtureSyncResult")
 
 
 class _AssistantTextBuffer:
@@ -295,6 +297,32 @@ def _load_fixture_events(path: Path) -> list[EventEnvelope]:
     ]
 
 
+async def _run_fixture_sync(
+    execution,
+    operation: Callable[[], _FixtureSyncResult],
+) -> _FixtureSyncResult:
+    worker_task = asyncio.create_task(asyncio.to_thread(operation))
+    try:
+        return await asyncio.shield(worker_task)
+    except asyncio.CancelledError:
+        execution.context.cancellation_requested.set()
+        while not worker_task.done():
+            try:
+                await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if not worker_task.cancelled():
+            worker_task.exception()
+        raise
+
+
+def _check_fixture_bridge_cancellation(execution) -> None:
+    if execution.context.cancellation_requested.is_set():
+        raise PipelineCancelledError("fixture pipeline was cancelled")
+
+
 class FixtureRunExecutor:
     """Run the official pinned fixture and bridge its v1 audit events."""
 
@@ -304,19 +332,30 @@ class FixtureRunExecutor:
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
-        await asyncio.to_thread(
-            run_pinned_fixture,
-            task_id=execution.task_id,
-            base_dir=self._repository.tasks_dir,
-            fixture_dir=self._fixture_dir,
-            topic=execution.input,
-            cancellation_requested=execution.context.cancellation_requested,
+        await _run_fixture_sync(
+            execution,
+            partial(
+                run_pinned_fixture,
+                task_id=execution.task_id,
+                base_dir=self._repository.tasks_dir,
+                fixture_dir=self._fixture_dir,
+                topic=execution.input,
+                cancellation_requested=execution.context.cancellation_requested,
+            ),
         )
-        legacy_events = await asyncio.to_thread(
-            _load_fixture_events,
-            self._repository.tasks_dir / execution.task_id / "logs" / "events.jsonl",
+        _check_fixture_bridge_cancellation(execution)
+        legacy_events = await _run_fixture_sync(
+            execution,
+            partial(
+                _load_fixture_events,
+                self._repository.tasks_dir
+                / execution.task_id
+                / "logs"
+                / "events.jsonl",
+            ),
         )
         for event in legacy_events:
+            _check_fixture_bridge_cancellation(execution)
             await execution.emit(
                 event.payload,
                 stage_attempt_id=event.stage_attempt_id,

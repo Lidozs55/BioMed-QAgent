@@ -397,10 +397,12 @@ class TaskManager:
                     task_id=task_id,
                     run_id=generate_run_id(),
                 )
-                return await self._admit_run_locked(
-                    snapshot,
-                    accepted,
-                    request.input,
+                return await self._shield_and_drain_admission_locked(
+                    self._admit_run_locked(
+                        snapshot,
+                        accepted,
+                        request.input,
+                    )
                 )
 
     async def create_task(self, request: StartTaskRequest) -> TaskRunAccepted:
@@ -433,12 +435,41 @@ class TaskManager:
                     updated_at=created_at,
                 )
             )
-            await self.repository.save_snapshot(snapshot)
-            return await self._admit_run_locked(
-                snapshot,
-                accepted,
-                request.input,
+            return await self._shield_and_drain_admission_locked(
+                self._create_and_admit_locked(
+                    snapshot,
+                    accepted,
+                    request.input,
+                )
             )
+
+    async def _shield_and_drain_admission_locked(
+        self,
+        admission: Awaitable[TaskRunAccepted],
+    ) -> TaskRunAccepted:
+        admission_task = asyncio.create_task(admission)
+        try:
+            return await asyncio.shield(admission_task)
+        except asyncio.CancelledError:
+            while not admission_task.done():
+                try:
+                    await asyncio.shield(admission_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not admission_task.cancelled():
+                admission_task.exception()
+            raise
+
+    async def _create_and_admit_locked(
+        self,
+        snapshot: TaskSnapshot,
+        accepted: TaskRunAccepted,
+        input_value: str,
+    ) -> TaskRunAccepted:
+        await self.repository.save_snapshot(snapshot)
+        return await self._admit_run_locked(snapshot, accepted, input_value)
 
     async def _admit_run_locked(
         self,

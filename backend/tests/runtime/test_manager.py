@@ -168,9 +168,15 @@ async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
 @pytest.mark.asyncio
 async def test_create_task_revalidates_constructed_fixture_request(
     tmp_path,
+    monkeypatch,
 ) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
+    monkeypatch.setattr(
+        manager_module,
+        "generate_task_id",
+        lambda: "task_fixture_bypass",
+    )
 
     async def run(execution) -> None:
         raise AssertionError("invalid fixture request must not execute")
@@ -181,7 +187,7 @@ async def test_create_task_revalidates_constructed_fixture_request(
         request_id="req_fixture_bypass",
         input="fixture bypass",
         databases=["pubmed"],
-        mode=TaskMode.FIXTURE,
+        mode="fixture",
     )
     try:
         with pytest.raises(ValueError, match="exactly pubmed and geo"):
@@ -189,7 +195,257 @@ async def test_create_task_revalidates_constructed_fixture_request(
 
         assert (await repository.list_tasks()).tasks == []
         assert await repository.find_request(request.request_id) is None
+        assert not (repository.tasks_dir / "task_fixture_bypass").exists()
     finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_cancellation_during_snapshot_write_drains_admission(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    snapshot_write_started = asyncio.Event()
+    release_snapshot_write = asyncio.Event()
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+    task_ids = iter(["task_create_cancelled", "task_create_duplicate"])
+    run_ids = iter(["run_create_cancelled", "run_create_duplicate"])
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(execution) -> None:
+        executor_started.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_save_snapshot = repository.save_snapshot
+
+    async def blocked_save_snapshot(snapshot) -> None:
+        if snapshot.task.task_id == "task_create_cancelled":
+            snapshot_write_started.set()
+            await release_snapshot_write.wait()
+        await real_save_snapshot(snapshot)
+
+    monkeypatch.setattr(repository, "save_snapshot", blocked_save_snapshot)
+    request = StartTaskRequest(
+        request_id="req_create_cancelled",
+        input="complete cancelled create admission",
+    )
+    admission = asyncio.create_task(manager.create_task(request))
+    try:
+        await asyncio.wait_for(snapshot_write_started.wait(), timeout=1)
+        admission.cancel()
+        await asyncio.sleep(0)
+
+        assert not admission.done()
+
+        release_snapshot_write.set()
+        with pytest.raises(asyncio.CancelledError):
+            await admission
+
+        retried = await manager.create_task(request)
+        assert retried.task_id == "task_create_cancelled"
+        assert retried.run_id == "run_create_cancelled"
+        assert await repository.find_request(request.request_id) == retried
+
+        page = await repository.list_tasks()
+        assert [task.task_id for task in page.tasks] == [retried.task_id]
+        snapshot = await repository.get_snapshot(retried.task_id)
+        assert snapshot is not None
+        assert len(snapshot.runs) == 1
+        assert snapshot.runs[0].run_id == retried.run_id
+        assert snapshot.runs[0].status is RunStatus.QUEUED
+        events = await repository.list_events(retried.task_id)
+        assert len(events) == 1
+        assert isinstance(events[0].payload, RunQueuedPayload)
+
+        manager._semaphore.release()
+        semaphore_held = False
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+    finally:
+        release_snapshot_write.set()
+        release_executor.set()
+        if semaphore_held:
+            manager._semaphore.release()
+        await asyncio.gather(admission, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_cancellation_during_queued_projection_drains_admission(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    projection_started = asyncio.Event()
+    release_projection = asyncio.Event()
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+    task_ids = iter(["task_projection_cancelled", "task_projection_duplicate"])
+    run_ids = iter(["run_projection_cancelled", "run_projection_duplicate"])
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(execution) -> None:
+        executor_started.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_upsert_snapshot = repository.index.upsert_snapshot
+    projection_blocked = False
+
+    async def blocked_upsert_snapshot(snapshot) -> None:
+        nonlocal projection_blocked
+        if (
+            snapshot.task.task_id == "task_projection_cancelled"
+            and snapshot.task.latest_sequence == 1
+            and not projection_blocked
+        ):
+            projection_blocked = True
+            projection_started.set()
+            await release_projection.wait()
+        await real_upsert_snapshot(snapshot)
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", blocked_upsert_snapshot)
+    request = StartTaskRequest(
+        request_id="req_projection_cancelled",
+        input="complete projected create admission",
+    )
+    admission = asyncio.create_task(manager.create_task(request))
+    try:
+        await asyncio.wait_for(projection_started.wait(), timeout=1)
+        admission.cancel()
+        await asyncio.sleep(0)
+
+        assert not admission.done()
+
+        release_projection.set()
+        with pytest.raises(asyncio.CancelledError):
+            await admission
+
+        retried = await manager.create_task(request)
+        assert retried.task_id == "task_projection_cancelled"
+        assert retried.run_id == "run_projection_cancelled"
+        assert await repository.find_request(request.request_id) == retried
+
+        page = await repository.list_tasks()
+        assert [task.task_id for task in page.tasks] == [retried.task_id]
+        snapshot = await repository.get_snapshot(retried.task_id)
+        assert snapshot is not None
+        assert len(snapshot.runs) == 1
+        assert snapshot.runs[0].run_id == retried.run_id
+        assert snapshot.runs[0].status is RunStatus.QUEUED
+        events = await repository.list_events(retried.task_id)
+        assert len(events) == 1
+        assert isinstance(events[0].payload, RunQueuedPayload)
+
+        manager._semaphore.release()
+        semaphore_held = False
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+    finally:
+        release_projection.set()
+        release_executor.set()
+        if semaphore_held:
+            manager._semaphore.release()
+        await asyncio.gather(admission, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_run_cancellation_during_request_registration_drains_admission(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    registration_started = asyncio.Event()
+    release_registration = asyncio.Event()
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+    run_ids = iter(["run_submit_cancelled", "run_submit_duplicate"])
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(execution) -> None:
+        executor_started.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await repository.save_snapshot(empty_snapshot("task_submit_cancelled"))
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_record_request = repository.record_request
+
+    async def blocked_record_request(accepted):
+        if accepted.request_id == "req_submit_cancelled":
+            registration_started.set()
+            await release_registration.wait()
+        return await real_record_request(accepted)
+
+    monkeypatch.setattr(repository, "record_request", blocked_record_request)
+    request = StartRunRequest(
+        request_id="req_submit_cancelled",
+        input="complete cancelled continuation admission",
+    )
+    admission = asyncio.create_task(
+        manager.submit_run("task_submit_cancelled", request)
+    )
+    try:
+        await asyncio.wait_for(registration_started.wait(), timeout=1)
+        admission.cancel()
+        await asyncio.sleep(0)
+
+        assert not admission.done()
+
+        release_registration.set()
+        with pytest.raises(asyncio.CancelledError):
+            await admission
+
+        retried = await manager.submit_run("task_submit_cancelled", request)
+        assert retried.task_id == "task_submit_cancelled"
+        assert retried.run_id == "run_submit_cancelled"
+        assert await repository.find_request(request.request_id) == retried
+
+        snapshot = await repository.get_snapshot(retried.task_id)
+        assert snapshot is not None
+        assert len(snapshot.runs) == 1
+        assert snapshot.runs[0].run_id == retried.run_id
+        assert snapshot.runs[0].status is RunStatus.QUEUED
+        events = await repository.list_events(retried.task_id)
+        assert len(events) == 1
+        assert isinstance(events[0].payload, RunQueuedPayload)
+
+        manager._semaphore.release()
+        semaphore_held = False
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+    finally:
+        release_registration.set()
+        release_executor.set()
+        if semaphore_held:
+            manager._semaphore.release()
+        await asyncio.gather(admission, return_exceptions=True)
         await manager.close()
 
 
