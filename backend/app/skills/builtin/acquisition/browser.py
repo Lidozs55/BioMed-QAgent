@@ -19,6 +19,7 @@ from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import BROWSER_HEADERS, _rate_limiter
+from app.tools.network_safety import async_validate_public_http_request
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,11 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     run_ctx: RunContext = ctx.context
     _rate_limiter.wait()
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            event_hooks={"request": [async_validate_public_http_request]},
+        ) as client:
             resp = await client.get(url, headers=BROWSER_HEADERS)
             status_code = resp.status_code
             content_type = resp.headers.get("content-type", "")
@@ -94,18 +99,29 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
 async def download_from_page(
     ctx: RunContextWrapper[Any], url: str, filename: str,
 ) -> str:
-    """Download a file from a URL via HTTP streaming to the task raw directory.
+    """Download a file through task-local temporary storage into source assets.
 
     Uses real browser User-Agent, Referer, and Accept headers with 2s rate
     limiting (project_memory L11). Detects Content-Type, streams the response
-    to task/raw/<filename>, and creates a SourceRecord for provenance tracking.
+    to download_tmp before atomically moving it to source_assets, and creates a
+    SourceRecord for provenance tracking.
     Use this as a last-resort download tool when API endpoints fail.
     """
     run_ctx: RunContext = ctx.context
     _rate_limiter.wait()
+    temp_path = None
     try:
+        temp_target = run_ctx.work_dir.download_temp_file(f"{filename}.part")
+        dest = run_ctx.work_dir.source_asset_file(filename)
+        if dest.exists():
+            raise FileExistsError(f"source asset already exists: {filename}")
+
         async with (
-            httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client,
+            httpx.AsyncClient(
+                timeout=120.0,
+                follow_redirects=True,
+                event_hooks={"request": [async_validate_public_http_request]},
+            ) as client,
             client.stream(
                 "GET", url, headers=BROWSER_HEADERS,
             ) as resp,
@@ -114,28 +130,31 @@ async def download_from_page(
             content_type = resp.headers.get("content-type", "")
             mime_type = content_type.split(";")[0].strip() if content_type else None
 
-            dest = run_ctx.work_dir.raw / filename
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            if status_code >= 400:
+                run_ctx.log_query(filename, "browser_fallback", "failed", 0)
+                return json.dumps({
+                    "source": "browser_fallback",
+                    "accession": filename,
+                    "source_url": url,
+                    "local_files": [],
+                    "error": f"HTTP {status_code}",
+                }, ensure_ascii=False)
+
             bytes_received = 0
-            with open(dest, "wb") as f:
+            temp_path = temp_target
+            with temp_path.open("wb") as f:
                 async for chunk in resp.aiter_bytes():
                     f.write(chunk)
                     bytes_received += len(chunk)
+
+        if dest.exists():
+            raise FileExistsError(f"source asset already exists: {filename}")
+        temp_path.replace(dest)
 
         logger.info(
             "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
             url, status_code, content_type, bytes_received, dest,
         )
-
-        if status_code >= 400:
-            run_ctx.log_query(filename, "browser_fallback", "failed", 0)
-            return json.dumps({
-                "source": "browser_fallback",
-                "accession": filename,
-                "source_url": url,
-                "local_files": [],
-                "error": f"HTTP {status_code}",
-            }, ensure_ascii=False)
 
         local_path = str(dest)
         run_ctx.add_raw_asset(local_path)
@@ -160,6 +179,8 @@ async def download_from_page(
             "retrieved_at": source_record.retrieved_at.isoformat(),
         }, ensure_ascii=False)
     except Exception as exc:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
         run_ctx.log_query(filename, "browser_fallback", "failed", 0)
         return json.dumps({
             "source": "browser_fallback",

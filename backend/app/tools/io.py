@@ -5,9 +5,9 @@
   - 拒绝 .. 路径穿越
   - 拒绝工作目录外的符号链接
 
-所有文件操作限制在任务工作目录 data/output/tasks/<task_id>/ 内，
-覆盖 source_assets/、parsed/、normalized/、staging/、artifacts/、state/、logs/
-等全部子目录。Agent 可直接读取 skill 下载/解析的中间产物。
+读取和列出操作限制在任务工作目录 data/output/tasks/<task_id>/ 内，覆盖
+source_assets/、parsed/、normalized/、staging/、artifacts/、state/、logs/
+等全部子目录。写入操作仅允许在 staging/agent/ 内。
 context 参数为 RunContextWrapper，由 SDK 自动注入，不暴露给 LLM。
 """
 from __future__ import annotations
@@ -59,6 +59,16 @@ def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
     return resolved
 
 
+def _resolve_safe_write_path(path: str, run_ctx: RunContext) -> Path:
+    """将 Agent 写入路径限制在任务的专用 staging/agent 目录内。"""
+    if Path(path).is_absolute():
+        raise ValueError(f"不允许使用绝对路径: {path}")
+    try:
+        return run_ctx.work_dir.agent_staging_file(path)
+    except ValueError:
+        raise ValueError(f"路径穿越被拒绝: {path}（目标在 Agent 暂存目录之外）") from None
+
+
 @function_tool
 def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
     """读取任务工作目录内的文件内容。path 为相对于任务根目录的相对路径。"""
@@ -75,16 +85,15 @@ def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
 
 @function_tool
 def write_file(ctx: RunContextWrapper[Any], path: str, content: str) -> str:
-    """将内容写入任务工作目录内的文件。path 为相对路径。返回写入的文件路径。"""
+    """将内容写入任务 staging/agent 目录。path 为相对路径。"""
     run_ctx: RunContext = ctx.context
     try:
-        safe_path = _resolve_safe_path(path, run_ctx)
+        safe_path = _resolve_safe_write_path(path, run_ctx)
     except ValueError as e:
         return f"路径错误: {e}"
 
     safe_path.parent.mkdir(parents=True, exist_ok=True)
     safe_path.write_text(content, encoding="utf-8")
-    run_ctx.artifacts.append(str(safe_path))
     return f"已写入: {safe_path}"
 
 

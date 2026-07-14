@@ -18,8 +18,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
+
+from app.tools.network_safety import (
+    validate_public_http_request,
+    validate_public_http_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +99,11 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
+def _guard_playwright_route(route: Any) -> None:
+    validate_public_http_url(route.request.url)
+    route.continue_()
+
+
 def httpx_fetch(
     url: str,
     *,
@@ -120,7 +131,11 @@ def httpx_fetch(
     start = time.monotonic()
 
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=follow_redirects) as client:
+        with httpx.Client(
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            event_hooks={"request": [validate_public_http_request]},
+        ) as client:
             response = client.get(url, headers=merged_headers)
             elapsed_ms = (time.monotonic() - start) * 1000
             return FetchResult(
@@ -194,6 +209,7 @@ def playwright_fetch(
             )
             # Inject stealth script before any page script runs
             context.add_init_script(STEALTH_JS)
+            context.route("**/*", _guard_playwright_route)
             page = context.new_page()
             page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
             content = page.content()
@@ -255,7 +271,11 @@ def api_fetch(
 
     start = time.monotonic()
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        with httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            event_hooks={"request": [validate_public_http_request]},
+        ) as client:
             response = client.get(url, headers=api_headers)
             elapsed_ms = (time.monotonic() - start) * 1000
             return FetchResult(

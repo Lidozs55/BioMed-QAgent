@@ -27,6 +27,7 @@ from app.tools.crawler import (
     httpx_fetch,
     playwright_fetch,
 )
+from app.tools.network_safety import validate_public_http_request
 
 # ---------------------------------------------------------------------------
 # Fixtures — rate limiter is disabled globally in conftest.py
@@ -106,6 +107,17 @@ def test_httpx_fetch_success() -> None:
     assert "Referer" in called_headers
     assert "Accept" in called_headers
 
+def test_httpx_fetch_configures_public_url_hook() -> None:
+    response = _mock_httpx_response(text="ok", status_code=200)
+    client = _mock_httpx_client(response)
+
+    with patch("app.tools.crawler.httpx.Client", return_value=client) as client_cls:
+        httpx_fetch("https://example.com")
+
+    assert client_cls.call_args.kwargs["event_hooks"] == {
+        "request": [validate_public_http_request]
+    }
+
 
 def test_httpx_fetch_failure_returns_error_result() -> None:
     """httpx_fetch returns FetchResult with error on exception."""
@@ -147,6 +159,18 @@ def test_api_fetch_success() -> None:
     assert "Referer" not in called_headers
 
 
+def test_api_fetch_configures_public_url_hook() -> None:
+    response = _mock_httpx_response(text="{}", status_code=200)
+    client = _mock_httpx_client(response)
+
+    with patch("app.tools.crawler.httpx.Client", return_value=client) as client_cls:
+        api_fetch("https://api.example.com/data")
+
+    assert client_cls.call_args.kwargs["event_hooks"] == {
+        "request": [validate_public_http_request]
+    }
+
+
 # ---------------------------------------------------------------------------
 # playwright_fetch
 # ---------------------------------------------------------------------------
@@ -182,6 +206,7 @@ def test_playwright_fetch_success() -> None:
 
     # Verify stealth script was injected
     mock_context.add_init_script.assert_called_once_with(STEALTH_JS)
+    mock_context.route.assert_called_once()
     # Verify networkidle wait
     mock_page.goto.assert_called_once()
     goto_kwargs = mock_page.goto.call_args[1]

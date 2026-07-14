@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents.tool_context import ToolContext
@@ -11,10 +12,13 @@ from app.skills.builtin.acquisition.browser import (
     download_from_page,
     navigate_page,
 )
+from app.tools.workdir import create_task_workdir
 
 
-def _make_ctx(task_id: str = "test_browser") -> ToolContext:
+def _make_ctx(task_id: str = "test_browser", tmp_path: Path | None = None) -> ToolContext:
     rc = RunContext(task_id=task_id)
+    if tmp_path is not None:
+        rc._work_dir = create_task_workdir(task_id, base_dir=str(tmp_path))
     return ToolContext(
         context=rc,
         tool_name="navigate_page",
@@ -96,7 +100,7 @@ def test_navigate_page_network_error_returns_error_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_download_from_page_success() -> None:
+def test_download_from_page_success(tmp_path: Path) -> None:
     """download_from_page saves file, tracks provenance, and logs query."""
     file_content = b"fake file content for testing"
 
@@ -115,7 +119,7 @@ def test_download_from_page_success() -> None:
     mock_client_cm = AsyncMock()
     mock_client_cm.__aenter__.return_value = mock_client
 
-    ctx = _make_ctx(task_id="test_browser_dl")
+    ctx = _make_ctx(task_id="test_browser_dl", tmp_path=tmp_path)
     with patch(
         "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
         return_value=mock_client_cm,
@@ -133,9 +137,11 @@ def test_download_from_page_success() -> None:
     assert "application/pdf" in data["mime_type"]
     assert len(data["local_files"]) == 1
     assert data["local_files"][0].endswith("test_data.pdf")
+    rc: RunContext = ctx.context
+    assert rc.work_dir.source_asset_file("test_data.pdf").read_bytes() == file_content
+    assert list(rc.work_dir.download_tmp.iterdir()) == []
 
     # Verify provenance tracking
-    rc: RunContext = ctx.context
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
     assert rc.sources[0].source == "browser_fallback"
@@ -145,7 +151,7 @@ def test_download_from_page_success() -> None:
     assert rc.query_log[0]["status"] == "succeeded"
 
 
-def test_download_from_page_http_4xx_returns_error_json() -> None:
+def test_download_from_page_http_4xx_returns_error_json(tmp_path: Path) -> None:
     """download_from_page returns error JSON on HTTP 4xx (not raises)."""
     mock_resp = AsyncMock()
     mock_resp.status_code = 404
@@ -162,7 +168,7 @@ def test_download_from_page_http_4xx_returns_error_json() -> None:
     mock_client_cm = AsyncMock()
     mock_client_cm.__aenter__.return_value = mock_client
 
-    ctx = _make_ctx(task_id="test_browser_404")
+    ctx = _make_ctx(task_id="test_browser_404", tmp_path=tmp_path)
     with patch(
         "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
         return_value=mock_client_cm,
@@ -186,6 +192,80 @@ def test_download_from_page_http_4xx_returns_error_json() -> None:
     # No raw assets or sources for failed download
     assert len(rc.raw_assets) == 0
     assert len(rc.sources) == 0
+    assert list(rc.work_dir.download_tmp.iterdir()) == []
+    assert list(rc.work_dir.source_assets.iterdir()) == []
+
+
+def test_download_rejects_filename_traversal_before_streaming(tmp_path: Path) -> None:
+    mock_client = MagicMock()
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__.return_value = mock_client
+    ctx = _make_ctx(task_id="test_browser_traversal", tmp_path=tmp_path)
+
+    with patch(
+        "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+        return_value=mock_client_cm,
+    ):
+        result = asyncio.run(download_from_page.on_invoke_tool(
+            ctx,
+            json.dumps({"url": "https://example.com/data", "filename": "../escape.bin"}),
+        ))
+
+    assert "error" in json.loads(result)
+    mock_client.stream.assert_not_called()
+
+
+def test_download_stream_exception_removes_partial_file(tmp_path: Path) -> None:
+    async def broken_stream():
+        yield b"partial"
+        raise RuntimeError("stream interrupted")
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {"content-type": "application/octet-stream"}
+    mock_resp.aiter_bytes = broken_stream
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__.return_value = mock_resp
+    mock_client = MagicMock()
+    mock_client.stream.return_value = mock_stream_cm
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__.return_value = mock_client
+    ctx = _make_ctx(task_id="test_browser_partial", tmp_path=tmp_path)
+
+    with patch(
+        "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+        return_value=mock_client_cm,
+    ):
+        result = asyncio.run(download_from_page.on_invoke_tool(
+            ctx,
+            json.dumps({"url": "https://example.com/data", "filename": "data.bin"}),
+        ))
+
+    assert "stream interrupted" in json.loads(result)["error"]
+    assert list(ctx.context.work_dir.download_tmp.iterdir()) == []
+    assert list(ctx.context.work_dir.source_assets.iterdir()) == []
+
+
+def test_download_does_not_overwrite_existing_asset(tmp_path: Path) -> None:
+    ctx = _make_ctx(task_id="test_browser_existing", tmp_path=tmp_path)
+    existing = ctx.context.work_dir.source_asset_file("data.bin")
+    existing.write_bytes(b"original")
+    mock_client = MagicMock()
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__.return_value = mock_client
+
+    with patch(
+        "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+        return_value=mock_client_cm,
+    ):
+        result = asyncio.run(download_from_page.on_invoke_tool(
+            ctx,
+            json.dumps({"url": "https://example.com/data", "filename": "data.bin"}),
+        ))
+
+    assert "error" in json.loads(result)
+    assert existing.read_bytes() == b"original"
+    mock_client.stream.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

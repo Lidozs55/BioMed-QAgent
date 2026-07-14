@@ -81,6 +81,22 @@ def test_artifact_file_path(tmp_path: Path) -> None:
     assert wd.artifact_file("result.csv") == wd.artifacts / "result.csv"
 
 
+def test_agent_staging_file_is_scoped_to_agent_directory(tmp_path: Path) -> None:
+    wd = create_task_workdir("test_task_agent_staging", base_dir=str(tmp_path))
+
+    path = wd.agent_staging_file("report.md")
+
+    assert path == wd.staging / "agent" / "report.md"
+    assert path.parent.is_dir()
+
+
+def test_agent_staging_file_rejects_traversal(tmp_path: Path) -> None:
+    wd = create_task_workdir("test_task_agent_traversal", base_dir=str(tmp_path))
+
+    with pytest.raises(ValueError, match="path"):
+        wd.agent_staging_file("../../artifacts/run_manifest.json")
+
+
 def test_workdir_is_frozen(tmp_path: Path) -> None:
     """TaskWorkDir 是 frozen dataclass，不可变。"""
     wd = create_task_workdir("test_task_005", base_dir=str(tmp_path))
