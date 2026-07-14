@@ -126,30 +126,30 @@ def test_search_gdc_network_error_returns_error_json() -> None:
 
 
 def test_describe_gdc_success() -> None:
-    """describe_gdc returns project metadata and logs query on success."""
+    """describe_gdc returns project metadata and logs query on success.
+
+    Mock matches the real GDC API shape for /projects/{id}: the project
+    object is returned directly under ``data`` (NOT under ``data.hits[]``).
+    """
     api_response = {
         "data": {
-            "hits": [
-                {
-                    "project_id": "TCGA-LUAD",
-                    "name": "Lung Adenocarcinoma",
-                    "disease_type": ["Adenomas and Adenocarcinomas"],
-                    "primary_site": ["Lung"],
-                    "program": {"name": "TCGA"},
-                    "summary": {
-                        "case_count": 500,
-                        "file_count": 3000,
-                        "data_categories": [
-                            {"data_category": "Transcriptome Profiling", "file_count": 1500}
-                        ],
-                        "experimental_strategies": [
-                            {"experimental_strategy": "RNA-Seq"}
-                        ],
-                    },
-                    "dbgap_accession_number": "phs000218",
-                    "state": "open",
-                }
-            ]
+            "project_id": "TCGA-LUAD",
+            "name": "Lung Adenocarcinoma",
+            "disease_type": ["Adenomas and Adenocarcinomas"],
+            "primary_site": ["Lung"],
+            "program": {"name": "TCGA"},
+            "summary": {
+                "case_count": 500,
+                "file_count": 3000,
+                "data_categories": [
+                    {"data_category": "Transcriptome Profiling", "file_count": 1500}
+                ],
+                "experimental_strategies": [
+                    {"experimental_strategy": "RNA-Seq"}
+                ],
+            },
+            "dbgap_accession_number": "phs000218",
+            "state": "open",
         }
     }
     mock_resp = _mock_urlopen_json(api_response)
@@ -177,8 +177,13 @@ def test_describe_gdc_success() -> None:
 
 
 def test_describe_gdc_not_found() -> None:
-    """describe_gdc returns error when project not found (empty hits)."""
-    api_response = {"data": {"hits": []}}
+    """describe_gdc returns error when project data is missing project_id.
+
+    Real GDC API returns HTTP 404 for unknown projects (caught by the
+    except branch). This test exercises the secondary guard: a 200
+    response with an empty/malformed ``data`` object.
+    """
+    api_response = {"data": {}}
     mock_resp = _mock_urlopen_json(api_response)
 
     ctx = _make_ctx(task_id="test_gdc_describe_nf")
@@ -241,7 +246,7 @@ def test_download_gdc_success() -> None:
     rc: RunContext = ctx.context
     assert len(rc.raw_assets) >= 1
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "gdc"
+    assert rc.sources[0].database.value == "gdc"
 
 
 def test_download_gdc_no_files_returns_error() -> None:

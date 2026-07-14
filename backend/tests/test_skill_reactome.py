@@ -185,7 +185,7 @@ def test_get_pathway_api_success() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "reactome"
+    assert rc.sources[0].database.value == "reactome"
     assert rc.sources[0].accession == "R-HSA-169893"
 
 
