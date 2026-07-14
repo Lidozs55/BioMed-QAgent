@@ -325,27 +325,27 @@ run_ctx.log_query(query="GSE178352[Accession]", source="geo", status="succeeded"
 **必填字段**：`source`、`source_url`、`local_files`
 **失败时**：追加 `"error": "..."` 字段
 
-**三级降级链扩展字段**（reactome/pubchem 等使用 `fetch_with_fallback()` 的 skill）：
+**页面降级响应字段**（reactome/pubchem 等使用 `fetch_with_fallback()` 的 skill）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `method_used` | `string` | 实际成功的获取方式：`"api"` \| `"httpx"` \| `"crawl"` |
-| `tried_methods` | `string[]` | 已尝试的获取方式列表（用于 requires_crawl 信号） |
-| `target_url` | `string` | 当返回 requires_crawl 信号时，建议浏览器兜底访问的 URL |
+| `status` | `string` | 页面降级成功时为 `"page_fallback"`，全部失败时为 `"error"` |
+| `page_url` | `string` | 实际页面降级 URL |
+| `body_text_preview` | `string` | BeautifulSoup 提取的可见文本，最多 5000 字符 |
+| `attempted_methods` | `string[]` | 全部失败时报告 `api`、`httpx`、`crawl` |
 
-**requires_crawl 信号**（API 和 httpx 均失败时返回）：
+API 解析失败后，skill 直接执行页面降级，不依赖 LLM 再次调度：
 
 ```json
 {
-  "status": "requires_crawl",
+  "status": "page_fallback",
   "source": "reactome",
-  "reason": "API and httpx both failed",
-  "tried_methods": ["api", "httpx"],
-  "target_url": "https://reactome.org/ContentService/..."
+  "method_used": "httpx",
+  "page_url": "https://reactome.org/content/query?q=apoptosis",
+  "body_text_preview": "Apoptosis ..."
 }
 ```
-
-LLM 收到此信号后应调用 browser skill 的 `navigate_page` 或 `download_from_page` 进行 Playwright 兜底（见第 12 节 crawler 工具层）。
 
 ### 6.3 processing 类 Tool
 
@@ -666,7 +666,7 @@ skill_registry.register(my_source_skill)
 - 位置：[builtin/acquisition/reactome.py](../backend/app/skills/builtin/acquisition/reactome.py)
 - 职责：Reactome 通路数据库的检索与详情查询（非 JS 网站）
 - 工具：`search_reactome(term, max_results)`、`get_pathway(pathway_id)`
-- 三级降级链：`Reactome ContentService REST API → httpx 页面抓取 → requires_crawl 信号`
+- 三级降级链：`Reactome ContentService REST API → httpx 页面抓取 → Playwright 页面抓取`
 - `supported_sources=["reactome"]`，使用 `fetch_with_fallback()` 编排降级
 
 ### pubchem
@@ -674,7 +674,7 @@ skill_registry.register(my_source_skill)
 - 位置：[builtin/acquisition/pubchem.py](../backend/app/skills/builtin/acquisition/pubchem.py)
 - 职责：PubChem 化合物数据库的检索与详情查询（JS-heavy 网站）
 - 工具：`search_pubchem(term, max_results)`、`get_compound(cid)`
-- 三级降级链：`PUG-REST API → httpx 页面抓取 → requires_crawl 信号`
+- 三级降级链：`PUG-REST API → 拒绝静态空壳 → Playwright 页面抓取`
 - `supported_sources=["pubchem"]`，使用 `fetch_with_fallback()` 编排降级
 
 ### learned skill
@@ -703,7 +703,7 @@ application/  HEADERS         networkidle
 json
 ```
 
-由 `fetch_with_fallback(api_url, page_url, source_name, use_crawl_fallback)` 编排:依次尝试三级,任一成功即返回;全失败抛 `CrawlError`。
+由 `fetch_with_fallback(api_url, page_url, source_name, use_crawl_fallback, accept_result)` 编排。传输成功后还会调用 `accept_result(FetchResult)` 做语义验收；HTTP 200 的空壳页面可被拒绝并继续进入 Playwright。全失败抛 `CrawlError`。
 
 ### 12.2 核心组件
 
@@ -723,7 +723,7 @@ json
 | `api_fetch(url, headers, timeout)` | Tier 1 | httpx + `Accept: application/json`,无 Referer | REST API 端点(Reactome ContentService、PUG-REST) |
 | `httpx_fetch(url, headers, timeout)` | Tier 2 | httpx + `BROWSER_HEADERS`(UA/Referer/Accept) | 非 JS 网页抓取,API 不可用时的降级 |
 | `playwright_fetch(url, wait_until, timeout)` | Tier 3 | Playwright Chromium + `STEALTH_JS` + `networkidle` | JS-heavy 网站(pubchem/uniprot/chembl),httpx 无法渲染时 |
-| `fetch_with_fallback(api_url, page_url, source_name, use_crawl_fallback)` | 编排 | 依次尝试 api → httpx → crawl | skill 工具内部调用,封装降级逻辑 |
+| `fetch_with_fallback(api_url, page_url, source_name, use_crawl_fallback, accept_result)` | 编排 | 依次尝试 api → httpx → crawl，并进行语义验收 | skill 工具内部调用,封装降级逻辑 |
 
 ### 12.4 project_memory 硬约束遵守
 
@@ -731,49 +731,41 @@ json
 - ✅ JS-heavy 网站(pubchem/uniprot/chembl/opentargets/cnki/wanfang)用 Playwright + stealth + networkidle
 - ✅ 非 JS 网站(reactome/tcmsp/drugbank/disgenet)用 httpx + BeautifulSoup
 - ✅ `STEALTH_JS` 隐藏 webdriver 标识
+- ✅ httpx 每次请求及重定向、Playwright 每条路由都执行公网 HTTP(S) 校验
+- ✅ `navigate_page` 直接消费 `playwright_fetch()` 的渲染 HTML、真实导航状态码和 method
 
 ---
 
-## 13. requires_crawl 信号机制
+## 13. 页面降级机制
 
-> 位置：[backend/app/tools/crawl_signal.py](../backend/app/tools/crawl_signal.py)
+> 位置：[backend/app/tools/crawler.py](../backend/app/tools/crawler.py) 与 acquisition skill
 
-当 API 和 httpx 均失败时,skill 工具返回 `requires_crawl` 信号 JSON,LLM 收到后应调用 browser skill 的 Playwright 兜底。
+Reactome 和 PubChem 在 API 传输或解析失败后直接调用 `fetch_with_fallback(None, page_url, ...)`。Reactome 可接受非空静态 HTML；PubChem 只接受 Playwright 渲染结果，避免把 HTTP 200 空壳误报为结构化空成功。
 
-### 13.1 四个函数
-
-| 函数 | 签名 | 用途 |
-|---|---|---|
-| `requires_crawl` | `(source, reason, tried_methods, target_url) -> dict` | 生成信号 dict |
-| `requires_crawl_json` | `(source, reason, tried_methods, target_url) -> str` | 生成 JSON 字符串(直接 return from @function_tool) |
-| `check_requires_crawl` | `(result) -> bool` | 检测结果(dict 或 JSON 字符串)是否为 requires_crawl 信号 |
-| `extract_crawl_target` | `(result) -> tuple[str \| None, str \| None]` | 从信号中提取 `(target_url, source)` |
-
-### 13.2 信号 JSON 格式
+### 13.1 响应 JSON 格式
 
 ```json
 {
-  "status": "requires_crawl",
+  "status": "page_fallback",
   "source": "reactome",
-  "reason": "API and httpx both failed",
-  "tried_methods": ["api", "httpx"],
-  "target_url": "https://reactome.org/ContentService/..."
+  "method_used": "httpx",
+  "page_url": "https://reactome.org/content/query?q=apoptosis",
+  "body_text_preview": "Apoptosis ..."
 }
 ```
 
-### 13.3 LLM 兜底流程
+### 13.2 直接兜底流程
 
-1. skill 工具(如 `search_reactome`)调用 `fetch_with_fallback()`,API 和 httpx 均失败
-2. skill 工具调用 `requires_crawl_json()` 生成信号并 return
-3. LLM 收到 JSON,识别 `status: "requires_crawl"`
-4. LLM 调用 browser skill 的 `navigate_page(url=target_url)` 或 `download_from_page(url=target_url, filename=...)`
-5. browser skill 内部委托 crawler 层的 `BROWSER_HEADERS` + `_rate_limiter` 完成 Playwright 兜底
+1. skill 先调用官方 API 并解析结构化 JSON。
+2. API 失败或解析失败时，skill 调用 `fetch_with_fallback(None, page_url, accept_result=...)`。
+3. httpx 页面通过语义验收则直接返回；否则自动继续 Playwright。
+4. 返回 `page_fallback`、来源、实际方法、页面 URL 和最多 5000 字符的可见文本。
+5. 全部失败时返回 `status: "error"` 和 `attempted_methods`，不伪装空成功。
 
 ### 13.4 使用示例
 
 ```python
-from app.tools.crawler import fetch_with_fallback, CrawlError
-from app.tools.crawl_signal import requires_crawl_json
+from app.tools.crawler import CrawlError, fetch_with_fallback
 
 @function_tool
 async def search_my_source(ctx: RunContextWrapper[RunContext], term: str) -> str:
@@ -781,15 +773,25 @@ async def search_my_source(ctx: RunContextWrapper[RunContext], term: str) -> str
     api_url = f"https://api.mysource.org/search?q={term}"
     page_url = f"https://www.mysource.org/search?q={term}"
     try:
-        result = fetch_with_fallback(api_url, page_url, source_name="my_source")
-        # ... 解析 result.content ...
-        return json.dumps({"source": "my_source", "records": [...]}, ensure_ascii=False)
-    except CrawlError:
-        run_ctx.log_query(term, "my_source", "failed", 0)
-        return requires_crawl_json(
-            source="my_source",
-            reason="API and httpx both failed",
-            tried_methods=["api", "httpx"],
-            target_url=page_url,
+        result = fetch_with_fallback(
+            api_url,
+            page_url,
+            source_name="my_source",
+            accept_result=lambda item: bool(item.content.strip()),
         )
+        return json.dumps({
+            "status": "page_fallback",
+            "source": "my_source",
+            "method_used": result.method_used,
+            "page_url": page_url,
+            "body_text_preview": visible_text(result.content)[:5000],
+        }, ensure_ascii=False)
+    except CrawlError as exc:
+        run_ctx.log_query(term, "my_source", "failed", 0)
+        return json.dumps({
+            "status": "error",
+            "source": "my_source",
+            "attempted_methods": ["api", "httpx", "crawl"],
+            "error": str(exc),
+        }, ensure_ascii=False)
 ```

@@ -5,7 +5,7 @@ This skill uses the three-tier fallback chain (api > httpx > crawl):
 
     1. API first: Reactome ContentService REST API (structured JSON)
     2. httpx second: direct page fetch with browser UA
-    3. crawl fallback: return requires_crawl signal for Playwright
+    3. crawl fallback: Playwright-rendered visible page text
 
 Reactome REST API docs: https://reactome.org/ContentService
 """
@@ -18,12 +18,12 @@ from typing import Any
 from urllib.parse import quote
 
 from agents import RunContextWrapper, function_tool
+from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawl_signal import requires_crawl_json
-from app.tools.crawler import api_fetch, httpx_fetch
+from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,38 @@ _REACTOME_PAGE_BASE = "https://reactome.org/content/detail"
 
 # 匹配 Reactome 搜索结果中的高亮 span 标签
 _HIGHLIGHT_RE = re.compile(r"<[^>]+>")
+_MAX_BODY_CHARS = 5000
+
+
+def _visible_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "head", "noscript"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ", strip=True).split())
+
+
+def _accept_reactome_page(result: FetchResult) -> bool:
+    return bool(_visible_text(result.content))
+
+
+def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
+    return json.dumps({
+        "status": "page_fallback",
+        "source": source,
+        "method_used": result.method_used,
+        "page_url": page_url,
+        "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+    }, ensure_ascii=False)
+
+
+def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
+    return json.dumps({
+        "status": "error",
+        "source": source,
+        "page_url": page_url,
+        "attempted_methods": ["api", "httpx", "crawl"],
+        "error": str(error),
+    }, ensure_ascii=False)
 
 
 def _strip_html(text: str) -> str:
@@ -54,9 +86,8 @@ def search_reactome(
 ) -> str:
     """Search Reactome for biological pathways matching a keyword.
 
-    Queries the Reactome ContentService REST API (tier 1). If the API is
-    unavailable, falls back to httpx page fetch (tier 2). If both fail,
-    returns a ``requires_crawl`` signal so the agent can use Playwright.
+    Queries the Reactome ContentService REST API first. If it is unavailable
+    or cannot be parsed, returns useful static or Playwright-rendered page text.
 
     Args:
         ctx: Agent SDK run context wrapper.
@@ -65,7 +96,8 @@ def search_reactome(
 
     Returns:
         JSON string with keys: source, term, count, records.
-        On failure: JSON with status="requires_crawl".
+        On page fallback: JSON with status="page_fallback".
+        On failure: JSON with status="error" and attempted methods.
     """
     run_ctx: RunContext = ctx.context
     encoded_term = quote(term)
@@ -110,36 +142,23 @@ def search_reactome(
                 "records": records,
                 "method_used": "api",
             }, ensure_ascii=False)
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome API response: %s", exc)
 
-    # Tier 2: httpx (page fetch — limited parsing)
+    # Direct page fallback: useful static HTML is accepted before Playwright.
     page_url = f"https://reactome.org/content/query?q={encoded_term}"
-    page_result = httpx_fetch(page_url)
-    if page_result.ok:
-        # Page fetch returns HTML; we can only confirm reachability
-        run_ctx.log_query(term, "reactome", "ok", 0)
-        return json.dumps({
-            "source": "reactome",
-            "term": term,
-            "count": 0,
-            "records": [],
-            "method_used": "httpx",
-            "note": "API unavailable; page fetched but requires HTML parsing",
-            "page_url": page_url,
-        }, ensure_ascii=False)
-
-    # Tier 3: requires_crawl signal
-    run_ctx.log_query(term, "reactome", "error", 0)
-    return requires_crawl_json(
-        source="reactome",
-        reason=(
-            f"Reactome API and httpx both failed: api={result.error or result.status_code}, "
-            f"httpx={page_result.error or page_result.status_code}"
-        ),
-        tried_methods=["api", "httpx"],
-        target_url=page_url,
-    )
+    try:
+        page_result = fetch_with_fallback(
+            None,
+            page_url,
+            source_name="reactome",
+            accept_result=_accept_reactome_page,
+        )
+        run_ctx.log_query(term, "reactome", "ok", 1)
+        return _page_fallback("reactome", page_url, page_result)
+    except CrawlError as exc:
+        run_ctx.log_query(term, "reactome", "error", 0)
+        return _fallback_error("reactome", page_url, exc)
 
 
 @function_tool
@@ -159,7 +178,8 @@ def get_pathway(
     Returns:
         JSON string with pathway details: pathway_id, name, species,
         has_diagram, url, and participants count.
-        On failure: JSON with status="requires_crawl".
+        On page fallback: JSON with status="page_fallback".
+        On failure: JSON with status="error" and attempted methods.
     """
     run_ctx: RunContext = ctx.context
     # Reactome ContentService 详情端点:/data/query/{stId}(不是 /data/pathway/)
@@ -203,30 +223,23 @@ def get_pathway(
                 "record": record,
                 "method_used": "api",
             }, ensure_ascii=False)
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome pathway response: %s", exc)
 
-    # Tier 2: httpx
+    # Direct page fallback.
     page_url = f"{_REACTOME_PAGE_BASE}/{pathway_id}"
-    page_result = httpx_fetch(page_url)
-    if page_result.ok:
+    try:
+        page_result = fetch_with_fallback(
+            None,
+            page_url,
+            source_name="reactome",
+            accept_result=_accept_reactome_page,
+        )
         run_ctx.log_query(pathway_id, "reactome", "ok", 1)
-        return json.dumps({
-            "source": "reactome",
-            "pathway_id": pathway_id,
-            "method_used": "httpx",
-            "page_url": page_url,
-            "note": "API unavailable; page fetched but requires HTML parsing",
-        }, ensure_ascii=False)
-
-    # Tier 3: requires_crawl
-    run_ctx.log_query(pathway_id, "reactome", "error", 0)
-    return requires_crawl_json(
-        source="reactome",
-        reason=f"Reactome pathway API and httpx both failed for {pathway_id}",
-        tried_methods=["api", "httpx"],
-        target_url=page_url,
-    )
+        return _page_fallback("reactome", page_url, page_result)
+    except CrawlError as exc:
+        run_ctx.log_query(pathway_id, "reactome", "error", 0)
+        return _fallback_error("reactome", page_url, exc)
 
 
 reactome_skill = SkillDef(
@@ -240,8 +253,8 @@ reactome_skill = SkillDef(
     instructions=(
         "Use search_reactome to find pathways by keyword (e.g. 'apoptosis', 'BRCA'). "
         "Use get_pathway to fetch details for a specific pathway by its stable ID "
-        "(e.g. 'R-HSA-169893'). If a requires_crawl signal is returned, use the "
-        "browser skill's navigate_page tool to fetch the page with Playwright."
+        "(e.g. 'R-HSA-169893'). API failures automatically use direct page "
+        "fallback and return a bounded visible-text preview."
     ),
     tools=[search_reactome, get_pathway],
     supported_sources=["reactome"],

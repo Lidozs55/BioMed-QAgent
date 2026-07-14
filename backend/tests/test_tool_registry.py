@@ -28,6 +28,13 @@ def test_get_all_tools_has_skill_tools() -> None:
     assert "analyze_records" not in names
 
 
+def test_get_all_tools_registers_reactome_and_pubchem() -> None:
+    tools = get_all_tools()
+    names = {getattr(tool, "name", str(tool)) for tool in tools}
+    assert {"search_reactome", "get_pathway"} <= names
+    assert {"search_pubchem", "get_compound"} <= names
+
+
 def test_all_tools_have_name() -> None:
     """每个 tool 应有 name 属性（function_tool 装饰后自动生成）。"""
     tools = get_all_tools()

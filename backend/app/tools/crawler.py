@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -211,9 +212,11 @@ def playwright_fetch(
             context.add_init_script(STEALTH_JS)
             context.route("**/*", _guard_playwright_route)
             page = context.new_page()
-            page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
+            response = page.goto(
+                url, wait_until=wait_until, timeout=int(timeout * 1000)
+            )
             content = page.content()
-            status_code = page.evaluate("() => document.readyState") and 200
+            status_code = response.status if response is not None else 0
             context.close()
             browser.close()
 
@@ -305,6 +308,7 @@ def fetch_with_fallback(
     *,
     source_name: str = "unknown",
     use_crawl_fallback: bool = True,
+    accept_result: Callable[[FetchResult], bool] | None = None,
 ) -> FetchResult:
     """Three-tier fallback fetch: api > httpx > crawl.
 
@@ -313,6 +317,8 @@ def fetch_with_fallback(
         page_url: Page URL for httpx and crawl tiers.
         source_name: Source name for logging.
         use_crawl_fallback: Whether to use Playwright as the final fallback.
+        accept_result: Optional semantic acceptance predicate applied after a
+            transport-successful result. Rejected results continue fallback.
 
     Returns:
         FetchResult from the first successful tier.
@@ -327,7 +333,7 @@ def fetch_with_fallback(
         logger.info("[%s] Tier 1 (API): fetching %s", source_name, api_url)
         result = api_fetch(api_url)
         tried_methods.append("api")
-        if result.ok:
+        if result.ok and (accept_result is None or accept_result(result)):
             logger.info("[%s] API tier succeeded (%.0fms)", source_name, result.elapsed_ms)
             return result
         logger.warning("[%s] API tier failed: %s", source_name, result.error or result.status_code)
@@ -336,7 +342,7 @@ def fetch_with_fallback(
     logger.info("[%s] Tier 2 (httpx): fetching %s", source_name, page_url)
     result = httpx_fetch(page_url)
     tried_methods.append("httpx")
-    if result.ok:
+    if result.ok and (accept_result is None or accept_result(result)):
         logger.info("[%s] httpx tier succeeded (%.0fms)", source_name, result.elapsed_ms)
         return result
     logger.warning("[%s] httpx tier failed: %s", source_name, result.error or result.status_code)
@@ -347,7 +353,7 @@ def fetch_with_fallback(
         try:
             result = playwright_fetch(page_url)
             tried_methods.append("crawl")
-            if result.ok:
+            if result.ok and (accept_result is None or accept_result(result)):
                 logger.info("[%s] crawl tier succeeded (%.0fms)", source_name, result.elapsed_ms)
                 return result
             logger.warning(

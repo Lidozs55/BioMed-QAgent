@@ -15,7 +15,7 @@ from app.skills.builtin.acquisition.reactome import (
     get_pathway,
     search_reactome,
 )
-from app.tools.crawler import FetchResult
+from app.tools.crawler import CrawlError, FetchResult
 
 
 def _make_ctx(task_id: str = "test_reactome") -> ToolContext:
@@ -98,54 +98,52 @@ def test_search_reactome_api_success() -> None:
     assert rc.query_log[0]["status"] == "ok"
 
 
-def test_search_reactome_api_fail_httpx_fallback() -> None:
-    """search_reactome falls back to httpx when API fails."""
-    api_result = _api_result("", status_code=500)
+def test_search_reactome_parse_failure_accepts_useful_static_html() -> None:
+    """Reactome can use useful visible static HTML without Playwright."""
+    api_result = _api_result("[]")
     httpx_result = FetchResult(
         url="https://reactome.org",
-        content="<html>page</html>",
+        content="<html><body>Apoptosis pathway details</body></html>",
         status_code=200,
         elapsed_ms=100,
         method_used="httpx",
     )
 
     ctx = _make_ctx(task_id="test_reactome_httpx")
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.reactome.httpx_fetch", return_value=httpx_result):
+    with (
+        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
+        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
+        patch("app.tools.crawler.playwright_fetch") as crawl,
+    ):
         args = json.dumps({"term": "BRCA"})
         result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
     assert data["source"] == "reactome"
+    assert data["status"] == "page_fallback"
     assert data["method_used"] == "httpx"
-    assert data["count"] == 0
-    assert "page_url" in data
+    assert data["body_text_preview"] == "Apoptosis pathway details"
+    crawl.assert_not_called()
 
 
-def test_search_reactome_all_fail_returns_requires_crawl() -> None:
-    """search_reactome returns requires_crawl signal when all tiers fail."""
+def test_search_reactome_all_fail_returns_structured_error() -> None:
+    """Reactome reports all attempted methods when page fallback fails."""
     api_result = _api_result("", status_code=500)
-    httpx_result = FetchResult(
-        url="",
-        content="",
-        status_code=0,
-        elapsed_ms=0,
-        method_used="httpx",
-        error="403 Forbidden",
-    )
-
     ctx = _make_ctx(task_id="test_reactome_crawl")
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.reactome.httpx_fetch", return_value=httpx_result):
+    with (
+        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
+        patch(
+            "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+            side_effect=CrawlError("All fetch tiers failed. Tried: httpx, crawl"),
+        ),
+    ):
         args = json.dumps({"term": "cell cycle"})
         result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
-    assert data["status"] == "requires_crawl"
+    assert data["status"] == "error"
     assert data["source"] == "reactome"
-    assert "api" in data["tried_methods"]
-    assert "httpx" in data["tried_methods"]
-    assert "target_url" in data
+    assert data["attempted_methods"] == ["api", "httpx", "crawl"]
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
@@ -211,21 +209,29 @@ def test_get_pathway_name_as_string() -> None:
     assert data["record"]["name"] == "Hemostasis"
 
 
-def test_get_pathway_all_fail_returns_requires_crawl() -> None:
-    """get_pathway returns requires_crawl when all tiers fail."""
+def test_get_pathway_page_fallback_returns_visible_text() -> None:
+    """get_pathway strips non-visible HTML from its page fallback."""
     api_result = _api_result("", status_code=404)
-    httpx_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="httpx", error="403",
-    )
-
     ctx = _make_ctx(task_id="test_reactome_get_fail")
     ctx.tool_name = "get_pathway"
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.reactome.httpx_fetch", return_value=httpx_result):
+    fallback_result = FetchResult(
+        url="https://reactome.org/content/detail/R-HSA-999999",
+        content="<html><head><style>hidden</style></head><body>Visible pathway</body></html>",
+        status_code=200,
+        elapsed_ms=10,
+        method_used="httpx",
+    )
+    with (
+        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
+        patch(
+            "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+            return_value=fallback_result,
+        ),
+    ):
         args = json.dumps({"pathway_id": "R-HSA-999999"})
         result = asyncio.run(get_pathway.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
-    assert data["status"] == "requires_crawl"
+    assert data["status"] == "page_fallback"
     assert data["source"] == "reactome"
+    assert data["body_text_preview"] == "Visible pathway"

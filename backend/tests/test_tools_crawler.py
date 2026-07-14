@@ -181,7 +181,7 @@ def test_playwright_fetch_success() -> None:
     # Mock playwright context manager chain
     mock_page = MagicMock()
     mock_page.content.return_value = "<html>rendered</html>"
-    mock_page.evaluate.return_value = "complete"
+    mock_page.goto.return_value.status = 200
 
     mock_context = MagicMock()
     mock_context.new_page.return_value = mock_page
@@ -211,6 +211,28 @@ def test_playwright_fetch_success() -> None:
     mock_page.goto.assert_called_once()
     goto_kwargs = mock_page.goto.call_args[1]
     assert goto_kwargs["wait_until"] == "networkidle"
+
+
+def test_playwright_fetch_preserves_navigation_error_status() -> None:
+    """playwright_fetch reports the actual main-document HTTP status."""
+    mock_page = MagicMock()
+    mock_page.content.return_value = "<html>not found</html>"
+    mock_page.goto.return_value.status = 404
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_pw = MagicMock()
+    mock_pw.chromium.launch.return_value = mock_browser
+    mock_sync_pw = MagicMock()
+    mock_sync_pw.__enter__.return_value = mock_pw
+    mock_sync_pw.__exit__.return_value = False
+
+    with patch("playwright.sync_api.sync_playwright", return_value=mock_sync_pw):
+        result = playwright_fetch("https://example.com/missing")
+
+    assert result.status_code == 404
+    assert result.ok is False
 
 
 def test_playwright_fetch_failure_returns_error_result() -> None:
@@ -309,6 +331,40 @@ def test_fetch_with_fallback_crawl_fallback() -> None:
 
     assert result.method_used == "crawl"
     assert result.ok is True
+
+
+def test_fetch_with_fallback_rejects_static_success_and_uses_crawl() -> None:
+    """A semantic predicate can reject an HTTP 200 shell page."""
+    httpx_result = FetchResult(
+        url="https://example.com",
+        content="<html><div id='app'></div></html>",
+        status_code=200,
+        elapsed_ms=100,
+        method_used="httpx",
+    )
+    crawl_result = FetchResult(
+        url="https://example.com",
+        content="<html><body>Rendered biomedical record</body></html>",
+        status_code=200,
+        elapsed_ms=500,
+        method_used="crawl",
+    )
+
+    with (
+        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
+        patch("app.tools.crawler.playwright_fetch", return_value=crawl_result) as crawl,
+    ):
+        result = fetch_with_fallback(
+            api_url=None,
+            page_url="https://example.com",
+            source_name="test",
+            accept_result=lambda candidate: (
+                candidate.method_used == "crawl" and "biomedical" in candidate.content
+            ),
+        )
+
+    assert result is crawl_result
+    crawl.assert_called_once_with("https://example.com")
 
 
 def test_fetch_with_fallback_all_fail_raises() -> None:

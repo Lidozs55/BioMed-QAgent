@@ -15,7 +15,7 @@ from app.skills.builtin.acquisition.pubchem import (
     get_compound,
     search_pubchem,
 )
-from app.tools.crawler import FetchResult
+from app.tools.crawler import CrawlError, FetchResult
 
 
 def _make_ctx(task_id: str = "test_pubchem") -> ToolContext:
@@ -88,49 +88,59 @@ def test_search_pubchem_api_success() -> None:
     assert rc.query_log[0]["status"] == "ok"
 
 
-def test_search_pubchem_api_fail_httpx_fallback() -> None:
-    """search_pubchem falls back to httpx when API fails."""
-    api_result = _api_result("", status_code=500)
+def test_search_pubchem_parse_failure_rejects_shell_and_uses_playwright() -> None:
+    """PubChem shell HTML is rejected until rendered content is available."""
+    api_result = _api_result("[]")
     httpx_result = FetchResult(
         url="https://pubchem.ncbi.nlm.nih.gov",
-        content="<html>page</html>",
+        content="<html><body><div id='root'></div></body></html>",
         status_code=200,
         elapsed_ms=100,
         method_used="httpx",
     )
+    crawl_result = FetchResult(
+        url="https://pubchem.ncbi.nlm.nih.gov",
+        content="<html><body>Aspirin compound results</body></html>",
+        status_code=200,
+        elapsed_ms=200,
+        method_used="crawl",
+    )
 
     ctx = _make_ctx(task_id="test_pubchem_httpx")
-    with patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.pubchem.httpx_fetch", return_value=httpx_result):
+    with (
+        patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result),
+        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
+        patch("app.tools.crawler.playwright_fetch", return_value=crawl_result) as crawl,
+    ):
         args = json.dumps({"term": "curcumin"})
         result = asyncio.run(search_pubchem.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
-    assert data["source"] == "pubchem"
-    assert data["method_used"] == "httpx"
-    assert data["count"] == 0
+    assert data["status"] == "page_fallback"
+    assert data["method_used"] == "crawl"
+    assert "Aspirin compound results" in data["body_text_preview"]
+    crawl.assert_called_once()
 
 
-def test_search_pubchem_all_fail_returns_requires_crawl() -> None:
-    """search_pubchem returns requires_crawl signal when all tiers fail."""
+def test_search_pubchem_all_fail_returns_structured_error() -> None:
+    """All fallback failures return attempted methods instead of mock success."""
     api_result = _api_result("", status_code=500)
-    httpx_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="httpx", error="403 Forbidden",
-    )
 
     ctx = _make_ctx(task_id="test_pubchem_crawl")
-    with patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.pubchem.httpx_fetch", return_value=httpx_result):
+    with (
+        patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result),
+        patch(
+            "app.skills.builtin.acquisition.pubchem.fetch_with_fallback",
+            side_effect=CrawlError("All fetch tiers failed. Tried: httpx, crawl"),
+        ),
+    ):
         args = json.dumps({"term": "aspirin"})
         result = asyncio.run(search_pubchem.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
-    assert data["status"] == "requires_crawl"
+    assert data["status"] == "error"
     assert data["source"] == "pubchem"
-    assert "api" in data["tried_methods"]
-    assert "httpx" in data["tried_methods"]
-    assert "target_url" in data
+    assert data["attempted_methods"] == ["api", "httpx", "crawl"]
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
@@ -180,21 +190,29 @@ def test_get_compound_api_success() -> None:
     assert rc.sources[0].accession == "2244"
 
 
-def test_get_compound_all_fail_returns_requires_crawl() -> None:
-    """get_compound returns requires_crawl when all tiers fail."""
+def test_get_compound_page_fallback_is_bounded() -> None:
+    """get_compound returns no more than 5000 visible-text characters."""
     api_result = _api_result("", status_code=404)
-    httpx_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="httpx", error="403",
-    )
-
     ctx = _make_ctx(task_id="test_pubchem_get_fail")
     ctx.tool_name = "get_compound"
-    with patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result), \
-         patch("app.skills.builtin.acquisition.pubchem.httpx_fetch", return_value=httpx_result):
+    fallback_result = FetchResult(
+        url="https://pubchem.ncbi.nlm.nih.gov/compound/99999999",
+        content=f"<html><body>{'visible ' * 1200}</body></html>",
+        status_code=200,
+        elapsed_ms=10,
+        method_used="crawl",
+    )
+    with (
+        patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result),
+        patch(
+            "app.skills.builtin.acquisition.pubchem.fetch_with_fallback",
+            return_value=fallback_result,
+        ),
+    ):
         args = json.dumps({"cid": 99999999})
         result = asyncio.run(get_compound.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
-    assert data["status"] == "requires_crawl"
+    assert data["status"] == "page_fallback"
     assert data["source"] == "pubchem"
+    assert len(data["body_text_preview"]) == 5000

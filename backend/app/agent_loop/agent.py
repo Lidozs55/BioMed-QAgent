@@ -18,6 +18,7 @@ from app.skills.registry import (
     build_agent_config,
     skill_registry,
 )
+from app.tools._registry import BUILTIN_SKILL_MODULES
 from app.tools.io import list_files, read_file, write_file
 
 logger = logging.getLogger(__name__)
@@ -74,21 +75,7 @@ def get_loaded_skill_names() -> list[str]:
 
 def _import_skill_modules() -> None:
     """尝试导入技能模块，失败时记录警告但不阻塞 Agent 启动。"""
-    modules = [
-        "app.skills.builtin.discovery.pubmed",
-        "app.skills.builtin.discovery.understanding",
-        "app.skills.builtin.acquisition.geo",
-        "app.skills.builtin.acquisition.pdb",
-        "app.skills.builtin.acquisition.gdc",
-        "app.skills.builtin.acquisition.xena",
-        "app.skills.builtin.acquisition.browser",
-        "app.skills.builtin.acquisition.reactome",
-        "app.skills.builtin.acquisition.pubchem",
-        "app.skills.builtin.processing.self_evolution",
-        "app.skills.builtin.processing.extract_tables",
-        "app.skills.builtin.analysis.stats",
-    ]
-    for module_name in modules:
+    for module_name in BUILTIN_SKILL_MODULES:
         try:
             __import__(module_name)
         except ImportError as error:

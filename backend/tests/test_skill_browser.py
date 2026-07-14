@@ -33,37 +33,38 @@ def _make_ctx(task_id: str = "test_browser", tmp_path: Path | None = None) -> To
 
 
 def test_navigate_page_success() -> None:
-    """navigate_page returns title, body_text_preview, and content_type on 200."""
+    """navigate_page parses the rendered document returned by Playwright."""
     html = (
         "<html><head><title>Test Page</title></head>"
         "<body><p>Hello World</p></body></html>"
     )
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "text/html; charset=utf-8"}
-    mock_response.text = html
-    mock_response.content = html.encode("utf-8")
+    from app.tools.crawler import FetchResult
 
-    mock_client = AsyncMock()
-    mock_client.get.return_value = mock_response
-
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.return_value = mock_client
+    rendered = FetchResult(
+        url="https://example.com",
+        content=html,
+        status_code=200,
+        elapsed_ms=12,
+        method_used="crawl",
+        headers={"content-type": "text/html; charset=utf-8"},
+    )
 
     ctx = _make_ctx()
     with patch(
-        "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
-        return_value=mock_cm,
-    ):
+        "app.skills.builtin.acquisition.browser.playwright_fetch",
+        return_value=rendered,
+    ) as fetch:
         args = json.dumps({"url": "https://example.com"})
         result = asyncio.run(navigate_page.on_invoke_tool(ctx, args))
 
     data = json.loads(result)
     assert data["url"] == "https://example.com"
     assert data["status_code"] == 200
+    assert data["method_used"] == "crawl"
     assert data["title"] == "Test Page"
     assert "Hello World" in data["body_text_preview"]
     assert "text/html" in data["content_type"]
+    fetch.assert_called_once_with("https://example.com")
 
     # log_query should record success
     rc: RunContext = ctx.context
@@ -73,13 +74,10 @@ def test_navigate_page_success() -> None:
 
 def test_navigate_page_network_error_returns_error_json() -> None:
     """navigate_page returns error JSON (not raises) on network failure."""
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__.side_effect = httpx_connect_error()
-
     ctx = _make_ctx()
     with patch(
-        "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
-        return_value=mock_cm,
+        "app.skills.builtin.acquisition.browser.playwright_fetch",
+        side_effect=httpx_connect_error(),
     ):
         args = json.dumps({"url": "https://unreachable.invalid"})
         result = asyncio.run(navigate_page.on_invoke_tool(ctx, args))

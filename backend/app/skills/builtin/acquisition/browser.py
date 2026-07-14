@@ -1,4 +1,4 @@
-"""Browser fallback acquisition skill — HTTP-based page navigation and file download
+"""Browser fallback acquisition skill — rendered page navigation and file download
 for biomedical databases when API endpoints are unavailable.
 
 This skill delegates HTTP concerns (browser UA, Referer, rate limiting) to the
@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawler import BROWSER_HEADERS, _rate_limiter
+from app.tools.crawler import BROWSER_HEADERS, _rate_limiter, playwright_fetch
 from app.tools.network_safety import async_validate_public_http_request
 
 logger = logging.getLogger(__name__)
@@ -51,31 +51,25 @@ def _extract_body_text(html: str) -> str:
 
 @function_tool
 async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
-    """Navigate to a web page via HTTP and return page metadata and visible text.
+    """Navigate with Playwright and return page metadata and visible text.
 
-    Fetches the page with real browser User-Agent, Referer, and Accept headers
-    (project_memory L11), rate-limited to 2s between requests. Extracts the
+    Fetches the page through the guarded Playwright crawler with real browser
+    headers, rate-limited to 2s between requests. Extracts the
     <title> and visible body text (up to 5000 characters) using BeautifulSoup.
     Use this as a last-resort tool when API endpoints are unavailable.
     """
     run_ctx: RunContext = ctx.context
-    _rate_limiter.wait()
     try:
-        async with httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=True,
-            event_hooks={"request": [async_validate_public_http_request]},
-        ) as client:
-            resp = await client.get(url, headers=BROWSER_HEADERS)
-            status_code = resp.status_code
-            content_type = resp.headers.get("content-type", "")
+        result = playwright_fetch(url)
+        status_code = result.status_code
+        content_type = result.headers.get("content-type", "")
 
         logger.info(
             "navigate_page url=%s status=%d content_type=%s bytes=%d",
-            url, status_code, content_type, len(resp.content),
+            url, status_code, content_type, len(result.content),
         )
 
-        html = resp.text
+        html = result.content
         title = _extract_title(html)
         body_text = _extract_body_text(html)
 
@@ -83,6 +77,7 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
         return json.dumps({
             "url": url,
             "status_code": status_code,
+            "method_used": result.method_used,
             "title": title,
             "body_text_preview": body_text[:_MAX_BODY_CHARS],
             "content_type": content_type,
@@ -194,14 +189,14 @@ browser_fallback_skill = SkillDef(
     name="browser_fallback",
     category=SkillCategory.ACQUISITION,
     description=(
-        "Last-resort HTTP browser fallback for navigating pages and downloading "
+        "Last-resort rendered browser fallback for navigating pages and downloading "
         "files from biomedical databases when API tools fail. Uses real browser "
         "User-Agent, Referer, Accept headers, and 2s rate limiting. HTML parsing "
         "uses BeautifulSoup."
     ),
     instructions=(
         "Use browser_fallback tools only when API endpoints (PubMed, GEO, PDB, "
-        "etc.) are unavailable or return errors. navigate_page fetches a page and "
+        "etc.) are unavailable or return errors. navigate_page renders a page and "
         "extracts title and body text. download_from_page downloads files directly "
         "via HTTP streaming to the task raw directory. "
         "All downloads are tracked in provenance."

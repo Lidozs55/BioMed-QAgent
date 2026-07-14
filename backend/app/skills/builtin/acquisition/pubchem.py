@@ -5,7 +5,7 @@ This skill uses the three-tier fallback chain (api > httpx > crawl):
 
     1. API first: PUG-REST API (structured JSON/CSV)
     2. httpx second: direct page fetch with browser UA
-    3. crawl fallback: return requires_crawl signal for Playwright
+    3. crawl fallback: Playwright-rendered visible page text
 
 PUG-REST API docs: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
 """
@@ -17,17 +17,49 @@ from typing import Any
 from urllib.parse import quote
 
 from agents import RunContextWrapper, function_tool
+from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawl_signal import requires_crawl_json
-from app.tools.crawler import api_fetch, httpx_fetch
+from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
 
 _PUGREST_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 _PUBCHEM_PAGE_BASE = "https://pubchem.ncbi.nlm.nih.gov/compound"
+_MAX_BODY_CHARS = 5000
+
+
+def _visible_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "head", "noscript"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ", strip=True).split())
+
+
+def _accept_pubchem_page(result: FetchResult) -> bool:
+    return result.method_used == "crawl" and bool(_visible_text(result.content))
+
+
+def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
+    return json.dumps({
+        "status": "page_fallback",
+        "source": source,
+        "method_used": result.method_used,
+        "page_url": page_url,
+        "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+    }, ensure_ascii=False)
+
+
+def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
+    return json.dumps({
+        "status": "error",
+        "source": source,
+        "page_url": page_url,
+        "attempted_methods": ["api", "httpx", "crawl"],
+        "error": str(error),
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -38,9 +70,8 @@ def search_pubchem(
 ) -> str:
     """Search PubChem for chemical compounds matching a name or keyword.
 
-    Queries the PUG-REST API (tier 1). If the API is unavailable, falls back
-    to httpx page fetch (tier 2). If both fail, returns a ``requires_crawl``
-    signal so the agent can use Playwright.
+    Queries the PUG-REST API first. If the API is unavailable or cannot be
+    parsed, rejects the static shell and uses Playwright-rendered page text.
 
     Args:
         ctx: Agent SDK run context wrapper.
@@ -49,7 +80,8 @@ def search_pubchem(
 
     Returns:
         JSON string with keys: source, term, count, records.
-        On failure: JSON with status="requires_crawl".
+        On page fallback: JSON with status="page_fallback".
+        On failure: JSON with status="error" and attempted methods.
     """
     run_ctx: RunContext = ctx.context
     encoded_term = quote(term)
@@ -86,35 +118,23 @@ def search_pubchem(
                 "records": records,
                 "method_used": "api",
             }, ensure_ascii=False)
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem API response: %s", exc)
 
-    # Tier 2: httpx
+    # Direct page fallback: PubChem requires rendered browser content.
     page_url = f"https://pubchem.ncbi.nlm.nih.gov/#query={encoded_term}"
-    page_result = httpx_fetch(page_url)
-    if page_result.ok:
-        run_ctx.log_query(term, "pubchem", "ok", 0)
-        return json.dumps({
-            "source": "pubchem",
-            "term": term,
-            "count": 0,
-            "records": [],
-            "method_used": "httpx",
-            "note": "API unavailable; page fetched but requires JS rendering",
-            "page_url": page_url,
-        }, ensure_ascii=False)
-
-    # Tier 3: requires_crawl (PubChem is JS-heavy, often needs Playwright)
-    run_ctx.log_query(term, "pubchem", "error", 0)
-    return requires_crawl_json(
-        source="pubchem",
-        reason=(
-            f"PubChem API and httpx both failed: api={result.error or result.status_code}, "
-            f"httpx={page_result.error or page_result.status_code}"
-        ),
-        tried_methods=["api", "httpx"],
-        target_url=page_url,
-    )
+    try:
+        page_result = fetch_with_fallback(
+            None,
+            page_url,
+            source_name="pubchem",
+            accept_result=_accept_pubchem_page,
+        )
+        run_ctx.log_query(term, "pubchem", "ok", 1)
+        return _page_fallback("pubchem", page_url, page_result)
+    except CrawlError as exc:
+        run_ctx.log_query(term, "pubchem", "error", 0)
+        return _fallback_error("pubchem", page_url, exc)
 
 
 @function_tool
@@ -133,7 +153,8 @@ def get_compound(
 
     Returns:
         JSON string with compound details.
-        On failure: JSON with status="requires_crawl".
+        On page fallback: JSON with status="page_fallback".
+        On failure: JSON with status="error" and attempted methods.
     """
     run_ctx: RunContext = ctx.context
     api_url = (
@@ -177,30 +198,23 @@ def get_compound(
                     "record": record,
                     "method_used": "api",
                 }, ensure_ascii=False)
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem compound response: %s", exc)
 
-    # Tier 2: httpx
+    # Direct rendered page fallback.
     page_url = f"{_PUBCHEM_PAGE_BASE}/{cid}"
-    page_result = httpx_fetch(page_url)
-    if page_result.ok:
+    try:
+        page_result = fetch_with_fallback(
+            None,
+            page_url,
+            source_name="pubchem",
+            accept_result=_accept_pubchem_page,
+        )
         run_ctx.log_query(str(cid), "pubchem", "ok", 1)
-        return json.dumps({
-            "source": "pubchem",
-            "cid": cid,
-            "method_used": "httpx",
-            "page_url": page_url,
-            "note": "API unavailable; page fetched but requires JS rendering",
-        }, ensure_ascii=False)
-
-    # Tier 3: requires_crawl
-    run_ctx.log_query(str(cid), "pubchem", "error", 0)
-    return requires_crawl_json(
-        source="pubchem",
-        reason=f"PubChem compound API and httpx both failed for CID {cid}",
-        tried_methods=["api", "httpx"],
-        target_url=page_url,
-    )
+        return _page_fallback("pubchem", page_url, page_result)
+    except CrawlError as exc:
+        run_ctx.log_query(str(cid), "pubchem", "error", 0)
+        return _fallback_error("pubchem", page_url, exc)
 
 
 pubchem_skill = SkillDef(
@@ -214,8 +228,8 @@ pubchem_skill = SkillDef(
     instructions=(
         "Use search_pubchem to find compounds by name (e.g. 'aspirin', 'curcumin'). "
         "Use get_compound to fetch details for a specific compound by CID "
-        "(e.g. 2244 for aspirin). If a requires_crawl signal is returned, "
-        "use the browser skill's navigate_page tool to fetch the page with Playwright."
+        "(e.g. 2244 for aspirin). API failures automatically use a rendered "
+        "page fallback and return a bounded visible-text preview."
     ),
     tools=[search_pubchem, get_compound],
     supported_sources=["pubchem"],
