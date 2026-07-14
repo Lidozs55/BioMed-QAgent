@@ -19,6 +19,7 @@ from app.domain.contracts import (
     ConversationCompactedPayload,
     RunCancelRequestedPayload,
     RunCancelledPayload,
+    RunCompletedPayload,
     RunFinalizingPayload,
     RunInterruptedPayload,
     RunQueuedPayload,
@@ -128,6 +129,132 @@ async def test_manager_deletes_each_terminal_task_status(tmp_path, status) -> No
         assert not (repository.tasks_dir / task_id).exists()
         assert await repository.find_request(f"req_{task_id}") is None
     finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_manager_delete_drains_snapshot_projection_before_unlocking(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_cancelled_manager_delete"
+    stale_snapshot = snapshot_with_status(task_id, RunStatus.FINALIZING)
+    await repository.save_snapshot(stale_snapshot)
+    await asyncio.to_thread(
+        repository.events.append,
+        build_event(
+            task_id=task_id,
+            run_id=f"run_{task_id}",
+            sequence=1,
+            timestamp=NOW + timedelta(seconds=1),
+            payload=RunCompletedPayload(),
+        ),
+    )
+    snapshot_path = repository.tasks_dir / task_id / "state" / "task_snapshot.json"
+    task_dir = repository.tasks_dir / task_id
+    projection_write_entered = asyncio.Event()
+    projection_write_finished = asyncio.Event()
+    release_projection_write = threading.Event()
+    first_load_lock = threading.Lock()
+    load_context = threading.local()
+    loop = asyncio.get_running_loop()
+    real_load_snapshot = repository._load_snapshot_sync
+    real_atomic_write_json = repository_module.atomic_write_json
+    first_load_selected = False
+    deletion = None
+    retry = None
+
+    def blocked_load_snapshot(loaded_task_id: str):
+        nonlocal first_load_selected
+        block_projection_write = False
+        with first_load_lock:
+            if loaded_task_id == task_id and not first_load_selected:
+                first_load_selected = True
+                block_projection_write = True
+        load_context.block_projection_write = block_projection_write
+        try:
+            return real_load_snapshot(loaded_task_id)
+        finally:
+            load_context.block_projection_write = False
+
+    def blocked_atomic_write_json(path, value) -> None:
+        if path == snapshot_path and getattr(
+            load_context,
+            "block_projection_write",
+            False,
+        ):
+            loop.call_soon_threadsafe(projection_write_entered.set)
+            if not release_projection_write.wait(timeout=5):
+                raise TimeoutError("snapshot projection release timed out")
+            try:
+                real_atomic_write_json(path, value)
+            finally:
+                loop.call_soon_threadsafe(projection_write_finished.set)
+            return
+        real_atomic_write_json(path, value)
+
+    monkeypatch.setattr(repository, "_load_snapshot_sync", blocked_load_snapshot)
+    monkeypatch.setattr(
+        repository_module,
+        "atomic_write_json",
+        blocked_atomic_write_json,
+    )
+
+    deletion = asyncio.create_task(manager.delete_task(task_id))
+    cancellation_barrier = asyncio.Event()
+    try:
+        await asyncio.wait_for(projection_write_entered.wait(), timeout=1)
+        deletion.cancel()
+        loop.call_soon(cancellation_barrier.set)
+        await asyncio.wait_for(cancellation_barrier.wait(), timeout=1)
+        cancellation_propagated_early = deletion.done()
+
+        retry = asyncio.create_task(manager.delete_task(task_id))
+        if cancellation_propagated_early:
+            with pytest.raises(asyncio.CancelledError):
+                await deletion
+            await asyncio.wait_for(retry, timeout=1)
+            assert not task_dir.exists()
+        else:
+            assert manager._admission_lock.locked()
+            assert manager._task_locks[task_id].locked()
+            assert repository._task_locks[task_id].locked()
+            repeated_cancellation_barrier = asyncio.Event()
+            deletion.cancel()
+            loop.call_soon(repeated_cancellation_barrier.set)
+            await asyncio.wait_for(repeated_cancellation_barrier.wait(), timeout=1)
+            assert not deletion.done()
+
+        release_projection_write.set()
+        await asyncio.wait_for(projection_write_finished.wait(), timeout=1)
+        deletion_result, retry_result = await asyncio.gather(
+            deletion,
+            retry,
+            return_exceptions=True,
+        )
+
+        assert not task_dir.exists(), (
+            "cancelled deletion released manager locks before its snapshot "
+            "projection drained"
+        )
+        assert not snapshot_path.exists()
+        assert not cancellation_propagated_early
+        assert isinstance(deletion_result, asyncio.CancelledError)
+        assert isinstance(retry_result, LookupError)
+    finally:
+        release_projection_write.set()
+        if deletion is not None:
+            await asyncio.gather(deletion, return_exceptions=True)
+        if retry is not None:
+            await asyncio.gather(retry, return_exceptions=True)
         await manager.close()
 
 

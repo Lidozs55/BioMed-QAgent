@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
@@ -42,6 +42,8 @@ from app.runtime.repository import TaskRepository
 
 
 logger = logging.getLogger(__name__)
+
+_ResultT = TypeVar("_ResultT")
 
 _TERMINAL_RUN_STATUSES = {
     RunStatus.COMPLETED,
@@ -413,7 +415,7 @@ class TaskManager:
                     task_id=task_id,
                     run_id=generate_run_id(),
                 )
-                return await self._shield_and_drain_admission_locked(
+                return await self._shield_and_drain_locked(
                     self._admit_run_locked(
                         snapshot,
                         accepted,
@@ -451,7 +453,7 @@ class TaskManager:
                     updated_at=created_at,
                 )
             )
-            return await self._shield_and_drain_admission_locked(
+            return await self._shield_and_drain_locked(
                 self._create_and_admit_locked(
                     snapshot,
                     accepted,
@@ -469,38 +471,38 @@ class TaskManager:
                 raise RuntimeError("task manager is not running")
             lock = self._task_locks.setdefault(task_id, asyncio.Lock())
             async with lock:
-                snapshot = await self.repository.get_snapshot(task_id)
-                if snapshot is None:
-                    raise LookupError(task_id)
-                if (
-                    snapshot.task.status not in _TERMINAL_RUN_STATUSES
-                    or snapshot.task.active_run_id is not None
-                    or any(
-                        run.status not in _TERMINAL_RUN_STATUSES
-                        for run in snapshot.runs
-                    )
-                ):
-                    raise TaskDeletionConflictError(task_id)
-                await self.repository.delete_task(task_id)
+                await self._shield_and_drain_locked(self._delete_task_locked(task_id))
 
-    async def _shield_and_drain_admission_locked(
+    async def _shield_and_drain_locked(
         self,
-        admission: Awaitable[TaskRunAccepted],
-    ) -> TaskRunAccepted:
-        admission_task = asyncio.create_task(admission)
+        operation: Awaitable[_ResultT],
+    ) -> _ResultT:
+        operation_task = asyncio.create_task(operation)
         try:
-            return await asyncio.shield(admission_task)
+            return await asyncio.shield(operation_task)
         except asyncio.CancelledError:
-            while not admission_task.done():
+            while not operation_task.done():
                 try:
-                    await asyncio.shield(admission_task)
+                    await asyncio.shield(operation_task)
                 except asyncio.CancelledError:
                     continue
                 except BaseException:
                     break
-            if not admission_task.cancelled():
-                admission_task.exception()
+            if not operation_task.cancelled():
+                operation_task.exception()
             raise
+
+    async def _delete_task_locked(self, task_id: str) -> None:
+        snapshot = await self.repository.get_snapshot(task_id)
+        if snapshot is None:
+            raise LookupError(task_id)
+        if (
+            snapshot.task.status not in _TERMINAL_RUN_STATUSES
+            or snapshot.task.active_run_id is not None
+            or any(run.status not in _TERMINAL_RUN_STATUSES for run in snapshot.runs)
+        ):
+            raise TaskDeletionConflictError(task_id)
+        await self.repository.delete_task(task_id)
 
     async def _create_and_admit_locked(
         self,
