@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -47,6 +48,51 @@ def queued_event(task_id: str = "task_123"):
         timestamp=NOW + timedelta(seconds=1),
         payload=RunQueuedPayload(request_id="req_123", input="question"),
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_append_waits_for_index_projection_before_unlocking(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    await repository.save_snapshot(empty_snapshot())
+    index_entered = asyncio.Event()
+    release_index = asyncio.Event()
+    real_upsert = repository.index.upsert_snapshot
+
+    async def blocked_upsert(snapshot) -> None:
+        index_entered.set()
+        await release_index.wait()
+        await real_upsert(snapshot)
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", blocked_upsert)
+    append = asyncio.create_task(repository.append_event(queued_event()))
+    try:
+        await asyncio.wait_for(index_entered.wait(), timeout=1)
+        append.cancel()
+        await asyncio.sleep(0)
+
+        lock_probe = asyncio.create_task(repository._task_locks["task_123"].acquire())
+        await asyncio.sleep(0.05)
+        assert not append.done()
+        assert not lock_probe.done()
+
+        release_index.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(append, timeout=1)
+        await asyncio.wait_for(lock_probe, timeout=1)
+        repository._task_locks["task_123"].release()
+
+        page = await repository.list_tasks()
+        summary = next(task for task in page.tasks if task.task_id == "task_123")
+        assert summary.latest_sequence == 1
+        assert summary.status is RunStatus.QUEUED
+    finally:
+        release_index.set()
+        await asyncio.gather(append, return_exceptions=True)
+        await repository.close()
 
 
 def snapshot_with_run(

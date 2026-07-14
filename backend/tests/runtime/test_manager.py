@@ -792,6 +792,39 @@ async def test_manager_publishes_durable_lifecycle_events_in_order(tmp_path) -> 
 
 
 @pytest.mark.asyncio
+async def test_event_reconciliation_requires_exact_envelope_identity() -> None:
+    expected = build_event(
+        task_id="task_exact_event",
+        run_id="run_exact_event",
+        sequence=1,
+        timestamp=NOW,
+        payload=AssistantDeltaPayload(delta="same payload"),
+    )
+    persisted = build_event(
+        task_id="task_exact_event",
+        run_id="run_exact_event",
+        sequence=1,
+        timestamp=NOW,
+        payload=AssistantDeltaPayload(delta="same payload"),
+    )
+    assert persisted.event_id != expected.event_id
+
+    class Repository:
+        async def list_events(self, *args, **kwargs):
+            return [persisted]
+
+    async def run(execution) -> None:
+        return None
+
+    manager = importlib.import_module("app.runtime.manager").TaskManager(
+        Repository(),
+        run_executor=run,
+    )
+
+    assert await manager._event_is_durable(expected) is False
+
+
+@pytest.mark.asyncio
 async def test_duplicate_request_returns_authoritative_active_run(tmp_path) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
@@ -1596,8 +1629,7 @@ async def test_compaction_snapshot_failure_keeps_journal_marker_on_restart(
             fail_compaction_projection,
         )
 
-        with pytest.raises(OSError, match="snapshot projection failed"):
-            await execution_seen.commit_compaction(record, payload)
+        assert await execution_seen.commit_compaction(record, payload) is True
 
         assert json.loads(summary_path.read_text("utf-8")) == record
         durable_events = await repository.list_events(task_id)

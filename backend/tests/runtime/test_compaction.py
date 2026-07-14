@@ -9,17 +9,20 @@ from types import SimpleNamespace
 import pytest
 
 import app.runtime.compaction as compaction_module
+from app.agent_loop.context import RunContext
 from app.agent_loop.model import LazyDashScopeModel
 
 from app.domain.contracts import (
     ConversationCompactedPayload,
     RunRecord,
     RunStatus,
+    TaskRunAccepted,
     TaskMode,
     TaskSnapshot,
     TaskSummary,
     WarningPayload,
 )
+from app.runtime.manager import TaskManager
 from app.runtime.compaction import (
     COMPACTION_FAILURE_RUNS,
     COMPACTION_CHARACTER_THRESHOLD,
@@ -757,3 +760,111 @@ async def test_compaction_delegates_marker_and_event_to_commit_callback() -> Non
     record, payload = committed[0]
     assert record["covered_through_run_id"] == "run_1"
     assert isinstance(payload, ConversationCompactedPayload)
+
+
+@pytest.mark.asyncio
+async def test_prepare_succeeds_when_exact_event_survives_projection_failure() -> None:
+    task_id = "task_projection_reconciled"
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        def __init__(self) -> None:
+            self.session = Session()
+            self.marker: dict = {}
+            self.events: list[object] = []
+            self.append_calls = 0
+
+        def task_session(self, requested_task_id: str):
+            assert requested_task_id == task_id
+            return self.session
+
+        async def get_snapshot(self, requested_task_id: str):
+            assert requested_task_id == task_id
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, requested_task_id: str):
+            assert requested_task_id == task_id
+            return dict(self.marker)
+
+        async def save_conversation_summary(
+            self,
+            requested_task_id: str,
+            summary,
+        ) -> None:
+            assert requested_task_id == task_id
+            self.marker = dict(summary)
+
+        async def append_event(self, event) -> None:
+            self.append_calls += 1
+            self.events.append(event)
+            raise RuntimeError("snapshot/index projection failed")
+
+        async def list_events(
+            self,
+            requested_task_id: str,
+            *,
+            after_sequence: int = 0,
+            limit: int | None = None,
+        ):
+            assert requested_task_id == task_id
+            selected = [
+                event for event in self.events if event.sequence > after_sequence
+            ]
+            return selected if limit is None else selected[:limit]
+
+    async def run(execution) -> None:
+        return None
+
+    repository = Repository()
+    manager = TaskManager(repository, run_executor=run)
+    accepted = TaskRunAccepted(
+        request_id="req_projection_reconciled",
+        task_id=task_id,
+        run_id="run_projection_reconciled",
+    )
+    context = RunContext(task_id=task_id)
+    emitted: list[object] = []
+
+    async def summarize(**kwargs):
+        return "projection-safe summary"
+
+    async def emit(payload) -> None:
+        emitted.append(payload)
+
+    preparation = await ConversationCompactor(
+        repository,
+        summarize=summarize,
+    ).prepare(
+        task_id,
+        model_handle=object(),
+        emit=emit,
+        cancellation_requested=context.cancellation_requested,
+        commit=lambda record, payload: manager._commit_compaction(
+            accepted,
+            context,
+            record,
+            payload,
+        ),
+    )
+
+    assert preparation.compacted is True
+    assert preparation.fallback is False
+    assert emitted == []
+    assert repository.marker["summary"] == "projection-safe summary"
+    assert repository.append_calls == 1
+    assert len(repository.events) == 1
+    assert isinstance(repository.events[0].payload, ConversationCompactedPayload)
+    effective = await preparation.session.get_items()
+    assert effective[0]["role"] == "system"
+    assert "projection-safe summary" in effective[0]["content"]

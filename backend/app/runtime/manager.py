@@ -716,7 +716,7 @@ class TaskManager:
             try:
                 event = await self._build_status_event(accepted, payload)
                 await self.repository.append_event(event)
-            except BaseException:
+            except BaseException as error:
                 event_durable = event is not None and await self._event_is_durable(
                     event
                 )
@@ -725,6 +725,16 @@ class TaskManager:
                         accepted.task_id,
                         previous,
                     )
+                    raise
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                if isinstance(error, Exception):
+                    logger.exception(
+                        "durable compaction event projection failed for task %s run %s",
+                        accepted.task_id,
+                        accepted.run_id,
+                    )
+                    return True
                 raise
             assert event is not None
             try:
@@ -760,13 +770,7 @@ class TaskManager:
             after_sequence=expected.sequence - 1,
             limit=1,
         )
-        return any(
-            event.task_id == expected.task_id
-            and event.run_id == expected.run_id
-            and event.sequence == expected.sequence
-            and event.payload == expected.payload
-            for event in events
-        )
+        return any(event == expected for event in events)
 
     async def _persist_status(
         self,

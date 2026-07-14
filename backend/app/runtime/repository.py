@@ -117,11 +117,15 @@ class TaskRepository:
     async def append_event(self, event: EventEnvelope) -> TaskSnapshot:
         lock = self._task_locks.setdefault(event.task_id, asyncio.Lock())
         async with lock:
-            append_task = asyncio.create_task(
-                asyncio.to_thread(self._append_event_sync, event)
-            )
+
+            async def append_and_index() -> TaskSnapshot:
+                snapshot = await asyncio.to_thread(self._append_event_sync, event)
+                await self.index.upsert_snapshot(snapshot)
+                return snapshot
+
+            append_task = asyncio.create_task(append_and_index())
             try:
-                snapshot = await asyncio.shield(append_task)
+                return await asyncio.shield(append_task)
             except asyncio.CancelledError:
                 while not append_task.done():
                     try:
@@ -133,8 +137,6 @@ class TaskRepository:
                 if not append_task.cancelled():
                     append_task.exception()
                 raise
-            await self.index.upsert_snapshot(snapshot)
-            return snapshot
 
     async def list_events(
         self,
