@@ -1499,6 +1499,97 @@ async def test_cancellation_during_compaction_commit_restores_previous_marker(
 
 
 @pytest.mark.asyncio
+async def test_direct_commit_cancellation_during_marker_write_restores_previous_marker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    execution_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    write_entered = threading.Event()
+    release_write = threading.Event()
+    write_finished = threading.Event()
+    execution_seen = None
+    commit = None
+
+    async def run(execution) -> None:
+        nonlocal execution_seen
+        execution_seen = execution
+        execution_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_compaction_direct_cancel"
+    previous = {"marker": "previous"}
+    record = {
+        "schema_version": "1.0",
+        "summary": "new summary",
+        "summary_digest": "ab" * 32,
+        "covered_through_run_id": "run_old",
+        "covered_run_ids": ["run_old"],
+        "covered_history_digest": "cd" * 32,
+    }
+    payload = ConversationCompactedPayload(
+        covered_through_run_id="run_old",
+        summary_digest="ab" * 32,
+    )
+    try:
+        await repository.save_snapshot(empty_snapshot(task_id))
+        await repository.save_conversation_summary(task_id, previous)
+        real_atomic_write = repository_module.atomic_write_json
+
+        def block_new_marker_write(path, value) -> None:
+            if path.name == "conversation_summary.json" and dict(value) == record:
+                write_entered.set()
+                if not release_write.wait(timeout=3):
+                    raise TimeoutError("summary write release timed out")
+                real_atomic_write(path, value)
+                write_finished.set()
+                return
+            real_atomic_write(path, value)
+
+        monkeypatch.setattr(
+            repository_module,
+            "atomic_write_json",
+            block_new_marker_write,
+        )
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_compaction_direct_cancel",
+                input="compact",
+            ),
+        )
+        await asyncio.wait_for(execution_ready.wait(), timeout=1)
+        assert execution_seen is not None
+
+        commit = asyncio.create_task(execution_seen.commit_compaction(record, payload))
+        await asyncio.wait_for(asyncio.to_thread(write_entered.wait), timeout=1)
+        commit.cancel()
+        await asyncio.sleep(0)
+        release_write.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(commit, timeout=1)
+        await asyncio.wait_for(asyncio.to_thread(write_finished.wait), timeout=1)
+
+        assert await repository.load_conversation_summary(task_id) == previous
+        events = await repository.list_events(task_id)
+        assert not any(
+            isinstance(event.payload, ConversationCompactedPayload) for event in events
+        )
+
+    finally:
+        release_write.set()
+        release_executor.set()
+        if commit is not None:
+            await asyncio.gather(commit, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_compaction_append_failure_restores_previous_marker(
     tmp_path,
     monkeypatch,

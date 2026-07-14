@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -92,6 +93,74 @@ async def test_cancelled_append_waits_for_index_projection_before_unlocking(
     finally:
         release_index.set()
         await asyncio.gather(append, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_summary_save_waits_for_atomic_write_before_unlocking(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    await repository.save_snapshot(empty_snapshot())
+    await repository.save_conversation_summary("task_123", {"summary": "first"})
+    write_entered = threading.Event()
+    release_write = threading.Event()
+    write_finished = threading.Event()
+    real_atomic_write = repository_module.atomic_write_json
+    lock_probe = None
+
+    def block_summary_write(path, value) -> None:
+        if (
+            path.name == "conversation_summary.json"
+            and dict(value).get("summary") == "second"
+        ):
+            write_entered.set()
+            if not release_write.wait(timeout=3):
+                raise TimeoutError("summary write release timed out")
+            real_atomic_write(path, value)
+            write_finished.set()
+            return
+        real_atomic_write(path, value)
+
+    monkeypatch.setattr(repository_module, "atomic_write_json", block_summary_write)
+    save = asyncio.create_task(
+        repository.save_conversation_summary("task_123", {"summary": "second"})
+    )
+    try:
+        await asyncio.wait_for(asyncio.to_thread(write_entered.wait), timeout=1)
+        save.cancel()
+        await asyncio.sleep(0)
+
+        lock = repository._task_locks["task_123"]
+        lock_probe = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0.05)
+
+        assert not save.done()
+        assert not lock_probe.done()
+
+        release_write.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(save, timeout=1)
+        await asyncio.wait_for(lock_probe, timeout=1)
+        lock.release()
+
+        assert write_finished.is_set()
+        assert await repository.load_conversation_summary("task_123") == {
+            "summary": "second"
+        }
+    finally:
+        release_write.set()
+        await asyncio.gather(save, return_exceptions=True)
+        if lock_probe is not None and lock_probe.done():
+            if not lock_probe.cancelled() and lock_probe.exception() is None:
+                lock = repository._task_locks["task_123"]
+                if lock.locked():
+                    lock.release()
+        elif lock_probe is not None:
+            lock_probe.cancel()
+            await asyncio.gather(lock_probe, return_exceptions=True)
         await repository.close()
 
 

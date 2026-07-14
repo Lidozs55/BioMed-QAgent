@@ -705,7 +705,17 @@ class TaskManager:
             previous = await self.repository.load_conversation_summary(accepted.task_id)
             if context.cancellation_requested.is_set():
                 return False
-            await self.repository.save_conversation_summary(accepted.task_id, record)
+            try:
+                await self.repository.save_conversation_summary(
+                    accepted.task_id,
+                    record,
+                )
+            except asyncio.CancelledError:
+                await self.repository.save_conversation_summary(
+                    accepted.task_id,
+                    previous,
+                )
+                raise
             if context.cancellation_requested.is_set():
                 await self.repository.save_conversation_summary(
                     accepted.task_id,

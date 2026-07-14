@@ -221,7 +221,22 @@ class TaskRepository:
             if await asyncio.to_thread(self._load_snapshot_sync, task_id) is None:
                 raise TaskNotFoundError(task_id)
             path = self._state_dir(task_id) / "conversation_summary.json"
-            await asyncio.to_thread(atomic_write_json, path, summary)
+            write_task = asyncio.create_task(
+                asyncio.to_thread(atomic_write_json, path, summary)
+            )
+            try:
+                await asyncio.shield(write_task)
+            except asyncio.CancelledError:
+                while not write_task.done():
+                    try:
+                        await asyncio.shield(write_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if not write_task.cancelled():
+                    write_task.exception()
+                raise
 
     async def load_conversation_summary(self, task_id: str) -> dict[str, Any]:
         if await asyncio.to_thread(self._load_snapshot_sync, task_id) is None:
