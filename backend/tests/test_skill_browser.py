@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -122,6 +123,32 @@ def test_navigate_page_failed_fetch_result_returns_error_json() -> None:
         "error": "browser launch failed",
     }
     assert ctx.context.query_log[0]["status"] == "failed"
+
+
+def test_navigate_page_keeps_event_loop_responsive() -> None:
+    from app.tools.crawler import FetchResult
+
+    loop_progressed = threading.Event()
+
+    def blocking_fetch(url: str) -> FetchResult:
+        assert loop_progressed.wait(timeout=0.5)
+        return FetchResult(url, "<html></html>", 200, 1, "crawl")
+
+    async def exercise() -> None:
+        ctx = _make_ctx()
+        task = asyncio.create_task(navigate_page.on_invoke_tool(
+            ctx, json.dumps({"url": "https://example.com"})
+        ))
+        await asyncio.sleep(0)
+        loop_progressed.set()
+        result = await task
+        assert "error" not in json.loads(result)
+
+    with patch(
+        "app.skills.builtin.acquisition.browser.playwright_fetch",
+        side_effect=blocking_fetch,
+    ):
+        asyncio.run(exercise())
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +322,66 @@ def test_download_does_not_overwrite_existing_asset(tmp_path: Path) -> None:
     assert "error" in json.loads(result)
     assert existing.read_bytes() == b"original"
     mock_client.stream.assert_not_called()
+
+
+def test_download_publication_is_atomic_and_no_clobber(tmp_path: Path) -> None:
+    from app.skills.builtin.acquisition import browser
+
+    temp = tmp_path / "complete.part"
+    destination = tmp_path / "asset.bin"
+    temp.write_bytes(b"complete download")
+    destination.write_bytes(b"competing writer")
+
+    try:
+        browser._publish_no_clobber(temp, destination)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("publication must reject an existing destination")
+
+    assert destination.read_bytes() == b"competing writer"
+    assert not temp.exists()
+
+
+def test_download_rate_limit_keeps_event_loop_responsive(tmp_path: Path) -> None:
+    loop_progressed = threading.Event()
+    wait_observed_progress = False
+
+    def blocking_wait() -> None:
+        nonlocal wait_observed_progress
+        wait_observed_progress = loop_progressed.wait(timeout=0.5)
+
+    mock_resp = AsyncMock(status_code=404, headers={"content-type": "text/html"})
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__.return_value = mock_resp
+    mock_client = MagicMock()
+    mock_client.stream.return_value = mock_stream_cm
+    mock_client_cm = AsyncMock()
+    mock_client_cm.__aenter__.return_value = mock_client
+
+    async def exercise() -> None:
+        ctx = _make_ctx(task_id="responsive_download", tmp_path=tmp_path)
+        task = asyncio.create_task(download_from_page.on_invoke_tool(
+            ctx,
+            json.dumps({"url": "https://example.com/data", "filename": "data.bin"}),
+        ))
+        await asyncio.sleep(0)
+        loop_progressed.set()
+        await task
+
+    with (
+        patch(
+            "app.skills.builtin.acquisition.browser._rate_limiter.wait",
+            side_effect=blocking_wait,
+        ),
+        patch(
+            "app.skills.builtin.acquisition.browser.httpx.AsyncClient",
+            return_value=mock_client_cm,
+        ),
+    ):
+        asyncio.run(exercise())
+
+    assert wait_observed_progress
 
 
 # ---------------------------------------------------------------------------

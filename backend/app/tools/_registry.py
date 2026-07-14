@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
+import logging
 
 from app.skills.registry import build_agent_config, skill_registry
 from app.tools.io import list_files, read_file, write_file
+
+logger = logging.getLogger(__name__)
 
 BUILTIN_SKILL_MODULES = (
     "app.skills.builtin.discovery.pubmed",
@@ -27,10 +29,14 @@ BUILTIN_SKILL_MODULES = (
 
 
 def _import_skill_modules() -> None:
-    """尝试导入技能模块，失败时不阻塞。"""
+    """Import built-ins, tolerating only an absent optional target module."""
     for module_name in BUILTIN_SKILL_MODULES:
-        with suppress(ImportError):
+        try:
             __import__(module_name)
+        except ModuleNotFoundError as error:
+            if error.name != module_name:
+                raise
+            logger.warning("optional skill module %s is unavailable", module_name)
 
 
 def get_all_tools() -> list:

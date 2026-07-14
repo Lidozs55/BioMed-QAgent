@@ -235,6 +235,26 @@ def test_playwright_fetch_preserves_navigation_error_status() -> None:
     assert result.ok is False
 
 
+def test_playwright_fetch_preserves_main_document_headers() -> None:
+    mock_response = MagicMock(status=200, headers={"content-type": "text/html"})
+    mock_page = MagicMock()
+    mock_page.content.return_value = "<html>rendered</html>"
+    mock_page.goto.return_value = mock_response
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    mock_pw = MagicMock()
+    mock_pw.chromium.launch.return_value = mock_browser
+    mock_sync_pw = MagicMock()
+    mock_sync_pw.__enter__.return_value = mock_pw
+
+    with patch("playwright.sync_api.sync_playwright", return_value=mock_sync_pw):
+        result = playwright_fetch("https://example.com/rendered")
+
+    assert result.headers == {"content-type": "text/html"}
+
+
 def test_playwright_fetch_failure_returns_error_result() -> None:
     """playwright_fetch returns error FetchResult on exception."""
     with patch("playwright.sync_api.sync_playwright") as mock_pw_fn:

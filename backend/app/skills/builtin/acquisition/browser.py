@@ -7,8 +7,11 @@ behavior across all acquisition skills (project_memory L11).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,6 +27,14 @@ from app.tools.network_safety import async_validate_public_http_request
 logger = logging.getLogger(__name__)
 
 _MAX_BODY_CHARS = 5000
+
+
+def _publish_no_clobber(temp_path: Path, destination: Path) -> None:
+    """Publish complete bytes atomically without replacing an existing asset."""
+    try:
+        os.link(temp_path, destination)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _extract_title(html: str) -> str:
@@ -60,7 +71,7 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     """
     run_ctx: RunContext = ctx.context
     try:
-        result = playwright_fetch(url)
+        result = await asyncio.to_thread(playwright_fetch, url)
         if not result.ok:
             run_ctx.log_query(url, "browser_fallback", "failed", 0)
             return json.dumps({
@@ -112,14 +123,13 @@ async def download_from_page(
     Use this as a last-resort download tool when API endpoints fail.
     """
     run_ctx: RunContext = ctx.context
-    _rate_limiter.wait()
+    await asyncio.to_thread(_rate_limiter.wait)
     temp_path = None
     try:
         temp_target = run_ctx.work_dir.download_temp_file(f"{filename}.part")
         dest = run_ctx.work_dir.source_asset_file(filename)
         if dest.exists():
             raise FileExistsError(f"source asset already exists: {filename}")
-
         async with (
             httpx.AsyncClient(
                 timeout=120.0,
@@ -151,9 +161,8 @@ async def download_from_page(
                     f.write(chunk)
                     bytes_received += len(chunk)
 
-        if dest.exists():
-            raise FileExistsError(f"source asset already exists: {filename}")
-        temp_path.replace(dest)
+        _publish_no_clobber(temp_path, dest)
+        temp_path = None
 
         logger.info(
             "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
@@ -207,7 +216,7 @@ browser_fallback_skill = SkillDef(
         "Use browser_fallback tools only when API endpoints (PubMed, GEO, PDB, "
         "etc.) are unavailable or return errors. navigate_page renders a page and "
         "extracts title and body text. download_from_page downloads files directly "
-        "via HTTP streaming to the task raw directory. "
+        "via HTTP streaming to the task source_assets directory. "
         "All downloads are tracked in provenance."
     ),
     tools=[navigate_page, download_from_page],

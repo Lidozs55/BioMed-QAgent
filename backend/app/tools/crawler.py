@@ -217,6 +217,7 @@ def playwright_fetch(
             )
             content = page.content()
             status_code = response.status if response is not None else 0
+            response_headers = dict(response.headers) if response is not None else {}
             context.close()
             browser.close()
 
@@ -227,6 +228,7 @@ def playwright_fetch(
                 status_code=status_code,
                 elapsed_ms=elapsed_ms,
                 method_used="crawl",
+                headers=response_headers,
             )
     except CrawlError:
         raise

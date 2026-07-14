@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from agents import Agent
 
 from app.agent_loop.model import get_model
@@ -18,10 +16,8 @@ from app.skills.registry import (
     build_agent_config,
     skill_registry,
 )
-from app.tools._registry import BUILTIN_SKILL_MODULES
+from app.tools._registry import _import_skill_modules
 from app.tools.io import list_files, read_file, write_file
-
-logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
@@ -71,15 +67,6 @@ _loaded_skill_names: list[str] = []
 def get_loaded_skill_names() -> list[str]:
     """Return skill names loaded in the last create_agent() invocation."""
     return list(_loaded_skill_names)
-
-
-def _import_skill_modules() -> None:
-    """尝试导入技能模块，失败时记录警告但不阻塞 Agent 启动。"""
-    for module_name in BUILTIN_SKILL_MODULES:
-        try:
-            __import__(module_name)
-        except ImportError as error:
-            logger.warning("skill module %s failed to import: %s", module_name, error)
 
 
 def create_agent(databases: list[str] | None = None) -> Agent:
