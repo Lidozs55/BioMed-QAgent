@@ -22,11 +22,13 @@ from app.domain.contracts import (
     RunFinalizingPayload,
     RunInterruptedPayload,
     RunQueuedPayload,
+    RunRecord,
     RunStartedPayload,
     RunStatus,
     StartRunRequest,
     StartTaskRequest,
     TaskMode,
+    TaskRunAccepted,
     TaskSnapshot,
     TaskSummary,
     WarningPayload,
@@ -60,6 +62,355 @@ def empty_snapshot(
             updated_at=NOW,
         )
     )
+
+
+def snapshot_with_status(task_id: str, status: RunStatus) -> TaskSnapshot:
+    active_statuses = {
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.FINALIZING,
+        RunStatus.CANCEL_REQUESTED,
+    }
+    run_id = f"run_{task_id}"
+    active = status in active_statuses
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id=task_id,
+            mode=TaskMode.AGENT,
+            title=task_id,
+            status=status,
+            active_run_id=run_id if active else None,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id=run_id,
+                task_id=task_id,
+                request_id=f"req_{task_id}",
+                status=status,
+                input=task_id,
+                created_at=NOW,
+                updated_at=NOW,
+                started_at=NOW if status is not RunStatus.QUEUED else None,
+                finished_at=NOW if not active else None,
+                error="expected failure" if status is RunStatus.FAILED else None,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.INTERRUPTED,
+    ],
+)
+async def test_manager_deletes_each_terminal_task_status(tmp_path, status) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = f"task_delete_{status.value}"
+    await repository.save_snapshot(snapshot_with_status(task_id, status))
+    try:
+        await manager.delete_task(task_id)
+
+        assert await repository.get_snapshot(task_id) is None
+        assert not (repository.tasks_dir / task_id).exists()
+        assert await repository.find_request(f"req_{task_id}") is None
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.FINALIZING,
+        RunStatus.CANCEL_REQUESTED,
+    ],
+)
+async def test_manager_rejects_deletion_of_each_active_status(
+    tmp_path,
+    status,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = f"task_keep_{status.value}"
+    expected = snapshot_with_status(task_id, status)
+    await repository.save_snapshot(expected)
+    try:
+        with pytest.raises(manager_module.TaskDeletionConflictError):
+            await manager.delete_task(task_id)
+
+        stored = await repository.get_snapshot(task_id)
+        assert stored is not None
+        assert stored.task.status is status
+        assert (repository.tasks_dir / task_id).is_dir()
+        assert await repository.find_request(f"req_{task_id}") == TaskRunAccepted(
+            request_id=f"req_{task_id}",
+            task_id=task_id,
+            run_id=f"run_{task_id}",
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_delete_fails_closed_for_inconsistent_terminal_snapshot(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    terminal_with_active_id = snapshot_with_status(
+        "task_terminal_active_id",
+        RunStatus.COMPLETED,
+    )
+    terminal_with_active_id = terminal_with_active_id.model_copy(
+        update={
+            "task": terminal_with_active_id.task.model_copy(
+                update={"active_run_id": "run_task_terminal_active_id"}
+            )
+        }
+    )
+    terminal_with_active_run = snapshot_with_status(
+        "task_terminal_active_run",
+        RunStatus.COMPLETED,
+    )
+    terminal_with_active_run = terminal_with_active_run.model_copy(
+        update={
+            "runs": [
+                terminal_with_active_run.runs[0].model_copy(
+                    update={
+                        "status": RunStatus.RUNNING,
+                        "finished_at": None,
+                    }
+                )
+            ]
+        }
+    )
+    await repository.save_snapshot(terminal_with_active_id)
+    await repository.save_snapshot(terminal_with_active_run)
+    try:
+        for task_id in ("task_terminal_active_id", "task_terminal_active_run"):
+            with pytest.raises(manager_module.TaskDeletionConflictError):
+                await manager.delete_task(task_id)
+            assert (repository.tasks_dir / task_id).is_dir()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_continuation_wins_before_delete_and_delete_returns_conflict(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    continuation_started = asyncio.Event()
+    release_continuation = asyncio.Event()
+
+    async def run(_execution) -> None:
+        continuation_started.set()
+        await release_continuation.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_continue_wins"
+    await repository.save_snapshot(snapshot_with_status(task_id, RunStatus.COMPLETED))
+    try:
+        await manager.submit_run(
+            task_id,
+            StartRunRequest(request_id="req_continue_wins", input="continue"),
+        )
+        await asyncio.wait_for(continuation_started.wait(), timeout=1)
+
+        with pytest.raises(manager_module.TaskDeletionConflictError):
+            await manager.delete_task(task_id)
+        assert (repository.tasks_dir / task_id).is_dir()
+    finally:
+        release_continuation.set()
+        await manager.wait_until_idle()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_wins_before_continuation_and_continuation_gets_not_found(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_delete_wins"
+    await repository.save_snapshot(snapshot_with_status(task_id, RunStatus.COMPLETED))
+    delete_entered = asyncio.Event()
+    release_delete = asyncio.Event()
+    real_delete = repository.delete_task
+
+    async def blocked_delete(deleted_task_id: str) -> None:
+        delete_entered.set()
+        await release_delete.wait()
+        await real_delete(deleted_task_id)
+
+    monkeypatch.setattr(repository, "delete_task", blocked_delete)
+    deletion = asyncio.create_task(manager.delete_task(task_id))
+    continuation = None
+    try:
+        await asyncio.wait_for(delete_entered.wait(), timeout=1)
+        continuation = asyncio.create_task(
+            manager.submit_run(
+                task_id,
+                StartRunRequest(
+                    request_id="req_after_delete",
+                    input="continue",
+                ),
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not continuation.done()
+
+        release_delete.set()
+        await asyncio.wait_for(deletion, timeout=1)
+        with pytest.raises(LookupError):
+            await asyncio.wait_for(continuation, timeout=1)
+    finally:
+        release_delete.set()
+        await asyncio.gather(deletion, return_exceptions=True)
+        if continuation is not None:
+            await asyncio.gather(continuation, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_queued_run_then_succeeds_after_cancellation(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    blocker_started = asyncio.Event()
+    release_blocker = asyncio.Event()
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_delete_blocker":
+            blocker_started.set()
+            await release_blocker.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    for task_id in ("task_delete_blocker", "task_cancel_then_delete"):
+        await repository.save_snapshot(
+            snapshot_with_status(task_id, RunStatus.COMPLETED)
+        )
+    try:
+        await manager.submit_run(
+            "task_delete_blocker",
+            StartRunRequest(request_id="req_blocker", input="block"),
+        )
+        await asyncio.wait_for(blocker_started.wait(), timeout=1)
+        queued = await manager.submit_run(
+            "task_cancel_then_delete",
+            StartRunRequest(request_id="req_cancel_then_delete", input="queue"),
+        )
+
+        with pytest.raises(manager_module.TaskDeletionConflictError):
+            await manager.delete_task(queued.task_id)
+        cancelled = await manager.cancel_run(queued.task_id, queued.run_id)
+        assert cancelled.task.status is RunStatus.CANCELLED
+
+        await manager.delete_task(queued.task_id)
+        assert await repository.get_snapshot(queued.task_id) is None
+    finally:
+        release_blocker.set()
+        await manager.wait_until_idle()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_deletes_have_one_success_and_one_not_found(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_delete_twice"
+    await repository.save_snapshot(snapshot_with_status(task_id, RunStatus.COMPLETED))
+    try:
+        results = await asyncio.gather(
+            manager.delete_task(task_id),
+            manager.delete_task(task_id),
+            return_exceptions=True,
+        )
+
+        assert sum(result is None for result in results) == 1
+        errors = [result for result in results if isinstance(result, BaseException)]
+        assert len(errors) == 1
+        assert isinstance(errors[0], LookupError)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_deleted_request_id_can_create_a_new_authoritative_task(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_request_reuse"
+    request_id = f"req_{task_id}"
+    await repository.save_snapshot(snapshot_with_status(task_id, RunStatus.COMPLETED))
+    try:
+        await manager.delete_task(task_id)
+        replacement = await manager.create_task(
+            StartTaskRequest(request_id=request_id, input="new request")
+        )
+        await manager.wait_until_idle()
+
+        assert replacement.task_id != task_id
+        assert await repository.find_request(request_id) == replacement
+        assert await repository.get_snapshot(replacement.task_id) is not None
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

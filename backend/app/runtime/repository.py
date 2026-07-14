@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Mapping
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,7 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
 )
-from app.runtime.event_store import CorruptEventLogError, EventStore
+from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import reduce_task_event
@@ -211,6 +213,39 @@ class TaskRepository:
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
         return await self.index.find_request(request_id)
 
+    async def delete_task(self, task_id: str) -> None:
+        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+
+            async def delete_tree_and_index() -> None:
+                await asyncio.to_thread(self._delete_task_tree_sync, task_id)
+                try:
+                    await self.index.delete_task(task_id)
+                except Exception as error:
+                    try:
+                        await self.index.rebuild()
+                    except Exception as rebuild_error:
+                        error.add_note(
+                            "task index rebuild also failed: "
+                            f"{type(rebuild_error).__name__}: {rebuild_error}"
+                        )
+                    raise
+
+            delete_task = asyncio.create_task(delete_tree_and_index())
+            try:
+                await asyncio.shield(delete_task)
+            except asyncio.CancelledError:
+                while not delete_task.done():
+                    try:
+                        await asyncio.shield(delete_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if not delete_task.cancelled():
+                    delete_task.exception()
+                raise
+
     async def save_conversation_summary(
         self,
         task_id: str,
@@ -306,6 +341,43 @@ class TaskRepository:
         persisted = self._snapshot_without_messages(updated)
         atomic_write_json(self._snapshot_path(event.task_id), persisted)
         return persisted
+
+    def _delete_task_tree_sync(self, task_id: str) -> None:
+        task_dir = self._validated_task_dir(task_id)
+        lock_paths = sorted(
+            (
+                task_dir / "events.jsonl",
+                task_dir / "state" / "session_items.jsonl",
+            ),
+            key=lambda path: str(path.resolve()).casefold(),
+        )
+        with ExitStack() as locks:
+            for lock_path in lock_paths:
+                locks.enter_context(path_lock(lock_path))
+            task_dir = self._validated_task_dir(task_id)
+            shutil.rmtree(task_dir)
+
+    def _validated_task_dir(self, task_id: str) -> Path:
+        if not task_id or task_id in {".", ".."} or Path(task_id).name != task_id:
+            raise TaskNotFoundError(task_id)
+        tasks_root = self.tasks_dir.resolve()
+        candidate = tasks_root / task_id
+        if candidate == tasks_root or candidate.parent != tasks_root:
+            raise TaskNotFoundError(task_id)
+        if candidate.is_symlink() or candidate.is_junction():
+            raise TaskNotFoundError(task_id)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError) as error:
+            raise TaskNotFoundError(task_id) from error
+        if (
+            resolved == tasks_root
+            or resolved.parent != tasks_root
+            or resolved != candidate
+            or not resolved.is_dir()
+        ):
+            raise TaskNotFoundError(task_id)
+        return resolved
 
     @staticmethod
     def _snapshot_without_messages(snapshot: TaskSnapshot) -> TaskSnapshot:

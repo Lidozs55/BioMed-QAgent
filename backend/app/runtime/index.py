@@ -137,6 +137,9 @@ class TaskIndex:
     async def record_request(self, accepted: TaskRunAccepted) -> TaskRunAccepted:
         return await self._run(self._record_request_sync, accepted)
 
+    async def delete_task(self, task_id: str) -> None:
+        await self._run(self._delete_task_sync, task_id)
+
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
         if not request_id:
             raise ValueError("request_id must not be blank")
@@ -289,6 +292,18 @@ class TaskIndex:
         if existing is None:
             raise RuntimeError("request id was not persisted")
         return existing
+
+    def _delete_task_sync(self, task_id: str) -> None:
+        connection = self._get_connection()
+        with connection:
+            connection.execute(
+                "DELETE FROM request_ids WHERE task_id = ?",
+                (task_id,),
+            )
+            connection.execute(
+                "DELETE FROM task_summaries WHERE task_id = ?",
+                (task_id,),
+            )
 
     def _find_request_sync(self, request_id: str) -> TaskRunAccepted | None:
         row = (

@@ -8,6 +8,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal, Protocol
 
 from app.agent_loop.context import RunContext
@@ -41,6 +42,13 @@ from app.runtime.repository import TaskRepository
 
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_RUN_STATUSES = {
+    RunStatus.COMPLETED,
+    RunStatus.FAILED,
+    RunStatus.CANCELLED,
+    RunStatus.INTERRUPTED,
+}
 
 
 class StreamingRunResult(Protocol):
@@ -201,6 +209,14 @@ class FixtureTaskContinuationError(RuntimeError):
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
         super().__init__(f"fixture task {task_id} cannot be continued")
+
+
+class TaskDeletionConflictError(RuntimeError):
+    """Raised when deletion targets a nonterminal or inconsistent Task."""
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"task {task_id} is not safely terminal")
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +458,30 @@ class TaskManager:
                     request.input,
                 )
             )
+
+    async def delete_task(self, task_id: str) -> None:
+        if not self._started or self._closing:
+            raise RuntimeError("task manager is not running")
+        if not task_id or task_id in {".", ".."} or Path(task_id).name != task_id:
+            raise LookupError(task_id)
+        async with self._admission_lock:
+            if not self._started or self._closing:
+                raise RuntimeError("task manager is not running")
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+                snapshot = await self.repository.get_snapshot(task_id)
+                if snapshot is None:
+                    raise LookupError(task_id)
+                if (
+                    snapshot.task.status not in _TERMINAL_RUN_STATUSES
+                    or snapshot.task.active_run_id is not None
+                    or any(
+                        run.status not in _TERMINAL_RUN_STATUSES
+                        for run in snapshot.runs
+                    )
+                ):
+                    raise TaskDeletionConflictError(task_id)
+                await self.repository.delete_task(task_id)
 
     async def _shield_and_drain_admission_locked(
         self,
@@ -975,6 +1015,7 @@ __all__ = [
     "RunExecutor",
     "StreamingRunResult",
     "RunQueueFullError",
+    "TaskDeletionConflictError",
     "TaskManager",
     "TaskRunConflictError",
 ]

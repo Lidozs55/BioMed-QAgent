@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -345,6 +347,295 @@ async def test_repository_exposes_idempotent_request_registration(tmp_path) -> N
         assert await repository.record_request(first) == first
     finally:
         await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_removes_complete_task_tree_only(tmp_path) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    deleted = snapshot_with_run(
+        task_id="task_deleted",
+        request_id="req_deleted",
+        run_id="run_deleted",
+    )
+    sibling = snapshot_with_run(
+        task_id="task_sibling",
+        request_id="req_sibling",
+        run_id="run_sibling",
+    )
+    await repository.save_snapshot(deleted)
+    await repository.save_snapshot(sibling)
+    deleted_dir = repository.tasks_dir / "task_deleted"
+    sibling_sentinel = repository.tasks_dir / "task_sibling" / "sibling.txt"
+    shared_sentinel = output_dir / "shared_cache" / "shared.bin"
+    external_sentinel = tmp_path / "external" / "sentinel.txt"
+    for relative_path in (
+        "source_assets/source.txt",
+        "download_tmp/download.part",
+        "parsed/parsed.json",
+        "normalized/normalized.json",
+        "staging/staged.bin",
+        "artifacts/result.csv",
+        "logs/runtime.log",
+        "state/extra-state.json",
+    ):
+        path = deleted_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative_path, "utf-8")
+    for sentinel in (sibling_sentinel, shared_sentinel, external_sentinel):
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("keep", "utf-8")
+    index_path = repository.index.path
+    try:
+        await repository.delete_task("task_deleted")
+
+        assert not deleted_dir.exists()
+        assert index_path.is_file()
+        assert sibling_sentinel.read_text("utf-8") == "keep"
+        assert shared_sentinel.read_text("utf-8") == "keep"
+        assert external_sentinel.read_text("utf-8") == "keep"
+        assert await repository.get_snapshot("task_sibling") is not None
+        assert await repository.find_request("req_deleted") is None
+        assert await repository.find_request("req_sibling") == TaskRunAccepted(
+            request_id="req_sibling",
+            task_id="task_sibling",
+            run_id="run_sibling",
+        )
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_rejects_missing_and_unsafe_task_ids(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    external_sentinel = tmp_path / "external" / "sentinel.txt"
+    external_sentinel.parent.mkdir(parents=True)
+    external_sentinel.write_text("keep", "utf-8")
+    unsafe_ids = [
+        "",
+        ".",
+        "..",
+        "../external",
+        str(external_sentinel.parent.resolve()),
+    ]
+    try:
+        for task_id in ["task_missing", *unsafe_ids]:
+            with pytest.raises(TaskNotFoundError):
+                await repository.delete_task(task_id)
+        assert external_sentinel.read_text("utf-8") == "keep"
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_rejects_task_root_symlink(tmp_path) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    external_dir = tmp_path / "external-target"
+    external_dir.mkdir()
+    sentinel = external_dir / "sentinel.txt"
+    sentinel.write_text("keep", "utf-8")
+    task_link = repository.tasks_dir / "task_link"
+    try:
+        try:
+            task_link.symlink_to(external_dir, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"directory symlinks are unavailable: {error}")
+
+        with pytest.raises(TaskNotFoundError):
+            await repository.delete_task("task_link")
+        assert task_link.is_symlink()
+        assert sentinel.read_text("utf-8") == "keep"
+    finally:
+        task_link.unlink(missing_ok=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_rejects_task_root_junction(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_dir = repository.tasks_dir / "task_junction"
+    task_dir.mkdir()
+    sentinel = task_dir / "sentinel.txt"
+    sentinel.write_text("keep", "utf-8")
+    real_is_junction = Path.is_junction
+
+    def report_test_directory_as_junction(path: Path) -> bool:
+        return path == task_dir or real_is_junction(path)
+
+    monkeypatch.setattr(Path, "is_junction", report_test_directory_as_junction)
+    try:
+        with pytest.raises(TaskNotFoundError):
+            await repository.delete_task("task_junction")
+        assert sentinel.read_text("utf-8") == "keep"
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_repository_delete_drains_tree_and_index_before_unlocking(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_cancelled_delete"
+    request_id = "req_cancelled_delete"
+    await repository.save_snapshot(
+        snapshot_with_run(
+            task_id=task_id,
+            request_id=request_id,
+            run_id="run_cancelled_delete",
+        )
+    )
+    task_dir = repository.tasks_dir / task_id
+    tree_entered = threading.Event()
+    release_tree = threading.Event()
+    tree_finished = threading.Event()
+    index_entered = asyncio.Event()
+    release_index = asyncio.Event()
+    real_rmtree = shutil.rmtree
+    real_index_delete = repository.index.delete_task
+    lock_probe = None
+
+    def blocked_rmtree(path: Path) -> None:
+        tree_entered.set()
+        if not release_tree.wait(timeout=3):
+            raise TimeoutError("tree deletion release timed out")
+        real_rmtree(path)
+        tree_finished.set()
+
+    async def blocked_index_delete(deleted_task_id: str) -> None:
+        index_entered.set()
+        await release_index.wait()
+        await real_index_delete(deleted_task_id)
+
+    monkeypatch.setattr(shutil, "rmtree", blocked_rmtree)
+    monkeypatch.setattr(repository.index, "delete_task", blocked_index_delete)
+    deletion = asyncio.create_task(repository.delete_task(task_id))
+    try:
+        await asyncio.wait_for(asyncio.to_thread(tree_entered.wait), timeout=1)
+        deletion.cancel()
+        await asyncio.sleep(0)
+        lock = repository._task_locks[task_id]
+        lock_probe = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0.05)
+        assert not deletion.done()
+        assert not lock_probe.done()
+
+        release_tree.set()
+        await asyncio.wait_for(index_entered.wait(), timeout=1)
+        assert tree_finished.is_set()
+        assert not task_dir.exists()
+        assert not deletion.done()
+        assert not lock_probe.done()
+
+        release_index.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(deletion, timeout=1)
+        await asyncio.wait_for(lock_probe, timeout=1)
+        lock.release()
+        assert await repository.find_request(request_id) is None
+    finally:
+        release_tree.set()
+        release_index.set()
+        await asyncio.gather(deletion, return_exceptions=True)
+        if lock_probe is not None and lock_probe.done():
+            if not lock_probe.cancelled() and lock_probe.exception() is None:
+                lock = repository._task_locks[task_id]
+                if lock.locked():
+                    lock.release()
+        elif lock_probe is not None:
+            lock_probe.cancel()
+            await asyncio.gather(lock_probe, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_rebuilds_index_after_cleanup_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_index_failure"
+    request_id = "req_index_failure"
+    await repository.save_snapshot(
+        snapshot_with_run(
+            task_id=task_id,
+            request_id=request_id,
+            run_id="run_index_failure",
+        )
+    )
+    task_dir = repository.tasks_dir / task_id
+    rebuild_calls = 0
+    real_rebuild = repository.index.rebuild
+
+    async def fail_index_delete(deleted_task_id: str) -> None:
+        assert deleted_task_id == task_id
+        assert not task_dir.exists()
+        raise OSError("simulated index cleanup failure")
+
+    async def count_rebuild() -> None:
+        nonlocal rebuild_calls
+        rebuild_calls += 1
+        await real_rebuild()
+
+    monkeypatch.setattr(repository.index, "delete_task", fail_index_delete)
+    monkeypatch.setattr(repository.index, "rebuild", count_rebuild)
+    try:
+        with pytest.raises(OSError, match="index cleanup failure"):
+            await repository.delete_task(task_id)
+
+        assert rebuild_calls == 1
+        assert not task_dir.exists()
+        assert await repository.find_request(request_id) is None
+        assert all(
+            item.task_id != task_id for item in (await repository.list_tasks()).tasks
+        )
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_restart_rebuild_drops_stale_deleted_projection(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "output"
+    task_id = "task_restart_deleted"
+    request_id = "req_restart_deleted"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    await repository.save_snapshot(
+        snapshot_with_run(
+            task_id=task_id,
+            request_id=request_id,
+            run_id="run_restart_deleted",
+        )
+    )
+    shutil.rmtree(repository.tasks_dir / task_id)
+    assert await repository.find_request(request_id) is not None
+    await repository.close()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        assert await reopened.get_snapshot(task_id) is None
+        assert await reopened.find_request(request_id) is None
+        assert all(
+            item.task_id != task_id for item in (await reopened.list_tasks()).tasks
+        )
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio

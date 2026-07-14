@@ -353,6 +353,101 @@ async def test_index_request_idempotency_returns_the_original_acceptance(
 
 
 @pytest.mark.asyncio
+async def test_index_delete_task_removes_all_rows_and_allows_request_reuse(
+    tmp_path,
+) -> None:
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+    deleted = TaskSnapshot(
+        task=snapshot("task_deleted").task,
+        runs=[
+            RunRecord(
+                run_id="run_deleted_first",
+                task_id="task_deleted",
+                request_id="req_deleted_first",
+                status=RunStatus.COMPLETED,
+                input="first",
+                created_at=NOW,
+                updated_at=NOW,
+                started_at=NOW,
+                finished_at=NOW,
+            ),
+            RunRecord(
+                run_id="run_deleted_second",
+                task_id="task_deleted",
+                request_id="req_deleted_second",
+                status=RunStatus.FAILED,
+                input="second",
+                created_at=NOW,
+                updated_at=NOW,
+                started_at=NOW,
+                finished_at=NOW,
+                error="expected failure",
+            ),
+        ],
+    )
+    sibling = snapshot(
+        "task_sibling",
+        request_id="req_sibling",
+        run_id="run_sibling",
+    )
+    replacement = TaskRunAccepted(
+        request_id="req_deleted_first",
+        task_id="task_replacement",
+        run_id="run_replacement",
+    )
+    try:
+        await index.upsert_snapshot(deleted)
+        await index.upsert_snapshot(sibling)
+
+        await index.delete_task("task_deleted")
+
+        page = await index.list_tasks()
+        assert [item.task_id for item in page.tasks] == ["task_sibling"]
+        assert await index.find_request("req_deleted_first") is None
+        assert await index.find_request("req_deleted_second") is None
+        assert await index.find_request("req_sibling") == TaskRunAccepted(
+            request_id="req_sibling",
+            task_id="task_sibling",
+            run_id="run_sibling",
+        )
+        assert await index.record_request(replacement) == replacement
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_cursor_remains_usable_after_boundary_task_is_deleted(
+    tmp_path,
+) -> None:
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+    try:
+        for number in range(5):
+            await index.upsert_snapshot(
+                snapshot(
+                    f"task_{number}",
+                    created_at=NOW + timedelta(minutes=number),
+                )
+            )
+
+        first = await index.list_tasks(limit=2)
+        assert [item.task_id for item in first.items] == ["task_4", "task_3"]
+        assert first.next_cursor is not None
+
+        await index.delete_task("task_3")
+
+        second = await index.list_tasks(limit=2, cursor=first.next_cursor)
+        third = await index.list_tasks(limit=2, cursor=second.next_cursor)
+        assert [item.task_id for item in second.items] == ["task_2", "task_1"]
+        assert [item.task_id for item in third.items] == ["task_0"]
+        assert second.next_cursor is not None
+        assert third.next_cursor is None
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
 async def test_index_rebuild_removes_an_orphan_request_reservation(
     tmp_path,
 ) -> None:

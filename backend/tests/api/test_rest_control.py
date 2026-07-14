@@ -886,6 +886,194 @@ async def test_cancel_missing_run_and_terminal_run_use_404_and_409(
 
 
 @pytest.mark.asyncio
+async def test_delete_terminal_task_returns_empty_204_and_removes_all_read_surfaces(
+    tmp_path: Path,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        task_id = "task_delete_api"
+        sibling_id = "task_delete_sibling"
+        await repository.save_snapshot(snapshot(task_id))
+        await repository.save_snapshot(snapshot(sibling_id))
+        await repository.task_session(task_id).add_items(
+            [{"role": "user", "content": "delete me"}]
+        )
+        payloads = [
+            RunQueuedPayload(request_id="req_delete_api", input="delete me"),
+            RunStartedPayload(),
+            RunFinalizingPayload(),
+            RunCompletedPayload(),
+        ]
+        for sequence, payload in enumerate(payloads, start=1):
+            await repository.append_event(
+                build_event(
+                    task_id=task_id,
+                    run_id="run_delete_api",
+                    sequence=sequence,
+                    timestamp=NOW + timedelta(seconds=sequence),
+                    payload=payload,
+                )
+            )
+        artifact = repository.tasks_dir / task_id / "artifacts" / "result.txt"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("delete me", "utf-8")
+
+        deleted = await client.delete(f"/api/v1/tasks/{task_id}")
+        listed = await client.get("/api/v1/tasks")
+        reads = [
+            await client.get(f"/api/v1/tasks/{task_id}"),
+            await client.get(f"/api/v1/tasks/{task_id}/messages"),
+            await client.get(f"/api/v1/tasks/{task_id}/events"),
+            await client.get(f"/api/v1/tasks/{task_id}/artifacts"),
+            await client.get(f"/api/v1/tasks/{task_id}/artifacts/artifact_missing"),
+        ]
+        sibling = await client.get(f"/api/v1/tasks/{sibling_id}")
+        repeated = await client.delete(f"/api/v1/tasks/{task_id}")
+
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+    listed_ids = {
+        item["task_id"]
+        for key in ("active_items", "items")
+        for item in listed.json()[key]
+    }
+    assert task_id not in listed_ids
+    assert sibling_id in listed_ids
+    assert [response.status_code for response in reads] == [404] * len(reads)
+    assert all(response.json() == {"detail": "Task not found"} for response in reads)
+    assert sibling.status_code == 200
+    assert repeated.status_code == 404
+    assert repeated.json() == {"detail": "Task not found"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.FINALIZING,
+        RunStatus.CANCEL_REQUESTED,
+    ],
+)
+async def test_delete_active_task_returns_stable_409_without_mutation(
+    tmp_path: Path,
+    status: RunStatus,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        task_id = f"task_delete_{status.value}"
+        await repository.save_snapshot(snapshot(task_id, status=status))
+
+        response = await client.delete(f"/api/v1/tasks/{task_id}")
+        stored = await repository.get_snapshot(task_id)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Only terminal tasks can be deleted"}
+    assert stored is not None
+    assert stored.task.status is status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "task_id",
+    ["task_missing", "bad.task", "bad%5Ctask"],
+)
+async def test_delete_missing_and_unsafe_tasks_returns_stable_404(
+    tmp_path: Path,
+    task_id: str,
+) -> None:
+    async with api_client(tmp_path) as (_, client):
+        response = await client.delete(f"/api/v1/tasks/{task_id}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Task not found"}
+
+
+@pytest.mark.asyncio
+async def test_delete_uses_manager_only_and_returns_empty_204(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        deleted_ids: list[str] = []
+
+        async def record_delete(task_id: str) -> None:
+            deleted_ids.append(task_id)
+
+        async def fail_repository_read(_task_id: str):
+            raise AssertionError("DELETE route must not read the repository")
+
+        monkeypatch.setattr(manager, "delete_task", record_delete)
+        monkeypatch.setattr(repository, "get_snapshot", fail_repository_read)
+
+        response = await client.delete("/api/v1/tasks/task_manager_only")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert deleted_ids == ["task_manager_only"]
+
+
+@pytest.mark.asyncio
+async def test_delete_returns_stable_503_when_runtime_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.delete("/api/v1/tasks/task_unavailable")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Task runtime is unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_delete_maps_manager_shutdown_race_to_503(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+
+        async def fail_delete(_task_id: str) -> None:
+            raise RuntimeError("task manager is not running")
+
+        monkeypatch.setattr(manager, "delete_task", fail_delete)
+        response = await client.delete("/api/v1/tasks/task_shutdown_race")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Task runtime is unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_delete_unexpected_storage_error_remains_500(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with api_client(tmp_path) as (application, _):
+        manager = application.state.task_manager
+
+        async def fail_delete(_task_id: str) -> None:
+            raise OSError("simulated delete failure")
+
+        monkeypatch.setattr(manager, "delete_task", fail_delete)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=application,
+                raise_app_exceptions=False,
+            ),
+            base_url="http://test",
+        ) as client:
+            response = await client.delete("/api/v1/tasks/task_storage_error")
+
+    assert response.status_code == 500
+
+
+@pytest.mark.asyncio
 async def test_continuation_queue_full_returns_429_without_new_run_or_request(
     tmp_path: Path,
 ) -> None:

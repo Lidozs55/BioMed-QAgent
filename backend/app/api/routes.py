@@ -33,6 +33,7 @@ from app.domain.contracts import (
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RunQueueFullError,
+    TaskDeletionConflictError,
     TaskManager,
     TaskRunConflictError,
 )
@@ -210,6 +211,28 @@ async def get_task(task_id: str, repository: TaskRepositoryDep) -> TaskSnapshot:
     """Return the authoritative durable task snapshot."""
 
     return await _require_snapshot(repository, task_id)
+
+
+@router.delete("/tasks/{task_id}", status_code=204)
+async def delete_task(task_id: str, manager: TaskManagerDep) -> None:
+    """Delete one explicitly requested terminal Task and all of its history."""
+
+    try:
+        await manager.delete_task(task_id)
+    except TaskDeletionConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Only terminal tasks can be deleted",
+        ) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Task not found") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
 
 
 @router.post(
