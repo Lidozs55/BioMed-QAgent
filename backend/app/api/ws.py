@@ -1,7 +1,8 @@
-"""WebSocket 端点 — 接收用户输入，流式推送 Agent loop 事件。"""
+"""WebSocket mode selection and temporary legacy Agent streaming."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -9,65 +10,178 @@ import re
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.agent_loop.runner import run_agent_stream
+from app.api.ws_events import (
+    _INVALID_JSON,
+    _run_event_session,
+    _send_internal_error_and_close,
+)
 from app.domain.contracts import generate_prefixed_uuid
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+_EVENT_COMMAND_TYPES = frozenset({"subscribe", "unsubscribe", "ping"})
+
 
 @router.websocket("/api/v1/ws")
 async def agent_ws(websocket: WebSocket) -> None:
-    """Agent loop WebSocket 端点。
+    """Select an isolated legacy or durable-event session from the first frame."""
 
-    客户端 → 服务端消息格式：
-        {"type": "run", "input": "研究目标文本", "task_id": "optional-task-id", "databases": ["geo", "gdc"]}
-
-    服务端 → 客户端事件格式：
-        {"type": "skill_loaded", "name": "...", "category": "..."}
-        {"type": "text", "delta": "..."}
-        {"type": "tool_call", "name": "...", "arguments": "..."}
-        {"type": "tool_output", "output": "..."}
-        {"type": "done", "final_output": "..."}
-        {"type": "file_downloaded", "name": "...", "path": "...", "size": N}
-        {"type": "artifact_produced", "name": "...", "path": "...", "size": N}
-        {"type": "error", "message": "..."}
-    """
     await websocket.accept()
+    send_lock = asyncio.Lock()
+    try:
+        first_message = await _receive_mode_message(websocket, send_lock)
+        if _is_legacy_run(first_message):
+            await _run_legacy_session(websocket, send_lock, first_message)
+        else:
+            await _run_event_session(websocket, send_lock, first_message)
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("WebSocket adapter failed before session startup")
+        await _send_internal_error_and_close(websocket, send_lock)
+
+
+async def _receive_mode_message(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+) -> object:
+    while True:
+        raw = await websocket.receive_text()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            await _send_json(websocket, send_lock, _INVALID_JSON)
+
+
+def _is_legacy_run(message: object) -> bool:
+    return isinstance(message, dict) and message.get("type") == "run"
+
+
+async def _run_legacy_session(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    first_message: object,
+) -> None:
+    """Preserve the current frontend's legacy-only inline streaming protocol."""
+
+    message: object = first_message
     try:
         while True:
-            raw = await websocket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "无效 JSON"})
-                continue
-
-            if msg.get("type") != "run":
-                continue
-
-            user_input = msg.get("input", "").strip()
-            if not user_input:
-                await websocket.send_json({"type": "error", "message": "输入为空"})
-                continue
-
-            task_id = msg.get("task_id") or generate_prefixed_uuid("task")
-            if not isinstance(task_id, str) or not re.fullmatch(
-                r"[A-Za-z0-9_-]{1,128}", task_id
+            if (
+                isinstance(message, dict)
+                and message.get("type") in _EVENT_COMMAND_TYPES
             ):
-                await websocket.send_json({"type": "error", "message": "无效 task_id"})
-                continue
-            databases = msg.get("databases", None)
-            await websocket.send_json({"type": "task_started", "task_id": task_id})
-            async for event in run_agent_stream(
-                user_input, task_id, databases=databases
-            ):
-                await websocket.send_json(event)
-
+                await _close_websocket(
+                    websocket,
+                    send_lock,
+                    code=1008,
+                    reason="WebSocket protocol mode cannot be changed",
+                )
+                return
+            if not isinstance(message, dict):
+                raise TypeError("WebSocket command must be a JSON object")
+            if message.get("type") == "run":
+                await _run_legacy_command(websocket, send_lock, message)
+            message = await _receive_legacy_message(websocket, send_lock)
     except WebSocketDisconnect:
-        logger.info("WebSocket 客户端断开")
-    except Exception as e:
-        logger.exception("WebSocket 异常")
+        logger.info("Legacy WebSocket client disconnected")
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        logger.exception("Legacy WebSocket session failed")
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await _send_json(
+                websocket,
+                send_lock,
+                {"type": "error", "message": str(error)},
+            )
         except Exception:
             pass
+
+
+async def _run_legacy_command(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    message: dict[str, object],
+) -> None:
+    user_input = message.get("input", "").strip()
+    if not user_input:
+        await _send_json(
+            websocket,
+            send_lock,
+            {"type": "error", "message": "输入为空"},
+        )
+        return
+
+    task_id = message.get("task_id") or generate_prefixed_uuid("task")
+    if (
+        not isinstance(task_id, str)
+        or re.fullmatch(
+            r"[A-Za-z0-9_-]{1,128}",
+            task_id,
+        )
+        is None
+    ):
+        await _send_json(
+            websocket,
+            send_lock,
+            {"type": "error", "message": "无效 task_id"},
+        )
+        return
+
+    await _send_json(
+        websocket,
+        send_lock,
+        {"type": "task_started", "task_id": task_id},
+    )
+    async for event in run_agent_stream(
+        user_input,
+        task_id,
+        databases=message.get("databases", None),
+    ):
+        await _send_json(websocket, send_lock, event)
+
+
+async def _receive_legacy_message(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+) -> object:
+    while True:
+        raw = await websocket.receive_text()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            await _send_json(
+                websocket,
+                send_lock,
+                {"type": "error", "message": "无效 JSON"},
+            )
+
+
+async def _send_json(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    value: dict[str, object],
+) -> None:
+    async with send_lock:
+        await websocket.send_json(value)
+
+
+async def _close_websocket(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    *,
+    code: int,
+    reason: str,
+) -> None:
+    try:
+        async with send_lock:
+            await websocket.close(code=code, reason=reason)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
