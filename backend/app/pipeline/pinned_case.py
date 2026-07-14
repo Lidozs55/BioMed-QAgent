@@ -560,9 +560,6 @@ def run_pinned_fixture(
     for name, columns in _ARTIFACT_COLUMNS.items():
         if name != "quality_report.csv":
             _write_csv(staging / name, columns, rows_by_file.get(name, []))
-    _write_csv(
-        staging / "quality_report.csv", _ARTIFACT_COLUMNS["quality_report.csv"], []
-    )
 
     validation, checks = _validate_package(
         staging, source_path, workdir.logs / "validation_report.json"

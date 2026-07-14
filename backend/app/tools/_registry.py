@@ -5,23 +5,21 @@
 
 from __future__ import annotations
 
-from app.skills.registry import build_agent_config, skill_registry
+from contextlib import suppress
+
+from app.skills.registry import SkillDef, build_agent_config, skill_registry
 from app.tools.io import list_files, read_file, write_file
 
-try:
+browser_fallback_skill: SkillDef | None = None
+with suppress(ImportError):
     from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
-except ImportError:
-    browser_fallback_skill = None
-try:
+self_evolution_skill: SkillDef | None = None
+with suppress(ImportError):
     from app.skills.builtin.processing.self_evolution import self_evolution_skill  # noqa: F401
-except ImportError:
-    self_evolution_skill = None
 
 
 def _import_skill_modules() -> None:
     """尝试导入技能模块，失败时不阻塞。"""
-    from contextlib import suppress
-
     with suppress(ImportError):
         import app.skills.builtin.discovery.pubmed  # noqa: F401
     with suppress(ImportError):

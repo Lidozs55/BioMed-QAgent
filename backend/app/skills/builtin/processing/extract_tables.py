@@ -394,6 +394,7 @@ def extract_pdf_tables(
     stem = path.stem
     saved_paths: list[str] = []
     table_meta: list[dict[str, Any]] = []
+    failed_count = 0
 
     for idx, table in enumerate(tables, 1):
         csv_name = f"{stem}_table_{idx}.csv"
@@ -419,6 +420,7 @@ def extract_pdf_tables(
                 writer.writerows(sanitized)
         except Exception as exc:
             logger.warning("Failed to write CSV %s: %s", csv_path, exc)
+            failed_count += 1
             continue
 
         saved_paths.append(str(csv_path))
@@ -442,6 +444,7 @@ def extract_pdf_tables(
         "summary": {
             "total_tables": len(tables),
             "tables": table_meta,
+            "failed_count": failed_count,
         },
     }
     if warning:

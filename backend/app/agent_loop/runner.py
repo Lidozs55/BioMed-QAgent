@@ -153,9 +153,12 @@ async def run_agent_stream(
                     }
                 elif event.name == "tool_output":
                     output = getattr(event.item, "output", "")
+                    text = str(output)
+                    truncated = len(text) > 5000
                     yield {
                         "type": "tool_output",
-                        "output": str(output)[:5000],
+                        "output": text[:5000],
+                        "truncated": truncated,
                     }
                     confirm_msg = _check_for_confirmation(output)
                     if confirm_msg:

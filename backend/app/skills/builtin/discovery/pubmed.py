@@ -20,6 +20,7 @@ from agents import RunContextWrapper, function_tool
 from Bio import Entrez
 
 from app.agent_loop.context import RunContext
+from app.config import settings
 from app.domain.output import SourceRecord
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
@@ -27,7 +28,7 @@ from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
 
-Entrez.email = "biomed-qagent@example.com"
+Entrez.email = settings.ncbi_email
 
 
 def _parse_pubmed_record(article: ET.Element) -> dict[str, Any]:

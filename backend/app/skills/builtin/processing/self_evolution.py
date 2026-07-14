@@ -66,18 +66,18 @@ def save_workflow_as_skill(
             "category": category,
             "skill_path": str(skill_path),
             "task_id": task_id,
-        })
+        }, ensure_ascii=False)
     except ValueError as exc:
         return json.dumps({
             "status": "error",
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
     except Exception as exc:
         logger.exception("Failed to save learned skill '%s'", name)
         return json.dumps({
             "status": "error",
             "error": f"Failed to save skill: {exc}",
-        })
+        }, ensure_ascii=False)
 
 
 @function_tool
@@ -87,13 +87,20 @@ def list_my_learned_skills(ctx: RunContextWrapper[Any]) -> str:
     Returns a JSON array with each skill's name, category, path,
     and whether it has EVOLUTION.md documentation.
     """
-    skills = list_learned_skills()
-    logger.info("Listed %d learned skills", len(skills))
-    return json.dumps({
-        "status": "ok",
-        "count": len(skills),
-        "skills": skills,
-    })
+    try:
+        skills = list_learned_skills()
+        logger.info("Listed %d learned skills", len(skills))
+        return json.dumps({
+            "status": "ok",
+            "count": len(skills),
+            "skills": skills,
+        }, ensure_ascii=False)
+    except Exception as exc:
+        logger.exception("Failed to list learned skills")
+        return json.dumps({
+            "status": "error",
+            "error": f"Failed to list learned skills: {exc}",
+        }, ensure_ascii=False)
 
 
 self_evolution_skill = SkillDef(

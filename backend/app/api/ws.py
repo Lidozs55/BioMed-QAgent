@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
@@ -69,5 +68,7 @@ async def agent_ws(websocket: WebSocket) -> None:
         logger.info("WebSocket 客户端断开")
     except Exception as e:
         logger.exception("WebSocket 异常")
-        with contextlib.suppress(Exception):
+        try:
             await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            logger.debug("WebSocket 发送错误事件时连接已断开", exc_info=True)

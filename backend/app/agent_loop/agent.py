@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from agents import Agent
 
 from app.agent_loop.model import get_model
@@ -18,14 +20,7 @@ from app.skills.registry import (
 )
 from app.tools.io import list_files, read_file, write_file
 
-try:
-    from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
-except ImportError:
-    browser_fallback_skill = None
-try:
-    from app.skills.builtin.processing.self_evolution import self_evolution_skill  # noqa: F401
-except ImportError:
-    self_evolution_skill = None
+logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
@@ -78,29 +73,26 @@ def get_loaded_skill_names() -> list[str]:
 
 
 def _import_skill_modules() -> None:
-    """尝试导入技能模块，失败时不阻塞。"""
-    from contextlib import suppress
-
-    with suppress(ImportError):
-        import app.skills.builtin.discovery.pubmed  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.discovery.understanding  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.acquisition.geo  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.acquisition.pdb  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.acquisition.gdc  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.acquisition.xena  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.acquisition.browser  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.processing.self_evolution  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.processing.extract_tables  # noqa: F401
-    with suppress(ImportError):
-        import app.skills.builtin.analysis.stats  # noqa: F401
+    """尝试导入技能模块，失败时记录警告但不阻塞 Agent 启动。"""
+    modules = [
+        "app.skills.builtin.discovery.pubmed",
+        "app.skills.builtin.discovery.understanding",
+        "app.skills.builtin.acquisition.geo",
+        "app.skills.builtin.acquisition.pdb",
+        "app.skills.builtin.acquisition.gdc",
+        "app.skills.builtin.acquisition.xena",
+        "app.skills.builtin.acquisition.browser",
+        "app.skills.builtin.acquisition.reactome",
+        "app.skills.builtin.acquisition.pubchem",
+        "app.skills.builtin.processing.self_evolution",
+        "app.skills.builtin.processing.extract_tables",
+        "app.skills.builtin.analysis.stats",
+    ]
+    for module_name in modules:
+        try:
+            __import__(module_name)
+        except ImportError as error:
+            logger.warning("skill module %s failed to import: %s", module_name, error)
 
 
 def create_agent(databases: list[str] | None = None) -> Agent:
@@ -122,11 +114,6 @@ def create_agent(databases: list[str] | None = None) -> Agent:
         skills: list = acq_skills + non_acq_skills
     else:
         skills = skill_registry.list_enabled()
-
-    if browser_fallback_skill is not None:
-        skills.append(browser_fallback_skill)
-    if self_evolution_skill is not None:
-        skills.append(self_evolution_skill)
 
     _loaded_skill_names = [s.name for s in skills]
 

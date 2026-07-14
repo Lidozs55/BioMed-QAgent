@@ -122,12 +122,18 @@ async def get_databases() -> dict:
 
 
 def _task_status(task_dir: Path) -> str:
-    """Heuristic task status based on directory contents."""
+    """Conservative task status when no valid manifest is available.
+
+    Only the persisted ``RunManifest.task_state`` is authoritative. When the
+    manifest is missing we must NOT infer ``completed`` from directory contents
+    — leftover mock artifacts would otherwise be misreported as success.
+    """
     if not task_dir.exists():
         return "not_found"
     artifacts_dir = task_dir / "artifacts"
     if artifacts_dir.exists() and any(artifacts_dir.iterdir()):
-        return "completed"
+        # Artifacts exist without a valid manifest → inconsistent state.
+        return "failed"
     return "running"
 
 

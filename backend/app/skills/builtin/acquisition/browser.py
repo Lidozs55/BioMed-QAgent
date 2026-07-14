@@ -1,81 +1,93 @@
 """Browser fallback acquisition skill — HTTP-based page navigation and file download
-for biomedical databases when API endpoints are unavailable."""
+for biomedical databases when API endpoints are unavailable.
+
+This skill delegates HTTP concerns (browser UA, Referer, rate limiting) to the
+unified crawler layer in ``app.tools.crawler``, ensuring consistent anti-crawler
+behavior across all acquisition skills (project_memory L11).
+"""
 from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 import httpx
 from agents import RunContextWrapper, function_tool
+from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
 from app.domain.output import SourceRecord
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.tools.crawler import BROWSER_HEADERS, _rate_limiter
 
 logger = logging.getLogger(__name__)
 
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
 _MAX_BODY_CHARS = 5000
 
 
 def _extract_title(html: str) -> str:
-    """Extract <title> tag content via regex."""
-    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-    return m.group(1).strip() if m else ""
+    """Extract <title> tag content via BeautifulSoup."""
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.title and soup.title.string:
+        return soup.title.string.strip()
+    return ""
 
 
 def _extract_body_text(html: str) -> str:
-    """Extract visible text from HTML body by stripping tags and collapsing whitespace."""
-    # Remove script, style, and head blocks
-    cleaned = re.sub(
-        r"<(script|style|head|noscript)[^>]*>.*?</\1>",
-        "", html, flags=re.IGNORECASE | re.DOTALL,
-    )
-    # Strip remaining HTML tags
-    text = re.sub(r"<[^>]+>", " ", cleaned)
-    # Decode common entities
-    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-    text = text.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
+    """Extract visible text from HTML body via BeautifulSoup.
+
+    Removes script/style/head/noscript blocks, then extracts visible text
+    with whitespace collapsed.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    # Remove non-content tags
+    for tag in soup(["script", "style", "head", "noscript"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)
     # Collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return " ".join(text.split())
 
 
 @function_tool
 async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     """Navigate to a web page via HTTP and return page metadata and visible text.
 
-    Fetches the page with a browser User-Agent, extracts the <title> and
-    visible body text (up to 5000 characters). Use this as a last-resort
-    tool when API endpoints are unavailable.
+    Fetches the page with real browser User-Agent, Referer, and Accept headers
+    (project_memory L11), rate-limited to 2s between requests. Extracts the
+    <title> and visible body text (up to 5000 characters) using BeautifulSoup.
+    Use this as a last-resort tool when API endpoints are unavailable.
     """
+    run_ctx: RunContext = ctx.context
+    _rate_limiter.wait()
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=BROWSER_HEADERS)
+            status_code = resp.status_code
+            content_type = resp.headers.get("content-type", "")
 
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"User-Agent": _BROWSER_UA})
-        status_code = resp.status_code
-        content_type = resp.headers.get("content-type", "")
+        logger.info(
+            "navigate_page url=%s status=%d content_type=%s bytes=%d",
+            url, status_code, content_type, len(resp.content),
+        )
 
-    logger.info(
-        "navigate_page url=%s status=%d content_type=%s bytes=%d",
-        url, status_code, content_type, len(resp.content),
-    )
+        html = resp.text
+        title = _extract_title(html)
+        body_text = _extract_body_text(html)
 
-    html = resp.text
-    title = _extract_title(html)
-    body_text = _extract_body_text(html)
-
-    return json.dumps({
-        "url": url,
-        "status_code": status_code,
-        "title": title,
-        "body_text_preview": body_text[:_MAX_BODY_CHARS],
-        "content_type": content_type,
-    })
+        run_ctx.log_query(url, "browser_fallback", "succeeded", 1)
+        return json.dumps({
+            "url": url,
+            "status_code": status_code,
+            "title": title,
+            "body_text_preview": body_text[:_MAX_BODY_CHARS],
+            "content_type": content_type,
+        }, ensure_ascii=False)
+    except Exception as exc:
+        run_ctx.log_query(url, "browser_fallback", "failed", 0)
+        return json.dumps({
+            "url": url,
+            "error": str(exc),
+        }, ensure_ascii=False)
 
 
 @function_tool
@@ -84,62 +96,77 @@ async def download_from_page(
 ) -> str:
     """Download a file from a URL via HTTP streaming to the task raw directory.
 
-    Detects Content-Type, streams the response to task/raw/<filename>,
-    and creates a SourceRecord for provenance tracking. Use this as a
-    last-resort download tool when API endpoints fail.
+    Uses real browser User-Agent, Referer, and Accept headers with 2s rate
+    limiting (project_memory L11). Detects Content-Type, streams the response
+    to task/raw/<filename>, and creates a SourceRecord for provenance tracking.
+    Use this as a last-resort download tool when API endpoints fail.
     """
     run_ctx: RunContext = ctx.context
+    _rate_limiter.wait()
+    try:
+        async with (
+            httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client,
+            client.stream(
+                "GET", url, headers=BROWSER_HEADERS,
+            ) as resp,
+        ):
+            status_code = resp.status_code
+            content_type = resp.headers.get("content-type", "")
+            mime_type = content_type.split(";")[0].strip() if content_type else None
 
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client, client.stream(
-        "GET", url, headers={"User-Agent": _BROWSER_UA},
-    ) as resp:
-        status_code = resp.status_code
-        content_type = resp.headers.get("content-type", "")
-        mime_type = content_type.split(";")[0].strip() if content_type else None
+            dest = run_ctx.work_dir.raw / filename
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            bytes_received = 0
+            with open(dest, "wb") as f:
+                async for chunk in resp.aiter_bytes():
+                    f.write(chunk)
+                    bytes_received += len(chunk)
 
-        dest = run_ctx.work_dir.raw / filename
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        bytes_received = 0
-        with open(dest, "wb") as f:
-            async for chunk in resp.aiter_bytes():
-                f.write(chunk)
-                bytes_received += len(chunk)
+        logger.info(
+            "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
+            url, status_code, content_type, bytes_received, dest,
+        )
 
-    logger.info(
-        "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
-        url, status_code, content_type, bytes_received, dest,
-    )
+        if status_code >= 400:
+            run_ctx.log_query(filename, "browser_fallback", "failed", 0)
+            return json.dumps({
+                "source": "browser_fallback",
+                "accession": filename,
+                "source_url": url,
+                "local_files": [],
+                "error": f"HTTP {status_code}",
+            }, ensure_ascii=False)
 
-    if status_code >= 400:
+        local_path = str(dest)
+        run_ctx.add_raw_asset(local_path)
+
+        source_record = SourceRecord(
+            source="browser_fallback",
+            accession=filename,
+            source_url=url,
+            local_files=[local_path],
+            mime_type=mime_type,
+            format_hint="browser_download",
+        )
+        run_ctx.add_source(source_record)
+        run_ctx.log_query(filename, "browser_fallback", "succeeded", 1)
+
+        return json.dumps({
+            "source": "browser_fallback",
+            "source_url": url,
+            "local_files": [local_path],
+            "mime_type": mime_type,
+            "bytes_received": bytes_received,
+            "retrieved_at": source_record.retrieved_at.isoformat(),
+        }, ensure_ascii=False)
+    except Exception as exc:
+        run_ctx.log_query(filename, "browser_fallback", "failed", 0)
         return json.dumps({
             "source": "browser_fallback",
             "accession": filename,
             "source_url": url,
-            "local_files": [],
-            "error": f"HTTP {status_code}",
-        })
-
-    local_path = str(dest)
-    run_ctx.add_raw_asset(local_path)
-
-    source_record = SourceRecord(
-        source="browser_fallback",
-        accession=filename,
-        source_url=url,
-        local_files=[local_path],
-        mime_type=mime_type,
-        format_hint="browser_download",
-    )
-    run_ctx.add_source(source_record)
-
-    return json.dumps({
-        "source": "browser_fallback",
-        "source_url": url,
-        "local_files": [local_path],
-        "mime_type": mime_type,
-        "bytes_received": bytes_received,
-        "retrieved_at": source_record.retrieved_at.isoformat(),
-    })
+            "error": str(exc),
+        }, ensure_ascii=False)
 
 
 browser_fallback_skill = SkillDef(
@@ -147,8 +174,9 @@ browser_fallback_skill = SkillDef(
     category=SkillCategory.ACQUISITION,
     description=(
         "Last-resort HTTP browser fallback for navigating pages and downloading "
-        "files from biomedical databases when API tools fail. Uses direct HTTP "
-        "requests with browser User-Agent instead of requiring a browser process."
+        "files from biomedical databases when API tools fail. Uses real browser "
+        "User-Agent, Referer, Accept headers, and 2s rate limiting. HTML parsing "
+        "uses BeautifulSoup."
     ),
     instructions=(
         "Use browser_fallback tools only when API endpoints (PubMed, GEO, PDB, "
@@ -159,7 +187,7 @@ browser_fallback_skill = SkillDef(
     ),
     tools=[navigate_page, download_from_page],
     supported_sources=["browser_fallback", "http", "web"],
-    version="0.1.0",
+    version="0.2.0",
 )
 
 skill_registry.register(browser_fallback_skill)
