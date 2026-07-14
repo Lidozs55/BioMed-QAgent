@@ -93,6 +93,37 @@ def test_navigate_page_network_error_returns_error_json() -> None:
     assert rc.query_log[0]["status"] == "failed"
 
 
+def test_navigate_page_failed_fetch_result_returns_error_json() -> None:
+    """navigate_page must not turn crawler failures into empty success."""
+    from app.tools.crawler import FetchResult
+
+    failed = FetchResult(
+        url="https://unreachable.invalid",
+        content="",
+        status_code=0,
+        elapsed_ms=12,
+        method_used="crawl",
+        error="browser launch failed",
+    )
+    ctx = _make_ctx()
+
+    with patch(
+        "app.skills.builtin.acquisition.browser.playwright_fetch",
+        return_value=failed,
+    ):
+        args = json.dumps({"url": "https://unreachable.invalid"})
+        result = asyncio.run(navigate_page.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data == {
+        "url": "https://unreachable.invalid",
+        "status_code": 0,
+        "method_used": "crawl",
+        "error": "browser launch failed",
+    }
+    assert ctx.context.query_log[0]["status"] == "failed"
+
+
 # ---------------------------------------------------------------------------
 # download_from_page
 # ---------------------------------------------------------------------------

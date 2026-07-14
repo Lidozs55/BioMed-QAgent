@@ -61,6 +61,15 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     run_ctx: RunContext = ctx.context
     try:
         result = playwright_fetch(url)
+        if not result.ok:
+            run_ctx.log_query(url, "browser_fallback", "failed", 0)
+            return json.dumps({
+                "url": url,
+                "status_code": result.status_code,
+                "method_used": result.method_used,
+                "error": result.error or f"HTTP {result.status_code}",
+            }, ensure_ascii=False)
+
         status_code = result.status_code
         content_type = result.headers.get("content-type", "")
 
