@@ -54,6 +54,275 @@ def queued_event(task_id: str = "task_123"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("read_operation", ["list_tasks", "find_request"])
+async def test_failed_projection_serializes_index_backed_reads(
+    tmp_path,
+    monkeypatch,
+    read_operation: str,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    projection_entered = threading.Event()
+    release_projection = threading.Event()
+    read_started = asyncio.Event()
+    writer = None
+    reader = None
+
+    def fail_projection(_snapshot) -> None:
+        projection_entered.set()
+        if not release_projection.wait(timeout=3):
+            raise TimeoutError("projection release timed out")
+        raise OSError("simulated index projection failure")
+
+    def fail_rebuild() -> None:
+        raise OSError("simulated index rebuild failure")
+
+    monkeypatch.setattr(repository.index, "_upsert_snapshot_sync", fail_projection)
+    monkeypatch.setattr(repository.index, "_rebuild_sync", fail_rebuild)
+    persisted = snapshot_with_run(
+        task_id="task_failed_projection_read",
+        request_id="req_failed_projection_read",
+        run_id="run_failed_projection_read",
+    )
+
+    async def read_index():
+        read_started.set()
+        if read_operation == "list_tasks":
+            return await repository.list_tasks()
+        return await repository.find_request("req_failed_projection_read")
+
+    writer = asyncio.create_task(repository.save_snapshot(persisted))
+    try:
+        assert await asyncio.to_thread(projection_entered.wait, 2)
+        reader = asyncio.create_task(read_index())
+        await read_started.wait()
+        release_projection.set()
+
+        await writer
+        with pytest.raises(OSError, match="index rebuild failure"):
+            await reader
+        assert repository._index_dirty is True
+    finally:
+        release_projection.set()
+        if writer is not None:
+            await asyncio.gather(writer, return_exceptions=True)
+        if reader is not None:
+            await asyncio.gather(reader, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_rejects_snapshot_save_after_close_without_writing(
+    tmp_path,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    await repository.close()
+
+    with pytest.raises(RuntimeError, match="repository is closed"):
+        await repository.save_snapshot(empty_snapshot("task_after_close"))
+
+    assert not (repository.tasks_dir / "task_after_close").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "read_operation",
+    ["list_messages", "load_conversation_summary"],
+)
+async def test_repository_rejects_recovery_reads_after_close_without_writing(
+    tmp_path,
+    read_operation: str,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_recovery_after_close"
+    await repository.save_snapshot(empty_snapshot(task_id))
+    await asyncio.to_thread(repository.events.append, queued_event(task_id))
+    snapshot_path = repository._snapshot_path(task_id)
+    assert (
+        TaskSnapshot.model_validate_json(
+            snapshot_path.read_text("utf-8")
+        ).task.latest_sequence
+        == 0
+    )
+    await repository.close()
+
+    with pytest.raises(RuntimeError, match="repository is closed"):
+        if read_operation == "list_messages":
+            await repository.list_messages(task_id)
+        else:
+            await repository.load_conversation_summary(task_id)
+
+    assert (
+        TaskSnapshot.model_validate_json(
+            snapshot_path.read_text("utf-8")
+        ).task.latest_sequence
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recovery_operation",
+    ["list_messages", "load_conversation_summary", "save_conversation_summary"],
+)
+async def test_cancelled_snapshot_recovery_drains_before_repository_close(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_operation: str,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_cancelled_recovery_read"
+    await repository.save_snapshot(empty_snapshot(task_id))
+    await asyncio.to_thread(repository.events.append, queued_event(task_id))
+    recovery_entered = threading.Event()
+    release_recovery = threading.Event()
+    recovery_finished = threading.Event()
+    close_drain_started = asyncio.Event()
+    real_load_snapshot = repository._load_snapshot_sync
+    real_close_when_drained = repository._close_index_when_drained
+    real_index_close = repository.index.close
+    index_closed_before_recovery = False
+
+    def blocked_load_snapshot(requested_task_id: str) -> TaskSnapshot | None:
+        recovery_entered.set()
+        if not release_recovery.wait(timeout=3):
+            raise TimeoutError("recovery release timed out")
+        try:
+            return real_load_snapshot(requested_task_id)
+        finally:
+            recovery_finished.set()
+
+    async def observed_close_when_drained() -> None:
+        close_drain_started.set()
+        await real_close_when_drained()
+
+    async def observed_index_close() -> None:
+        nonlocal index_closed_before_recovery
+        if not recovery_finished.is_set():
+            index_closed_before_recovery = True
+        await real_index_close()
+
+    monkeypatch.setattr(repository, "_load_snapshot_sync", blocked_load_snapshot)
+    monkeypatch.setattr(
+        repository,
+        "_close_index_when_drained",
+        observed_close_when_drained,
+    )
+    monkeypatch.setattr(repository.index, "close", observed_index_close)
+    if recovery_operation == "list_messages":
+        recovery_read = asyncio.create_task(repository.list_messages(task_id))
+    elif recovery_operation == "load_conversation_summary":
+        recovery_read = asyncio.create_task(
+            repository.load_conversation_summary(task_id)
+        )
+    else:
+        recovery_read = asyncio.create_task(
+            repository.save_conversation_summary(task_id, {"summary": "updated"})
+        )
+    close = None
+    try:
+        assert await asyncio.to_thread(recovery_entered.wait, 2)
+        recovery_read.cancel()
+        close = asyncio.create_task(repository.close())
+        await close_drain_started.wait()
+        release_recovery.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await recovery_read
+        await close
+        assert recovery_finished.is_set()
+        assert index_closed_before_recovery is False
+    finally:
+        release_recovery.set()
+        await asyncio.gather(recovery_read, return_exceptions=True)
+        if close is not None:
+            await asyncio.gather(close, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_snapshot_save_drains_index_projection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    projection_entered = asyncio.Event()
+    release_projection = asyncio.Event()
+    projection_finished = asyncio.Event()
+    real_upsert = repository.index.upsert_snapshot
+
+    async def blocked_upsert(snapshot) -> None:
+        projection_entered.set()
+        await release_projection.wait()
+        await real_upsert(snapshot)
+        projection_finished.set()
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", blocked_upsert)
+    save = asyncio.create_task(
+        repository.save_snapshot(empty_snapshot("task_cancelled_snapshot_save"))
+    )
+    try:
+        await projection_entered.wait()
+        save.cancel()
+        release_projection.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await save
+        assert projection_finished.is_set()
+        page = await repository.list_tasks()
+        assert [task.task_id for task in page.tasks] == ["task_cancelled_snapshot_save"]
+    finally:
+        release_projection.set()
+        await asyncio.gather(save, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_snapshot_get_drains_index_projection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_cancelled_snapshot_get"
+    await repository.save_snapshot(empty_snapshot(task_id))
+    await asyncio.to_thread(repository._append_event_sync, queued_event(task_id))
+    projection_entered = asyncio.Event()
+    release_projection = asyncio.Event()
+    projection_finished = asyncio.Event()
+    real_upsert = repository.index.upsert_snapshot
+
+    async def blocked_upsert(snapshot) -> None:
+        projection_entered.set()
+        await release_projection.wait()
+        await real_upsert(snapshot)
+        projection_finished.set()
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", blocked_upsert)
+    load = asyncio.create_task(repository.get_snapshot(task_id))
+    try:
+        await projection_entered.wait()
+        load.cancel()
+        release_projection.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await load
+        assert projection_finished.is_set()
+        page = await repository.list_tasks()
+        summary = next(task for task in page.tasks if task.task_id == task_id)
+        assert summary.latest_sequence == 1
+        assert summary.active_run_id == "run_123"
+    finally:
+        release_projection.set()
+        await asyncio.gather(load, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_append_waits_for_index_projection_before_unlocking(
     tmp_path,
     monkeypatch,

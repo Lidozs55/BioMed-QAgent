@@ -6,11 +6,12 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
-from collections.abc import Mapping
-from contextlib import ExitStack
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
@@ -26,6 +27,10 @@ from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import reduce_task_event
+
+
+_ResultT = TypeVar("_ResultT")
+_TRANSIENT_INDEX_ERRORS = (OSError, sqlite3.Error)
 
 
 class TaskNotFoundError(LookupError):
@@ -86,61 +91,127 @@ class TaskRepository:
         )
         self.index = index or TaskIndex(self.tasks_dir, settings=self.settings)
         self._task_locks: dict[str, asyncio.Lock] = {}
+        self._close_lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
+        self._active_operations = 0
+        self._operations_drained = asyncio.Event()
+        self._operations_drained.set()
+        self._closing = False
+        self._closed = False
+        self._index_gate = asyncio.Lock()
         self._index_dirty = False
 
     async def initialize(self) -> None:
-        await self.index.initialize()
-        await self.index.rebuild()
-        self._index_dirty = False
+        async with self._operation():
+            async with self._index_gate:
+                await self.index.initialize()
+                await self.index.rebuild()
+                self._index_dirty = False
 
     async def close(self) -> None:
+        async with self._close_lock:
+            async with self._lifecycle_lock:
+                if self._closed:
+                    return
+                self._closing = True
+            try:
+                await self._shield_and_drain(self._close_index_when_drained())
+            finally:
+                async with self._lifecycle_lock:
+                    self._closed = True
+
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("task repository is closed")
+            self._active_operations += 1
+            self._operations_drained.clear()
+        try:
+            yield
+        finally:
+            async with self._lifecycle_lock:
+                self._active_operations -= 1
+                if self._active_operations == 0:
+                    self._operations_drained.set()
+
+    async def _close_index_when_drained(self) -> None:
+        await self._operations_drained.wait()
         await self.index.close()
 
+    async def _shield_and_drain(
+        self,
+        operation: Awaitable[_ResultT],
+    ) -> _ResultT:
+        operation_task = asyncio.create_task(operation)
+        try:
+            return await asyncio.shield(operation_task)
+        except asyncio.CancelledError:
+            while not operation_task.done():
+                try:
+                    await asyncio.shield(operation_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not operation_task.cancelled():
+                operation_task.exception()
+            raise
+
     async def save_snapshot(self, snapshot: TaskSnapshot) -> None:
-        lock = self._task_locks.setdefault(snapshot.task.task_id, asyncio.Lock())
-        async with lock:
-            persisted = self._snapshot_without_messages(snapshot)
-            await asyncio.to_thread(self._save_snapshot_sync, persisted)
-            await self._project_snapshot(persisted)
+        async with self._operation():
+            lock = self._task_locks.setdefault(snapshot.task.task_id, asyncio.Lock())
+            async with lock:
+                persisted = self._snapshot_without_messages(snapshot)
+
+                async def save_and_project() -> None:
+                    async with self._index_gate:
+                        await asyncio.to_thread(self._save_snapshot_sync, persisted)
+                        await self._project_snapshot_locked(persisted)
+
+                await self._shield_and_drain(save_and_project())
 
     async def get_snapshot(self, task_id: str) -> TaskSnapshot | None:
-        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
-        async with lock:
-            snapshot = await asyncio.to_thread(self._load_snapshot_sync, task_id)
-            if snapshot is None:
-                return None
-            await self._project_snapshot(snapshot)
-        messages = await self.task_session(task_id).get_message_page()
-        return snapshot.model_copy(
-            update={
-                "messages": messages.messages,
-                "older_messages_cursor": messages.next_cursor,
-            }
-        )
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def load_and_project() -> TaskSnapshot | None:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._load_snapshot_sync,
+                            task_id,
+                        )
+                        if snapshot is None:
+                            return None
+                        await self._project_snapshot_locked(snapshot)
+                        return snapshot
+
+                snapshot = await self._shield_and_drain(load_and_project())
+                if snapshot is None:
+                    return None
+            messages = await self.task_session(task_id).get_message_page()
+            return snapshot.model_copy(
+                update={
+                    "messages": messages.messages,
+                    "older_messages_cursor": messages.next_cursor,
+                }
+            )
 
     async def append_event(self, event: EventEnvelope) -> TaskSnapshot:
-        lock = self._task_locks.setdefault(event.task_id, asyncio.Lock())
-        async with lock:
+        async with self._operation():
+            lock = self._task_locks.setdefault(event.task_id, asyncio.Lock())
+            async with lock:
 
-            async def append_and_index() -> TaskSnapshot:
-                snapshot = await asyncio.to_thread(self._append_event_sync, event)
-                await self._project_snapshot(snapshot)
-                return snapshot
+                async def append_and_index() -> TaskSnapshot:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._append_event_sync, event
+                        )
+                        await self._project_snapshot_locked(snapshot)
+                        return snapshot
 
-            append_task = asyncio.create_task(append_and_index())
-            try:
-                return await asyncio.shield(append_task)
-            except asyncio.CancelledError:
-                while not append_task.done():
-                    try:
-                        await asyncio.shield(append_task)
-                    except asyncio.CancelledError:
-                        continue
-                    except BaseException:
-                        break
-                if not append_task.cancelled():
-                    append_task.exception()
-                raise
+                return await self._shield_and_drain(append_and_index())
 
     async def list_events(
         self,
@@ -162,8 +233,10 @@ class TaskRepository:
         limit: int | None = None,
         cursor: str | None = None,
     ) -> TaskPage:
-        await self._ensure_index_current()
-        return await self.index.list_tasks(limit=limit, cursor=cursor)
+        async with self._operation():
+            async with self._index_gate:
+                await self._ensure_index_current_locked()
+                return await self.index.list_tasks(limit=limit, cursor=cursor)
 
     async def list_messages(
         self,
@@ -172,12 +245,27 @@ class TaskRepository:
         limit: int | None = None,
         cursor: str | None = None,
     ) -> MessagePage:
-        if await asyncio.to_thread(self._load_snapshot_sync, task_id) is None:
-            raise TaskNotFoundError(task_id)
-        return await self.task_session(task_id).get_message_page(
-            limit=limit,
-            cursor=cursor,
-        )
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def load_and_project() -> TaskSnapshot | None:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._load_snapshot_sync,
+                            task_id,
+                        )
+                        if snapshot is not None:
+                            await self._project_snapshot_locked(snapshot)
+                        return snapshot
+
+                snapshot = await self._shield_and_drain(load_and_project())
+                if snapshot is None:
+                    raise TaskNotFoundError(task_id)
+            return await self.task_session(task_id).get_message_page(
+                limit=limit,
+                cursor=cursor,
+            )
 
     def task_session(self, task_id: str) -> DurableTaskSession:
         return DurableTaskSession(
@@ -190,124 +278,152 @@ class TaskRepository:
         self,
         accepted: TaskRunAccepted,
     ) -> TaskRunAccepted:
-        lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
-        async with lock:
-            snapshot = await asyncio.to_thread(
-                self._load_snapshot_sync,
-                accepted.task_id,
-            )
-            if snapshot is None:
-                raise TaskNotFoundError(accepted.task_id)
-            authoritative = any(
-                run.task_id == accepted.task_id
-                and run.run_id == accepted.run_id
-                and run.request_id == accepted.request_id
-                for run in snapshot.runs
-            )
-            if not authoritative:
-                raise ValueError(
-                    "request registration must match an authoritative task run"
-                )
-            try:
-                registered = await self.index.record_request(accepted)
-            except Exception:
-                self._index_dirty = True
-                raise
-            if registered != accepted:
-                raise ValueError("request_id conflicts with authoritative task run")
-            return registered
+        async with self._operation():
+            lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
+            async with lock:
+
+                async def validate_and_record() -> TaskRunAccepted:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._load_snapshot_sync,
+                            accepted.task_id,
+                        )
+                        if snapshot is None:
+                            raise TaskNotFoundError(accepted.task_id)
+                        authoritative = any(
+                            run.task_id == accepted.task_id
+                            and run.run_id == accepted.run_id
+                            and run.request_id == accepted.request_id
+                            for run in snapshot.runs
+                        )
+                        if not authoritative:
+                            raise ValueError(
+                                "request registration must match an authoritative "
+                                "task run"
+                            )
+                        return await self._project_request_locked(accepted)
+
+                return await self._shield_and_drain(validate_and_record())
 
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
-        await self._ensure_index_current()
-        return await self.index.find_request(request_id)
+        async with self._operation():
+            async with self._index_gate:
+                await self._ensure_index_current_locked()
+                return await self.index.find_request(request_id)
 
-    async def _ensure_index_current(self) -> None:
+    async def _ensure_index_current_locked(self) -> None:
         if not self._index_dirty:
             return
         await self.index.rebuild()
         self._index_dirty = False
 
-    async def _project_snapshot(self, snapshot: TaskSnapshot) -> None:
+    async def _project_snapshot_locked(self, snapshot: TaskSnapshot) -> None:
         try:
             await self.index.upsert_snapshot(snapshot)
-        except Exception:
+        except _TRANSIENT_INDEX_ERRORS:
             self._index_dirty = True
             try:
                 await self.index.rebuild()
             except ValueError:
                 raise
-            except Exception:
+            except _TRANSIENT_INDEX_ERRORS:
                 return
             self._index_dirty = False
 
-    async def delete_task(self, task_id: str) -> None:
-        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
-        async with lock:
-
-            async def delete_tree_and_index() -> None:
-                await asyncio.to_thread(self._delete_task_tree_sync, task_id)
-                try:
-                    await self.index.delete_task(task_id)
-                except Exception as error:
-                    self._index_dirty = True
-                    try:
-                        await self.index.rebuild()
-                    except Exception as rebuild_error:
-                        error.add_note(
-                            "task index rebuild also failed: "
-                            f"{type(rebuild_error).__name__}: {rebuild_error}"
-                        )
-                    else:
-                        self._index_dirty = False
-                    raise
-
-            delete_task = asyncio.create_task(delete_tree_and_index())
+    async def _project_request_locked(
+        self,
+        accepted: TaskRunAccepted,
+    ) -> TaskRunAccepted:
+        try:
+            registered = await self.index.record_request(accepted)
+        except _TRANSIENT_INDEX_ERRORS:
+            self._index_dirty = True
             try:
-                await asyncio.shield(delete_task)
-            except asyncio.CancelledError:
-                while not delete_task.done():
-                    try:
-                        await asyncio.shield(delete_task)
-                    except asyncio.CancelledError:
-                        continue
-                    except BaseException:
-                        break
-                if not delete_task.cancelled():
-                    delete_task.exception()
+                await self.index.rebuild()
+            except ValueError:
                 raise
+            except _TRANSIENT_INDEX_ERRORS:
+                return accepted
+            self._index_dirty = False
+            return accepted
+        if registered != accepted:
+            self._index_dirty = True
+            raise ValueError("request_id conflicts with authoritative task run")
+        return registered
+
+    async def delete_task(self, task_id: str) -> None:
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def delete_tree_and_index() -> None:
+                    async with self._index_gate:
+                        await asyncio.to_thread(self._delete_task_tree_sync, task_id)
+                        try:
+                            await self.index.delete_task(task_id)
+                        except Exception as error:
+                            self._index_dirty = True
+                            try:
+                                await self.index.rebuild()
+                            except Exception as rebuild_error:
+                                error.add_note(
+                                    "task index rebuild also failed: "
+                                    f"{type(rebuild_error).__name__}: "
+                                    f"{rebuild_error}"
+                                )
+                            else:
+                                self._index_dirty = False
+                            raise
+
+                await self._shield_and_drain(delete_tree_and_index())
 
     async def save_conversation_summary(
         self,
         task_id: str,
         summary: Mapping[str, Any],
     ) -> None:
-        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
-        async with lock:
-            if await asyncio.to_thread(self._load_snapshot_sync, task_id) is None:
-                raise TaskNotFoundError(task_id)
-            path = self._state_dir(task_id) / "conversation_summary.json"
-            write_task = asyncio.create_task(
-                asyncio.to_thread(atomic_write_json, path, summary)
-            )
-            try:
-                await asyncio.shield(write_task)
-            except asyncio.CancelledError:
-                while not write_task.done():
-                    try:
-                        await asyncio.shield(write_task)
-                    except asyncio.CancelledError:
-                        continue
-                    except BaseException:
-                        break
-                if not write_task.cancelled():
-                    write_task.exception()
-                raise
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def load_and_project() -> TaskSnapshot | None:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._load_snapshot_sync,
+                            task_id,
+                        )
+                        if snapshot is not None:
+                            await self._project_snapshot_locked(snapshot)
+                        return snapshot
+
+                snapshot = await self._shield_and_drain(load_and_project())
+                if snapshot is None:
+                    raise TaskNotFoundError(task_id)
+                path = self._state_dir(task_id) / "conversation_summary.json"
+                await self._shield_and_drain(
+                    asyncio.to_thread(atomic_write_json, path, summary)
+                )
 
     async def load_conversation_summary(self, task_id: str) -> dict[str, Any]:
-        if await asyncio.to_thread(self._load_snapshot_sync, task_id) is None:
-            raise TaskNotFoundError(task_id)
-        path = self._state_dir(task_id) / "conversation_summary.json"
-        return await asyncio.to_thread(self._read_json_object, path)
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def load_and_project() -> TaskSnapshot | None:
+                    async with self._index_gate:
+                        snapshot = await asyncio.to_thread(
+                            self._load_snapshot_sync,
+                            task_id,
+                        )
+                        if snapshot is not None:
+                            await self._project_snapshot_locked(snapshot)
+                        return snapshot
+
+                snapshot = await self._shield_and_drain(load_and_project())
+                if snapshot is None:
+                    raise TaskNotFoundError(task_id)
+            path = self._state_dir(task_id) / "conversation_summary.json"
+            return await asyncio.to_thread(self._read_json_object, path)
 
     def _task_dir(self, task_id: str) -> Path:
         return self.events.path_for(task_id).parent

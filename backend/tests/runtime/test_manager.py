@@ -1008,6 +1008,99 @@ async def test_create_task_seq1_projection_and_rebuild_failure_keeps_one_task(
 
 
 @pytest.mark.asyncio
+async def test_create_task_request_projection_and_rebuild_failure_keeps_one_run(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_ids = iter(["task_request_projection", "task_request_retry"])
+    run_ids = iter(["run_request_projection", "run_request_retry"])
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(_execution) -> None:
+        raise AssertionError("queued run must remain gated")
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_record_request = repository.index.record_request
+    real_rebuild = repository.index.rebuild
+
+    async def fail_record_request(_accepted) -> TaskRunAccepted:
+        raise OSError("simulated request projection failure")
+
+    async def fail_rebuild() -> None:
+        raise OSError("simulated request rebuild failure")
+
+    monkeypatch.setattr(repository.index, "record_request", fail_record_request)
+    monkeypatch.setattr(repository.index, "rebuild", fail_rebuild)
+    request = StartTaskRequest(
+        request_id="req_request_projection_failure",
+        input="preserve the committed request",
+    )
+    try:
+        accepted = await manager.create_task(request)
+
+        monkeypatch.setattr(
+            repository.index,
+            "record_request",
+            real_record_request,
+        )
+        with pytest.raises(OSError, match="request rebuild failure"):
+            await manager.create_task(request)
+
+        monkeypatch.setattr(repository.index, "rebuild", real_rebuild)
+        retried = await manager.create_task(request)
+
+        assert retried == accepted
+        assert accepted.task_id == "task_request_projection"
+        assert accepted.run_id == "run_request_projection"
+        assert await repository.find_request(request.request_id) == accepted
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [accepted.run_id]
+        assert len(await repository.list_events(accepted.task_id)) == 1
+    finally:
+        monkeypatch.setattr(repository.index, "record_request", real_record_request)
+        monkeypatch.setattr(repository.index, "rebuild", real_rebuild)
+        await manager.close()
+        if semaphore_held:
+            manager._semaphore.release()
+            semaphore_held = False
+
+    reopened = TaskRepository(output_dir)
+    restarted = manager_module.TaskManager(
+        reopened,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await restarted._semaphore.acquire()
+    restarted_semaphore_held = True
+    await restarted.start()
+    try:
+        restarted_retry = await restarted.create_task(request)
+
+        assert restarted_retry == accepted
+        page = await reopened.list_tasks()
+        assert [task.task_id for task in page.tasks] == [accepted.task_id]
+        snapshot = await reopened.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [accepted.run_id]
+    finally:
+        await restarted.close()
+        if restarted_semaphore_held:
+            restarted._semaphore.release()
+
+
+@pytest.mark.asyncio
 async def test_create_task_revalidates_constructed_fixture_request(
     tmp_path,
     monkeypatch,
