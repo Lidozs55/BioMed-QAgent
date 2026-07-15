@@ -11,6 +11,7 @@ import type {
 } from "@/runtime/contracts";
 import {
   createInitialRuntimeState,
+  createTaskProjection,
   hydrateTaskSnapshot as projectTaskSnapshot,
   mergeTaskPage as projectTaskPage,
   reduceRuntimeEvent,
@@ -51,7 +52,8 @@ export function mergeTaskArtifacts(
   const task = state.tasksById[taskId];
   if (task === undefined) return state;
   const artifactsById = { ...task.artifactsById };
-  const artifactOrder: string[] = [];
+  const artifactOrder = [...task.artifactOrder];
+  const orderedArtifactIds = new Set(artifactOrder);
   for (const artifact of artifacts) {
     artifactsById[artifact.artifact_id] = {
       ...artifact,
@@ -59,7 +61,10 @@ export function mergeTaskArtifacts(
       generatedByStepId:
         artifactsById[artifact.artifact_id]?.generatedByStepId ?? null,
     };
-    artifactOrder.push(artifact.artifact_id);
+    if (!orderedArtifactIds.has(artifact.artifact_id)) {
+      artifactOrder.push(artifact.artifact_id);
+      orderedArtifactIds.add(artifact.artifact_id);
+    }
   }
   return {
     ...state,
@@ -77,8 +82,55 @@ export function addAcceptedTask(
   databases: string[],
   mode: TaskMode,
 ): AgentRuntimeData {
-  if (state.tasksById[accepted.taskId] !== undefined) return state;
   const timestamp = new Date(0).toISOString();
+  const acceptedRun = {
+    runId: accepted.runId,
+    taskId: accepted.taskId,
+    requestId: accepted.requestId,
+    status: "queued" as const,
+    input,
+    createdAt: null,
+    updatedAt: timestamp,
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+  };
+  const acceptedMessage = {
+    messageId: `live:${accepted.runId}:user`,
+    taskId: accepted.taskId,
+    runId: accepted.runId,
+    ordinal: null,
+    role: "user" as const,
+    content: input,
+    createdAt: timestamp,
+    sequence: null,
+  };
+  const existing = state.tasksById[accepted.taskId];
+  if (existing !== undefined) {
+    if (existing.hydration !== "summary") {
+      return { ...state, activeTaskId: accepted.taskId };
+    }
+    const summaryProjection = createTaskProjection(existing.summary);
+    const projection = {
+      ...summaryProjection,
+      runsById: { [accepted.runId]: acceptedRun },
+      runOrder: [accepted.runId],
+      messages: [acceptedMessage],
+      lastSequence: 0,
+      hydration: "accepted" as const,
+    };
+    return {
+      ...state,
+      tasksById: { ...state.tasksById, [accepted.taskId]: projection },
+      activeItems: state.activeItems.includes(accepted.taskId)
+        ? state.activeItems
+        : [accepted.taskId, ...state.activeItems],
+      taskOrder: state.taskOrder.filter(
+        (taskId) => taskId !== accepted.taskId,
+      ),
+      activeTaskId: accepted.taskId,
+    };
+  }
   const summary = {
     task_id: accepted.taskId,
     mode,
@@ -93,32 +145,10 @@ export function addAcceptedTask(
   const projection = {
     summary,
     runsById: {
-      [accepted.runId]: {
-        runId: accepted.runId,
-        taskId: accepted.taskId,
-        requestId: accepted.requestId,
-        status: "queued" as const,
-        input,
-        createdAt: null,
-        updatedAt: timestamp,
-        startedAt: null,
-        finishedAt: null,
-        error: null,
-      },
+      [accepted.runId]: acceptedRun,
     },
     runOrder: [accepted.runId],
-    messages: [
-      {
-        messageId: `live:${accepted.runId}:user`,
-        taskId: accepted.taskId,
-        runId: accepted.runId,
-        ordinal: null,
-        role: "user" as const,
-        content: input,
-        createdAt: timestamp,
-        sequence: null,
-      },
-    ],
+    messages: [acceptedMessage],
     olderMessagesCursor: null,
     activitiesById: {},
     activityOrder: [],

@@ -22,8 +22,12 @@ export default function App() {
   );
 
   useEffect(() => {
-    void startRuntime({ api, transport });
-    return () => transport.disconnect();
+    const startup = new AbortController();
+    void startRuntime({ api, transport, signal: startup.signal });
+    return () => {
+      startup.abort();
+      transport.disconnect();
+    };
   }, [api, transport]);
 
   return (

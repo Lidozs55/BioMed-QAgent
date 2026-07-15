@@ -166,6 +166,34 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeTaskId).toBeNull();
   });
 
+  it("ignores an aborted startup page that resolves after a newer startup", async () => {
+    const olderPage = deferred<TaskPage>();
+    const newerPage = deferred<TaskPage>();
+    const startupAbort = new AbortController();
+    const eventTransport = transport();
+    const olderStartup = startRuntime({
+      api: api({ fetchTasks: vi.fn(() => olderPage.promise) }),
+      transport: eventTransport,
+      ...{ signal: startupAbort.signal },
+    });
+
+    startupAbort.abort();
+    const newerStartup = startRuntime({
+      api: api({ fetchTasks: vi.fn(() => newerPage.promise) }),
+      transport: eventTransport,
+      ...{ signal: new AbortController().signal },
+    });
+    newerPage.resolve(page([summary("task_newer", "running", 4)]));
+    await Promise.resolve();
+    olderPage.resolve(page([summary("task_older", "running", 2)]));
+    await Promise.all([olderStartup, newerStartup]);
+
+    expect(useAgentStore.getState().activeItems).toEqual(["task_newer"]);
+    expect(useAgentStore.getState().tasksById.task_older).toBeUndefined();
+    expect(eventTransport.subscribe).toHaveBeenCalledTimes(1);
+    expect(eventTransport.subscribe).toHaveBeenCalledWith("task_newer", 4);
+  });
+
   it("selects a background task only after the unsubscribe barrier and snapshot", async () => {
     useAgentStore.getState().mergeTaskPage(page([summary("task_a")]), false);
     const barrier = deferred<void>();
@@ -258,6 +286,69 @@ describe("runtime orchestration", () => {
     expect(eventTransport.subscribe).toHaveBeenCalledWith("task_a", 5);
   });
 
+  it("keeps the last user selection when an earlier task snapshot resolves later", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_a"), summary("task_b")]),
+      false,
+    );
+    const taskA = deferred<TaskSnapshot>();
+    const taskB = deferred<TaskSnapshot>();
+    const apiClient = api({
+      fetchTask: vi.fn((taskId: string) =>
+        taskId === "task_a" ? taskA.promise : taskB.promise,
+      ),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const selectA = controller.selectTask("task_a");
+    const selectB = controller.selectTask("task_b");
+    taskB.resolve(snapshot("task_b", 4));
+    await selectB;
+    expect(useAgentStore.getState().activeTaskId).toBe("task_b");
+    taskA.resolve(snapshot("task_a", 3));
+    await selectA;
+
+    expect(useAgentStore.getState().activeTaskId).toBe("task_b");
+  });
+
+  it("shares one task-local selection handoff across overlapping same-task requests", async () => {
+    useAgentStore.getState().mergeTaskPage(page([summary("task_a")]), false);
+    const barrier = deferred<void>();
+    const detail = deferred<TaskSnapshot>();
+    let desired = true;
+    const apiClient = api({
+      fetchTask: vi.fn(() => detail.promise),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({
+      isSubscribed: vi.fn(() => desired),
+      unsubscribeAndWait: vi.fn(() => {
+        desired = false;
+        return barrier.promise;
+      }),
+      subscribe: vi.fn(() => {
+        desired = true;
+      }),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const first = controller.selectTask("task_a");
+    const second = controller.selectTask("task_a");
+    await Promise.resolve();
+    const fetchesBeforeBarrier = vi.mocked(apiClient.fetchTask).mock.calls.length;
+    barrier.resolve();
+    await Promise.resolve();
+    detail.resolve(snapshot("task_a", 7));
+    await Promise.all([first, second]);
+
+    expect(fetchesBeforeBarrier).toBe(0);
+    expect(eventTransport.unsubscribeAndWait).toHaveBeenCalledTimes(1);
+    expect(apiClient.fetchTask).toHaveBeenCalledTimes(1);
+    expect(eventTransport.subscribe).toHaveBeenCalledTimes(1);
+    expect(useAgentStore.getState().activeTaskId).toBe("task_a");
+  });
+
   it("admits a new task through REST then hydrates and subscribes without a socket run", async () => {
     const accepted: TaskRunAccepted = {
       request_id: "req_create",
@@ -285,6 +376,144 @@ describe("runtime orchestration", () => {
     expect(apiClient.fetchTask).toHaveBeenCalledWith("task_created");
     expect(eventTransport.subscribe).toHaveBeenCalledWith("task_created", 1);
     expect(useAgentStore.getState().activeTaskId).toBe("task_created");
+  });
+
+  it("drains accepted-task replay through the snapshot watermark before hydrating", async () => {
+    const accepted: TaskRunAccepted = {
+      request_id: "req_replay",
+      task_id: "task_replay",
+      run_id: "run_replay",
+      status: "queued",
+    };
+    const order: string[] = [];
+    const apiClient = api({
+      createTask: vi.fn().mockResolvedValue(accepted),
+      fetchTask: vi.fn(() => {
+        order.push("fetch");
+        return Promise.resolve(snapshot("task_replay", 1));
+      }),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({
+      subscribe: vi.fn((_taskId, afterSequence) => {
+        order.push(`subscribe:${afterSequence}`);
+      }),
+      unsubscribeAndWait: vi.fn(() => {
+        order.push("barrier");
+        useAgentStore.getState().applyEvent({
+          schema_version: "2.0",
+          event_id: "event_replay_1",
+          type: "tool_started",
+          task_id: "task_replay",
+          run_id: "run_replay",
+          stage_attempt_id: null,
+          sequence: 1,
+          timestamp: "2026-07-14T00:00:01Z",
+          payload: {
+            type: "tool_started",
+            tool_call_id: "call_replay",
+            tool_name: "search_literature",
+          },
+        });
+        return Promise.resolve();
+      }),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+
+    expect(order).toEqual([
+      "fetch",
+      "subscribe:0",
+      "barrier",
+      "subscribe:1",
+    ]);
+    expect(
+      useAgentStore.getState().tasksById.task_replay.activityOrder,
+    ).toEqual(["tool:run_replay:call_replay"]);
+  });
+
+  it("preserves equal-watermark assistant replay when hydrating the accepted snapshot", async () => {
+    const accepted: TaskRunAccepted = {
+      request_id: "req_delta",
+      task_id: "task_delta",
+      run_id: "run_delta",
+      status: "queued",
+    };
+    const detail = snapshot("task_delta", 2);
+    detail.messages = [
+      {
+        message_id: "message_delta_user",
+        task_id: "task_delta",
+        run_id: "run_delta",
+        ordinal: 1,
+        role: "user",
+        content: "question",
+        created_at: CREATED_AT,
+      },
+    ];
+    const eventTransport = transport({
+      unsubscribeAndWait: vi.fn(() => {
+        useAgentStore.getState().applyEvent({
+          schema_version: "2.0",
+          event_id: "event_delta_queued",
+          type: "run_queued",
+          task_id: "task_delta",
+          run_id: "run_delta",
+          stage_attempt_id: null,
+          sequence: 1,
+          timestamp: "2026-07-14T00:00:01Z",
+          payload: {
+            type: "run_queued",
+            request_id: "req_delta",
+            input: "question",
+          },
+        });
+        useAgentStore.getState().applyEvent({
+          schema_version: "2.0",
+          event_id: "event_delta_assistant",
+          type: "assistant_delta",
+          task_id: "task_delta",
+          run_id: "run_delta",
+          stage_attempt_id: null,
+          sequence: 2,
+          timestamp: "2026-07-14T00:00:02Z",
+          payload: { type: "assistant_delta", delta: "partial answer" },
+        });
+        return Promise.resolve();
+      }),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockResolvedValue(detail),
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+
+    expect(useAgentStore.getState().tasksById.task_delta.runOrder).toEqual([
+      "run_delta",
+    ]);
+    expect(
+      useAgentStore.getState().tasksById.task_delta.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    ).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: "partial answer" },
+    ]);
   });
 
   it("installs an accepted shell before subscribing and keeps it when hydration fails", async () => {
@@ -326,6 +555,163 @@ describe("runtime orchestration", () => {
       lastSequence: 0,
     });
     expect(state.tasksById.task_shell.messages[0].content).toBe("question");
+  });
+
+  it("merges an accepted shell into startup history and replays from zero when snapshot hydration fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_existing", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_existing",
+      task_id: "task_existing",
+      run_id: "run_task_existing",
+      status: "queued",
+    };
+    const subscribedFrom: number[] = [];
+    const eventTransport = transport({
+      subscribe: vi.fn((_taskId, afterSequence) => {
+        subscribedFrom.push(afterSequence);
+        useAgentStore.getState().applyEvent({
+          schema_version: "2.0",
+          event_id: "event_existing_1",
+          type: "run_queued",
+          task_id: "task_existing",
+          run_id: "run_task_existing",
+          stage_attempt_id: null,
+          sequence: 1,
+          timestamp: "2026-07-14T00:00:01Z",
+          payload: {
+            type: "run_queued",
+            request_id: "req_existing",
+            input: "question",
+          },
+        });
+        useAgentStore.getState().applyEvent({
+          schema_version: "2.0",
+          event_id: "event_existing_2",
+          type: "run_started",
+          task_id: "task_existing",
+          run_id: "run_task_existing",
+          stage_attempt_id: null,
+          sequence: 2,
+          timestamp: "2026-07-14T00:00:02Z",
+          payload: { type: "run_started" },
+        });
+      }),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({
+      input: "question",
+      databases: ["pubmed"],
+      mode: "agent",
+    });
+
+    const state = useAgentStore.getState();
+    expect(subscribedFrom).toEqual([0]);
+    expect(state.activeTaskId).toBe("task_existing");
+    expect(state.tasksById.task_existing).toMatchObject({
+      hydration: "accepted",
+      runOrder: ["run_task_existing"],
+      lastSequence: 2,
+    });
+    expect(state.tasksById.task_existing.messages).toHaveLength(1);
+    expect(state.tasksById.task_existing.summary.status).toBe("running");
+  });
+
+  it("drains a startup subscription before resetting an accepted summary watermark", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_existing", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_existing",
+      task_id: "task_existing",
+      run_id: "run_task_existing",
+      status: "queued",
+    };
+    let desiredSequence: number | null = 2;
+    const order: string[] = [];
+    const applyAssistantDelta = (sequence: number, delta: string) => {
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: `event_existing_delta_${sequence}`,
+        type: "assistant_delta",
+        task_id: "task_existing",
+        run_id: "run_task_existing",
+        stage_attempt_id: null,
+        sequence,
+        timestamp: `2026-07-14T00:00:0${sequence}Z`,
+        payload: { type: "assistant_delta", delta },
+      });
+    };
+    const eventTransport = transport({
+      isSubscribed: vi.fn(() => desiredSequence !== null),
+      unsubscribeAndWait: vi.fn(() => {
+        order.push("barrier");
+        expect(
+          useAgentStore.getState().tasksById.task_existing,
+        ).toMatchObject({ hydration: "summary", lastSequence: 2 });
+        applyAssistantDelta(3, "late");
+        desiredSequence = null;
+        return Promise.resolve();
+      }),
+      subscribe: vi.fn((_taskId, afterSequence) => {
+        desiredSequence = Math.max(desiredSequence ?? 0, afterSequence);
+        order.push(`subscribe:${desiredSequence}`);
+        if (afterSequence === 0) {
+          useAgentStore.getState().applyEvent({
+            schema_version: "2.0",
+            event_id: "event_existing_queued",
+            type: "run_queued",
+            task_id: "task_existing",
+            run_id: "run_task_existing",
+            stage_attempt_id: null,
+            sequence: 1,
+            timestamp: "2026-07-14T00:00:01Z",
+            payload: {
+              type: "run_queued",
+              request_id: "req_existing",
+              input: "question",
+            },
+          });
+          applyAssistantDelta(2, "early");
+          applyAssistantDelta(3, "late");
+        }
+      }),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({
+      input: "question",
+      databases: ["pubmed"],
+      mode: "agent",
+    });
+
+    expect(order).toEqual(["barrier", "subscribe:0"]);
+    expect(desiredSequence).toBe(0);
+    expect(useAgentStore.getState().tasksById.task_existing).toMatchObject({
+      hydration: "accepted",
+      lastSequence: 3,
+    });
+    expect(
+      useAgentStore.getState().tasksById.task_existing.messages.map(
+        (message) => message.content,
+      ),
+    ).toEqual(["question", "earlylate"]);
   });
 
   it("replays a queued event that arrives before accepted-task hydration", async () => {

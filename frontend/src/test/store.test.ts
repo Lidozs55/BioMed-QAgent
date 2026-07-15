@@ -189,6 +189,24 @@ describe("agent task projection store", () => {
     expect(state.tasksById.task_b.summary.status).toBe("running");
   });
 
+  it("keeps a locally terminal task in history when a stale first page still calls it active", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_terminal", "running", 0)], [], null),
+      false,
+    );
+    useAgentStore.getState().applyEvent(completedEvent("task_terminal", 3));
+
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_terminal", "running", 2)], [], null),
+      false,
+    );
+
+    const state = useAgentStore.getState();
+    expect(state.tasksById.task_terminal.summary.status).toBe("completed");
+    expect(state.activeItems).not.toContain("task_terminal");
+    expect(state.taskOrder).toContain("task_terminal");
+  });
+
   it("hydrates an authoritative snapshot without implicitly selecting it", () => {
     useAgentStore.getState().hydrateTaskSnapshot(snapshot("task_detail", 8));
 
@@ -204,6 +222,26 @@ describe("agent task projection store", () => {
       "message_task_detail",
     );
   });
+
+  it.each(["completed", "failed", "cancelled", "interrupted"] as const)(
+    "moves a task hydrated as %s from active items into history",
+    (status) => {
+      useAgentStore.getState().mergeTaskPage(
+        page([summary("task_terminal", "running", 2)], [], null),
+        false,
+      );
+
+      useAgentStore.getState().hydrateTaskSnapshot({
+        ...snapshot("task_terminal", 5),
+        task: summary("task_terminal", status, 5),
+      });
+
+      const state = useAgentStore.getState();
+      expect(state.activeItems).not.toContain("task_terminal");
+      expect(state.taskOrder).toContain("task_terminal");
+      expect(state.tasksById.task_terminal.summary.status).toBe(status);
+    },
+  );
 
   it("ignores a stale snapshot after a newer live event", () => {
     useAgentStore.getState().mergeTaskPage(
@@ -306,6 +344,53 @@ describe("agent task projection store", () => {
       size: 42,
     });
     expect(state.tasksById.task_b).toBe(beforeTaskB);
+  });
+
+  it("keeps a live artifact visible when an older REST artifact list resolves later", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_artifacts", "running", 0)], [], null),
+      false,
+    );
+    useAgentStore.getState().applyEvent({
+      schema_version: "2.0",
+      event_id: "event_artifact_live",
+      type: "artifact_produced",
+      task_id: "task_artifacts",
+      run_id: "run_task_artifacts",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: {
+        type: "artifact_produced",
+        artifact: {
+          artifact_id: "artifact_live",
+          name: "live.csv",
+          relative_path: "artifacts/live.csv",
+          media_type: "text/csv",
+          size_bytes: 5,
+          sha256: "b".repeat(64),
+          generated_by_step_id: "step_live",
+        },
+      },
+    });
+
+    useAgentStore.setState((state) =>
+      mergeTaskArtifacts(state, "task_artifacts", [
+        {
+          artifact_id: "artifact_rest",
+          name: "rest.csv",
+          size: 4,
+          sha256: "a".repeat(64),
+          media_type: "text/csv",
+        },
+      ]),
+    );
+
+    const task = useAgentStore.getState().tasksById.task_artifacts;
+    expect(task.artifactOrder).toEqual(["artifact_live", "artifact_rest"]);
+    expect(Object.keys(task.artifactsById)).toEqual(
+      expect.arrayContaining(["artifact_live", "artifact_rest"]),
+    );
   });
 
   it("persists only version 2 draft database preferences", () => {

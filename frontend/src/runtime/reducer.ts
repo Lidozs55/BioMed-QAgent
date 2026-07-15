@@ -111,7 +111,7 @@ export function mergeTaskPage(
   );
   const activeItems = [...pageActive, ...preservedActive];
 
-  const incomingHistory = page.items
+  const incomingHistory = [...page.active_items, ...page.items]
     .map((item) => item.task_id)
     .filter((taskId) => !isActiveStatus(tasksById[taskId].summary.status));
   const history = append
@@ -157,6 +157,36 @@ function projectMessage(record: MessageRecord): ProjectedMessage {
   };
 }
 
+function messageSlot(message: ProjectedMessage): string | null {
+  if (
+    message.runId === null ||
+    (message.role !== "user" && message.role !== "assistant")
+  ) {
+    return null;
+  }
+  return `${message.runId}:${message.role}`;
+}
+
+function mergeSnapshotMessages(
+  base: TaskProjection,
+  snapshotMessages: ProjectedMessage[],
+): ProjectedMessage[] {
+  const snapshotIds = new Set(
+    snapshotMessages.map((message) => message.messageId),
+  );
+  const snapshotSlots = new Set(
+    snapshotMessages
+      .map(messageSlot)
+      .filter((slot): slot is string => slot !== null),
+  );
+  const replayOnly = base.messages.filter((message) => {
+    if (snapshotIds.has(message.messageId)) return false;
+    const slot = messageSlot(message);
+    return slot === null || !snapshotSlots.has(slot);
+  });
+  return [...snapshotMessages, ...replayOnly];
+}
+
 export function hydrateTaskSnapshot(
   state: AgentRuntimeData,
   snapshot: TaskSnapshot,
@@ -171,23 +201,30 @@ export function hydrateTaskSnapshot(
   const base = existing ?? createTaskProjection(snapshot.task);
   const runs = snapshot.runs.map(projectRun);
   const snapshotMessages = snapshot.messages.map(projectMessage);
-  const messages =
-    snapshotMessages.length === 0 && base.hydration === "accepted"
-      ? base.messages
-      : snapshotMessages;
+  const snapshotRunIds = new Set(runs.map((run) => run.runId));
+  const runOrder = [
+    ...runs.map((run) => run.runId),
+    ...base.runOrder.filter((runId) => !snapshotRunIds.has(runId)),
+  ];
+  const runsById = {
+    ...base.runsById,
+    ...Object.fromEntries(runs.map((run) => [run.runId, run])),
+  };
   const task: TaskProjection = {
     ...base,
     summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
-    runsById: Object.fromEntries(runs.map((run) => [run.runId, run])),
-    runOrder: runs.map((run) => run.runId),
-    messages,
+    runsById,
+    runOrder,
+    messages: mergeSnapshotMessages(base, snapshotMessages),
     olderMessagesCursor: snapshot.older_messages_cursor,
     lastSequence: snapshot.task.latest_sequence,
     hydration: "snapshot",
   };
+  const classification = updateClassification(state, task);
   return {
     ...state,
     tasksById: { ...state.tasksById, [snapshot.task.task_id]: task },
+    ...classification,
   };
 }
 
@@ -573,6 +610,7 @@ export function reduceRuntimeEvent(
     case "stage_completed":
     case "stage_failed":
     case "stage_skipped": {
+      if (task.summary.mode !== "fixture") break;
       if (envelope.stage_attempt_id === null) break;
       const existing = task.fixtureStages[payload.stage];
       if (

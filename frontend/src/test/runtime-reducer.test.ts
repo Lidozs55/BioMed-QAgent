@@ -239,6 +239,29 @@ describe("runtime event projection", () => {
     ]);
   });
 
+  it("advances agent task watermarks without projecting fixture stage events", () => {
+    const initial = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_agent", "running", 0, "agent")),
+      false,
+    );
+
+    const state = reduceRuntimeEvent(
+      initial,
+      envelope(
+        "task_agent",
+        null,
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_agent",
+      ),
+    );
+
+    expect(state.tasksById.task_agent.fixtureStages).toEqual({});
+    expect(state.tasksById.task_agent.lastSequence).toBe(1);
+    expect(state.tasksById.task_agent.summary.latest_sequence).toBe(1);
+  });
+
   it("does not overwrite a newer active run when an older run terminalizes", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

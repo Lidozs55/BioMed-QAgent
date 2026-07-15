@@ -23,15 +23,21 @@ export interface EventTransport {
 interface RuntimeDependencies {
   api: APIClient;
   transport: EventTransport;
+  signal?: AbortSignal;
 }
 
-export function startRuntime({ api, transport }: RuntimeDependencies) {
+export function startRuntime({ api, transport, signal }: RuntimeDependencies) {
   const databasePromise = api
     .fetchDatabases()
-    .then((databases) => useAgentStore.getState().setDatabases(databases));
+    .then((databases) => {
+      if (signal?.aborted) return;
+      useAgentStore.getState().setDatabases(databases);
+    });
   const historyPromise = api.fetchTasks({ limit: TASK_PAGE_SIZE }).then((page) => {
+    if (signal?.aborted) return;
     useAgentStore.getState().mergeTaskPage(page, false);
     for (const task of page.active_items) {
+      if (signal?.aborted) return;
       const lastSequence =
         useAgentStore.getState().tasksById[task.task_id]?.lastSequence ??
         task.latest_sequence;
@@ -47,12 +53,39 @@ export function startRuntime({ api, transport }: RuntimeDependencies) {
 }
 
 export class RuntimeController {
+  private selectionGeneration = 0;
+  private readonly selectionHandoffs = new Map<string, Promise<void>>();
+  private readonly artifactHydrations = new Map<string, Promise<void>>();
+
   constructor(
     private readonly api: APIClient,
     private readonly transport: EventTransport,
   ) {}
 
   async selectTask(taskId: string): Promise<void> {
+    const generation = ++this.selectionGeneration;
+    await this.getSelectionHandoff(taskId);
+    if (generation === this.selectionGeneration) {
+      useAgentStore.getState().setActiveTaskId(taskId);
+    }
+    await this.getArtifactHydration(taskId);
+  }
+
+  private getSelectionHandoff(taskId: string): Promise<void> {
+    const existing = this.selectionHandoffs.get(taskId);
+    if (existing !== undefined) return existing;
+    const handoff = this.performSelectionHandoff(taskId);
+    this.selectionHandoffs.set(taskId, handoff);
+    const clear = () => {
+      if (this.selectionHandoffs.get(taskId) === handoff) {
+        this.selectionHandoffs.delete(taskId);
+      }
+    };
+    void handoff.then(clear, clear);
+    return handoff;
+  }
+
+  private async performSelectionHandoff(taskId: string): Promise<void> {
     const wasSubscribed = this.transport.isSubscribed(taskId);
     try {
       if (wasSubscribed) {
@@ -60,12 +93,7 @@ export class RuntimeController {
       }
       const snapshot = await this.api.fetchTask(taskId);
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-      useAgentStore.getState().setActiveTaskId(taskId);
       this.transport.subscribe(taskId, snapshot.task.latest_sequence);
-      const artifacts = await this.api.fetchArtifacts(taskId);
-      useAgentStore.setState((state) =>
-        mergeTaskArtifacts(state, taskId, artifacts),
-      );
     } catch (error) {
       if (wasSubscribed) {
         const lastSequence =
@@ -76,8 +104,33 @@ export class RuntimeController {
     }
   }
 
+  private getArtifactHydration(taskId: string): Promise<void> {
+    const existing = this.artifactHydrations.get(taskId);
+    if (existing !== undefined) return existing;
+    const hydration = this.api.fetchArtifacts(taskId).then((artifacts) => {
+      useAgentStore.setState((state) =>
+        mergeTaskArtifacts(state, taskId, artifacts),
+      );
+    });
+    this.artifactHydrations.set(taskId, hydration);
+    const clear = () => {
+      if (this.artifactHydrations.get(taskId) === hydration) {
+        this.artifactHydrations.delete(taskId);
+      }
+    };
+    void hydration.then(clear, clear);
+    return hydration;
+  }
+
   async startTask(input: StartTaskInput): Promise<TaskRunAccepted> {
     const accepted = await this.api.createTask(input);
+    if (this.transport.isSubscribed(accepted.task_id)) {
+      try {
+        await this.transport.unsubscribeAndWait(accepted.task_id);
+      } catch {
+        // unsubscribeAndWait removes the desired subscription before awaiting pong.
+      }
+    }
     useAgentStore.setState((state) =>
       addAcceptedTask(
         state,
@@ -91,9 +144,10 @@ export class RuntimeController {
         input.mode,
       ),
     );
-    this.transport.subscribe(accepted.task_id, 0);
     try {
       const snapshot = await this.api.fetchTask(accepted.task_id);
+      this.transport.subscribe(accepted.task_id, 0);
+      await this.transport.unsubscribeAndWait(accepted.task_id);
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
       useAgentStore.getState().setActiveTaskId(accepted.task_id);
       this.transport.subscribe(
@@ -105,6 +159,9 @@ export class RuntimeController {
         mergeTaskArtifacts(state, accepted.task_id, artifacts),
       );
     } catch {
+      const lastSequence =
+        useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
+      this.transport.subscribe(accepted.task_id, lastSequence);
       return accepted;
     }
     return accepted;
