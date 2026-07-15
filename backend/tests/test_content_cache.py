@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from app.tools.content_cache import ContentCache
-
 
 SHA256 = "abcdef" + "01" * 29
 REQUEST_HASH = "12" * 32

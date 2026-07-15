@@ -1,0 +1,2 @@
+# Prevent line-ending conversion for test fixtures (SHA256 integrity)
+backend/tests/fixtures/**/* -text

@@ -3,18 +3,17 @@ from __future__ import annotations
 import re
 
 import pytest
-from pydantic import Field, ValidationError
-
 from app.domain.contracts import (
     ContractModel,
-    DataLevel,
     Database,
+    DataLevel,
     asset_id_from_sha256,
     generate_prefixed_uuid,
     make_dataset_id,
     make_record_id,
     make_source_id,
 )
+from pydantic import Field, ValidationError
 
 
 class ExampleContract(ContractModel):

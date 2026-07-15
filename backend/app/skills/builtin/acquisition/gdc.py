@@ -1,8 +1,9 @@
-"""GDC acquisition skill — search, describe, and download raw files from NCI Genomic Data Commons."""
+"""GDC acquisition skill — search, describe, and download from NCI Genomic Data Commons."""
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -61,7 +62,8 @@ def _download_file(url: str, dest: Path) -> None:
     """Download a file to *dest*, atomically via a .part temp file."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)
+    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:
+        shutil.copyfileobj(resp, f)
     if dest.exists():
         dest.unlink()
     tmp.rename(dest)
@@ -124,7 +126,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
             "project_ids": [],
             "records": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     hits: list[dict[str, Any]] = data.get("data", {}).get("hits", [])
     term_lower = term.lower()
@@ -172,7 +174,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         "term": term,
         "project_ids": [r["project_id"] for r in records],
         "records": records,
-    })
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -215,19 +217,21 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
         })
         data = _fetch_json(url)
     except Exception as exc:
+        run_ctx.log_query(project_id, "gdc", "failed", 0)
         return json.dumps({
             "source": "gdc",
             "project_id": project_id,
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     hits: list[dict[str, Any]] = data.get("data", {}).get("hits", [])
     if not hits:
+        run_ctx.log_query(project_id, "gdc", "failed", 0)
         return json.dumps({
             "source": "gdc",
             "project_id": project_id,
             "error": f"project '{project_id}' not found",
-        })
+        }, ensure_ascii=False)
 
     hit = hits[0]
     summary: dict[str, Any] = hit.get("summary", {}) or {}
@@ -243,6 +247,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     for es in (hit.get("summary", {}).get("experimental_strategies", []) or []):
         exp_strategies.append(es.get("experimental_strategy", ""))
 
+    run_ctx.log_query(project_id, "gdc", "succeeded", 1)
     return json.dumps({
         "source": "gdc",
         "project_id": hit.get("project_id", project_id),
@@ -256,7 +261,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
         "experimental_strategies": exp_strategies,
         "dbgap_accession": hit.get("dbgap_accession_number", ""),
         "state": hit.get("state", ""),
-    })
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -332,7 +337,7 @@ def download_gdc(
             "source": "gdc",
             "accession": project_id,
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     file_hits: list[dict[str, Any]] = data.get("data", {}).get("hits", [])
     pagination: dict[str, Any] = data.get("data", {}).get("pagination", {})
@@ -390,7 +395,7 @@ def download_gdc(
     ]
 
     download_limit = min(len(file_hits), 5)
-    for idx, fh in enumerate(file_hits[:download_limit]):
+    for _idx, fh in enumerate(file_hits[:download_limit]):
         file_uuid: str = fh.get("file_id", "")
         file_name: str = fh.get("file_name", "") or f"{file_uuid}.tsv"
         download_url = f"{_GDC_API_BASE}/data/{file_uuid}"
@@ -437,7 +442,7 @@ def download_gdc(
         "file_count": total_files,
         "downloaded": download_limit,
         "retrieved_at": source_record.retrieved_at.isoformat(),
-    })
+    }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

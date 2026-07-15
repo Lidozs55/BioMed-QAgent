@@ -18,7 +18,6 @@ from app.domain.contracts.discovery import (
 )
 from app.domain.contracts.enums import DataLevel
 
-
 _MONTHS = {
     "jan": 1,
     "feb": 2,

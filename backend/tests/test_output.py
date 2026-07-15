@@ -4,8 +4,6 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-import pytest
-
 from app.domain.output import (
     DataRecord,
     FieldDescription,
@@ -22,7 +20,6 @@ from app.tools.export import (
     export_source_list_csv,
     export_warnings_csv,
 )
-
 
 # ---------------------------------------------------------------------------
 # 领域模型

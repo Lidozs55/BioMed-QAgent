@@ -8,7 +8,6 @@ from pathlib import Path
 
 from app.config import settings
 
-
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SUBDIRS = (
     "source_assets",
@@ -73,6 +72,11 @@ class TaskWorkDir:
 
     def artifact_file(self, filename: str) -> Path:
         return _safe_child(self.artifacts, filename)
+
+    def agent_staging_file(self, relative: str) -> Path:
+        root = _safe_child(self.staging, "agent")
+        root.mkdir(parents=True, exist_ok=True)
+        return _safe_child(root, relative)
 
     def staging_run(self, run_id: str) -> Path:
         run_path = _safe_child(self.staging, _validate_id(run_id, "run_id"))

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -201,21 +202,18 @@ def run_differential_expression(
 
             # Welch's t-test (requires at least 2 values per group)
             if len(a_vals) >= 2 and len(b_vals) >= 2 and np.std(a_vals) > 0 and np.std(b_vals) > 0:
-                try:
-                    t_stat, p_val = stats.ttest_ind(a_vals, b_vals, equal_var=False)
-                    pval_list.append(float(p_val))
-                except Exception:
-                    pval_list.append(1.0)
+                t_stat, p_val = stats.ttest_ind(a_vals, b_vals, equal_var=False)
+                pval_list.append(float(p_val))
             else:
                 pval_list.append(1.0)
 
         # Count significant DEGs
         sig_up = int(sum(
-            1 for fc, p in zip(log2fc_list, pval_list)
+            1 for fc, p in zip(log2fc_list, pval_list, strict=False)
             if float(p) <= pval_threshold and float(fc) >= log2fc_threshold
         ))
         sig_down = int(sum(
-            1 for fc, p in zip(log2fc_list, pval_list)
+            1 for fc, p in zip(log2fc_list, pval_list, strict=False)
             if float(p) <= pval_threshold and float(fc) <= -log2fc_threshold
         ))
 
@@ -231,7 +229,7 @@ def run_differential_expression(
                         float(pv) <= pval_threshold and abs(float(fc)) >= log2fc_threshold
                     ),
                 }
-                for g, fc, pv in zip(genes, log2fc_list, pval_list)
+                for g, fc, pv in zip(genes, log2fc_list, pval_list, strict=False)
             ],
             key=lambda x: x["pvalue"],
         )[:top_n]
@@ -243,31 +241,31 @@ def run_differential_expression(
         # Non-significant
         ns_mask = [
             not (pv <= pval_threshold and abs(fc) >= log2fc_threshold)
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, ns_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, ns_mask) if m],
+            [fc for fc, m in zip(log2fc_list, ns_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, ns_mask, strict=False) if m],
             s=8, c="grey", alpha=0.5, label="NS",
         )
         # Up-regulated
         up_mask = [
             pv <= pval_threshold and fc >= log2fc_threshold
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, up_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, up_mask) if m],
+            [fc for fc, m in zip(log2fc_list, up_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, up_mask, strict=False) if m],
             s=12, c="red", alpha=0.7, label=f"Up ({sig_up})",
         )
         # Down-regulated
         down_mask = [
             pv <= pval_threshold and fc <= -log2fc_threshold
-            for pv, fc in zip(pval_list, log2fc_list)
+            for pv, fc in zip(pval_list, log2fc_list, strict=False)
         ]
         ax.scatter(
-            [fc for fc, m in zip(log2fc_list, down_mask) if m],
-            [nlp for nlp, m in zip(neg_log_pvals, down_mask) if m],
+            [fc for fc, m in zip(log2fc_list, down_mask, strict=False) if m],
+            [nlp for nlp, m in zip(neg_log_pvals, down_mask, strict=False) if m],
             s=12, c="blue", alpha=0.7, label=f"Down ({sig_down})",
         )
         ax.axhline(-np.log10(pval_threshold), color="grey", linestyle="--", linewidth=0.8)
@@ -302,7 +300,7 @@ def run_differential_expression(
             "degs": deg_records,
             "volcano_plot": str(volcano_path),
             "outputs": outputs,
-        })
+        }, ensure_ascii=False)
 
     except Exception as exc:
         logger.exception("run_differential_expression failed")
@@ -318,7 +316,7 @@ def run_differential_expression(
             "volcano_plot": "",
             "outputs": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +451,7 @@ def generate_heatmap(
             "zscore": zscore,
             "heatmap_png": str(heatmap_path),
             "outputs": outputs,
-        })
+        }, ensure_ascii=False)
 
     except Exception as exc:
         logger.exception("generate_heatmap failed")
@@ -466,7 +464,7 @@ def generate_heatmap(
             "heatmap_png": "",
             "outputs": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +560,7 @@ def basic_statistics(
             "stats_report": str(report_path),
             "summary": summary,
             "outputs": outputs,
-        })
+        }, ensure_ascii=False)
 
     except Exception as exc:
         logger.exception("basic_statistics failed")
@@ -575,7 +573,7 @@ def basic_statistics(
             "summary": {},
             "outputs": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -643,20 +641,27 @@ def generate_correlation_matrix(
         fig, ax = plt.subplots(figsize=(max(8, len(num_cols) * 0.8),
                                         max(6, len(num_cols) * 0.7)))
         mask = np.triu(np.ones_like(corr_df, dtype=bool), k=1) if len(num_cols) > 1 else None
-        sns.heatmap(
-            corr_df,
-            annot=(len(num_cols) <= 20),
-            fmt=".2f",
-            cmap=cmap,
-            mask=mask,
-            center=0,
-            vmin=-1,
-            vmax=1,
-            square=True,
-            linewidths=0.5,
-            cbar_kws={"shrink": 0.8},
-            ax=ax,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"The set_bad function will be deprecated.*",
+                category=PendingDeprecationWarning,
+                module=r"seaborn\.matrix",
+            )
+            sns.heatmap(
+                corr_df,
+                annot=(len(num_cols) <= 20),
+                fmt=".2f",
+                cmap=cmap,
+                mask=mask,
+                center=0,
+                vmin=-1,
+                vmax=1,
+                square=True,
+                linewidths=0.5,
+                cbar_kws={"shrink": 0.8},
+                ax=ax,
+            )
         ax.set_title(
             f"{method.capitalize()} Correlation Matrix ({len(num_cols)} variables)",
             fontsize=13,
@@ -675,7 +680,7 @@ def generate_correlation_matrix(
             "columns_used": num_cols,
             "correlation_png": str(corr_path),
             "outputs": outputs,
-        })
+        }, ensure_ascii=False)
 
     except Exception as exc:
         logger.exception("generate_correlation_matrix failed")
@@ -687,7 +692,7 @@ def generate_correlation_matrix(
             "correlation_png": "",
             "outputs": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

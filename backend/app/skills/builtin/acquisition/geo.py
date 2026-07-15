@@ -5,16 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import DataLevel, Database, SourceRecord
+from app.domain.contracts import Database, DataLevel, SourceRecord
 from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
@@ -23,7 +23,6 @@ from app.integrations.ncbi.discovery import (
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.integrations.ncbi.parsers import resolve_geo_supplementary_assets
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
     except ValueError:
         try:
             retry_at = parsedate_to_datetime(value)
-            now = datetime.now(retry_at.tzinfo or timezone.utc)
+            now = datetime.now(retry_at.tzinfo or UTC)
             return max(0.0, (retry_at - now).total_seconds())
         except (TypeError, ValueError, OverflowError):
             return fallback
@@ -202,7 +201,7 @@ async def _resolve_download(
         accession=record.accession,
         url=url,
         title=record.title,
-        retrieved_at=datetime.now(timezone.utc),
+        retrieved_at=datetime.now(UTC),
     )
     return source, selected_filename, DataLevel.REPOSITORY_PROCESSED
 

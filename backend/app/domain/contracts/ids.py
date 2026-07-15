@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from app.domain.contracts.enums import Database
 
-
 _PREFIX_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 

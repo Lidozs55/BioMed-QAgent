@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from pydantic import ValidationError
-
 from app.domain.contracts import (
-    DataLevel,
     Database,
+    DataLevel,
     DownloadAttempt,
     DownloadStatus,
     ErrorCode,
@@ -17,9 +15,9 @@ from app.domain.contracts import (
     SourceRecord,
     SourceRelation,
 )
+from pydantic import ValidationError
 
-
-NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 12, tzinfo=UTC)
 SHA256 = "ab" * 32
 
 

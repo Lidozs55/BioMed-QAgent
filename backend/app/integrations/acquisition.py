@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import shutil
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
@@ -25,7 +26,6 @@ from app.domain.contracts import (
 )
 from app.tools.content_cache import ContentCache
 from app.tools.workdir import TaskWorkDir
-
 
 _ALLOWED_HOSTS = frozenset(
     {
@@ -159,10 +159,8 @@ def _publish_task_asset(
                 mismatch_message="task asset checksum mismatch",
             )
         except AcquisitionFailure:
-            try:
+            with contextlib.suppress(OSError):
                 destination.parent.rmdir()
-            except OSError:
-                pass
             raise
     if _sha256_file(destination) != checksum:
         raise AcquisitionFailure(
@@ -184,7 +182,7 @@ async def acquire_source(
     expected_sha256: str | None = None,
 ) -> AcquisitionResult:
     attempt_id = generate_prefixed_uuid("download_attempt")
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     part_path = workdir.download_temp_file(f"{attempt_id}.part")
     bytes_received = 0
     try:
@@ -278,7 +276,7 @@ async def acquire_source(
         destination = _publish_task_asset(
             blob_path, workdir, asset_id, filename, checksum
         )
-        finished_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(UTC)
         attempt = DownloadAttempt(
             attempt_id=attempt_id,
             source_id=source.source_id,
@@ -317,7 +315,7 @@ async def acquire_source(
     finally:
         part_path.unlink(missing_ok=True)
 
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     return AcquisitionResult(
         attempt=DownloadAttempt(
             attempt_id=attempt_id,

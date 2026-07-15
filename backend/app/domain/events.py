@@ -4,13 +4,13 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 from itertools import count
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """任务事件类型。"""
 
     TASK_CREATED = "task_created"
@@ -55,5 +55,5 @@ class EventFactory:
             sequence=next(self._counter),
             event_type=event_type,
             payload=payload,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )

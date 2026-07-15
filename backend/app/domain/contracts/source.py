@@ -10,8 +10,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.enums import DataLevel, Database, DownloadStatus, ErrorCode
-
+from app.domain.contracts.enums import Database, DataLevel, DownloadStatus, ErrorCode
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -57,7 +56,7 @@ class DownloadAttempt(ContractModel):
     finished_at: datetime
 
     @model_validator(mode="after")
-    def validate_outcome(self) -> "DownloadAttempt":
+    def validate_outcome(self) -> DownloadAttempt:
         if self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
         has_error = self.error_code is not None or self.error_message is not None
@@ -91,7 +90,7 @@ class FileAsset(ContractModel):
         return checksum
 
     @model_validator(mode="after")
-    def validate_asset_id(self) -> "FileAsset":
+    def validate_asset_id(self) -> FileAsset:
         if self.asset_id != f"asset_{self.sha256}":
             raise ValueError("asset_id must be derived from the full sha256")
         return self
@@ -104,7 +103,7 @@ class SourceAsset(FileAsset):
     data_level: DataLevel
 
     @model_validator(mode="after")
-    def validate_source_path(self) -> "SourceAsset":
+    def validate_source_path(self) -> SourceAsset:
         if PurePosixPath(self.relative_path).parts[0] != "source_assets":
             raise ValueError("SourceAsset path must be inside source_assets")
         return self
@@ -129,7 +128,7 @@ class AcquisitionResult(ContractModel):
     asset: SourceAsset | None = None
 
     @model_validator(mode="after")
-    def validate_result(self) -> "AcquisitionResult":
+    def validate_result(self) -> AcquisitionResult:
         succeeded = self.attempt.status is DownloadStatus.SUCCEEDED
         if succeeded != (self.asset is not None):
             raise ValueError("successful attempts require an asset and failures forbid one")

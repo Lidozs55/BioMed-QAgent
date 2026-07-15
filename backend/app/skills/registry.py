@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ SUGGESTED_MAX_TOOLS = 20
 HARD_MAX_TOOLS = 30
 
 
-class SkillCategory(str, Enum):
+class SkillCategory(StrEnum):
     """Skill 四大类别。"""
 
     DISCOVERY = "discovery"
@@ -86,7 +86,7 @@ class SkillRegistry:
         """按名称查询 Skill。"""
         return self._skills.get(name)
 
-    def list(self) -> list[str]:
+    def names(self) -> list[str]:
         """列出所有已注册 Skill 名称。"""
         return list(self._skills.keys())
 

@@ -89,7 +89,7 @@ class GeoSeriesRecord(ContractModel):
         return values
 
     @model_validator(mode="after")
-    def validate_samples(self) -> "GeoSeriesRecord":
+    def validate_samples(self) -> GeoSeriesRecord:
         accessions = [sample.accession for sample in self.samples]
         if self.sample_count != len(accessions):
             raise ValueError("sample_count must equal the number of samples")

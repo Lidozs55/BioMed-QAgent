@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.domain.contracts import (
     Database,
     DatasetSelection,
@@ -11,6 +9,7 @@ from app.domain.contracts import (
     TaskRequest,
     TaskSpecification,
 )
+from pydantic import ValidationError
 
 
 def test_task_request_requires_only_topic_and_uses_approved_defaults() -> None:

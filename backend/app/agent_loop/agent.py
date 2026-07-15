@@ -17,17 +17,9 @@ from app.skills.registry import (
     build_agent_config,
     skill_registry,
 )
+from app.tools._registry import _import_skill_modules
 from app.tools.io import read_file, write_file, list_files
 from app.pipeline.tool import run_research_pipeline
-
-try:
-    from app.skills.builtin.acquisition.browser import browser_fallback_skill  # noqa: F401
-except ImportError:
-    browser_fallback_skill = None
-try:
-    from app.skills.builtin.processing.self_evolution import self_evolution_skill  # noqa: F401
-except ImportError:
-    self_evolution_skill = None
 
 INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
@@ -78,50 +70,6 @@ class AgentBuild:
     model: LazyDashScopeModel
 
 
-def _import_skill_modules() -> None:
-    """尝试导入技能模块，失败时不阻塞。"""
-    try:
-        import app.skills.builtin.discovery.pubmed  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.discovery.understanding  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.acquisition.geo  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.acquisition.pdb  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.acquisition.gdc  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.acquisition.xena  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.acquisition.browser  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.processing.self_evolution  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.processing.extract_tables  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import app.skills.builtin.analysis.stats  # noqa: F401
-    except ImportError:
-        pass
-
-
 def build_agent(databases: list[str] | None = None) -> AgentBuild:
     """构造主 Agent。
 
@@ -140,11 +88,6 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
         skills: list = acq_skills + non_acq_skills
     else:
         skills = skill_registry.list_enabled()
-
-    if browser_fallback_skill is not None:
-        skills.append(browser_fallback_skill)
-    if self_evolution_skill is not None:
-        skills.append(self_evolution_skill)
 
     skill_names = tuple(skill.name for skill in skills)
 

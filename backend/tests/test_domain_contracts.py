@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.domain.events import EventFactory, EventType
 from app.domain.task import (
     InvalidTaskTransition,
@@ -11,6 +9,7 @@ from app.domain.task import (
     TaskStateMachine,
     TaskStatus,
 )
+from pydantic import ValidationError
 
 
 def test_topic_is_the_only_required_business_input() -> None:

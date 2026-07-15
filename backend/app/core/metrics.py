@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
-from typing import Generator
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Pydantic model
@@ -253,7 +253,7 @@ def export_ablation_report(
     Returns:
         The path to the written report.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     runs: list[dict] = [t.to_json() for t in trackers]
 
@@ -282,7 +282,7 @@ def export_ablation_report(
 
     report = {
         "report_type": "ablation_comparison",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "run_count": len(runs),
         "runs": runs,
         "stage_comparison": stage_comparison,

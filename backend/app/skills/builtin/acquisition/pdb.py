@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,8 @@ def _download(url: str, dest: Path) -> None:
     """Download a file to dest (atomic via .part rename)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)
+    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:
+        shutil.copyfileobj(resp, f)
     if dest.exists():
         dest.unlink()
     tmp.rename(dest)
@@ -90,7 +92,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
             "pdb_ids": [],
             "records": [],
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     result_set = data.get("result_set", [])
     run_ctx.log_query(term, "pdb", "ok", len(result_set))
@@ -112,7 +114,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         "term": term,
         "pdb_ids": [r["pdb_id"] for r in records],
         "records": records,
-    })
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -129,11 +131,12 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     try:
         data = _get_json(url)
     except Exception as exc:
+        run_ctx.log_query(pdb_id, "pdb", "failed", 0)
         return json.dumps({
             "source": "pdb",
             "pdb_id": pdb_id,
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     struct = data.get("struct", {})
     rcsb = data.get("rcsb_entry_info", {})
@@ -143,6 +146,7 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     polymers = data.get("polymer_entities", [])
     non_polymers = data.get("nonpolymer_entities", [])
 
+    run_ctx.log_query(pdb_id, "pdb", "succeeded", 1)
     return json.dumps({
         "source": "pdb",
         "pdb_id": pdb_id.upper(),
@@ -157,7 +161,7 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
         "polymer_entities": polymers,
         "nonpolymer_entities": non_polymers,
         "url": url,
-    })
+    }, ensure_ascii=False)
 
 
 @function_tool
@@ -199,7 +203,7 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
             "source": "pdb",
             "pdb_id": pdb_id,
             "error": str(exc),
-        })
+        }, ensure_ascii=False)
 
     local_files = [str(run_ctx.work_dir.raw_file(filename))]
     run_ctx.add_raw_asset(local_files[0])
@@ -220,13 +224,17 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
         "local_files": local_files,
         "format_hint": format_hint,
         "retrieved_at": source_record.retrieved_at.isoformat(),
-    })
+    }, ensure_ascii=False)
 
 
 pdb_skill = SkillDef(
     name="pdb",
     category=SkillCategory.ACQUISITION,
-    description="Search, describe, and download protein structures from RCSB PDB. Use when user asks about protein structures, 3D models, PDB IDs, or needs structural biology data.",
+    description=(
+        "Search, describe, and download protein structures from RCSB PDB. "
+        "Use when user asks about protein structures, 3D models, PDB IDs, "
+        "or needs structural biology data."
+    ),
     instructions=(
         "Use the pdb tools to search RCSB PDB by keyword, inspect structure metadata, "
         "and download PDB or mmCIF files. "

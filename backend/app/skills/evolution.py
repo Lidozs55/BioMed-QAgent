@@ -6,9 +6,8 @@ as reusable learned skills, including EVOLUTION.md lifecycle tracking.
 from __future__ import annotations
 
 import importlib
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +99,7 @@ def create_evolution_md(
     Returns:
         EVOLUTION.md content as a markdown string.
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     return (
         f"# {name} — Evolution Record\n"
         f"\n"

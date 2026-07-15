@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
-
 from app.integrations.ncbi.client import (
     AsyncRateLimiter,
     NcbiClientConfig,
@@ -181,7 +180,7 @@ async def test_client_does_not_retry_non_retryable_400() -> None:
 
 
 def test_retry_after_parses_seconds_and_http_date() -> None:
-    now = datetime(2026, 7, 12, 8, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 12, 8, 0, tzinfo=UTC)
 
     assert parse_retry_after("2", now=now) == 2.0
     assert parse_retry_after(

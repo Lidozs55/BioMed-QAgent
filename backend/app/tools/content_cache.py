@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 

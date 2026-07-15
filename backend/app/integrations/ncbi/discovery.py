@@ -16,7 +16,6 @@ from app.integrations.ncbi.parsers import (
     parse_pubmed_xml,
 )
 
-
 _BATCH_SIZE = 200
 
 

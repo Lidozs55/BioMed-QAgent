@@ -1,6 +1,11 @@
 """工具注册表测试 — 验证 get_all_tools 返回已注册的 function_tool。"""
 from __future__ import annotations
 
+from unittest.mock import patch
+
+import pytest
+from app.agent_loop import agent as agent_module
+from app.tools import _registry
 from app.tools._registry import get_all_tools
 
 
@@ -28,8 +33,37 @@ def test_get_all_tools_has_skill_tools() -> None:
     assert "analyze_records" not in names
 
 
+def test_get_all_tools_registers_reactome_and_pubchem() -> None:
+    tools = get_all_tools()
+    names = {getattr(tool, "name", str(tool)) for tool in tools}
+    assert {"search_reactome", "get_pathway"} <= names
+    assert {"search_pubchem", "get_compound"} <= names
+
+
 def test_all_tools_have_name() -> None:
     """每个 tool 应有 name 属性（function_tool 装饰后自动生成）。"""
     tools = get_all_tools()
     for t in tools:
         assert hasattr(t, "name"), f"工具 {t} 缺少 name 属性"
+
+
+@pytest.mark.parametrize(
+    "loader", [_registry._import_skill_modules, agent_module._import_skill_modules]
+)
+def test_builtin_loader_reraises_nested_missing_dependency(loader) -> None:
+    target = _registry.BUILTIN_SKILL_MODULES[0]
+    real_import = __import__
+
+    def fail_nested(name, *args, **kwargs):
+        if name == target:
+            raise ModuleNotFoundError("missing dependency", name="optional_dependency")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fail_nested), pytest.raises(
+        ModuleNotFoundError, match="missing dependency"
+    ):
+        loader()
+
+
+def test_agent_and_registry_share_builtin_loader() -> None:
+    assert agent_module._import_skill_modules is _registry._import_skill_modules

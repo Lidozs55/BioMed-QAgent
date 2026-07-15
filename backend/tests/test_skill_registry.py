@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 
 import pytest
-
 from app.skills.registry import (
     HARD_MAX_TOOLS,
     SUGGESTED_MAX_TOOLS,
@@ -118,7 +117,7 @@ def test_register_and_get() -> None:
 
 def test_list_returns_all_names() -> None:
     reg = _build_registry()
-    names = set(reg.list())
+    names = set(reg.names())
     assert names == {"literature_search", "geo_acquisition", "pdb_acquisition", "tabular_parsing"}
 
 

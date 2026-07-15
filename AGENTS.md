@@ -1,152 +1,340 @@
-# BioMed-QAgent
+# BioMed-QAgent — AGENTS.md
 
-> Biomedical Question-Answering Agent with multi-agent orchestration.
+> This document has two parts: universal rules that all agents must follow, and
+> Commonly MCP extensions that apply mandatorily when connected.
+>
+> The authoritative source for system architecture and design decisions is
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is a concise guide
+> only — it does not duplicate architecture diagrams, to avoid drift.
 
-## Commonly Pod
+---
 
-- **Pod ID**: `6a520e34f4baa9b280bba195`
-- Todo tasks synced from `TODO.md` → commonly as `TASK-001` through `TASK-017`.
-- Keep `.claude/TODO.md` and commonly task board in sync.
+## Part I: Universal Rules (All Agents Must Follow)
 
-## Tech Stack
+### 1. Tech Stack
 
-| Layer | Technology |
-|---|---|
-| **Backend** | Python 3.12+, FastAPI, OpenAI Agents SDK, Qwen (DashScope) |
-| **Frontend** | React 19, Vite, Tailwind CSS v4, shadcn/ui |
-| **Package (FE)** | pnpm (primary) — **do not use npm** |
-| **Package (BE)** | uv (uv.lock) |
+| Layer                | Technology                                                 |
+| -------------------- | ---------------------------------------------------------- |
+| Backend              | Python 3.12+, FastAPI, OpenAI Agents SDK, Qwen (DashScope) |
+| Frontend             | React 19, Vite, Tailwind CSS v4, shadcn/ui                 |
+| Package Manager (FE) | pnpm (**never npm**)                                       |
+| Package Manager (BE) | uv (`uv.lock`)                                             |
 
-## Architecture
+### 2. Architecture Overview & Agent Loop
 
-```
-Frontend (React/Vite)
-   │
-   ▼  WebSocket  (/ws)
-FastAPI (app.server)
-   │
-   ▼  asgi / lifespan
-Runner (Agents SDK Runner)
-   │
-   ▼
-Main Agent (multi-tool orchestration)
-   ├── search_literature  (stub — returns mock JSON)
-   ├── parse_pdf          (stub — returns mock JSON)
-   ├── analyze_records    (stub — returns mock JSON)
-   ├── read_file          (functional)
-   ├── write_file         (functional)
-   └── list_files         (functional)
-```
+The current architecture is a **dual-layer structure: Agent + Deterministic
+Pipeline**. Full details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2.
+Key points:
 
-### Agent Loop (WebSocket)
+- The frontend (React/Vite) communicates with FastAPI via HTTP + WebSocket.
+- The FastAPI entry point is `app.main:app`, with routes registered in
+  [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
+  [app/api/ws.py](backend/app/api/ws.py) (WebSocket).
+- The Main Agent is built on the OpenAI Agents SDK and enters the deterministic
+  pipeline through a single `run_research_pipeline` Function Tool
+  ([app/pipeline/tool.py](backend/app/pipeline/tool.py)). The Agent never
+  assembles the final CSV directly.
+- The deterministic Pipeline Runner
+  ([app/pipeline/runner.py](backend/app/pipeline/runner.py)) executes five
+  stages: **Discovery → Acquisition → Processing → Artifact Build → Validation
+  Gate**. Only artifacts that pass the Validation Gate are published to
+  `artifacts/`.
+- The WebSocket endpoint is `/api/v1/ws`; the streaming entry function is
+  `app.agent_loop.runner.run_agent_stream`.
+- The skill repository is organized into four categories — discovery,
+  acquisition, processing, analysis — under
+  [backend/app/skills/builtin/](backend/app/skills/builtin/). Learned skills
+  (under `learned/`) are disabled by default.
 
-1. Client connects to `ws://<host>:8000/ws`
-2. FastAPI `websocket_endpoint` in `app.server` accepts
-3. Messages dispatched to `app.core.runner.AgentRunner`
-4. Runner executes configured tools, streams back responses
-5. Frontend renders markdown/tool-call results
+**HTTP API Routes** (prefix `/api/v1`):
 
-## Critical State
+| Method | Path                                              | Purpose                            |
+| ------ | ------------------------------------------------- | ---------------------------------- |
+| GET    | `/api/v1/health`                                  | Health check                       |
+| GET    | `/api/v1/databases`                               | List user-selectable databases     |
+| POST   | `/api/v1/tasks`                                   | Create and run a fixture-mode task |
+| GET    | `/api/v1/tasks/{task_id}`                         | Task status and summary            |
+| GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
+| GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
 
-### Domain Models (`app.domain.*`)
+**Agent Loop (WebSocket)**
 
-- Tests (`tests/test_domain_contracts.py`) reference `app.domain` models but the package **does not exist on disk**.
-- **Must be built before tests can pass or domain-dependent features work.**
-- Appears to be the next major unit of work.
+1. The client connects to `ws://<host>:8000/api/v1/ws`.
+2. `app/api/ws.py:agent_ws` receives a message:
+   `{"type":"run","input":"...","databases":[...],"task_id":"optional"}`.
+3. The handler calls `run_agent_stream(user_input, task_id, databases)` to
+   stream Agent loop events.
+4. The runner converts SDK stream events into WSMessage dicts and pushes them
+   back. Event types:
+   - `task_started` — sent by `ws.py` immediately after accepting a run
+   - `skill_loaded` — a skill was loaded (name + category)
+   - `text` — LLM text delta
+   - `tool_call` — a tool call started (name + arguments)
+   - `tool_output` — a tool call returned (output, possibly truncated)
+   - `file_downloaded` — a source file was downloaded (name + path + size)
+   - `artifact_produced` — a validated artifact was produced (name + size)
+   - `confirm` — a quality / human-in-the-loop confirmation prompt
+   - `done` — the Agent loop finished (carries `final_output`)
+   - `error` — an exception occurred
+5. The frontend renders Markdown, tool-call traces, and artifact events.
 
-### Data Tools Are Placeholders
+Always treat the code as the source of truth for skill and tool implementation
+status — do not assume from documentation alone.
 
-`search_literature`, `parse_pdf`, `analyze_records` are **dummy stubs** returning hardcoded JSON. They need real implementations (PubMed API, PDF parser, etc.).
+### 3. Project Documentation Guidance
 
-### Build / Lint
+Before starting any task, consult:
 
-- Frontend builds with `pnpm dev` / `pnpm build` (use pnpm, not npm).
-- Backend uses `uv sync` / `uv run uvicorn app.server:app --reload`.
-- Both `package-lock.json` and `pnpm-lock.yaml` existed — use pnpm-lock.yaml as canonical. Delete package-lock.json if it reappears.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture and design
+  decisions (authoritative).
+- [PROBLEM.md](PROBLEM.md) — competition background and evaluation criteria
+  (repository root).
+- [docs/TODO.md](docs/TODO.md) — current development TODOs and approved
+  architecture decisions.
+- `docs/superpowers/specs/` and `docs/superpowers/plans/` — phase design specs
+  and plans.
 
-### Branches
+### 4. Common Commands
 
-- `codex/core-architecture-foundation` — core backend architecture
-- `feat/skill-library` — skill/plugin system
-- Check `git branch -r` for remote tracking before creating new branches.
+#### Backend (cwd: `backend/`)
 
-## Developer Commands
+All backend commands must be run from the `backend/` directory (where
+`pyproject.toml` lives).
 
 ```bash
-# Backend
-uv sync                          # install deps
-uv run uvicorn app.server:app    # run server
-uv run pytest                    # run tests
-
-# Frontend
-pnpm install                     # install deps
-pnpm dev                         # dev server
-pnpm build                       # production build
-pnpm lint                        # lint
+uv sync                                    # Install dependencies
+uv run uvicorn app.main:app --reload       # Start dev server (default 127.0.0.1:8000)
+uv run pytest                              # Run tests (excludes @pytest.mark.live by default)
+uv run pytest -m live                      # Run live network tests only
+uv run pytest tests/test_runner.py         # Run a single test file
+uv run pytest -k "skill"                   # Filter by keyword
+uv run ruff check app/ tests/ launcher.py  # Lint (CI quality gate, zero warnings allowed)
 ```
 
-## Conventions
+Notes:
 
-- Python: PEP 8, type hints expected, pydantic v2 for models.
-- TypeScript/React: shadcn component patterns, Tailwind utility classes.
-- Imports: backend uses `from app.<module>`, frontend uses `@/` alias.
-- Tests: pytest for backend, currently minimal coverage.
-- NEVER suppress type errors (`as any`, `@ts-ignore`, `@ts-expect-error`).
-- Prefer small focused changes over large refactors unless explicitly requested.
+- The dev server binds to `127.0.0.1:8000` by default. Override with `HOST` and
+  `PORT` environment variables.
+- CORS allows the Vite dev server origins `http://localhost:5173` and
+  `http://127.0.0.1:5173`.
+- `pytest` is configured with `asyncio_mode = "strict"` and treats warnings as
+  errors.
 
-## Agent Workflow
+#### Frontend (cwd: `frontend/`)
 
-### Task Lifecycle
+All frontend commands must be run from the `frontend/` directory.
 
-任务在 Commonly 任务板上流转：`pending → claimed → completed`
+```bash
+pnpm install                               # Install dependencies
+pnpm dev                                   # Start Vite dev server (default :5173)
+pnpm build                                 # Production build (tsc -b && vite build)
+pnpm lint                                  # ESLint (--max-warnings 0)
+pnpm tsc                                   # TypeScript type check (runs tsc --noEmit)
+pnpm test                                  # Run unit tests once (vitest run)
+pnpm test:watch                            # Run unit tests in watch mode (vitest)
+```
 
-**每次会话接手任务：**
-1. `commonly_get_tasks`（先查 `pending`，再查 `claimed`）
-2. `commonly_get_messages`（limit=20）
-3. `commonly_claim_task` — 同一时间只 claim 一个任务
-4. 修改文件前发 `[LOCK]` 声明文件锁（最多 5 个文件）
-5. 对照 `ARCHITECTURE.md` / `PROBLEM.md` 执行
-6. 验证：AST、import 链、前端 `tsc`、后端重启
-7. `git commit + push`
-8. 发 `[UNLOCK]` 解封文件锁
-9. `commonly_complete_task`
-10. 发消息通知完成
+### 5. Technical Conventions
 
-**创建任务：**
-- `commonly_create_task`，title 加 `[P0]`/`[P1]`/`[P2]`
-- `source` 填来源文档路径；有硬依赖填 `dep`
+- **Python**: PEP 8, mandatory type annotations on all function signatures,
+  Pydantic v2 for models.
+- **TypeScript / React**: follow shadcn/ui component patterns and Tailwind
+  utility classes; use the `@/` path alias.
+- **Imports**: backend uses `from app.<module>...`; frontend uses `@/...`.
+- **Type safety**: never suppress type errors — no `as any`, `@ts-ignore`, or
+  `@ts-expect-error`.
+- **Testing**: backend uses pytest; every new feature must ship with tests, and
+  every bug fix starts with a test that reproduces the bug. Frontend uses
+  vitest with jsdom.
+- **Frontend components**: use the shadcn skill to discover existing components;
+  do not reinvent the wheel (see [frontend/AGENTS.md](frontend/AGENTS.md)).
 
-**约束：**
-- 一个 agent 同时只 claim 一个任务
-- 完成前确认：代码已 push、文件锁已解封、相关文档已更新
-- 卡住超 1 轮无法推进 → 发 `[BLOCKED]` 并 unclaim
+### 6. Development Principles
 
-### File Locking
+- **Think first, code later**: state assumptions explicitly; when multiple
+  interpretations exist, list them and ask before acting; stop and clarify when
+  unclear.
+- **Minimal implementation**: write only the code necessary to solve the
+  problem. Do not add unrequested features, extension points, or "just in case"
+  abstractions. Do not handle theoretically impossible errors. If 200 lines can
+  be compressed to 50, rewrite immediately.
+- **Surgical changes**: touch only the files needed to achieve the goal. Do not
+  "incidentally" modify unrelated code, comments, or formatting. Clean up only
+  your own orphans (unused imports/variables); do not remove existing dead code
+  unless explicitly asked. Match existing style even if it differs from personal
+  preference.
+- **Goal-driven execution**: break tasks into verifiable checkpoints ("write a
+  repro test → fix → test passes"). Use a checklist for multi-step work and
+  verify after each step. Advance only when a checkpoint passes, to avoid
+  accumulating issues.
 
-基于消息的轻量协议，避免 git 冲突。
+### 7. Git Workflow
 
-- **加锁：** claim 后、改文件前发 `[LOCK] TASK-XXX: path1, path2`（最多 5 文件）
-- **检查：** 改文件前扫最近消息，若有他人未解封的 `[LOCK]` 则等待或 `[Q]` 协商
-- **解锁：** push 后立即发 `[UNLOCK] TASK-XXX`
+#### 7.1 Branch Policy
 
-### Messages
+- Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
+  `fix/summary`.
+- **Single-file small changes** (typos, config tweaks) may be committed directly
+  to `main`, but you must:
+  - `git pull` to sync first;
+  - If connected to Commonly, declare the file to be modified in the Pod and
+    confirm no conflict (see Part II §3).
+- Multi-file changes, new features, or changes that may affect other agents
+  **must** use a dedicated branch.
+- Before creating a new branch, run `git branch -r` to check the remote and
+  avoid naming collisions.
 
-| 前缀 | 用途 |
-|---|---|
-| `[LOCK]` / `[UNLOCK]` | 文件锁定 |
-| `[TASK]` | 任务看板更新 |
-| `[Q]` | 提问/讨论 |
-| `[DONE]` | 完成通知 |
-| `[BLOCKED]` | 阻塞提示 |
+#### 7.2 Self-Serve Merge
 
-- 架构决策或不确定选型先发 `[Q]`
-- 回复用 `replyToMessageId` 做线程
-- 不发无实质内容的消息；`[DONE]` 一条概括改动与影响
+**Each agent is responsible for merging its own branch**. Before merging, all of the following must hold:
 
-### Git
+1. The branch is functionally stable and the target changes are achieved.
+2. `uv run pytest` is fully green with no new failures.
+3. Frontend changes pass `pnpm lint && pnpm tsc` with 0 errors, and `pnpm build`
+   succeeds.
+4. The backend has no import errors, AST is intact, and
+   `uv run uvicorn app.main:app --reload` starts normally.
 
-- 每完成一个任务 `commit + push` 一次
-- commit message：`[TASK-XXX] 简述`
-- push 前确认：AST 通过、import 正常、前端 `tsc` 0 error、后端重启正常
-- 后端改动后：清 `__pycache__`、kill Python 进程、`uvicorn app.main:app --reload`
-- 绝不 force push 到主分支；失败先 `git pull --rebase`
+**Merge steps**:
+
+- `git pull --rebase origin main` and resolve conflicts.
+- After resolving conflicts, re-run tests and frontend/backend verification.
+- Prefer `git merge --no-ff` to preserve branch history, or rebase then push.
+- Before pushing, confirm local `main` can start.
+- After merging, post a `[DONE]` message in Commonly summarizing the result. (If connected to Commonly)
+
+**Constraints**:
+
+- **Never force-push to shared branches** (main, dev). If push is rejected, run
+  `git pull --rebase` first, then push.
+
+#### 7.3 Pre-Push Checklist
+
+- Backend: no import errors, AST intact, `uv run pytest` passes, and
+  `uv run uvicorn app.main:app --reload` starts after clearing `__pycache__`.
+- Frontend: `pnpm lint && pnpm tsc` with 0 errors, `pnpm build` succeeds.
+- Commit message format: `[TASK-XXX] summary` or `feat/fix/chore: summary`.
+
+### 8. Documentation First
+
+Proactively capture knowledge under `docs/`:
+
+- Error-prone integration points (API parameter quirks, environment traps).
+- Identified but unfixed bugs or tech debt.
+- Complex trade-offs or architecture decisions.
+- Non-obvious usage patterns or conventions (e.g., internal tool call sequences).
+
+**Principle**: code says "how", docs say "why". Do not make other agents (or
+your future self) re-derive your reasoning. Document names are not prescribed;
+place content into the most fitting existing document to avoid scattering and
+duplication.
+
+---
+
+## Part II: Commonly MCP Extensions (Mandatory When Connected)
+
+When an agent session is connected to the Commonly MCP server, the following
+rules **stack on top of** Part I.
+
+### 1. Work Types and Check-In
+
+| Work type         | Check-in required? | Method                                                                                                           |
+| ----------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Coding & fixes    | **Yes**            | `[TASK]` before starting, `[DONE]` upon completion                                                               |
+| Research & review | No                 | If **high-risk / high-value** info is found (architecture flaws, risks, etc.), share via `[Q]` or a new `[TASK]` |
+
+### 2. Task Source and Corresponding Workflow
+
+#### 2.1 User Explicitly Assigns a Commonly Board Task
+
+When told to handle a Commonly task, follow the board lifecycle strictly:
+
+1. Sync: `commonly_get_tasks` + `commonly_get_messages`.
+2. Claim: `commonly_claim_task` (claim only one task at a time).
+3. Work: execute per Part I; open a branch if needed.
+4. Verify & commit: after self-check passes, run
+   `git commit -m "[TASK-XXX] description" && git push`.
+5. Complete: `commonly_complete_task`, post `[DONE]` summarizing the changes and
+   branch name, then merge.
+6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
+
+#### 2.2 User Gives a Direct Instruction (Non-Board Task)
+
+When the user gives an immediate request and no board task corresponds, use a
+lightweight check-in:
+
+1. Before starting, post:
+   `[TASK] brief description, working on branch <branch-name>`
+   (for single-file small changes that do not need a branch, write:
+   `[TASK] brief description, directly modifying main: <file-path>`).
+2. Execute per Part I §7 branch/modification rules.
+3. On completion, post:
+   `[DONE] change summary, merged to main`
+   (or `[DONE] change summary, pushed to main`).
+
+No `claim` / `complete` actions are needed.
+
+#### 2.3 High-Value Findings
+
+If research or review reveals issues worth tracking, start a discussion with
+`[Q]`, or create a new task via `commonly_create_task` (prefix the title with
+`[P0]` / `[P1]` / `[P2]`, fill in `source` and hard dependencies `dep`).
+
+#### 2.4 Proactively Maintain the Commonly Board
+
+The Commonly board is the team's shared task workspace. Agents must not wait
+passively for tasks — proactively keep the board in sync with reality.
+
+**When to update**
+
+- **Sync from `docs/TODO.md`**: if a `docs/TODO.md` entry has no corresponding
+  board task, create one via `commonly_create_task` with `source` set to
+  `docs/TODO.md`.
+- **New issues found during work**: when encountering a new bug, tech debt, or
+  uncovered requirement, create a board task immediately, prefixing the title
+  with `[P0]` / `[P1]` / `[P2]` and filling `dep` with hard dependencies.
+- **Status changes**: when a task's completion status or priority changes due to
+  code changes or discussion, sync via `commonly_update_task`.
+
+**How to update**
+
+- `commonly_create_task` to create, filling `title` / `source` / `priority` /
+  `dep`.
+- `commonly_update_task` to modify an existing task's status, description, or
+  dependencies.
+- Optionally post a `[TASK]` message summarizing the change to help the team
+  sync quickly.
+
+**Principle**: the board must never lag behind actual work. Every agent is
+responsible for making the board a real-time projection of project progress.
+
+### 3. Lightweight Coordination and Branch Reporting
+
+- **Pre-check for branchless small changes**: after posting `[TASK]` declaring a
+  direct edit to `main`, scan recent Commonly messages (about 10) to confirm no
+  other agent is working on the same file. If no conflict, proceed; if a
+  conflict is suspected, negotiate via `[Q]` or switch to a branch.
+- **After pushing a branch**: always post a `[DONE]` message summarizing the
+  changes and impact, and mention the branch name.
+
+### 4. Message Prefix Conventions
+
+| Prefix      | Purpose                                   |
+| ----------- | ----------------------------------------- |
+| `[TASK]`    | Task start check-in / new task record     |
+| `[Q]`       | Question, discussion                      |
+| `[DONE]`    | Work completed (must include branch info) |
+| `[BLOCKED]` | Blocker announcement                      |
+
+- Use `replyToMessageId` to keep threads.
+- Every message must contain substantive information; avoid empty notifications.
+- For architecture decisions or uncertain choices, post a `[Q]` first.
+
+### 5. Pod Information
+
+- **Pod ID**: `6a520e34f4baa9b280bba195`
+- Board tasks sync dynamically with `docs/TODO.md`; task numbers are auto-assigned
+  by Commonly.
+- Keep `docs/TODO.md` and the board in sync: new `docs/TODO.md` entries should be
+  mapped to board tasks, and board status changes should be written back to the
+  corresponding `docs/TODO.md` checkboxes.
