@@ -12,12 +12,16 @@ import app.agent_loop.runner as runner_module
 from app.domain.contracts import (
     AssistantDeltaPayload,
     ArtifactProducedPayload,
+    RunCompletedPayload,
+    RunFinalizingPayload,
+    StartTaskRequest,
     ToolCompletedPayload,
     ToolStartedPayload,
 )
 from app.pipeline.pinned_case import run_pinned_fixture
 from app.runtime.compaction import CompactionCancelledError
-from app.runtime.manager import RunExecution
+from app.runtime.manager import RunExecution, TaskManager
+from app.runtime.repository import TaskRepository
 
 
 class NoopCompactor:
@@ -542,6 +546,71 @@ async def test_executor_emits_manifest_artifact_ids_after_success(
     assert {payload.artifact.artifact_id for payload in artifact_payloads[1:]} == {
         artifact.artifact_id for artifact in manifest.artifacts
     }
+
+
+@pytest.mark.asyncio
+async def test_manager_persists_all_executor_artifacts_before_terminal_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+
+    class FakeResult:
+        def __init__(self, task_id: str) -> None:
+            self.task_id = task_id
+
+        async def stream_events(self):
+            run_pinned_fixture(
+                task_id=self.task_id,
+                base_dir=output_dir / "tasks",
+                fixture_dir=FIXTURE_DIR,
+            )
+            if False:
+                yield None
+
+    def run_streamed(*args, **kwargs):
+        return FakeResult(kwargs["context"].task_id)
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_artifact_ordering",
+                input="build ordered artifacts",
+            )
+        )
+        await manager.wait_until_idle()
+
+        events = await repository.list_events(accepted.task_id)
+        artifact_indices = [
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.payload, ArtifactProducedPayload)
+        ]
+        finalizing_index = next(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.payload, RunFinalizingPayload)
+        )
+        completed_index = next(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.payload, RunCompletedPayload)
+        )
+
+        assert len(artifact_indices) > 1
+        assert max(artifact_indices) < finalizing_index < completed_index
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

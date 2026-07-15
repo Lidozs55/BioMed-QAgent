@@ -194,22 +194,19 @@ interface AgentState {
 `useAgentStream.ts` 管理 WebSocket 连接生命周期：
 
 ```
-连接 ws://host/api/v1/ws
+通过 REST 创建任务或续跑
         │
-        ├── 发送 { type: "run", input, databases }
+        ├── 连接 ws://host/api/v1/ws
+        ├── 发送 { type: "subscribe", task_id, after_sequence }
         │
         ▼
-接收 WSEvent（9 种事件类型）：
-  ├── text              → store.addMessage()
-  ├── tool_call         → store.addTrace()
-  ├── tool_output       → store.addTrace()
-  ├── skill_loaded      → store.addMessage()
-  ├── artifact_produced → store.addArtifact()
-  ├── file_downloaded   → store.addMessage()
-  ├── confirm           → store.addMessage()（请求用户确认）
-  ├── done              → store.setRunning(false)、ChatPanel 自动获取产物
-  └── error             → store.addMessage()（错误提示）
+接收按 sequence 排序的 durable EventEnvelope
+        │
+        └── runtime reducer 更新对应 Task 投影
 ```
+
+WebSocket 仅发送 `subscribe`、`unsubscribe` 和 `ping` 控制命令；断线重连后
+从 Task 的 `lastSequence` 继续 replay。
 
 ### REST API 补充数据
 

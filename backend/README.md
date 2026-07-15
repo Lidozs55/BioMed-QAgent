@@ -106,7 +106,7 @@ backend/
 │   ├── config.py              # 配置 dataclass（从 .env 加载）
 │   ├── agent_loop/            # Agent 运行核心
 │   │   ├── agent.py           # create_agent()：构建 Main Agent
-│   │   ├── runner.py          # run_agent_stream()：流式执行 + 事件转换
+│   │   ├── runner.py          # durable Agent/fixture Run 执行 + typed 事件转换
 │   │   ├── context.py         # RunContext：任务状态、来源记录、工作目录
 │   │   ├── model.py           # 模型适配器（DashScope Qwen / OpenAI 兼容）
 │   │   └── summarizer.py      # ContextManager：查询日志压缩（超过 8000 字符时触发）
@@ -258,28 +258,21 @@ Analysis：统计与可视化（可选）
 
 **连接**：`ws://host:8000/api/v1/ws`
 
-**发送消息**：
+任务创建与续跑分别通过 `POST /api/v1/tasks` 和
+`POST /api/v1/tasks/{task_id}/runs` 完成。WebSocket 仅接收
+`subscribe`、`unsubscribe` 和 `ping` 控制命令。
+
+**订阅任务事件**：
 ```json
 {
-  "type": "run",
-  "input": "寻找乳腺癌相关的 GEO 数据集",
-  "databases": ["geo", "pubmed"]
+  "type": "subscribe",
+  "task_id": "task_123",
+  "after_sequence": 0
 }
 ```
 
-**接收事件**（共 9 种）：
-
-| 事件类型 | 说明 |
-|----------|------|
-| `text` | Agent 文本输出（流式） |
-| `tool_call` | Tool 调用开始（含参数） |
-| `tool_output` | Tool 调用结果 |
-| `skill_loaded` | Skill 加载通知 |
-| `artifact_produced` | 产物生成通知 |
-| `file_downloaded` | 文件下载完成 |
-| `confirm` | 需要用户确认（HITL） |
-| `done` | 任务完成 |
-| `error` | 错误信息 |
+订阅成功后，服务端按 sequence 推送 durable `EventEnvelope`；`ping` 返回
+`pong`，无效或不支持的命令返回稳定的 `error` 控制帧。
 
 ## 技术栈
 

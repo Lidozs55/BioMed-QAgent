@@ -246,6 +246,28 @@ async def stop_socket(
 
 
 @pytest.mark.asyncio
+async def test_first_frame_run_is_rejected_and_connection_remains_usable(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, _, hub):
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command({"type": "run", "input": "legacy"})
+            assert await websocket.receive_frame() == {
+                "type": "error",
+                "code": "unsupported_command",
+                "message": "Unsupported WebSocket command",
+            }
+
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+        finally:
+            await stop_socket(websocket, endpoint)
+
+        assert hub.subscriber_count == 0
+
+
+@pytest.mark.asyncio
 async def test_event_session_ping_is_fifo_and_run_is_rejected(tmp_path: Path) -> None:
     async with websocket_runtime(tmp_path) as (application, _, hub):
         websocket, endpoint = await start_socket(application)
@@ -350,17 +372,9 @@ async def test_event_session_reports_missing_task_without_closing(
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_before_mode_selection_preserves_legacy_run(
+async def test_invalid_json_then_run_does_not_switch_protocol_mode(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    observed: list[tuple[str, str, object]] = []
-
-    async def fake_stream(user_input: str, task_id: str, databases=None):
-        observed.append((user_input, task_id, databases))
-        yield {"type": "done", "final_output": user_input}
-
-    monkeypatch.setattr(ws_module, "run_agent_stream", fake_stream)
     async with websocket_runtime(tmp_path) as (application, _, hub):
         websocket, endpoint = await start_socket(application)
         try:
@@ -380,19 +394,16 @@ async def test_invalid_json_before_mode_selection_preserves_legacy_run(
                 }
             )
             assert await websocket.receive_frame() == {
-                "type": "task_started",
-                "task_id": "task_legacy",
+                "type": "error",
+                "code": "unsupported_command",
+                "message": "Unsupported WebSocket command",
             }
-            assert await websocket.receive_frame() == {
-                "type": "done",
-                "final_output": "legacy input",
-            }
+
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
         finally:
             await stop_socket(websocket, endpoint)
 
-        assert observed == [
-            ("legacy input", "task_legacy", ["pubmed", "geo"]),
-        ]
         assert hub.subscriber_count == 0
 
 
@@ -1102,33 +1113,3 @@ async def test_unexpected_event_adapter_failure_is_stable_and_closes_1011(
             assert hub.subscriber_count == 0
         finally:
             await stop_socket(websocket, endpoint)
-
-
-@pytest.mark.asyncio
-async def test_legacy_session_closes_on_event_protocol_mixing(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    async def fake_stream(user_input: str, task_id: str, databases=None):
-        yield {"type": "done", "final_output": user_input}
-
-    monkeypatch.setattr(ws_module, "run_agent_stream", fake_stream)
-    async with websocket_runtime(tmp_path) as (application, _, hub):
-        websocket, endpoint = await start_socket(application)
-        try:
-            await websocket.send_command(
-                {"type": "run", "input": "legacy", "task_id": "task_legacy"}
-            )
-            assert (await websocket.receive_frame())["type"] == "task_started"
-            assert await websocket.receive_frame() == {
-                "type": "done",
-                "final_output": "legacy",
-            }
-
-            await websocket.send_command({"type": "ping"})
-            await websocket.wait_until_closed()
-            assert websocket.close_code == 1008
-        finally:
-            await stop_socket(websocket, endpoint)
-
-        assert hub.subscriber_count == 0

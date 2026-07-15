@@ -98,7 +98,7 @@ class _EventConnection:
 async def _run_event_session(
     websocket: WebSocket,
     send_lock: asyncio.Lock,
-    first_message: object,
+    first_message: object = _NO_MESSAGE,
 ) -> None:
     application = websocket.scope["app"]
     repository: TaskRepository = application.state.task_repository
