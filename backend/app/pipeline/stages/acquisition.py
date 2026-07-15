@@ -5,7 +5,6 @@ import gzip
 import hashlib
 import os
 from datetime import datetime
-from pathlib import Path
 
 from app.domain.contracts import (
     DataLevel,
@@ -77,11 +76,8 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
 
 def _geo_source_id_from_ctx(ctx: StageContext) -> str:
     """Derive the GEO source_id from the fixture manifest (mirrors discovery)."""
-    import json
-
     from app.domain.contracts import Database, make_source_id
 
-    fixture_manifest = json.loads((ctx.fixture_dir / "manifest.json").read_text("utf-8"))
     geo_accession = "GSE178352"
     geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo_accession}"
     return make_source_id(Database.GEO, geo_accession, geo_url)

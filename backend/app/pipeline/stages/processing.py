@@ -5,7 +5,6 @@ import hashlib
 
 from app.domain.contracts import ParsedDataset, SourceAsset
 from app.pipeline.processing.geo_tximport import (
-    GeoSampleMetadata,
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )

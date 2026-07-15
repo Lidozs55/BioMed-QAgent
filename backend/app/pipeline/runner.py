@@ -15,22 +15,21 @@ from typing import Any
 
 from app.domain.contracts import (
     AttemptStatus,
+    ErrorCode,
     ErrorDetail,
     EventEnvelope,
-    ErrorCode,
-    PipelineEventType,
+    PlanReadyPayload,
     RunManifest,
     StageAttempt,
+    StageCompletedPayload,
+    StageFailedPayload,
     StageName,
+    StageSkippedPayload,
+    StageStartedPayload,
     TaskCancelledPayload,
     TaskCompletedPayload,
     TaskCreatedPayload,
     TaskFailedPayload,
-    PlanReadyPayload,
-    StageCompletedPayload,
-    StageFailedPayload,
-    StageSkippedPayload,
-    StageStartedPayload,
     TaskRecoveredPayload,
     TaskState,
     build_event,
@@ -51,9 +50,8 @@ from app.pipeline.stages import (
     run_validation,
 )
 from app.pipeline.state import (
-    PipelineState,
-    load_state,
     load_stage_output,
+    load_state,
     save_stage_output,
     save_state,
 )
@@ -126,7 +124,7 @@ class PipelineRunner:
         """Execute the pipeline, guaranteeing a terminal task state."""
         try:
             return await asyncio.wait_for(self._run_inner(), self.total_timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return self._finalize_failed(
                 TimeoutError(f"total pipeline timeout ({self.total_timeout}s) exceeded"),
                 ErrorCode.TIMEOUT,
@@ -141,9 +139,15 @@ class PipelineRunner:
         save_state(self.workdir.state, self.state)
 
     async def _run_inner(self) -> RunManifest:
-        is_recovered = self.state.task_state not in (
-            TaskState.CREATED,
-        ) and bool(self.state.completed_stages)
+        # A run is "recovered" when prior progress exists (completed_stages
+        # non-empty) and the task is not in the fresh CREATED state. This
+        # covers COMPLETED (re-run → all SKIPPED), FAILED (retry → prior
+        # stages SKIPPED, failed stage re-executed), and intermediate states
+        # after a process restart.
+        is_recovered = (
+            self.state.task_state is not TaskState.CREATED
+            and bool(self.state.completed_stages)
+        )
         if is_recovered:
             self._emit_event(
                 TaskRecoveredPayload(
@@ -199,7 +203,7 @@ class PipelineRunner:
                     ),
                     self.stage_timeouts[stage],
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return self._finalize_stage_failed(
                     stage, stage_attempt_id, input_digest, parameter_digest, started,
                     TimeoutError(f"stage {stage.value} timeout exceeded"),
@@ -316,10 +320,14 @@ class PipelineRunner:
         return _sha256_json(payload)
 
     def _compute_parameter_digest(self, stage: StageName) -> str:
-        """Compute parameter digest from stage, fixture hash, and topic."""
-        fixture_hash = hashlib.sha256(
-            str(self.fixture_dir.stat().st_mtime).encode("utf-8")
-        ).hexdigest()
+        """Compute parameter digest from stage, fixture content hash, and topic.
+
+        Uses the combined SHA-256 of all files under ``fixture_dir`` (sorted
+        by name) rather than the directory mtime — directory mtime is unstable
+        across filesystems and does not change when file contents change but
+        filenames stay the same.
+        """
+        fixture_hash = _hash_directory(self.fixture_dir)
         payload = {
             "stage": stage.value,
             "fixture_dir": str(self.fixture_dir),
@@ -400,7 +408,7 @@ class PipelineRunner:
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
             stage_attempt_id=stage_attempt_id,
         )
-        self._persist_logs()
+        # _persist_logs is called once by _finalize_failed; no duplicate call here.
         return self._finalize_failed(exc, error_code)
 
     def _finalize_failed(
@@ -466,6 +474,24 @@ class PipelineRunner:
 def _sha256_json(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _hash_directory(directory: Path) -> str:
+    """Compute a stable SHA-256 over all files in ``directory`` (sorted by name).
+
+    Combines each file's relative path and content hash, so any content change
+    produces a different digest regardless of filesystem mtime behavior.
+    """
+    hasher = hashlib.sha256()
+    for path in sorted(directory.iterdir(), key=lambda p: p.name):
+        if path.is_file():
+            rel = path.relative_to(directory).as_posix()
+            file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            hasher.update(rel.encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update(file_hash.encode("utf-8"))
+            hasher.update(b"\0")
+    return hasher.hexdigest()
 
 
 def _build_specification_for_plan(ctx: StageContext) -> Any:

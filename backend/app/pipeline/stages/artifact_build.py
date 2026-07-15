@@ -2,26 +2,26 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.domain.contracts import (
+    DownloadAttempt,
     LiteratureRecord,
     SourceAsset,
     SourceRecord,
     TaskSpecification,
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
-from app.pipeline.processing.geo_tximport import GeoSampleMetadata, _OUTPUT_COLUMNS
+from app.pipeline.processing.geo_tximport import _OUTPUT_COLUMNS, GeoSampleMetadata
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
     StageContext,
     StageResult,
 )
-from app.domain.contracts import DownloadAttempt
-
 
 _ARTIFACT_COLUMNS: dict[str, list[str]] = {
     "literature.csv": [
@@ -270,9 +270,17 @@ def run_artifact_build(
         started_at=ctx.started_at,
     )
 
-    import hashlib
-
-    digest = hashlib.sha256(
-        str(staging.stat().st_size).encode("utf-8")
-    ).hexdigest()
+    # Compute digest from the combined content hash of all staging files
+    # (sorted by name) — using only directory size would cause collisions
+    # between packages with identical byte counts but different content.
+    hasher = hashlib.sha256()
+    for path in sorted(staging.iterdir(), key=lambda p: p.name):
+        if path.is_file():
+            rel = path.relative_to(staging).as_posix()
+            file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            hasher.update(rel.encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update(file_hash.encode("utf-8"))
+            hasher.update(b"\0")
+    digest = hasher.hexdigest()
     return StageResult(output_digest=digest, output=output)

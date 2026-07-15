@@ -11,11 +11,8 @@ from pathlib import Path
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
-    AttemptStatus,
-    Database,
     RunManifest,
     StageAttempt,
-    StageName,
     TaskRequest,
     TaskState,
     ValidationSummary,
@@ -243,9 +240,11 @@ def run_validation(
         manifest.model_dump_json(indent=2) + "\n", "utf-8"
     )
 
-    if any(ctx.workdir.artifacts.iterdir()):
-        raise FileExistsError("artifacts directory is not empty")
-    ctx.workdir.artifacts.rmdir()
+    # Atomic publish: os.replace overwrites the target atomically on both
+    # POSIX and Windows. If artifacts/ already exists with content (e.g. from
+    # a prior successful validation that crashed before state was saved),
+    # we replace it — the staging package is the authoritative source.
+    ctx.workdir.artifacts.mkdir(parents=True, exist_ok=True)
     os.replace(build_output.staging_dir, ctx.workdir.artifacts)
 
     output = ValidationOutput(
