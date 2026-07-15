@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPanel } from "@/components/ChatPanel";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
-import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
+import type { StartTaskInput, TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -30,6 +30,50 @@ function seedBackgroundTask(): void {
     },
     false,
   );
+}
+
+function seedTerminalTask(mode: "agent" | "fixture" = "agent"): void {
+  const snapshot: TaskSnapshot = {
+    task: {
+      task_id: "task_terminal",
+      mode,
+      databases: ["pubmed"],
+      title: "Terminal task",
+      status: "completed",
+      active_run_id: null,
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 3,
+    },
+    runs: [
+      {
+        run_id: "run_terminal",
+        task_id: "task_terminal",
+        request_id: "req_terminal",
+        status: "completed",
+        input: "initial question",
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        started_at: CREATED_AT,
+        finished_at: CREATED_AT,
+        error: null,
+      },
+    ],
+    messages: [
+      {
+        message_id: "message_terminal",
+        task_id: "task_terminal",
+        run_id: "run_terminal",
+        ordinal: 1,
+        role: "user",
+        content: "initial question",
+        created_at: CREATED_AT,
+      },
+    ],
+    older_messages_cursor: null,
+  };
+  useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+  useAgentStore.getState().setActiveTaskId("task_terminal");
 }
 
 describe("ChatPanel", () => {
@@ -160,5 +204,55 @@ describe("ChatPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
     expect(onToggle).toHaveBeenNthCalledWith(3, "pubmed", false);
     expect(onToggle).toHaveBeenNthCalledWith(4, "geo", false);
+  });
+
+  it("enables continuation only for an idle terminal agent task", async () => {
+    seedTerminalTask();
+    const continueTask = vi.fn().mockResolvedValue({
+      request_id: "req_follow",
+      task_id: "task_terminal",
+      run_id: "run_follow",
+      status: "queued",
+    });
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "follow up" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+
+    await waitFor(() =>
+      expect(continueTask).toHaveBeenCalledWith("task_terminal", {
+        input: "follow up",
+      }),
+    );
+  });
+
+  it("disables continuation while a task is active or fixture-only", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    const { rerender } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+
+    act(() => seedTerminalTask("fixture"));
+    rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+  });
+
+  it("keeps continuation text and projection unchanged on a 409 response", async () => {
+    seedTerminalTask();
+    const before = useAgentStore.getState().tasksById.task_terminal;
+    const continueTask = vi.fn().mockRejectedValue(new Error("409 conflict"));
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "keep this" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("409 conflict"));
+    expect(input).toHaveValue("keep this");
+    expect(useAgentStore.getState().tasksById.task_terminal).toBe(before);
   });
 });

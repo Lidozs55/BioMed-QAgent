@@ -1,6 +1,7 @@
-import { TerminalIcon, XIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { TerminalIcon, XIcon, BroomIcon } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
 
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,21 +15,53 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import type { ActivityProjection } from "@/runtime/types";
+import { selectActiveActivities, selectActiveTask } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import { selectConnectionIsConnected } from "@/stores/agentSelectors";
-import { selectCompatTraceItems } from "@/stores/legacyProjectionSelectors";
 
-function statusFor(kind: string) {
-  if (kind === "error") return "error";
-  if (kind === "warning") return "warning";
-  if (kind === "tool_output") return "success";
-  return kind === "tool_call" ? "running" : "recorded";
+function activityStatus(activity: ActivityProjection): {
+  label: string;
+  variant: "default" | "secondary" | "destructive" | "outline";
+} {
+  if (activity.isError) return { label: "错误", variant: "destructive" };
+  if (activity.kind === "warning") return { label: "警告", variant: "outline" };
+  if (activity.kind === "tool" && activity.status === "started") {
+    return { label: "运行中", variant: "default" };
+  }
+  if (activity.kind === "tool") return { label: "已完成", variant: "secondary" };
+  return { label: "已记录", variant: "outline" };
 }
 
 export function ToolTrace() {
-  const traces = useAgentStore(selectCompatTraceItems);
-  const isConnected = useAgentStore(selectConnectionIsConnected);
+  const activities = useAgentStore(selectActiveActivities);
+  const task = useAgentStore(selectActiveTask);
+  const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const [open, setOpen] = useState(false);
+  const [hiddenThroughSequence, setHiddenThroughSequence] = useState<
+    Record<string, number>
+  >({});
+
+  const taskId = task?.summary.task_id ?? null;
+  const visibleActivities = useMemo(() => {
+    const hiddenThrough = taskId === null ? 0 : hiddenThroughSequence[taskId] ?? 0;
+    return activities.filter((activity) => activity.sequence > hiddenThrough);
+  }, [activities, hiddenThroughSequence, taskId]);
+
+  const hideVisible = () => {
+    if (taskId === null || activities.length === 0) return;
+    const latestSequence = activities[activities.length - 1]?.sequence ?? 0;
+    setHiddenThroughSequence((current) => ({
+      ...current,
+      [taskId]: latestSequence,
+    }));
+  };
+
+  const connectionLabel =
+    connectionStatus === "connected"
+      ? "已连接"
+      : connectionStatus === "connecting" || connectionStatus === "reconnecting"
+        ? "连接中"
+        : "未连接";
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -37,52 +70,57 @@ export function ToolTrace() {
           <Button
             variant="outline"
             size="icon"
-            className="fixed bottom-4 right-4 shadow-lg"
+            className="fixed right-4 bottom-4 shadow-lg"
             aria-label="Toggle tool trace"
+            title="Toggle tool trace"
           />
         }
       >
         <TerminalIcon />
       </SheetTrigger>
-      <SheetContent side="right">
+      <SheetContent side="right" className="min-w-0">
         <SheetHeader>
           <SheetTitle>工具追踪</SheetTitle>
-          <SheetDescription>{isConnected ? "已连接" : "未连接"}</SheetDescription>
+          <SheetDescription>
+            {task === undefined ? "未选择任务" : `${task.summary.title} · ${connectionLabel}`}
+          </SheetDescription>
         </SheetHeader>
-        <ScrollArea className="-mx-6 flex-1 px-6">
-          {traces.length === 0 ? (
-            <div className="py-8 text-center text-xs text-muted-foreground">
-              尚无工具调用
-            </div>
+        <ScrollArea className="-mx-6 min-w-0 flex-1 px-6">
+          {visibleActivities.length === 0 ? (
+            <Empty className="border-0 py-8">
+              <EmptyHeader>
+                <EmptyTitle>{task === undefined ? "选择任务查看工具调用" : "尚无工具调用"}</EmptyTitle>
+                <EmptyDescription>
+                  {task === undefined
+                    ? "后台任务的活动会在这里显示。"
+                    : "该任务还没有可显示的工具活动。"}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
-            <div className="flex flex-col gap-3 py-2">
-              {traces.map((trace) => {
-                const status = statusFor(trace.kind);
+            <div className="flex min-w-0 flex-col gap-3 py-2">
+              {visibleActivities.map((activity) => {
+                const status = activityStatus(activity);
+                const detail = activity.input ?? activity.output ?? activity.message;
                 return (
-                  <Card key={trace.id} size="sm">
+                  <Card key={activity.activityId} size="sm" className="min-w-0">
                     <CardHeader>
-                      <div className="flex w-full items-center justify-between">
-                        <CardTitle className="text-xs">
-                          {trace.kind}
-                          {trace.name ? `: ${trace.name}` : ""}
-                        </CardTitle>
-                        <Badge
-                          variant={
-                            status === "error"
-                              ? "destructive"
-                              : status === "success"
-                                ? "secondary"
-                                : "outline"
-                          }
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <CardTitle
+                          className="min-w-0 truncate text-xs"
+                          title={activity.name ?? activity.kind}
                         >
-                          {status}
+                          {activity.name ?? activity.kind}
+                        </CardTitle>
+                        <Badge variant={status.variant} className="shrink-0">
+                          {status.label}
                         </Badge>
                       </div>
                     </CardHeader>
-                    {(trace.arguments || trace.output || trace.message) && (
+                    {detail && (
                       <CardContent>
-                        <pre className="whitespace-pre-wrap break-all font-mono text-[0.625rem] leading-relaxed text-muted-foreground">
-                          {trace.arguments ?? trace.output ?? trace.message}
+                        <pre className="max-w-full whitespace-pre-wrap break-words font-mono text-[0.625rem] leading-relaxed text-muted-foreground">
+                          {detail}
                         </pre>
                       </CardContent>
                     )}
@@ -92,7 +130,13 @@ export function ToolTrace() {
             </div>
           )}
         </ScrollArea>
-        <SheetFooter>
+        <SheetFooter className="gap-2">
+          {visibleActivities.length > 0 && (
+            <Button variant="outline" size="sm" onClick={hideVisible}>
+              <BroomIcon data-icon="inline-start" />
+              清除当前显示
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"

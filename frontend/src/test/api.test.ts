@@ -213,4 +213,17 @@ describe("runtime REST client", () => {
       "/api/v1/tasks/task%2F1/artifacts/artifact%2Fabc",
     );
   });
+
+  it("deletes a task only through the authoritative encoded DELETE endpoint", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    const api = createAPIClient({ fetcher });
+
+    await expect(api.deleteTask("task/terminal")).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v1/tasks/task%2Fterminal",
+      { method: "DELETE" },
+    );
+  });
 });

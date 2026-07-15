@@ -334,6 +334,23 @@ export class RuntimeController {
     return this.api.continueTask(taskId, input);
   }
 
+  async cancelRun(taskId: string, runId: string): Promise<void> {
+    const snapshot = await this.api.cancelRun(taskId, runId);
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+  }
+
+  async deleteTask(taskId: string): Promise<void> {
+    await this.api.deleteTask(taskId);
+    if (this.transport.isSubscribed(taskId)) {
+      try {
+        await this.transport.unsubscribeAndWait(taskId);
+      } catch {
+        // The desired subscription is removed before the barrier settles.
+      }
+    }
+    useAgentStore.getState().removeTask(taskId);
+  }
+
   async loadMoreTasks(): Promise<void> {
     const cursor = useAgentStore.getState().nextCursor;
     if (cursor === null) return;

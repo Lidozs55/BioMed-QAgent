@@ -42,6 +42,7 @@ export interface AgentStore extends AgentRuntimeData {
   setDraftMode: (mode: TaskMode) => void;
   setDraftError: (error: string | null) => void;
   showNewDraft: () => void;
+  removeTask: (taskId: string) => void;
 }
 
 export function mergeTaskArtifacts(
@@ -274,6 +275,23 @@ export const useAgentStore = create<AgentStore>()(
             error: null,
           },
         })),
+
+      removeTask: (taskId) =>
+        set((state) => {
+          const tasksById = { ...state.tasksById };
+          delete tasksById[taskId];
+          return {
+            tasksById,
+            activeItems: state.activeItems.filter(
+              (candidate) => candidate !== taskId,
+            ),
+            taskOrder: state.taskOrder.filter(
+              (candidate) => candidate !== taskId,
+            ),
+            activeTaskId:
+              state.activeTaskId === taskId ? null : state.activeTaskId,
+          };
+        }),
     }),
     {
       name: AGENT_STORE_NAME,

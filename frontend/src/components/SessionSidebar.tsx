@@ -1,8 +1,35 @@
-import { DatabaseIcon, FlaskIcon, PlusCircleIcon } from "@phosphor-icons/react";
+import {
+  ArrowsClockwiseIcon,
+  FlaskIcon,
+  PlusCircleIcon,
+  TrashIcon,
+  WifiHighIcon,
+  WifiSlashIcon,
+  XIcon,
+} from "@phosphor-icons/react";
+import { useState } from "react";
 
+import { TaskStatusIcon } from "@/components/taskStatus";
+import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import {
   Sidebar,
   SidebarContent,
@@ -12,133 +39,343 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
-import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
+import type { RunStatus } from "@/runtime/contracts";
+import type { ConnectionStatus, TaskProjection } from "@/runtime/types";
 import { useAgentStore } from "@/stores/agentStore";
-import { selectActiveTask } from "@/stores/agentSelectors";
-import { selectCompatTaskRows } from "@/stores/legacyProjectionSelectors";
 
 interface SessionSidebarProps {
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
+  onLoadMore?: () => Promise<void>;
+  onCancelRun?: (taskId: string, runId: string) => Promise<void>;
+  onDeleteTask?: (taskId: string) => Promise<void>;
+}
+
+const ACTIVE_STATUSES = new Set<RunStatus>([
+  "queued",
+  "running",
+  "finalizing",
+  "cancel_requested",
+]);
+
+const OCCUPYING_STATUSES = new Set<RunStatus>([
+  "running",
+  "finalizing",
+  "cancel_requested",
+]);
+
+const CONNECTION_META: Record<
+  ConnectionStatus,
+  { label: string; pending: boolean }
+> = {
+  idle: { label: "空闲", pending: false },
+  connecting: { label: "连接中", pending: true },
+  connected: { label: "已连接", pending: false },
+  reconnecting: { label: "重新连接中", pending: true },
+  disconnected: { label: "已断开", pending: false },
+};
+
+function TaskRow({
+  task,
+  selected,
+  pendingCancel,
+  onSelect,
+  onCancel,
+  onDelete,
+}: {
+  task: TaskProjection;
+  selected: boolean;
+  pendingCancel: boolean;
+  onSelect: () => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  const { summary } = task;
+  const status = TASK_STATUS_META[summary.status];
+  const active = ACTIVE_STATUSES.has(summary.status);
+  const cancelling = summary.status === "cancel_requested" || pendingCancel;
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        isActive={selected}
+        onClick={onSelect}
+        tooltip={summary.title}
+        aria-label={`${summary.title} ${status.label}`}
+        className="min-w-0"
+      >
+        <TaskStatusIcon status={summary.status} />
+        <span className="min-w-0 flex-1 truncate" title={summary.title}>
+          {summary.title}
+        </span>
+        <Badge variant={status.badgeVariant} className="shrink-0">
+          {status.label}
+        </Badge>
+      </SidebarMenuButton>
+      {active && summary.active_run_id !== null && (
+        <SidebarMenuAction
+          aria-label={
+            cancelling
+              ? `正在取消 ${summary.title}`
+              : `取消 ${summary.title}`
+          }
+          title={cancelling ? "正在取消" : "取消任务"}
+          disabled={cancelling}
+          onClick={onCancel}
+        >
+          {cancelling ? <Spinner /> : <XIcon />}
+        </SidebarMenuAction>
+      )}
+      {!active && (
+        <SidebarMenuAction
+          aria-label={`删除 ${summary.title}`}
+          title="删除任务"
+          onClick={onDelete}
+        >
+          <TrashIcon />
+        </SidebarMenuAction>
+      )}
+    </SidebarMenuItem>
+  );
 }
 
 export function SessionSidebar({
   onNewDraft,
   onSelectTask,
+  onLoadMore,
+  onCancelRun,
+  onDeleteTask,
 }: SessionSidebarProps) {
-  const rows = useAgentStore(selectCompatTaskRows);
+  const tasksById = useAgentStore((state) => state.tasksById);
+  const activeItems = useAgentStore((state) => state.activeItems);
+  const taskOrder = useAgentStore((state) => state.taskOrder);
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
-  const activeTask = useAgentStore(selectActiveTask);
-  const databases = useAgentStore((state) => state.databases);
+  const nextCursor = useAgentStore((state) => state.nextCursor);
   const connectionStatus = useAgentStore((state) => state.connectionStatus);
-  const selectedDbNames = databases
-    .filter((database) => activeTask?.summary.databases.includes(database.id))
-    .map((database) => database.name);
+  const { isMobile, setOpenMobile } = useSidebar();
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pendingCancels, setPendingCancels] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const activeTasks = activeItems
+    .map((taskId) => tasksById[taskId])
+    .filter((task): task is TaskProjection => task !== undefined);
+  const historyTasks = taskOrder
+    .map((taskId) => tasksById[taskId])
+    .filter((task): task is TaskProjection => task !== undefined);
+  const runningCount = activeTasks.filter((task) =>
+    OCCUPYING_STATUSES.has(task.summary.status),
+  ).length;
+  const connection = CONNECTION_META[connectionStatus];
+  const deleteTarget =
+    deleteTargetId === null ? undefined : tasksById[deleteTargetId];
+
+  const closeMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+
+  const selectTask = (taskId: string) => {
+    void onSelectTask(taskId);
+    closeMobile();
+  };
+
+  const showNewDraft = () => {
+    onNewDraft();
+    closeMobile();
+  };
+
+  const loadMore = async () => {
+    if (loadingMore || onLoadMore === undefined) return;
+    setLoadingMore(true);
+    try {
+      await onLoadMore();
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const cancelTask = async (task: TaskProjection) => {
+    const runId = task.summary.active_run_id;
+    if (runId === null || onCancelRun === undefined) return;
+    setPendingCancels((current) => new Set(current).add(task.summary.task_id));
+    try {
+      await onCancelRun(task.summary.task_id, runId);
+    } finally {
+      setPendingCancels((current) => {
+        const next = new Set(current);
+        next.delete(task.summary.task_id);
+        return next;
+      });
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (deleteTargetId === null || onDeleteTask === undefined || deleting) return;
+    setDeleting(true);
+    try {
+      await onDeleteTask(deleteTargetId);
+      setDeleteTargetId(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const taskRows = (tasks: TaskProjection[]) => (
+    <SidebarMenu>
+      {tasks.map((task) => (
+        <TaskRow
+          key={task.summary.task_id}
+          task={task}
+          selected={task.summary.task_id === activeTaskId}
+          pendingCancel={pendingCancels.has(task.summary.task_id)}
+          onSelect={() => selectTask(task.summary.task_id)}
+          onCancel={() => void cancelTask(task)}
+          onDelete={() => setDeleteTargetId(task.summary.task_id)}
+        />
+      ))}
+    </SidebarMenu>
+  );
 
   return (
-    <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 pt-2">
-          <FlaskIcon className="size-5 text-sidebar-foreground" />
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">
-              BioMed QAgent
-            </span>
-            <span className="text-xs text-sidebar-foreground/50">
-              v2 — Durable Tasks
-            </span>
+    <>
+      <Sidebar>
+        <SidebarHeader>
+          <div className="flex min-w-0 items-center gap-2 px-2 pt-2">
+            <FlaskIcon className="shrink-0 text-sidebar-foreground" />
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-semibold text-sidebar-foreground">
+                BioMed QAgent
+              </span>
+              <span className="truncate text-xs text-sidebar-foreground/70">
+                Durable task workspace
+              </span>
+            </div>
           </div>
-        </div>
-      </SidebarHeader>
-
-      <SidebarContent>
-        <div className="px-2 pb-2">
           <Button
             variant="outline"
             size="sm"
-            className="w-full justify-start gap-2"
-            onClick={onNewDraft}
+            className="w-full justify-start"
+            onClick={showNewDraft}
           >
             <PlusCircleIcon data-icon="inline-start" />
             新建研究
           </Button>
-        </div>
+        </SidebarHeader>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>会话历史</SidebarGroupLabel>
-          <SidebarGroupContent>
-            {rows.length === 0 ? (
-              <p className="px-2 text-xs text-sidebar-foreground/50">
-                暂无研究记录
-              </p>
-            ) : (
-              <SidebarMenu>
-                {rows.map((row) => (
-                  <SidebarMenuItem key={row.taskId}>
-                    <SidebarMenuButton
-                      isActive={row.taskId === activeTaskId}
-                      onClick={() => void onSelectTask(row.taskId)}
-                      tooltip={row.topic}
-                    >
-                      <DatabaseIcon />
-                      <span className="truncate">{row.topic}</span>
-                      <Badge variant="secondary">{row.status}</Badge>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            )}
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {activeTask && (
+        <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>当前会话</SidebarGroupLabel>
+            <SidebarGroupLabel>正在进行</SidebarGroupLabel>
             <SidebarGroupContent>
-              <div className="flex flex-col gap-2 px-2">
-                <div className="flex flex-wrap gap-1">
-                  {selectedDbNames.length > 0 ? (
-                    selectedDbNames.map((name) => (
-                      <Badge key={name} variant="secondary">
-                        {name}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="text-xs text-sidebar-foreground/50">
-                      未选择数据源
-                    </span>
-                  )}
-                </div>
-                <span className="text-xs text-sidebar-foreground/70">
-                  {activeTask.summary.status}
-                </span>
-              </div>
+              {activeTasks.length > 0 ? (
+                taskRows(activeTasks)
+              ) : (
+                <Empty className="p-4">
+                  <EmptyHeader>
+                    <EmptyTitle>没有运行中的任务</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              )}
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
-      </SidebarContent>
 
-      <SidebarFooter>
-        <div className="flex items-center justify-between px-2">
-          <ThemeToggle />
-          <div className="flex items-center gap-1.5">
-            <span
-              className={cn(
-                "size-2 shrink-0 rounded-full",
-                connectionStatus === "connected"
-                  ? "bg-primary"
-                  : "bg-destructive",
+          <SidebarGroup>
+            <SidebarGroupLabel>历史任务</SidebarGroupLabel>
+            <SidebarGroupContent>
+              {historyTasks.length > 0 ? (
+                taskRows(historyTasks)
+              ) : (
+                <Empty className="p-4">
+                  <EmptyHeader>
+                    <EmptyTitle>暂无历史任务</EmptyTitle>
+                    <EmptyDescription>完成的研究会显示在这里。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
-            />
-            <span className="text-xs text-sidebar-foreground/70">
-              {connectionStatus === "connected" ? "已连接" : "未连接"}
+              {nextCursor !== null && onLoadMore !== undefined && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 w-full"
+                  disabled={loadingMore}
+                  aria-label={loadingMore ? "加载中" : "加载更多"}
+                  onClick={() => void loadMore()}
+                >
+                  {loadingMore && (
+                    <Spinner data-icon="inline-start" aria-hidden="true" />
+                  )}
+                  {loadingMore ? "加载中" : "加载更多"}
+                </Button>
+              )}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+
+        <SidebarFooter className="gap-2">
+          <div className="flex items-center justify-between gap-2 px-2">
+            <span className="flex min-w-0 items-center gap-2 text-xs">
+              {connection.pending ? (
+                <ArrowsClockwiseIcon className="shrink-0" />
+              ) : connectionStatus === "connected" ? (
+                <WifiHighIcon className="shrink-0" />
+              ) : (
+                <WifiSlashIcon className="shrink-0" />
+              )}
+              <span className="truncate">连接状态</span>
             </span>
+            <Badge
+              variant="outline"
+              className="shrink-0"
+              data-connection-status={connectionStatus}
+              aria-label={`${connectionStatus}: ${connection.label}`}
+            >
+              {connection.label}
+            </Badge>
           </div>
-        </div>
-      </SidebarFooter>
-    </Sidebar>
+          <div className="flex items-center justify-between gap-2 px-2">
+            <span className="text-xs text-sidebar-foreground/70">并发槽位</span>
+            <Badge variant="secondary">运行中 {runningCount} / 4</Badge>
+          </div>
+          <div className="px-1">
+            <ThemeToggle />
+          </div>
+        </SidebarFooter>
+      </Sidebar>
+
+      <AlertDialog
+        open={deleteTargetId !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteTargetId(null);
+        }}
+      >
+        <AlertDialogContent className="min-w-0 max-w-[calc(100vw-2rem)]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除任务</AlertDialogTitle>
+            <AlertDialogDescription className="min-w-0 break-words">
+              删除“{deleteTarget?.summary.title ?? "该任务"}”后无法恢复。任务只会在服务端确认删除后从列表移除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void confirmDelete()}
+            >
+              {deleting && <Spinner data-icon="inline-start" />}
+              {deleting ? "删除中" : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

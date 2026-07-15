@@ -1,13 +1,5 @@
-import { useState } from "react";
-import { useAgentStore } from "../stores/agentStore";
-import { useAPI } from "../hooks/useAPI";
-import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
-import {
-  selectActiveArtifacts,
-  selectActiveMessages,
-  selectActiveTaskIsBusy,
-  selectConnectionIsConnected,
-} from "@/stores/agentSelectors";
+import { useMemo, useState } from "react";
+
 import {
   DownloadIcon,
   FileCodeIcon,
@@ -17,11 +9,35 @@ import {
   UserIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
+
+import { AgentProgress } from "@/components/AgentProgress";
+import { DatabaseSelector } from "@/components/DatabaseSelector";
+import ResultsViewer from "@/components/ResultsViewer";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
+import { Marker, MarkerContent } from "@/components/ui/marker";
 import { Message, MessageAvatar, MessageContent } from "@/components/ui/message";
 import {
   MessageScroller,
@@ -32,283 +48,351 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
 import {
-  Accordion,
-  AccordionItem,
-  AccordionTrigger,
-  AccordionContent,
-} from "@/components/ui/accordion";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-  CardFooter,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { DatabaseSelector } from "./DatabaseSelector";
-import ResearchPipeline from "./ResearchPipeline";
-import ResultsViewer from "./ResultsViewer";
+  selectActiveArtifacts,
+  selectActiveMessages,
+  selectActiveTask,
+  selectConnectionIsConnected,
+} from "@/stores/agentSelectors";
+import { useAgentStore } from "@/stores/agentStore";
+import { useAPI } from "@/hooks/useAPI";
 
 type TabMode = "setup" | "chat" | "results";
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
+  continueTask?: (
+    taskId: string,
+    input: { input: string },
+  ) => Promise<TaskRunAccepted>;
 }
 
-/** Format bytes to human-readable size */
+const TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-/** Get file extension from filename */
 function getExtension(name: string): string {
-  const idx = name.lastIndexOf(".");
-  if (idx === -1) return "";
-  return name.slice(idx + 1).toLowerCase();
+  const index = name.lastIndexOf(".");
+  return index === -1 ? "" : name.slice(index + 1).toLowerCase();
 }
 
-/** Choose icon based on file extension */
 function getFileIcon(name: string) {
-  const ext = getExtension(name);
-  switch (ext) {
+  switch (getExtension(name)) {
     case "csv":
     case "tsv":
       return FileCsvIcon;
-    case "txt":
-    case "md":
-      return FileTextIcon;
     case "json":
     case "jsonl":
       return FileCodeIcon;
+    case "md":
+    case "txt":
     default:
       return FileTextIcon;
   }
 }
 
-/** 研究工作台 — 设置 / 对话 / 结果 三模式切换。 */
-export function ChatPanel({ startTask }: ChatPanelProps) {
+function latestRunIsTerminal(task: NonNullable<ReturnType<typeof selectActiveTask>>) {
+  const latestRunId = task.runOrder[task.runOrder.length - 1];
+  const latestRun = latestRunId === undefined ? undefined : task.runsById[latestRunId];
+  return latestRun !== undefined && TERMINAL_STATUSES.has(latestRun.status);
+}
+
+export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
+  const activeTaskId = useAgentStore((state) => state.activeTaskId);
+  const activeTask = useAgentStore(selectActiveTask);
   const messages = useAgentStore(selectActiveMessages);
-  const isRunning = useAgentStore(selectActiveTaskIsBusy);
-  const isConnected = useAgentStore(selectConnectionIsConnected);
-  const taskId = useAgentStore((state) => state.activeTaskId);
   const artifacts = useAgentStore(selectActiveArtifacts);
-  const fixtureError = useAgentStore((state) => state.draft.error);
-  const setFixtureError = useAgentStore((state) => state.setDraftError);
+  const connected = useAgentStore(selectConnectionIsConnected);
+  const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
     (state) => state.draft.selectedDatabaseIds,
   );
+  const draftError = useAgentStore((state) => state.draft.error);
+  const setDraftInput = useAgentStore((state) => state.setDraftInput);
+  const setDraftError = useAgentStore((state) => state.setDraftError);
   const { getArtifactUrl } = useAPI();
-  const input = useAgentStore((state) => state.draft.input);
-  const setInput = useAgentStore((state) => state.setDraftInput);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<TabMode>("setup");
+  const [activeTab, setActiveTab] = useState<TabMode>(
+    activeTaskId === null ? "setup" : "chat",
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [continuationDrafts, setContinuationDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [continuationPending, setContinuationPending] = useState(false);
+  const [continuationErrors, setContinuationErrors] = useState<
+    Record<string, string>
+  >({});
+
+  const continuationInput =
+    activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
+  const continuationError =
+    activeTaskId === null ? null : continuationErrors[activeTaskId] ?? null;
+  const visibleTab: TabMode =
+    activeTaskId === null
+      ? "setup"
+      : activeTab === "setup"
+        ? "chat"
+        : activeTab;
+
+  const continuationEnabled =
+    activeTask !== undefined &&
+    activeTask.summary.mode === "agent" &&
+    activeTask.summary.active_run_id === null &&
+    latestRunIsTerminal(activeTask) &&
+    continueTask !== undefined &&
+    !continuationPending;
+
+  const continuationDisabledReason = useMemo(() => {
+    if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
+    if (activeTask.summary.mode !== "agent") return "固定验收任务不支持继续提问";
+    if (activeTask.summary.active_run_id !== null) {
+      switch (activeTask.summary.status) {
+        case "queued":
+          return "任务排队中，请等待执行槽";
+        case "running":
+          return "任务运行中，请等待当前回答";
+        case "finalizing":
+          return "任务收尾中，请稍候";
+        case "cancel_requested":
+          return "任务正在取消，请稍候";
+      }
+    }
+    return "选择已完成的 Agent 任务后继续提问";
+  }, [activeTask]);
 
   const submitTask = async (mode: StartTaskInput["mode"]) => {
-    const trimmed = input.trim();
-    if (!trimmed || isSubmitting) return;
-    setFixtureError(null);
+    const input = draftInput.trim();
+    if (!input || isSubmitting) return;
+    setDraftError(null);
     setIsSubmitting(true);
     try {
-      await startTask({
-        input: trimmed,
-        databases: selectedDatabases,
-        mode,
-      });
-      setInput("");
+      await startTask({ input, databases: selectedDatabases, mode });
+      setDraftInput("");
       setActiveTab("chat");
     } catch (error) {
-      setFixtureError(error instanceof Error ? error.message : "任务提交失败");
+      setDraftError(error instanceof Error ? error.message : "任务提交失败");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleSetupSend = () => {
-    void submitTask("agent");
-  };
-
-  const handleFixtureRun = () => {
-    const trimmed = input.trim();
-    if (!trimmed || isSubmitting) return;
-    setFixtureError(null);
+  const runFixture = () => {
+    if (!draftInput.trim() || isSubmitting) return;
     if (
       selectedDatabases.length !== 2 ||
       !selectedDatabases.includes("pubmed") ||
       !selectedDatabases.includes("geo")
     ) {
-      const message = "固定验收案例只能选择 PubMed 和 GEO。";
-      setFixtureError(message);
+      setDraftError("固定验收案例只能选择 PubMed 和 GEO。");
       return;
     }
     void submitTask("fixture");
   };
 
-  const handleChatSend = () => {
-    if (taskId === null) handleSetupSend();
+  const sendContinuation = async () => {
+    if (!continuationEnabled || activeTaskId === null || continueTask === undefined) {
+      return;
+    }
+    const input = continuationInput.trim();
+    if (!input) return;
+    setContinuationPending(true);
+    setContinuationErrors((current) => {
+      const next = { ...current };
+      delete next[activeTaskId];
+      return next;
+    });
+    try {
+      await continueTask(activeTaskId, { input });
+      setContinuationDrafts((current) => ({ ...current, [activeTaskId]: "" }));
+    } catch (error) {
+      setContinuationErrors((current) => ({
+        ...current,
+        [activeTaskId]: error instanceof Error ? error.message : "继续提问失败",
+      }));
+    } finally {
+      setContinuationPending(false);
+    }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (activeTab === "setup") {
-        handleSetupSend();
-      } else {
-        handleChatSend();
-      }
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    if (activeTab === "setup") {
+      void submitTask("agent");
+    } else {
+      void sendContinuation();
     }
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-col">
       <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as TabMode)}
-        className="flex h-full flex-col"
+        value={visibleTab}
+        onValueChange={(value) => setActiveTab(value as TabMode)}
+        className="flex h-full min-w-0 flex-col"
       >
-        <TabsList className="shrink-0 mx-4 mt-2">
+        <TabsList className="mx-4 mt-2 shrink-0">
           <TabsTrigger value="setup">设置</TabsTrigger>
           <TabsTrigger value="chat">对话</TabsTrigger>
           <TabsTrigger value="results">结果</TabsTrigger>
         </TabsList>
 
-        {/* ── 设置 Tab ─────────────────────────────────────────── */}
-        <TabsContent value="setup" className="p-4">
+        <TabsContent value="setup" className="min-w-0 p-4">
           <Card>
             <CardHeader>
               <CardTitle>研究设置</CardTitle>
               <CardDescription>配置研究目标和数据源</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="输入研究目标..."
-                disabled={isSubmitting}
-                className="min-h-20 resize-none"
-              />
-              <DatabaseSelector
-                onToggle={() => setFixtureError(null)}
-                disabled={isSubmitting}
-              />
-              {fixtureError && (
+            <FieldGroup className="px-6 pb-4">
+              <Field data-invalid={draftError !== null}>
+                <FieldLabel htmlFor="research-goal">研究目标</FieldLabel>
+                <Textarea
+                  id="research-goal"
+                  value={draftInput}
+                  onChange={(event) => setDraftInput(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="输入研究目标..."
+                  disabled={isSubmitting}
+                  aria-invalid={draftError !== null}
+                  className="min-h-20 resize-none"
+                />
+                <FieldDescription>
+                  新建任务使用独立草稿，不会被后台任务切换覆盖。
+                </FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel>数据源</FieldLabel>
+                <DatabaseSelector
+                  onToggle={() => setDraftError(null)}
+                  disabled={isSubmitting}
+                />
+              </Field>
+              {draftError && (
                 <Alert variant="destructive">
                   <WarningCircleIcon />
-                  <AlertDescription>{fixtureError}</AlertDescription>
+                  <AlertDescription>{draftError}</AlertDescription>
                 </Alert>
               )}
-            </CardContent>
+            </FieldGroup>
             <CardFooter className="flex flex-col gap-2">
               <Button
-                onClick={handleSetupSend}
-                disabled={isSubmitting || !input.trim()}
+                onClick={() => void submitTask("agent")}
+                disabled={isSubmitting || !draftInput.trim()}
                 className="w-full"
               >
+                {isSubmitting && <Spinner data-icon="inline-start" aria-hidden="true" />}
                 开始研究
               </Button>
               <Button
                 variant="outline"
-                onClick={handleFixtureRun}
-                disabled={isSubmitting || !input.trim()}
+                onClick={runFixture}
+                disabled={isSubmitting || !draftInput.trim()}
                 className="w-full"
               >
                 运行固定验收案例
               </Button>
-              {!isConnected && (
-                <p className="text-xs text-muted-foreground">
-                  未连接到后端
-                </p>
+              {!connected && (
+                <p className="text-xs text-muted-foreground">未连接到后端</p>
               )}
             </CardFooter>
           </Card>
         </TabsContent>
 
-        {/* ── 对话 Tab ─────────────────────────────────────────── */}
-        <TabsContent value="chat" className="flex flex-col flex-1">
-          {/* Disconnection banner */}
-          {!isConnected && isRunning && (
-            <div className="mx-4 mt-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              事件连接已断开，任务状态暂未更新
-            </div>
+        <TabsContent value="chat" className="flex min-w-0 flex-1 flex-col">
+          {!connected && activeTask !== undefined && (
+            <Alert variant="destructive" className="mx-4 mt-2">
+              <WarningCircleIcon />
+              <AlertDescription>事件连接已断开，任务状态暂未更新</AlertDescription>
+            </Alert>
           )}
 
-          {/* Research pipeline */}
-          <div className="shrink-0 px-4 pt-2">
-            <ResearchPipeline />
+          <div className="min-w-0 shrink-0 px-4 pt-2">
+            <AgentProgress task={activeTask} />
           </div>
 
           <MessageScrollerProvider autoScroll>
-            <div className="flex flex-1 min-h-0 flex-col">
-              <MessageScroller className="flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <MessageScroller className="min-w-0 flex-1">
                 <MessageScrollerViewport>
                   <MessageScrollerContent>
                     {messages.length === 0 && (
                       <MessageScrollerItem messageId="empty">
                         <Marker variant="separator">
                           <MarkerContent>
-                            输入研究目标开始对话，例如：
-                            <br />
-                            分析健脾散结方对胰腺癌肝转移的影响
+                            {activeTask === undefined
+                              ? "输入研究目标开始对话，例如："
+                              : "该任务暂时没有消息"}
+                            {activeTask === undefined && (
+                              <>
+                                <br />
+                                分析健脾散结方对胰腺癌肝转移的影响
+                              </>
+                            )}
                           </MarkerContent>
                         </Marker>
                       </MessageScrollerItem>
                     )}
 
-                    {messages.map((msg) => (
+                    {messages.map((message) => (
                       <MessageScrollerItem
-                        key={msg.messageId}
-                        messageId={msg.messageId}
-                        scrollAnchor={msg.role === "user"}
+                        key={message.messageId}
+                        messageId={message.messageId}
+                        scrollAnchor={message.role === "user"}
                       >
-                        <Message align={msg.role === "user" ? "end" : "start"}>
+                        <Message align={message.role === "user" ? "end" : "start"}>
                           <MessageAvatar>
                             <Avatar>
                               <AvatarFallback>
-                                {msg.role === "user" ? (
-                                  <UserIcon className="size-4" />
+                                {message.role === "user" ? (
+                                  <UserIcon />
                                 ) : (
-                                  <RobotIcon className="size-4" />
+                                  <RobotIcon />
                                 )}
                               </AvatarFallback>
                             </Avatar>
                           </MessageAvatar>
                           <MessageContent>
                             <Bubble>
-                              <BubbleContent>{msg.content}</BubbleContent>
+                              <BubbleContent>{message.content}</BubbleContent>
                             </Bubble>
                           </MessageContent>
                         </Message>
                       </MessageScrollerItem>
                     ))}
 
-                    {/* Inline artifact cards */}
-                    {artifacts.length > 0 && (
+                    {activeTaskId !== null && artifacts.length > 0 && (
                       <MessageScrollerItem messageId="artifacts">
                         <Accordion>
                           {artifacts.map((artifact) => {
                             const Icon = getFileIcon(artifact.name);
-                            const ext = getExtension(artifact.name);
+                            const extension = getExtension(artifact.name);
                             return (
-                              <AccordionItem key={artifact.name} value={artifact.name}>
+                              <AccordionItem key={artifact.artifact_id} value={artifact.artifact_id}>
                                 <AccordionTrigger>
-                                  <div className="flex items-center gap-2">
-                                    <Icon className="size-4 shrink-0 text-muted-foreground" />
-                                    <span className="truncate text-sm">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <Icon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+                                    <span className="min-w-0 truncate text-sm" title={artifact.name}>
                                       {artifact.name}
                                     </span>
-                                    <Badge variant="outline" className="ml-1 shrink-0">
+                                    <Badge variant="outline" className="shrink-0">
                                       {formatSize(artifact.size)}
                                     </Badge>
-                                    {ext && (
+                                    {extension && (
                                       <Badge variant="secondary" className="shrink-0">
-                                        {ext.toUpperCase()}
+                                        {extension.toUpperCase()}
                                       </Badge>
                                     )}
                                   </div>
@@ -316,7 +400,7 @@ export function ChatPanel({ startTask }: ChatPanelProps) {
                                 <AccordionContent>
                                   <Card size="sm">
                                     <CardHeader>
-                                      <CardTitle className="text-sm">
+                                      <CardTitle className="truncate text-sm" title={artifact.name}>
                                         {artifact.name}
                                       </CardTitle>
                                       <CardDescription>
@@ -325,19 +409,11 @@ export function ChatPanel({ startTask }: ChatPanelProps) {
                                     </CardHeader>
                                     <CardFooter>
                                       <a
-                                        href={getArtifactUrl(
-                                          taskId ?? "",
-                                          artifact.artifact_id,
-                                        )}
+                                        href={getArtifactUrl(activeTaskId, artifact.artifact_id)}
                                         download={artifact.name}
-                                        className={buttonVariants({
-                                          variant: "outline",
-                                          size: "sm",
-                                        })}
+                                        className={buttonVariants({ variant: "outline", size: "sm" })}
                                       >
-                                        <DownloadIcon
-                                          data-icon="inline-start"
-                                        />
+                                        <DownloadIcon data-icon="inline-start" />
                                         下载文件
                                       </a>
                                     </CardFooter>
@@ -349,47 +425,61 @@ export function ChatPanel({ startTask }: ChatPanelProps) {
                         </Accordion>
                       </MessageScrollerItem>
                     )}
-
-                    {isRunning && (
-                      <MessageScrollerItem messageId="thinking">
-                        <Marker role="status">
-                          <MarkerIcon>
-                            <Spinner />
-                          </MarkerIcon>
-                          <MarkerContent>思考中...</MarkerContent>
-                        </Marker>
-                      </MessageScrollerItem>
-                    )}
                   </MessageScrollerContent>
                 </MessageScrollerViewport>
                 <MessageScrollerButton />
               </MessageScroller>
 
-              {/* 对话输入 */}
-              <div className="shrink-0 border-t p-4">
-                <div className="flex gap-2">
-                  <Textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
+              <div className="min-w-0 shrink-0 border-t p-4">
+                <InputGroup className="min-h-11" data-disabled={!continuationEnabled}>
+                  <InputGroupAddon align="block-start">
+                    <span className="truncate text-xs text-muted-foreground">
+                      {continuationEnabled ? "继续提问" : continuationDisabledReason}
+                    </span>
+                  </InputGroupAddon>
+                  <InputGroupTextarea
+                    value={continuationInput}
+                    onChange={(event) => {
+                      if (activeTaskId === null) return;
+                      setContinuationDrafts((current) => ({
+                        ...current,
+                        [activeTaskId]: event.target.value,
+                      }));
+                    }}
                     onKeyDown={handleKeyDown}
-                    placeholder="当前会话的继续提问将在下一版开放"
-                    disabled={taskId !== null || isSubmitting}
-                    className="min-h-11 resize-none"
+                    placeholder={
+                      continuationEnabled
+                        ? "输入对当前任务的继续问题..."
+                        : continuationDisabledReason
+                    }
+                    disabled={!continuationEnabled}
+                    aria-label="继续提问"
+                    className="min-h-11"
                   />
-                  <Button
-                    onClick={handleChatSend}
-                    disabled={taskId !== null || isSubmitting || !input.trim()}
-                  >
-                    {isSubmitting ? "提交中..." : "发送"}
-                  </Button>
-                </div>
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      size="sm"
+                      variant="default"
+                      onClick={() => void sendContinuation()}
+                      disabled={!continuationEnabled || !continuationInput.trim()}
+                      aria-label={continuationPending ? "提交中" : "发送继续问题"}
+                    >
+                      {continuationPending && <Spinner aria-hidden="true" />}
+                      {continuationPending ? "提交中" : "发送"}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+                {continuationError && (
+                  <p role="alert" className="mt-2 break-words text-xs text-destructive">
+                    {continuationError}
+                  </p>
+                )}
               </div>
             </div>
           </MessageScrollerProvider>
         </TabsContent>
 
-        {/* ── 结果 Tab ─────────────────────────────────────────── */}
-        <TabsContent value="results" className="flex-1 p-4">
+        <TabsContent value="results" className="min-w-0 flex-1 p-4">
           <ResultsViewer />
         </TabsContent>
       </Tabs>

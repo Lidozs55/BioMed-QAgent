@@ -60,6 +60,7 @@ export interface APIClient {
     options?: AdmissionOptions,
   ) => Promise<TaskRunAccepted>;
   cancelRun: (taskId: string, runId: string) => Promise<TaskSnapshot>;
+  deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
 }
@@ -116,6 +117,13 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
 
   const request = async <T>(url: string, init?: RequestInit): Promise<T> =>
     parseResponse<T>(await fetcher(url, init));
+
+  const requestVoid = async (url: string, init?: RequestInit): Promise<void> => {
+    const response = await fetcher(url, init);
+    if (!response.ok) {
+      throw new APIError(response.status, await errorDetail(response));
+    }
+  };
 
   const postAdmission = async <T>(url: string, body: string): Promise<T> => {
     const init: RequestInit = {
@@ -194,6 +202,11 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
         `${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/cancel`,
         { method: "POST" },
       ),
+
+    deleteTask: (taskId) =>
+      requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}`, {
+        method: "DELETE",
+      }),
 
     fetchArtifacts: (taskId) =>
       request<{ artifacts: ArtifactRecord[] }>(

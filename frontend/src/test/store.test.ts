@@ -223,6 +223,31 @@ describe("agent task projection store", () => {
     );
   });
 
+  it("removes only the specified authoritative task projection", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [summary("task_active", "running", 1)],
+        [
+          summary("task_delete", "completed", 2),
+          summary("task_keep", "completed", 3),
+        ],
+        null,
+      ),
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("task_delete");
+
+    useAgentStore.getState().removeTask("task_delete");
+
+    const state = useAgentStore.getState();
+    expect(state.tasksById.task_delete).toBeUndefined();
+    expect(state.tasksById.task_keep).toBeDefined();
+    expect(state.tasksById.task_active).toBeDefined();
+    expect(state.taskOrder).toEqual(["task_keep"]);
+    expect(state.activeItems).toEqual(["task_active"]);
+    expect(state.activeTaskId).toBeNull();
+  });
+
   it.each(["completed", "failed", "cancelled", "interrupted"] as const)(
     "moves a task hydrated as %s from active items into history",
     (status) => {

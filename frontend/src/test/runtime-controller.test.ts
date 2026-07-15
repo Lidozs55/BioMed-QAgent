@@ -161,6 +161,7 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     createTask: vi.fn(),
     continueTask: vi.fn(),
     cancelRun: vi.fn(),
+    deleteTask: vi.fn(),
     fetchArtifacts: vi.fn(),
     getArtifactUrl: vi.fn(),
     ...overrides,
@@ -1648,6 +1649,92 @@ describe("runtime orchestration", () => {
       controller.continueTask("task_a", { input: "follow up" }),
     ).rejects.toThrow("409 conflict");
     expect(useAgentStore.getState().tasksById).toBe(before);
+  });
+
+  it("hydrates the authoritative snapshot returned by run cancellation", async () => {
+    useAgentStore.getState().mergeTaskPage(page([summary("task_cancel")]), false);
+    const cancelledSnapshot: TaskSnapshot = {
+      task: {
+        ...summary("task_cancel", "running", 3),
+        status: "cancel_requested",
+        active_run_id: "run_task_cancel",
+      },
+      runs: [
+        {
+          run_id: "run_task_cancel",
+          task_id: "task_cancel",
+          request_id: "req_cancel",
+          status: "cancel_requested",
+          input: "question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: null,
+          error: null,
+        },
+      ],
+      messages: [],
+      older_messages_cursor: null,
+    };
+    const apiClient = api({
+      cancelRun: vi.fn().mockResolvedValue(cancelledSnapshot),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.cancelRun("task_cancel", "run_task_cancel");
+
+    expect(apiClient.cancelRun).toHaveBeenCalledWith(
+      "task_cancel",
+      "run_task_cancel",
+    );
+    expect(useAgentStore.getState().tasksById.task_cancel.summary.status).toBe(
+      "cancel_requested",
+    );
+  });
+
+  it("keeps a terminal task projected until authoritative deletion succeeds", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_delete", "completed", 2)]),
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("task_delete");
+    const deletion = deferred<void>();
+    const apiClient = api({ deleteTask: vi.fn(() => deletion.promise) });
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const pending = controller.deleteTask("task_delete");
+    expect(useAgentStore.getState().tasksById.task_delete).toBeDefined();
+    expect(useAgentStore.getState().taskOrder).toContain("task_delete");
+    expect(eventTransport.unsubscribeAndWait).not.toHaveBeenCalled();
+
+    deletion.resolve();
+    await pending;
+
+    expect(apiClient.deleteTask).toHaveBeenCalledWith("task_delete");
+    expect(eventTransport.unsubscribeAndWait).toHaveBeenCalledWith("task_delete");
+    expect(useAgentStore.getState().tasksById.task_delete).toBeUndefined();
+    expect(useAgentStore.getState().taskOrder).not.toContain("task_delete");
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+  });
+
+  it("retains a terminal task when authoritative deletion fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_delete", "completed", 2)]),
+      false,
+    );
+    const apiClient = api({
+      deleteTask: vi.fn().mockRejectedValue(new Error("delete failed")),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await expect(controller.deleteTask("task_delete")).rejects.toThrow(
+      "delete failed",
+    );
+    expect(useAgentStore.getState().tasksById.task_delete).toBeDefined();
+    expect(useAgentStore.getState().taskOrder).toContain("task_delete");
   });
 
   it("loads another page without duplicating active tasks or changing selection", async () => {
