@@ -1692,6 +1692,48 @@ describe("runtime orchestration", () => {
     );
   });
 
+  it("does not let stale artifact hydration overwrite a cancellation snapshot", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_cancel_generation", "running", 1)]),
+      false,
+    );
+    const artifacts = deferred<Awaited<ReturnType<APIClient["fetchArtifacts"]>>>();
+    const selectedSnapshot = snapshot("task_cancel_generation", 2);
+    const cancelledSnapshot: TaskSnapshot = {
+      ...selectedSnapshot,
+      task: {
+        ...selectedSnapshot.task,
+        status: "cancel_requested",
+        active_run_id: "run_task_cancel_generation",
+        latest_sequence: 3,
+      },
+    };
+    const apiClient = api({
+      fetchTask: vi.fn().mockResolvedValue(selectedSnapshot),
+      fetchArtifacts: vi.fn(() => artifacts.promise),
+      cancelRun: vi.fn().mockResolvedValue(cancelledSnapshot),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const selection = controller.selectTask("task_cancel_generation");
+    await vi.waitFor(() => expect(apiClient.fetchArtifacts).toHaveBeenCalled());
+    await controller.cancelRun("task_cancel_generation", "run_task_cancel_generation");
+    artifacts.resolve([
+      {
+        artifact_id: "stale_artifact",
+        name: "stale.csv",
+        size: 1,
+        sha256: "a".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    await selection;
+
+    const task = useAgentStore.getState().tasksById.task_cancel_generation;
+    expect(task.summary.status).toBe("cancel_requested");
+    expect(task.artifactOrder).toEqual([]);
+  });
+
   it("keeps a terminal task projected until authoritative deletion succeeds", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_delete", "completed", 2)]),

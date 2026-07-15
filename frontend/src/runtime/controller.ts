@@ -335,8 +335,12 @@ export class RuntimeController {
   }
 
   async cancelRun(taskId: string, runId: string): Promise<void> {
-    const snapshot = await this.api.cancelRun(taskId, runId);
-    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    await this.enqueueTaskHandoff(taskId, async () => {
+      const generation = this.advanceTaskHandoffGeneration(taskId);
+      const snapshot = await this.api.cancelRun(taskId, runId);
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    });
   }
 
   async deleteTask(taskId: string): Promise<void> {

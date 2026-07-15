@@ -32,13 +32,16 @@ function seedBackgroundTask(): void {
   );
 }
 
-function seedTerminalTask(mode: "agent" | "fixture" = "agent"): void {
+function seedTerminalTask(
+  mode: "agent" | "fixture" = "agent",
+  taskId = "task_terminal",
+): void {
   const snapshot: TaskSnapshot = {
     task: {
-      task_id: "task_terminal",
+      task_id: taskId,
       mode,
       databases: ["pubmed"],
-      title: "Terminal task",
+      title: `${taskId} task`,
       status: "completed",
       active_run_id: null,
       created_at: CREATED_AT,
@@ -47,9 +50,9 @@ function seedTerminalTask(mode: "agent" | "fixture" = "agent"): void {
     },
     runs: [
       {
-        run_id: "run_terminal",
-        task_id: "task_terminal",
-        request_id: "req_terminal",
+        run_id: `run_${taskId}`,
+        task_id: taskId,
+        request_id: `req_${taskId}`,
         status: "completed",
         input: "initial question",
         created_at: CREATED_AT,
@@ -61,19 +64,29 @@ function seedTerminalTask(mode: "agent" | "fixture" = "agent"): void {
     ],
     messages: [
       {
-        message_id: "message_terminal",
-        task_id: "task_terminal",
-        run_id: "run_terminal",
+        message_id: `message_${taskId}`,
+        task_id: taskId,
+        run_id: `run_${taskId}`,
         ordinal: 1,
         role: "user",
-        content: "initial question",
+        content: `${taskId} question`,
         created_at: CREATED_AT,
       },
     ],
     older_messages_cursor: null,
   };
   useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-  useAgentStore.getState().setActiveTaskId("task_terminal");
+  useAgentStore.getState().setActiveTaskId(taskId);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("ChatPanel", () => {
@@ -254,5 +267,83 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("409 conflict"));
     expect(input).toHaveValue("keep this");
     expect(useAgentStore.getState().tasksById.task_terminal).toBe(before);
+  });
+
+  it("submits the new draft when Enter follows a task view", async () => {
+    seedTerminalTask();
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_new_draft",
+      task_id: "task_new_draft",
+      run_id: "run_new_draft",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(<ChatPanel startTask={startTask} continueTask={vi.fn()} />);
+
+    act(() => useAgentStore.getState().showNewDraft());
+    const input = screen.getByPlaceholderText("输入研究目标...");
+    fireEvent.change(input, { target: { value: "new draft" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() =>
+      expect(startTask).toHaveBeenCalledWith({
+        input: "new draft",
+        databases: [],
+        mode: "agent",
+      }),
+    );
+  });
+
+  it("does not let an earlier submission clear a newer draft", async () => {
+    const submission = deferred<TaskRunAccepted>();
+    const startTask = vi.fn().mockReturnValue(submission.promise);
+    render(<ChatPanel startTask={startTask} />);
+
+    const input = screen.getByPlaceholderText("输入研究目标...");
+    fireEvent.change(input, { target: { value: "first draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+    act(() => useAgentStore.getState().showNewDraft());
+    fireEvent.change(input, { target: { value: "newer draft" } });
+
+    await act(async () => {
+      submission.resolve({
+        request_id: "req_first",
+        task_id: "task_first",
+        run_id: "run_first",
+        status: "queued",
+      });
+      await submission.promise;
+    });
+
+    expect(input).toHaveValue("newer draft");
+    expect(screen.getByPlaceholderText("输入研究目标...")).toBeVisible();
+  });
+
+  it("keeps Task B continuation enabled while Task A is pending", async () => {
+    seedTerminalTask("agent", "task_a");
+    seedTerminalTask("agent", "task_b");
+    useAgentStore.getState().setActiveTaskId("task_a");
+    const continuation = deferred<TaskRunAccepted>();
+    const continueTask = vi.fn().mockReturnValue(continuation.promise);
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const inputA = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(inputA, { target: { value: "question A" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+    act(() => useAgentStore.getState().setActiveTaskId("task_b"));
+
+    const inputB = screen.getByRole("textbox", { name: "继续提问" });
+    expect(inputB).toBeEnabled();
+    fireEvent.change(inputB, { target: { value: "question B" } });
+    expect(screen.getByRole("button", { name: "发送继续问题" })).toBeEnabled();
+
+    await act(async () => {
+      continuation.resolve({
+        request_id: "req_follow_a",
+        task_id: "task_a",
+        run_id: "run_follow_a",
+        status: "queued",
+      });
+      await continuation.promise;
+    });
   });
 });

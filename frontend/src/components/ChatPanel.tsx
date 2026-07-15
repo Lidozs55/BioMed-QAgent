@@ -109,6 +109,10 @@ function latestRunIsTerminal(task: NonNullable<ReturnType<typeof selectActiveTas
   return latestRun !== undefined && TERMINAL_STATUSES.has(latestRun.status);
 }
 
+function draftKey(input: string, databases: readonly string[]): string {
+  return JSON.stringify({ input, databases });
+}
+
 export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
@@ -127,11 +131,15 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<TabMode>(
     activeTaskId === null ? "setup" : "chat",
   );
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(
+    null,
+  );
   const [continuationDrafts, setContinuationDrafts] = useState<
     Record<string, string>
   >({});
-  const [continuationPending, setContinuationPending] = useState(false);
+  const [continuationPendingByTask, setContinuationPendingByTask] = useState<
+    Record<string, boolean>
+  >({});
   const [continuationErrors, setContinuationErrors] = useState<
     Record<string, string>
   >({});
@@ -140,6 +148,10 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
   const continuationError =
     activeTaskId === null ? null : continuationErrors[activeTaskId] ?? null;
+  const currentDraftKey = draftKey(draftInput, selectedDatabases);
+  const isSubmitting = submittingDraftKey === currentDraftKey;
+  const continuationPending =
+    activeTaskId !== null && continuationPendingByTask[activeTaskId] === true;
   const visibleTab: TabMode =
     activeTaskId === null
       ? "setup"
@@ -176,16 +188,31 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
   const submitTask = async (mode: StartTaskInput["mode"]) => {
     const input = draftInput.trim();
     if (!input || isSubmitting) return;
+    const submissionKey = draftKey(input, selectedDatabases);
     setDraftError(null);
-    setIsSubmitting(true);
+    setSubmittingDraftKey(submissionKey);
     try {
       await startTask({ input, databases: selectedDatabases, mode });
-      setDraftInput("");
-      setActiveTab("chat");
+      const currentDraft = useAgentStore.getState().draft;
+      if (
+        draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) ===
+        submissionKey
+      ) {
+        setDraftInput("");
+        setActiveTab("chat");
+      }
     } catch (error) {
-      setDraftError(error instanceof Error ? error.message : "任务提交失败");
+      const currentDraft = useAgentStore.getState().draft;
+      if (
+        draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) ===
+        submissionKey
+      ) {
+        setDraftError(error instanceof Error ? error.message : "任务提交失败");
+      }
     } finally {
-      setIsSubmitting(false);
+      setSubmittingDraftKey((current) =>
+        current === submissionKey ? null : current,
+      );
     }
   };
 
@@ -206,31 +233,38 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
     if (!continuationEnabled || activeTaskId === null || continueTask === undefined) {
       return;
     }
+    const taskId = activeTaskId;
     const input = continuationInput.trim();
     if (!input) return;
-    setContinuationPending(true);
+    setContinuationPendingByTask((current) => ({
+      ...current,
+      [taskId]: true,
+    }));
     setContinuationErrors((current) => {
       const next = { ...current };
-      delete next[activeTaskId];
+      delete next[taskId];
       return next;
     });
     try {
-      await continueTask(activeTaskId, { input });
-      setContinuationDrafts((current) => ({ ...current, [activeTaskId]: "" }));
+      await continueTask(taskId, { input });
+      setContinuationDrafts((current) => ({ ...current, [taskId]: "" }));
     } catch (error) {
       setContinuationErrors((current) => ({
         ...current,
-        [activeTaskId]: error instanceof Error ? error.message : "继续提问失败",
+        [taskId]: error instanceof Error ? error.message : "继续提问失败",
       }));
     } finally {
-      setContinuationPending(false);
+      setContinuationPendingByTask((current) => ({
+        ...current,
+        [taskId]: false,
+      }));
     }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
-    if (activeTab === "setup") {
+    if (visibleTab === "setup") {
       void submitTask("agent");
     } else {
       void sendContinuation();
@@ -265,7 +299,6 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
                   onChange={(event) => setDraftInput(event.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="输入研究目标..."
-                  disabled={isSubmitting}
                   aria-invalid={draftError !== null}
                   className="min-h-20 resize-none"
                 />
@@ -464,7 +497,9 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
                       disabled={!continuationEnabled || !continuationInput.trim()}
                       aria-label={continuationPending ? "提交中" : "发送继续问题"}
                     >
-                      {continuationPending && <Spinner aria-hidden="true" />}
+                      {continuationPending && (
+                        <Spinner data-icon="inline-start" aria-hidden="true" />
+                      )}
                       {continuationPending ? "提交中" : "发送"}
                     </InputGroupButton>
                   </InputGroupAddon>

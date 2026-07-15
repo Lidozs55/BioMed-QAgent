@@ -76,7 +76,7 @@ export function ToolTrace() {
           />
         }
       >
-        <TerminalIcon />
+        <TerminalIcon data-icon="inline-start" />
       </SheetTrigger>
       <SheetContent side="right" className="min-w-0">
         <SheetHeader>
