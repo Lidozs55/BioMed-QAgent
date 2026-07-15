@@ -313,6 +313,189 @@ describe("durable event transport", () => {
     expect(transport.isSubscribed("task_b")).toBe(true);
   });
 
+  it("serializes concurrent task recoveries without opening parallel sockets", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const recoverA = transport.recoverSubscription("task_a", 0);
+    const recoverB = transport.recoverSubscription("task_b", 3);
+    const outcomes = [
+      recoverA.then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+      recoverB.then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+    ];
+
+    try {
+      await Promise.resolve();
+      expect(sockets).toHaveLength(2);
+      sockets[1].open();
+      await Promise.resolve();
+      expect(sockets[1].sent.map((item) => JSON.parse(item))).toEqual([
+        { type: "subscribe", task_id: "task_a", after_sequence: 0 },
+        { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+        { type: "ping" },
+      ]);
+      sockets[1].message(event("task_a", 1, "A"));
+      sockets[1].message({ type: "pong" });
+      await recoverA;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(sockets).toHaveLength(3);
+      expect(sockets[1].readyState).toBe(3);
+      sockets[2].open();
+      await Promise.resolve();
+      expect(sockets[2].sent.map((item) => JSON.parse(item))).toEqual([
+        { type: "subscribe", task_id: "task_a", after_sequence: 1 },
+        { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+        { type: "ping" },
+      ]);
+      sockets[2].message(event("task_b", 4, "B"));
+      sockets[2].message({ type: "pong" });
+      await recoverB;
+
+      expect(transport.isSubscribed("task_a")).toBe(true);
+      expect(transport.isSubscribed("task_b")).toBe(true);
+      expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
+      expect(useAgentStore.getState().tasksById.task_b.lastSequence).toBe(4);
+    } finally {
+      transport.disconnect();
+      await Promise.all(outcomes);
+    }
+  });
+
+  it("keeps recovery pending across a transient close before the fresh socket opens", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const recovery = transport.recoverSubscription("task_a", 0);
+    let outcome = "pending";
+    const observed = recovery.then(
+      () => {
+        outcome = "fulfilled";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+
+    try {
+      await Promise.resolve();
+      expect(sockets).toHaveLength(2);
+      sockets[1].abnormalClose();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(outcome).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(sockets).toHaveLength(3);
+      sockets[2].open();
+      await Promise.resolve();
+      expect(sockets[2].sent.map((item) => JSON.parse(item))).toEqual([
+        { type: "subscribe", task_id: "task_a", after_sequence: 0 },
+        { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+        { type: "ping" },
+      ]);
+      sockets[2].message(event("task_a", 1, "recovered"));
+      sockets[2].message({ type: "pong" });
+      await recovery;
+
+      expect(outcome).toBe("fulfilled");
+      expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
+      expect(transport.isSubscribed("task_b")).toBe(true);
+    } finally {
+      transport.disconnect();
+      await observed;
+    }
+  });
+
+  it("terminates queued recovery on manual disconnect", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const recovery = transport.recoverSubscription("task_a", 0);
+    transport.disconnect();
+
+    await expect(recovery).rejects.toThrow("disconnected");
+    await vi.runAllTimersAsync();
+    expect(sockets).toHaveLength(2);
+    expect(useAgentStore.getState().connectionStatus).toBe("disconnected");
+  });
+
+  it("rejects recovery when the target task subscription returns a control error", async () => {
+    const { transport, sockets, controlErrors } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const recovery = transport.recoverSubscription("task_a", 0);
+    try {
+      await Promise.resolve();
+      sockets[1].open();
+      await Promise.resolve();
+      sockets[1].message({
+        type: "error",
+        code: "task_not_found",
+        message: "Task not found",
+        task_id: "task_a",
+      });
+      sockets[1].message({ type: "pong" });
+
+      await expect(recovery).rejects.toThrow("Task not found");
+      expect(controlErrors).toHaveLength(1);
+    } finally {
+      transport.disconnect();
+      await recovery.catch(() => undefined);
+    }
+  });
+
+  it("does not reject target recovery for another task's control error", async () => {
+    const { transport, sockets, controlErrors } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const recovery = transport.recoverSubscription("task_a", 0);
+    try {
+      await Promise.resolve();
+      sockets[1].open();
+      await Promise.resolve();
+      sockets[1].message({
+        type: "error",
+        code: "task_not_found",
+        message: "Task not found",
+        task_id: "task_b",
+      });
+      sockets[1].message({ type: "pong" });
+
+      await expect(recovery).resolves.toBeUndefined();
+      expect(controlErrors).toHaveLength(1);
+    } finally {
+      transport.disconnect();
+      await recovery.catch(() => undefined);
+    }
+  });
+
   it("ignores malformed JSON and unknown frames without corrupting state", async () => {
     const { transport, sockets } = setupTransport();
     const connected = transport.connect();

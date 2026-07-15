@@ -63,6 +63,20 @@ interface PendingPing {
   reject: (error: Error) => void;
 }
 
+type ConnectionWaiter = PendingPing;
+
+interface RecoveryAttempt {
+  taskId: string;
+  controlError: Error | null;
+}
+
+interface RecoveryRequest {
+  taskId: string;
+  disconnectGeneration: number;
+  resolve: () => void;
+  reject: (reason?: unknown) => void;
+}
+
 function browserSocketUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/api/v1/ws`;
@@ -176,6 +190,11 @@ export class AgentEventTransport {
   private connectPromise: Promise<void> | null = null;
   private resolveConnect: (() => void) | null = null;
   private rejectConnect: ((error: Error) => void) | null = null;
+  private readonly connectionWaiters: ConnectionWaiter[] = [];
+  private readonly recoveryQueue: RecoveryRequest[] = [];
+  private recoveryRunning = false;
+  private recoveryAttempt: RecoveryAttempt | null = null;
+  private disconnectGeneration = 0;
   private manuallyDisconnected = false;
   private hasConnected = false;
 
@@ -208,12 +227,14 @@ export class AgentEventTransport {
 
   disconnect(): void {
     this.manuallyDisconnected = true;
+    this.disconnectGeneration += 1;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     const error = new Error("WebSocket transport disconnected");
     this.rejectPendingPings(error);
+    this.rejectConnectionWaiters(error);
     this.rejectConnect?.(error);
     this.finishConnect();
     const socket = this.socket;
@@ -275,8 +296,89 @@ export class AgentEventTransport {
 
   recoverSubscription(taskId: string, afterSequence: number): Promise<void> {
     this.desired.set(taskId, afterSequence);
+    const disconnectGeneration = this.disconnectGeneration;
+    const recovery = new Promise<void>((resolve, reject) => {
+      this.recoveryQueue.push({
+        taskId,
+        disconnectGeneration,
+        resolve,
+        reject,
+      });
+    });
+    this.startNextRecovery();
+    return recovery;
+  }
+
+  private startNextRecovery(): void {
+    if (this.recoveryRunning) return;
+    const request = this.recoveryQueue.shift();
+    if (request === undefined) return;
+    this.recoveryRunning = true;
+    void this.performRecovery(
+      request.taskId,
+      request.disconnectGeneration,
+    ).then(
+      () => {
+        request.resolve();
+        this.finishRecovery();
+      },
+      (error: unknown) => {
+        request.reject(error);
+        this.finishRecovery();
+      },
+    );
+  }
+
+  private finishRecovery(): void {
+    this.recoveryRunning = false;
+    this.startNextRecovery();
+  }
+
+  private async performRecovery(
+    taskId: string,
+    disconnectGeneration: number,
+  ): Promise<void> {
+    if (disconnectGeneration !== this.disconnectGeneration) {
+      throw new Error("WebSocket transport disconnected");
+    }
     this.replaceSocket();
-    return this.connect().then(() => this.ping());
+    for (;;) {
+      let attempt: RecoveryAttempt | null = null;
+      try {
+        if (!this.isConnected) await this.connect();
+        if (disconnectGeneration !== this.disconnectGeneration) {
+          throw new Error("WebSocket transport disconnected");
+        }
+        attempt = { taskId, controlError: null };
+        this.recoveryAttempt = attempt;
+        await this.ping();
+        if (attempt.controlError !== null) throw attempt.controlError;
+        return;
+      } catch (error) {
+        const controlError = attempt?.controlError ?? null;
+        if (this.recoveryAttempt === attempt) this.recoveryAttempt = null;
+        if (controlError !== null) throw controlError;
+        if (
+          disconnectGeneration !== this.disconnectGeneration ||
+          this.manuallyDisconnected
+        ) {
+          throw error;
+        }
+        await this.waitForConnection(disconnectGeneration);
+      } finally {
+        if (this.recoveryAttempt === attempt) this.recoveryAttempt = null;
+      }
+    }
+  }
+
+  private waitForConnection(disconnectGeneration: number): Promise<void> {
+    if (disconnectGeneration !== this.disconnectGeneration) {
+      return Promise.reject(new Error("WebSocket transport disconnected"));
+    }
+    if (this.isConnected) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      this.connectionWaiters.push({ resolve, reject });
+    });
   }
 
   private replaceSocket(): void {
@@ -317,6 +419,7 @@ export class AgentEventTransport {
       this.hasConnected = true;
       this.options.setConnectionStatus("connected");
       this.flushSubscriptions();
+      this.resolveConnectionWaiters();
       this.resolveConnect?.();
       this.finishConnect();
     };
@@ -367,6 +470,14 @@ export class AgentEventTransport {
       if (frame.type === "pong") {
         this.pendingPings.shift()?.resolve();
       } else {
+        if (
+          frame.task_id !== undefined &&
+          frame.task_id === this.recoveryAttempt?.taskId
+        ) {
+          this.recoveryAttempt.controlError = new Error(
+            `${frame.code}: ${frame.message}`,
+          );
+        }
         this.options.onControlError?.(frame);
       }
       return;
@@ -392,6 +503,14 @@ export class AgentEventTransport {
 
   private rejectPendingPings(error: Error): void {
     for (const pending of this.pendingPings.splice(0)) pending.reject(error);
+  }
+
+  private resolveConnectionWaiters(): void {
+    for (const waiter of this.connectionWaiters.splice(0)) waiter.resolve();
+  }
+
+  private rejectConnectionWaiters(error: Error): void {
+    for (const waiter of this.connectionWaiters.splice(0)) waiter.reject(error);
   }
 
   private finishConnect(): void {

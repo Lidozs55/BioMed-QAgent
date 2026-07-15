@@ -516,6 +516,34 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeTaskId).toBe("task_created");
   });
 
+  it("returns an accepted task when artifact hydration fails", async () => {
+    const accepted: TaskRunAccepted = {
+      request_id: "req_artifact_failure",
+      task_id: "task_artifact_failure",
+      run_id: "run_artifact_failure",
+      status: "queued",
+    };
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi
+          .fn()
+          .mockResolvedValue(snapshot("task_artifact_failure", 1)),
+        fetchArtifacts: vi
+          .fn()
+          .mockRejectedValue(new TypeError("artifact list unavailable")),
+      }),
+      transport(),
+    );
+
+    await expect(
+      controller.startTask({ input: "question", databases: [], mode: "agent" }),
+    ).resolves.toEqual(accepted);
+    expect(
+      useAgentStore.getState().tasksById.task_artifact_failure.hydration,
+    ).toBe("snapshot");
+  });
+
   it("drains accepted-task replay through the snapshot watermark before hydrating", async () => {
     const accepted: TaskRunAccepted = {
       request_id: "req_replay",
@@ -747,6 +775,68 @@ describe("runtime orchestration", () => {
     ]);
   });
 
+  it("retains the sequence drained by the accepted-task unsubscribe barrier", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_barrier_watermark", "running", 1)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_barrier_watermark",
+      task_id: "task_barrier_watermark",
+      run_id: "run_task_barrier_watermark",
+      status: "queued",
+    };
+    const barrier = deferred<void>();
+    const recoveredTool = toolStartedEvent(
+      "task_barrier_watermark",
+      2,
+      "call_barrier_watermark",
+    );
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+      unsubscribeAndWait: vi.fn(() => barrier.promise),
+      recoverSubscription: vi.fn(() => {
+        useAgentStore.getState().applyEvent(recoveredTool);
+        return Promise.resolve();
+      }),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
+        fetchEvents: vi
+          .fn<APIClient["fetchEvents"]>()
+          .mockResolvedValue([runStartedEvent("task_barrier_watermark", 1)]),
+      }),
+      eventTransport,
+    );
+
+    const start = controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+    await vi.waitFor(() =>
+      expect(eventTransport.unsubscribeAndWait).toHaveBeenCalledTimes(1),
+    );
+    useAgentStore.getState().applyEvent(recoveredTool);
+    expect(
+      useAgentStore.getState().tasksById.task_barrier_watermark.lastSequence,
+    ).toBe(2);
+    barrier.resolve();
+    await start;
+
+    expect(eventTransport.recoverSubscription).toHaveBeenCalledWith(
+      "task_barrier_watermark",
+      1,
+    );
+    expect(
+      useAgentStore.getState().tasksById.task_barrier_watermark.activityOrder,
+    ).toEqual([
+      "tool:run_task_barrier_watermark:call_barrier_watermark",
+    ]);
+  });
+
   it("recovers an event-only tool after a short replay instead of skipping to the snapshot", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([summary("task_short_replay", "running", 3)]),
@@ -831,6 +921,104 @@ describe("runtime orchestration", () => {
       useAgentStore.getState().tasksById.task_replay_error.activityOrder,
     ).toEqual(["tool:run_task_replay_error:call_replay_error"]);
     expect(useAgentStore.getState().tasksById.task_replay_error.lastSequence).toBe(2);
+  });
+
+  it("does not hydrate a snapshot when target subscription recovery rejects", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_recovery_rejected", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_recovery_rejected",
+      task_id: "task_recovery_rejected",
+      run_id: "run_task_recovery_rejected",
+      status: "queued",
+    };
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+      recoverSubscription: vi
+        .fn()
+        .mockRejectedValue(new Error("task_not_found: Task not found")),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi
+          .fn()
+          .mockResolvedValue(snapshot("task_recovery_rejected", 2)),
+        fetchEvents: vi.fn().mockRejectedValue(new Error("events unavailable")),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+
+    expect(eventTransport.recoverSubscription).toHaveBeenCalledTimes(1);
+    expect(
+      useAgentStore.getState().tasksById.task_recovery_rejected,
+    ).toMatchObject({
+      hydration: "accepted",
+      lastSequence: 0,
+    });
+  });
+
+  it("serializes accepted replay before a same-task selection snapshot", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_serial_handoff", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_serial_handoff",
+      task_id: "task_serial_handoff",
+      run_id: "run_task_serial_handoff",
+      status: "queued",
+    };
+    const replay = deferred<EventEnvelope[]>();
+    let desired = true;
+    const apiClient = api({
+      createTask: vi.fn().mockResolvedValue(accepted),
+      fetchTask: vi
+        .fn<APIClient["fetchTask"]>()
+        .mockResolvedValueOnce(snapshot("task_serial_handoff", 2))
+        .mockResolvedValueOnce(snapshot("task_serial_handoff", 3)),
+      fetchEvents: vi.fn(() => replay.promise),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({
+      isSubscribed: vi.fn(() => desired),
+      unsubscribeAndWait: vi.fn(() => {
+        desired = false;
+        return Promise.resolve();
+      }),
+      subscribe: vi.fn(() => {
+        desired = true;
+      }),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const starting = controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+    await vi.waitFor(() => expect(apiClient.fetchEvents).toHaveBeenCalledTimes(1));
+    const selection = controller.selectTask("task_serial_handoff");
+    const fetchesWhileReplayPending = vi.mocked(apiClient.fetchTask).mock.calls.length;
+    replay.resolve([
+      runStartedEvent("task_serial_handoff", 1),
+      toolStartedEvent(
+        "task_serial_handoff",
+        2,
+        "call_serial_handoff",
+      ),
+    ]);
+    await Promise.all([starting, selection]);
+
+    expect(fetchesWhileReplayPending).toBe(1);
+    expect(apiClient.fetchTask).toHaveBeenCalledTimes(2);
+    expect(
+      useAgentStore.getState().tasksById.task_serial_handoff.activityOrder,
+    ).toEqual(["tool:run_task_serial_handoff:call_serial_handoff"]);
   });
 
   it("drains a startup subscription before resetting an accepted summary watermark", async () => {
@@ -1242,6 +1430,85 @@ describe("runtime orchestration", () => {
     expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(2);
     const task = useAgentStore.getState().tasksById.task_snapshot_generation;
     expect(task.lastSequence).toBe(4);
+    expect(task.artifactOrder).toEqual(["run_manifest", "artifact_current"]);
+    expect(task.artifactsById.run_manifest).toMatchObject({
+      size: 30,
+      sha256: "c".repeat(64),
+    });
+    expect(task.artifactsById.artifact_removed).toBeUndefined();
+  });
+
+  it("rejects stale start-task artifacts after a newer selection snapshot", async () => {
+    const accepted: TaskRunAccepted = {
+      request_id: "req_start_artifact_generation",
+      task_id: "task_start_artifact_generation",
+      run_id: "run_start_artifact_generation",
+      status: "queued",
+    };
+    const artifactsA = deferred<
+      Awaited<ReturnType<APIClient["fetchArtifacts"]>>
+    >();
+    const artifactsB = deferred<
+      Awaited<ReturnType<APIClient["fetchArtifacts"]>>
+    >();
+    const apiClient = api({
+      createTask: vi.fn().mockResolvedValue(accepted),
+      fetchTask: vi
+        .fn<APIClient["fetchTask"]>()
+        .mockResolvedValueOnce(snapshot("task_start_artifact_generation", 1))
+        .mockResolvedValueOnce(snapshot("task_start_artifact_generation", 3)),
+      fetchArtifacts: vi
+        .fn<APIClient["fetchArtifacts"]>()
+        .mockImplementationOnce(() => artifactsA.promise)
+        .mockImplementationOnce(() => artifactsB.promise),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const starting = controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+    await vi.waitFor(() => expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(1));
+    const selection = controller.selectTask("task_start_artifact_generation");
+    await vi.waitFor(() => expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(2));
+    artifactsB.resolve([
+      {
+        artifact_id: "run_manifest",
+        name: "run_manifest.json",
+        size: 30,
+        sha256: "c".repeat(64),
+        media_type: "application/json",
+      },
+      {
+        artifact_id: "artifact_current",
+        name: "current.csv",
+        size: 40,
+        sha256: "d".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    await selection;
+    artifactsA.resolve([
+      {
+        artifact_id: "run_manifest",
+        name: "run_manifest.json",
+        size: 10,
+        sha256: "a".repeat(64),
+        media_type: "application/json",
+      },
+      {
+        artifact_id: "artifact_removed",
+        name: "removed.csv",
+        size: 20,
+        sha256: "b".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    await starting;
+
+    const task = useAgentStore.getState().tasksById.task_start_artifact_generation;
+    expect(task.lastSequence).toBe(3);
     expect(task.artifactOrder).toEqual(["run_manifest", "artifact_current"]);
     expect(task.artifactsById.run_manifest).toMatchObject({
       size: 30,

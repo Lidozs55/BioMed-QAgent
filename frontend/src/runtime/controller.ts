@@ -58,6 +58,7 @@ export function startRuntime({ api, transport, signal }: RuntimeDependencies) {
 export class RuntimeController {
   private selectionGeneration = 0;
   private readonly taskHandoffGenerations = new Map<string, number>();
+  private readonly taskHandoffTails = new Map<string, Promise<void>>();
   private readonly selectionHandoffs = new Map<string, Promise<number>>();
   private readonly artifactHydrations = new Map<
     string,
@@ -81,9 +82,11 @@ export class RuntimeController {
   private getSelectionHandoff(taskId: string): Promise<number> {
     const existing = this.selectionHandoffs.get(taskId);
     if (existing !== undefined) return existing;
-    const generation = (this.taskHandoffGenerations.get(taskId) ?? 0) + 1;
-    this.taskHandoffGenerations.set(taskId, generation);
-    const handoff = this.performSelectionHandoff(taskId).then(() => generation);
+    const handoff = this.enqueueTaskHandoff(taskId, async () => {
+      const generation = this.advanceTaskHandoffGeneration(taskId);
+      await this.performSelectionHandoff(taskId);
+      return generation;
+    });
     this.selectionHandoffs.set(taskId, handoff);
     const clear = () => {
       if (this.selectionHandoffs.get(taskId) === handoff) {
@@ -92,6 +95,31 @@ export class RuntimeController {
     };
     void handoff.then(clear, clear);
     return handoff;
+  }
+
+  private enqueueTaskHandoff<T>(
+    taskId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.taskHandoffTails.get(taskId) ?? Promise.resolve();
+    const handoff = previous.then(operation, operation);
+    const tail = handoff.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.taskHandoffTails.set(taskId, tail);
+    void tail.then(() => {
+      if (this.taskHandoffTails.get(taskId) === tail) {
+        this.taskHandoffTails.delete(taskId);
+      }
+    });
+    return handoff;
+  }
+
+  private advanceTaskHandoffGeneration(taskId: string): number {
+    const generation = (this.taskHandoffGenerations.get(taskId) ?? 0) + 1;
+    this.taskHandoffGenerations.set(taskId, generation);
+    return generation;
   }
 
   private async performSelectionHandoff(taskId: string): Promise<void> {
@@ -191,11 +219,13 @@ export class RuntimeController {
     }
   }
 
-  async startTask(input: StartTaskInput): Promise<TaskRunAccepted> {
-    const accepted = await this.api.createTask(input);
+  private async performAcceptedTaskHandoff(
+    accepted: TaskRunAccepted,
+    input: StartTaskInput,
+  ): Promise<boolean> {
     const existing = useAgentStore.getState().tasksById[accepted.task_id];
     const needsRestReplay = existing?.hydration === "summary";
-    const minimumReplaySequence = existing?.lastSequence ?? 0;
+    let minimumReplaySequence = existing?.lastSequence ?? 0;
     if (this.transport.isSubscribed(accepted.task_id)) {
       try {
         await this.transport.unsubscribeAndWait(accepted.task_id);
@@ -203,6 +233,10 @@ export class RuntimeController {
         // unsubscribeAndWait removes the desired subscription before awaiting pong.
       }
     }
+    minimumReplaySequence = Math.max(
+      minimumReplaySequence,
+      useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0,
+    );
     useAgentStore.setState((state) =>
       addAcceptedTask(
         state,
@@ -228,13 +262,13 @@ export class RuntimeController {
           );
         } catch {
           await this.recoverAcceptedTask(accepted.task_id, null);
-          return accepted;
+          return false;
         }
       }
       const lastSequence =
         useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
       this.transport.subscribe(accepted.task_id, lastSequence);
-      return accepted;
+      return false;
     }
     try {
       if (needsRestReplay) {
@@ -249,31 +283,40 @@ export class RuntimeController {
     } catch {
       if (needsRestReplay) {
         await this.recoverAcceptedTask(accepted.task_id, snapshot);
-        return accepted;
+        return false;
       }
       const lastSequence =
         useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
       this.transport.subscribe(accepted.task_id, lastSequence);
-      return accepted;
+      return false;
     }
     useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     useAgentStore.getState().setActiveTaskId(accepted.task_id);
     const lastSequence =
       useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
     this.transport.subscribe(accepted.task_id, lastSequence);
-    const artifactRequestSequence = lastSequence;
-    try {
-      const artifacts = await this.api.fetchArtifacts(accepted.task_id);
-      useAgentStore.setState((state) =>
-        mergeTaskArtifacts(
-          state,
-          accepted.task_id,
-          artifacts,
-          artifactRequestSequence,
-        ),
-      );
-    } catch {
-      return accepted;
+    return true;
+  }
+
+  async startTask(input: StartTaskInput): Promise<TaskRunAccepted> {
+    const accepted = await this.api.createTask(input);
+    const { generation, hydrateArtifacts } = await this.enqueueTaskHandoff(
+      accepted.task_id,
+      async () => {
+        const generation = this.advanceTaskHandoffGeneration(accepted.task_id);
+        const hydrateArtifacts = await this.performAcceptedTaskHandoff(
+          accepted,
+          input,
+        );
+        return { generation, hydrateArtifacts };
+      },
+    );
+    if (hydrateArtifacts) {
+      try {
+        await this.getArtifactHydration(accepted.task_id, generation);
+      } catch {
+        return accepted;
+      }
     }
     return accepted;
   }
