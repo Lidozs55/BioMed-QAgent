@@ -156,6 +156,14 @@ class DurableTaskSession:
         normalized = [_json_item(item) for item in items]
         await asyncio.to_thread(self._add_items, normalized)
 
+    async def add_run_input_once(self, run_id: str, input_value: str) -> bool:
+        """Project one manager-owned Run input into history exactly once."""
+
+        if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
+            raise ValueError("run_id must be a single path-safe component")
+        item = _json_item({"role": MessageRole.USER.value, "content": input_value})
+        return await asyncio.to_thread(self._add_run_input_once, run_id, item)
+
     async def pop_item(self) -> TResponseInputItem | None:
         return await asyncio.to_thread(self._pop_item)
 
@@ -306,6 +314,39 @@ class DurableTaskSession:
             append_jsonl_records(self.path, records)
             active.extend(records)
             self._remember(active, highest_ordinal + len(records))
+
+    def _add_run_input_once(
+        self,
+        run_id: str,
+        item: dict[str, Any],
+    ) -> bool:
+        with path_lock(self.path):
+            if any(
+                record.get("op") == "add" and record.get("source_run_id") == run_id
+                for record in self._read_records()
+            ):
+                return False
+            active, highest_ordinal = self._replay()
+            ordinal = highest_ordinal + 1
+            message = _project_message(
+                task_id=self.session_id,
+                ordinal=ordinal,
+                item=item,
+            )
+            record = {
+                "schema_version": "1.0",
+                "op": "add",
+                "ordinal": ordinal,
+                "item": item,
+                "message": (
+                    message.model_dump(mode="json") if message is not None else None
+                ),
+                "source_run_id": run_id,
+            }
+            append_jsonl_records(self.path, [record])
+            active.append(record)
+            self._remember(active, ordinal)
+            return True
 
     def _pop_item(self) -> TResponseInputItem | None:
         with path_lock(self.path):

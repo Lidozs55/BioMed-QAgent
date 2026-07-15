@@ -644,6 +644,168 @@ async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
 
 
 @pytest.mark.asyncio
+async def test_create_task_snapshot_index_failure_rolls_back_before_restart_retry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_ids = iter(
+        [
+            "task_snapshot_projection_failed",
+            "task_snapshot_projection_retry",
+        ]
+    )
+    run_ids = iter(
+        [
+            "run_snapshot_projection_failed",
+            "run_snapshot_projection_retry",
+        ]
+    )
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+
+    async def run(_execution) -> None:
+        executor_started.set()
+        await release_executor.wait()
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    real_upsert_snapshot = repository.index.upsert_snapshot
+    failed_once = False
+
+    async def fail_initial_projection(snapshot) -> None:
+        nonlocal failed_once
+        if snapshot.task.latest_sequence == 0 and not failed_once:
+            failed_once = True
+            raise OSError("simulated initial snapshot index failure")
+        await real_upsert_snapshot(snapshot)
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", fail_initial_projection)
+    request = StartTaskRequest(
+        request_id="req_snapshot_projection_failure",
+        input="retry after initial projection failure",
+    )
+    try:
+        with pytest.raises(OSError, match="initial snapshot index failure"):
+            await manager.create_task(request)
+    finally:
+        await manager.close()
+
+    reopened = TaskRepository(output_dir)
+    restarted = manager_module.TaskManager(
+        reopened,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await restarted.start()
+    try:
+        retried = await restarted.create_task(request)
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+
+        assert retried.task_id == "task_snapshot_projection_retry"
+        assert retried.run_id == "run_snapshot_projection_retry"
+        assert await reopened.find_request(request.request_id) == retried
+        page = await reopened.list_tasks()
+        assert [task.task_id for task in page.tasks] == [retried.task_id]
+        assert not (reopened.tasks_dir / "task_snapshot_projection_failed").exists()
+    finally:
+        release_executor.set()
+        await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_recovers_durable_first_event_after_index_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    monkeypatch.setattr(
+        manager_module,
+        "generate_task_id",
+        lambda: "task_first_event_projection",
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "generate_run_id",
+        lambda: "run_first_event_projection",
+    )
+
+    async def run(_execution) -> None:
+        raise AssertionError("recovered queued run must remain gated")
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_upsert_snapshot = repository.index.upsert_snapshot
+    failed_once = False
+
+    async def fail_first_event_projection(snapshot) -> None:
+        nonlocal failed_once
+        if snapshot.task.latest_sequence == 1 and not failed_once:
+            failed_once = True
+            raise OSError("simulated first event index failure")
+        await real_upsert_snapshot(snapshot)
+
+    monkeypatch.setattr(
+        repository.index,
+        "upsert_snapshot",
+        fail_first_event_projection,
+    )
+    request = StartTaskRequest(
+        request_id="req_first_event_projection",
+        input="recover the durable queued event",
+    )
+    try:
+        accepted = await manager.create_task(request)
+        assert await repository.find_request(request.request_id) == accepted
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [accepted.run_id]
+        assert len(await repository.list_events(accepted.task_id)) == 1
+    finally:
+        await manager.close()
+        if semaphore_held:
+            manager._semaphore.release()
+            semaphore_held = False
+
+    reopened = TaskRepository(output_dir)
+    restarted = manager_module.TaskManager(
+        reopened,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await restarted._semaphore.acquire()
+    restarted_semaphore_held = True
+    await restarted.start()
+    try:
+        retried = await restarted.create_task(request)
+
+        assert retried == accepted
+        assert await reopened.find_request(request.request_id) == accepted
+        page = await reopened.list_tasks()
+        assert [task.task_id for task in page.tasks] == [accepted.task_id]
+        snapshot = await reopened.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [accepted.run_id]
+        assert len(await reopened.list_events(accepted.task_id)) == 1
+    finally:
+        await restarted.close()
+        if restarted_semaphore_held:
+            restarted._semaphore.release()
+
+
+@pytest.mark.asyncio
 async def test_create_task_revalidates_constructed_fixture_request(
     tmp_path,
     monkeypatch,
@@ -1433,6 +1595,7 @@ async def test_queued_cancelled_during_publish_still_removes_waiting_entry(
     active_started = asyncio.Event()
     release_active = asyncio.Event()
     cancelled_publish_entered = asyncio.Event()
+    release_cancelled_publish = asyncio.Event()
     blocked_once = False
 
     async def run(execution) -> None:
@@ -1447,7 +1610,7 @@ async def test_queued_cancelled_during_publish_still_removes_waiting_entry(
         if isinstance(event.payload, blocked_payload_type) and not blocked_once:
             blocked_once = True
             cancelled_publish_entered.set()
-            await asyncio.Event().wait()
+            await release_cancelled_publish.wait()
         await real_publish(event)
 
     monkeypatch.setattr(hub, "publish", block_cancelled_publish)
@@ -1481,6 +1644,11 @@ async def test_queued_cancelled_during_publish_still_removes_waiting_entry(
         )
         await asyncio.wait_for(cancelled_publish_entered.wait(), timeout=1)
         cancellation.cancel()
+        cancellation_delivery_barrier = asyncio.Event()
+        asyncio.get_running_loop().call_soon(cancellation_delivery_barrier.set)
+        await asyncio.wait_for(cancellation_delivery_barrier.wait(), timeout=1)
+        assert not cancellation.done()
+        release_cancelled_publish.set()
         with pytest.raises(asyncio.CancelledError):
             await cancellation
 
@@ -1498,6 +1666,7 @@ async def test_queued_cancelled_during_publish_still_removes_waiting_entry(
         assert retried.runs[-1].status is RunStatus.CANCELLED
         assert manager._queue.qsize() == 1
     finally:
+        release_cancelled_publish.set()
         release_active.set()
         await manager.close()
         await hub.close()
@@ -3295,6 +3464,7 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
     warning_persisted = asyncio.Event()
+    cancel_persisted = asyncio.Event()
     release_executor = asyncio.Event()
     real_append = repository.append_event
 
@@ -3302,6 +3472,8 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
         snapshot = await real_append(event)
         if isinstance(event.payload, WarningPayload):
             warning_persisted.set()
+        if isinstance(event.payload, RunCancelRequestedPayload):
+            cancel_persisted.set()
         return snapshot
 
     async def fail_summary_load(task_id: str):
@@ -3339,6 +3511,7 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
         await asyncio.wait_for(warning_persisted.wait(), timeout=1)
 
         cancellation = asyncio.create_task(manager.cancel_run(task_id, accepted.run_id))
+        await asyncio.wait_for(cancel_persisted.wait(), timeout=1)
         release_executor.set()
         await asyncio.wait_for(cancellation, timeout=1)
 

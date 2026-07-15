@@ -332,6 +332,10 @@ class FixtureRunExecutor:
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
+        await self._repository.task_session(execution.task_id).add_run_input_once(
+            execution.run_id,
+            execution.input,
+        )
         await _run_fixture_sync(
             execution,
             partial(

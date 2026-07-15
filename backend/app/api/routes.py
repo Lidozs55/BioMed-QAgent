@@ -300,6 +300,11 @@ async def cancel_task_run(
         raise HTTPException(status_code=404, detail="Run not found") from error
     except RuntimeError as error:
         detail = str(error)
+        if detail == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
         if detail in {
             f"run {run_id} is not cancellable",
             f"run {run_id} has no live execution",

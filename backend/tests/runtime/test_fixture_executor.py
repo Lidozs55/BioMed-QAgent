@@ -12,6 +12,7 @@ import app.runtime.manager as manager_module
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     EventEnvelope,
+    MessageRole,
     RunStatus,
     StageName,
     StageStartedPayload,
@@ -25,6 +26,65 @@ from app.domain.contracts import (
 )
 from app.pipeline.pinned_case import PipelineCancelledError
 from app.runtime.repository import TaskRepository
+
+
+@pytest.mark.asyncio
+async def test_fixture_completion_projects_one_user_message_across_restart(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def complete_fixture(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(runner_module, "run_pinned_fixture", complete_fixture)
+    monkeypatch.setattr(runner_module, "_load_fixture_events", lambda _path: [])
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    fixture_executor = runner_module.FixtureRunExecutor(
+        repository,
+        fixture_dir=tmp_path / "fixture",
+    )
+
+    async def run_twice(execution) -> None:
+        await fixture_executor(execution)
+        await fixture_executor(execution)
+
+    manager = manager_module.TaskManager(repository, run_executor=run_twice)
+    await manager.start()
+    accepted = await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_message_projection",
+            input="  durable fixture question  ",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    try:
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.task.status is RunStatus.COMPLETED
+        assert len(completed.messages) == 1
+        assert completed.messages[0].role is MessageRole.USER
+        assert completed.messages[0].content == "durable fixture question"
+        live_page = await repository.list_messages(accepted.task_id)
+        assert live_page.messages == completed.messages
+    finally:
+        await manager.close()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        restarted = await reopened.get_snapshot(accepted.task_id)
+        assert restarted is not None
+        assert len(restarted.messages) == 1
+        assert restarted.messages[0].role is MessageRole.USER
+        assert restarted.messages[0].content == "durable fixture question"
+        restarted_page = await reopened.list_messages(accepted.task_id)
+        assert restarted_page.messages == restarted.messages
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio
@@ -150,7 +210,7 @@ async def test_fixture_executor_cancellation_sets_token_and_drains_sync_worker(
         databases=["pubmed", "geo"],
     )
     executor = runner_module.FixtureRunExecutor(
-        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        TaskRepository(tmp_path / "output"),
         fixture_dir=tmp_path / "fixture",
     )
     executor_task = asyncio.create_task(executor(execution))
@@ -285,7 +345,7 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
         databases=["pubmed", "geo"],
     )
     executor = runner_module.FixtureRunExecutor(
-        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        TaskRepository(tmp_path / "output"),
         fixture_dir=tmp_path / "fixture",
     )
 
@@ -356,7 +416,7 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
         _event_emitter=emit,
     )
     executor = runner_module.FixtureRunExecutor(
-        SimpleNamespace(tasks_dir=tmp_path / "tasks"),
+        TaskRepository(tmp_path / "output"),
         fixture_dir=tmp_path / "fixture",
     )
 

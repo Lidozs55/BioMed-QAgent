@@ -886,6 +886,50 @@ async def test_cancel_missing_run_and_terminal_run_use_404_and_409(
 
 
 @pytest.mark.asyncio
+async def test_cancel_maps_manager_shutdown_race_to_503(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with api_client(tmp_path) as (application, _):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        task_id = "task_cancel_shutdown_race"
+        run_id = f"run_{task_id}"
+        await repository.save_snapshot(snapshot(task_id, status=RunStatus.QUEUED))
+        cancel_entered = asyncio.Event()
+        release_cancel = asyncio.Event()
+        real_cancel = manager.cancel_run
+
+        async def delayed_cancel(*args, **kwargs):
+            cancel_entered.set()
+            await release_cancel.wait()
+            return await real_cancel(*args, **kwargs)
+
+        monkeypatch.setattr(manager, "cancel_run", delayed_cancel)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=application,
+                raise_app_exceptions=False,
+            ),
+            base_url="http://test",
+        ) as client:
+            request_task = asyncio.create_task(
+                client.post(f"/api/v1/tasks/{task_id}/runs/{run_id}/cancel")
+            )
+            try:
+                await asyncio.wait_for(cancel_entered.wait(), timeout=1)
+                await manager.close()
+                release_cancel.set()
+                response = await asyncio.wait_for(request_task, timeout=1)
+            finally:
+                release_cancel.set()
+                await asyncio.gather(request_task, return_exceptions=True)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Task runtime is unavailable"}
+
+
+@pytest.mark.asyncio
 async def test_delete_terminal_task_returns_empty_204_and_removes_all_read_surfaces(
     tmp_path: Path,
 ) -> None:

@@ -299,9 +299,29 @@ async def _send_live_events(connection: _EventConnection) -> _SessionEnd:
                     continue
                 if event.sequence <= connection.last_sent.get(event.task_id, 0):
                     continue
-                await _send_event_locked(connection, event)
+                await _send_live_event_locked(connection, event)
         except WebSocketDisconnect:
             return _SessionEnd.CLIENT_DISCONNECT
+
+
+async def _send_live_event_locked(
+    connection: _EventConnection,
+    event: EventEnvelope,
+) -> None:
+    watermark = connection.last_sent.get(event.task_id, 0)
+    if event.sequence > watermark + 1:
+        durable_events = await connection.repository.list_events(
+            event.task_id,
+            after_sequence=watermark,
+        )
+        for durable_event in durable_events:
+            if durable_event.sequence > event.sequence:
+                break
+            if durable_event.sequence <= connection.last_sent.get(event.task_id, 0):
+                continue
+            await _send_event_locked(connection, durable_event)
+    if event.sequence > connection.last_sent.get(event.task_id, 0):
+        await _send_event_locked(connection, event)
 
 
 async def _send_event_locked(

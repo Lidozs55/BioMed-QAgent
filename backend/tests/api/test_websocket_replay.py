@@ -16,8 +16,12 @@ import app.api.ws_events as ws_events_module
 from app.domain.contracts import RunStatus, TaskMode, TaskSnapshot, TaskSummary
 from app.domain.contracts import (
     AssistantDeltaPayload,
+    RunCancelRequestedPayload,
+    RunCancelledPayload,
     RunCompletedPayload,
+    RunQueuedPayload,
     RunRecord,
+    StartRunRequest,
     StartTaskRequest,
     build_event,
 )
@@ -605,6 +609,131 @@ async def test_snapshot_to_subscribe_handoff_has_no_gap_or_duplicate(
         finally:
             release_replay.set()
             await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_live_delivery_backfills_a_missed_durable_sequence(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_live_backfill"
+        await repository.save_snapshot(running_snapshot(task_id))
+        first = await append_delta(repository, task_id, 1)
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {
+                    "type": "subscribe",
+                    "task_id": task_id,
+                    "after_sequence": 0,
+                }
+            )
+            assert await websocket.receive_frame() == first.model_dump(mode="json")
+
+            missed = await append_delta(repository, task_id, 2)
+            later = await append_delta(repository, task_id, 3)
+            await hub.publish(later)
+
+            assert await websocket.receive_frame() == missed.model_dump(mode="json")
+            assert await websocket.receive_frame() == later.model_dump(mode="json")
+        finally:
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_cancel_publish_interruption_drains_and_retry_keeps_ws_sequences(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_cancel_publish_gap"
+        await repository.save_snapshot(empty_snapshot(task_id))
+
+        async def run(_execution) -> None:
+            raise AssertionError("queued cancellation must prevent execution")
+
+        manager = TaskManager(
+            repository,
+            run_executor=run,
+            max_active_runs=1,
+            event_hub=hub,
+        )
+        await manager.start()
+        await manager._semaphore.acquire()
+        semaphore_held = True
+        accepted = await manager.submit_run(
+            task_id,
+            StartRunRequest(
+                request_id="req_cancel_publish_gap",
+                input="cancel without a live sequence gap",
+            ),
+        )
+        websocket, endpoint = await start_socket(application)
+        publish_entered = asyncio.Event()
+        release_publish = asyncio.Event()
+        real_publish = hub.publish
+
+        async def block_cancel_requested_publish(event) -> None:
+            if isinstance(event.payload, RunCancelRequestedPayload):
+                publish_entered.set()
+                await release_publish.wait()
+            await real_publish(event)
+
+        monkeypatch.setattr(hub, "publish", block_cancel_requested_publish)
+        cancellation: asyncio.Task[TaskSnapshot] | None = None
+        try:
+            await websocket.send_command(
+                {
+                    "type": "subscribe",
+                    "task_id": task_id,
+                    "after_sequence": 0,
+                }
+            )
+            queued_frame = await websocket.receive_frame()
+            assert queued_frame["sequence"] == 1
+            assert queued_frame["payload"]["type"] == "run_queued"
+
+            cancellation = asyncio.create_task(
+                manager.cancel_run(task_id, accepted.run_id)
+            )
+            await asyncio.wait_for(publish_entered.wait(), timeout=1)
+            cancellation.cancel()
+            assert cancellation.cancelling() == 1
+            cancellation_delivery_barrier = asyncio.Event()
+            asyncio.get_running_loop().call_soon(cancellation_delivery_barrier.set)
+            await asyncio.wait_for(cancellation_delivery_barrier.wait(), timeout=1)
+
+            assert not cancellation.done()
+            release_publish.set()
+            with pytest.raises(asyncio.CancelledError):
+                await cancellation
+
+            retried = await manager.cancel_run(task_id, accepted.run_id)
+            assert retried.runs[-1].status is RunStatus.CANCELLED
+            cancel_requested_frame = await websocket.receive_frame()
+            cancelled_frame = await websocket.receive_frame()
+            assert [
+                cancel_requested_frame["sequence"],
+                cancelled_frame["sequence"],
+            ] == [2, 3]
+            assert [
+                cancel_requested_frame["payload"]["type"],
+                cancelled_frame["payload"]["type"],
+            ] == ["run_cancel_requested", "run_cancelled"]
+
+            events = await repository.list_events(task_id)
+            assert [event.sequence for event in events] == [1, 2, 3]
+            assert isinstance(events[0].payload, RunQueuedPayload)
+            assert isinstance(events[1].payload, RunCancelRequestedPayload)
+            assert isinstance(events[2].payload, RunCancelledPayload)
+        finally:
+            release_publish.set()
+            await stop_socket(websocket, endpoint)
+            await manager.close()
+            if semaphore_held:
+                manager._semaphore.release()
+            if cancellation is not None:
+                await asyncio.gather(cancellation, return_exceptions=True)
 
 
 @pytest.mark.asyncio

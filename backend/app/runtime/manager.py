@@ -38,7 +38,7 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.runtime import validate_task_databases
 from app.runtime.hub import EventHub
-from app.runtime.repository import TaskRepository
+from app.runtime.repository import TaskNotFoundError, TaskRepository
 
 
 logger = logging.getLogger(__name__)
@@ -340,6 +340,9 @@ class TaskManager:
         self._lifecycle_lock = asyncio.Lock()
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._running: dict[tuple[str, str], RunExecution] = {}
+        self._active_cancellations: set[asyncio.Task[object]] = set()
+        self._cancellations_drained = asyncio.Event()
+        self._cancellations_drained.set()
         self._workers: list[asyncio.Task[None]] = []
         self._started = False
         self._closing = False
@@ -372,6 +375,7 @@ class TaskManager:
                     for worker in self._workers:
                         worker.cancel()
                     await asyncio.gather(*self._workers, return_exceptions=True)
+                    await self._cancellations_drained.wait()
                     self._workers.clear()
                     self._running.clear()
                     self._queue.drain()
@@ -510,7 +514,19 @@ class TaskManager:
         accepted: TaskRunAccepted,
         input_value: str,
     ) -> TaskRunAccepted:
-        await self.repository.save_snapshot(snapshot)
+        try:
+            await self.repository.save_snapshot(snapshot)
+        except Exception as error:
+            try:
+                await self.repository.delete_task(snapshot.task.task_id)
+            except TaskNotFoundError:
+                pass
+            except Exception as rollback_error:
+                error.add_note(
+                    "initial task rollback also failed: "
+                    f"{type(rollback_error).__name__}: {rollback_error}"
+                )
+            raise
         return await self._admit_run_locked(snapshot, accepted, input_value)
 
     async def _admit_run_locked(
@@ -537,6 +553,35 @@ class TaskManager:
         return accepted
 
     async def cancel_run(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        reason: str | None = None,
+    ) -> TaskSnapshot:
+        if not self._started or self._closing:
+            raise RuntimeError("task manager is not running")
+        caller = asyncio.current_task()
+        if caller is None:
+            raise RuntimeError("cancellation requires an asyncio Task")
+        async with self._admission_lock:
+            if not self._started or self._closing:
+                raise RuntimeError("task manager is not running")
+            live_execution = self._running.get((task_id, run_id))
+            if live_execution is not None:
+                live_execution.context.cancellation_requested.set()
+            self._active_cancellations.add(caller)
+            self._cancellations_drained.clear()
+        try:
+            return await self._shield_and_drain_locked(
+                self._cancel_run(task_id, run_id, reason=reason)
+            )
+        finally:
+            self._active_cancellations.discard(caller)
+            if not self._active_cancellations:
+                self._cancellations_drained.set()
+
+    async def _cancel_run(
         self,
         task_id: str,
         run_id: str,

@@ -122,7 +122,17 @@ class TaskRepository:
 
             async def append_and_index() -> TaskSnapshot:
                 snapshot = await asyncio.to_thread(self._append_event_sync, event)
-                await self.index.upsert_snapshot(snapshot)
+                try:
+                    await self.index.upsert_snapshot(snapshot)
+                except Exception as error:
+                    try:
+                        await self.index.rebuild()
+                    except Exception as rebuild_error:
+                        error.add_note(
+                            "task index rebuild also failed: "
+                            f"{type(rebuild_error).__name__}: {rebuild_error}"
+                        )
+                        raise error
                 return snapshot
 
             append_task = asyncio.create_task(append_and_index())
