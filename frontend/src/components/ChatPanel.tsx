@@ -1,6 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useAgentStore } from "../stores/agentStore";
 import { useAPI } from "../hooks/useAPI";
+import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
+import {
+  selectActiveArtifacts,
+  selectActiveMessages,
+  selectActiveTaskIsBusy,
+  selectConnectionIsConnected,
+} from "@/stores/agentSelectors";
 import {
   DownloadIcon,
   FileCodeIcon,
@@ -49,7 +56,7 @@ import ResultsViewer from "./ResultsViewer";
 type TabMode = "setup" | "chat" | "results";
 
 interface ChatPanelProps {
-  send: (input: string, databases?: string[]) => void;
+  startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
 }
 
 /** Format bytes to human-readable size */
@@ -85,100 +92,66 @@ function getFileIcon(name: string) {
 }
 
 /** 研究工作台 — 设置 / 对话 / 结果 三模式切换。 */
-export function ChatPanel({ send }: ChatPanelProps) {
-  const { messages, isRunning, isConnected, taskId } = useAgentStore();
-  const artifacts = useAgentStore((s) => s.artifacts);
-  const fixtureError = useAgentStore((s) => s.fixtureError);
-  const setFixtureError = useAgentStore((s) => s.setFixtureError);
-  const { createTask, fetchArtifacts, getArtifactUrl } = useAPI();
-  const [input, setInput] = useState("");
+export function ChatPanel({ startTask }: ChatPanelProps) {
+  const messages = useAgentStore(selectActiveMessages);
+  const isRunning = useAgentStore(selectActiveTaskIsBusy);
+  const isConnected = useAgentStore(selectConnectionIsConnected);
+  const taskId = useAgentStore((state) => state.activeTaskId);
+  const artifacts = useAgentStore(selectActiveArtifacts);
+  const fixtureError = useAgentStore((state) => state.draft.error);
+  const setFixtureError = useAgentStore((state) => state.setDraftError);
+  const selectedDatabases = useAgentStore(
+    (state) => state.draft.selectedDatabaseIds,
+  );
+  const { getArtifactUrl } = useAPI();
+  const input = useAgentStore((state) => state.draft.input);
+  const setInput = useAgentStore((state) => state.setDraftInput);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<TabMode>(() => {
-    const s = useAgentStore.getState();
-    return s.isRunning || s.messages.length > 0 ? "chat" : "setup";
-  });
+  const [activeTab, setActiveTab] = useState<TabMode>("setup");
 
-  // Fetch artifacts when a task completes
-  useEffect(() => {
-    if (taskId && !isRunning) {
-      fetchArtifacts(taskId)
-        .then((arts) => {
-          if (arts && useAgentStore.getState().taskId === taskId) {
-            const store = useAgentStore.getState();
-            store.setArtifacts(arts.map((a) => ({
-              artifactId: a.artifact_id,
-              name: a.name,
-              size: a.size,
-            })));
-          }
-        })
-        .catch(() => {});
-    }
-  }, [taskId, isRunning, fetchArtifacts]);
-
-  const handleSetupSend = () => {
+  const submitTask = async (mode: StartTaskInput["mode"]) => {
     const trimmed = input.trim();
-    if (!trimmed || !isConnected || isRunning) return;
-    const selected = useAgentStore.getState().selectedDatabases;
-    send(trimmed, selected);
-    setInput("");
-    setActiveTab("chat");
+    if (!trimmed || isSubmitting) return;
+    setFixtureError(null);
+    setIsSubmitting(true);
+    try {
+      await startTask({
+        input: trimmed,
+        databases: selectedDatabases,
+        mode,
+      });
+      setInput("");
+      setActiveTab("chat");
+    } catch (error) {
+      setFixtureError(error instanceof Error ? error.message : "任务提交失败");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleFixtureRun = async () => {
+  const handleSetupSend = () => {
+    void submitTask("agent");
+  };
+
+  const handleFixtureRun = () => {
     const trimmed = input.trim();
-    if (!trimmed || isRunning) return;
+    if (!trimmed || isSubmitting) return;
     setFixtureError(null);
-    const store = useAgentStore.getState();
-    const selected = store.selectedDatabases;
     if (
-      selected.length !== 2 ||
-      !selected.includes("pubmed") ||
-      !selected.includes("geo")
+      selectedDatabases.length !== 2 ||
+      !selectedDatabases.includes("pubmed") ||
+      !selectedDatabases.includes("geo")
     ) {
       const message = "固定验收案例只能选择 PubMed 和 GEO。";
       setFixtureError(message);
       return;
     }
-    store.prepareNewTask(selected);
-    store.addMessage("user", trimmed);
-    store.setRunning(true);
-    store.setPipelineStage("discovery");
-    setActiveTab("chat");
-    try {
-      const created = await createTask(trimmed, selected);
-      store.setTaskId(created.task_id);
-      store.setPipelineStage("done");
-      store.addMessage(
-        "assistant",
-        `确定性 Pipeline 已完成，任务 ${created.task_id} 的产物已通过验证。`,
-      );
-      const arts = await fetchArtifacts(created.task_id);
-      if (useAgentStore.getState().taskId === created.task_id) {
-        store.setArtifacts(arts.map((a) => ({
-          artifactId: a.artifact_id,
-          name: a.name,
-          size: a.size,
-        })));
-        setActiveTab("results");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "任务执行失败";
-      store.setPipelineStage("error");
-      store.addTrace({ kind: "error", message });
-      setFixtureError(message);
-      setActiveTab("setup");
-    } finally {
-      store.setRunning(false);
-    }
+    void submitTask("fixture");
   };
 
   const handleChatSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed || isRunning) return;
-    const selected = useAgentStore.getState().selectedDatabases;
-    send(trimmed, selected);
-    setInput("");
+    if (taskId === null) handleSetupSend();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -218,10 +191,13 @@ export function ChatPanel({ send }: ChatPanelProps) {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="输入研究目标..."
-                disabled={isRunning}
+                disabled={isSubmitting}
                 className="min-h-20 resize-none"
               />
-              <DatabaseSelector onToggle={() => setFixtureError(null)} />
+              <DatabaseSelector
+                onToggle={() => setFixtureError(null)}
+                disabled={isSubmitting}
+              />
               {fixtureError && (
                 <Alert variant="destructive">
                   <WarningCircleIcon />
@@ -232,7 +208,7 @@ export function ChatPanel({ send }: ChatPanelProps) {
             <CardFooter className="flex flex-col gap-2">
               <Button
                 onClick={handleSetupSend}
-                disabled={!isConnected || isRunning || !input.trim()}
+                disabled={isSubmitting || !input.trim()}
                 className="w-full"
               >
                 开始研究
@@ -240,7 +216,7 @@ export function ChatPanel({ send }: ChatPanelProps) {
               <Button
                 variant="outline"
                 onClick={handleFixtureRun}
-                disabled={isRunning || !input.trim()}
+                disabled={isSubmitting || !input.trim()}
                 className="w-full"
               >
                 运行固定验收案例
@@ -259,7 +235,7 @@ export function ChatPanel({ send }: ChatPanelProps) {
           {/* Disconnection banner */}
           {!isConnected && isRunning && (
             <div className="mx-4 mt-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              连接已断开，研究已中断
+              事件连接已断开，任务状态暂未更新
             </div>
           )}
 
@@ -287,8 +263,8 @@ export function ChatPanel({ send }: ChatPanelProps) {
 
                     {messages.map((msg) => (
                       <MessageScrollerItem
-                        key={msg.id}
-                        messageId={msg.id}
+                        key={msg.messageId}
+                        messageId={msg.messageId}
                         scrollAnchor={msg.role === "user"}
                       >
                         <Message align={msg.role === "user" ? "end" : "start"}>
@@ -351,7 +327,7 @@ export function ChatPanel({ send }: ChatPanelProps) {
                                       <a
                                         href={getArtifactUrl(
                                           taskId ?? "",
-                                          artifact.artifactId,
+                                          artifact.artifact_id,
                                         )}
                                         download={artifact.name}
                                         className={buttonVariants({
@@ -396,17 +372,15 @@ export function ChatPanel({ send }: ChatPanelProps) {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={
-                      isConnected ? "输入研究目标..." : "正在连接后端..."
-                    }
-                    disabled={!isConnected || isRunning}
+                    placeholder="当前会话的继续提问将在下一版开放"
+                    disabled={taskId !== null || isSubmitting}
                     className="min-h-11 resize-none"
                   />
                   <Button
                     onClick={handleChatSend}
-                    disabled={!isConnected || isRunning || !input.trim()}
+                    disabled={taskId !== null || isSubmitting || !input.trim()}
                   >
-                    {isRunning ? "运行中..." : "发送"}
+                    {isSubmitting ? "提交中..." : "发送"}
                   </Button>
                 </div>
               </div>

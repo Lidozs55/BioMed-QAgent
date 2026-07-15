@@ -1,5 +1,10 @@
 import { useAgentStore } from "@/stores/agentStore";
 import { useAPI } from "@/hooks/useAPI";
+import {
+  selectActiveArtifacts,
+  selectActiveTaskIsBusy,
+} from "@/stores/agentSelectors";
+import { selectCompatTraceItems } from "@/stores/legacyProjectionSelectors";
 import { useState, useEffect } from "react";
 import Papa from "papaparse";
 import {
@@ -110,7 +115,7 @@ interface SourceEntry {
 }
 
 function parseSourceManifest(
-  traces: { kind: string; name?: string; output?: string }[],
+  traces: readonly { kind: string; name?: string; output?: string }[],
 ): SourceEntry[] {
   const entries: SourceEntry[] = [];
 
@@ -300,10 +305,10 @@ function CsvPreview({
 }
 
 export default function ResultsViewer() {
-  const artifacts = useAgentStore((s) => s.artifacts);
-  const taskId = useAgentStore((s) => s.taskId);
-  const isRunning = useAgentStore((s) => s.isRunning);
-  const traces = useAgentStore((s) => s.traces);
+  const artifacts = useAgentStore(selectActiveArtifacts);
+  const taskId = useAgentStore((state) => state.activeTaskId);
+  const isRunning = useAgentStore(selectActiveTaskIsBusy);
+  const traces = useAgentStore(selectCompatTraceItems);
 
   const { getArtifactUrl } = useAPI();
 
@@ -399,7 +404,7 @@ export default function ResultsViewer() {
                           <CsvPreview
                             artifactUrl={getArtifactUrl(
                               taskId ?? "",
-                              artifact.artifactId,
+                              artifact.artifact_id,
                             )}
                           />
                         </AccordionContent>
@@ -414,7 +419,7 @@ export default function ResultsViewer() {
                     size="sm"
                     onClick={() =>
                       triggerDownload(
-                        getArtifactUrl(taskId ?? "", artifact.artifactId),
+                        getArtifactUrl(taskId ?? "", artifact.artifact_id),
                         artifact.name,
                       )
                     }

@@ -1,71 +1,42 @@
-import { useState } from "react"
-import { useAgentStore } from "@/stores/agentStore"
-import { useAPI } from "@/hooks/useAPI"
-import { ThemeToggle } from "@/components/ThemeToggle"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { cn } from "@/lib/utils"
+import { DatabaseIcon, FlaskIcon, PlusCircleIcon } from "@phosphor-icons/react";
+
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
-  SidebarGroup,
-  SidebarGroupLabel,
-  SidebarGroupContent,
-  SidebarMenu,
-  SidebarMenuAction,
-  SidebarMenuItem,
-  SidebarMenuButton,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
-} from "@/components/ui/sidebar"
-import {
-  DatabaseIcon,
-  DownloadIcon,
-  FlaskIcon,
-  PlusCircleIcon,
-  TrashIcon,
-} from "@phosphor-icons/react"
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
+import { useAgentStore } from "@/stores/agentStore";
+import { selectActiveTask } from "@/stores/agentSelectors";
+import { selectCompatTaskRows } from "@/stores/legacyProjectionSelectors";
 
-export function SessionSidebar() {
-  const sessions = useAgentStore((s) => s.sessions)
-  const currentSessionId = useAgentStore((s) => s.currentSessionId)
-  const isConnected = useAgentStore((s) => s.isConnected)
-  const isRunning = useAgentStore((s) => s.isRunning)
-  const databases = useAgentStore((s) => s.databases)
-  const selectedDatabases = useAgentStore((s) => s.selectedDatabases)
-  const pipelineStage = useAgentStore((s) => s.pipelineStage)
-  const artifacts = useAgentStore((s) => s.artifacts)
-  const taskId = useAgentStore((s) => s.taskId)
-  const reset = useAgentStore((s) => s.reset)
-  const deleteSession = useAgentStore((s) => s.deleteSession)
-  const loadSession = useAgentStore((s) => s.loadSession)
+interface SessionSidebarProps {
+  onNewDraft: () => void;
+  onSelectTask: (taskId: string) => void | Promise<void>;
+}
 
-  const { getArtifactUrl } = useAPI()
-
-  const [deleteTarget, setDeleteTarget] = useState<{
-    taskId: string
-    topic: string
-  } | null>(null)
-
-  const currentSession = sessions.find((s) => s.taskId === currentSessionId)
+export function SessionSidebar({
+  onNewDraft,
+  onSelectTask,
+}: SessionSidebarProps) {
+  const rows = useAgentStore(selectCompatTaskRows);
+  const activeTaskId = useAgentStore((state) => state.activeTaskId);
+  const activeTask = useAgentStore(selectActiveTask);
+  const databases = useAgentStore((state) => state.databases);
+  const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const selectedDbNames = databases
-    .filter((db) => selectedDatabases.includes(db.id))
-    .map((db) => db.name)
-
-  /** Format bytes to human-readable size */
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / 1048576).toFixed(1)} MB`
-  }
+    .filter((database) => activeTask?.summary.databases.includes(database.id))
+    .map((database) => database.name);
 
   return (
     <Sidebar>
@@ -77,23 +48,19 @@ export function SessionSidebar() {
               BioMed QAgent
             </span>
             <span className="text-xs text-sidebar-foreground/50">
-              v1 — Agent Loop
+              v2 — Durable Tasks
             </span>
           </div>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
-        {/* 新建研究 button */}
         <div className="px-2 pb-2">
           <Button
             variant="outline"
             size="sm"
             className="w-full justify-start gap-2"
-            onClick={() => {
-              reset()
-            }}
-            disabled={isRunning}
+            onClick={onNewDraft}
           >
             <PlusCircleIcon data-icon="inline-start" />
             新建研究
@@ -103,36 +70,23 @@ export function SessionSidebar() {
         <SidebarGroup>
           <SidebarGroupLabel>会话历史</SidebarGroupLabel>
           <SidebarGroupContent>
-            {sessions.length === 0 ? (
+            {rows.length === 0 ? (
               <p className="px-2 text-xs text-sidebar-foreground/50">
                 暂无研究记录
               </p>
             ) : (
               <SidebarMenu>
-                {sessions.map((session) => (
-                  <SidebarMenuItem key={session.taskId}>
+                {rows.map((row) => (
+                  <SidebarMenuItem key={row.taskId}>
                     <SidebarMenuButton
-                      isActive={session.taskId === currentSessionId}
-                      onClick={() => loadSession(session.taskId)}
-                      tooltip={session.topic}
-                      disabled={isRunning}
+                      isActive={row.taskId === activeTaskId}
+                      onClick={() => void onSelectTask(row.taskId)}
+                      tooltip={row.topic}
                     >
                       <DatabaseIcon />
-                      <span className="truncate">{session.topic}</span>
+                      <span className="truncate">{row.topic}</span>
+                      <Badge variant="secondary">{row.status}</Badge>
                     </SidebarMenuButton>
-                    <SidebarMenuAction
-                      showOnHover
-                      aria-label={`删除 ${session.topic}`}
-                      disabled={isRunning}
-                      onClick={() => {
-                        setDeleteTarget({
-                          taskId: session.taskId,
-                          topic: session.topic,
-                        })
-                      }}
-                    >
-                      <TrashIcon />
-                    </SidebarMenuAction>
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>
@@ -140,7 +94,7 @@ export function SessionSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {currentSession && (
+        {activeTask && (
           <SidebarGroup>
             <SidebarGroupLabel>当前会话</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -158,132 +112,33 @@ export function SessionSidebar() {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      "size-2 shrink-0 rounded-full",
-                      pipelineStage === "done" && "bg-primary",
-                      pipelineStage === "error" && "bg-destructive",
-                      pipelineStage === "idle" && "bg-sidebar-foreground/30",
-                      pipelineStage !== "done" &&
-                        pipelineStage !== "error" &&
-                        pipelineStage !== "idle" &&
-                        "bg-muted-foreground"
-                    )}
-                  />
-                  <span className="text-xs capitalize text-sidebar-foreground/70">
-                    {pipelineStage}
-                  </span>
-                </div>
+                <span className="text-xs text-sidebar-foreground/70">
+                  {activeTask.summary.status}
+                </span>
               </div>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
-
-        {/* Artifacts section */}
-        {artifacts.length > 0 && (
-          <SidebarGroup>
-            <SidebarGroupLabel>产出文件</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {artifacts.map((artifact) => (
-                  <SidebarMenuItem key={artifact.name}>
-                    <SidebarMenuButton
-                      render={
-                        // biome-ignore lint/a11y/useAnchorContent: children rendered by SidebarMenuButton's useRender merge
-                        <a
-                          href={getArtifactUrl(taskId ?? "", artifact.artifactId)}
-                          download={artifact.name}
-                          aria-label={`下载 ${artifact.name}`}
-                        />
-                      }
-                      tooltip={artifact.name}
-                    >
-                      <span className="truncate text-xs">{artifact.name}</span>
-                      <span className="ml-auto shrink-0 text-xs text-sidebar-foreground/50">
-                        {formatSize(artifact.size)}
-                      </span>
-                      <DownloadIcon />
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         )}
       </SidebarContent>
 
       <SidebarFooter>
-        <div className="flex flex-col gap-2 px-2">
-          <div className="flex items-center justify-between">
-            <ThemeToggle />
-            <div className="flex items-center gap-1.5">
-              <span
-                className={cn(
-                  "size-2 shrink-0 rounded-full",
-                  isConnected ? "bg-primary" : "bg-destructive"
-                )}
-              />
-              <span className="text-xs text-sidebar-foreground/70">
-                {isConnected ? "已连接" : "未连接"}
-              </span>
-            </div>
-          </div>
-          {/* Agent running status */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-sidebar-foreground/50">Agent 状态</span>
-            <Badge
-              variant={
-                isRunning
-                  ? "default"
-                  : pipelineStage === "error"
-                    ? "destructive"
-                    : "secondary"
-              }
-              className="text-xs"
-            >
-              {isRunning
-                ? "运行中"
-                : pipelineStage === "error"
-                  ? "异常"
-                  : "空闲"}
-            </Badge>
+        <div className="flex items-center justify-between px-2">
+          <ThemeToggle />
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "size-2 shrink-0 rounded-full",
+                connectionStatus === "connected"
+                  ? "bg-primary"
+                  : "bg-destructive",
+              )}
+            />
+            <span className="text-xs text-sidebar-foreground/70">
+              {connectionStatus === "connected" ? "已连接" : "未连接"}
+            </span>
           </div>
         </div>
       </SidebarFooter>
-
-      {/* Delete confirmation Dialog */}
-      <Dialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>确认删除会话</DialogTitle>
-            <DialogDescription>
-              确认删除会话「{deleteTarget?.topic}」？
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (deleteTarget) {
-                  deleteSession(deleteTarget.taskId)
-                  setDeleteTarget(null)
-                }
-              }}
-            >
-              确认删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Sidebar>
-  )
+  );
 }

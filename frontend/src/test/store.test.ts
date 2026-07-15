@@ -1,144 +1,404 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { migratePersistedAgentState, useAgentStore } from '@/stores/agentStore'
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe('agentStore', () => {
+import type {
+  EventEnvelope,
+  TaskPage,
+  TaskSnapshot,
+  TaskSummary,
+} from "@/runtime/contracts";
+import { createInitialRuntimeState } from "@/runtime/reducer";
+import {
+  addAcceptedTask,
+  AGENT_STORE_NAME,
+  mergeTaskArtifacts,
+  useAgentStore,
+} from "@/stores/agentStore";
+
+const CREATED_AT = "2026-07-14T00:00:00Z";
+
+function summary(
+  taskId: string,
+  status: TaskSummary["status"],
+  latestSequence: number,
+  createdAt = CREATED_AT,
+): TaskSummary {
+  return {
+    task_id: taskId,
+    mode: "agent",
+    databases: ["pubmed"],
+    title: `Task ${taskId}`,
+    status,
+    active_run_id:
+      status === "queued" ||
+      status === "running" ||
+      status === "finalizing" ||
+      status === "cancel_requested"
+        ? `run_${taskId}`
+        : null,
+    created_at: createdAt,
+    updated_at: createdAt,
+    latest_sequence: latestSequence,
+  };
+}
+
+function page(
+  activeItems: TaskSummary[],
+  items: TaskSummary[],
+  nextCursor: string | null,
+): TaskPage {
+  return {
+    schema_version: "1.0",
+    active_items: activeItems,
+    items,
+    next_cursor: nextCursor,
+  };
+}
+
+function completedEvent(taskId: string, sequence: number): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "run_completed",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: "2026-07-14T01:00:00Z",
+    payload: { type: "run_completed" },
+  };
+}
+
+function snapshot(taskId: string, latestSequence: number): TaskSnapshot {
+  const task = summary(taskId, "completed", latestSequence);
+  return {
+    schema_version: "1.0",
+    task,
+    runs: [
+      {
+        schema_version: "1.0",
+        run_id: `run_${taskId}`,
+        task_id: taskId,
+        request_id: `req_${taskId}`,
+        status: "completed",
+        input: "question",
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        started_at: CREATED_AT,
+        finished_at: CREATED_AT,
+        error: null,
+      },
+    ],
+    messages: [
+      {
+        schema_version: "1.0",
+        message_id: `message_${taskId}`,
+        task_id: taskId,
+        run_id: `run_${taskId}`,
+        ordinal: 1,
+        role: "user",
+        content: "question",
+        created_at: CREATED_AT,
+      },
+    ],
+    older_messages_cursor: "older_cursor",
+  };
+}
+
+describe("agent task projection store", () => {
   beforeEach(() => {
-    // Reset store to defaults before each test
-    useAgentStore.setState({
+    window.localStorage.clear();
+    useAgentStore.setState(createInitialRuntimeState());
+  });
+
+  it("merges active and inactive pages without selecting a task", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [summary("task_active", "running", 2)],
+        [
+          summary("task_new", "completed", 4, "2026-07-14T02:00:00Z"),
+          summary("task_old", "completed", 3),
+        ],
+        "cursor_1",
+      ),
+      false,
+    );
+
+    const state = useAgentStore.getState();
+    expect(state.activeItems).toEqual(["task_active"]);
+    expect(state.taskOrder).toEqual(["task_new", "task_old"]);
+    expect(state.nextCursor).toBe("cursor_1");
+    expect(state.activeTaskId).toBeNull();
+    expect(state.draft.input).toBe("");
+  });
+
+  it("deduplicates repeated active summaries and preserves hydrated detail", () => {
+    const store = useAgentStore.getState();
+    store.mergeTaskPage(
+      page(
+        [summary("task_active", "running", 2)],
+        [summary("task_history", "completed", 3)],
+        "cursor_1",
+      ),
+      false,
+    );
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot("task_history", 3));
+
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [summary("task_active", "running", 2)],
+        [
+          summary("task_history", "completed", 3),
+          summary("task_older", "completed", 1, "2026-07-13T00:00:00Z"),
+        ],
+        null,
+      ),
+      true,
+    );
+
+    const state = useAgentStore.getState();
+    expect(state.activeItems).toEqual(["task_active"]);
+    expect(state.taskOrder).toEqual(["task_history", "task_older"]);
+    expect(state.tasksById.task_history.hydration).toBe("snapshot");
+    expect(state.tasksById.task_history.messages).toHaveLength(1);
+    expect(state.nextCursor).toBeNull();
+  });
+
+  it("moves only a terminal task to history and rejects a stale page regression", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [
+          summary("task_a", "running", 0),
+          summary("task_b", "running", 0),
+        ],
+        [],
+        null,
+      ),
+      false,
+    );
+    useAgentStore.getState().applyEvent(completedEvent("task_a", 3));
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_a", "running", 2)], [], null),
+      true,
+    );
+
+    const state = useAgentStore.getState();
+    expect(state.tasksById.task_a.summary.status).toBe("completed");
+    expect(state.tasksById.task_a.lastSequence).toBe(3);
+    expect(state.activeItems).toEqual(["task_b"]);
+    expect(state.taskOrder).toContain("task_a");
+    expect(state.tasksById.task_b.summary.status).toBe("running");
+  });
+
+  it("hydrates an authoritative snapshot without implicitly selecting it", () => {
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot("task_detail", 8));
+
+    const state = useAgentStore.getState();
+    expect(state.activeTaskId).toBeNull();
+    expect(state.tasksById.task_detail).toMatchObject({
+      runOrder: ["run_task_detail"],
+      olderMessagesCursor: "older_cursor",
+      lastSequence: 8,
+      hydration: "snapshot",
+    });
+    expect(state.tasksById.task_detail.messages[0].messageId).toBe(
+      "message_task_detail",
+    );
+  });
+
+  it("ignores a stale snapshot after a newer live event", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_live", "running", 0)], [], null),
+      false,
+    );
+    useAgentStore.getState().applyEvent(completedEvent("task_live", 5));
+    const before = useAgentStore.getState().tasksById.task_live;
+
+    useAgentStore.getState().hydrateTaskSnapshot({
+      ...snapshot("task_live", 4),
+      task: summary("task_live", "running", 4),
+    });
+
+    expect(useAgentStore.getState().tasksById.task_live).toBe(before);
+  });
+
+  it("upserts run_queued into the accepted shell without duplicating the user message", () => {
+    useAgentStore.setState((state) =>
+      addAcceptedTask(
+        state,
+        { taskId: "task_shell", runId: "run_shell", requestId: "req_shell" },
+        "question",
+        ["pubmed"],
+        "agent",
+      ),
+    );
+    useAgentStore.getState().applyEvent({
+      schema_version: "2.0",
+      event_id: "event_shell_1",
+      type: "run_queued",
+      task_id: "task_shell",
+      run_id: "run_shell",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: { type: "run_queued", request_id: "req_shell", input: "question" },
+    });
+
+    const task = useAgentStore.getState().tasksById.task_shell;
+    expect(task.messages).toHaveLength(1);
+    expect(task.messages[0].messageId).toBe("live:run_shell:user");
+  });
+
+  it("retains an accepted user shell when the first snapshot has no messages", () => {
+    useAgentStore.setState((state) =>
+      addAcceptedTask(
+        state,
+        { taskId: "task_shell", runId: "run_shell", requestId: "req_shell" },
+        "question",
+        [],
+        "agent",
+      ),
+    );
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: {
+        ...summary("task_shell", "queued", 1),
+        active_run_id: "run_shell",
+      },
+      runs: [],
       messages: [],
-      traces: [],
-      isConnected: false,
-      isRunning: false,
-      databases: [],
-      selectedDatabases: [],
-      artifacts: [],
-      taskId: null,
-      fixtureError: null,
-      sessions: [],
-      currentSessionId: null,
-      pipelineStage: 'idle',
-    })
-  })
+      older_messages_cursor: null,
+    });
 
-  it('initializes with empty state', () => {
-    const state = useAgentStore.getState()
-    expect(state.messages).toEqual([])
-    expect(state.traces).toEqual([])
-    expect(state.isConnected).toBe(false)
-    expect(state.isRunning).toBe(false)
-    expect(state.sessions).toEqual([])
-    expect(state.currentSessionId).toBeNull()
-    expect(state.pipelineStage).toBe('idle')
-  })
+    expect(useAgentStore.getState().tasksById.task_shell.messages).toEqual([
+      expect.objectContaining({
+        messageId: "live:run_shell:user",
+        content: "question",
+      }),
+    ]);
+  });
 
-  it('addSession creates session and sets currentSessionId', () => {
-    useAgentStore.getState().addSession('task-1', 'Test Topic', ['pubmed', 'pmc'])
-    const state = useAgentStore.getState()
-    expect(state.sessions).toHaveLength(1)
-    expect(state.sessions[0].taskId).toBe('task-1')
-    expect(state.sessions[0].topic).toBe('Test Topic')
-    expect(state.sessions[0].databases).toEqual(['pubmed', 'pmc'])
-    expect(state.sessions[0].messageCount).toBe(0)
-    expect(typeof state.sessions[0].createdAt).toBe('number')
-    expect(state.currentSessionId).toBe('task-1')
+  it("merges REST artifact records into only the addressed task", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [summary("task_a", "running", 0), summary("task_b", "running", 0)],
+        [],
+        null,
+      ),
+      false,
+    );
+    const beforeTaskB = useAgentStore.getState().tasksById.task_b;
 
-    // Adding another session
-    useAgentStore.getState().addSession('task-2', 'Another Topic', [])
-    expect(useAgentStore.getState().sessions).toHaveLength(2)
-    expect(useAgentStore.getState().currentSessionId).toBe('task-2')
-  })
+    useAgentStore.setState((state) =>
+      mergeTaskArtifacts(state, "task_a", [
+        {
+          artifact_id: "artifact_a",
+          name: "result.csv",
+          size: 42,
+          sha256: "a".repeat(64),
+          media_type: "text/csv",
+        },
+      ]),
+    );
 
-  it('setPipelineStage updates pipelineStage', () => {
-    useAgentStore.getState().setPipelineStage('discovery')
-    expect(useAgentStore.getState().pipelineStage).toBe('discovery')
+    const state = useAgentStore.getState();
+    expect(state.tasksById.task_a.artifactOrder).toEqual(["artifact_a"]);
+    expect(state.tasksById.task_a.artifactsById.artifact_a).toMatchObject({
+      taskId: "task_a",
+      size: 42,
+    });
+    expect(state.tasksById.task_b).toBe(beforeTaskB);
+  });
 
-    useAgentStore.getState().setPipelineStage('analysis')
-    expect(useAgentStore.getState().pipelineStage).toBe('analysis')
-  })
+  it("persists only version 2 draft database preferences", () => {
+    useAgentStore.getState().setDraftSelectedDatabaseIds(["pubmed", "geo"]);
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_private", "running", 2)], [], null),
+      false,
+    );
+    useAgentStore.getState().setDraftInput("not persisted");
+    useAgentStore.getState().setDraftError("not persisted");
 
-  it('reset resets pipelineStage but preserves sessions', () => {
-    useAgentStore.getState().addSession('task-1', 'Persist Topic', [])
-    useAgentStore.getState().setPipelineStage('processing')
-    useAgentStore.getState().reset()
+    const stored = JSON.parse(
+      window.localStorage.getItem(AGENT_STORE_NAME) ?? "{}",
+    ) as {
+      state?: Record<string, unknown>;
+      version?: number;
+    };
+    expect(stored.version).toBe(2);
+    expect(stored.state).toEqual({
+      draftPreferences: { selectedDatabaseIds: ["pubmed", "geo"] },
+    });
+  });
 
-    const state = useAgentStore.getState()
-    // Sessions persist across reset
-    expect(state.sessions).toHaveLength(1)
-    expect(state.sessions[0].taskId).toBe('task-1')
-    // PipelineStage resets to idle
-    expect(state.pipelineStage).toBe('idle')
-  })
+  it("destructively discards v1 browser sessions during real rehydration", async () => {
+    window.localStorage.setItem(
+      AGENT_STORE_NAME,
+      JSON.stringify({
+        version: 1,
+        state: {
+          sessions: [
+            {
+              taskId: "legacy_task",
+              messages: [{ role: "user", content: "private history" }],
+              artifacts: [{ artifactId: "legacy_artifact" }],
+            },
+          ],
+          currentSessionId: "legacy_task",
+          traces: [{ output: "private trace" }],
+        },
+      }),
+    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-  it('drops legacy artifacts without artifactId during persisted-state migration', () => {
-    const migrated = migratePersistedAgentState({
-      sessions: [{
-        taskId: 'legacy',
-        topic: 'Legacy',
-        databases: ['geo'],
-        createdAt: 1,
-        messageCount: 0,
-        messages: [],
-        traces: [],
-        artifacts: [{ name: 'main_data.csv', path: 'artifacts/main_data.csv', size: 1 }],
-        pipelineStage: 'done',
-      }],
-    })
+    await useAgentStore.persist.rehydrate();
 
-    expect(migrated.sessions[0].artifacts).toEqual([])
-  })
+    const state = useAgentStore.getState();
+    expect(state.tasksById).toEqual({});
+    expect(state.taskOrder).toEqual([]);
+    expect(state.activeTaskId).toBeNull();
+    expect(state.draft.input).toBe("");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const rewritten = window.localStorage.getItem(AGENT_STORE_NAME) ?? "";
+    expect(rewritten).not.toContain("legacy_task");
+    expect(rewritten).not.toContain("private history");
+    expect(rewritten).not.toContain("legacy_artifact");
+    fetchSpy.mockRestore();
+  });
 
-  it('loadSession restores task data and current session selection', () => {
-    useAgentStore.setState({
-      sessions: [{
-        taskId: 'task-history',
-        topic: 'History',
-        databases: ['pubmed', 'geo'],
-        createdAt: 1,
-        messageCount: 1,
-        messages: [{ id: 'm1', role: 'user', content: 'History' }],
-        traces: [],
-        artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
-        pipelineStage: 'done',
-      }],
-    })
+  it("discards legacy v1 database selections with session content", async () => {
+    window.localStorage.setItem(
+      AGENT_STORE_NAME,
+      JSON.stringify({
+        version: 1,
+        state: {
+          selectedDatabases: ["pubmed", "geo"],
+          sessions: [{ taskId: "legacy_task" }],
+        },
+      }),
+    );
 
-    useAgentStore.getState().loadSession('task-history')
-    const state = useAgentStore.getState()
-    expect(state.taskId).toBe('task-history')
-    expect(state.currentSessionId).toBe('task-history')
-    expect(state.messages[0].content).toBe('History')
-    expect(state.artifacts[0].artifactId).toBe('artifact_1')
-  })
+    await useAgentStore.persist.rehydrate();
 
-  it('deleting the active session also clears its working state', () => {
-    useAgentStore.setState({
-      sessions: [{
-        taskId: 'task-active',
-        topic: 'Active',
-        databases: ['pubmed', 'geo'],
-        createdAt: 1,
-        messageCount: 1,
-        messages: [{ id: 'm1', role: 'user', content: 'Active' }],
-        traces: [],
-        artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
-        pipelineStage: 'done',
-      }],
-      currentSessionId: 'task-active',
-      taskId: 'task-active',
-      messages: [{ id: 'm1', role: 'user', content: 'Active' }],
-      artifacts: [{ artifactId: 'artifact_1', name: 'main_data.csv', size: 10 }],
-      selectedDatabases: ['pubmed', 'geo'],
-      pipelineStage: 'done',
-    })
+    expect(useAgentStore.getState().draft.selectedDatabaseIds).toEqual([]);
+  });
 
-    useAgentStore.getState().deleteSession('task-active')
-    useAgentStore.getState().reset()
+  it("drops backend task projections during version 2 rehydration", async () => {
+    window.localStorage.setItem(
+      AGENT_STORE_NAME,
+      JSON.stringify({
+        version: 2,
+        state: {
+          draftPreferences: { selectedDatabaseIds: ["pubmed"] },
+          tasksById: { leaked_task: { messages: ["private"] } },
+          activeTaskId: "leaked_task",
+        },
+      }),
+    );
 
-    const state = useAgentStore.getState()
-    expect(state.sessions).toEqual([])
-    expect(state.currentSessionId).toBeNull()
-    expect(state.taskId).toBeNull()
-    expect(state.messages).toEqual([])
-    expect(state.artifacts).toEqual([])
-  })
-})
+    await useAgentStore.persist.rehydrate();
+
+    const state = useAgentStore.getState();
+    expect(state.tasksById).toEqual({});
+    expect(state.activeTaskId).toBeNull();
+    expect(state.draft.selectedDatabaseIds).toEqual(["pubmed"]);
+  });
+});
