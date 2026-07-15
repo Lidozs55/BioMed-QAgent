@@ -644,7 +644,7 @@ async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
 
 
 @pytest.mark.asyncio
-async def test_create_task_snapshot_index_failure_rolls_back_before_restart_retry(
+async def test_create_task_snapshot_index_failure_recovers_before_restart_retry(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -672,8 +672,14 @@ async def test_create_task_snapshot_index_failure_rolls_back_before_restart_retr
         await release_executor.wait()
 
     repository = TaskRepository(output_dir)
-    manager = manager_module.TaskManager(repository, run_executor=run)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
     await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
     real_upsert_snapshot = repository.index.upsert_snapshot
     failed_once = False
 
@@ -690,10 +696,12 @@ async def test_create_task_snapshot_index_failure_rolls_back_before_restart_retr
         input="retry after initial projection failure",
     )
     try:
-        with pytest.raises(OSError, match="initial snapshot index failure"):
-            await manager.create_task(request)
+        accepted = await manager.create_task(request)
     finally:
         await manager.close()
+        if semaphore_held:
+            manager._semaphore.release()
+            semaphore_held = False
 
     reopened = TaskRepository(output_dir)
     restarted = manager_module.TaskManager(
@@ -701,20 +709,28 @@ async def test_create_task_snapshot_index_failure_rolls_back_before_restart_retr
         run_executor=run,
         max_active_runs=1,
     )
+    await restarted._semaphore.acquire()
+    restarted_semaphore_held = True
     await restarted.start()
     try:
         retried = await restarted.create_task(request)
-        await asyncio.wait_for(executor_started.wait(), timeout=1)
 
-        assert retried.task_id == "task_snapshot_projection_retry"
-        assert retried.run_id == "run_snapshot_projection_retry"
-        assert await reopened.find_request(request.request_id) == retried
+        assert accepted.task_id == "task_snapshot_projection_failed"
+        assert accepted.run_id == "run_snapshot_projection_failed"
+        assert retried == accepted
+        assert await reopened.find_request(request.request_id) == accepted
         page = await reopened.list_tasks()
-        assert [task.task_id for task in page.tasks] == [retried.task_id]
-        assert not (reopened.tasks_dir / "task_snapshot_projection_failed").exists()
+        assert [task.task_id for task in page.tasks] == [accepted.task_id]
+        assert (reopened.tasks_dir / accepted.task_id).exists()
+
+        restarted._semaphore.release()
+        restarted_semaphore_held = False
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
     finally:
         release_executor.set()
         await restarted.close()
+        if restarted_semaphore_held:
+            restarted._semaphore.release()
 
 
 @pytest.mark.asyncio
@@ -799,6 +815,192 @@ async def test_create_task_recovers_durable_first_event_after_index_failure(
         assert snapshot is not None
         assert [run.run_id for run in snapshot.runs] == [accepted.run_id]
         assert len(await reopened.list_events(accepted.task_id)) == 1
+    finally:
+        await restarted.close()
+        if restarted_semaphore_held:
+            restarted._semaphore.release()
+
+
+@pytest.mark.asyncio
+async def test_create_task_seq0_projection_and_rollback_failure_keeps_one_task(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_ids = iter(["task_seq0_orphan", "task_seq0_retry"])
+    run_ids = iter(["run_seq0_orphan", "run_seq0_retry"])
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(_execution) -> None:
+        raise AssertionError("queued run must remain gated")
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_upsert_snapshot = repository.index.upsert_snapshot
+    real_delete_task = repository.delete_task
+
+    async def fail_initial_projection(snapshot) -> None:
+        if (
+            snapshot.task.task_id == "task_seq0_orphan"
+            and snapshot.task.latest_sequence == 0
+        ):
+            raise OSError("simulated seq0 projection failure")
+        await real_upsert_snapshot(snapshot)
+
+    async def fail_initial_rollback(task_id: str) -> None:
+        if task_id == "task_seq0_orphan":
+            raise OSError("simulated seq0 rollback failure")
+        await real_delete_task(task_id)
+
+    monkeypatch.setattr(repository.index, "upsert_snapshot", fail_initial_projection)
+    monkeypatch.setattr(repository, "delete_task", fail_initial_rollback)
+    request = StartTaskRequest(
+        request_id="req_seq0_projection_and_rollback_failure",
+        input="preserve one authoritative admission",
+    )
+    first = None
+    first_error: OSError | None = None
+    try:
+        try:
+            first = await manager.create_task(request)
+        except OSError as error:
+            first_error = error
+
+        monkeypatch.setattr(repository.index, "upsert_snapshot", real_upsert_snapshot)
+        monkeypatch.setattr(repository, "delete_task", real_delete_task)
+        retried = await manager.create_task(request)
+    finally:
+        await manager.close()
+        if semaphore_held:
+            manager._semaphore.release()
+            semaphore_held = False
+
+    reopened = TaskRepository(output_dir)
+    restarted = manager_module.TaskManager(
+        reopened,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await restarted._semaphore.acquire()
+    restarted_semaphore_held = True
+    await restarted.start()
+    try:
+        page = await reopened.list_tasks()
+        assert [task.task_id for task in page.tasks] == [retried.task_id]
+        assert first_error is None
+        assert first == retried
+        assert await reopened.find_request(request.request_id) == retried
+        snapshot = await reopened.get_snapshot(retried.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [retried.run_id]
+    finally:
+        await restarted.close()
+        if restarted_semaphore_held:
+            restarted._semaphore.release()
+
+
+@pytest.mark.asyncio
+async def test_create_task_seq1_projection_and_rebuild_failure_keeps_one_task(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_ids = iter(["task_seq1_committed", "task_seq1_retry"])
+    run_ids = iter(["run_seq1_committed", "run_seq1_retry"])
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: next(task_ids))
+    monkeypatch.setattr(manager_module, "generate_run_id", lambda: next(run_ids))
+
+    async def run(_execution) -> None:
+        raise AssertionError("queued run must remain gated")
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    await manager._semaphore.acquire()
+    semaphore_held = True
+    real_upsert_snapshot = repository.index.upsert_snapshot
+    real_rebuild = repository.index.rebuild
+
+    async def fail_first_event_projection(snapshot) -> None:
+        if (
+            snapshot.task.task_id == "task_seq1_committed"
+            and snapshot.task.latest_sequence == 1
+        ):
+            raise OSError("simulated seq1 projection failure")
+        await real_upsert_snapshot(snapshot)
+
+    async def fail_rebuild() -> None:
+        raise OSError("simulated seq1 rebuild failure")
+
+    monkeypatch.setattr(
+        repository.index,
+        "upsert_snapshot",
+        fail_first_event_projection,
+    )
+    monkeypatch.setattr(repository.index, "rebuild", fail_rebuild)
+    request = StartTaskRequest(
+        request_id="req_seq1_projection_and_rebuild_failure",
+        input="preserve the committed queued run",
+    )
+    first = None
+    first_error: OSError | None = None
+    try:
+        try:
+            first = await manager.create_task(request)
+        except OSError as error:
+            first_error = error
+
+        if first is not None:
+            with pytest.raises(OSError, match="seq1 rebuild failure"):
+                await manager.create_task(request)
+
+        monkeypatch.setattr(repository.index, "upsert_snapshot", real_upsert_snapshot)
+        monkeypatch.setattr(repository.index, "rebuild", real_rebuild)
+        retried = await manager.create_task(request)
+    finally:
+        await manager.close()
+        if semaphore_held:
+            manager._semaphore.release()
+            semaphore_held = False
+
+    reopened = TaskRepository(output_dir)
+    restarted = manager_module.TaskManager(
+        reopened,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await restarted._semaphore.acquire()
+    restarted_semaphore_held = True
+    restart_error: ValueError | None = None
+    try:
+        try:
+            await restarted.start()
+        except ValueError as error:
+            restart_error = error
+
+        assert restart_error is None
+        page = await reopened.list_tasks()
+        assert [task.task_id for task in page.tasks] == [retried.task_id]
+        assert first_error is None
+        assert first == retried
+        assert await reopened.find_request(request.request_id) == retried
+        snapshot = await reopened.get_snapshot(retried.task_id)
+        assert snapshot is not None
+        assert [run.run_id for run in snapshot.runs] == [retried.run_id]
     finally:
         await restarted.close()
         if restarted_semaphore_held:

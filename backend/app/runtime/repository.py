@@ -86,10 +86,12 @@ class TaskRepository:
         )
         self.index = index or TaskIndex(self.tasks_dir, settings=self.settings)
         self._task_locks: dict[str, asyncio.Lock] = {}
+        self._index_dirty = False
 
     async def initialize(self) -> None:
         await self.index.initialize()
         await self.index.rebuild()
+        self._index_dirty = False
 
     async def close(self) -> None:
         await self.index.close()
@@ -99,7 +101,7 @@ class TaskRepository:
         async with lock:
             persisted = self._snapshot_without_messages(snapshot)
             await asyncio.to_thread(self._save_snapshot_sync, persisted)
-            await self.index.upsert_snapshot(persisted)
+            await self._project_snapshot(persisted)
 
     async def get_snapshot(self, task_id: str) -> TaskSnapshot | None:
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
@@ -107,7 +109,7 @@ class TaskRepository:
             snapshot = await asyncio.to_thread(self._load_snapshot_sync, task_id)
             if snapshot is None:
                 return None
-            await self.index.upsert_snapshot(snapshot)
+            await self._project_snapshot(snapshot)
         messages = await self.task_session(task_id).get_message_page()
         return snapshot.model_copy(
             update={
@@ -122,17 +124,7 @@ class TaskRepository:
 
             async def append_and_index() -> TaskSnapshot:
                 snapshot = await asyncio.to_thread(self._append_event_sync, event)
-                try:
-                    await self.index.upsert_snapshot(snapshot)
-                except Exception as error:
-                    try:
-                        await self.index.rebuild()
-                    except Exception as rebuild_error:
-                        error.add_note(
-                            "task index rebuild also failed: "
-                            f"{type(rebuild_error).__name__}: {rebuild_error}"
-                        )
-                        raise error
+                await self._project_snapshot(snapshot)
                 return snapshot
 
             append_task = asyncio.create_task(append_and_index())
@@ -170,6 +162,7 @@ class TaskRepository:
         limit: int | None = None,
         cursor: str | None = None,
     ) -> TaskPage:
+        await self._ensure_index_current()
         return await self.index.list_tasks(limit=limit, cursor=cursor)
 
     async def list_messages(
@@ -215,13 +208,37 @@ class TaskRepository:
                 raise ValueError(
                     "request registration must match an authoritative task run"
                 )
-            registered = await self.index.record_request(accepted)
+            try:
+                registered = await self.index.record_request(accepted)
+            except Exception:
+                self._index_dirty = True
+                raise
             if registered != accepted:
                 raise ValueError("request_id conflicts with authoritative task run")
             return registered
 
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
+        await self._ensure_index_current()
         return await self.index.find_request(request_id)
+
+    async def _ensure_index_current(self) -> None:
+        if not self._index_dirty:
+            return
+        await self.index.rebuild()
+        self._index_dirty = False
+
+    async def _project_snapshot(self, snapshot: TaskSnapshot) -> None:
+        try:
+            await self.index.upsert_snapshot(snapshot)
+        except Exception:
+            self._index_dirty = True
+            try:
+                await self.index.rebuild()
+            except ValueError:
+                raise
+            except Exception:
+                return
+            self._index_dirty = False
 
     async def delete_task(self, task_id: str) -> None:
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
@@ -232,6 +249,7 @@ class TaskRepository:
                 try:
                     await self.index.delete_task(task_id)
                 except Exception as error:
+                    self._index_dirty = True
                     try:
                         await self.index.rebuild()
                     except Exception as rebuild_error:
@@ -239,6 +257,8 @@ class TaskRepository:
                             "task index rebuild also failed: "
                             f"{type(rebuild_error).__name__}: {rebuild_error}"
                         )
+                    else:
+                        self._index_dirty = False
                     raise
 
             delete_task = asyncio.create_task(delete_tree_and_index())
