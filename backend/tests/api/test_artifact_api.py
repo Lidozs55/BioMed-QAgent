@@ -7,7 +7,7 @@ import app.api.routes as routes_module
 import httpx
 import pytest
 from app.main import app
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -19,11 +19,11 @@ async def test_artifact_api_lists_manifest_entries_and_downloads_by_artifact_id(
     tmp_path: Path, monkeypatch
 ) -> None:
     output_dir = tmp_path / "output"
-    manifest = run_pinned_fixture(
+    manifest = await PipelineRunner(
         task_id="task_api",
         base_dir=output_dir / "tasks",
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
     monkeypatch.setattr(routes_module, "settings", SimpleNamespace(output_dir=str(output_dir)))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -49,11 +49,11 @@ async def test_artifact_api_rejects_unregistered_filename_and_invalid_manifest(
     tmp_path: Path, monkeypatch
 ) -> None:
     output_dir = tmp_path / "output"
-    run_pinned_fixture(
+    await PipelineRunner(
         task_id="task_api_invalid",
         base_dir=output_dir / "tasks",
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
     monkeypatch.setattr(routes_module, "settings", SimpleNamespace(output_dir=str(output_dir)))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
