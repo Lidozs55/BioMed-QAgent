@@ -278,19 +278,19 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 ## 9. Phase 1F：Pipeline Runner
 
-- [ ] **P0** 实现固定阶段状态机与 append-only StageAttempt
-- [ ] **P0** 每个阶段消费和返回明确类型与 input/parameter/output digest
-- [ ] **P0** 阶段操作幂等，重试生成新 attempt
-- [ ] **P0** 摘要匹配时复用已验证输出
-- [ ] **P0** 进程重启后从最近成功阶段恢复
-- [ ] **P0** 阶段失败时停止下游阶段
-- [ ] **P0** 网络、模型、解析和完整任务独立超时
-- [ ] **P0** 每个任务保证 completed 或 failed 终态
-- [ ] **P0** 正式流程失败时禁止自动切换 mock success
+- [x] **P0** 实现固定阶段状态机与 append-only StageAttempt
+- [x] **P0** 每个阶段消费和返回明确类型与 input/parameter/output digest
+- [x] **P0** 阶段操作幂等，重试生成新 attempt
+- [x] **P0** 摘要匹配时复用已验证输出
+- [x] **P0** 进程重启后从最近成功阶段恢复
+- [x] **P0** 阶段失败时停止下游阶段
+- [x] **P0** 网络、模型、解析和完整任务独立超时
+- [x] **P0** 每个任务保证 completed 或 failed 终态
+- [x] **P0** 正式流程失败时禁止自动切换 mock success
 - [x] **P0** 支持离线 fixture 模式
 - [ ] **P0** 支持显式 live 模式
 - [ ] **P0** mock 模式必须显式标记且不能通过 live 验收
-- [ ] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
+- [x] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
 
 ## 10. Phase 1 测试
 
@@ -306,7 +306,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** DownloadAttempt、checksum、cache 和中断测试
 - [x] **P0** parser 与 long-form 测试
 - [x] **P0** SourceLocator、名称规范化、字段映射和行数测试
-- [ ] **P0** StageAttempt、锁、取消、幂等和恢复测试
+- [x] **P0** StageAttempt、锁、取消、幂等和恢复测试
 - [ ] **P0** 全部 Validation Gate 规则测试
 - [x] **P0** 完整 fixture Pipeline 集成测试
 - [x] **P0** Artifact API 列表和下载测试

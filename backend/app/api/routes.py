@@ -9,7 +9,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 from pathlib import Path
@@ -26,7 +25,7 @@ from app.domain.contracts import (
     RunManifest,
     generate_prefixed_uuid,
 )
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 from app.skills.registry import SkillCategory, skill_registry
 
 router = APIRouter(prefix="/api/v1")
@@ -145,13 +144,13 @@ async def create_task(request: CreateTaskRequest) -> dict:
     fixture_dir = (
         Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     )
-    manifest = await asyncio.to_thread(
-        run_pinned_fixture,
+    runner = PipelineRunner(
         task_id=task_id,
         base_dir=_tasks_base(),
         fixture_dir=fixture_dir,
         topic=request.topic,
     )
+    manifest = await runner.run()
     return {"task_id": task_id, "status": manifest.task_state.value}
 
 
