@@ -273,6 +273,34 @@ export class AgentEventTransport {
     });
   }
 
+  recoverSubscription(taskId: string, afterSequence: number): Promise<void> {
+    this.desired.set(taskId, afterSequence);
+    this.replaceSocket();
+    return this.connect().then(() => this.ping());
+  }
+
+  private replaceSocket(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const error = new Error("WebSocket transport replaced for replay recovery");
+    this.rejectPendingPings(error);
+    this.rejectConnect?.(error);
+    this.finishConnect();
+    const socket = this.socket;
+    this.socket = null;
+    this.active.clear();
+    this.awaitingUnsubscribe.clear();
+    if (socket !== null) {
+      socket.onopen = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+      socket.close(1000, "replay recovery");
+    }
+  }
+
   private openSocket(): void {
     const configuredUrl = this.options.url;
     const url =

@@ -282,6 +282,37 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(3);
   });
 
+  it("recovers one task on a fresh socket without dropping other desired subscriptions", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 3);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+    const unsubscribeBarrier = transport.unsubscribeAndWait("task_a");
+    sockets[0].message({ type: "pong" });
+    await unsubscribeBarrier;
+    useAgentStore.getState().applyEvent(event("task_a", 1, "partial"));
+
+    const recovery = transport.recoverSubscription("task_a", 1);
+    expect(sockets[0].readyState).toBe(3);
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+
+    expect(sockets[1].sent.map((item) => JSON.parse(item))).toEqual([
+      { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+      { type: "subscribe", task_id: "task_a", after_sequence: 1 },
+      { type: "ping" },
+    ]);
+    sockets[1].message(event("task_a", 2, "recovered"));
+    sockets[1].message({ type: "pong" });
+    await recovery;
+
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(2);
+    expect(transport.isSubscribed("task_b")).toBe(true);
+  });
+
   it("ignores malformed JSON and unknown frames without corrupting state", async () => {
     const { transport, sockets } = setupTransport();
     const connected = transport.connect();

@@ -33,10 +33,11 @@ function summary(
   taskId: string,
   status: TaskSummary["status"] = "running",
   latestSequence = 0,
+  mode: TaskSummary["mode"] = "agent",
 ): TaskSummary {
   return {
     task_id: taskId,
-    mode: "agent",
+    mode,
     databases: [],
     title: taskId,
     status,
@@ -55,9 +56,13 @@ function page(
   return { active_items: activeItems, items, next_cursor: nextCursor };
 }
 
-function snapshot(taskId: string, latestSequence: number): TaskSnapshot {
+function snapshot(
+  taskId: string,
+  latestSequence: number,
+  mode: TaskSummary["mode"] = "agent",
+): TaskSnapshot {
   return {
-    task: summary(taskId, "completed", latestSequence),
+    task: summary(taskId, "completed", latestSequence, mode),
     runs: [],
     messages: [],
     older_messages_cursor: null,
@@ -75,6 +80,42 @@ function runStartedEvent(taskId: string, sequence: number): EventEnvelope {
     sequence,
     timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
     payload: { type: "run_started" },
+  };
+}
+
+function toolStartedEvent(
+  taskId: string,
+  sequence: number,
+  toolCallId = `call_${taskId}`,
+): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "tool_started",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
+    payload: {
+      type: "tool_started",
+      tool_call_id: toolCallId,
+      tool_name: "search_literature",
+    },
+  };
+}
+
+function stageStartedEvent(taskId: string, sequence: number): EventEnvelope {
+  return {
+    schema_version: "1.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "stage_started",
+    task_id: taskId,
+    run_id: null,
+    stage_attempt_id: `attempt_${taskId}`,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
+    payload: { type: "stage_started", stage: "discovery", attempt: 1 },
   };
 }
 
@@ -133,8 +174,58 @@ function transport(overrides: Partial<EventTransport> = {}): EventTransport {
     subscribe: vi.fn(),
     isSubscribed: vi.fn().mockReturnValue(false),
     unsubscribeAndWait: vi.fn().mockResolvedValue(undefined),
+    recoverSubscription: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
+}
+
+function watermarkedTransport(
+  taskId: string,
+  startupWatermark: number,
+  durableEvents: EventEnvelope[],
+): EventTransport {
+  let connected = true;
+  let connectionWatermark = startupWatermark;
+  const desired = new Map([[taskId, startupWatermark]]);
+
+  const deliverAfter = (afterSequence: number) => {
+    connectionWatermark = Math.max(connectionWatermark, afterSequence);
+    for (const event of durableEvents) {
+      if (event.sequence <= connectionWatermark) continue;
+      useAgentStore.getState().applyEvent(event);
+      connectionWatermark = event.sequence;
+    }
+  };
+
+  const eventTransport = transport({
+    disconnect: vi.fn(() => {
+      connected = false;
+      desired.clear();
+    }),
+    subscribe: vi.fn((subscribedTaskId, afterSequence) => {
+      desired.set(
+        subscribedTaskId,
+        Math.max(desired.get(subscribedTaskId) ?? 0, afterSequence),
+      );
+      if (connected && subscribedTaskId === taskId) {
+        deliverAfter(afterSequence);
+      }
+    }),
+    isSubscribed: vi.fn((subscribedTaskId) => desired.has(subscribedTaskId)),
+    unsubscribeAndWait: vi.fn((subscribedTaskId) => {
+      desired.delete(subscribedTaskId);
+      return Promise.resolve();
+    }),
+  });
+  return Object.assign(eventTransport, {
+    recoverSubscription: vi.fn((recoveredTaskId: string, afterSequence: number) => {
+      desired.set(recoveredTaskId, afterSequence);
+      connected = true;
+      connectionWatermark = 0;
+      deliverAfter(afterSequence);
+      return Promise.resolve();
+    }),
+  });
 }
 
 describe("runtime orchestration", () => {
@@ -604,9 +695,9 @@ describe("runtime orchestration", () => {
     expect(state.tasksById.task_shell.messages[0].content).toBe("question");
   });
 
-  it("merges an accepted shell into startup history and replays from zero when snapshot hydration fails", async () => {
+  it("recovers a short replay below the startup watermark when snapshot hydration fails", async () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_existing", "running", 2)]),
+      page([summary("task_existing", "running", 3)]),
       false,
     );
     const accepted: TaskRunAccepted = {
@@ -615,54 +706,24 @@ describe("runtime orchestration", () => {
       run_id: "run_task_existing",
       status: "queued",
     };
-    const replayEvents = [
-      {
-        schema_version: "2.0" as const,
-        event_id: "event_existing_1",
-        type: "run_queued" as const,
-        task_id: "task_existing",
-        run_id: "run_task_existing",
-        stage_attempt_id: null,
-        sequence: 1,
-        timestamp: "2026-07-14T00:00:01Z",
-        payload: {
-          type: "run_queued" as const,
-          request_id: "req_existing",
-          input: "question",
-        },
-      },
-      {
-        schema_version: "2.0" as const,
-        event_id: "event_existing_2",
-        type: "run_started" as const,
-        task_id: "task_existing",
-        run_id: "run_task_existing",
-        stage_attempt_id: null,
-        sequence: 2,
-        timestamp: "2026-07-14T00:00:02Z",
-        payload: { type: "run_started" as const },
-      },
+    const durableEvents = [
+      runStartedEvent("task_existing", 1),
+      toolStartedEvent("task_existing", 2, "call_recovered"),
+      runStartedEvent("task_existing", 3),
     ];
-    let desiredSequence: number | null = 2;
-    let serverLastSent = 2;
-    const subscribedFrom: number[] = [];
-    const eventTransport = transport({
-      isSubscribed: vi.fn(() => desiredSequence !== null),
-      unsubscribeAndWait: vi.fn(() => {
-        desiredSequence = null;
-        return Promise.resolve();
-      }),
-      subscribe: vi.fn((_taskId, afterSequence) => {
-        serverLastSent = Math.max(serverLastSent, afterSequence);
-        desiredSequence = serverLastSent;
-        subscribedFrom.push(serverLastSent);
-      }),
-    });
+    const eventTransport = watermarkedTransport(
+      "task_existing",
+      3,
+      durableEvents,
+    );
+    const fetchEvents = vi
+      .fn<APIClient["fetchEvents"]>()
+      .mockResolvedValue([durableEvents[0]]);
     const controller = new RuntimeController(
       api({
         createTask: vi.fn().mockResolvedValue(accepted),
         fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
-        fetchEvents: vi.fn().mockResolvedValue(replayEvents),
+        fetchEvents,
       }),
       eventTransport,
     );
@@ -674,46 +735,46 @@ describe("runtime orchestration", () => {
     });
 
     const state = useAgentStore.getState();
-    expect(subscribedFrom).toEqual([2]);
+    expect(fetchEvents).toHaveBeenCalledTimes(1);
     expect(state.activeTaskId).toBe("task_existing");
     expect(state.tasksById.task_existing).toMatchObject({
       hydration: "accepted",
       runOrder: ["run_task_existing"],
-      lastSequence: 2,
+      lastSequence: 3,
     });
-    expect(state.tasksById.task_existing.messages).toHaveLength(1);
-    expect(state.tasksById.task_existing.summary.status).toBe("running");
+    expect(state.tasksById.task_existing.activityOrder).toEqual([
+      "tool:run_task_existing:call_recovered",
+    ]);
   });
 
-  it("hydrates the authoritative snapshot when REST event replay is unavailable", async () => {
+  it("recovers an event-only tool after a short replay instead of skipping to the snapshot", async () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_fallback", "running", 2)]),
+      page([summary("task_short_replay", "running", 3)]),
       false,
     );
     const accepted: TaskRunAccepted = {
-      request_id: "req_fallback",
-      task_id: "task_fallback",
-      run_id: "run_task_fallback",
+      request_id: "req_short_replay",
+      task_id: "task_short_replay",
+      run_id: "run_task_short_replay",
       status: "queued",
     };
-    let desiredSequence: number | null = 2;
-    let serverLastSent = 2;
-    const detail = snapshot("task_fallback", 2);
-    const eventTransport = transport({
-      isSubscribed: vi.fn(() => desiredSequence !== null),
-      unsubscribeAndWait: vi.fn(() => {
-        desiredSequence = null;
-        return Promise.resolve();
-      }),
-      subscribe: vi.fn((_taskId, afterSequence) => {
-        serverLastSent = Math.max(serverLastSent, afterSequence);
-        desiredSequence = serverLastSent;
-      }),
-    });
+    const durableEvents = [
+      runStartedEvent("task_short_replay", 1),
+      toolStartedEvent("task_short_replay", 2, "call_short_replay"),
+      runStartedEvent("task_short_replay", 3),
+    ];
+    const fetchEvents = vi
+      .fn<APIClient["fetchEvents"]>()
+      .mockResolvedValue([durableEvents[0]]);
+    const eventTransport = watermarkedTransport(
+      "task_short_replay",
+      3,
+      durableEvents,
+    );
     const apiClient = api({
       createTask: vi.fn().mockResolvedValue(accepted),
-      fetchTask: vi.fn().mockResolvedValue(detail),
-      fetchEvents: vi.fn().mockRejectedValue(new Error("events unavailable")),
+      fetchTask: vi.fn().mockResolvedValue(snapshot("task_short_replay", 3)),
+      fetchEvents,
       fetchArtifacts: vi.fn().mockResolvedValue([]),
     });
     const controller = new RuntimeController(apiClient, eventTransport);
@@ -724,12 +785,52 @@ describe("runtime orchestration", () => {
       mode: "agent",
     });
 
-    expect(apiClient.fetchEvents).toHaveBeenCalledTimes(1);
-    expect(useAgentStore.getState().tasksById.task_fallback).toMatchObject({
+    expect(fetchEvents).toHaveBeenCalledTimes(1);
+    expect(useAgentStore.getState().tasksById.task_short_replay).toMatchObject({
       hydration: "snapshot",
-      lastSequence: 2,
+      lastSequence: 3,
     });
-    expect(serverLastSent).toBe(2);
+    expect(
+      useAgentStore.getState().tasksById.task_short_replay.activityOrder,
+    ).toEqual(["tool:run_task_short_replay:call_short_replay"]);
+  });
+
+  it("recovers an event-only tool when REST replay throws instead of skipping to the snapshot", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_replay_error", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_replay_error",
+      task_id: "task_replay_error",
+      run_id: "run_task_replay_error",
+      status: "queued",
+    };
+    const durableEvents = [
+      runStartedEvent("task_replay_error", 1),
+      toolStartedEvent("task_replay_error", 2, "call_replay_error"),
+    ];
+    const eventTransport = watermarkedTransport(
+      "task_replay_error",
+      2,
+      durableEvents,
+    );
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockResolvedValue(snapshot("task_replay_error", 2)),
+        fetchEvents: vi.fn().mockRejectedValue(new Error("events unavailable")),
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+
+    expect(
+      useAgentStore.getState().tasksById.task_replay_error.activityOrder,
+    ).toEqual(["tool:run_task_replay_error:call_replay_error"]);
+    expect(useAgentStore.getState().tasksById.task_replay_error.lastSequence).toBe(2);
   });
 
   it("drains a startup subscription before resetting an accepted summary watermark", async () => {
@@ -865,9 +966,9 @@ describe("runtime orchestration", () => {
     expect(eventTransport.subscribe).toHaveBeenLastCalledWith("task_paged", 1001);
   });
 
-  it("falls back to the snapshot after one empty replay page misses its target", async () => {
+  it("recovers an event-only fixture stage after an empty replay instead of skipping to the snapshot", async () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_empty_replay", "running", 2)]),
+      page([summary("task_empty_replay", "running", 1, "fixture")]),
       false,
     );
     const accepted: TaskRunAccepted = {
@@ -876,36 +977,40 @@ describe("runtime orchestration", () => {
       run_id: "run_task_empty_replay",
       status: "queued",
     };
+    const durableEvents = [stageStartedEvent("task_empty_replay", 1)];
     const fetchEvents = vi.fn<APIClient["fetchEvents"]>().mockResolvedValue([]);
-    const eventTransport = transport({
-      isSubscribed: vi.fn().mockReturnValue(true),
-    });
+    const eventTransport = watermarkedTransport(
+      "task_empty_replay",
+      1,
+      durableEvents,
+    );
     const controller = new RuntimeController(
       api({
         createTask: vi.fn().mockResolvedValue(accepted),
-        fetchTask: vi.fn().mockResolvedValue(snapshot("task_empty_replay", 2)),
+        fetchTask: vi
+          .fn()
+          .mockResolvedValue(snapshot("task_empty_replay", 1, "fixture")),
         fetchEvents,
         fetchArtifacts: vi.fn().mockResolvedValue([]),
       }),
       eventTransport,
     );
 
-    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+    await controller.startTask({ input: "question", databases: [], mode: "fixture" });
 
     expect(fetchEvents).toHaveBeenCalledTimes(1);
-    expect(useAgentStore.getState().tasksById.task_empty_replay).toMatchObject({
-      hydration: "snapshot",
-      lastSequence: 2,
+    expect(
+      useAgentStore.getState().tasksById.task_empty_replay.fixtureStages.discovery,
+    ).toMatchObject({
+      stageAttemptId: "attempt_task_empty_replay",
+      status: "running",
     });
-    expect(eventTransport.subscribe).toHaveBeenLastCalledWith(
-      "task_empty_replay",
-      2,
-    );
+    expect(useAgentStore.getState().tasksById.task_empty_replay.lastSequence).toBe(1);
   });
 
-  it("stops after a repeated REST replay page does not advance", async () => {
+  it("recovers an event-only artifact after a replay page does not advance", async () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_repeated_replay", "running", 2)]),
+      page([summary("task_repeated_replay", "running", 1001)]),
       false,
     );
     const accepted: TaskRunAccepted = {
@@ -914,18 +1019,37 @@ describe("runtime orchestration", () => {
       run_id: "run_task_repeated_replay",
       status: "queued",
     };
-    const repeatedPage = [runStartedEvent("task_repeated_replay", 1)];
+    const firstPage = Array.from({ length: 1000 }, (_, index) =>
+      runStartedEvent("task_repeated_replay", index + 1),
+    );
+    const repeatedPage = [runStartedEvent("task_repeated_replay", 1000)];
+    const recoveredArtifact = artifactEvent(
+      "task_repeated_replay",
+      1001,
+      "artifact_recovered",
+      "recovered.csv",
+      21,
+      "e".repeat(64),
+    );
     const fetchEvents = vi
       .fn<APIClient["fetchEvents"]>()
-      .mockResolvedValue(repeatedPage);
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(repeatedPage);
+    const eventTransport = watermarkedTransport(
+      "task_repeated_replay",
+      1001,
+      [...firstPage, recoveredArtifact],
+    );
     const controller = new RuntimeController(
       api({
         createTask: vi.fn().mockResolvedValue(accepted),
-        fetchTask: vi.fn().mockResolvedValue(snapshot("task_repeated_replay", 2)),
+        fetchTask: vi
+          .fn()
+          .mockResolvedValue(snapshot("task_repeated_replay", 1001)),
         fetchEvents,
         fetchArtifacts: vi.fn().mockResolvedValue([]),
       }),
-      transport({ isSubscribed: vi.fn().mockReturnValue(true) }),
+      eventTransport,
     );
 
     await controller.startTask({ input: "question", databases: [], mode: "agent" });
@@ -935,13 +1059,19 @@ describe("runtime orchestration", () => {
       limit: 1000,
     });
     expect(fetchEvents).toHaveBeenNthCalledWith(2, "task_repeated_replay", {
-      afterSequence: 1,
+      afterSequence: 1000,
       limit: 1000,
     });
     expect(fetchEvents).toHaveBeenCalledTimes(2);
-    expect(useAgentStore.getState().tasksById.task_repeated_replay).toMatchObject({
-      hydration: "snapshot",
-      lastSequence: 2,
+    expect(
+      useAgentStore.getState().tasksById.task_repeated_replay.artifactOrder,
+    ).toEqual(["artifact_recovered"]);
+    expect(
+      useAgentStore.getState().tasksById.task_repeated_replay.artifactsById
+        .artifact_recovered,
+    ).toMatchObject({
+      name: "recovered.csv",
+      size: 21,
     });
   });
 
@@ -1018,6 +1148,100 @@ describe("runtime orchestration", () => {
     await selection;
 
     const task = useAgentStore.getState().tasksById.task_artifact_generation;
+    expect(task.artifactOrder).toEqual(["run_manifest", "artifact_current"]);
+    expect(task.artifactsById.run_manifest).toMatchObject({
+      size: 30,
+      sha256: "c".repeat(64),
+    });
+    expect(task.artifactsById.artifact_removed).toBeUndefined();
+  });
+
+  it("binds artifact hydration to each same-task snapshot handoff", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_snapshot_generation", "running", 0)]),
+      false,
+    );
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_snapshot_generation",
+        1,
+        "run_manifest",
+        "run_manifest.json",
+        10,
+        "a".repeat(64),
+      ),
+    );
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_snapshot_generation",
+        2,
+        "artifact_removed",
+        "removed.csv",
+        20,
+        "b".repeat(64),
+      ),
+    );
+    const artifactsA = deferred<
+      Awaited<ReturnType<APIClient["fetchArtifacts"]>>
+    >();
+    const artifactsB = deferred<
+      Awaited<ReturnType<APIClient["fetchArtifacts"]>>
+    >();
+    const apiClient = api({
+      fetchTask: vi
+        .fn<APIClient["fetchTask"]>()
+        .mockResolvedValueOnce(snapshot("task_snapshot_generation", 2))
+        .mockResolvedValueOnce(snapshot("task_snapshot_generation", 4)),
+      fetchArtifacts: vi
+        .fn<APIClient["fetchArtifacts"]>()
+        .mockImplementationOnce(() => artifactsA.promise)
+        .mockImplementationOnce(() => artifactsB.promise),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const firstSelection = controller.selectTask("task_snapshot_generation");
+    await vi.waitFor(() => expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(1));
+    const secondSelection = controller.selectTask("task_snapshot_generation");
+    await vi.waitFor(() => expect(eventTransport.subscribe).toHaveBeenCalledTimes(2));
+
+    artifactsB.resolve([
+      {
+        artifact_id: "run_manifest",
+        name: "run_manifest.json",
+        size: 30,
+        sha256: "c".repeat(64),
+        media_type: "application/json",
+      },
+      {
+        artifact_id: "artifact_current",
+        name: "current.csv",
+        size: 40,
+        sha256: "d".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    artifactsA.resolve([
+      {
+        artifact_id: "run_manifest",
+        name: "run_manifest.json",
+        size: 10,
+        sha256: "a".repeat(64),
+        media_type: "application/json",
+      },
+      {
+        artifact_id: "artifact_removed",
+        name: "removed.csv",
+        size: 20,
+        sha256: "b".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    await Promise.all([firstSelection, secondSelection]);
+
+    expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(2);
+    const task = useAgentStore.getState().tasksById.task_snapshot_generation;
+    expect(task.lastSequence).toBe(4);
     expect(task.artifactOrder).toEqual(["run_manifest", "artifact_current"]);
     expect(task.artifactsById.run_manifest).toMatchObject({
       size: 30,

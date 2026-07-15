@@ -20,6 +20,7 @@ export interface EventTransport {
   subscribe(taskId: string, afterSequence: number): void;
   isSubscribed(taskId: string): boolean;
   unsubscribeAndWait(taskId: string): Promise<void>;
+  recoverSubscription(taskId: string, afterSequence: number): Promise<void>;
 }
 
 interface RuntimeDependencies {
@@ -56,8 +57,12 @@ export function startRuntime({ api, transport, signal }: RuntimeDependencies) {
 
 export class RuntimeController {
   private selectionGeneration = 0;
-  private readonly selectionHandoffs = new Map<string, Promise<void>>();
-  private readonly artifactHydrations = new Map<string, Promise<void>>();
+  private readonly taskHandoffGenerations = new Map<string, number>();
+  private readonly selectionHandoffs = new Map<string, Promise<number>>();
+  private readonly artifactHydrations = new Map<
+    string,
+    { generation: number; promise: Promise<void> }
+  >();
 
   constructor(
     private readonly api: APIClient,
@@ -66,17 +71,19 @@ export class RuntimeController {
 
   async selectTask(taskId: string): Promise<void> {
     const generation = ++this.selectionGeneration;
-    await this.getSelectionHandoff(taskId);
+    const handoffGeneration = await this.getSelectionHandoff(taskId);
     if (generation === this.selectionGeneration) {
       useAgentStore.getState().setActiveTaskId(taskId);
     }
-    await this.getArtifactHydration(taskId);
+    await this.getArtifactHydration(taskId, handoffGeneration);
   }
 
-  private getSelectionHandoff(taskId: string): Promise<void> {
+  private getSelectionHandoff(taskId: string): Promise<number> {
     const existing = this.selectionHandoffs.get(taskId);
     if (existing !== undefined) return existing;
-    const handoff = this.performSelectionHandoff(taskId);
+    const generation = (this.taskHandoffGenerations.get(taskId) ?? 0) + 1;
+    this.taskHandoffGenerations.set(taskId, generation);
+    const handoff = this.performSelectionHandoff(taskId).then(() => generation);
     this.selectionHandoffs.set(taskId, handoff);
     const clear = () => {
       if (this.selectionHandoffs.get(taskId) === handoff) {
@@ -106,19 +113,23 @@ export class RuntimeController {
     }
   }
 
-  private getArtifactHydration(taskId: string): Promise<void> {
+  private getArtifactHydration(
+    taskId: string,
+    generation: number,
+  ): Promise<void> {
     const existing = this.artifactHydrations.get(taskId);
-    if (existing !== undefined) return existing;
+    if (existing?.generation === generation) return existing.promise;
     const requestSequence =
       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
     const hydration = this.api.fetchArtifacts(taskId).then((artifacts) => {
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
       useAgentStore.setState((state) =>
         mergeTaskArtifacts(state, taskId, artifacts, requestSequence),
       );
     });
-    this.artifactHydrations.set(taskId, hydration);
+    this.artifactHydrations.set(taskId, { generation, promise: hydration });
     const clear = () => {
-      if (this.artifactHydrations.get(taskId) === hydration) {
+      if (this.artifactHydrations.get(taskId)?.promise === hydration) {
         this.artifactHydrations.delete(taskId);
       }
     };
@@ -128,7 +139,7 @@ export class RuntimeController {
 
   private async replayTaskEvents(
     taskId: string,
-    targetSequence: number | null,
+    targetSequence: number,
   ): Promise<void> {
     let afterSequence = 0;
     for (;;) {
@@ -139,7 +150,7 @@ export class RuntimeController {
       if (events.length === 0) {
         const currentSequence =
           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
-        if (targetSequence !== null && currentSequence < targetSequence) {
+        if (currentSequence < targetSequence) {
           throw new Error("Task event replay is incomplete");
         }
         return;
@@ -151,16 +162,32 @@ export class RuntimeController {
       }
       const currentSequence =
         useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
-      if (
-        (targetSequence !== null && currentSequence >= targetSequence) ||
-        (targetSequence === null && events.length < EVENT_REPLAY_PAGE_SIZE)
-      ) {
+      if (currentSequence >= targetSequence) {
         return;
       }
       if (nextSequence <= afterSequence) {
         throw new Error("Task event replay did not advance");
       }
+      if (events.length < EVENT_REPLAY_PAGE_SIZE) {
+        throw new Error("Task event replay is incomplete");
+      }
       afterSequence = nextSequence;
+    }
+  }
+
+  private async recoverAcceptedTask(
+    taskId: string,
+    snapshot: TaskSnapshot | null,
+  ): Promise<void> {
+    const lastSequence =
+      useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
+    try {
+      await this.transport.recoverSubscription(taskId, lastSequence);
+    } catch {
+      return;
+    }
+    if (snapshot !== null) {
+      useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     }
   }
 
@@ -168,6 +195,7 @@ export class RuntimeController {
     const accepted = await this.api.createTask(input);
     const existing = useAgentStore.getState().tasksById[accepted.task_id];
     const needsRestReplay = existing?.hydration === "summary";
+    const minimumReplaySequence = existing?.lastSequence ?? 0;
     if (this.transport.isSubscribed(accepted.task_id)) {
       try {
         await this.transport.unsubscribeAndWait(accepted.task_id);
@@ -194,9 +222,13 @@ export class RuntimeController {
     } catch {
       if (needsRestReplay) {
         try {
-          await this.replayTaskEvents(accepted.task_id, null);
+          await this.replayTaskEvents(
+            accepted.task_id,
+            minimumReplaySequence,
+          );
         } catch {
-          // Keep the accepted shell when neither snapshot nor replay is available.
+          await this.recoverAcceptedTask(accepted.task_id, null);
+          return accepted;
         }
       }
       const lastSequence =
@@ -208,7 +240,7 @@ export class RuntimeController {
       if (needsRestReplay) {
         await this.replayTaskEvents(
           accepted.task_id,
-          snapshot.task.latest_sequence,
+          Math.max(minimumReplaySequence, snapshot.task.latest_sequence),
         );
       } else {
         this.transport.subscribe(accepted.task_id, 0);
@@ -216,7 +248,8 @@ export class RuntimeController {
       }
     } catch {
       if (needsRestReplay) {
-        useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+        await this.recoverAcceptedTask(accepted.task_id, snapshot);
+        return accepted;
       }
       const lastSequence =
         useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
