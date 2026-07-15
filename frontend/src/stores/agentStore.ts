@@ -48,18 +48,36 @@ export function mergeTaskArtifacts(
   state: AgentRuntimeData,
   taskId: string,
   artifacts: ArtifactRecord[],
+  requestSequence: number,
 ): AgentRuntimeData {
   const task = state.tasksById[taskId];
   if (task === undefined) return state;
-  const artifactsById = { ...task.artifactsById };
-  const artifactOrder = [...task.artifactOrder];
-  const orderedArtifactIds = new Set(artifactOrder);
+  if (
+    task.artifactManifestSequence !== null &&
+    task.artifactManifestSequence > requestSequence
+  ) {
+    return state;
+  }
+  const liveArtifactIds = task.artifactOrder.filter(
+    (artifactId) =>
+      (task.artifactEventSequences[artifactId] ?? 0) > requestSequence,
+  );
+  const liveArtifactIdSet = new Set(liveArtifactIds);
+  const artifactsById = Object.fromEntries(
+    liveArtifactIds.map((artifactId) => [
+      artifactId,
+      task.artifactsById[artifactId],
+    ]),
+  );
+  const artifactOrder = [...liveArtifactIds];
+  const orderedArtifactIds = new Set(liveArtifactIds);
   for (const artifact of artifacts) {
+    if (liveArtifactIdSet.has(artifact.artifact_id)) continue;
     artifactsById[artifact.artifact_id] = {
       ...artifact,
       taskId,
       generatedByStepId:
-        artifactsById[artifact.artifact_id]?.generatedByStepId ?? null,
+        task.artifactsById[artifact.artifact_id]?.generatedByStepId ?? null,
     };
     if (!orderedArtifactIds.has(artifact.artifact_id)) {
       artifactOrder.push(artifact.artifact_id);
@@ -154,6 +172,8 @@ export function addAcceptedTask(
     activityOrder: [],
     artifactsById: {},
     artifactOrder: [],
+    artifactEventSequences: {},
+    artifactManifestSequence: null,
     fixtureStages: {},
     lastSequence: 0,
     hydration: "accepted" as const,

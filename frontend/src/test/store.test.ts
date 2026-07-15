@@ -334,7 +334,7 @@ describe("agent task projection store", () => {
           sha256: "a".repeat(64),
           media_type: "text/csv",
         },
-      ]),
+      ], 0),
     );
 
     const state = useAgentStore.getState();
@@ -346,9 +346,13 @@ describe("agent task projection store", () => {
     expect(state.tasksById.task_b).toBe(beforeTaskB);
   });
 
-  it("keeps a live artifact visible when an older REST artifact list resolves later", () => {
+  it("keeps a fixture live artifact visible without a manifest boundary", () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_artifacts", "running", 0)], [], null),
+      page(
+        [{ ...summary("task_artifacts", "running", 0), mode: "fixture" }],
+        [],
+        null,
+      ),
       false,
     );
     useAgentStore.getState().applyEvent({
@@ -383,7 +387,7 @@ describe("agent task projection store", () => {
           sha256: "a".repeat(64),
           media_type: "text/csv",
         },
-      ]),
+      ], 0),
     );
 
     const task = useAgentStore.getState().tasksById.task_artifacts;

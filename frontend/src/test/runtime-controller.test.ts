@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { APIClient } from "@/hooks/useAPI";
 import type {
   DatabaseRecord,
+  EventEnvelope,
   TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
@@ -60,6 +61,52 @@ function snapshot(taskId: string, latestSequence: number): TaskSnapshot {
     runs: [],
     messages: [],
     older_messages_cursor: null,
+  };
+}
+
+function runStartedEvent(taskId: string, sequence: number): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "run_started",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
+    payload: { type: "run_started" },
+  };
+}
+
+function artifactEvent(
+  taskId: string,
+  sequence: number,
+  artifactId: string,
+  name: string,
+  size: number,
+  sha256: string,
+): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "artifact_produced",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence).padStart(2, "0")}Z`,
+    payload: {
+      type: "artifact_produced",
+      artifact: {
+        artifact_id: artifactId,
+        name,
+        relative_path: `artifacts/${name}`,
+        media_type: name.endsWith(".json") ? "application/json" : "text/csv",
+        size_bytes: size,
+        sha256,
+        generated_by_step_id: "step_artifact_builder_v1",
+      },
+    },
   };
 }
 
@@ -568,42 +615,54 @@ describe("runtime orchestration", () => {
       run_id: "run_task_existing",
       status: "queued",
     };
+    const replayEvents = [
+      {
+        schema_version: "2.0" as const,
+        event_id: "event_existing_1",
+        type: "run_queued" as const,
+        task_id: "task_existing",
+        run_id: "run_task_existing",
+        stage_attempt_id: null,
+        sequence: 1,
+        timestamp: "2026-07-14T00:00:01Z",
+        payload: {
+          type: "run_queued" as const,
+          request_id: "req_existing",
+          input: "question",
+        },
+      },
+      {
+        schema_version: "2.0" as const,
+        event_id: "event_existing_2",
+        type: "run_started" as const,
+        task_id: "task_existing",
+        run_id: "run_task_existing",
+        stage_attempt_id: null,
+        sequence: 2,
+        timestamp: "2026-07-14T00:00:02Z",
+        payload: { type: "run_started" as const },
+      },
+    ];
+    let desiredSequence: number | null = 2;
+    let serverLastSent = 2;
     const subscribedFrom: number[] = [];
     const eventTransport = transport({
+      isSubscribed: vi.fn(() => desiredSequence !== null),
+      unsubscribeAndWait: vi.fn(() => {
+        desiredSequence = null;
+        return Promise.resolve();
+      }),
       subscribe: vi.fn((_taskId, afterSequence) => {
-        subscribedFrom.push(afterSequence);
-        useAgentStore.getState().applyEvent({
-          schema_version: "2.0",
-          event_id: "event_existing_1",
-          type: "run_queued",
-          task_id: "task_existing",
-          run_id: "run_task_existing",
-          stage_attempt_id: null,
-          sequence: 1,
-          timestamp: "2026-07-14T00:00:01Z",
-          payload: {
-            type: "run_queued",
-            request_id: "req_existing",
-            input: "question",
-          },
-        });
-        useAgentStore.getState().applyEvent({
-          schema_version: "2.0",
-          event_id: "event_existing_2",
-          type: "run_started",
-          task_id: "task_existing",
-          run_id: "run_task_existing",
-          stage_attempt_id: null,
-          sequence: 2,
-          timestamp: "2026-07-14T00:00:02Z",
-          payload: { type: "run_started" },
-        });
+        serverLastSent = Math.max(serverLastSent, afterSequence);
+        desiredSequence = serverLastSent;
+        subscribedFrom.push(serverLastSent);
       }),
     });
     const controller = new RuntimeController(
       api({
         createTask: vi.fn().mockResolvedValue(accepted),
         fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
+        fetchEvents: vi.fn().mockResolvedValue(replayEvents),
       }),
       eventTransport,
     );
@@ -615,7 +674,7 @@ describe("runtime orchestration", () => {
     });
 
     const state = useAgentStore.getState();
-    expect(subscribedFrom).toEqual([0]);
+    expect(subscribedFrom).toEqual([2]);
     expect(state.activeTaskId).toBe("task_existing");
     expect(state.tasksById.task_existing).toMatchObject({
       hydration: "accepted",
@@ -624,6 +683,53 @@ describe("runtime orchestration", () => {
     });
     expect(state.tasksById.task_existing.messages).toHaveLength(1);
     expect(state.tasksById.task_existing.summary.status).toBe("running");
+  });
+
+  it("hydrates the authoritative snapshot when REST event replay is unavailable", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_fallback", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_fallback",
+      task_id: "task_fallback",
+      run_id: "run_task_fallback",
+      status: "queued",
+    };
+    let desiredSequence: number | null = 2;
+    let serverLastSent = 2;
+    const detail = snapshot("task_fallback", 2);
+    const eventTransport = transport({
+      isSubscribed: vi.fn(() => desiredSequence !== null),
+      unsubscribeAndWait: vi.fn(() => {
+        desiredSequence = null;
+        return Promise.resolve();
+      }),
+      subscribe: vi.fn((_taskId, afterSequence) => {
+        serverLastSent = Math.max(serverLastSent, afterSequence);
+        desiredSequence = serverLastSent;
+      }),
+    });
+    const apiClient = api({
+      createTask: vi.fn().mockResolvedValue(accepted),
+      fetchTask: vi.fn().mockResolvedValue(detail),
+      fetchEvents: vi.fn().mockRejectedValue(new Error("events unavailable")),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+
+    expect(apiClient.fetchEvents).toHaveBeenCalledTimes(1);
+    expect(useAgentStore.getState().tasksById.task_fallback).toMatchObject({
+      hydration: "snapshot",
+      lastSequence: 2,
+    });
+    expect(serverLastSent).toBe(2);
   });
 
   it("drains a startup subscription before resetting an accepted summary watermark", async () => {
@@ -638,20 +744,36 @@ describe("runtime orchestration", () => {
       status: "queued",
     };
     let desiredSequence: number | null = 2;
+    let serverLastSent = 2;
     const order: string[] = [];
-    const applyAssistantDelta = (sequence: number, delta: string) => {
-      useAgentStore.getState().applyEvent({
-        schema_version: "2.0",
-        event_id: `event_existing_delta_${sequence}`,
-        type: "assistant_delta",
+    const replayEvents = [
+      {
+        schema_version: "2.0" as const,
+        event_id: "event_existing_queued",
+        type: "run_queued" as const,
         task_id: "task_existing",
         run_id: "run_task_existing",
         stage_attempt_id: null,
-        sequence,
-        timestamp: `2026-07-14T00:00:0${sequence}Z`,
-        payload: { type: "assistant_delta", delta },
-      });
-    };
+        sequence: 1,
+        timestamp: "2026-07-14T00:00:01Z",
+        payload: {
+          type: "run_queued" as const,
+          request_id: "req_existing",
+          input: "question",
+        },
+      },
+      ...["early", "late"].map((delta, index) => ({
+        schema_version: "2.0" as const,
+        event_id: `event_existing_delta_${index + 2}`,
+        type: "assistant_delta" as const,
+        task_id: "task_existing",
+        run_id: "run_task_existing",
+        stage_attempt_id: null,
+        sequence: index + 2,
+        timestamp: `2026-07-14T00:00:0${index + 2}Z`,
+        payload: { type: "assistant_delta" as const, delta },
+      })),
+    ];
     const eventTransport = transport({
       isSubscribed: vi.fn(() => desiredSequence !== null),
       unsubscribeAndWait: vi.fn(() => {
@@ -659,38 +781,21 @@ describe("runtime orchestration", () => {
         expect(
           useAgentStore.getState().tasksById.task_existing,
         ).toMatchObject({ hydration: "summary", lastSequence: 2 });
-        applyAssistantDelta(3, "late");
         desiredSequence = null;
         return Promise.resolve();
       }),
       subscribe: vi.fn((_taskId, afterSequence) => {
-        desiredSequence = Math.max(desiredSequence ?? 0, afterSequence);
-        order.push(`subscribe:${desiredSequence}`);
-        if (afterSequence === 0) {
-          useAgentStore.getState().applyEvent({
-            schema_version: "2.0",
-            event_id: "event_existing_queued",
-            type: "run_queued",
-            task_id: "task_existing",
-            run_id: "run_task_existing",
-            stage_attempt_id: null,
-            sequence: 1,
-            timestamp: "2026-07-14T00:00:01Z",
-            payload: {
-              type: "run_queued",
-              request_id: "req_existing",
-              input: "question",
-            },
-          });
-          applyAssistantDelta(2, "early");
-          applyAssistantDelta(3, "late");
-        }
+        serverLastSent = Math.max(serverLastSent, afterSequence);
+        desiredSequence = serverLastSent;
+        order.push(`subscribe:${serverLastSent}`);
       }),
     });
     const controller = new RuntimeController(
       api({
         createTask: vi.fn().mockResolvedValue(accepted),
-        fetchTask: vi.fn().mockRejectedValue(new TypeError("detail unavailable")),
+        fetchTask: vi.fn().mockResolvedValue(snapshot("task_existing", 3)),
+        fetchEvents: vi.fn().mockResolvedValue(replayEvents),
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
       }),
       eventTransport,
     );
@@ -701,10 +806,10 @@ describe("runtime orchestration", () => {
       mode: "agent",
     });
 
-    expect(order).toEqual(["barrier", "subscribe:0"]);
-    expect(desiredSequence).toBe(0);
+    expect(order).toEqual(["barrier", "subscribe:3"]);
+    expect(desiredSequence).toBe(3);
     expect(useAgentStore.getState().tasksById.task_existing).toMatchObject({
-      hydration: "accepted",
+      hydration: "snapshot",
       lastSequence: 3,
     });
     expect(
@@ -712,6 +817,213 @@ describe("runtime orchestration", () => {
         (message) => message.content,
       ),
     ).toEqual(["question", "earlylate"]);
+  });
+
+  it("requests the next REST replay page after an exact 1000-event page", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_paged", "running", 1001)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_paged",
+      task_id: "task_paged",
+      run_id: "run_task_paged",
+      status: "queued",
+    };
+    const firstPage = Array.from({ length: 1000 }, (_, index) =>
+      runStartedEvent("task_paged", index + 1),
+    );
+    const fetchEvents = vi
+      .fn<APIClient["fetchEvents"]>()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([runStartedEvent("task_paged", 1001)]);
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockResolvedValue(snapshot("task_paged", 1001)),
+        fetchEvents,
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+
+    expect(fetchEvents).toHaveBeenNthCalledWith(1, "task_paged", {
+      afterSequence: 0,
+      limit: 1000,
+    });
+    expect(fetchEvents).toHaveBeenNthCalledWith(2, "task_paged", {
+      afterSequence: 1000,
+      limit: 1000,
+    });
+    expect(fetchEvents).toHaveBeenCalledTimes(2);
+    expect(useAgentStore.getState().tasksById.task_paged.lastSequence).toBe(1001);
+    expect(eventTransport.subscribe).toHaveBeenLastCalledWith("task_paged", 1001);
+  });
+
+  it("falls back to the snapshot after one empty replay page misses its target", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_empty_replay", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_empty_replay",
+      task_id: "task_empty_replay",
+      run_id: "run_task_empty_replay",
+      status: "queued",
+    };
+    const fetchEvents = vi.fn<APIClient["fetchEvents"]>().mockResolvedValue([]);
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+    });
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockResolvedValue(snapshot("task_empty_replay", 2)),
+        fetchEvents,
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      eventTransport,
+    );
+
+    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+
+    expect(fetchEvents).toHaveBeenCalledTimes(1);
+    expect(useAgentStore.getState().tasksById.task_empty_replay).toMatchObject({
+      hydration: "snapshot",
+      lastSequence: 2,
+    });
+    expect(eventTransport.subscribe).toHaveBeenLastCalledWith(
+      "task_empty_replay",
+      2,
+    );
+  });
+
+  it("stops after a repeated REST replay page does not advance", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_repeated_replay", "running", 2)]),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_repeated_replay",
+      task_id: "task_repeated_replay",
+      run_id: "run_task_repeated_replay",
+      status: "queued",
+    };
+    const repeatedPage = [runStartedEvent("task_repeated_replay", 1)];
+    const fetchEvents = vi
+      .fn<APIClient["fetchEvents"]>()
+      .mockResolvedValue(repeatedPage);
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn().mockResolvedValue(accepted),
+        fetchTask: vi.fn().mockResolvedValue(snapshot("task_repeated_replay", 2)),
+        fetchEvents,
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      transport({ isSubscribed: vi.fn().mockReturnValue(true) }),
+    );
+
+    await controller.startTask({ input: "question", databases: [], mode: "agent" });
+
+    expect(fetchEvents).toHaveBeenNthCalledWith(1, "task_repeated_replay", {
+      afterSequence: 0,
+      limit: 1000,
+    });
+    expect(fetchEvents).toHaveBeenNthCalledWith(2, "task_repeated_replay", {
+      afterSequence: 1,
+      limit: 1000,
+    });
+    expect(fetchEvents).toHaveBeenCalledTimes(2);
+    expect(useAgentStore.getState().tasksById.task_repeated_replay).toMatchObject({
+      hydration: "snapshot",
+      lastSequence: 2,
+    });
+  });
+
+  it("does not let stale artifact hydration overwrite a newer live manifest", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_artifact_generation", "running", 0)]),
+      false,
+    );
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_artifact_generation",
+        1,
+        "run_manifest",
+        "run_manifest.json",
+        10,
+        "a".repeat(64),
+      ),
+    );
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_artifact_generation",
+        2,
+        "artifact_removed",
+        "removed.csv",
+        20,
+        "b".repeat(64),
+      ),
+    );
+    const artifacts = deferred<Awaited<ReturnType<APIClient["fetchArtifacts"]>>>();
+    const apiClient = api({
+      fetchTask: vi.fn().mockResolvedValue(snapshot("task_artifact_generation", 2)),
+      fetchArtifacts: vi.fn(() => artifacts.promise),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const selection = controller.selectTask("task_artifact_generation");
+    await vi.waitFor(() => expect(apiClient.fetchArtifacts).toHaveBeenCalledTimes(1));
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_artifact_generation",
+        3,
+        "run_manifest",
+        "run_manifest.json",
+        30,
+        "c".repeat(64),
+      ),
+    );
+    useAgentStore.getState().applyEvent(
+      artifactEvent(
+        "task_artifact_generation",
+        4,
+        "artifact_current",
+        "current.csv",
+        40,
+        "d".repeat(64),
+      ),
+    );
+    artifacts.resolve([
+      {
+        artifact_id: "run_manifest",
+        name: "run_manifest.json",
+        size: 10,
+        sha256: "a".repeat(64),
+        media_type: "application/json",
+      },
+      {
+        artifact_id: "artifact_removed",
+        name: "removed.csv",
+        size: 20,
+        sha256: "b".repeat(64),
+        media_type: "text/csv",
+      },
+    ]);
+    await selection;
+
+    const task = useAgentStore.getState().tasksById.task_artifact_generation;
+    expect(task.artifactOrder).toEqual(["run_manifest", "artifact_current"]);
+    expect(task.artifactsById.run_manifest).toMatchObject({
+      size: 30,
+      sha256: "c".repeat(64),
+    });
+    expect(task.artifactsById.artifact_removed).toBeUndefined();
   });
 
   it("replays a queued event that arrives before accepted-task hydration", async () => {

@@ -57,6 +57,8 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     activityOrder: [],
     artifactsById: {},
     artifactOrder: [],
+    artifactEventSequences: {},
+    artifactManifestSequence: null,
     fixtureStages: {},
     lastSequence: summary.latest_sequence,
     hydration: "summary",
@@ -594,15 +596,28 @@ export function reduceRuntimeEvent(
         taskId: envelope.task_id,
         generatedByStepId: payload.artifact.generated_by_step_id,
       };
+      const startsManifestGeneration = artifact.artifact_id === "run_manifest";
+      const artifactsById = startsManifestGeneration
+        ? { [artifact.artifact_id]: artifact }
+        : { ...task.artifactsById, [artifact.artifact_id]: artifact };
+      const artifactOrder = startsManifestGeneration
+        ? [artifact.artifact_id]
+        : task.artifactOrder.includes(artifact.artifact_id)
+          ? task.artifactOrder
+          : [...task.artifactOrder, artifact.artifact_id];
       task = {
         ...task,
-        artifactsById: {
-          ...task.artifactsById,
-          [artifact.artifact_id]: artifact,
-        },
-        artifactOrder: task.artifactOrder.includes(artifact.artifact_id)
-          ? task.artifactOrder
-          : [...task.artifactOrder, artifact.artifact_id],
+        artifactsById,
+        artifactOrder,
+        artifactEventSequences: startsManifestGeneration
+          ? { [artifact.artifact_id]: envelope.sequence }
+          : {
+              ...task.artifactEventSequences,
+              [artifact.artifact_id]: envelope.sequence,
+            },
+        artifactManifestSequence: startsManifestGeneration
+          ? envelope.sequence
+          : task.artifactManifestSequence,
       };
       break;
     }

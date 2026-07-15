@@ -3,6 +3,7 @@ import type {
   ContinueTaskInput,
   StartTaskInput,
   TaskRunAccepted,
+  TaskSnapshot,
 } from "./contracts";
 import {
   addAcceptedTask,
@@ -11,6 +12,7 @@ import {
 } from "@/stores/agentStore";
 
 const TASK_PAGE_SIZE = 30;
+const EVENT_REPLAY_PAGE_SIZE = 1000;
 
 export interface EventTransport {
   connect(): Promise<void>;
@@ -107,9 +109,11 @@ export class RuntimeController {
   private getArtifactHydration(taskId: string): Promise<void> {
     const existing = this.artifactHydrations.get(taskId);
     if (existing !== undefined) return existing;
+    const requestSequence =
+      useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
     const hydration = this.api.fetchArtifacts(taskId).then((artifacts) => {
       useAgentStore.setState((state) =>
-        mergeTaskArtifacts(state, taskId, artifacts),
+        mergeTaskArtifacts(state, taskId, artifacts, requestSequence),
       );
     });
     this.artifactHydrations.set(taskId, hydration);
@@ -122,8 +126,48 @@ export class RuntimeController {
     return hydration;
   }
 
+  private async replayTaskEvents(
+    taskId: string,
+    targetSequence: number | null,
+  ): Promise<void> {
+    let afterSequence = 0;
+    for (;;) {
+      const events = await this.api.fetchEvents(taskId, {
+        afterSequence,
+        limit: EVENT_REPLAY_PAGE_SIZE,
+      });
+      if (events.length === 0) {
+        const currentSequence =
+          useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
+        if (targetSequence !== null && currentSequence < targetSequence) {
+          throw new Error("Task event replay is incomplete");
+        }
+        return;
+      }
+      let nextSequence = afterSequence;
+      for (const event of events) {
+        useAgentStore.getState().applyEvent(event);
+        nextSequence = Math.max(nextSequence, event.sequence);
+      }
+      const currentSequence =
+        useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
+      if (
+        (targetSequence !== null && currentSequence >= targetSequence) ||
+        (targetSequence === null && events.length < EVENT_REPLAY_PAGE_SIZE)
+      ) {
+        return;
+      }
+      if (nextSequence <= afterSequence) {
+        throw new Error("Task event replay did not advance");
+      }
+      afterSequence = nextSequence;
+    }
+  }
+
   async startTask(input: StartTaskInput): Promise<TaskRunAccepted> {
     const accepted = await this.api.createTask(input);
+    const existing = useAgentStore.getState().tasksById[accepted.task_id];
+    const needsRestReplay = existing?.hydration === "summary";
     if (this.transport.isSubscribed(accepted.task_id)) {
       try {
         await this.transport.unsubscribeAndWait(accepted.task_id);
@@ -144,24 +188,58 @@ export class RuntimeController {
         input.mode,
       ),
     );
+    let snapshot: TaskSnapshot;
     try {
-      const snapshot = await this.api.fetchTask(accepted.task_id);
-      this.transport.subscribe(accepted.task_id, 0);
-      await this.transport.unsubscribeAndWait(accepted.task_id);
-      useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-      useAgentStore.getState().setActiveTaskId(accepted.task_id);
-      this.transport.subscribe(
-        accepted.task_id,
-        snapshot.task.latest_sequence,
-      );
-      const artifacts = await this.api.fetchArtifacts(accepted.task_id);
-      useAgentStore.setState((state) =>
-        mergeTaskArtifacts(state, accepted.task_id, artifacts),
-      );
+      snapshot = await this.api.fetchTask(accepted.task_id);
     } catch {
+      if (needsRestReplay) {
+        try {
+          await this.replayTaskEvents(accepted.task_id, null);
+        } catch {
+          // Keep the accepted shell when neither snapshot nor replay is available.
+        }
+      }
       const lastSequence =
         useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
       this.transport.subscribe(accepted.task_id, lastSequence);
+      return accepted;
+    }
+    try {
+      if (needsRestReplay) {
+        await this.replayTaskEvents(
+          accepted.task_id,
+          snapshot.task.latest_sequence,
+        );
+      } else {
+        this.transport.subscribe(accepted.task_id, 0);
+        await this.transport.unsubscribeAndWait(accepted.task_id);
+      }
+    } catch {
+      if (needsRestReplay) {
+        useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+      }
+      const lastSequence =
+        useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
+      this.transport.subscribe(accepted.task_id, lastSequence);
+      return accepted;
+    }
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    useAgentStore.getState().setActiveTaskId(accepted.task_id);
+    const lastSequence =
+      useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
+    this.transport.subscribe(accepted.task_id, lastSequence);
+    const artifactRequestSequence = lastSequence;
+    try {
+      const artifacts = await this.api.fetchArtifacts(accepted.task_id);
+      useAgentStore.setState((state) =>
+        mergeTaskArtifacts(
+          state,
+          accepted.task_id,
+          artifacts,
+          artifactRequestSequence,
+        ),
+      );
+    } catch {
       return accepted;
     }
     return accepted;

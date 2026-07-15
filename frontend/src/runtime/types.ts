@@ -97,6 +97,8 @@ export interface TaskProjection {
   activityOrder: string[];
   artifactsById: Record<string, ArtifactProjection>;
   artifactOrder: string[];
+  artifactEventSequences: Record<string, number>;
+  artifactManifestSequence: number | null;
   fixtureStages: Partial<Record<StageName, FixtureStageProjection>>;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";
