@@ -372,7 +372,7 @@ async def test_event_session_reports_missing_task_without_closing(
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_then_run_does_not_switch_protocol_mode(
+async def test_invalid_json_then_run_keeps_event_session_usable(
     tmp_path: Path,
 ) -> None:
     async with websocket_runtime(tmp_path) as (application, _, hub):

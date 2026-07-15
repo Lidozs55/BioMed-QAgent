@@ -181,23 +181,27 @@ backend/
 用户主题 + 数据库限制
         │
         ▼
-  WebSocket (/api/v1/ws)
+  REST POST admission
+  (/api/v1/tasks 或 /api/v1/tasks/{task_id}/runs)
         │
         ▼
-  Runner.run_streamed(agent, input, context)
+  TaskManager → durable Run queue
         │
         ▼
-  Main Agent (BioMedResearcher)
+  AgentRunExecutor + TaskSession
         │
-        ├── 理解主题 → 制定计划
-        ├── 按需加载 Skill（从 SkillRegistry）
-        ├── 调用 Tool（文献检索 → 数据下载 → 解析 → 清洗 → 导出）
-        └── 通过 RunContext 共享任务状态
+        └── Runner.run_streamed(Main Agent, input, context, session)
         │
         ▼
-  流式事件 → WebSocket → 前端渲染
-  (text / tool_call / tool_output / done / error / confirm /
-   skill_loaded / artifact_produced / file_downloaded)
+  TaskRepository 持久化 v2 EventEnvelope
+  (Run lifecycle / assistant_delta / tool_started /
+   tool_completed / artifact_produced)
+        │
+        ▼
+  WebSocket subscribe + sequence replay/live fan-out
+        │
+        ▼
+  前端按 task_id / run_id / sequence 更新 Task 投影
 ```
 
 ### Skill 体系
