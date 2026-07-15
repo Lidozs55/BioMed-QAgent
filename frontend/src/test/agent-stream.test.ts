@@ -333,6 +333,54 @@ describe("durable event transport", () => {
     }
   });
 
+  it("expires a queued unsubscribe before a new disconnect-generation recovery", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const activeBarrier = transport.unsubscribeAndWait("task_a");
+    const staleBarrier = transport.unsubscribeAndWait("task_b");
+    const barrierOutcomes = [activeBarrier, staleBarrier].map((barrier) =>
+      barrier.then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+    );
+    transport.disconnect();
+    const recovery = transport.recoverSubscription("task_b", 3);
+    const recoveryOutcome = recovery.then(
+      () => "fulfilled",
+      () => "rejected",
+    );
+
+    try {
+      for (let index = 0; index < 8 && sockets.length < 2; index += 1) {
+        await Promise.resolve();
+      }
+      expect(sockets).toHaveLength(2);
+      sockets[1].open();
+      await Promise.resolve();
+      expect(sockets[1].sent.map((item) => JSON.parse(item))).toEqual([
+        { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+        { type: "ping" },
+      ]);
+      sockets[1].message({ type: "pong" });
+      await recovery;
+
+      expect(await Promise.all(barrierOutcomes)).toEqual([
+        "rejected",
+        "rejected",
+      ]);
+      expect(transport.isSubscribed("task_b")).toBe(true);
+    } finally {
+      transport.disconnect();
+      await recoveryOutcome;
+    }
+  });
+
   it("recovers one task on a fresh socket without dropping other desired subscriptions", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 3);

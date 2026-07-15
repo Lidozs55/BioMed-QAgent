@@ -71,6 +71,7 @@ interface RecoveryAttempt {
 }
 
 interface ControlBarrierRequest {
+  disconnectGeneration: number;
   operation: () => Promise<void>;
   resolve: () => void;
   reject: (reason?: unknown) => void;
@@ -306,7 +307,12 @@ export class AgentEventTransport {
     operation: () => Promise<void>,
   ): Promise<void> {
     const barrier = new Promise<void>((resolve, reject) => {
-      this.controlBarrierQueue.push({ operation, resolve, reject });
+      this.controlBarrierQueue.push({
+        disconnectGeneration: this.disconnectGeneration,
+        operation,
+        resolve,
+        reject,
+      });
     });
     this.startNextControlBarrier();
     return barrier;
@@ -317,6 +323,11 @@ export class AgentEventTransport {
     const request = this.controlBarrierQueue.shift();
     if (request === undefined) return;
     this.controlBarrierRunning = true;
+    if (request.disconnectGeneration !== this.disconnectGeneration) {
+      request.reject(new Error("WebSocket control barrier expired"));
+      this.finishControlBarrier();
+      return;
+    }
     void request.operation().then(
       () => {
         request.resolve();
