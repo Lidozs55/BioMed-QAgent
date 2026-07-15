@@ -70,9 +70,8 @@ interface RecoveryAttempt {
   controlError: Error | null;
 }
 
-interface RecoveryRequest {
-  taskId: string;
-  disconnectGeneration: number;
+interface ControlBarrierRequest {
+  operation: () => Promise<void>;
   resolve: () => void;
   reject: (reason?: unknown) => void;
 }
@@ -191,8 +190,8 @@ export class AgentEventTransport {
   private resolveConnect: (() => void) | null = null;
   private rejectConnect: ((error: Error) => void) | null = null;
   private readonly connectionWaiters: ConnectionWaiter[] = [];
-  private readonly recoveryQueue: RecoveryRequest[] = [];
-  private recoveryRunning = false;
+  private readonly controlBarrierQueue: ControlBarrierRequest[] = [];
+  private controlBarrierRunning = false;
   private recoveryAttempt: RecoveryAttempt | null = null;
   private disconnectGeneration = 0;
   private manuallyDisconnected = false;
@@ -287,8 +286,9 @@ export class AgentEventTransport {
   }
 
   unsubscribeAndWait(taskId: string): Promise<void> {
-    this.unsubscribe(taskId);
-    return this.ping().then(() => {
+    return this.enqueueControlBarrier(async () => {
+      this.unsubscribe(taskId);
+      await this.ping();
       this.active.delete(taskId);
       this.awaitingUnsubscribe.delete(taskId);
     });
@@ -297,41 +297,41 @@ export class AgentEventTransport {
   recoverSubscription(taskId: string, afterSequence: number): Promise<void> {
     this.desired.set(taskId, afterSequence);
     const disconnectGeneration = this.disconnectGeneration;
-    const recovery = new Promise<void>((resolve, reject) => {
-      this.recoveryQueue.push({
-        taskId,
-        disconnectGeneration,
-        resolve,
-        reject,
-      });
-    });
-    this.startNextRecovery();
-    return recovery;
+    return this.enqueueControlBarrier(() =>
+      this.performRecovery(taskId, disconnectGeneration),
+    );
   }
 
-  private startNextRecovery(): void {
-    if (this.recoveryRunning) return;
-    const request = this.recoveryQueue.shift();
+  private enqueueControlBarrier(
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const barrier = new Promise<void>((resolve, reject) => {
+      this.controlBarrierQueue.push({ operation, resolve, reject });
+    });
+    this.startNextControlBarrier();
+    return barrier;
+  }
+
+  private startNextControlBarrier(): void {
+    if (this.controlBarrierRunning) return;
+    const request = this.controlBarrierQueue.shift();
     if (request === undefined) return;
-    this.recoveryRunning = true;
-    void this.performRecovery(
-      request.taskId,
-      request.disconnectGeneration,
-    ).then(
+    this.controlBarrierRunning = true;
+    void request.operation().then(
       () => {
         request.resolve();
-        this.finishRecovery();
+        this.finishControlBarrier();
       },
       (error: unknown) => {
         request.reject(error);
-        this.finishRecovery();
+        this.finishControlBarrier();
       },
     );
   }
 
-  private finishRecovery(): void {
-    this.recoveryRunning = false;
-    this.startNextRecovery();
+  private finishControlBarrier(): void {
+    this.controlBarrierRunning = false;
+    this.startNextControlBarrier();
   }
 
   private async performRecovery(

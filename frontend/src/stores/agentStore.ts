@@ -99,6 +99,7 @@ export function addAcceptedTask(
   input: string,
   databases: string[],
   mode: TaskMode,
+  activate = true,
 ): AgentRuntimeData {
   const timestamp = new Date(0).toISOString();
   const acceptedRun = {
@@ -126,7 +127,7 @@ export function addAcceptedTask(
   const existing = state.tasksById[accepted.taskId];
   if (existing !== undefined) {
     if (existing.hydration !== "summary") {
-      return { ...state, activeTaskId: accepted.taskId };
+      return activate ? { ...state, activeTaskId: accepted.taskId } : state;
     }
     const summaryProjection = createTaskProjection(existing.summary);
     const projection = {
@@ -146,7 +147,7 @@ export function addAcceptedTask(
       taskOrder: state.taskOrder.filter(
         (taskId) => taskId !== accepted.taskId,
       ),
-      activeTaskId: accepted.taskId,
+      activeTaskId: activate ? accepted.taskId : state.activeTaskId,
     };
   }
   const summary = {
@@ -184,7 +185,7 @@ export function addAcceptedTask(
     activeItems: state.activeItems.includes(accepted.taskId)
       ? state.activeItems
       : [accepted.taskId, ...state.activeItems],
-    activeTaskId: accepted.taskId,
+    activeTaskId: activate ? accepted.taskId : state.activeTaskId,
   };
 }
 

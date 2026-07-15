@@ -56,7 +56,7 @@ export function startRuntime({ api, transport, signal }: RuntimeDependencies) {
 }
 
 export class RuntimeController {
-  private selectionGeneration = 0;
+  private foregroundIntentGeneration = 0;
   private readonly taskHandoffGenerations = new Map<string, number>();
   private readonly taskHandoffTails = new Map<string, Promise<void>>();
   private readonly selectionHandoffs = new Map<string, Promise<number>>();
@@ -71,9 +71,9 @@ export class RuntimeController {
   ) {}
 
   async selectTask(taskId: string): Promise<void> {
-    const generation = ++this.selectionGeneration;
+    const generation = ++this.foregroundIntentGeneration;
     const handoffGeneration = await this.getSelectionHandoff(taskId);
-    if (generation === this.selectionGeneration) {
+    if (generation === this.foregroundIntentGeneration) {
       useAgentStore.getState().setActiveTaskId(taskId);
     }
     await this.getArtifactHydration(taskId, handoffGeneration);
@@ -222,6 +222,7 @@ export class RuntimeController {
   private async performAcceptedTaskHandoff(
     accepted: TaskRunAccepted,
     input: StartTaskInput,
+    foregroundIntentGeneration: number,
   ): Promise<boolean> {
     const existing = useAgentStore.getState().tasksById[accepted.task_id];
     const needsRestReplay = existing?.hydration === "summary";
@@ -248,6 +249,7 @@ export class RuntimeController {
         input.input,
         input.databases,
         input.mode,
+        foregroundIntentGeneration === this.foregroundIntentGeneration,
       ),
     );
     let snapshot: TaskSnapshot;
@@ -291,7 +293,9 @@ export class RuntimeController {
       return false;
     }
     useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-    useAgentStore.getState().setActiveTaskId(accepted.task_id);
+    if (foregroundIntentGeneration === this.foregroundIntentGeneration) {
+      useAgentStore.getState().setActiveTaskId(accepted.task_id);
+    }
     const lastSequence =
       useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
     this.transport.subscribe(accepted.task_id, lastSequence);
@@ -299,6 +303,7 @@ export class RuntimeController {
   }
 
   async startTask(input: StartTaskInput): Promise<TaskRunAccepted> {
+    const foregroundIntentGeneration = ++this.foregroundIntentGeneration;
     const accepted = await this.api.createTask(input);
     const { generation, hydrateArtifacts } = await this.enqueueTaskHandoff(
       accepted.task_id,
@@ -307,6 +312,7 @@ export class RuntimeController {
         const hydrateArtifacts = await this.performAcceptedTaskHandoff(
           accepted,
           input,
+          foregroundIntentGeneration,
         );
         return { generation, hydrateArtifacts };
       },
@@ -345,6 +351,7 @@ export class RuntimeController {
   }
 
   showNewDraft(): void {
+    this.foregroundIntentGeneration += 1;
     useAgentStore.getState().showNewDraft();
   }
 }

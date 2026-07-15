@@ -282,6 +282,57 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(3);
   });
 
+  it("waits for an unsubscribe pong before replacing the socket for recovery", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const barrier = transport.unsubscribeAndWait("task_b");
+    const recovery = transport.recoverSubscription("task_a", 0);
+    const outcomes = [
+      barrier.then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+      recovery.then(
+        () => "fulfilled",
+        () => "rejected",
+      ),
+    ];
+
+    try {
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0].readyState).toBe(1);
+      expect(sockets[0].sent.map((item) => JSON.parse(item)).slice(-2)).toEqual([
+        { type: "unsubscribe", task_id: "task_b" },
+        { type: "ping" },
+      ]);
+
+      sockets[0].message({ type: "pong" });
+      await barrier;
+      expect(sockets).toHaveLength(2);
+      transport.subscribe("task_b", 3);
+      sockets[1].open();
+      await Promise.resolve();
+      expect(sockets[1].sent.map((item) => JSON.parse(item))).toEqual([
+        { type: "subscribe", task_id: "task_a", after_sequence: 0 },
+        { type: "subscribe", task_id: "task_b", after_sequence: 3 },
+        { type: "ping" },
+      ]);
+      sockets[1].message({ type: "pong" });
+      await recovery;
+
+      expect(transport.isSubscribed("task_a")).toBe(true);
+      expect(transport.isSubscribed("task_b")).toBe(true);
+    } finally {
+      transport.disconnect();
+      await Promise.all(outcomes);
+    }
+  });
+
   it("recovers one task on a fresh socket without dropping other desired subscriptions", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 3);

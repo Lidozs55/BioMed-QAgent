@@ -487,6 +487,83 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeTaskId).toBe("task_a");
   });
 
+  it("keeps a newer task selection foreground when an earlier start resolves", async () => {
+    useAgentStore.getState().mergeTaskPage(page([summary("task_b")]), false);
+    const admission = deferred<TaskRunAccepted>();
+    const accepted: TaskRunAccepted = {
+      request_id: "req_foreground_a",
+      task_id: "task_foreground_a",
+      run_id: "run_foreground_a",
+      status: "queued",
+    };
+    const apiClient = api({
+      createTask: vi.fn(() => admission.promise),
+      fetchTask: vi.fn((taskId: string) =>
+        Promise.resolve(snapshot(taskId, taskId === "task_b" ? 2 : 1)),
+      ),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const starting = controller.startTask({
+      input: "question A",
+      databases: [],
+      mode: "agent",
+    });
+    await controller.selectTask("task_b");
+    admission.resolve(accepted);
+    await starting;
+
+    expect(useAgentStore.getState().activeTaskId).toBe("task_b");
+    expect(
+      useAgentStore.getState().tasksById.task_foreground_a.hydration,
+    ).toBe("snapshot");
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_foreground_a",
+      1,
+    );
+  });
+
+  it("keeps a newer draft foreground when an earlier start resolves", async () => {
+    const admission = deferred<TaskRunAccepted>();
+    const accepted: TaskRunAccepted = {
+      request_id: "req_draft_foreground",
+      task_id: "task_draft_foreground",
+      run_id: "run_draft_foreground",
+      status: "queued",
+    };
+    const eventTransport = transport();
+    const controller = new RuntimeController(
+      api({
+        createTask: vi.fn(() => admission.promise),
+        fetchTask: vi
+          .fn()
+          .mockResolvedValue(snapshot("task_draft_foreground", 1)),
+        fetchArtifacts: vi.fn().mockResolvedValue([]),
+      }),
+      eventTransport,
+    );
+
+    const starting = controller.startTask({
+      input: "question",
+      databases: [],
+      mode: "agent",
+    });
+    controller.showNewDraft();
+    admission.resolve(accepted);
+    await starting;
+
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    expect(
+      useAgentStore.getState().tasksById.task_draft_foreground.hydration,
+    ).toBe("snapshot");
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_draft_foreground",
+      1,
+    );
+  });
+
   it("admits a new task through REST then hydrates and subscribes without a socket run", async () => {
     const accepted: TaskRunAccepted = {
       request_id: "req_create",
