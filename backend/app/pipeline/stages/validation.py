@@ -163,6 +163,32 @@ def _validate_package(
             "details": "",
         }
     )
+    # Warnings ↔ processing-log metrics consistency.
+    # warnings.csv row count must equal the total warnings recorded in
+    # processing_log.csv ``warnings`` JSON arrays.
+    warnings_path = staging / "warnings.csv"
+    warning_rows = _read_csv(warnings_path) if warnings_path.is_file() else []
+    proc_log_path = staging / "processing_log.csv"
+    processing_rows = _read_csv(proc_log_path) if proc_log_path.is_file() else []
+    logged_warning_count = 0
+    for prow in processing_rows:
+        raw = prow.get("warnings", "[]")
+        try:
+            logged_warning_count += len(json.loads(raw))
+        except (json.JSONDecodeError, TypeError):
+            logged_warning_count += 0
+    warning_mismatch = abs(len(warning_rows) - logged_warning_count)
+    checks.append(
+        {
+            "check_id": "warnings_metrics_consistency",
+            "scope": "warnings",
+            "check_name": "warnings.csv count matches processing_log warnings count",
+            "status": "passed" if warning_mismatch == 0 else "failed",
+            "checked_count": len(warning_rows) + logged_warning_count,
+            "failed_count": warning_mismatch,
+            "details": "",
+        }
+    )
     total_failed = sum(int(check["failed_count"]) for check in checks)
     report = {
         "schema_version": "1.0",
@@ -201,7 +227,9 @@ def run_validation(
         checks,
     )
     if validation.status != "valid":
-        raise ValueError("pinned fixture failed validation")
+        raise ValueError(
+            f"validation gate rejected the package: {validation.failed_count} failure(s)"
+        )
 
     entries: list[ArtifactManifestEntry] = []
     for path in sorted(build_output.staging_dir.iterdir(), key=lambda item: item.name):
@@ -239,6 +267,14 @@ def run_validation(
     (build_output.staging_dir / "run_manifest.json").write_text(
         manifest.model_dump_json(indent=2) + "\n", "utf-8"
     )
+
+    # Flush all staging files to disk before the atomic rename so a crash
+    # between write and rename cannot leave stale page-cache state.
+    for path in build_output.staging_dir.iterdir():
+        if path.is_file():
+            with path.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
 
     # Atomic publish: os.replace overwrites the target atomically on both
     # POSIX and Windows. If artifacts/ already exists with content (e.g. from
