@@ -13,19 +13,28 @@ export interface WSEvent {
     | "skill_loaded"
     | "artifact_produced"
     | "file_downloaded"
-    | "confirm";
+    | "confirm"
+    | "cancel_ack";
   delta?: string;
   name?: string;
   arguments?: string;
   output?: string;
+  /** tool_output: whether the output was truncated to fit the WS frame. */
+  truncated?: boolean;
   final_output?: string;
   message?: string;
+  /** error: machine-readable error code (e.g. "configuration_error"). */
+  code?: string;
   confirm_message?: string;
   category?: string;
   path?: string;
   size?: number;
   task_id?: string;
   artifact_id?: string;
+  /** cancel_ack: whether the cancellation was accepted. */
+  cancelled?: boolean;
+  /** cancel_ack: task state when cancellation was not accepted (already terminal). */
+  status?: string;
 }
 
 /** 工具调用轨迹项 */
@@ -35,7 +44,11 @@ export interface TraceItem {
   name?: string;
   arguments?: string;
   output?: string;
+  /** tool_output: whether the output was truncated. */
+  truncated?: boolean;
   message?: string;
+  /** error: machine-readable error code. */
+  code?: string;
 }
 
 /** 对话消息 */

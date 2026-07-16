@@ -130,4 +130,76 @@ describe("useAgentStream", () => {
     ).toBe("Model unavailable")
     expect(state.sessions[0].pipelineStage).toBe("error")
   })
+
+  it("records the error code when the backend sends one", () => {
+    const { result } = renderHook(() => useAgentStream())
+    act(() => result.current.connect())
+    act(() => result.current.send("Run task", ["pubmed", "geo"]))
+    act(() => FakeWebSocket.latest.emit({ type: "task_started", task_id: "task-code" }))
+    act(() => FakeWebSocket.latest.emit({
+      type: "error",
+      message: "model key not configured",
+      code: "configuration_error",
+    }))
+
+    const state = useAgentStore.getState()
+    const lastTrace = state.traces[state.traces.length - 1]
+    expect(lastTrace?.code).toBe("configuration_error")
+    expect(lastTrace?.message).toBe("model key not configured")
+  })
+
+  it("records the truncated flag on tool_output events", () => {
+    const { result } = renderHook(() => useAgentStream())
+    act(() => result.current.connect())
+    act(() => result.current.send("Run task", ["pubmed", "geo"]))
+    act(() => FakeWebSocket.latest.emit({ type: "task_started", task_id: "task-trunc" }))
+    act(() => FakeWebSocket.latest.emit({ type: "tool_call", name: "search" }))
+    act(() => FakeWebSocket.latest.emit({
+      type: "tool_output",
+      output: "long output...",
+      truncated: true,
+    }))
+
+    const state = useAgentStore.getState()
+    const outputTrace = state.traces.find((t) => t.kind === "tool_output")
+    expect(outputTrace?.truncated).toBe(true)
+    expect(outputTrace?.output).toBe("long output...")
+  })
+
+  it("handles cancel_ack with cancelled=true by informing the user", () => {
+    const { result } = renderHook(() => useAgentStream())
+    act(() => result.current.connect())
+    act(() => result.current.send("Run task", ["pubmed", "geo"]))
+    act(() => FakeWebSocket.latest.emit({ type: "task_started", task_id: "task-cancel" }))
+    act(() => FakeWebSocket.latest.emit({
+      type: "cancel_ack",
+      task_id: "task-cancel",
+      cancelled: true,
+    }))
+
+    const state = useAgentStore.getState()
+    const lastMessage = state.messages[state.messages.length - 1]
+    expect(lastMessage?.content).toContain("取消请求已接受")
+    // Running state is NOT cleared on cancelled=true — the pipeline will
+    // emit a terminal event shortly.
+    expect(state.isRunning).toBe(true)
+  })
+
+  it("handles cancel_ack with cancelled=false by stopping the runner", () => {
+    const { result } = renderHook(() => useAgentStream())
+    act(() => result.current.connect())
+    act(() => result.current.send("Run task", ["pubmed", "geo"]))
+    act(() => FakeWebSocket.latest.emit({ type: "task_started", task_id: "task-done" }))
+    act(() => FakeWebSocket.latest.emit({
+      type: "cancel_ack",
+      task_id: "task-done",
+      cancelled: false,
+      status: "completed",
+    }))
+
+    const state = useAgentStore.getState()
+    const lastMessage = state.messages[state.messages.length - 1]
+    expect(lastMessage?.content).toContain("completed")
+    expect(state.isRunning).toBe(false)
+  })
 })

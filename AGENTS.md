@@ -72,12 +72,13 @@ Key points:
    - `skill_loaded` — a skill was loaded (name + category)
    - `text` — LLM text delta
    - `tool_call` — a tool call started (name + arguments)
-   - `tool_output` — a tool call returned (output, possibly truncated)
+   - `tool_output` — a tool call returned (output + truncated flag)
    - `file_downloaded` — a source file was downloaded (name + path + size)
-   - `artifact_produced` — a validated artifact was produced (name + size)
-   - `confirm` — a quality / human-in-the-loop confirmation prompt
+   - `artifact_produced` — a validated artifact was produced (artifact_id + name + size)
+   - `confirm` — a quality / human-in-the-loop confirmation prompt (confirm_message)
    - `done` — the Agent loop finished (carries `final_output`)
-   - `error` — an exception occurred
+   - `error` — an exception occurred (message + optional code)
+   - `cancel_ack` — a cancel request was accepted or rejected (task_id + cancelled + optional status)
 5. The frontend renders Markdown, tool-call traces, and artifact events.
 
 Always treat the code as the source of truth for skill and tool implementation

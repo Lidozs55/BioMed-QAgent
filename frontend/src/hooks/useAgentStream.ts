@@ -44,6 +44,7 @@ export function useAgentStream() {
         addTrace({
           kind: "tool_output",
           output: event.output,
+          truncated: event.truncated,
         });
         break;
       case "done": {
@@ -63,7 +64,11 @@ export function useAgentStream() {
         break;
       }
       case "error":
-        addTrace({ kind: "error", message: event.message });
+        addTrace({
+          kind: "error",
+          message: event.message,
+          code: event.code,
+        });
         storeRef.current.setPipelineStage("error");
         setRunning(false);
         break;
@@ -87,6 +92,23 @@ export function useAgentStream() {
         break;
       case "confirm":
         addMessage("assistant", event.confirm_message || event.message || "");
+        break;
+      case "cancel_ack":
+        // cancelled=true: cancellation accepted; the pipeline will emit a
+        // terminal event (or simply stop) shortly. cancelled=false: the task
+        // was already in a terminal state, so there is nothing to cancel.
+        if (event.cancelled) {
+          addMessage(
+            "assistant",
+            `任务取消请求已接受 (task_id: ${event.task_id || ""}).`,
+          );
+        } else {
+          addMessage(
+            "assistant",
+            `任务已处于终态 (${event.status || "unknown"})，无法取消。`,
+          );
+          setRunning(false);
+        }
         break;
     }
   }, []);

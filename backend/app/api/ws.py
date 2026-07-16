@@ -48,11 +48,16 @@ async def agent_ws(websocket: WebSocket) -> None:
     服务端 → 客户端事件格式：
         Agent loop (ad-hoc dict):
         {"type": "task_started", "task_id": "..."}
+        {"type": "skill_loaded", "name": "...", "category": "..."}
         {"type": "text", "delta": "..."}
         {"type": "tool_call", "name": "...", "arguments": "..."}
-        {"type": "tool_output", "output": "..."}
+        {"type": "tool_output", "output": "...", "truncated": false}
+        {"type": "file_downloaded", "name": "...", "path": "...", "size": 123}
+        {"type": "artifact_produced", "artifact_id": "...", "name": "...", "size": 123}
+        {"type": "confirm", "confirm_message": "..."}
         {"type": "done", "final_output": "..."}
-        {"type": "error", "message": "..."}
+        {"type": "error", "message": "...", "code": "configuration_error"?}
+        {"type": "cancel_ack", "task_id": "...", "cancelled": true, "status": "..."?}
 
         Pipeline (EventEnvelope):
         {"schema_version": "1.0", "event_id": "...", "type": "task_created",
