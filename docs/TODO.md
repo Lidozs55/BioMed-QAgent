@@ -345,15 +345,15 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 后端事件与 Artifact 契约稳定后开始。
 
-- [ ] **P1** 使用 shadcn Form 创建任务
+- [x] **P1** 使用 shadcn Form 创建任务
 - [x] **P1** 数据库选择只显示真实数据库
 - [ ] **P1** 计划确认 Card/Dialog
 - [x] **P1** 阶段 Timeline/Progress
 - [ ] **P1** 结果使用 Tabs 分离主数据、来源、处理和警告
-- [ ] **P1** 使用 Table 展示紧凑预览
+- [x] **P1** 使用 Table 展示紧凑预览
 - [x] **P1** Artifact 下载列表
-- [ ] **P1** 单一 task/event client
-- [ ] **P1** 自动重连和任务恢复
+- [x] **P1** 单一 task/event client
+- [x] **P1** 自动重连和任务恢复
 - [x] **P1** Vitest + React Testing Library
 - [x] **P1** ESLint、TypeScript 和 production build 检查
 - [x] **P1** 真实浏览器覆盖 fixture 创建、执行、结果展示和下载流程
