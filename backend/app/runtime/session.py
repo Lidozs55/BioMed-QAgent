@@ -100,6 +100,32 @@ def _content_text(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
+def _same_user_input(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return (
+        left.get("role") == MessageRole.USER.value
+        and right.get("role") == MessageRole.USER.value
+        and _content_text(left.get("content", ""))
+        == _content_text(right.get("content", ""))
+    )
+
+
+def _is_existing_run_input(
+    record: dict[str, Any],
+    run_id: str,
+    item: dict[str, Any],
+) -> bool:
+    if record.get("op") != "add" or record.get("source_run_id") != run_id:
+        return False
+    if record.get("manager_run_input") is True:
+        return True
+    legacy_item = record.get("item")
+    return (
+        "manager_run_input" not in record
+        and isinstance(legacy_item, dict)
+        and _same_user_input(legacy_item, item)
+    )
+
+
 def _project_message(
     *,
     task_id: str,
@@ -173,7 +199,8 @@ class DurableTaskSession:
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative")
         active, _ = await self._run_storage(self._replay)
-        selected = active if limit is None else active[-limit:] if limit else []
+        visible = self._sdk_visible_records(active)
+        selected = visible if limit is None else visible[-limit:] if limit else []
         return [copy.deepcopy(record["item"]) for record in selected]
 
     async def add_items(self, items: list[TResponseInputItem]) -> None:
@@ -285,9 +312,20 @@ class DurableTaskSession:
                     active.append(record)
                 elif operation == "pop":
                     target = record.get("target_ordinal")
-                    if not active or target != active[-1]["ordinal"]:
+                    target_index = next(
+                        (
+                            index
+                            for index, candidate in enumerate(active)
+                            if candidate["ordinal"] == target
+                        ),
+                        None,
+                    )
+                    if target_index is None or (
+                        target_index != len(active) - 1
+                        and record.get("sdk_visible_pop") is not True
+                    ):
                         raise SessionCorruptionError("session pop target is invalid")
-                    active.pop()
+                    active.pop(target_index)
                 elif operation == "clear":
                     if record.get("through_ordinal") != highest_ordinal:
                         raise SessionCorruptionError(
@@ -320,29 +358,52 @@ class DurableTaskSession:
     def _add_items(self, items: list[dict[str, Any]]) -> None:
         with path_lock(self.path):
             active, highest_ordinal = self._replay()
+            admitted = next(
+                (
+                    record
+                    for record in active
+                    if record.get("manager_run_input") is True
+                    and record.get("source_run_id") == self.run_id
+                ),
+                None,
+            )
+            input_reconciled = any(
+                record.get("sdk_input_copy_for") == self.run_id for record in active
+            )
             records: list[dict[str, Any]] = []
             for offset, item in enumerate(items, start=1):
                 ordinal = highest_ordinal + offset
-                message = _project_message(
-                    task_id=self.session_id,
-                    run_id=self.run_id,
-                    ordinal=ordinal,
-                    item=item,
+                reconciles_admitted_input = bool(
+                    admitted is not None
+                    and not input_reconciled
+                    and _same_user_input(item, admitted["item"])
                 )
-                records.append(
-                    {
-                        "schema_version": "1.0",
-                        "op": "add",
-                        "ordinal": ordinal,
-                        "item": item,
-                        "source_run_id": self.run_id,
-                        "message": (
-                            message.model_dump(mode="json")
-                            if message is not None
-                            else None
-                        ),
-                    }
+                message = (
+                    None
+                    if reconciles_admitted_input
+                    else _project_message(
+                        task_id=self.session_id,
+                        run_id=self.run_id,
+                        ordinal=ordinal,
+                        item=item,
+                    )
                 )
+                record = {
+                    "schema_version": "1.0",
+                    "op": "add",
+                    "ordinal": ordinal,
+                    "item": item,
+                    "source_run_id": self.run_id,
+                    "message": (
+                        message.model_dump(mode="json")
+                        if message is not None
+                        else None
+                    ),
+                }
+                if reconciles_admitted_input:
+                    record["sdk_input_copy_for"] = self.run_id
+                    input_reconciled = True
+                records.append(record)
             append_jsonl_records(self.path, records)
             active.extend(records)
             self._remember(active, highest_ordinal + len(records))
@@ -354,7 +415,7 @@ class DurableTaskSession:
     ) -> bool:
         with path_lock(self.path):
             if any(
-                record.get("op") == "add" and record.get("source_run_id") == run_id
+                _is_existing_run_input(record, run_id, item)
                 for record in self._read_records()
             ):
                 return False
@@ -375,29 +436,58 @@ class DurableTaskSession:
                     message.model_dump(mode="json") if message is not None else None
                 ),
                 "source_run_id": run_id,
+                "manager_run_input": True,
             }
             append_jsonl_records(self.path, [record])
             active.append(record)
             self._remember(active, ordinal)
             return True
 
+    def _sdk_visible_records(
+        self,
+        active: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        reconciled_run_ids = {
+            run_id
+            for record in active
+            if isinstance(run_id := record.get("sdk_input_copy_for"), str)
+        }
+        return [
+            record
+            for record in active
+            if not (
+                record.get("manager_run_input") is True
+                and (
+                    record.get("source_run_id") == self.run_id
+                    or record.get("source_run_id") in reconciled_run_ids
+                )
+            )
+        ]
+
     def _pop_item(self) -> TResponseInputItem | None:
         with path_lock(self.path):
             active, highest_ordinal = self._replay()
-            if not active:
+            visible = self._sdk_visible_records(active)
+            if not visible:
                 return None
-            latest = active[-1]
+            latest = visible[-1]
+            target_index = next(
+                index
+                for index, record in enumerate(active)
+                if record["ordinal"] == latest["ordinal"]
+            )
+            operation = {
+                "schema_version": "1.0",
+                "op": "pop",
+                "target_ordinal": latest["ordinal"],
+            }
+            if target_index != len(active) - 1:
+                operation["sdk_visible_pop"] = True
             append_jsonl_records(
                 self.path,
-                [
-                    {
-                        "schema_version": "1.0",
-                        "op": "pop",
-                        "target_ordinal": latest["ordinal"],
-                    }
-                ],
+                [operation],
             )
-            active.pop()
+            active.pop(target_index)
             self._remember(active, highest_ordinal)
             return latest["item"]
 
