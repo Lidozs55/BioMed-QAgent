@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo } from "react"
 import { useAgentStore } from "@/stores/agentStore"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"

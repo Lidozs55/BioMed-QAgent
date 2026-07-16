@@ -1087,7 +1087,7 @@ class TaskManager:
     async def _persist_status(
         self,
         accepted: TaskRunAccepted,
-        payload,
+        payload: object,
         *,
         stage_attempt_id: str | None = None,
         timestamp: datetime | None = None,
@@ -1107,7 +1107,7 @@ class TaskManager:
     async def _append_status(
         self,
         accepted: TaskRunAccepted,
-        payload,
+        payload: object,
         *,
         stage_attempt_id: str | None = None,
         timestamp: datetime | None = None,

@@ -37,11 +37,6 @@ import {
 import {
   DatabaseIcon,
   DownloadIcon,
-  FileArchiveIcon,
-  FileCodeIcon,
-  FileCsvIcon,
-  FileDashedIcon,
-  FileTextIcon,
 } from "@phosphor-icons/react";
 import type { ActivityProjection, ArtifactProjection } from "@/runtime/types";
 import {
@@ -50,36 +45,8 @@ import {
   selectActiveTask,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-function extension(name: string): string {
-  const index = name.lastIndexOf(".");
-  return index === -1 ? "" : name.slice(index + 1).toLowerCase();
-}
-
-function fileType(name: string) {
-  switch (extension(name)) {
-    case "csv":
-      return { Icon: FileCsvIcon, label: "CSV" };
-    case "json":
-    case "jsonl":
-      return { Icon: FileCodeIcon, label: extension(name).toUpperCase() };
-    case "txt":
-    case "md":
-    case "tsv":
-      return { Icon: FileTextIcon, label: extension(name).toUpperCase() };
-    default:
-      return {
-        Icon: extension(name) ? FileDashedIcon : FileArchiveIcon,
-        label: extension(name) ? extension(name).toUpperCase() : "FILE",
-      };
-  }
-}
+import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
+import { isActiveStatus } from "@/runtime/reducer";
 
 function parseCSV(text: string): {
   headers: string[];
@@ -240,7 +207,7 @@ function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; task
   const { getArtifactUrl } = useAPI();
   const { Icon, label } = fileType(artifact.name);
   const url = getArtifactUrl(taskId, artifact.artifact_id);
-  const isCsv = extension(artifact.name) === "csv";
+  const isCsv = getExtension(artifact.name) === "csv";
 
   return (
     <Card size="sm" className="min-w-0">
@@ -295,11 +262,7 @@ export default function ResultsViewer() {
     );
   }
 
-  const isActive =
-    task.summary.status === "queued" ||
-    task.summary.status === "running" ||
-    task.summary.status === "finalizing" ||
-    task.summary.status === "cancel_requested";
+  const isActive = isActiveStatus(task.summary.status);
   if (artifacts.length === 0 && isActive) {
     return (
       <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">

@@ -39,7 +39,12 @@ def _get_dist_path() -> Path | None:
     """
     # Scenario 1 — PyInstaller bundle
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        candidate = Path(sys._MEIPASS) / "dist"  # pyright: ignore[reportAttributeAccessIssue]
+        # `_MEIPASS` is injected by PyInstaller at runtime; it is not in the
+        # stdlib `sys` type stubs. Use `getattr` (not direct access) so pyright
+        # does not flag an unknown attribute, and suppress ruff B009 since the
+        # constant attribute name is intentional for this dynamic field.
+        meipass = getattr(sys, "_MEIPASS")  # noqa: B009
+        candidate = Path(meipass) / "dist"
         if candidate.is_dir():
             return candidate.resolve()
         return None

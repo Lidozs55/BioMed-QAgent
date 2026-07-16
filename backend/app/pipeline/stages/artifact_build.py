@@ -254,11 +254,14 @@ def run_artifact_build(
         _write_csv(staging / name, columns, rows_by_file.get(name, []))
 
     artifact_paths = sorted(staging.iterdir(), key=lambda item: item.name)
+    # Derive source_path from the actual SourceAsset relative_path so both
+    # fixture mode (GSE178352_tximportCounts.fixture.txt.gz) and live mode
+    # (GSE178352_tximportCounts.txt.gz) resolve to the real on-disk file.
     output = ArtifactBuildOutput(
         staging_dir=staging,
         artifact_paths=artifact_paths,
         source_assets=source_assets,
-        source_path=ctx.workdir.source_assets / "GSE178352_tximportCounts.fixture.txt.gz",
+        source_path=ctx.workdir.root / source_asset.relative_path,
         literature=literature,
         geo=geo,
         specification=specification,

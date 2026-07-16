@@ -42,9 +42,18 @@ async def _compress_extractor(result: RunResult | RunResultStreaming) -> str:
 
     通过 result.context_wrapper.context 访问共享的 RunContext，
     用子 Agent 生成的摘要替换旧查询记录。
+
+    LLM 返回非字符串或空字符串时抛 ``RuntimeError``，不静默 fallback
+    为字面量 "None" —— 符合"LLM 失败必须抛异常"的硬约束。
     """
     run_ctx: RunContext = result.context_wrapper.context
-    summary = str(result.final_output)
+    raw_output = result.final_output
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        raise RuntimeError(
+            "compress_query_log LLM returned no usable text; "
+            "refusing to silently fallback to a placeholder summary"
+        )
+    summary = raw_output.strip()
     compressed = run_ctx.compress_log(keep_recent=KEEP_RECENT, summary=summary)
     if compressed == 0:
         return f"当前仅 {len(run_ctx.query_log)} 条查询记录，无需压缩。"
