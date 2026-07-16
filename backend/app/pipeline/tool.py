@@ -15,21 +15,20 @@ from app.pipeline.runner import PipelineRunner
 @function_tool(
     name_override="run_research_pipeline",
     description_override=(
-        "Run the deterministic validated research-data pipeline. The current "
-        "accepted mode is the official PMID 34180400 / GSE178352 fixture."
+        "Run the deterministic validated research-data pipeline. Supports "
+        "fixture mode (offline, pinned GSE178352/PMID 34180400) and live "
+        "mode (real NCBI E-utilities + FTP download)."
     ),
 )
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
     databases: list[str],
-    mode: Literal["fixture"] = "fixture",
+    mode: Literal["fixture", "live"] = "fixture",
 ) -> str:
     normalized_databases = [value.lower() for value in databases]
     if set(normalized_databases) != {"pubmed", "geo"} or len(databases) != 2:
-        raise ValueError("fixture pipeline supports exactly pubmed and geo")
-    if mode != "fixture":
-        raise ValueError("only fixture mode is supported; live mode is Phase 2 work")
+        raise ValueError("pipeline supports exactly pubmed and geo")
 
     run_context = ctx.context
     fixture_dir = (

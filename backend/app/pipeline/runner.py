@@ -58,6 +58,7 @@ from app.pipeline.stages import (
     run_validation,
 )
 from app.pipeline.state import (
+    TaskLock,
     load_stage_output,
     load_state,
     save_stage_output,
@@ -160,7 +161,18 @@ class PipelineRunner:
         return max_seq
 
     async def run(self) -> RunManifest:
-        """Execute the pipeline, guaranteeing a terminal task state."""
+        """Execute the pipeline, guaranteeing a terminal task state.
+
+        Acquires a task-level exclusive lock to prevent concurrent execution
+        of the same task (e.g. a recovery run racing with a stuck prior
+        process). The lock is held for the entire pipeline run and released
+        in ``finally``.
+        """
+        lock = TaskLock(self.workdir.state / "task_running.lock", timeout=5.0)
+        try:
+            lock.acquire()
+        except TimeoutError as exc:
+            return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         try:
             return await asyncio.wait_for(self._run_inner(), self.total_timeout)
         except TimeoutError:
@@ -170,6 +182,8 @@ class PipelineRunner:
             )
         except Exception as exc:
             return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
+        finally:
+            lock.release()
 
     async def run_streamed(self) -> AsyncIterator[EventEnvelope]:
         """Execute the pipeline, yielding each EventEnvelope as it is emitted.
