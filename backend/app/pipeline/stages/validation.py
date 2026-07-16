@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -278,11 +279,15 @@ def run_validation(
                 handle.flush()
                 os.fsync(handle.fileno())
 
-    # Atomic publish: os.replace overwrites the target atomically on both
-    # POSIX and Windows. If artifacts/ already exists with content (e.g. from
-    # a prior successful validation that crashed before state was saved),
-    # we replace it — the staging package is the authoritative source.
-    ctx.workdir.artifacts.mkdir(parents=True, exist_ok=True)
+    # Publish: rename the validated staging package to artifacts/.
+    # On Windows, os.replace CANNOT overwrite an existing directory
+    # (MoveFileEx with MOVEFILE_REPLACE_EXISTING only supports files), so a
+    # prior artifacts/ dir — from a recovered re-publish — must be removed
+    # first. Renaming onto a non-existent path is atomic on both POSIX and
+    # Windows. The fully atomic publish with a task lock is tracked as
+    # TODO §8 (line 276); this preserves the prior safety level.
+    if ctx.workdir.artifacts.exists():
+        shutil.rmtree(ctx.workdir.artifacts)
     os.replace(build_output.staging_dir, ctx.workdir.artifacts)
 
     output = ValidationOutput(

@@ -205,6 +205,8 @@ async def get_task(task_id: str) -> dict:
             "current_stage": None,
             "validation_status": None,
             "artifact_count": 0,
+            "mode": None,
+            "live_accepted": None,
         }
     manifest, _ = loaded
     return {

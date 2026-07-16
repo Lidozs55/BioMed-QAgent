@@ -164,7 +164,7 @@ async def run_agent_stream(
                     if confirm_msg:
                         yield {
                             "type": "confirm",
-                            "content": confirm_msg,
+                            "confirm_message": confirm_msg,
                         }
 
         # ── 扫描产物目录，yield file_downloaded / artifact_produced 事件 ──

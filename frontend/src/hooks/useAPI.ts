@@ -13,6 +13,8 @@ export interface TaskStatus {
   current_stage: string | null;
   validation_status: string | null;
   artifact_count: number;
+  mode: string | null;
+  live_accepted: boolean | null;
 }
 
 export interface CreatedTask {
