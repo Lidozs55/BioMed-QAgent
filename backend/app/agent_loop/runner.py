@@ -16,6 +16,7 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    CancelRequestedPayload,
     EventEnvelope,
     RunManifest,
     TaskCompletedPayload,
@@ -379,6 +380,9 @@ class FixtureRunExecutor:
         async def persist_pipeline_event(event: EventEnvelope) -> None:
             if event.event_id in streamed_event_ids:
                 return
+            if isinstance(event.payload, CancelRequestedPayload):
+                streamed_event_ids.add(event.event_id)
+                return
             if isinstance(
                 event.payload,
                 (ArtifactProducedPayload, TaskCompletedPayload),
@@ -405,10 +409,8 @@ class FixtureRunExecutor:
         if callable(set_event_sink):
             set_event_sink(persist_pipeline_event)
         manifest = await _run_pipeline_with_cancellation(execution, runner)
-        _check_fixture_bridge_cancellation(execution)
         if not streams_events:
             for event in list(runner.events):
-                _check_fixture_bridge_cancellation(execution)
                 await persist_pipeline_event(event)
         if manifest.task_state is TaskState.CANCELLED:
             raise PipelineCancelledError("fixture pipeline was cancelled")

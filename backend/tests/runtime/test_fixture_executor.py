@@ -12,6 +12,8 @@ import app.runtime.manager as manager_module
 import pytest
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     CancelRequestedPayload,
     MessageRole,
     RunStatus,
@@ -606,21 +608,70 @@ async def test_manager_close_drains_fixture_worker_before_repository_close(
 
 
 @pytest.mark.asyncio
-async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
+async def test_fixture_bridge_replays_buffered_audit_before_existing_cancellation(
     tmp_path,
 ) -> None:
     context = RunContext(task_id="task_fixture_cancel_before_load")
+    validation = ValidationSummary(
+        status="valid",
+        checked_count=1,
+        failed_count=0,
+        report_path="logs/validation_report.json",
+    )
+    legacy_events = [
+        build_event(
+            task_id=context.task_id,
+            sequence=1,
+            payload=TaskCreatedPayload(topic="fixture buffered audit"),
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=2,
+            payload=StageStartedPayload(stage=StageName.DISCOVERY, attempt=1),
+            stage_attempt_id="stage_attempt_discovery_1",
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=3,
+            payload=CancelRequestedPayload(reason="pipeline-local cancellation"),
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=4,
+            payload=ArtifactProducedPayload(
+                artifact=ArtifactManifestEntry(
+                    artifact_id="artifact_buffered_cancel",
+                    name="cancelled.csv",
+                    relative_path="artifacts/cancelled.csv",
+                    media_type="text/csv",
+                    size_bytes=1,
+                    sha256="ab" * 32,
+                    generated_by_step_id="step_buffered_cancel",
+                )
+            ),
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=5,
+            payload=TaskCompletedPayload(validation=validation),
+        ),
+    ]
+    emitted: list[str] = []
 
     def cancel_before_bridge_factory(**kwargs):
         class CancelBeforeBridgeRunner:
             def __init__(self) -> None:
-                self.events: list = []
+                self.events = list(legacy_events)
 
             async def run(self):
                 kwargs["cancellation_requested"].set()
                 return completed_manifest(kwargs["task_id"])
 
         return CancelBeforeBridgeRunner()
+
+    async def emit(payload, **kwargs):
+        emitted.append(payload.type.value)
+        return SimpleNamespace()
 
     execution = manager_module.RunExecution(
         task_id=context.task_id,
@@ -630,6 +681,7 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
         context=context,
         mode=TaskMode.FIXTURE,
         databases=["pubmed", "geo"],
+        _event_emitter=emit,
     )
     executor = runner_module.FixtureRunExecutor(
         TaskRepository(tmp_path / "output"),
@@ -640,14 +692,14 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
     with pytest.raises(PipelineCancelledError):
         await executor(execution)
 
+    assert emitted == ["task_created", "stage_started"]
+
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_after", [1, 2])
-async def test_fixture_bridge_stops_before_event_after_cancellation(
+async def test_fixture_bridge_finishes_buffered_audit_after_mid_replay_cancellation(
     tmp_path,
-    cancel_after: int,
 ) -> None:
-    context = RunContext(task_id=f"task_fixture_bridge_cancel_{cancel_after}")
+    context = RunContext(task_id="task_fixture_bridge_cancel_mid_replay")
     validation = ValidationSummary(
         status="valid",
         checked_count=1,
@@ -669,6 +721,11 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
         build_event(
             task_id=context.task_id,
             sequence=3,
+            payload=CancelRequestedPayload(reason="pipeline-local cancellation"),
+        ),
+        build_event(
+            task_id=context.task_id,
+            sequence=4,
             payload=TaskCompletedPayload(validation=validation),
         ),
     ]
@@ -686,14 +743,14 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
 
     async def emit(payload, **kwargs):
         emitted.append(payload.type.value)
-        if len(emitted) == cancel_after:
+        if len(emitted) == 1:
             context.cancellation_requested.set()
         return SimpleNamespace()
 
     execution = manager_module.RunExecution(
         task_id=context.task_id,
-        run_id=f"run_fixture_bridge_cancel_{cancel_after}",
-        request_id=f"req_fixture_bridge_cancel_{cancel_after}",
+        run_id="run_fixture_bridge_cancel_mid_replay",
+        request_id="req_fixture_bridge_cancel_mid_replay",
         input="cancel during fixture bridge",
         context=context,
         mode=TaskMode.FIXTURE,
@@ -709,9 +766,7 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
     with pytest.raises(PipelineCancelledError):
         await executor(execution)
 
-    assert emitted == [
-        event.payload.type.value for event in legacy_events[:cancel_after]
-    ]
+    assert emitted == ["task_created", "stage_started"]
 
 
 @pytest.mark.asyncio
