@@ -401,16 +401,15 @@ class FixtureRunExecutor:
             defer_publication=True,
         )
         set_event_sink = getattr(runner, "set_event_sink", None)
+        streams_events = callable(set_event_sink)
         if callable(set_event_sink):
             set_event_sink(persist_pipeline_event)
         manifest = await _run_pipeline_with_cancellation(execution, runner)
         _check_fixture_bridge_cancellation(execution)
-        legacy_events = list(runner.events)
-        for event in legacy_events:
-            if event.event_id in streamed_event_ids:
-                continue
-            _check_fixture_bridge_cancellation(execution)
-            await persist_pipeline_event(event)
+        if not streams_events:
+            for event in list(runner.events):
+                _check_fixture_bridge_cancellation(execution)
+                await persist_pipeline_event(event)
         if manifest.task_state is TaskState.CANCELLED:
             raise PipelineCancelledError("fixture pipeline was cancelled")
         if manifest.task_state is TaskState.FAILED:

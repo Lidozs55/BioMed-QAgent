@@ -12,6 +12,7 @@ import app.runtime.manager as manager_module
 import pytest
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
+    CancelRequestedPayload,
     MessageRole,
     RunStatus,
     StageName,
@@ -723,11 +724,16 @@ async def test_fixture_stream_does_not_replay_the_same_fallback_event(
         sequence=1,
         payload=TaskCreatedPayload(topic="streamed once"),
     )
+    local_only_event = build_event(
+        task_id=context.task_id,
+        sequence=2,
+        payload=CancelRequestedPayload(reason="legacy local cancellation"),
+    )
 
     def streamed_and_buffered_factory(**kwargs):
         class StreamedAndBufferedRunner:
             def __init__(self) -> None:
-                self.events = [event]
+                self.events = [event, local_only_event]
                 self._event_sink = None
 
             def set_event_sink(self, sink) -> None:
