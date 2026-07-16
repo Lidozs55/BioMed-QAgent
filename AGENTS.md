@@ -206,31 +206,41 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 **Each agent is responsible for merging its own branch**. Before merging, all of the following must hold:
 
 1. The branch is functionally stable and the target changes are achieved.
-2. `uv run pytest` is fully green with no new failures.
-3. Frontend changes pass `pnpm lint && pnpm tsc` with 0 errors, and `pnpm build`
-   succeeds.
-4. The backend has no import errors, AST is intact, and
-   `uv run uvicorn app.main:app --reload` starts normally.
+2. All checks in **7.3 Quality Gates** pass.
+3. The merge represents one complete functional unit (see merge constraints below).
 
 **Merge steps**:
 
 - `git pull --rebase origin main` and resolve conflicts.
-- After resolving conflicts, re-run tests and frontend/backend verification.
+- After resolving conflicts, **re-run the Quality Gates**.
 - Prefer `git merge --no-ff` to preserve branch history, or rebase then push.
 - Before pushing, confirm local `main` can start.
-- After merging, post a `[DONE]` message in Commonly summarizing the result. (If connected to Commonly)
+- After merging, post a `[DONE]` message in Commonly summarizing the result (if connected to Commonly).
 
-**Constraints**:
+**Merge constraints**:
 
 - **Never force-push to shared branches** (main, dev). If push is rejected, run
   `git pull --rebase` first, then push.
+- **Merge granularity**: one merge to `main` must represent one
+  complete functional unit. Bundle related `feat` + `fix` + test + doc
+  changes into the same branch and merge them together.
+- **One feature, one merge**: do not chain multiple merges for sub-steps of the
+  same feature. If the feature is not yet complete, keep committing on the
+  branch; only merge when the functional unit is whole and self-verifying.
 
-#### 7.3 Pre-Push Checklist
+#### 7.3 Quality Gates
 
-- Backend: no import errors, AST intact, `uv run pytest` passes, and
-  `uv run uvicorn app.main:app --reload` starts after clearing `__pycache__`.
-- Frontend: `pnpm lint && pnpm tsc` with 0 errors, `pnpm build` succeeds.
-- Commit message format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
+The following checks **must all pass** before pushing a branch **and** before merging to `main`.
+
+- **Backend**
+  - No import errors, AST intact;
+  - `uv run pytest` passes with no failures;
+  - After clearing `__pycache__`, `uv run uvicorn app.main:app --reload` starts normally.
+- **Frontend**
+  - `pnpm lint && pnpm tsc` with 0 errors;
+  - `pnpm build` succeeds.
+- **Commit message**
+  - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
 
 ### 8. Documentation First
 
