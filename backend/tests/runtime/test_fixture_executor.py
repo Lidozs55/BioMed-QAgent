@@ -62,6 +62,149 @@ async def run_blocking_with_drain(operation):
 
 
 @pytest.mark.asyncio
+async def test_fixture_stage_started_is_durable_before_stage_body_finishes(
+    tmp_path,
+) -> None:
+    stage_entered = threading.Event()
+    release_stage = threading.Event()
+
+    class BlockingDiscoveryRunner(runner_module.PipelineRunner):
+        def _execute_stage(self, stage, stage_outputs, stage_attempt_id):
+            if stage is StageName.DISCOVERY:
+                stage_entered.set()
+                release_stage.wait()
+            return super()._execute_stage(stage, stage_outputs, stage_attempt_id)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=(
+                Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+            ),
+            pipeline_runner_factory=BlockingDiscoveryRunner,
+        ),
+    )
+    await manager.start()
+    accepted = await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_stage_started_durable",
+            input="durable stage start",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    try:
+        assert await asyncio.wait_for(
+            asyncio.to_thread(stage_entered.wait, 1),
+            timeout=2,
+        )
+
+        events = await repository.list_events(accepted.task_id)
+        stage_started = [
+            event
+            for event in events
+            if event.payload.type.value == "stage_started"
+        ]
+        assert len(stage_started) == 1
+        assert stage_started[0].run_id == accepted.run_id
+        assert [event.sequence for event in events] == list(
+            range(1, len(events) + 1)
+        )
+    finally:
+        release_stage.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_cancellation_preserves_prior_durable_audit_events(
+    tmp_path,
+) -> None:
+    stage_entered = threading.Event()
+    release_stage = threading.Event()
+
+    class BlockingDiscoveryRunner(runner_module.PipelineRunner):
+        def _execute_stage(self, stage, stage_outputs, stage_attempt_id):
+            if stage is StageName.DISCOVERY:
+                stage_entered.set()
+                release_stage.wait()
+            return super()._execute_stage(stage, stage_outputs, stage_attempt_id)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=(
+                Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+            ),
+            pipeline_runner_factory=BlockingDiscoveryRunner,
+        ),
+    )
+    await manager.start()
+    accepted = await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_cancel_preserves_audit",
+            input="cancel after durable audit",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    cancel_task: asyncio.Task | None = None
+    try:
+        assert await asyncio.wait_for(
+            asyncio.to_thread(stage_entered.wait, 1),
+            timeout=2,
+        )
+        before_cancel = await repository.list_events(accepted.task_id)
+        assert "stage_started" in {
+            event.payload.type.value for event in before_cancel
+        }
+
+        cancel_task = asyncio.create_task(
+            manager.cancel_run(
+                accepted.task_id,
+                accepted.run_id,
+                reason="test cancellation",
+            )
+        )
+        for _ in range(100):
+            during_cancel = await repository.list_events(accepted.task_id)
+            if any(
+                event.payload.type.value == "run_cancel_requested"
+                for event in during_cancel
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("run_cancel_requested was not persisted")
+
+        release_stage.set()
+        await asyncio.wait_for(cancel_task, timeout=2)
+
+        final_events = await repository.list_events(accepted.task_id)
+        assert [event.event_id for event in final_events[: len(before_cancel)]] == [
+            event.event_id for event in before_cancel
+        ]
+        final_types = [event.payload.type.value for event in final_events]
+        assert "task_cancelled" in final_types
+        assert "run_cancelled" in final_types
+        assert "artifact_produced" not in final_types
+        assert "task_completed" not in final_types
+        assert "run_completed" not in final_types
+        assert [event.sequence for event in final_events] == list(
+            range(1, len(final_events) + 1)
+        )
+        assert all(event.run_id == accepted.run_id for event in final_events)
+    finally:
+        release_stage.set()
+        if cancel_task is not None:
+            await asyncio.gather(cancel_task, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_fixture_completion_projects_one_user_message_across_restart(
     tmp_path,
 ) -> None:
@@ -568,6 +711,60 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
     assert emitted == [
         event.payload.type.value for event in legacy_events[:cancel_after]
     ]
+
+
+@pytest.mark.asyncio
+async def test_fixture_stream_does_not_replay_the_same_fallback_event(
+    tmp_path,
+) -> None:
+    context = RunContext(task_id="task_fixture_stream_dedup")
+    event = build_event(
+        task_id=context.task_id,
+        sequence=1,
+        payload=TaskCreatedPayload(topic="streamed once"),
+    )
+
+    def streamed_and_buffered_factory(**kwargs):
+        class StreamedAndBufferedRunner:
+            def __init__(self) -> None:
+                self.events = [event]
+                self._event_sink = None
+
+            def set_event_sink(self, sink) -> None:
+                self._event_sink = sink
+
+            async def run(self):
+                assert self._event_sink is not None
+                await self._event_sink(event)
+                return completed_manifest(kwargs["task_id"])
+
+        return StreamedAndBufferedRunner()
+
+    emitted: list[str] = []
+
+    async def emit(payload, **kwargs):
+        emitted.append(payload.type.value)
+        return SimpleNamespace()
+
+    execution = manager_module.RunExecution(
+        task_id=context.task_id,
+        run_id="run_fixture_stream_dedup",
+        request_id="req_fixture_stream_dedup",
+        input="stream fixture event once",
+        context=context,
+        mode=TaskMode.FIXTURE,
+        databases=["pubmed", "geo"],
+        _event_emitter=emit,
+    )
+    executor = runner_module.FixtureRunExecutor(
+        TaskRepository(tmp_path / "output"),
+        fixture_dir=tmp_path / "fixture",
+        pipeline_runner_factory=streamed_and_buffered_factory,
+    )
+
+    await executor(execution)
+
+    assert emitted == ["task_created"]
 
 
 @pytest.mark.asyncio

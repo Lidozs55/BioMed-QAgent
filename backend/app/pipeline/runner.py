@@ -10,7 +10,7 @@ import asyncio
 import csv
 import hashlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +83,14 @@ TOTAL_TIMEOUT: float = 300.0
 class CancellationToken(Protocol):
     def is_set(self) -> bool: ...
 
+
+PipelineEventSink = Callable[[EventEnvelope], Awaitable[None]]
+
+
+class PipelineEventSinkError(RuntimeError):
+    """Raised when the runtime cannot durably accept a Pipeline event."""
+
+
 _STAGES: list[StageName] = [
     StageName.DISCOVERY,
     StageName.ACQUISITION,
@@ -121,6 +129,7 @@ class PipelineRunner:
         mode: Literal["fixture", "live"] = "fixture",
         cancellation_requested: CancellationToken | None = None,
         defer_publication: bool = False,
+        event_sink: PipelineEventSink | None = None,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -130,6 +139,7 @@ class PipelineRunner:
         self.mode = mode
         self.cancellation_requested = cancellation_requested
         self.defer_publication = defer_publication
+        self._event_sink = event_sink
         self.workdir = create_task_workdir(task_id, base_dir=str(base_dir))
         self.started_at = datetime.now(UTC)
         self.state = load_state(self.workdir.state, task_id, self.started_at)
@@ -153,6 +163,13 @@ class PipelineRunner:
         # in-memory list. The sentinel ``None`` signals stream completion.
         self._event_queue: asyncio.Queue[EventEnvelope | None] | None = None
         self._pending_publication: Path | None = None
+
+    def set_event_sink(self, sink: PipelineEventSink) -> None:
+        """Attach the awaitable in-memory handoff used by the durable runtime."""
+
+        if self._event_sink is not None and self._event_sink is not sink:
+            raise RuntimeError("pipeline event sink is already attached")
+        self._event_sink = sink
 
     def _load_persisted_attempt_count(self) -> int:
         """Validate the append-only attempt prefix and detect crash gaps."""
@@ -204,28 +221,30 @@ class PipelineRunner:
         try:
             lock.acquire()
         except TimeoutError as exc:
-            return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
+            return await self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         try:
             return await asyncio.wait_for(self._run_inner(), self.total_timeout)
         except PipelineCancelledError:
-            return self._finalize_cancelled()
+            return await self._finalize_cancelled()
+        except PipelineEventSinkError:
+            raise
         except TimeoutError:
-            return self._finalize_failed(
+            return await self._finalize_failed(
                 TimeoutError(f"total pipeline timeout ({self.total_timeout}s) exceeded"),
                 ErrorCode.TIMEOUT,
             )
         except Exception as exc:
-            return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
+            return await self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         finally:
             lock.release()
 
     async def run_streamed(self) -> AsyncIterator[EventEnvelope]:
         """Execute the pipeline, yielding each EventEnvelope as it is emitted.
 
-        Persists every event to events.jsonl before yielding (persist-then-push)
-        so a WS disconnect can resume via ``GET /tasks/{task_id}/events?since=N``.
-        After the generator is exhausted, ``self.manifest`` holds the terminal
-        RunManifest (or None if the run has not reached a terminal state).
+        If a runtime sink is attached, each event is acknowledged by that sink
+        before it is yielded. After the generator is exhausted,
+        ``self.manifest`` holds the terminal RunManifest (or None if the run
+        has not reached a terminal state).
         """
         if self._event_queue is not None:
             raise RuntimeError("run_streamed() cannot be called concurrently")
@@ -252,11 +271,13 @@ class PipelineRunner:
     def request_cancel(self, reason: str | None = None) -> None:
         """Request cancellation; checked before each stage.
 
-        Emits a ``task_cancel_requested`` event (persisted + pushed) so WS
-        clients see the request immediately, then sets the in-memory and
-        persisted state flag checked by ``_run_inner`` before each stage.
+        The legacy synchronous API records ``task_cancel_requested`` only in
+        the runner's local audit list, then sets the persisted Pipeline flag.
+        TaskManager owns authoritative managed-Run cancellation events.
         """
-        self._emit_event(CancelRequestedPayload(reason=reason))
+        self._record_local_event(
+            self._build_event(CancelRequestedPayload(reason=reason))
+        )
         self.state.cancel_requested = True
         self.state.cancel_reason = reason
         save_state(self.workdir.state, self.state)
@@ -278,20 +299,20 @@ class PipelineRunner:
             and bool(self.state.completed_stages)
         )
         if is_recovered:
-            self._emit_event(
+            await self._emit_event(
                 TaskRecoveredPayload(
                     recovered_from_sequence=0
                 )
             )
         else:
-            self._emit_event(TaskCreatedPayload(topic=self.topic))
+            await self._emit_event(TaskCreatedPayload(topic=self.topic))
             specification = _build_specification_for_plan(self.ctx)
-            self._emit_event(PlanReadyPayload(specification=specification))
+            await self._emit_event(PlanReadyPayload(specification=specification))
 
         stage_outputs: dict[StageName, Any] = {}
         for stage in _STAGES:
             if self._is_cancelled():
-                return self._finalize_cancelled()
+                return await self._finalize_cancelled()
 
             input_digest = self._compute_input_digest(stage, stage_outputs)
             parameter_digest = self._compute_parameter_digest(stage)
@@ -306,7 +327,7 @@ class PipelineRunner:
                         AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
                     )
                     self.state.append_attempt(skipped_attempt)
-                    self._emit_stage_event(
+                    await self._emit_stage_event(
                         StageSkippedPayload(
                             stage=stage,
                             status=AttemptStatus.SKIPPED,
@@ -320,11 +341,11 @@ class PipelineRunner:
 
             stage_attempt_id = generate_prefixed_uuid("stage_attempt")
             started = datetime.now(UTC)
-            self._emit_stage_event(
+            await self._emit_stage_event(
                 StageStartedPayload(stage=stage, attempt=1),
                 stage_attempt_id=stage_attempt_id,
             )
-            self._emit_stage_event(
+            await self._emit_stage_event(
                 ToolCalledPayload(
                     tool_name=f"run_{stage.value}",
                     arguments_digest=parameter_digest,
@@ -340,20 +361,20 @@ class PipelineRunner:
                     self.stage_timeouts[stage],
                 )
             except TimeoutError:
-                return self._finalize_stage_failed(
+                return await self._finalize_stage_failed(
                     stage, stage_attempt_id, input_digest, parameter_digest, started,
                     TimeoutError(f"stage {stage.value} timeout exceeded"),
                     ErrorCode.TIMEOUT,
                 )
             except PipelineCancelledError:
-                return self._finalize_cancelled()
+                return await self._finalize_cancelled()
             except Exception as exc:
-                return self._finalize_stage_failed(
+                return await self._finalize_stage_failed(
                     stage, stage_attempt_id, input_digest, parameter_digest, started,
                     exc, ErrorCode.INTERNAL_ERROR,
                 )
 
-            self._emit_stage_event(
+            await self._emit_stage_event(
                 ToolCompletedPayload(
                     tool_name=f"run_{stage.value}",
                     output_digest=result.output_digest,
@@ -374,7 +395,7 @@ class PipelineRunner:
             save_stage_output(self.workdir.state, stage, result.output)
 
             stage_outputs[stage] = result.output
-            self._emit_stage_event(
+            await self._emit_stage_event(
                 StageCompletedPayload(
                     stage=stage,
                     status=AttemptStatus.SUCCEEDED,
@@ -385,11 +406,11 @@ class PipelineRunner:
             save_state(self.workdir.state, self.state)
 
             if stage is StageName.ARTIFACT_BUILD:
-                self._emit_warning_events(stage_outputs, stage_attempt_id)
+                await self._emit_warning_events(stage_outputs, stage_attempt_id)
 
-        return self._finalize_completed(stage_outputs)
+        return await self._finalize_completed(stage_outputs)
 
-    def _emit_warning_events(
+    async def _emit_warning_events(
         self,
         stage_outputs: dict[StageName, Any],
         stage_attempt_id: str,
@@ -424,7 +445,7 @@ class PipelineRunner:
                     )
                 except (KeyError, ValueError):
                     continue
-                self._emit_stage_event(
+                await self._emit_stage_event(
                     WarningPayload(warning=warning),
                     stage_attempt_id=stage_attempt_id,
                 )
@@ -593,30 +614,43 @@ class PipelineRunner:
             error=error,
         )
 
-    def _emit_event(self, payload: Any) -> None:
-        event = build_event(
-            task_id=self.task_id,
-            sequence=self._sequence,
-            payload=payload,
-        )
-        self.events.append(event)
-        self._sequence += 1
-        if self._event_queue is not None:
-            self._event_queue.put_nowait(event)
-
-    def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
+    def _build_event(
+        self,
+        payload: Any,
+        *,
+        stage_attempt_id: str | None = None,
+    ) -> EventEnvelope:
         event = build_event(
             task_id=self.task_id,
             sequence=self._sequence,
             payload=payload,
             stage_attempt_id=stage_attempt_id,
         )
-        self.events.append(event)
         self._sequence += 1
+        return event
+
+    def _record_local_event(self, event: EventEnvelope) -> None:
+        self.events.append(event)
+
+    async def _publish_event(self, event: EventEnvelope) -> None:
+        if self._event_sink is not None:
+            try:
+                await self._event_sink(event)
+            except Exception as exc:
+                raise PipelineEventSinkError(str(exc) or type(exc).__name__) from exc
+        self.events.append(event)
         if self._event_queue is not None:
             self._event_queue.put_nowait(event)
 
-    def _finalize_stage_failed(
+    async def _emit_event(self, payload: Any) -> None:
+        await self._publish_event(self._build_event(payload))
+
+    async def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
+        await self._publish_event(
+            self._build_event(payload, stage_attempt_id=stage_attempt_id)
+        )
+
+    async def _finalize_stage_failed(
         self,
         stage: StageName,
         stage_attempt_id: str,
@@ -639,14 +673,14 @@ class PipelineRunner:
             started=started, finished=finished, error=error,
         )
         self.state.append_attempt(attempt)
-        self._emit_stage_event(
+        await self._emit_stage_event(
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
             stage_attempt_id=stage_attempt_id,
         )
         # _persist_logs is called once by _finalize_failed; no duplicate call here.
-        return self._finalize_failed(exc, error_code)
+        return await self._finalize_failed(exc, error_code)
 
-    def _finalize_failed(
+    async def _finalize_failed(
         self, exc: Exception, error_code: ErrorCode = ErrorCode.INTERNAL_ERROR
     ) -> RunManifest:
         self.state.task_state = TaskState.FAILED
@@ -656,16 +690,16 @@ class PipelineRunner:
             message=str(exc),
             retryable=error_code is ErrorCode.TIMEOUT,
         )
-        self._emit_event(TaskFailedPayload(error=error))
+        await self._emit_event(TaskFailedPayload(error=error))
         self._persist_logs()
         return _build_failed_manifest(
             self.task_id, self.started_at, error, self.topic, self.mode
         )
 
-    def _finalize_cancelled(self) -> RunManifest:
+    async def _finalize_cancelled(self) -> RunManifest:
         self.state.task_state = TaskState.CANCELLED
         save_state(self.workdir.state, self.state)
-        self._emit_event(
+        await self._emit_event(
             TaskCancelledPayload(reason=self.state.cancel_reason or "cancel requested")
         )
         self._persist_logs()
@@ -673,7 +707,7 @@ class PipelineRunner:
             self.task_id, self.started_at, self.topic, self.mode
         )
 
-    def _finalize_completed(
+    async def _finalize_completed(
         self, stage_outputs: dict[StageName, Any]
     ) -> RunManifest:
         validation_output = self._get_output(
@@ -682,18 +716,18 @@ class PipelineRunner:
         manifest = validation_output.manifest
 
         for entry in manifest.artifacts:
-            self._emit_event_with_payload(
+            await self._emit_event_with_payload(
                 _artifact_produced_payload(entry)
             )
-        self._emit_event(TaskCompletedPayload(validation=manifest.validation))
+        await self._emit_event(TaskCompletedPayload(validation=manifest.validation))
 
         self.state.task_state = TaskState.COMPLETED
         save_state(self.workdir.state, self.state)
         self._persist_logs()
         return manifest
 
-    def _emit_event_with_payload(self, payload: Any) -> None:
-        self._emit_event(payload)
+    async def _emit_event_with_payload(self, payload: Any) -> None:
+        await self._emit_event(payload)
 
     def _persist_logs(self) -> None:
         """Write stage_attempts.jsonl to logs/.

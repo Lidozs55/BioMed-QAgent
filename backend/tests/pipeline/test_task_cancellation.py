@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from app.domain.contracts import (
     PipelineEventType,
     TaskState,
 )
-from app.pipeline.runner import PipelineRunner
+from app.pipeline.runner import PipelineEventSinkError, PipelineRunner
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -82,6 +83,52 @@ def test_pipeline_with_cancel_flag_transitions_to_cancelled(
     # task_cancel_requested is NOT emitted here because the cancel flag was
     # set externally (not via request_cancel). Only request_cancel emits it.
     assert PipelineEventType.TASK_CANCEL_REQUESTED.value not in types
+
+
+def test_pipeline_event_sink_failure_prevents_stage_body_start(
+    tmp_path: Path,
+) -> None:
+    stage_body_started = False
+
+    class ObservedRunner(PipelineRunner):
+        def _execute_stage(self, stage, stage_outputs, stage_attempt_id):
+            nonlocal stage_body_started
+            stage_body_started = True
+            return super()._execute_stage(stage, stage_outputs, stage_attempt_id)
+
+    runner = ObservedRunner(
+        task_id="task_sink_failure",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    async def fail_on_stage_start(event) -> None:
+        if event.payload.type.value == "stage_started":
+            raise OSError("runtime event persistence failed")
+
+    runner.set_event_sink(fail_on_stage_start)
+
+    with pytest.raises(
+        PipelineEventSinkError,
+        match="runtime event persistence failed",
+    ):
+        asyncio.run(runner.run())
+
+    assert not stage_body_started
+
+
+def test_pipeline_does_not_create_secondary_event_jsonl(
+    tmp_path: Path,
+) -> None:
+    runner = PipelineRunner(
+        task_id="task_no_secondary_event_log",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    asyncio.run(runner.run())
+
+    assert not (runner.workdir.logs / "events.jsonl").exists()
 
 
 # ---------------------------------------------------------------------------

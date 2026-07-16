@@ -373,6 +373,25 @@ class FixtureRunExecutor:
             execution.run_id,
             execution.input,
         )
+        streamed_event_ids: set[str] = set()
+        completion_events: list[EventEnvelope] = []
+
+        async def persist_pipeline_event(event: EventEnvelope) -> None:
+            if event.event_id in streamed_event_ids:
+                return
+            if isinstance(
+                event.payload,
+                (ArtifactProducedPayload, TaskCompletedPayload),
+            ):
+                completion_events.append(event)
+            else:
+                await execution.emit(
+                    event.payload,
+                    stage_attempt_id=event.stage_attempt_id,
+                    timestamp=event.timestamp,
+                )
+            streamed_event_ids.add(event.event_id)
+
         runner = self._pipeline_runner_factory(
             task_id=execution.task_id,
             base_dir=self._repository.tasks_dir,
@@ -381,23 +400,17 @@ class FixtureRunExecutor:
             cancellation_requested=execution.context.cancellation_requested,
             defer_publication=True,
         )
+        set_event_sink = getattr(runner, "set_event_sink", None)
+        if callable(set_event_sink):
+            set_event_sink(persist_pipeline_event)
         manifest = await _run_pipeline_with_cancellation(execution, runner)
         _check_fixture_bridge_cancellation(execution)
         legacy_events = list(runner.events)
-        completion_events: list[EventEnvelope] = []
         for event in legacy_events:
-            _check_fixture_bridge_cancellation(execution)
-            if isinstance(
-                event.payload,
-                (ArtifactProducedPayload, TaskCompletedPayload),
-            ):
-                completion_events.append(event)
+            if event.event_id in streamed_event_ids:
                 continue
-            await execution.emit(
-                event.payload,
-                stage_attempt_id=event.stage_attempt_id,
-                timestamp=event.timestamp,
-            )
+            _check_fixture_bridge_cancellation(execution)
+            await persist_pipeline_event(event)
         if manifest.task_state is TaskState.CANCELLED:
             raise PipelineCancelledError("fixture pipeline was cancelled")
         if manifest.task_state is TaskState.FAILED:
