@@ -60,6 +60,7 @@ export class RuntimeController {
   private readonly taskHandoffGenerations = new Map<string, number>();
   private readonly taskHandoffTails = new Map<string, Promise<void>>();
   private readonly selectionHandoffs = new Map<string, Promise<number>>();
+  private readonly messageHydrations = new Map<string, Promise<void>>();
   private readonly artifactHydrations = new Map<
     string,
     { generation: number; promise: Promise<void> }
@@ -327,11 +328,31 @@ export class RuntimeController {
     return accepted;
   }
 
-  continueTask(
+  async continueTask(
     taskId: string,
     input: ContinueTaskInput,
   ): Promise<TaskRunAccepted> {
-    return this.api.continueTask(taskId, input);
+    const accepted = await this.api.continueTask(taskId, input);
+    await this.enqueueTaskHandoff(taskId, async () => {
+      this.advanceTaskHandoffGeneration(taskId);
+      const task = useAgentStore.getState().tasksById[accepted.task_id];
+      if (task === undefined) return;
+      useAgentStore.setState((state) =>
+        addAcceptedTask(
+          state,
+          {
+            taskId: accepted.task_id,
+            runId: accepted.run_id,
+            requestId: accepted.request_id,
+          },
+          input.input,
+          task.summary.databases,
+          task.summary.mode,
+          false,
+        ),
+      );
+    });
+    return accepted;
   }
 
   async cancelRun(taskId: string, runId: string): Promise<void> {
@@ -369,6 +390,30 @@ export class RuntimeController {
         task.latest_sequence;
       this.transport.subscribe(task.task_id, lastSequence);
     }
+  }
+
+  loadOlderMessages(taskId: string): Promise<void> {
+    const existing = this.messageHydrations.get(taskId);
+    if (existing !== undefined) return existing;
+    const cursor =
+      useAgentStore.getState().tasksById[taskId]?.olderMessagesCursor;
+    if (cursor === undefined || cursor === null) return Promise.resolve();
+
+    const hydration = this.api
+      .fetchMessages(taskId, { limit: 100, cursor })
+      .then((page) => {
+        useAgentStore
+          .getState()
+          .mergeOlderMessagePage(taskId, cursor, page);
+      });
+    this.messageHydrations.set(taskId, hydration);
+    const clear = () => {
+      if (this.messageHydrations.get(taskId) === hydration) {
+        this.messageHydrations.delete(taskId);
+      }
+    };
+    void hydration.then(clear, clear);
+    return hydration;
   }
 
   showNewDraft(): void {

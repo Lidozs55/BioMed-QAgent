@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import functools
 import json
+from collections.abc import Callable
+from concurrent.futures import Executor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from agents.items import TResponseInputItem
 from agents.memory.session_settings import SessionSettings
@@ -29,8 +32,8 @@ from app.runtime.event_store import (
     read_jsonl,
 )
 
-
 MESSAGE_PAGE_LIMIT = default_settings.task_message_page_size
+_ResultT = TypeVar("_ResultT")
 
 
 class SessionCorruptionError(ValueError):
@@ -100,6 +103,7 @@ def _content_text(content: Any) -> str:
 def _project_message(
     *,
     task_id: str,
+    run_id: str | None,
     ordinal: int,
     item: dict[str, Any],
 ) -> MessageRecord | None:
@@ -109,10 +113,11 @@ def _project_message(
     return MessageRecord(
         message_id=generate_message_id(),
         task_id=task_id,
+        run_id=run_id,
         ordinal=ordinal,
         role=MessageRole(role_value),
         content=_content_text(item.get("content", "")),
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 
@@ -126,8 +131,10 @@ class DurableTaskSession:
         session_id: str,
         tasks_dir: str | Path,
         *,
+        run_id: str | None = None,
         session_settings: SessionSettings | None = None,
         message_page_size: int = MESSAGE_PAGE_LIMIT,
+        storage_executor: Executor | None = None,
     ) -> None:
         if (
             not session_id
@@ -137,16 +144,35 @@ class DurableTaskSession:
             raise ValueError("session_id must be a single path-safe component")
         if message_page_size < 1:
             raise ValueError("message_page_size must be positive")
+        if run_id is not None and (
+            not run_id or run_id in {".", ".."} or Path(run_id).name != run_id
+        ):
+            raise ValueError("run_id must be a single path-safe component")
         self.session_id = session_id
+        self.run_id = run_id
         self.session_settings = session_settings
         self.message_page_size = message_page_size
         self.path = Path(tasks_dir) / session_id / "state" / "session_items.jsonl"
+        self._storage_executor = storage_executor
         self._replay_cache: _ReplayCache | None = None
+
+    async def _run_storage(
+        self,
+        function: Callable[..., _ResultT],
+        *args: Any,
+    ) -> _ResultT:
+        if self._storage_executor is None:
+            return await asyncio.to_thread(function, *args)
+        call = functools.partial(function, *args)
+        return await asyncio.get_running_loop().run_in_executor(
+            self._storage_executor,
+            call,
+        )
 
     async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative")
-        active, _ = await asyncio.to_thread(self._replay)
+        active, _ = await self._run_storage(self._replay)
         selected = active if limit is None else active[-limit:] if limit else []
         return [copy.deepcopy(record["item"]) for record in selected]
 
@@ -154,7 +180,7 @@ class DurableTaskSession:
         if not items:
             return
         normalized = [_json_item(item) for item in items]
-        await asyncio.to_thread(self._add_items, normalized)
+        await self._run_storage(self._add_items, normalized)
 
     async def add_run_input_once(self, run_id: str, input_value: str) -> bool:
         """Project one manager-owned Run input into history exactly once."""
@@ -162,13 +188,13 @@ class DurableTaskSession:
         if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
             raise ValueError("run_id must be a single path-safe component")
         item = _json_item({"role": MessageRole.USER.value, "content": input_value})
-        return await asyncio.to_thread(self._add_run_input_once, run_id, item)
+        return await self._run_storage(self._add_run_input_once, run_id, item)
 
     async def pop_item(self) -> TResponseInputItem | None:
-        return await asyncio.to_thread(self._pop_item)
+        return await self._run_storage(self._pop_item)
 
     async def clear_session(self) -> None:
-        await asyncio.to_thread(self._clear_session)
+        await self._run_storage(self._clear_session)
 
     async def get_message_page(
         self,
@@ -180,7 +206,7 @@ class DurableTaskSession:
         if page_limit < 1 or page_limit > self.message_page_size:
             raise ValueError(f"limit must be between 1 and {self.message_page_size}")
         before = _decode_cursor(self.session_id, cursor) if cursor else None
-        active, _ = await asyncio.to_thread(self._replay)
+        active, _ = await self._run_storage(self._replay)
         messages = [
             MessageRecord.model_validate(record["message"])
             for record in active
@@ -247,6 +273,10 @@ class DurableTaskSession:
                         if (
                             message.task_id != self.session_id
                             or message.ordinal != ordinal
+                            or (
+                                message.run_id is not None
+                                and message.run_id != record.get("source_run_id")
+                            )
                         ):
                             raise SessionCorruptionError(
                                 "session message task_id and ordinal must match add"
@@ -295,6 +325,7 @@ class DurableTaskSession:
                 ordinal = highest_ordinal + offset
                 message = _project_message(
                     task_id=self.session_id,
+                    run_id=self.run_id,
                     ordinal=ordinal,
                     item=item,
                 )
@@ -304,6 +335,7 @@ class DurableTaskSession:
                         "op": "add",
                         "ordinal": ordinal,
                         "item": item,
+                        "source_run_id": self.run_id,
                         "message": (
                             message.model_dump(mode="json")
                             if message is not None
@@ -330,6 +362,7 @@ class DurableTaskSession:
             ordinal = highest_ordinal + 1
             message = _project_message(
                 task_id=self.session_id,
+                run_id=run_id,
                 ordinal=ordinal,
                 item=item,
             )

@@ -1,24 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+import hashlib
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator
 
 import httpx
 import pytest
-from fastapi import FastAPI
-
 from app.config import Settings
-from app.domain.contracts import RunStatus, TaskMode, TaskSnapshot, TaskSummary
+from app.domain.contracts import (
+    RunRecord,
+    RunStatus,
+    TaskMode,
+    TaskSnapshot,
+    TaskSummary,
+)
 from app.main import create_app
 from app.pipeline.pinned_case import run_pinned_fixture
-
+from fastapi import FastAPI
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
-NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 14, tzinfo=UTC)
 
 
 @asynccontextmanager
@@ -26,12 +31,11 @@ async def api_client(
     tmp_path: Path,
 ) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient]]:
     application = create_app(Settings(output_dir=str(tmp_path / "isolated-output")))
-    async with application.router.lifespan_context(application):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application),
-            base_url="http://test",
-        ) as client:
-            yield application, client
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        yield application, client
 
 
 def authoritative_snapshot(task_id: str) -> TaskSnapshot:
@@ -48,15 +52,61 @@ def authoritative_snapshot(task_id: str) -> TaskSnapshot:
     )
 
 
+def snapshot_with_run(task_id: str, run_id: str, status: RunStatus) -> TaskSnapshot:
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id=task_id,
+            mode=TaskMode.FIXTURE,
+            databases=["pubmed", "geo"],
+            title=task_id,
+            status=status,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id=run_id,
+                task_id=task_id,
+                request_id=f"request_{run_id}",
+                status=status,
+                input=task_id,
+                created_at=NOW,
+                updated_at=NOW,
+                started_at=NOW,
+                finished_at=NOW,
+            )
+        ],
+    )
+
+
 async def seed_fixture(application: FastAPI, task_id: str) -> object:
     repository = application.state.task_repository
-    await repository.save_snapshot(authoritative_snapshot(task_id))
-    return await asyncio.to_thread(
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(
+        snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+    )
+    manifest = await asyncio.to_thread(
         run_pinned_fixture,
         task_id=task_id,
         base_dir=repository.tasks_dir,
         fixture_dir=FIXTURE_DIR,
     )
+    artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+    manifest_path = artifacts_dir / "run_manifest.json"
+    (artifacts_dir / ".runtime-publication.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task_id": task_id,
+                "run_id": run_id,
+                "manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        "utf-8",
+    )
+    return manifest
 
 
 @pytest.mark.asyncio
@@ -126,6 +176,50 @@ async def test_artifact_api_requires_authoritative_task_and_handles_no_manifest(
     assert empty_list.json() == {"artifacts": []}
     assert empty_download.status_code == 404
     assert empty_download.json() == {"detail": "Artifact not found"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_never_exposes_cancelled_run_publication(
+    tmp_path: Path,
+) -> None:
+    task_id = "task_cancelled_artifacts"
+    run_id = "run_cancelled_artifacts"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.CANCELLED)
+        )
+        await asyncio.to_thread(
+            run_pinned_fixture,
+            task_id=task_id,
+            base_dir=repository.tasks_dir,
+            fixture_dir=FIXTURE_DIR,
+        )
+        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+        manifest_path = artifacts_dir / "run_manifest.json"
+        (artifacts_dir / ".runtime-publication.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "manifest_sha256": hashlib.sha256(
+                        manifest_path.read_bytes()
+                    ).hexdigest(),
+                }
+            ),
+            "utf-8",
+        )
+
+        artifact_list = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        artifact_download = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/run_manifest"
+        )
+
+    assert artifact_list.status_code == 200
+    assert artifact_list.json() == {"artifacts": []}
+    assert artifact_download.status_code == 404
+    assert artifact_download.json() == {"detail": "Artifact not found"}
 
 
 @pytest.mark.asyncio

@@ -491,7 +491,8 @@ async def test_repository_creates_layout_and_hydrates_latest_100_messages(
         assert json.loads(summary_path.read_text("utf-8")) == {}
         assert (output_dir / "tasks" / "task_index.sqlite3").is_file()
 
-        session = repository.task_session("task_123")
+        session = repository.task_session("task_123", run_id="run_123")
+        assert session.run_id == "run_123"
         await session.add_items(
             [
                 {"role": "user", "content": f"message {number}"}

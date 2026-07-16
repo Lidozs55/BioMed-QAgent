@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import {
+  ArrowUpIcon,
   DownloadIcon,
   FileCodeIcon,
   FileCsvIcon,
@@ -68,6 +69,7 @@ interface ChatPanelProps {
     taskId: string,
     input: { input: string },
   ) => Promise<TaskRunAccepted>;
+  loadOlderMessages?: (taskId: string) => Promise<void>;
 }
 
 const TERMINAL_STATUSES = new Set([
@@ -113,7 +115,11 @@ function draftKey(input: string, databases: readonly string[]): string {
   return JSON.stringify({ input, databases });
 }
 
-export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
+export function ChatPanel({
+  startTask,
+  continueTask,
+  loadOlderMessages,
+}: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
   const messages = useAgentStore(selectActiveMessages);
@@ -143,6 +149,12 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
   const [continuationErrors, setContinuationErrors] = useState<
     Record<string, string>
   >({});
+  const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<
+    Record<string, boolean>
+  >({});
+  const [olderMessagesErrors, setOlderMessagesErrors] = useState<
+    Record<string, string>
+  >({});
 
   const continuationInput =
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
@@ -152,6 +164,15 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
   const isSubmitting = submittingDraftKey === currentDraftKey;
   const continuationPending =
     activeTaskId !== null && continuationPendingByTask[activeTaskId] === true;
+  const olderMessagesPending =
+    activeTaskId !== null && olderMessagesPendingByTask[activeTaskId] === true;
+  const olderMessagesError =
+    activeTaskId === null ? null : olderMessagesErrors[activeTaskId] ?? null;
+  const hasOlderMessages =
+    activeTaskId !== null &&
+    activeTask !== undefined &&
+    activeTask.olderMessagesCursor !== null &&
+    loadOlderMessages !== undefined;
   const visibleTab: TabMode =
     activeTaskId === null
       ? "setup"
@@ -261,6 +282,41 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
     }
   };
 
+  const loadEarlierMessages = async () => {
+    if (
+      !hasOlderMessages ||
+      activeTaskId === null ||
+      loadOlderMessages === undefined ||
+      olderMessagesPending
+    ) {
+      return;
+    }
+    const taskId = activeTaskId;
+    setOlderMessagesPendingByTask((current) => ({
+      ...current,
+      [taskId]: true,
+    }));
+    setOlderMessagesErrors((current) => {
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+    try {
+      await loadOlderMessages(taskId);
+    } catch (error) {
+      setOlderMessagesErrors((current) => ({
+        ...current,
+        [taskId]:
+          error instanceof Error ? error.message : "更早消息加载失败",
+      }));
+    } finally {
+      setOlderMessagesPendingByTask((current) => ({
+        ...current,
+        [taskId]: false,
+      }));
+    }
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
@@ -361,6 +417,48 @@ export function ChatPanel({ startTask, continueTask }: ChatPanelProps) {
               <MessageScroller className="min-w-0 flex-1">
                 <MessageScrollerViewport>
                   <MessageScrollerContent>
+                    {hasOlderMessages && activeTaskId !== null && (
+                      <MessageScrollerItem
+                        messageId={`older-messages:${activeTaskId}`}
+                      >
+                        <div className="flex flex-col items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void loadEarlierMessages()}
+                            disabled={olderMessagesPending}
+                            aria-label={
+                              olderMessagesPending
+                                ? "正在加载更早消息"
+                                : "加载更早消息"
+                            }
+                          >
+                            {olderMessagesPending ? (
+                              <Spinner
+                                data-icon="inline-start"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <ArrowUpIcon
+                                data-icon="inline-start"
+                                aria-hidden="true"
+                              />
+                            )}
+                            {olderMessagesPending ? "加载中" : "加载更早消息"}
+                          </Button>
+                          {olderMessagesError && (
+                            <p
+                              role="alert"
+                              className="break-words text-xs text-destructive"
+                            >
+                              {olderMessagesError}
+                            </p>
+                          )}
+                        </div>
+                      </MessageScrollerItem>
+                    )}
+
                     {messages.length === 0 && (
                       <MessageScrollerItem messageId="empty">
                         <Marker variant="separator">

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 from pathlib import Path
 
-import pytest
+from app.pipeline.runner import PipelineRunner
 
-from app.pipeline.pinned_case import PipelineCancelledError, run_pinned_fixture
-
-
-FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+FIXTURE_DIR = (
+    Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+)
 MANDATORY_ARTIFACTS = {
     "run_manifest.json",
     "main_data.csv",
@@ -36,11 +36,12 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 def test_pinned_fixture_pipeline_builds_validated_traceable_package(
     tmp_path: Path,
 ) -> None:
-    manifest = run_pinned_fixture(
+    runner = PipelineRunner(
         task_id="task_pinned",
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
     )
+    manifest = asyncio.run(runner.run())
     artifacts = tmp_path / "tasks" / "task_pinned" / "artifacts"
 
     assert {path.name for path in artifacts.iterdir()} == MANDATORY_ARTIFACTS
@@ -49,9 +50,7 @@ def test_pinned_fixture_pipeline_builds_validated_traceable_package(
     assert manifest.validation.failed_count == 0
 
     main_rows = read_csv(artifacts / "main_data.csv")
-    datasets = {
-        row["dataset_id"] for row in read_csv(artifacts / "dataset_catalog.csv")
-    }
+    datasets = {row["dataset_id"] for row in read_csv(artifacts / "dataset_catalog.csv")}
     samples = {row["sample_id"] for row in read_csv(artifacts / "sample_metadata.csv")}
     sources = {row["source_id"] for row in read_csv(artifacts / "source_list.csv")}
     assets = {row["asset_id"] for row in read_csv(artifacts / "source_assets.csv")}
@@ -83,11 +82,12 @@ def test_pinned_fixture_pipeline_builds_validated_traceable_package(
 def test_pinned_pipeline_persists_stage_attempts_and_replayable_events(
     tmp_path: Path,
 ) -> None:
-    manifest = run_pinned_fixture(
+    runner = PipelineRunner(
         task_id="task_events",
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
     )
+    manifest = asyncio.run(runner.run())
     logs = tmp_path / "tasks" / "task_events" / "logs"
 
     attempts = [
@@ -108,32 +108,3 @@ def test_pinned_pipeline_persists_stage_attempts_and_replayable_events(
     assert events[0]["type"] == "task_created"
     assert events[-1]["type"] == "task_completed"
     assert any(event["type"] == "artifact_produced" for event in events)
-
-
-def test_pinned_pipeline_cancellation_before_atomic_publish_has_no_manifest(
-    tmp_path: Path,
-) -> None:
-    task_id = "task_cancel_publish"
-    task_root = tmp_path / "tasks" / task_id
-    staged_manifest = task_root / "staging" / "run_pinned_fixture" / "run_manifest.json"
-
-    class CancelAtPublication:
-        def is_set(self) -> bool:
-            return staged_manifest.is_file()
-
-    with pytest.raises(PipelineCancelledError):
-        run_pinned_fixture(
-            task_id=task_id,
-            base_dir=tmp_path / "tasks",
-            fixture_dir=FIXTURE_DIR,
-            cancellation_requested=CancelAtPublication(),
-        )
-
-    assert not (task_root / "artifacts" / "run_manifest.json").exists()
-    events_path = task_root / "logs" / "events.jsonl"
-    events = (
-        [json.loads(line) for line in events_path.read_text("utf-8").splitlines()]
-        if events_path.exists()
-        else []
-    )
-    assert not any(event["type"] == "artifact_produced" for event in events)

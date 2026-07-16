@@ -170,7 +170,7 @@ def test_download_pdb_success() -> None:
     rc: RunContext = ctx.context
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "pdb"
+    assert rc.sources[0].database.value == "pdb"
 
 
 def test_download_pdb_unsupported_file_type() -> None:

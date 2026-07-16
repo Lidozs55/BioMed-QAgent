@@ -1,9 +1,15 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import App from "@/App";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+  Toaster: () => null,
+}));
 
 class FakeWebSocket {
   static latest: FakeWebSocket;
@@ -36,6 +42,8 @@ class FakeWebSocket {
 }
 
 describe("App startup ownership", () => {
+  let historyFailure = false;
+
   beforeAll(() => {
     window.matchMedia = () => ({
       matches: false,
@@ -50,6 +58,8 @@ describe("App startup ownership", () => {
   });
 
   beforeEach(() => {
+    historyFailure = false;
+    vi.clearAllMocks();
     useAgentStore.setState(createInitialRuntimeState());
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal(
@@ -62,6 +72,9 @@ describe("App startup ownership", () => {
           );
         }
         if (url === "/api/v1/tasks?limit=30") {
+          if (historyFailure) {
+            return Promise.reject(new Error("history unavailable"));
+          }
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -113,5 +126,18 @@ describe("App startup ownership", () => {
       "running",
     );
     expect(useAgentStore.getState().connectionStatus).toBe("disconnected");
+  });
+
+  it("shows a visible error when startup history loading fails", async () => {
+    historyFailure = true;
+    render(<App />);
+    act(() => FakeWebSocket.latest.open());
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "会话历史加载失败",
+        expect.objectContaining({ description: "history unavailable" }),
+      ),
+    );
   });
 });

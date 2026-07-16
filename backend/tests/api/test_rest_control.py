@@ -1,22 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import AsyncIterator
 
 import httpx
 import pytest
-from fastapi import FastAPI
-
 from app.config import Settings
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
-    RunCancelRequestedPayload,
     RunCancelledPayload,
+    RunCancelRequestedPayload,
     RunCompletedPayload,
     RunFinalizingPayload,
     RunQueuedPayload,
@@ -30,9 +28,9 @@ from app.domain.contracts import (
     build_event,
 )
 from app.main import create_app
+from fastapi import FastAPI
 
-
-NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 14, tzinfo=UTC)
 
 
 @asynccontextmanager
@@ -44,12 +42,11 @@ async def api_client(
     application = create_app(
         configured or Settings(output_dir=str(tmp_path / "output"))
     )
-    async with application.router.lifespan_context(application):
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application),
-            base_url="http://test",
-        ) as client:
-            yield application, client
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        yield application, client
 
 
 def snapshot(
@@ -599,8 +596,10 @@ async def test_fixture_create_returns_202_then_completes_with_durable_bridge(
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     assert events[0].type == "run_queued"
     assert events[1].type == "run_started"
-    assert events[-2].type == "run_finalizing"
-    assert events[-1].type == "run_completed"
+    lifecycle_types = [
+        event.type.value for event in events if event.type.value.startswith("run_")
+    ]
+    assert lifecycle_types[-2:] == ["run_finalizing", "run_completed"]
     legacy_events = [
         EventEnvelope.model_validate_json(line)
         for line in (repository.tasks_dir / accepted.task_id / "logs" / "events.jsonl")
@@ -608,7 +607,7 @@ async def test_fixture_create_returns_202_then_completes_with_durable_bridge(
         .splitlines()
         if line.strip()
     ]
-    bridged = events[2:-2]
+    bridged = [event for event in events if not event.type.value.startswith("run_")]
     assert len(bridged) == len(legacy_events)
     assert [
         (
@@ -694,6 +693,39 @@ async def test_agent_continuation_is_202_idempotent_and_rejects_new_active_reque
         finally:
             executor.release_continuation.set()
             await manager.wait_until_idle()
+
+
+@pytest.mark.asyncio
+async def test_continuation_rejects_request_id_owned_by_another_task(
+    tmp_path: Path,
+) -> None:
+    async def complete(_execution: object) -> None:
+        return None
+
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        manager.run_executor = complete
+        owner_response = await client.post(
+            "/api/v1/tasks",
+            json={"request_id": "req_cross_task", "input": "owner"},
+        )
+        target_response = await client.post(
+            "/api/v1/tasks",
+            json={"request_id": "req_target_task", "input": "target"},
+        )
+        owner = TaskRunAccepted.model_validate(owner_response.json())
+        target = TaskRunAccepted.model_validate(target_response.json())
+        await manager.wait_until_idle()
+
+        response = await client.post(
+            f"/api/v1/tasks/{target.task_id}/runs",
+            json={"request_id": owner.request_id, "input": "wrong owner"},
+        )
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "detail": "Request ID belongs to another task",
+        }
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,16 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import type { RunStatus, TaskSummary } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn() },
+}));
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
@@ -65,6 +70,7 @@ describe("SessionSidebar", () => {
   });
 
   beforeEach(() => {
+    vi.clearAllMocks();
     useAgentStore.setState(createInitialRuntimeState());
   });
 
@@ -141,6 +147,83 @@ describe("SessionSidebar", () => {
     await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
     expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
+  });
+
+  it("shows a visible error when loading another history page fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: "page_2",
+      },
+      false,
+    );
+    const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
+    renderSidebar({ onLoadMore });
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "历史任务加载失败",
+        expect.objectContaining({ description: "history unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when selecting a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [summary("history_a", "completed", "History A")], next_cursor: null },
+      false,
+    );
+    const onSelectTask = vi.fn().mockRejectedValue(new Error("task unavailable"));
+    renderSidebar({ onSelectTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "History A 已完成" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "打开任务失败",
+        expect.objectContaining({ description: "task unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when cancelling a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [summary("running", "running", "Running")], items: [], next_cursor: null },
+      false,
+    );
+    const onCancelRun = vi.fn().mockRejectedValue(new Error("cancel unavailable"));
+    renderSidebar({ onCancelRun });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消 Running" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "取消任务失败",
+        expect.objectContaining({ description: "cancel unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when deleting a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [summary("finished", "completed", "Finished")], next_cursor: null },
+      false,
+    );
+    const onDeleteTask = vi.fn().mockRejectedValue(new Error("delete unavailable"));
+    renderSidebar({ onDeleteTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 Finished" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "删除任务失败",
+        expect.objectContaining({ description: "delete unavailable" }),
+      ),
+    );
   });
 
   it("keeps navigation and new research available while other tasks run", () => {

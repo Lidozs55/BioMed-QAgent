@@ -26,6 +26,8 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
+_STORAGE_WORKER_THREADS = 2
+
 
 async def health() -> dict[str, str]:
     return {"status": "ok", "version": "1.0.0", "arch": "agent_loop"}
@@ -42,6 +44,10 @@ def create_app(configured: Settings = settings) -> FastAPI:
             thread_name_prefix="task-sync",
         )
         loop.set_default_executor(sync_executor)
+        storage_executor = ThreadPoolExecutor(
+            max_workers=_STORAGE_WORKER_THREADS,
+            thread_name_prefix="task-storage",
+        )
         index_executor = SingleThreadExecutor()
         index = TaskIndex(
             Path(configured.output_dir) / "tasks",
@@ -52,6 +58,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             configured.output_dir,
             index=index,
             settings=configured,
+            storage_executor=storage_executor,
         )
         event_hub = EventHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
@@ -64,6 +71,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             event_hub=event_hub,
         )
         application.state.sync_executor = sync_executor
+        application.state.storage_executor = storage_executor
         application.state.index_executor = index_executor
         application.state.task_repository = repository
         application.state.event_hub = event_hub
@@ -81,7 +89,10 @@ def create_app(configured: Settings = settings) -> FastAPI:
                     try:
                         await index_executor.close()
                     finally:
-                        sync_executor.shutdown(wait=True)
+                        try:
+                            storage_executor.shutdown(wait=True)
+                        finally:
+                            sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",

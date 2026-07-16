@@ -4,37 +4,38 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
-from collections.abc import Awaitable, Callable, Mapping
-from typing import TypeVar
 
 from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import build_agent
 from app.domain.contracts import (
-    AssistantDeltaPayload,
     ArtifactManifestEntry,
     ArtifactProducedPayload,
+    AssistantDeltaPayload,
     EventEnvelope,
     RunManifest,
+    TaskCompletedPayload,
     TaskMode,
+    TaskState,
     ToolCompletedPayload,
     ToolStartedPayload,
+    build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
-from app.pipeline.pinned_case import PipelineCancelledError, run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
+from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
+from app.runtime.repository import atomic_write_json
 
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
     Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
 )
-_FixtureSyncResult = TypeVar("_FixtureSyncResult")
-
-
 class _AssistantTextBuffer:
     def __init__(
         self,
@@ -132,6 +133,28 @@ def _load_artifact_payloads(
     ]
 
 
+def _write_artifact_publication_marker(
+    output_dir: Path,
+    task_id: str,
+    run_id: str,
+    expected_manifest_sha256: str,
+) -> None:
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
+    manifest_path = artifacts_dir / "run_manifest.json"
+    actual_manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    if actual_manifest_sha256 != expected_manifest_sha256:
+        raise RuntimeError("artifact manifest changed before formal publication")
+    atomic_write_json(
+        artifacts_dir / ".runtime-publication.json",
+        {
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "manifest_sha256": actual_manifest_sha256,
+        },
+    )
+
+
 class AgentRunExecutor:
     """Execute one manager-owned Run against its durable SDK session."""
 
@@ -207,7 +230,10 @@ class AgentRunExecutor:
                 await asyncio.gather(pending_event, return_exceptions=True)
 
     async def __call__(self, execution) -> None:
-        task_session = self._repository.task_session(execution.task_id)
+        task_session = self._repository.task_session(
+            execution.task_id,
+            run_id=execution.run_id,
+        )
         build = build_agent(execution.databases)
         text_buffer = _AssistantTextBuffer(execution.emit)
         output_dir_value = getattr(self._repository, "output_dir", None)
@@ -255,10 +281,28 @@ class AgentRunExecutor:
                     execution.task_id,
                     previous_fingerprint=previous_manifest_fingerprint,
                 )
-                for payload in payloads:
-                    if execution.context.cancellation_requested.is_set():
-                        break
-                    await execution.emit(payload)
+                if payloads:
+                    manifest_sha256 = payloads[0].artifact.sha256
+
+                    async def commit_agent_artifacts() -> list[EventEnvelope]:
+                        await asyncio.to_thread(
+                            _write_artifact_publication_marker,
+                            output_dir,
+                            execution.task_id,
+                            execution.run_id,
+                            manifest_sha256,
+                        )
+                        return [
+                            build_event(
+                                task_id=execution.task_id,
+                                run_id=execution.run_id,
+                                sequence=index,
+                                payload=payload,
+                            )
+                            for index, payload in enumerate(payloads, start=1)
+                        ]
+
+                    execution.set_completion_committer(commit_agent_artifacts)
         finally:
             await build.model.close()
 
@@ -271,11 +315,31 @@ def _load_fixture_events(path: Path) -> list[EventEnvelope]:
     ]
 
 
-async def _run_fixture_sync(
+async def _run_fixture_sync[FixtureSyncResult](
     execution,
-    operation: Callable[[], _FixtureSyncResult],
-) -> _FixtureSyncResult:
+    operation: Callable[[], FixtureSyncResult],
+) -> FixtureSyncResult:
     worker_task = asyncio.create_task(asyncio.to_thread(operation))
+    try:
+        return await asyncio.shield(worker_task)
+    except asyncio.CancelledError:
+        execution.context.cancellation_requested.set()
+        while not worker_task.done():
+            try:
+                await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if not worker_task.cancelled():
+            worker_task.exception()
+        raise
+
+
+async def _run_pipeline_with_cancellation(execution, runner):
+    """Await an async PipelineRunner while draining it after cancellation."""
+
+    worker_task = asyncio.create_task(runner.run())
     try:
         return await asyncio.shield(worker_task)
     except asyncio.CancelledError:
@@ -298,11 +362,18 @@ def _check_fixture_bridge_cancellation(execution) -> None:
 
 
 class FixtureRunExecutor:
-    """Run the official pinned fixture and bridge its v1 audit events."""
+    """Run the deterministic PipelineRunner and bridge its v1 audit events."""
 
-    def __init__(self, repository, *, fixture_dir: Path = OFFICIAL_FIXTURE_DIR) -> None:
+    def __init__(
+        self,
+        repository,
+        *,
+        fixture_dir: Path = OFFICIAL_FIXTURE_DIR,
+        pipeline_runner_factory=PipelineRunner,
+    ) -> None:
         self._repository = repository
         self._fixture_dir = fixture_dir
+        self._pipeline_runner_factory = pipeline_runner_factory
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
@@ -310,35 +381,63 @@ class FixtureRunExecutor:
             execution.run_id,
             execution.input,
         )
-        await _run_fixture_sync(
-            execution,
-            partial(
-                run_pinned_fixture,
-                task_id=execution.task_id,
-                base_dir=self._repository.tasks_dir,
-                fixture_dir=self._fixture_dir,
-                topic=execution.input,
-                cancellation_requested=execution.context.cancellation_requested,
-            ),
+        runner = self._pipeline_runner_factory(
+            task_id=execution.task_id,
+            base_dir=self._repository.tasks_dir,
+            fixture_dir=self._fixture_dir,
+            topic=execution.input,
+            cancellation_requested=execution.context.cancellation_requested,
+            defer_publication=True,
         )
+        manifest = await _run_pipeline_with_cancellation(execution, runner)
         _check_fixture_bridge_cancellation(execution)
-        legacy_events = await _run_fixture_sync(
-            execution,
-            partial(
-                _load_fixture_events,
-                self._repository.tasks_dir
-                / execution.task_id
-                / "logs"
-                / "events.jsonl",
-            ),
+        current_events = getattr(runner, "events", None)
+        legacy_events = (
+            list(current_events)
+            if current_events is not None
+            else await _run_fixture_sync(
+                execution,
+                partial(
+                    _load_fixture_events,
+                    self._repository.tasks_dir
+                    / execution.task_id
+                    / "logs"
+                    / "events.jsonl",
+                ),
+            )
         )
+        completion_events: list[EventEnvelope] = []
         for event in legacy_events:
             _check_fixture_bridge_cancellation(execution)
+            if isinstance(
+                event.payload,
+                (ArtifactProducedPayload, TaskCompletedPayload),
+            ):
+                completion_events.append(event)
+                continue
             await execution.emit(
                 event.payload,
                 stage_attempt_id=event.stage_attempt_id,
                 timestamp=event.timestamp,
             )
+        if manifest.task_state is TaskState.CANCELLED:
+            raise PipelineCancelledError("fixture pipeline was cancelled")
+        if manifest.task_state is TaskState.FAILED:
+            raise RuntimeError("fixture pipeline failed validation or execution")
+        _check_fixture_bridge_cancellation(execution)
+
+        publish = getattr(runner, "publish", None)
+        if callable(publish) or completion_events:
+
+            async def commit_fixture_completion() -> list[EventEnvelope]:
+                if callable(publish):
+                    await _run_fixture_sync(
+                        execution,
+                        partial(publish, execution.run_id),
+                    )
+                return completion_events
+
+            execution.set_completion_committer(commit_fixture_completion)
 
 
 class ModeDispatchRunExecutor:

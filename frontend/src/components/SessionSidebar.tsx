@@ -8,6 +8,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
@@ -80,6 +81,10 @@ const CONNECTION_META: Record<
   reconnecting: { label: "重新连接中", pending: true },
   disconnected: { label: "已断开", pending: false },
 };
+
+function errorDescription(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
+}
 
 function TaskRow({
   task,
@@ -183,9 +188,13 @@ export function SessionSidebar({
     if (isMobile) setOpenMobile(false);
   };
 
-  const selectTask = (taskId: string) => {
-    void onSelectTask(taskId);
+  const selectTask = async (taskId: string) => {
     closeMobile();
+    try {
+      await onSelectTask(taskId);
+    } catch (error) {
+      toast.error("打开任务失败", { description: errorDescription(error) });
+    }
   };
 
   const showNewDraft = () => {
@@ -198,6 +207,10 @@ export function SessionSidebar({
     setLoadingMore(true);
     try {
       await onLoadMore();
+    } catch (error) {
+      toast.error("历史任务加载失败", {
+        description: errorDescription(error),
+      });
     } finally {
       setLoadingMore(false);
     }
@@ -209,6 +222,8 @@ export function SessionSidebar({
     setPendingCancels((current) => new Set(current).add(task.summary.task_id));
     try {
       await onCancelRun(task.summary.task_id, runId);
+    } catch (error) {
+      toast.error("取消任务失败", { description: errorDescription(error) });
     } finally {
       setPendingCancels((current) => {
         const next = new Set(current);
@@ -224,6 +239,8 @@ export function SessionSidebar({
     try {
       await onDeleteTask(deleteTargetId);
       setDeleteTargetId(null);
+    } catch (error) {
+      toast.error("删除任务失败", { description: errorDescription(error) });
     } finally {
       setDeleting(false);
     }
@@ -237,7 +254,7 @@ export function SessionSidebar({
           task={task}
           selected={task.summary.task_id === activeTaskId}
           pendingCancel={pendingCancels.has(task.summary.task_id)}
-          onSelect={() => selectTask(task.summary.task_id)}
+          onSelect={() => void selectTask(task.summary.task_id)}
           onCancel={() => void cancelTask(task)}
           onDelete={() => setDeleteTargetId(task.summary.task_id)}
         />

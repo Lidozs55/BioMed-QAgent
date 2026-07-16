@@ -6,19 +6,20 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
+from app.agent_loop.context import RunContext
+from app.config import Settings
 from app.domain.contracts import (
-    AssistantDeltaPayload,
     ArtifactManifestEntry,
     ArtifactProducedPayload,
+    AssistantDeltaPayload,
     ConversationCompactedPayload,
-    RunCancelRequestedPayload,
     RunCancelledPayload,
+    RunCancelRequestedPayload,
     RunCompletedPayload,
     RunFinalizingPayload,
     RunInterruptedPayload,
@@ -35,15 +36,12 @@ from app.domain.contracts import (
     WarningPayload,
     build_event,
 )
-from app.config import Settings
-from app.agent_loop.context import RunContext
-from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
-from app.runtime.repository import TaskRepository
-from app.runtime.hub import EventHub
 from app.runtime import repository as repository_module
+from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
+from app.runtime.hub import EventHub
+from app.runtime.repository import TaskRepository
 
-
-NOW = datetime(2026, 7, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
 
 def empty_snapshot(
@@ -2438,6 +2436,88 @@ async def test_duplicate_request_returns_authoritative_active_run(tmp_path) -> N
         assert [run.run_id for run in snapshot.runs] == [first.run_id]
     finally:
         release.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_request_id_cannot_be_reused_for_a_different_task(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    request = StartRunRequest(request_id="req_cross_task", input="question")
+    try:
+        await repository.save_snapshot(empty_snapshot("task_request_owner"))
+        await repository.save_snapshot(empty_snapshot("task_request_target"))
+        accepted = await manager.submit_run("task_request_owner", request)
+        await manager.wait_until_idle()
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                "request_id req_cross_task belongs to task task_request_owner, "
+                "not task_request_target"
+            ),
+        ) as caught:
+            await manager.submit_run("task_request_target", request)
+
+        assert isinstance(caught.value, manager_module.RequestIdConflictError)
+        target = await repository.get_snapshot("task_request_target")
+        assert target is not None
+        assert target.runs == []
+        assert accepted.task_id == "task_request_owner"
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_late_cancellation_signal_does_not_retain_completed_execution(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    completion_persisted = asyncio.Event()
+    release_completion = asyncio.Event()
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    real_append_status = manager._append_status
+
+    async def pause_after_completed_persist(accepted, payload, **kwargs):
+        updated = await real_append_status(accepted, payload, **kwargs)
+        if isinstance(payload, RunCompletedPayload):
+            completion_persisted.set()
+            await release_completion.wait()
+        return updated
+
+    monkeypatch.setattr(manager, "_append_status", pause_after_completed_persist)
+    try:
+        await repository.save_snapshot(empty_snapshot("task_late_cancel_signal"))
+        accepted = await manager.submit_run(
+            "task_late_cancel_signal",
+            StartRunRequest(request_id="req_late_cancel_signal", input="finish"),
+        )
+        await asyncio.wait_for(completion_persisted.wait(), timeout=1)
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+
+        execution.context.cancellation_requested.set()
+        release_completion.set()
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert (accepted.task_id, accepted.run_id) not in manager._running
+    finally:
+        release_completion.set()
         await manager.close()
 
 

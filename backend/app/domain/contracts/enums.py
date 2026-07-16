@@ -13,6 +13,7 @@ class Database(StrEnum):
     PDB = "pdb"
     REACTOME = "reactome"
     PUBCHEM = "pubchem"
+    BROWSER = "browser"
 
 
 class DataLevel(StrEnum):

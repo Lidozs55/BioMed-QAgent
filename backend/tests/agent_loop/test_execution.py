@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import app.agent_loop.runner as runner_module
 import pytest
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
-
-import app.agent_loop.runner as runner_module
 from app.domain.contracts import (
-    AssistantDeltaPayload,
     ArtifactProducedPayload,
+    AssistantDeltaPayload,
     RunCompletedPayload,
     RunFinalizingPayload,
     StartTaskRequest,
@@ -45,6 +47,15 @@ def make_executor(repository):
     )
 
 
+def run_scoped_session(session: object) -> Callable[..., object]:
+    def task_session(task_id: str, *, run_id: str) -> object:
+        assert task_id.startswith("task_")
+        assert run_id.startswith("run_")
+        return session
+
+    return task_session
+
+
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 
@@ -53,7 +64,13 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = object()
-    repository = SimpleNamespace(task_session=lambda task_id: session)
+    session_requests: list[tuple[str, str]] = []
+
+    def task_session(task_id: str, *, run_id: str) -> object:
+        session_requests.append((task_id, run_id))
+        return session
+
+    repository = SimpleNamespace(task_session=task_session)
     agent = object()
     build = SimpleNamespace(
         agent=agent,
@@ -97,6 +114,7 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
         "args": (agent, "continue the analysis"),
         "kwargs": {"context": context, "session": session},
     }
+    assert session_requests == [(execution.task_id, execution.run_id)]
     assert await execution.wait_for_streaming_result() is result
 
 
@@ -131,7 +149,9 @@ async def test_executor_closes_model_on_every_terminal_path(
         "run_streamed",
         lambda *args, **kwargs: FakeResult(),
     )
-    executor = make_executor(SimpleNamespace(task_session=lambda task_id: object()))
+    executor = make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )
 
     if outcome == "error":
         with pytest.raises(RuntimeError, match="stream failed"):
@@ -186,9 +206,9 @@ async def test_executor_coalesces_text_at_utf8_kib_boundary(
         lambda *args, **kwargs: FakeResult(),
     )
 
-    await make_executor(SimpleNamespace(task_session=lambda task_id: object()))(
-        execution
-    )
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
 
     deltas = [
         payload.delta
@@ -248,9 +268,9 @@ async def test_executor_flushes_text_after_100ms_while_stream_is_idle(
         lambda *args, **kwargs: FakeResult(),
     )
 
-    await make_executor(SimpleNamespace(task_session=lambda task_id: object()))(
-        execution
-    )
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
 
     assert runner_module.ASSISTANT_FLUSH_INTERVAL_SECONDS == 0.1
     assert flushed_before_second is True
@@ -303,7 +323,9 @@ async def test_executor_flushes_buffered_text_before_abnormal_exit(
         "run_streamed",
         lambda *args, **kwargs: FakeResult(),
     )
-    executor = make_executor(SimpleNamespace(task_session=lambda task_id: object()))
+    executor = make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )
 
     if outcome == "error":
         with pytest.raises(RuntimeError, match="stream failed"):
@@ -375,9 +397,9 @@ async def test_executor_emits_ordered_tool_activity(
         lambda *args, **kwargs: FakeResult(),
     )
 
-    await make_executor(SimpleNamespace(task_session=lambda task_id: object()))(
-        execution
-    )
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
 
     assert [type(payload) for payload in emitted] == [
         AssistantDeltaPayload,
@@ -397,7 +419,9 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
 ) -> None:
     original_session = object()
     effective_session = object()
-    repository = SimpleNamespace(task_session=lambda task_id: original_session)
+    repository = SimpleNamespace(
+        task_session=run_scoped_session(original_session)
+    )
     model = SimpleNamespace(close=AsyncMock())
     build = SimpleNamespace(agent=object(), skill_names=(), model=model)
     execution = RunExecution(
@@ -481,7 +505,7 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
 
     with pytest.raises(CompactionCancelledError):
         await runner_module.AgentRunExecutor(
-            SimpleNamespace(task_session=lambda task_id: object()),
+            SimpleNamespace(task_session=run_scoped_session(object())),
             compactor=Compactor(),
         )(execution)
 
@@ -533,13 +557,20 @@ async def test_executor_emits_manifest_artifact_ids_after_success(
     )
     repository = SimpleNamespace(
         output_dir=output_dir,
-        task_session=lambda task_id: object(),
+        task_session=run_scoped_session(object()),
     )
 
     await make_executor(repository)(execution)
 
+    assert not any(
+        isinstance(payload, ArtifactProducedPayload) for payload in emitted
+    )
+    execution.seal_completion()
+    completion_events = await execution.commit_completion()
     artifact_payloads = [
-        payload for payload in emitted if isinstance(payload, ArtifactProducedPayload)
+        event.payload
+        for event in completion_events
+        if isinstance(event.payload, ArtifactProducedPayload)
     ]
     assert manifest is not None
     assert artifact_payloads[0].artifact.artifact_id == "run_manifest"
@@ -606,9 +637,26 @@ async def test_manager_persists_all_executor_artifacts_before_terminal_events(
             for index, event in enumerate(events)
             if isinstance(event.payload, RunCompletedPayload)
         )
+        marker_path = (
+            repository.tasks_dir
+            / accepted.task_id
+            / "artifacts"
+            / ".runtime-publication.json"
+        )
+        marker = json.loads(marker_path.read_text("utf-8"))
+        manifest_path = marker_path.with_name("run_manifest.json")
 
         assert len(artifact_indices) > 1
-        assert max(artifact_indices) < finalizing_index < completed_index
+        assert finalizing_index < min(artifact_indices) < completed_index
+        assert max(artifact_indices) < completed_index
+        assert marker == {
+            "schema_version": 1,
+            "task_id": accepted.task_id,
+            "run_id": accepted.run_id,
+            "manifest_sha256": hashlib.sha256(
+                manifest_path.read_bytes()
+            ).hexdigest(),
+        }
     finally:
         await manager.close()
 
@@ -656,7 +704,7 @@ async def test_executor_does_not_reemit_unchanged_manifest_artifacts(
     )
     repository = SimpleNamespace(
         output_dir=output_dir,
-        task_session=lambda task_id: object(),
+        task_session=run_scoped_session(object()),
     )
 
     await make_executor(repository)(execution)
@@ -726,14 +774,19 @@ async def test_executor_changed_manifest_keeps_stable_artifact_ids(
     )
     repository = SimpleNamespace(
         output_dir=output_dir,
-        task_session=lambda task_id: object(),
+        task_session=run_scoped_session(object()),
     )
 
     await make_executor(repository)(execution)
 
+    assert not any(
+        isinstance(payload, ArtifactProducedPayload) for payload in emitted
+    )
+    execution.seal_completion()
+    completion_events = await execution.commit_completion()
     artifact_ids = {
-        payload.artifact.artifact_id
-        for payload in emitted
-        if isinstance(payload, ArtifactProducedPayload)
+        event.payload.artifact.artifact_id
+        for event in completion_events
+        if isinstance(event.payload, ArtifactProducedPayload)
     }
     assert artifact_ids == expected_ids

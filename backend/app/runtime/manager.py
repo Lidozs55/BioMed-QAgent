@@ -7,7 +7,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
@@ -16,15 +16,15 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     ConversationCompactedPayload,
     EventEnvelope,
-    RunCancelRequestedPayload,
     RunCancelledPayload,
+    RunCancelRequestedPayload,
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
     RunInterruptedPayload,
     RunQueuedPayload,
-    RunStatus,
     RunStartedPayload,
+    RunStatus,
     StartRunRequest,
     StartTaskRequest,
     TaskMode,
@@ -39,7 +39,6 @@ from app.domain.contracts import (
 from app.domain.contracts.runtime import validate_task_databases
 from app.runtime.hub import EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
-
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +75,7 @@ RunCompactionCommit = Callable[
     [Mapping[str, object], ConversationCompactedPayload],
     Awaitable[bool],
 ]
+RunCompletionCommit = Callable[[], Awaitable[list[EventEnvelope]]]
 
 
 @dataclass(slots=True)
@@ -91,6 +91,10 @@ class RunExecution:
     databases: list[str] = field(default_factory=list)
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
     _compaction_committer: RunCompactionCommit | None = field(
+        default=None,
+        repr=False,
+    )
+    _completion_committer: RunCompletionCommit | None = field(
         default=None,
         repr=False,
     )
@@ -115,6 +119,7 @@ class RunExecution:
         repr=False,
     )
     _cancel_sent: bool = field(default=False, init=False, repr=False)
+    _completion_sealed: bool = field(default=False, init=False, repr=False)
 
     def set_streaming_result(self, result: StreamingRunResult) -> None:
         if self._streaming_result is not None and self._streaming_result is not result:
@@ -151,6 +156,37 @@ class RunExecution:
         if self._compaction_committer is None:
             raise RuntimeError("run execution has no compaction committer")
         return await self._compaction_committer(record, payload)
+
+    def set_completion_committer(self, committer: RunCompletionCommit) -> None:
+        """Attach the executor's one-shot formal publication operation."""
+
+        if self._completion_committer is not None:
+            raise RuntimeError("completion committer is already attached")
+        if self._completion_sealed:
+            raise RuntimeError("run completion is already sealed")
+        self._completion_committer = committer
+
+    async def commit_completion(self) -> list[EventEnvelope]:
+        if not self._completion_sealed:
+            raise RuntimeError("run completion must be sealed before commit")
+        if self._completion_committer is None:
+            return []
+        return await self._completion_committer()
+
+    def request_cancellation(self) -> bool:
+        """Set the cooperative token unless formal completion already won."""
+
+        if self._completion_sealed:
+            return False
+        self.context.cancellation_requested.set()
+        return True
+
+    def seal_completion(self) -> None:
+        """Choose completion as the winner over all later cancel requests."""
+
+        if self.context.cancellation_requested.is_set():
+            raise RuntimeError("cannot seal completion after cancellation")
+        self._completion_sealed = True
 
     async def wait_for_streaming_result(self) -> StreamingRunResult | None:
         if self._streaming_result is not None or self._drained.is_set():
@@ -195,6 +231,24 @@ class TaskRunConflictError(RuntimeError):
         self.task_id = task_id
         self.active_run_id = active_run_id
         super().__init__(f"task {task_id} already has active run {active_run_id}")
+
+
+class RequestIdConflictError(RuntimeError):
+    """Raised when a request id already belongs to a different Task."""
+
+    def __init__(
+        self,
+        request_id: str,
+        existing_task_id: str,
+        requested_task_id: str,
+    ) -> None:
+        self.request_id = request_id
+        self.existing_task_id = existing_task_id
+        self.requested_task_id = requested_task_id
+        super().__init__(
+            f"request_id {request_id} belongs to task {existing_task_id}, "
+            f"not {requested_task_id}"
+        )
 
 
 class RunQueueFullError(RuntimeError):
@@ -399,6 +453,12 @@ class TaskManager:
                 raise FixtureTaskContinuationError(task_id)
             existing = await self.repository.find_request(request.request_id)
             if existing is not None:
+                if existing.task_id != task_id:
+                    raise RequestIdConflictError(
+                        request.request_id,
+                        existing.task_id,
+                        task_id,
+                    )
                 return existing
             lock = self._task_locks.setdefault(task_id, asyncio.Lock())
             async with lock:
@@ -445,7 +505,7 @@ class TaskManager:
                 task_id=generate_task_id(),
                 run_id=generate_run_id(),
             )
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
             snapshot = TaskSnapshot(
                 task=TaskSummary(
                     task_id=accepted.task_id,
@@ -569,7 +629,7 @@ class TaskManager:
                 raise RuntimeError("task manager is not running")
             live_execution = self._running.get((task_id, run_id))
             if live_execution is not None:
-                live_execution.context.cancellation_requested.set()
+                live_execution.request_cancellation()
             self._active_cancellations.add(caller)
             self._cancellations_drained.clear()
         try:
@@ -590,7 +650,7 @@ class TaskManager:
     ) -> TaskSnapshot:
         live_execution = self._running.get((task_id, run_id))
         if live_execution is not None:
-            live_execution.context.cancellation_requested.set()
+            live_execution.request_cancellation()
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)
@@ -631,7 +691,7 @@ class TaskManager:
                 execution = self._running.get((task_id, run_id))
                 if execution is None:
                     raise RuntimeError(f"run {run_id} has no live execution")
-                execution.context.cancellation_requested.set()
+                execution.request_cancellation()
                 accepted = TaskRunAccepted(
                     request_id=run.request_id,
                     task_id=task_id,
@@ -882,11 +942,21 @@ class TaskManager:
                     )
                     return
                 await self._append_status(accepted, RunFinalizingPayload())
+                if execution.context.cancellation_requested.is_set():
+                    retain_cancellation = True
+                    return
+                execution.seal_completion()
+                completion_events = await execution.commit_completion()
+                for completion_event in completion_events:
+                    await self._append_status(
+                        accepted,
+                        completion_event.payload,
+                        stage_attempt_id=completion_event.stage_attempt_id,
+                        timestamp=completion_event.timestamp,
+                    )
                 await self._append_status(accepted, RunCompletedPayload())
         finally:
-            if not (
-                retain_cancellation or execution.context.cancellation_requested.is_set()
-            ):
+            if not retain_cancellation:
                 self._running.pop((accepted.task_id, accepted.run_id), None)
 
     async def _emit_activity(
@@ -1056,9 +1126,11 @@ class TaskManager:
 
 __all__ = [
     "FixtureTaskContinuationError",
+    "RequestIdConflictError",
     "RunExecution",
     "RunEventEmitter",
     "RunCompactionCommit",
+    "RunCompletionCommit",
     "RunExecutor",
     "StreamingRunResult",
     "RunQueueFullError",

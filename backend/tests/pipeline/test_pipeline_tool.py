@@ -105,16 +105,19 @@ async def test_pipeline_function_tool_forwards_run_cancellation_token(
     )
     captured: dict[str, object] = {}
 
-    def fake_fixture(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            task_id=context.task_id,
-            task_state=SimpleNamespace(value="completed"),
-            validation=SimpleNamespace(status="valid"),
-            artifacts=[],
-        )
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
 
-    monkeypatch.setattr(pipeline_tool_module, "run_pinned_fixture", fake_fixture)
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
 
     await run_research_pipeline.on_invoke_tool(
         tool_context,

@@ -1,5 +1,6 @@
 import type {
   EventEnvelope,
+  MessagePage,
   MessageRecord,
   RunRecord,
   RunStatus,
@@ -169,24 +170,117 @@ function messageSlot(message: ProjectedMessage): string | null {
   return `${message.runId}:${message.role}`;
 }
 
+function sortProjectedMessages(
+  messages: ProjectedMessage[],
+): ProjectedMessage[] {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const leftOrdinal = left.message.ordinal;
+      const rightOrdinal = right.message.ordinal;
+      if (leftOrdinal !== null && rightOrdinal !== null) {
+        return leftOrdinal - rightOrdinal || left.index - right.index;
+      }
+      if (leftOrdinal !== null) return -1;
+      if (rightOrdinal !== null) return 1;
+      return left.index - right.index;
+    })
+    .map(({ message }) => message);
+}
+
+function mergeProjectedMessages(
+  existing: ProjectedMessage[],
+  incoming: ProjectedMessage[],
+): ProjectedMessage[] {
+  const incomingById = new Map(
+    incoming.map((message) => [message.messageId, message]),
+  );
+  const durableIncomingSlots = new Set(
+    [...incomingById.values()]
+      .filter((message) => message.ordinal !== null)
+      .map(messageSlot)
+      .filter((slot): slot is string => slot !== null),
+  );
+  const seenExistingIds = new Set<string>();
+  const retainedExisting = existing.filter((message) => {
+    if (
+      incomingById.has(message.messageId) ||
+      seenExistingIds.has(message.messageId)
+    ) {
+      return false;
+    }
+    seenExistingIds.add(message.messageId);
+    const slot = messageSlot(message);
+    return !(
+      message.ordinal === null &&
+      slot !== null &&
+      durableIncomingSlots.has(slot)
+    );
+  });
+  return sortProjectedMessages([
+    ...retainedExisting,
+    ...incomingById.values(),
+  ]);
+}
+
+function snapshotConnectsToExistingHistory(
+  base: TaskProjection,
+  snapshotMessages: ProjectedMessage[],
+): boolean {
+  const existingOrdinals = base.messages
+    .map((message) => message.ordinal)
+    .filter((ordinal): ordinal is number => ordinal !== null);
+  const snapshotOrdinals = snapshotMessages
+    .map((message) => message.ordinal)
+    .filter((ordinal): ordinal is number => ordinal !== null);
+  if (existingOrdinals.length === 0 || snapshotOrdinals.length === 0) {
+    return false;
+  }
+  let existingMaximum = existingOrdinals[0];
+  for (const ordinal of existingOrdinals.slice(1)) {
+    existingMaximum = Math.max(existingMaximum, ordinal);
+  }
+  let snapshotMinimum = snapshotOrdinals[0];
+  for (const ordinal of snapshotOrdinals.slice(1)) {
+    snapshotMinimum = Math.min(snapshotMinimum, ordinal);
+  }
+  return snapshotMinimum <= existingMaximum + 1;
+}
+
 function mergeSnapshotMessages(
   base: TaskProjection,
   snapshotMessages: ProjectedMessage[],
 ): ProjectedMessage[] {
-  const snapshotIds = new Set(
-    snapshotMessages.map((message) => message.messageId),
-  );
-  const snapshotSlots = new Set(
-    snapshotMessages
-      .map(messageSlot)
-      .filter((slot): slot is string => slot !== null),
-  );
-  const replayOnly = base.messages.filter((message) => {
-    if (snapshotIds.has(message.messageId)) return false;
-    const slot = messageSlot(message);
-    return slot === null || !snapshotSlots.has(slot);
-  });
-  return [...snapshotMessages, ...replayOnly];
+  return mergeProjectedMessages(base.messages, snapshotMessages);
+}
+
+export function mergeOlderMessagePage(
+  state: AgentRuntimeData,
+  taskId: string,
+  requestedCursor: string,
+  page: MessagePage,
+): AgentRuntimeData {
+  const task = state.tasksById[taskId];
+  if (
+    task === undefined ||
+    task.olderMessagesCursor !== requestedCursor
+  ) {
+    return state;
+  }
+  const incoming = page.messages
+    .filter((message) => message.task_id === taskId)
+    .map(projectMessage);
+  return {
+    ...state,
+    tasksById: {
+      ...state.tasksById,
+      [taskId]: {
+        ...task,
+        messages: mergeProjectedMessages(task.messages, incoming),
+        olderMessagesCursor: page.next_cursor,
+      },
+    },
+  };
 }
 
 export function hydrateTaskSnapshot(
@@ -218,7 +312,11 @@ export function hydrateTaskSnapshot(
     runsById,
     runOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
-    olderMessagesCursor: snapshot.older_messages_cursor,
+    olderMessagesCursor:
+      existing?.hydration === "snapshot" &&
+      snapshotConnectsToExistingHistory(base, snapshotMessages)
+        ? base.olderMessagesCursor
+        : snapshot.older_messages_cursor,
     lastSequence: snapshot.task.latest_sequence,
     hydration: "snapshot",
   };
@@ -669,24 +767,28 @@ export function reduceRuntimeEvent(
     case "task_completed":
     case "task_failed": {
       if (task.summary.mode !== "fixture") break;
-      const status: RunStatus =
-        payload.type === "task_cancel_requested"
-          ? "cancel_requested"
-          : payload.type === "task_cancelled"
-            ? "cancelled"
-            : payload.type === "task_completed"
-              ? "completed"
-              : "failed";
-      task = {
-        ...task,
-        summary: {
-          ...task.summary,
-          status,
-          active_run_id: isActiveStatus(status)
-            ? task.summary.active_run_id
-            : null,
-        },
-      };
+      const output =
+        payload.type === "task_completed"
+          ? payload.validation.status
+          : payload.type === "task_failed"
+            ? payload.error.message
+            : payload.reason;
+      task = upsertActivity(task, {
+        activityId: `event:${envelope.sequence}`,
+        taskId: envelope.task_id,
+        runId,
+        sequence: envelope.sequence,
+        timestamp: envelope.timestamp,
+        kind: "fixture_event",
+        status:
+          payload.type === "task_cancel_requested" ? "started" : "completed",
+        name: payload.type,
+        input: null,
+        output,
+        isError: payload.type === "task_failed",
+        code: payload.type === "task_failed" ? payload.error.code : null,
+        message: payload.type === "task_failed" ? payload.error.message : null,
+      });
       break;
     }
     default:

@@ -3,11 +3,16 @@ import { describe, expect, it } from "vitest";
 import type {
   EventEnvelope,
   EventPayload,
+  MessagePage,
+  MessageRecord,
   TaskPage,
+  TaskSnapshot,
   TaskSummary,
 } from "@/runtime/contracts";
 import {
   createInitialRuntimeState,
+  hydrateTaskSnapshot,
+  mergeOlderMessagePage,
   mergeTaskPage,
   reduceRuntimeEvent,
 } from "@/runtime/reducer";
@@ -35,6 +40,41 @@ function summary(
 
 function page(...tasks: TaskSummary[]): TaskPage {
   return { active_items: tasks, items: [], next_cursor: null };
+}
+
+function message(
+  taskId: string,
+  ordinal: number,
+  options: {
+    messageId?: string;
+    runId?: string | null;
+    role?: MessageRecord["role"];
+    content?: string;
+  } = {},
+): MessageRecord {
+  return {
+    message_id: options.messageId ?? `message_${ordinal}`,
+    task_id: taskId,
+    run_id: options.runId ?? `run_${ordinal}`,
+    ordinal,
+    role: options.role ?? "user",
+    content: options.content ?? `message ${ordinal}`,
+    created_at: `2026-07-14T00:00:${String(ordinal).padStart(2, "0")}Z`,
+  };
+}
+
+function taskSnapshot(
+  taskId: string,
+  messages: MessageRecord[],
+  olderMessagesCursor: string | null,
+  latestSequence = 0,
+): TaskSnapshot {
+  return {
+    task: summary(taskId, "completed", latestSequence),
+    runs: [],
+    messages,
+    older_messages_cursor: olderMessagesCursor,
+  };
 }
 
 function envelope(
@@ -344,4 +384,250 @@ describe("runtime event projection", () => {
       status: "running",
     });
   });
+
+  it("merges older message pages in durable order and rejects a stale cursor", () => {
+    let state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_history",
+        [message("task_history", 4), message("task_history", 5)],
+        "cursor_before_4",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_history", "run_live", 1, {
+        type: "assistant_delta",
+        delta: "live answer",
+      }),
+    );
+    const olderPage: MessagePage = {
+      messages: [
+        message("task_history", 2),
+        message("task_history", 3),
+        message("task_history", 4),
+      ],
+      next_cursor: "cursor_before_2",
+    };
+
+    const merged = mergeOlderMessagePage(
+      state,
+      "task_history",
+      "cursor_before_4",
+      olderPage,
+    );
+
+    expect(
+      merged.tasksById.task_history.messages.map((item) => item.messageId),
+    ).toEqual([
+      "message_2",
+      "message_3",
+      "message_4",
+      "message_5",
+      "live:run_live:assistant",
+    ]);
+    expect(merged.tasksById.task_history.olderMessagesCursor).toBe(
+      "cursor_before_2",
+    );
+    expect(
+      mergeOlderMessagePage(
+        merged,
+        "task_history",
+        "cursor_before_4",
+        { messages: [message("task_history", 1)], next_cursor: null },
+      ),
+    ).toBe(merged);
+  });
+
+  it("keeps already loaded older messages and their cursor across a newer snapshot", () => {
+    let state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_history",
+        [message("task_history", 4), message("task_history", 5)],
+        "cursor_before_4",
+      ),
+    );
+    state = mergeOlderMessagePage(
+      state,
+      "task_history",
+      "cursor_before_4",
+      {
+        messages: [message("task_history", 2), message("task_history", 3)],
+        next_cursor: "cursor_before_2",
+      },
+    );
+
+    const refreshed = hydrateTaskSnapshot(
+      state,
+      taskSnapshot(
+        "task_history",
+        [message("task_history", 5), message("task_history", 6)],
+        "cursor_before_5",
+        1,
+      ),
+    );
+
+    expect(
+      refreshed.tasksById.task_history.messages.map((item) => item.ordinal),
+    ).toEqual([2, 3, 4, 5, 6]);
+    expect(refreshed.tasksById.task_history.olderMessagesCursor).toBe(
+      "cursor_before_2",
+    );
+  });
+
+  it("uses a newer snapshot cursor when a message gap still needs pagination", () => {
+    const state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_history",
+        [message("task_history", 1), message("task_history", 2)],
+        null,
+      ),
+    );
+
+    const refreshed = hydrateTaskSnapshot(
+      state,
+      taskSnapshot(
+        "task_history",
+        [message("task_history", 5), message("task_history", 6)],
+        "cursor_before_5",
+        1,
+      ),
+    );
+
+    expect(
+      refreshed.tasksById.task_history.messages.map((item) => item.ordinal),
+    ).toEqual([1, 2, 5, 6]);
+    expect(refreshed.tasksById.task_history.olderMessagesCursor).toBe(
+      "cursor_before_5",
+    );
+  });
+
+  it("replaces live user and assistant slots with durable snapshot messages", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_live", "running")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_live", "run_live", 1, {
+        type: "run_queued",
+        request_id: "req_live",
+        input: "question",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_live", "run_live", 2, {
+        type: "assistant_delta",
+        delta: "answer",
+      }),
+    );
+
+    const hydrated = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_live", "running", 2),
+        active_run_id: "run_live",
+      },
+      runs: [],
+      messages: [
+        message("task_live", 1, {
+          messageId: "durable_user",
+          runId: "run_live",
+          role: "user",
+          content: "question",
+        }),
+        message("task_live", 2, {
+          messageId: "durable_assistant",
+          runId: "run_live",
+          role: "assistant",
+          content: "answer",
+        }),
+      ],
+      older_messages_cursor: null,
+    });
+
+    expect(
+      hydrated.tasksById.task_live.messages.map((item) => item.messageId),
+    ).toEqual(["durable_user", "durable_assistant"]);
+  });
+
+  it("keeps fixture task terminal payloads informational until runtime terminalizes the Run", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_fixture", "running", 0, "fixture")),
+      false,
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_task_fixture", 1, {
+        type: "task_completed",
+        validation: {
+          status: "valid",
+          checked_count: 1,
+          failed_count: 0,
+          report_path: "logs/validation_report.json",
+        },
+      }),
+    );
+    expect(state.tasksById.task_fixture.summary.status).toBe("running");
+    expect(state.tasksById.task_fixture.activitiesById["event:1"]).toMatchObject({
+      kind: "fixture_event",
+      name: "task_completed",
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_task_fixture", 2, {
+        type: "run_finalizing",
+      }),
+    );
+    expect(state.tasksById.task_fixture.summary.status).toBe("finalizing");
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_task_fixture", 3, {
+        type: "run_completed",
+      }),
+    );
+    expect(state.tasksById.task_fixture.summary.status).toBe("completed");
+  });
+
+  it.each(["task_cancelled", "task_failed"] as const)(
+    "does not let fixture %s override the authoritative Run status",
+    (type) => {
+      const initial = mergeTaskPage(
+        createInitialRuntimeState(),
+        page(summary("task_fixture", "running", 0, "fixture")),
+        false,
+      );
+      const payload: EventPayload =
+        type === "task_cancelled"
+          ? { type, reason: "cancelled by user" }
+          : {
+              type,
+              error: {
+                code: "fixture_failed",
+                message: "fixture failed",
+                retryable: false,
+                stage: "validation",
+                details: {},
+              },
+            };
+
+      const state = reduceRuntimeEvent(
+        initial,
+        envelope("task_fixture", "run_task_fixture", 1, payload),
+      );
+
+      expect(state.tasksById.task_fixture.summary.status).toBe("running");
+      expect(state.tasksById.task_fixture.activitiesById["event:1"]).toMatchObject({
+        kind: "fixture_event",
+        name: type,
+      });
+    },
+  );
 });

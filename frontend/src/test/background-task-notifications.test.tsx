@@ -13,11 +13,15 @@ vi.mock("sonner", () => ({
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
-function summary(taskId: string, status: TaskSummary["status"]): TaskSummary {
+function summary(
+  taskId: string,
+  status: TaskSummary["status"],
+  mode: TaskSummary["mode"] = "agent",
+): TaskSummary {
   const active = status === "running";
   return {
     task_id: taskId,
-    mode: "agent",
+    mode,
     databases: [],
     title: `Title ${taskId}`,
     status,
@@ -113,5 +117,70 @@ describe("BackgroundTaskNotifications", () => {
     act(() => useAgentStore.getState().applyEvent(terminalEvent("foreground", "completed")));
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("notifies once from the authoritative Run terminal after fixture terminal activity", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary("fixture", "running", "fixture")],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    render(<BackgroundTaskNotifications onViewTask={vi.fn()} />);
+
+    act(() =>
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: "fixture_task_completed",
+        type: "task_completed",
+        task_id: "fixture",
+        run_id: "run_fixture",
+        stage_attempt_id: null,
+        sequence: 1,
+        timestamp: "2026-07-14T00:00:01Z",
+        payload: {
+          type: "task_completed",
+          validation: {
+            status: "valid",
+            checked_count: 1,
+            failed_count: 0,
+            report_path: "logs/validation_report.json",
+          },
+        },
+      }),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+
+    act(() =>
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: "fixture_run_finalizing",
+        type: "run_finalizing",
+        task_id: "fixture",
+        run_id: "run_fixture",
+        stage_attempt_id: null,
+        sequence: 2,
+        timestamp: "2026-07-14T00:00:02Z",
+        payload: { type: "run_finalizing" },
+      }),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+
+    act(() =>
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: "fixture_run_completed",
+        type: "run_completed",
+        task_id: "fixture",
+        run_id: "run_fixture",
+        stage_attempt_id: null,
+        sequence: 3,
+        timestamp: "2026-07-14T00:00:03Z",
+        payload: { type: "run_completed" },
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledTimes(1);
   });
 });

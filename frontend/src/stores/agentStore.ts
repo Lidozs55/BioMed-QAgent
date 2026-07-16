@@ -5,6 +5,7 @@ import type {
   ArtifactRecord,
   DatabaseRecord,
   EventEnvelope,
+  MessagePage,
   TaskMode,
   TaskPage,
   TaskSnapshot,
@@ -13,6 +14,7 @@ import {
   createInitialRuntimeState,
   createTaskProjection,
   hydrateTaskSnapshot as projectTaskSnapshot,
+  mergeOlderMessagePage as projectOlderMessagePage,
   mergeTaskPage as projectTaskPage,
   reduceRuntimeEvent,
 } from "@/runtime/reducer";
@@ -33,6 +35,11 @@ interface PersistedAgentState {
 export interface AgentStore extends AgentRuntimeData {
   mergeTaskPage: (page: TaskPage, append: boolean) => void;
   hydrateTaskSnapshot: (snapshot: TaskSnapshot) => void;
+  mergeOlderMessagePage: (
+    taskId: string,
+    requestedCursor: string,
+    page: MessagePage,
+  ) => void;
   applyEvent: (event: EventEnvelope) => void;
   setActiveTaskId: (taskId: string | null) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -127,12 +134,44 @@ export function addAcceptedTask(
   };
   const existing = state.tasksById[accepted.taskId];
   if (existing !== undefined) {
-    if (existing.hydration !== "summary") {
+    if (existing.runsById[accepted.runId] !== undefined) {
       return activate ? { ...state, activeTaskId: accepted.taskId } : state;
+    }
+    if (existing.hydration !== "summary") {
+      const projection = {
+        ...existing,
+        summary: {
+          ...existing.summary,
+          status: "queued" as const,
+          active_run_id: accepted.runId,
+        },
+        runsById: {
+          ...existing.runsById,
+          [accepted.runId]: acceptedRun,
+        },
+        runOrder: [...existing.runOrder, accepted.runId],
+        messages: [...existing.messages, acceptedMessage],
+      };
+      return {
+        ...state,
+        tasksById: { ...state.tasksById, [accepted.taskId]: projection },
+        activeItems: state.activeItems.includes(accepted.taskId)
+          ? state.activeItems
+          : [accepted.taskId, ...state.activeItems],
+        taskOrder: state.taskOrder.filter(
+          (taskId) => taskId !== accepted.taskId,
+        ),
+        activeTaskId: activate ? accepted.taskId : state.activeTaskId,
+      };
     }
     const summaryProjection = createTaskProjection(existing.summary);
     const projection = {
       ...summaryProjection,
+      summary: {
+        ...summaryProjection.summary,
+        status: "queued" as const,
+        active_run_id: accepted.runId,
+      },
       runsById: { [accepted.runId]: acceptedRun },
       runOrder: [accepted.runId],
       messages: [acceptedMessage],
@@ -238,6 +277,11 @@ export const useAgentStore = create<AgentStore>()(
 
       hydrateTaskSnapshot: (snapshot) =>
         set((state) => projectTaskSnapshot(state, snapshot)),
+
+      mergeOlderMessagePage: (taskId, requestedCursor, page) =>
+        set((state) =>
+          projectOlderMessagePage(state, taskId, requestedCursor, page),
+        ),
 
       applyEvent: (event) =>
         set((state) => reduceRuntimeEvent(state, event)),

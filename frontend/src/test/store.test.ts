@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   EventEnvelope,
+  MessagePage,
   TaskPage,
   TaskSnapshot,
   TaskSummary,
@@ -221,6 +222,37 @@ describe("agent task projection store", () => {
     expect(state.tasksById.task_detail.messages[0].messageId).toBe(
       "message_task_detail",
     );
+  });
+
+  it("merges a captured older-message page through the store action", () => {
+    const detail = snapshot("task_detail", 8);
+    detail.messages[0] = { ...detail.messages[0], ordinal: 2 };
+    useAgentStore.getState().hydrateTaskSnapshot(detail);
+    const olderPage: MessagePage = {
+      messages: [
+        {
+          message_id: "message_older",
+          task_id: "task_detail",
+          run_id: "run_older",
+          ordinal: 1,
+          role: "user",
+          content: "older question",
+          created_at: CREATED_AT,
+        },
+      ],
+      next_cursor: null,
+    };
+
+    useAgentStore
+      .getState()
+      .mergeOlderMessagePage("task_detail", "older_cursor", olderPage);
+
+    const task = useAgentStore.getState().tasksById.task_detail;
+    expect(task.messages.map((message) => message.messageId)).toEqual([
+      "message_older",
+      "message_task_detail",
+    ]);
+    expect(task.olderMessagesCursor).toBeNull();
   });
 
   it("removes only the specified authoritative task projection", () => {

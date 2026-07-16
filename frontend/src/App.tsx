@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import { ChatPanel } from "@/components/ChatPanel";
@@ -15,6 +16,10 @@ import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI } from "@/hooks/useAPI";
 import { RuntimeController, startRuntime } from "@/runtime/controller";
 
+function errorDescription(reason: unknown): string {
+  return reason instanceof Error ? reason.message : "未知错误";
+}
+
 export default function App() {
   const transport = useAgentStream();
   const api = useAPI();
@@ -29,7 +34,26 @@ export default function App() {
 
   useEffect(() => {
     const startup = new AbortController();
-    void startRuntime({ api, transport, signal: startup.signal });
+    void startRuntime({ api, transport, signal: startup.signal }).then(
+      ([databases, history, socket]) => {
+        if (startup.signal.aborted) return;
+        if (databases.status === "rejected") {
+          toast.error("数据源加载失败", {
+            description: errorDescription(databases.reason),
+          });
+        }
+        if (history.status === "rejected") {
+          toast.error("会话历史加载失败", {
+            description: errorDescription(history.reason),
+          });
+        }
+        if (socket.status === "rejected") {
+          toast.error("实时连接失败", {
+            description: errorDescription(socket.reason),
+          });
+        }
+      },
+    );
     return () => {
       startup.abort();
       transport.disconnect();
@@ -57,6 +81,9 @@ export default function App() {
               startTask={(input) => controller.startTask(input)}
               continueTask={(taskId, input) =>
                 controller.continueTask(taskId, input)
+              }
+              loadOlderMessages={(taskId) =>
+                controller.loadOlderMessages(taskId)
               }
             />
           </div>

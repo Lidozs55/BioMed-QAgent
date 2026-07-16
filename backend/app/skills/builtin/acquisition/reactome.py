@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -21,7 +22,7 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
 
@@ -209,11 +210,12 @@ def get_pathway(
             run_ctx.log_query(pathway_id, "reactome", "ok", 1)
 
             source_record = SourceRecord(
-                source="reactome",
+                source_id=make_source_id(Database.REACTOME, pathway_id, api_url),
+                database=Database.REACTOME,
                 accession=pathway_id,
-                source_url=api_url,
-                local_files=[],
-                format_hint="reactome_json",
+                url=api_url,
+                title=f"Reactome pathway {pathway_id}",
+                retrieved_at=datetime.now(UTC),
             )
             run_ctx.add_source(source_record)
 

@@ -4,7 +4,6 @@ import json
 
 import pytest
 from agents.memory.session import Session
-
 from app.runtime import session as session_module
 from app.runtime.session import DurableTaskSession, SessionCorruptionError
 
@@ -42,6 +41,79 @@ async def test_durable_session_implements_sdk_add_get_pop_and_clear(
     assert '"content":"answer"' in persisted
     assert '"op":"pop"' in persisted
     assert '"op":"clear"' in persisted
+
+
+@pytest.mark.asyncio
+async def test_scoped_session_projects_run_id_for_sdk_messages(tmp_path) -> None:
+    session = DurableTaskSession(
+        "task_123",
+        tmp_path / "tasks",
+        run_id="run_first",
+    )
+
+    await session.add_items(
+        [
+            user_item("question"),
+            assistant_item("answer"),
+        ]
+    )
+
+    page = await session.get_message_page()
+    assert [message.run_id for message in page.messages] == [
+        "run_first",
+        "run_first",
+    ]
+    records = [
+        json.loads(line) for line in session.path.read_text("utf-8").splitlines()
+    ]
+    assert [record["source_run_id"] for record in records] == [
+        "run_first",
+        "run_first",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scoped_sessions_preserve_provenance_across_task_runs(tmp_path) -> None:
+    first = DurableTaskSession(
+        "task_123",
+        tmp_path / "tasks",
+        run_id="run_first",
+    )
+    second = DurableTaskSession(
+        "task_123",
+        tmp_path / "tasks",
+        run_id="run_second",
+    )
+
+    await first.add_items([user_item("first question"), assistant_item("first answer")])
+    await second.add_items(
+        [user_item("second question"), assistant_item("second answer")]
+    )
+
+    assert await second.get_items() == [
+        user_item("first question"),
+        assistant_item("first answer"),
+        user_item("second question"),
+        assistant_item("second answer"),
+    ]
+    page = await second.get_message_page()
+    assert [message.run_id for message in page.messages] == [
+        "run_first",
+        "run_first",
+        "run_second",
+        "run_second",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unscoped_session_projects_explicit_fixture_run_input(tmp_path) -> None:
+    session = DurableTaskSession("task_123", tmp_path / "tasks")
+
+    assert await session.add_run_input_once("run_fixture", "fixture question")
+
+    page = await session.get_message_page()
+    assert len(page.messages) == 1
+    assert page.messages[0].run_id == "run_fixture"
 
 
 @pytest.mark.asyncio
@@ -94,6 +166,7 @@ async def test_session_rejects_an_incomplete_committed_operation(tmp_path) -> No
     [
         ("task_id", "task_other"),
         ("ordinal", 99),
+        ("run_id", "run_other"),
         (None, "not-a-message-record"),
     ],
 )
@@ -191,6 +264,12 @@ async def test_session_preserves_a_complete_final_record_without_newline(
 def test_session_rejects_reserved_path_components(tmp_path, session_id) -> None:
     with pytest.raises(ValueError, match="session_id"):
         DurableTaskSession(session_id, tmp_path / "tasks")
+
+
+@pytest.mark.parametrize("run_id", ["", ".", "..", "../run"])
+def test_session_rejects_unsafe_run_scope(tmp_path, run_id) -> None:
+    with pytest.raises(ValueError, match="run_id"):
+        DurableTaskSession("task_123", tmp_path / "tasks", run_id=run_id)
 
 
 @pytest.mark.asyncio

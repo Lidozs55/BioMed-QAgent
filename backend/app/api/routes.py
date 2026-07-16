@@ -10,6 +10,7 @@ Endpoints:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Annotated
@@ -21,8 +22,9 @@ from pydantic import ValidationError
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
-    RunRecord,
     RunManifest,
+    RunRecord,
+    RunStatus,
     StartRunRequest,
     StartTaskRequest,
     TaskMode,
@@ -32,6 +34,7 @@ from app.domain.contracts import (
 )
 from app.runtime.manager import (
     FixtureTaskContinuationError,
+    RequestIdConflictError,
     RunQueueFullError,
     TaskDeletionConflictError,
     TaskManager,
@@ -256,6 +259,11 @@ async def continue_task(
         )
     try:
         return await manager.submit_run(task_id, request)
+    except RequestIdConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID belongs to another task",
+        ) from error
     except TaskRunConflictError as error:
         raise HTTPException(
             status_code=409,
@@ -361,8 +369,8 @@ async def list_task_events(
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
     """List only files registered by a valid completed run manifest."""
-    await _require_snapshot(repository, task_id)
-    loaded = _load_validated_manifest(repository.tasks_dir, task_id)
+    snapshot = await _require_snapshot(repository, task_id)
+    loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         return {"artifacts": []}
     manifest, artifacts_dir = loaded
@@ -404,8 +412,8 @@ async def get_artifact_file(
     repository: TaskRepositoryDep,
 ):
     """Resolve an artifact ID through the valid manifest and stream it."""
-    await _require_snapshot(repository, task_id)
-    loaded = _load_validated_manifest(repository.tasks_dir, task_id)
+    snapshot = await _require_snapshot(repository, task_id)
+    loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     manifest, artifacts_dir = loaded
@@ -454,12 +462,14 @@ def _verified_artifact_path(artifacts_dir: Path, relative_path: str) -> Path:
 def _load_validated_manifest(
     tasks_dir: Path,
     task_id: str,
+    snapshot: TaskSnapshot,
 ) -> tuple[RunManifest, Path] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
         raise HTTPException(status_code=404, detail="Task not found")
     artifacts_dir = (tasks_dir / task_id / "artifacts").resolve()
     manifest_path = artifacts_dir / "run_manifest.json"
-    if not manifest_path.is_file():
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    if not manifest_path.is_file() or not marker_path.is_file():
         return None
     try:
         manifest = RunManifest.model_validate_json(manifest_path.read_text("utf-8"))
@@ -472,4 +482,47 @@ def _load_validated_manifest(
         or manifest.task_state.value != "completed"
     ):
         raise HTTPException(status_code=409, detail="Artifacts are not validated")
+    if manifest.task_id != task_id:
+        raise HTTPException(status_code=409, detail="Artifact manifest is invalid")
+    try:
+        marker = json.loads(marker_path.read_text("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        ) from error
+    if not isinstance(marker, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        )
+    run_id = marker.get("run_id")
+    marker_hash = marker.get("manifest_sha256")
+    if (
+        marker.get("schema_version") != 1
+        or marker.get("task_id") != task_id
+        or not isinstance(run_id, str)
+        or _SAFE_RUNTIME_ID.fullmatch(run_id) is None
+        or not isinstance(marker_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", marker_hash) is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        )
+    completed_run = next(
+        (
+            run
+            for run in snapshot.runs
+            if run.run_id == run_id and run.status is RunStatus.COMPLETED
+        ),
+        None,
+    )
+    if completed_run is None:
+        return None
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != marker_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker does not match manifest",
+        )
     return manifest, artifacts_dir

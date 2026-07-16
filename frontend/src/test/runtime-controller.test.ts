@@ -4,6 +4,7 @@ import type { APIClient } from "@/hooks/useAPI";
 import type {
   DatabaseRecord,
   EventEnvelope,
+  MessagePage,
   TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
@@ -1651,6 +1652,41 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().tasksById).toBe(before);
   });
 
+  it("projects a successful continuation as queued before the next websocket event", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_terminal", "completed")]),
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("task_terminal");
+    const accepted: TaskRunAccepted = {
+      request_id: "req_follow_success",
+      task_id: "task_terminal",
+      run_id: "run_follow_success",
+      status: "queued",
+    };
+    const apiClient = api({
+      continueTask: vi.fn().mockResolvedValue(accepted),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.continueTask("task_terminal", { input: "follow up" });
+
+    const task = useAgentStore.getState().tasksById.task_terminal;
+    expect(task.summary.status).toBe("queued");
+    expect(task.summary.active_run_id).toBe("run_follow_success");
+    expect(task.runsById.run_follow_success?.status).toBe("queued");
+    expect(task.messages).toContainEqual(
+      expect.objectContaining({
+        runId: "run_follow_success",
+        role: "user",
+        content: "follow up",
+      }),
+    );
+    expect(useAgentStore.getState().activeItems).toContain("task_terminal");
+    expect(useAgentStore.getState().taskOrder).not.toContain("task_terminal");
+    expect(useAgentStore.getState().activeTaskId).toBe("task_terminal");
+  });
+
   it("hydrates the authoritative snapshot returned by run cancellation", async () => {
     useAgentStore.getState().mergeTaskPage(page([summary("task_cancel")]), false);
     const cancelledSnapshot: TaskSnapshot = {
@@ -1812,5 +1848,69 @@ describe("runtime orchestration", () => {
       "task_older",
     ]);
     expect(useAgentStore.getState().activeTaskId).toBe("task_history");
+  });
+
+  it("coalesces concurrent older-message requests for the same task", async () => {
+    useAgentStore.getState().hydrateTaskSnapshot({
+      ...snapshot("task_messages", 3),
+      messages: [
+        {
+          message_id: "message_3",
+          task_id: "task_messages",
+          run_id: "run_3",
+          ordinal: 3,
+          role: "user",
+          content: "message 3",
+          created_at: CREATED_AT,
+        },
+      ],
+      older_messages_cursor: "cursor_before_3",
+    });
+    const messagePage = deferred<MessagePage>();
+    const apiClient = api({
+      fetchMessages: vi.fn(() => messagePage.promise),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const first = controller.loadOlderMessages("task_messages");
+    const second = controller.loadOlderMessages("task_messages");
+
+    expect(apiClient.fetchMessages).toHaveBeenCalledTimes(1);
+    expect(apiClient.fetchMessages).toHaveBeenCalledWith("task_messages", {
+      limit: 100,
+      cursor: "cursor_before_3",
+    });
+    messagePage.resolve({
+      messages: [
+        {
+          message_id: "message_2",
+          task_id: "task_messages",
+          run_id: "run_2",
+          ordinal: 2,
+          role: "assistant",
+          content: "message 2",
+          created_at: CREATED_AT,
+        },
+      ],
+      next_cursor: null,
+    });
+    await Promise.all([first, second]);
+
+    const task = useAgentStore.getState().tasksById.task_messages;
+    expect(task.messages.map((message) => message.messageId)).toEqual([
+      "message_2",
+      "message_3",
+    ]);
+    expect(task.olderMessagesCursor).toBeNull();
+  });
+
+  it("does not fetch older messages when the task has no cursor", async () => {
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot("task_messages", 3));
+    const apiClient = api({ fetchMessages: vi.fn() });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.loadOlderMessages("task_messages");
+
+    expect(apiClient.fetchMessages).not.toHaveBeenCalled();
   });
 });

@@ -35,6 +35,7 @@ function seedBackgroundTask(): void {
 function seedTerminalTask(
   mode: "agent" | "fixture" = "agent",
   taskId = "task_terminal",
+  olderMessagesCursor: string | null = null,
 ): void {
   const snapshot: TaskSnapshot = {
     task: {
@@ -73,7 +74,7 @@ function seedTerminalTask(
         created_at: CREATED_AT,
       },
     ],
-    older_messages_cursor: null,
+    older_messages_cursor: olderMessagesCursor,
   };
   useAgentStore.getState().hydrateTaskSnapshot(snapshot);
   useAgentStore.getState().setActiveTaskId(taskId);
@@ -345,5 +346,74 @@ describe("ChatPanel", () => {
       });
       await continuation.promise;
     });
+  });
+
+  it("shows a task-scoped load-earlier action only when a cursor exists", async () => {
+    seedTerminalTask("agent", "task_history", "cursor_before_latest");
+    const loading = deferred<void>();
+    const loadOlderMessages = vi.fn(() => loading.promise);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={loadOlderMessages}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    );
+
+    expect(loadOlderMessages).toHaveBeenCalledWith("task_history");
+    expect(
+      screen.getByRole("button", { name: "正在加载更早消息" }),
+    ).toBeDisabled();
+    await act(async () => {
+      loading.resolve();
+      await loading.promise;
+    });
+    expect(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps load-earlier errors scoped to the task when switching", async () => {
+    seedTerminalTask("agent", "task_a", "cursor_a");
+    seedTerminalTask("agent", "task_b", "cursor_b");
+    useAgentStore.getState().setActiveTaskId("task_a");
+    const loadOlderMessages = vi.fn().mockRejectedValue(new Error("history failed"));
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={loadOlderMessages}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("history failed"),
+    );
+
+    act(() => useAgentStore.getState().setActiveTaskId("task_b"));
+    expect(screen.queryByText("history failed")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    ).toBeEnabled();
+
+    act(() => useAgentStore.getState().setActiveTaskId("task_a"));
+    expect(screen.getByRole("alert")).toHaveTextContent("history failed");
+  });
+
+  it("hides the load-earlier action after the full history is loaded", () => {
+    seedTerminalTask();
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "加载更早消息" }),
+    ).not.toBeInTheDocument();
   });
 });

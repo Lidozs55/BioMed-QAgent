@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from concurrent.futures import Executor
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from app.config import Settings, settings as default_settings
+from app.config import Settings
+from app.config import settings as default_settings
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
@@ -27,7 +30,6 @@ from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import reduce_task_event
-
 
 _ResultT = TypeVar("_ResultT")
 _TRANSIENT_INDEX_ERRORS = (OSError, sqlite3.Error)
@@ -82,6 +84,7 @@ class TaskRepository:
         *,
         index: TaskIndex | None = None,
         settings: Settings | None = None,
+        storage_executor: Executor | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.tasks_dir = self.output_dir / "tasks"
@@ -90,6 +93,7 @@ class TaskRepository:
             index.settings if index is not None else default_settings
         )
         self.index = index or TaskIndex(self.tasks_dir, settings=self.settings)
+        self._storage_executor = storage_executor
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._close_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
@@ -102,11 +106,10 @@ class TaskRepository:
         self._index_dirty = False
 
     async def initialize(self) -> None:
-        async with self._operation():
-            async with self._index_gate:
-                await self.index.initialize()
-                await self.index.rebuild()
-                self._index_dirty = False
+        async with self._operation(), self._index_gate:
+            await self.index.initialize()
+            await self.index.rebuild()
+            self._index_dirty = False
 
     async def close(self) -> None:
         async with self._close_lock:
@@ -158,6 +161,20 @@ class TaskRepository:
                 operation_task.exception()
             raise
 
+    async def _run_storage(
+        self,
+        function: Callable[..., _ResultT],
+        *args: Any,
+        **kwargs: Any,
+    ) -> _ResultT:
+        if self._storage_executor is None:
+            return await asyncio.to_thread(function, *args, **kwargs)
+        call = functools.partial(function, *args, **kwargs)
+        return await asyncio.get_running_loop().run_in_executor(
+            self._storage_executor,
+            call,
+        )
+
     async def save_snapshot(self, snapshot: TaskSnapshot) -> None:
         async with self._operation():
             lock = self._task_locks.setdefault(snapshot.task.task_id, asyncio.Lock())
@@ -166,7 +183,7 @@ class TaskRepository:
 
                 async def save_and_project() -> None:
                     async with self._index_gate:
-                        await asyncio.to_thread(self._save_snapshot_sync, persisted)
+                        await self._run_storage(self._save_snapshot_sync, persisted)
                         await self._project_snapshot_locked(persisted)
 
                 await self._shield_and_drain(save_and_project())
@@ -178,7 +195,7 @@ class TaskRepository:
 
                 async def load_and_project() -> TaskSnapshot | None:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._load_snapshot_sync,
                             task_id,
                         )
@@ -205,7 +222,7 @@ class TaskRepository:
 
                 async def append_and_index() -> TaskSnapshot:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._append_event_sync, event
                         )
                         await self._project_snapshot_locked(snapshot)
@@ -220,7 +237,7 @@ class TaskRepository:
         after_sequence: int = 0,
         limit: int | None = None,
     ) -> list[EventEnvelope]:
-        return await asyncio.to_thread(
+        return await self._run_storage(
             self.events.read,
             task_id,
             after_sequence=after_sequence,
@@ -233,10 +250,9 @@ class TaskRepository:
         limit: int | None = None,
         cursor: str | None = None,
     ) -> TaskPage:
-        async with self._operation():
-            async with self._index_gate:
-                await self._ensure_index_current_locked()
-                return await self.index.list_tasks(limit=limit, cursor=cursor)
+        async with self._operation(), self._index_gate:
+            await self._ensure_index_current_locked()
+            return await self.index.list_tasks(limit=limit, cursor=cursor)
 
     async def list_messages(
         self,
@@ -251,7 +267,7 @@ class TaskRepository:
 
                 async def load_and_project() -> TaskSnapshot | None:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._load_snapshot_sync,
                             task_id,
                         )
@@ -267,11 +283,18 @@ class TaskRepository:
                 cursor=cursor,
             )
 
-    def task_session(self, task_id: str) -> DurableTaskSession:
+    def task_session(
+        self,
+        task_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> DurableTaskSession:
         return DurableTaskSession(
             task_id,
             self.tasks_dir,
+            run_id=run_id,
             message_page_size=self.settings.task_message_page_size,
+            storage_executor=self._storage_executor,
         )
 
     async def record_request(
@@ -284,7 +307,7 @@ class TaskRepository:
 
                 async def validate_and_record() -> TaskRunAccepted:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._load_snapshot_sync,
                             accepted.task_id,
                         )
@@ -306,10 +329,9 @@ class TaskRepository:
                 return await self._shield_and_drain(validate_and_record())
 
     async def find_request(self, request_id: str) -> TaskRunAccepted | None:
-        async with self._operation():
-            async with self._index_gate:
-                await self._ensure_index_current_locked()
-                return await self.index.find_request(request_id)
+        async with self._operation(), self._index_gate:
+            await self._ensure_index_current_locked()
+            return await self.index.find_request(request_id)
 
     async def _ensure_index_current_locked(self) -> None:
         if not self._index_dirty:
@@ -358,7 +380,7 @@ class TaskRepository:
 
                 async def delete_tree_and_index() -> None:
                     async with self._index_gate:
-                        await asyncio.to_thread(self._delete_task_tree_sync, task_id)
+                        await self._run_storage(self._delete_task_tree_sync, task_id)
                         try:
                             await self.index.delete_task(task_id)
                         except Exception as error:
@@ -388,7 +410,7 @@ class TaskRepository:
 
                 async def load_and_project() -> TaskSnapshot | None:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._load_snapshot_sync,
                             task_id,
                         )
@@ -401,7 +423,7 @@ class TaskRepository:
                     raise TaskNotFoundError(task_id)
                 path = self._state_dir(task_id) / "conversation_summary.json"
                 await self._shield_and_drain(
-                    asyncio.to_thread(atomic_write_json, path, summary)
+                    self._run_storage(atomic_write_json, path, summary)
                 )
 
     async def load_conversation_summary(self, task_id: str) -> dict[str, Any]:
@@ -411,7 +433,7 @@ class TaskRepository:
 
                 async def load_and_project() -> TaskSnapshot | None:
                     async with self._index_gate:
-                        snapshot = await asyncio.to_thread(
+                        snapshot = await self._run_storage(
                             self._load_snapshot_sync,
                             task_id,
                         )
@@ -423,7 +445,7 @@ class TaskRepository:
                 if snapshot is None:
                     raise TaskNotFoundError(task_id)
             path = self._state_dir(task_id) / "conversation_summary.json"
-            return await asyncio.to_thread(self._read_json_object, path)
+            return await self._run_storage(self._read_json_object, path)
 
     def _task_dir(self, task_id: str) -> Path:
         return self.events.path_for(task_id).parent
