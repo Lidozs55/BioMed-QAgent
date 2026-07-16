@@ -725,6 +725,8 @@ class PipelineRunner:
         )
         self.state.append_attempt(attempt)
         self.state.inflight_attempt = None
+        save_state(self.workdir.state, self.state)
+        self._persist_logs()
         await self._emit_stage_event(
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
             stage_attempt_id=inflight.stage_attempt_id,

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 from app.pipeline.runner import PipelineRunner
@@ -33,7 +34,8 @@ def test_task_lock_acquire_release_reacquire(tmp_path: Path) -> None:
         assert (tmp_path / "task.lock").is_file()
     finally:
         lock.release()
-    # After release the lock can be re-acquired.
+    assert (tmp_path / "task.lock").is_file()
+    # After release the stable lock file can be re-acquired.
     lock2 = TaskLock(tmp_path / "task.lock")
     lock2.acquire()
     lock2.release()
@@ -83,6 +85,57 @@ def test_task_lock_release_on_process_exit_via_handle(tmp_path: Path) -> None:
     t.join(timeout=5)
     # After the holder releases, acquire succeeds.
     with TaskLock(lock_file, timeout=2.0):
+        pass
+
+
+def test_task_lock_closes_handle_when_diagnostic_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.pipeline.state as state_module
+
+    lock_file = tmp_path / "task.lock"
+    lock_file.write_bytes(b"\0")
+    real_fdopen = state_module.os.fdopen
+
+    class FailingDiagnosticHandle:
+        def __init__(self, handle: BinaryIO) -> None:
+            self._handle = handle
+            self.closed_by_lock = False
+
+        def fileno(self) -> int:
+            return self._handle.fileno()
+
+        def seek(self, offset: int, whence: int = 0) -> int:
+            return self._handle.seek(offset, whence)
+
+        def write(self, data: bytes) -> int:
+            raise OSError("diagnostic write failed")
+
+        def truncate(self, size: int | None = None) -> int:
+            return self._handle.truncate(size)
+
+        def close(self) -> None:
+            self.closed_by_lock = True
+            self._handle.close()
+
+    observed: dict[str, FailingDiagnosticHandle] = {}
+
+    def failing_fdopen(
+        fd: int, mode: str, buffering: int = -1
+    ) -> FailingDiagnosticHandle:
+        handle = FailingDiagnosticHandle(real_fdopen(fd, mode, buffering))
+        observed["handle"] = handle
+        return handle
+
+    monkeypatch.setattr(state_module.os, "fdopen", failing_fdopen)
+    lock = TaskLock(lock_file)
+
+    with pytest.raises(OSError, match="diagnostic write failed"):
+        lock.acquire()
+
+    assert observed["handle"].closed_by_lock
+    monkeypatch.setattr(state_module.os, "fdopen", real_fdopen)
+    with TaskLock(lock_file, timeout=0.2):
         pass
 
 
@@ -220,8 +273,9 @@ def test_runner_task_lock_created_during_run(tmp_path: Path) -> None:
     manifest = asyncio.run(runner.run())
     assert manifest.task_state.value == "completed"
     assert observed == [True], "lock file must exist during _run_inner"
-    # Lock is released after run completes.
-    assert not lock_file.is_file(), "lock file must be released after run"
+    assert lock_file.is_file(), "diagnostic lock file must remain stable"
+    with TaskLock(lock_file, timeout=0.2):
+        pass
 
 
 def test_runner_lock_blocks_concurrent_runner(tmp_path: Path) -> None:
@@ -266,4 +320,6 @@ def test_runner_lock_released_on_exception(tmp_path: Path) -> None:
 
     manifest = asyncio.run(runner.run())
     assert manifest.task_state.value == "failed"
-    assert not lock_file.is_file(), "lock must be released even on exception"
+    assert lock_file.is_file(), "diagnostic lock file must remain stable"
+    with TaskLock(lock_file, timeout=0.2):
+        pass

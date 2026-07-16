@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -82,6 +85,75 @@ def test_runner_recovers_durable_inflight_attempt_after_hard_interruption(
     assert [
         json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
     ] == [attempt.model_dump(mode="json") for attempt in runner2.state.stage_attempts]
+
+
+def test_runner_recovers_after_process_death_releases_task_lock(
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = "task_process_death_lock"
+    child_code = textwrap.dedent(
+        """
+        import asyncio
+        import os
+        import sys
+        from pathlib import Path
+
+        from app.pipeline.runner import PipelineRunner
+
+        async def exit_on_stage_started(event):
+            if event.payload.type == "stage_started":
+                os._exit(73)
+
+        runner = PipelineRunner(
+            task_id=sys.argv[1],
+            base_dir=Path(sys.argv[2]),
+            fixture_dir=Path(sys.argv[3]),
+            event_sink=exit_on_stage_started,
+        )
+        asyncio.run(runner.run())
+        """
+    )
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            child_code,
+            task_id,
+            str(base_dir),
+            str(FIXTURE_DIR),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert crashed.returncode == 73, crashed.stderr
+    state_path = base_dir / task_id / "state" / "pipeline_state.json"
+    crashed_state = json.loads(state_path.read_text("utf-8"))
+    assert crashed_state["inflight_attempt"]["status"] == AttemptStatus.RUNNING.value
+    lock_path = base_dir / task_id / "state" / "task_running.lock"
+    assert lock_path.is_file()
+
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.COMPLETED
+    discovery_attempts = [
+        attempt
+        for attempt in runner.state.stage_attempts
+        if attempt.stage is StageName.DISCOVERY
+    ]
+    assert [attempt.attempt for attempt in discovery_attempts] == [1, 2]
+    assert [attempt.status for attempt in discovery_attempts] == [
+        AttemptStatus.CANCELLED,
+        AttemptStatus.SUCCEEDED,
+    ]
+    assert runner.state.inflight_attempt is None
 
 
 def test_stage_attempt_numbers_remain_monotonic_across_reuse_and_parameter_change(

@@ -14,7 +14,11 @@ from pathlib import Path
 
 import pytest
 from app.domain.contracts import AttemptStatus, StageName, TaskState
-from app.pipeline.runner import DEFAULT_STAGE_TIMEOUTS, PipelineRunner
+from app.pipeline.runner import (
+    DEFAULT_STAGE_TIMEOUTS,
+    PipelineEventSinkError,
+    PipelineRunner,
+)
 from app.pipeline.stages import PipelineCancelledError
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -123,6 +127,40 @@ def test_runner_terminalizes_inflight_attempt_on_stage_failure(
     assert [
         json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
     ] == [attempt.model_dump(mode="json") for attempt in runner.state.stage_attempts]
+
+
+def test_stage_failure_is_durable_before_stage_failed_event_is_awaited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_discovery(ctx):
+        raise RuntimeError("discovery failed before event sink")
+
+    async def fail_on_stage_failed(event) -> None:
+        if event.payload.type == "stage_failed":
+            raise OSError("runtime rejected stage_failed")
+
+    monkeypatch.setattr("app.pipeline.runner.run_discovery", failing_discovery)
+    runner = PipelineRunner(
+        task_id="task_failed_event_sink",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        event_sink=fail_on_stage_failed,
+    )
+
+    with pytest.raises(PipelineEventSinkError, match="runtime rejected stage_failed"):
+        asyncio.run(runner.run())
+
+    started = next(
+        event for event in runner.events if event.payload.type == "stage_started"
+    )
+    state_path = runner.workdir.state / "pipeline_state.json"
+    durable_state = json.loads(state_path.read_text("utf-8"))
+    assert durable_state["inflight_attempt"] is None
+    assert len(durable_state["stage_attempts"]) == 1
+    failed = durable_state["stage_attempts"][0]
+    assert failed["status"] == AttemptStatus.FAILED.value
+    assert failed["stage_attempt_id"] == started.stage_attempt_id
+    assert failed["attempt"] == started.payload.attempt
 
 
 def test_runner_per_stage_timeout_marks_failed(
