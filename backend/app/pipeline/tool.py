@@ -40,6 +40,7 @@ async def run_research_pipeline(
         base_dir=run_context.work_dir.root.parent,
         fixture_dir=fixture_dir,
         topic=topic,
+        mode=mode,
     )
     manifest = await runner.run()
     return json.dumps(

@@ -250,7 +250,7 @@ def run_validation(
     manifest = RunManifest(
         task_id=ctx.task_id,
         id_generation_version="1.0",
-        request=TaskRequest(topic=build_output.specification.topic),
+        request=TaskRequest(topic=build_output.specification.topic, mode=ctx.mode),
         specification=build_output.specification,
         task_state=TaskState.COMPLETED,
         stage_attempt_ids=sorted(
@@ -261,6 +261,8 @@ def run_validation(
         validation=validation,
         pipeline_version="0.1.0",
         model_name=None,
+        mode=ctx.mode,
+        live_accepted=ctx.mode == "live" and validation.status == "valid",
         started_at=ctx.started_at,
         finished_at=datetime.now(UTC),
     )

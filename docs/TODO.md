@@ -289,7 +289,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 正式流程失败时禁止自动切换 mock success
 - [x] **P0** 支持离线 fixture 模式
 - [ ] **P0** 支持显式 live 模式
-- [ ] **P0** mock 模式必须显式标记且不能通过 live 验收
+- [x] **P0** mock 模式必须显式标记且不能通过 live 验收
 - [x] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
 
 ## 10. Phase 1 测试

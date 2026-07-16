@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
@@ -32,6 +32,7 @@ class StageContext:
     fixture_dir: Path
     topic: str
     started_at: datetime
+    mode: Literal["fixture", "live"] = "fixture"
 
 
 @dataclass

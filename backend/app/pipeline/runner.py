@@ -13,7 +13,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.domain.contracts import (
     AttemptStatus,
@@ -109,12 +109,14 @@ class PipelineRunner:
         topic: str = "breast cancer gene expression under Hsp70 inhibition",
         stage_timeouts: dict[StageName, float] | None = None,
         total_timeout: float = TOTAL_TIMEOUT,
+        mode: Literal["fixture", "live"] = "fixture",
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
         self.topic = topic
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
         self.total_timeout = total_timeout
+        self.mode = mode
         self.workdir = create_task_workdir(task_id, base_dir=str(base_dir))
         self.started_at = datetime.now(UTC)
         self.state = load_state(self.workdir.state, task_id, self.started_at)
@@ -124,6 +126,7 @@ class PipelineRunner:
             fixture_dir=fixture_dir,
             topic=topic,
             started_at=self.state.started_at,
+            mode=mode,
         )
         self.events: list[EventEnvelope] = []
         # Sequence is task-local and monotonically increasing across recovery
@@ -455,7 +458,9 @@ class PipelineRunner:
         Uses the combined SHA-256 of all files under ``fixture_dir`` (sorted
         by name) rather than the directory mtime — directory mtime is unstable
         across filesystems and does not change when file contents change but
-        filenames stay the same.
+        filenames stay the same. Includes ``mode`` so a fixture run and a live
+        run on the same topic produce different digests and are never reused
+        for each other.
         """
         fixture_hash = _hash_directory(self.fixture_dir)
         payload = {
@@ -463,6 +468,7 @@ class PipelineRunner:
             "fixture_dir": str(self.fixture_dir),
             "fixture_hash": fixture_hash,
             "topic": self.topic,
+            "mode": self.mode,
         }
         return _sha256_json(payload)
 
@@ -568,7 +574,9 @@ class PipelineRunner:
         )
         self._emit_event(TaskFailedPayload(error=error))
         self._persist_logs()
-        return _build_failed_manifest(self.task_id, self.started_at, error, self.topic)
+        return _build_failed_manifest(
+            self.task_id, self.started_at, error, self.topic, self.mode
+        )
 
     def _finalize_cancelled(self) -> RunManifest:
         self.state.task_state = TaskState.CANCELLED
@@ -577,7 +585,9 @@ class PipelineRunner:
             TaskCancelledPayload(reason=self.state.cancel_reason or "cancel requested")
         )
         self._persist_logs()
-        return _build_cancelled_manifest(self.task_id, self.started_at, self.topic)
+        return _build_cancelled_manifest(
+            self.task_id, self.started_at, self.topic, self.mode
+        )
 
     def _finalize_completed(
         self, stage_outputs: dict[StageName, Any]
@@ -692,14 +702,18 @@ def _artifact_produced_payload(entry: Any) -> Any:
 
 
 def _build_failed_manifest(
-    task_id: str, started_at: datetime, error: ErrorDetail, topic: str
+    task_id: str,
+    started_at: datetime,
+    error: ErrorDetail,
+    topic: str,
+    mode: Literal["fixture", "live"] = "fixture",
 ) -> RunManifest:
     """Build a minimal RunManifest for a failed task."""
     from app.domain.contracts import TaskRequest, TaskSpecification, ValidationSummary
     return RunManifest(
         task_id=task_id,
         id_generation_version="1.0",
-        request=TaskRequest(topic=topic),
+        request=TaskRequest(topic=topic, mode=mode),
         specification=TaskSpecification(topic=topic, queries=[], datasets=[], requested_outputs=[]),
         task_state=TaskState.FAILED,
         stage_attempt_ids=[],
@@ -712,20 +726,25 @@ def _build_failed_manifest(
             report_path="logs/validation_report.json",
         ),
         pipeline_version="0.1.0",
+        mode=mode,
+        live_accepted=False,
         started_at=started_at,
         finished_at=datetime.now(UTC),
     )
 
 
 def _build_cancelled_manifest(
-    task_id: str, started_at: datetime, topic: str
+    task_id: str,
+    started_at: datetime,
+    topic: str,
+    mode: Literal["fixture", "live"] = "fixture",
 ) -> RunManifest:
     """Build a minimal RunManifest for a cancelled task."""
     from app.domain.contracts import TaskRequest, TaskSpecification, ValidationSummary
     return RunManifest(
         task_id=task_id,
         id_generation_version="1.0",
-        request=TaskRequest(topic=topic),
+        request=TaskRequest(topic=topic, mode=mode),
         specification=TaskSpecification(topic=topic, queries=[], datasets=[], requested_outputs=[]),
         task_state=TaskState.CANCELLED,
         stage_attempt_ids=[],
@@ -738,6 +757,8 @@ def _build_cancelled_manifest(
             report_path="logs/validation_report.json",
         ),
         pipeline_version="0.1.0",
+        mode=mode,
+        live_accepted=False,
         started_at=started_at,
         finished_at=datetime.now(UTC),
     )
