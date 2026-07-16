@@ -9,6 +9,7 @@ import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
@@ -20,6 +21,7 @@ from app.domain.contracts import (
 )
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
+    PipelineCancelledError,
     StageContext,
     StageResult,
     ValidationOutput,
@@ -65,6 +67,55 @@ def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[
     ]
     scored.sort(key=lambda item: item[0])
     return [row for _hash, row in scored[:max_samples]]
+
+
+def publish_artifacts(staging: Path, target: Path, ctx: StageContext) -> None:
+    """Swap a validated staging directory into place without Windows clobbering.
+
+    Writes ``state/publish_completed.json`` only after the rename succeeds,
+    so its presence is a reliable signal that ``artifacts/`` is fully
+    populated (TODO §8 line 276). Its absence means the publish did not
+    complete (crash, validation failure, cancellation, or in-flight).
+    """
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    previous = target.with_name(f".{target.name}.previous-{uuid4().hex}")
+    moved_previous = False
+    try:
+        ctx.check_cancelled()
+        if target.exists():
+            if target.is_dir() and not any(target.iterdir()):
+                target.rmdir()
+            else:
+                os.replace(target, previous)
+                moved_previous = True
+        ctx.check_cancelled()
+        os.replace(staging, target)
+    except PipelineCancelledError:
+        if moved_previous and previous.exists() and not target.exists():
+            os.replace(previous, target)
+        raise
+    except BaseException:
+        if moved_previous and previous.exists() and not target.exists():
+            os.replace(previous, target)
+        raise
+    finally:
+        if previous.exists():
+            shutil.rmtree(previous, ignore_errors=True)
+
+    # Marker written AFTER the rename: if a crash happened before this point,
+    # the marker is absent even though artifacts/ may exist, so recovery can
+    # detect the incomplete publish and re-run.
+    state_dir = ctx.workdir.state
+    state_dir.mkdir(parents=True, exist_ok=True)
+    marker_file = state_dir / "publish_completed.json"
+    marker_payload = {
+        "published_at": datetime.now(UTC).isoformat(),
+        "artifacts_dir": str(target.relative_to(target.parents[0])),
+    }
+    tmp = marker_file.with_suffix(".json.part")
+    tmp.write_text(json.dumps(marker_payload, indent=2) + "\n", "utf-8")
+    os.replace(tmp, marker_file)
 
 
 def _validate_package(
@@ -236,6 +287,8 @@ def run_validation(
     build_output: ArtifactBuildOutput,
     stage_attempts: list[StageAttempt],
     stage_attempt_id: str,
+    *,
+    publish: bool = True,
 ) -> StageResult:
     """Validate the staging package and publish artifacts atomically.
 
@@ -300,15 +353,9 @@ def run_validation(
     # between write and rename cannot leave stale page-cache state.
     _fsync_directory(build_output.staging_dir)
 
-    # Publish atomically under the task lock: a recovery run racing with a
-    # stuck prior publisher cannot corrupt the artifacts/ dir. The marker
-    # ``publish_completed.json`` is written only after the rename succeeds,
-    # so its presence is a reliable signal that artifacts/ is consistent.
-    _publish_artifacts(
-        staging=build_output.staging_dir,
-        artifacts=ctx.workdir.artifacts,
-        state_dir=ctx.workdir.state,
-    )
+    ctx.check_cancelled()
+    if publish:
+        publish_artifacts(build_output.staging_dir, ctx.workdir.artifacts, ctx)
 
     output = ValidationOutput(
         validation=validation,

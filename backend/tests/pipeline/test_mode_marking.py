@@ -149,34 +149,37 @@ def test_cancelled_manifest_carries_mode_and_not_live_accepted() -> None:
 
 @pytest.mark.asyncio
 async def test_task_status_api_exposes_mode_and_live_accepted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    """The GET /tasks/{task_id} response includes mode and live_accepted fields."""
-    from types import SimpleNamespace
+    """The durable task snapshot exposes task.mode via the new REST API.
 
-    import app.api.routes as routes_module
-    import httpx
-    from app.main import app
+    Superseded-by: tests/api/test_rest_control.py covers the full
+    TaskSnapshot shape (including mode) against the lifespan-owned
+    TaskManager. This test is kept as a contract-level smoke check.
+    """
+    from app.config import Settings
+    from app.main import create_app
 
-    monkeypatch.setattr(
-        routes_module,
-        "settings",
-        SimpleNamespace(output_dir=str(tmp_path / "output")),
-    )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        created = await client.post(
-            "/api/v1/tasks",
-            json={
-                "topic": "breast cancer gene expression",
-                "databases": ["pubmed", "geo"],
-            },
-        )
-        assert created.status_code == 201
-        task_id = created.json()["task_id"]
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application):
+        import httpx
 
-        status = await client.get(f"/api/v1/tasks/{task_id}")
-        body = status.json()
-        assert body["mode"] == "fixture"
-        assert body["live_accepted"] is False
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application),
+            base_url="http://test",
+        ) as client:
+            created = await client.post(
+                "/api/v1/tasks",
+                json={
+                    "request_id": "req-mode-smoke",
+                    "input": "breast cancer gene expression",
+                    "databases": ["pubmed", "geo"],
+                    "mode": "fixture",
+                },
+            )
+            assert created.status_code == 202
+            task_id = created.json()["task_id"]
+
+            status = await client.get(f"/api/v1/tasks/{task_id}")
+            body = status.json()
+            assert body["task"]["mode"] == "fixture"

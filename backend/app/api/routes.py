@@ -10,27 +10,102 @@ Endpoints:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import ValidationError
 
-from app.config import settings
 from app.domain.contracts import (
-    ContractModel,
-    Database,
     EventEnvelope,
+    MessagePage,
     RunManifest,
-    TaskState,
-    generate_prefixed_uuid,
+    RunRecord,
+    RunStatus,
+    StartRunRequest,
+    StartTaskRequest,
+    TaskMode,
+    TaskPage,
+    TaskRunAccepted,
+    TaskSnapshot,
 )
-from app.pipeline.runner import PipelineRunner
+from app.runtime.manager import (
+    FixtureTaskContinuationError,
+    RequestIdConflictError,
+    RunQueueFullError,
+    TaskDeletionConflictError,
+    TaskManager,
+    TaskRunConflictError,
+)
+from app.runtime.repository import TaskRepository
 from app.skills.registry import SkillCategory, skill_registry
 
 router = APIRouter(prefix="/api/v1")
+_SAFE_RUNTIME_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def get_task_repository(request: Request) -> TaskRepository:
+    """Return the lifespan-owned task repository."""
+
+    repository = getattr(request.app.state, "task_repository", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="Task runtime is unavailable")
+    return repository
+
+
+TaskRepositoryDep = Annotated[TaskRepository, Depends(get_task_repository)]
+
+
+def get_task_manager(request: Request) -> TaskManager:
+    """Return the available lifespan-owned task manager."""
+
+    manager = getattr(request.app.state, "task_manager", None)
+    if (
+        manager is None
+        or getattr(manager, "_closed", False)
+        or getattr(manager, "_closing", False)
+        or getattr(manager, "_started", True) is False
+    ):
+        raise HTTPException(status_code=503, detail="Task runtime is unavailable")
+    return manager
+
+
+TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
+
+
+async def _require_snapshot(
+    repository: TaskRepository,
+    task_id: str,
+) -> TaskSnapshot:
+    if _SAFE_RUNTIME_ID.fullmatch(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    snapshot = await repository.get_snapshot(task_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return snapshot
+
+
+def _require_run(snapshot: TaskSnapshot, run_id: str) -> RunRecord:
+    if _SAFE_RUNTIME_ID.fullmatch(run_id) is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = next(
+        (candidate for candidate in snapshot.runs if candidate.run_id == run_id),
+        None,
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+def _raise_pagination_error(error: ValueError, *, cursor_detail: str) -> None:
+    detail = str(error)
+    if detail == cursor_detail or detail.startswith("limit must be between "):
+        raise HTTPException(status_code=422, detail=detail) from error
+    raise error
+
 
 # ---------------------------------------------------------------------------
 # Display name mapping (skill name → human-readable)
@@ -62,29 +137,6 @@ def _load_database_skills() -> None:
     import app.skills.builtin.acquisition.xena  # noqa: F401
     import app.skills.builtin.discovery.pubmed  # noqa: F401
 
-
-def _tasks_base() -> Path:
-    """Return the base directory for task data."""
-    return Path(settings.output_dir) / "tasks"
-
-
-class CreateTaskRequest(ContractModel):
-    topic: str = Field(min_length=1)
-    databases: list[Database]
-    mode: Literal["fixture", "live"] = "fixture"
-
-    @field_validator("topic", mode="before")
-    @classmethod
-    def strip_topic(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
-
-    @model_validator(mode="after")
-    def validate_sources(self) -> CreateTaskRequest:
-        if set(self.databases) != {Database.PUBMED, Database.GEO}:
-            raise ValueError("pipeline supports exactly pubmed and geo")
-        if len(self.databases) != 2:
-            raise ValueError("databases must not contain duplicates")
-        return self
 
 
 # ---------------------------------------------------------------------------
@@ -122,140 +174,192 @@ async def get_databases() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _task_status(task_dir: Path) -> str:
-    """Conservative task status when no valid manifest is available.
+@router.get("/tasks", response_model=TaskPage)
+async def list_tasks(
+    repository: TaskRepositoryDep,
+    limit: Annotated[int | None, Query(ge=1)] = None,
+    cursor: str | None = None,
+) -> TaskPage:
+    """Return active tasks and one page of inactive task history."""
 
-    Only the persisted ``RunManifest.task_state`` is authoritative. When the
-    manifest is missing we must NOT infer ``completed`` from directory contents
-    — leftover mock artifacts would otherwise be misreported as success.
-    """
-    if not task_dir.exists():
-        return "not_found"
-    artifacts_dir = task_dir / "artifacts"
-    if artifacts_dir.exists() and any(artifacts_dir.iterdir()):
-        # Artifacts exist without a valid manifest → inconsistent state.
-        return "failed"
-    return "running"
-
-
-@router.post("/tasks", status_code=201)
-async def create_task(request: CreateTaskRequest) -> dict:
-    """Run the approved deterministic fixture pipeline as an explicit mode."""
-
-    task_id = generate_prefixed_uuid("task")
-    fixture_dir = (
-        Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
-    )
-    runner = PipelineRunner(
-        task_id=task_id,
-        base_dir=_tasks_base(),
-        fixture_dir=fixture_dir,
-        topic=request.topic,
-        mode=request.mode,
-    )
-    manifest = await runner.run()
-    return {"task_id": task_id, "status": manifest.task_state.value}
+    if cursor == "":
+        raise HTTPException(status_code=422, detail="invalid task cursor")
+    try:
+        return await repository.list_tasks(limit=limit, cursor=cursor)
+    except ValueError as error:
+        _raise_pagination_error(error, cursor_detail="invalid task cursor")
 
 
-class CancelTaskRequest(ContractModel):
-    reason: str | None = None
+@router.post("/tasks", status_code=202, response_model=TaskRunAccepted)
+async def create_task(
+    request: StartTaskRequest,
+    manager: TaskManagerDep,
+) -> TaskRunAccepted:
+    """Create a durable task and enqueue its first run."""
+
+    try:
+        return await manager.create_task(request)
+    except RunQueueFullError as error:
+        raise HTTPException(status_code=429, detail="Run queue is full") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
 
 
-@router.post("/tasks/{task_id}/cancel", status_code=202)
-async def cancel_task(task_id: str, request: CancelTaskRequest) -> dict:
-    """Request cancellation of a running or pending task.
+@router.get("/tasks/{task_id}", response_model=TaskSnapshot)
+async def get_task(task_id: str, repository: TaskRepositoryDep) -> TaskSnapshot:
+    """Return the authoritative durable task snapshot."""
 
-    Sets ``cancel_requested`` on the persisted pipeline state. The pipeline
-    checks this flag before each stage and transitions to CANCELLED. If the
-    task is already terminal, this is a no-op.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
-        raise HTTPException(status_code=400, detail="invalid task_id")
-
-    task_dir = _tasks_base() / task_id
-    if not task_dir.exists():
-        raise HTTPException(status_code=404, detail="task not found")
-
-    state_file = task_dir / "state" / "pipeline_state.json"
-    if not state_file.is_file():
-        raise HTTPException(status_code=409, detail="task has no pipeline state")
-
-    from datetime import UTC, datetime
-
-    from app.pipeline.state import load_state, save_state
-
-    state = load_state(state_file.parent, task_id, datetime.now(UTC))
-    if state.task_state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED}:
-        return {"task_id": task_id, "status": state.task_state.value, "cancelled": False}
-    state.cancel_requested = True
-    state.cancel_reason = request.reason
-    save_state(state_file.parent, state)
-    return {"task_id": task_id, "status": "cancelling", "cancelled": True}
+    return await _require_snapshot(repository, task_id)
 
 
-@router.get("/tasks/{task_id}")
-async def get_task(task_id: str) -> dict:
-    """Return typed state derived from the persisted valid manifest."""
-    loaded = _load_validated_manifest(task_id)
-    if loaded is None:
-        task_dir = _tasks_base() / task_id
-        return {
-            "task_id": task_id,
-            "status": _task_status(task_dir),
-            "current_stage": None,
-            "validation_status": None,
-            "artifact_count": 0,
-            "mode": None,
-            "live_accepted": None,
-        }
-    manifest, _ = loaded
-    return {
-        "task_id": task_id,
-        "status": manifest.task_state.value,
-        "current_stage": "validation",
-        "validation_status": manifest.validation.status,
-        "artifact_count": len(manifest.artifacts) + 1,
-        "mode": manifest.mode,
-        "live_accepted": manifest.live_accepted,
-    }
+@router.delete("/tasks/{task_id}", status_code=204)
+async def delete_task(task_id: str, manager: TaskManagerDep) -> None:
+    """Delete one explicitly requested terminal Task and all of its history."""
+
+    try:
+        await manager.delete_task(task_id)
+    except TaskDeletionConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Only terminal tasks can be deleted",
+        ) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Task not found") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
 
 
-# ---------------------------------------------------------------------------
-# Event replay (resume by sequence)
-# ---------------------------------------------------------------------------
+@router.post(
+    "/tasks/{task_id}/runs",
+    status_code=202,
+    response_model=TaskRunAccepted,
+)
+async def continue_task(
+    task_id: str,
+    request: StartRunRequest,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> TaskRunAccepted:
+    """Enqueue another user turn for an idle Agent task."""
+
+    snapshot = await _require_snapshot(repository, task_id)
+    if snapshot.task.mode is TaskMode.FIXTURE:
+        raise HTTPException(
+            status_code=409,
+            detail="Fixture tasks cannot be continued",
+        )
+    try:
+        return await manager.submit_run(task_id, request)
+    except RequestIdConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID belongs to another task",
+        ) from error
+    except TaskRunConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Task already has an active run",
+        ) from error
+    except FixtureTaskContinuationError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Fixture tasks cannot be continued",
+        ) from error
+    except RunQueueFullError as error:
+        raise HTTPException(status_code=429, detail="Run queue is full") from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Task not found") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
+
+
+@router.post(
+    "/tasks/{task_id}/runs/{run_id}/cancel",
+    status_code=202,
+    response_model=TaskSnapshot,
+)
+async def cancel_task_run(
+    task_id: str,
+    run_id: str,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> TaskSnapshot:
+    """Request cancellation of one queued or running task run."""
+
+    snapshot = await _require_snapshot(repository, task_id)
+    _require_run(snapshot, run_id)
+    try:
+        return await manager.cancel_run(task_id, run_id, reason=None)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Run not found") from error
+    except RuntimeError as error:
+        detail = str(error)
+        if detail == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        if detail in {
+            f"run {run_id} is not cancellable",
+            f"run {run_id} has no live execution",
+            f"run {run_id} left cancellation state",
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Run is not cancellable",
+            ) from error
+        raise
+
+
+@router.get("/tasks/{task_id}/messages", response_model=MessagePage)
+async def list_task_messages(
+    task_id: str,
+    repository: TaskRepositoryDep,
+    limit: Annotated[int | None, Query(ge=1)] = None,
+    cursor: str | None = None,
+) -> MessagePage:
+    """Return one ascending page of durable task messages."""
+
+    await _require_snapshot(repository, task_id)
+    if cursor == "":
+        raise HTTPException(status_code=422, detail="invalid message cursor")
+    try:
+        return await repository.list_messages(task_id, limit=limit, cursor=cursor)
+    except ValueError as error:
+        _raise_pagination_error(error, cursor_detail="invalid message cursor")
 
 
 @router.get("/tasks/{task_id}/events")
-async def list_events(task_id: str, since: int = 0) -> dict:
-    """Replay persisted events with sequence > ``since``.
+async def list_task_events(
+    task_id: str,
+    repository: TaskRepositoryDep,
+    after_sequence: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+) -> dict[str, list[EventEnvelope]]:
+    """Return exclusive, ordered durable events for task replay."""
 
-    Reads the append-only ``logs/events.jsonl`` written by PipelineRunner.
-    A WS reconnect can resume by passing the last seen sequence as ``since``.
-    Returns 404 if the task directory does not exist; returns an empty list
-    if no events have been persisted yet.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
-        raise HTTPException(status_code=400, detail="invalid task_id")
-    if since < 0:
-        raise HTTPException(status_code=400, detail="since must be >= 0")
-
-    task_dir = _tasks_base() / task_id
-    if not task_dir.exists():
-        raise HTTPException(status_code=404, detail="task not found")
-
-    events_file = task_dir / "logs" / "events.jsonl"
-    events: list[dict] = []
-    if events_file.is_file():
-        for line in events_file.read_text("utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                envelope = EventEnvelope.model_validate_json(line)
-            except ValidationError:
-                continue
-            if envelope.sequence > since:
-                events.append(envelope.model_dump(mode="json"))
-    return {"task_id": task_id, "since": since, "events": events}
+    await _require_snapshot(repository, task_id)
+    events = await repository.list_events(
+        task_id,
+        after_sequence=after_sequence,
+        limit=limit,
+    )
+    return {"events": events}
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +368,10 @@ async def list_events(task_id: str, since: int = 0) -> dict:
 
 
 @router.get("/tasks/{task_id}/artifacts")
-async def list_artifacts(task_id: str) -> dict:
+async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
     """List only files registered by a valid completed run manifest."""
-    loaded = _load_validated_manifest(task_id)
+    snapshot = await _require_snapshot(repository, task_id)
+    loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         return {"artifacts": []}
     manifest, artifacts_dir = loaded
@@ -302,9 +407,14 @@ async def list_artifacts(task_id: str) -> dict:
 
 
 @router.get("/tasks/{task_id}/artifacts/{artifact_id}")
-async def get_artifact_file(task_id: str, artifact_id: str):
+async def get_artifact_file(
+    task_id: str,
+    artifact_id: str,
+    repository: TaskRepositoryDep,
+):
     """Resolve an artifact ID through the valid manifest and stream it."""
-    loaded = _load_validated_manifest(task_id)
+    snapshot = await _require_snapshot(repository, task_id)
+    loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     manifest, artifacts_dir = loaded
@@ -350,16 +460,21 @@ def _verified_artifact_path(artifacts_dir: Path, relative_path: str) -> Path:
     return file_path
 
 
-def _load_validated_manifest(task_id: str) -> tuple[RunManifest, Path] | None:
+def _load_validated_manifest(
+    tasks_dir: Path,
+    task_id: str,
+    snapshot: TaskSnapshot,
+) -> tuple[RunManifest, Path] | None:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
         raise HTTPException(status_code=404, detail="Task not found")
-    artifacts_dir = (_tasks_base() / task_id / "artifacts").resolve()
+    artifacts_dir = (tasks_dir / task_id / "artifacts").resolve()
     manifest_path = artifacts_dir / "run_manifest.json"
-    if not manifest_path.is_file():
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    if not manifest_path.is_file() or not marker_path.is_file():
         return None
     try:
         manifest = RunManifest.model_validate_json(manifest_path.read_text("utf-8"))
-    except (OSError, ValidationError, ValueError) as error:
+    except (ValidationError, ValueError) as error:
         raise HTTPException(
             status_code=409, detail="Artifact manifest is invalid"
         ) from error
@@ -368,4 +483,47 @@ def _load_validated_manifest(task_id: str) -> tuple[RunManifest, Path] | None:
         or manifest.task_state.value != "completed"
     ):
         raise HTTPException(status_code=409, detail="Artifacts are not validated")
+    if manifest.task_id != task_id:
+        raise HTTPException(status_code=409, detail="Artifact manifest is invalid")
+    try:
+        marker = json.loads(marker_path.read_text("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        ) from error
+    if not isinstance(marker, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        )
+    run_id = marker.get("run_id")
+    marker_hash = marker.get("manifest_sha256")
+    if (
+        marker.get("schema_version") != 1
+        or marker.get("task_id") != task_id
+        or not isinstance(run_id, str)
+        or _SAFE_RUNTIME_ID.fullmatch(run_id) is None
+        or not isinstance(marker_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", marker_hash) is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker is invalid",
+        )
+    completed_run = next(
+        (
+            run
+            for run in snapshot.runs
+            if run.run_id == run_id and run.status is RunStatus.COMPLETED
+        ),
+        None,
+    )
+    if completed_run is None:
+        return None
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != marker_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="Artifact publication marker does not match manifest",
+        )
     return manifest, artifacts_dir

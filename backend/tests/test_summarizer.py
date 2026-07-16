@@ -1,4 +1,8 @@
 """summarizer 与 RunContext 压缩逻辑的最小测试（不依赖 LLM）。"""
+
+import importlib
+from types import SimpleNamespace
+
 from app.agent_loop.context import RunContext
 from app.agent_loop.summarizer import (
     COMPRESS_THRESHOLD_CHARS,
@@ -40,8 +44,24 @@ def test_compress_log_appends_to_existing_summary():
     assert "第二轮摘要" in ctx.query_log_summary
 
 
-def test_build_compress_tool_has_correct_name():
-    tool = build_compress_query_log_tool()
+def test_build_compress_tool_uses_supplied_model(monkeypatch):
+    summarizer_module = importlib.import_module("app.agent_loop.summarizer")
+    supplied_model = object()
+    captured: dict[str, object] = {}
+
+    class ContextManagerAgent:
+        def as_tool(self, *, tool_name, **kwargs):
+            return SimpleNamespace(name=tool_name)
+
+    def build_context_manager_agent(**kwargs):
+        captured.update(kwargs)
+        return ContextManagerAgent()
+
+    monkeypatch.setattr(summarizer_module, "Agent", build_context_manager_agent)
+
+    tool = build_compress_query_log_tool(supplied_model)
+
+    assert captured["model"] is supplied_model
     assert tool.name == "compress_query_log"
 
 

@@ -5,8 +5,8 @@ Covers:
     2. Per-event persistence: events.jsonl is appended as events are emitted,
        not rewritten at terminal state.
     3. run_streamed() yields EventEnvelope objects in order with persist-then-push.
-    4. GET /api/v1/tasks/{task_id}/events?since=N replay endpoint.
-    5. WS run_pipeline message type streams EventEnvelope events.
+    4-5. (Legacy REST/WS envelope) — superseded by tests/api/test_rest_control.py
+         and tests/api/test_websocket_replay.py (durable event API).
     6. Recovery appends (not overwrites) prior events in events.jsonl.
     7. Stage failure preserves prior events + failure event in events.jsonl.
     8. Cancellation preserves prior events + cancel event in events.jsonl.
@@ -16,10 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
-import app.api.routes as routes_module
-import httpx
 import pytest
 from app.domain.contracts import (
     AttemptStatus,
@@ -27,7 +24,6 @@ from app.domain.contracts import (
     PipelineEventType,
     TaskState,
 )
-from app.main import app
 from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = (
@@ -162,105 +158,10 @@ def test_run_streamed_yields_typed_envelopes_in_sequence_order(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4: GET /api/v1/tasks/{task_id}/events?since=N replay
+# Scenario 4 & 5 (legacy REST/WS envelope) — superseded by
+# tests/api/test_rest_control.py and tests/api/test_websocket_replay.py
+# which cover the durable event API (after_sequence + durable WS session).
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_events_replay_endpoint_returns_events_after_since(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """GET /tasks/{id}/events?since=N returns only events with sequence > N."""
-    output_dir = tmp_path / "output"
-    runner = PipelineRunner(
-        task_id="task_replay",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    )
-    await runner.run()
-    monkeypatch.setattr(
-        routes_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        # Full replay (since=0).
-        resp = await client.get("/api/v1/tasks/task_replay/events")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["task_id"] == "task_replay"
-        assert body["since"] == 0
-        all_events = body["events"]
-        assert len(all_events) > 0
-        sequences = [e["sequence"] for e in all_events]
-        assert sequences == list(range(1, len(all_events) + 1))
-
-        # Partial replay: since = midpoint.
-        midpoint = len(all_events) // 2
-        since_value = all_events[midpoint - 1]["sequence"]
-        resp2 = await client.get(f"/api/v1/tasks/task_replay/events?since={since_value}")
-        assert resp2.status_code == 200
-        partial = resp2.json()["events"]
-        assert len(partial) == len(all_events) - midpoint
-        assert all(e["sequence"] > since_value for e in partial)
-
-        # 404 for unknown task.
-        resp3 = await client.get("/api/v1/tasks/nonexistent_task/events")
-        assert resp3.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# Scenario 5: WS run_pipeline streams EventEnvelope events
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ws_run_pipeline_streams_event_envelopes(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """WS run_pipeline must stream typed EventEnvelope dicts to the client."""
-    output_dir = tmp_path / "output"
-    monkeypatch.setattr(
-        routes_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
-    # The WS handler imports settings from app.config, not routes_module.
-    import app.api.ws as ws_module
-    monkeypatch.setattr(
-        ws_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
-
-    from starlette.testclient import TestClient
-
-    with TestClient(app) as client, client.websocket_connect("/api/v1/ws") as ws:
-        ws.send_json({
-            "type": "run_pipeline",
-            "topic": "breast cancer gene expression under Hsp70 inhibition",
-        })
-        events: list[dict] = []
-        # Read until we see a terminal event or hit a safety cap.
-        while len(events) < 50:
-            raw = ws.receive_json()
-            if raw.get("type") == "error":
-                pytest.fail(f"server error: {raw.get('message')}")
-            events.append(raw)
-            if raw.get("type") in {
-                PipelineEventType.TASK_COMPLETED.value,
-                PipelineEventType.TASK_FAILED.value,
-            }:
-                break
-
-    assert len(events) > 0
-    # Every event must carry the EventEnvelope field set.
-    required = {"schema_version", "event_id", "type", "task_id", "sequence", "timestamp", "payload"}
-    for event in events:
-        assert required <= set(event), f"missing fields: {required - set(event)}"
-        assert event["schema_version"] == "1.0"
-    # Sequences are contiguous starting at 1.
-    sequences = [e["sequence"] for e in events]
-    assert sequences == list(range(1, len(events) + 1))
-    assert events[0]["type"] == PipelineEventType.TASK_CREATED.value
-    assert events[-1]["type"] == PipelineEventType.TASK_COMPLETED.value
 
 
 # ---------------------------------------------------------------------------

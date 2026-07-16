@@ -27,21 +27,29 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
-import app.api.routes as routes_module
 import httpx
 import pytest
+from app.config import Settings
 from app.domain.contracts import (
     AttemptStatus,
     PipelineEventType,
+    RunRecord,
+    RunStatus,
     StageName,
+    TaskMode,
+    TaskSnapshot,
     TaskState,
+    TaskSummary,
 )
-from app.main import app
+from app.main import create_app
 from app.pipeline import runner as runner_module
 from app.pipeline.runner import PipelineRunner
+from fastapi import FastAPI
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -59,6 +67,64 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def _event_types(events: list[dict]) -> list[str]:
     return [event["type"] for event in events]
+
+
+@asynccontextmanager
+async def _runtime_client(
+    output_dir: Path,
+) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient]]:
+    application = create_app(Settings(output_dir=str(output_dir)))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        yield application, client
+
+
+async def _register_completed_task(application: FastAPI, task_id: str) -> None:
+    now = datetime.now(UTC)
+    run_id = f"run_{task_id}"
+    await application.state.task_repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id=task_id,
+                mode=TaskMode.FIXTURE,
+                databases=["pubmed", "geo"],
+                title=task_id,
+                status=RunStatus.COMPLETED,
+                created_at=now,
+                updated_at=now,
+            ),
+            runs=[
+                RunRecord(
+                    run_id=run_id,
+                    task_id=task_id,
+                    request_id=f"request_{task_id}",
+                    status=RunStatus.COMPLETED,
+                    input=task_id,
+                    created_at=now,
+                    updated_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            ],
+        )
+    )
+    artifacts_dir = application.state.task_repository.tasks_dir / task_id / "artifacts"
+    manifest_path = artifacts_dir / "run_manifest.json"
+    (artifacts_dir / ".runtime-publication.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task_id": task_id,
+                "run_id": run_id,
+                "manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        "utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -123,38 +189,32 @@ def test_e2e_full_event_sequence_is_ordered_and_complete(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_e2e_api_full_round_trip_post_status_list_download(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     """POST /tasks → GET /tasks/{id} → GET /artifacts → GET /artifacts/{id}."""
     output_dir = tmp_path / "output"
-    monkeypatch.setattr(
-        routes_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with _runtime_client(output_dir) as (application, client):
         # Step 1: create task via API.
         create_response = await client.post(
             "/api/v1/tasks",
             json={
-                "topic": "breast cancer gene expression under Hsp70 inhibition",
+                "request_id": "req_e2e_round_trip",
+                "input": "breast cancer gene expression under Hsp70 inhibition",
                 "databases": ["pubmed", "geo"],
                 "mode": "fixture",
             },
         )
-        assert create_response.status_code == 201
+        assert create_response.status_code == 202
         task_id = create_response.json()["task_id"]
         assert task_id.startswith("task_")
+        await application.state.task_manager.wait_until_idle()
 
         # Step 2: get task status.
         status_response = await client.get(f"/api/v1/tasks/{task_id}")
         assert status_response.status_code == 200
         status_body = status_response.json()
-        assert status_body["task_id"] == task_id
-        assert status_body["status"] == "completed"
-        assert status_body["validation_status"] == "valid"
-        assert status_body["artifact_count"] > 0
+        assert status_body["task"]["task_id"] == task_id
+        assert status_body["task"]["status"] == "completed"
 
         # Step 3: list artifacts.
         list_response = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
@@ -274,25 +334,20 @@ def test_e2e_mid_pipeline_crash_recovery_resumes_from_failure(
 
 @pytest.mark.asyncio
 async def test_e2e_artifact_tamper_detection_returns_409(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     """Corrupting an artifact file must cause 409 on both list and download."""
     output_dir = tmp_path / "output"
-    await PipelineRunner(
-        task_id="task_tamper",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    ).run()
-    monkeypatch.setattr(
-        routes_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
+    async with _runtime_client(output_dir) as (application, client):
+        await PipelineRunner(
+            task_id="task_tamper",
+            base_dir=application.state.task_repository.tasks_dir,
+            fixture_dir=FIXTURE_DIR,
+        ).run()
+        await _register_completed_task(application, "task_tamper")
+        artifacts_dir = output_dir / "tasks" / "task_tamper" / "artifacts"
+        main_data_path = artifacts_dir / "main_data.csv"
 
-    artifacts_dir = output_dir / "tasks" / "task_tamper" / "artifacts"
-    main_data_path = artifacts_dir / "main_data.csv"
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
         # Before tamper: listing works.
         list_response = await client.get("/api/v1/tasks/task_tamper/artifacts")
         assert list_response.status_code == 200
@@ -317,8 +372,7 @@ async def test_e2e_artifact_tamper_detection_returns_409(
         )
         assert download_response_tampered.status_code == 409
 
-    # Restore original bytes to avoid side effects on shared tmp_path.
-    main_data_path.write_bytes(original_bytes)
+        main_data_path.write_bytes(original_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -449,22 +503,17 @@ def test_e2e_validation_soft_failure_marks_task_failed_without_publish(
 
 @pytest.mark.asyncio
 async def test_e2e_downloaded_bytes_sha256_matches_manifest_for_all_artifacts(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
 ) -> None:
     """Every downloadable artifact's bytes must match its manifest SHA-256."""
     output_dir = tmp_path / "output"
-    await PipelineRunner(
-        task_id="task_sha256_verify",
-        base_dir=output_dir / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    ).run()
-    monkeypatch.setattr(
-        routes_module, "settings", SimpleNamespace(output_dir=str(output_dir))
-    )
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with _runtime_client(output_dir) as (application, client):
+        await PipelineRunner(
+            task_id="task_sha256_verify",
+            base_dir=application.state.task_repository.tasks_dir,
+            fixture_dir=FIXTURE_DIR,
+        ).run()
+        await _register_completed_task(application, "task_sha256_verify")
         list_response = await client.get(
             "/api/v1/tasks/task_sha256_verify/artifacts"
         )

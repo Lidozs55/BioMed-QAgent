@@ -2,7 +2,7 @@
 
 > This document has two parts: universal rules that all agents must follow, and
 > Commonly MCP extensions that apply mandatorily when connected.
-> 
+>
 > The authoritative source for system architecture and design decisions is
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is a concise guide
 > only — it does not duplicate architecture diagrams, to avoid drift.

@@ -9,18 +9,18 @@ Validates:
 
 from __future__ import annotations
 
-from app.agent_loop.agent import create_agent, get_loaded_skill_names
+from app.agent_loop.agent import build_agent
 
 
 def test_agent_has_correct_name() -> None:
     """Agent must be named BioMedResearcher."""
-    agent = create_agent()
+    agent = build_agent().agent
     assert agent.name == "BioMedResearcher"
 
 
 def test_instructions_contain_required_keywords() -> None:
     """Instructions must mention structured data, source tracking, and CSV output."""
-    agent = create_agent()
+    agent = build_agent().agent
 
     # 检查结构化数据关键词
     assert "CSV" in agent.instructions, (
@@ -38,7 +38,7 @@ def test_instructions_contain_required_keywords() -> None:
 
 def test_agent_instructions_are_non_empty() -> None:
     """Agent must have non-empty instructions string."""
-    agent = create_agent()
+    agent = build_agent().agent
     assert isinstance(agent.instructions, str)
     assert len(agent.instructions) > 100, (
         "instructions should be substantial ( > 100 chars )"
@@ -47,13 +47,13 @@ def test_agent_instructions_are_non_empty() -> None:
 
 def test_tools_list_is_non_empty() -> None:
     """Agent must be loaded with at least one tool."""
-    agent = create_agent()
+    agent = build_agent().agent
     assert len(agent.tools) > 0, "agent should have at least one tool loaded"
 
 
 def test_model_is_configured() -> None:
     """Agent must have a non-None model attribute."""
-    agent = create_agent()
+    agent = build_agent().agent
     assert agent.model is not None, "agent.model must not be None"
 
 
@@ -67,8 +67,8 @@ _ACQUISITION_SKILLS = {"geo", "gdc", "pdb", "xena", "reactome", "pubchem", "brow
 
 def test_database_filter_loads_only_selected_acquisition_skills() -> None:
     """When databases=["pubmed", "geo"], only the geo acquisition skill loads."""
-    create_agent(databases=["pubmed", "geo"])
-    loaded = set(get_loaded_skill_names())
+    build = build_agent(databases=["pubmed", "geo"])
+    loaded = set(build.skill_names)
     # geo acquisition skill must be loaded.
     assert "geo" in loaded
     # Other acquisition skills must NOT be loaded.
@@ -80,8 +80,8 @@ def test_database_filter_loads_only_selected_acquisition_skills() -> None:
 
 def test_database_filter_loads_multiple_acquisition_skills() -> None:
     """When databases includes multiple sources, all matching acquisition skills load."""
-    create_agent(databases=["pubmed", "geo", "pdb"])
-    loaded = set(get_loaded_skill_names())
+    build = build_agent(databases=["pubmed", "geo", "pdb"])
+    loaded = set(build.skill_names)
     assert "geo" in loaded
     assert "pdb" in loaded
     # Unselected acquisition skills must NOT be loaded.
@@ -93,8 +93,8 @@ def test_database_filter_loads_multiple_acquisition_skills() -> None:
 
 def test_database_filter_none_loads_all_skills() -> None:
     """When databases=None, all enabled acquisition skills load (no filtering)."""
-    create_agent(databases=None)
-    loaded = set(get_loaded_skill_names())
+    build = build_agent(databases=None)
+    loaded = set(build.skill_names)
     # All acquisition skills should be present when no filtering is applied.
     assert "geo" in loaded
     assert "gdc" in loaded
@@ -103,8 +103,8 @@ def test_database_filter_none_loads_all_skills() -> None:
 
 def test_database_filter_always_loads_non_acquisition_skills() -> None:
     """Non-acquisition skills (discovery, processing, analysis) load regardless of databases."""
-    create_agent(databases=["geo"])
-    loaded = set(get_loaded_skill_names())
+    build = build_agent(databases=["geo"])
+    loaded = set(build.skill_names)
     # pubmed is a discovery skill and must always be loaded.
     assert "pubmed" in loaded
     # literature_understanding is a discovery skill.

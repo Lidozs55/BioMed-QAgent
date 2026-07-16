@@ -1,16 +1,93 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ChatPanel } from "@/components/ChatPanel"
-import { DatabaseSelector } from "@/components/DatabaseSelector"
-import { useAgentStore } from "@/stores/agentStore"
+import { ChatPanel } from "@/components/ChatPanel";
+import { DatabaseSelector } from "@/components/DatabaseSelector";
+import type { StartTaskInput, TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
+import { createInitialRuntimeState } from "@/runtime/reducer";
+import { useAgentStore } from "@/stores/agentStore";
+
+const CREATED_AT = "2026-07-14T00:00:00Z";
+
+function seedBackgroundTask(): void {
+  useAgentStore.getState().mergeTaskPage(
+    {
+      active_items: [
+        {
+          task_id: "task_background",
+          mode: "agent",
+          databases: ["pubmed"],
+          title: "Background research",
+          status: "running",
+          active_run_id: "run_background",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          latest_sequence: 2,
+        },
+      ],
+      items: [],
+      next_cursor: null,
+    },
+    false,
+  );
+}
+
+function seedTerminalTask(
+  mode: "agent" | "fixture" = "agent",
+  taskId = "task_terminal",
+  olderMessagesCursor: string | null = null,
+): void {
+  const snapshot: TaskSnapshot = {
+    task: {
+      task_id: taskId,
+      mode,
+      databases: ["pubmed"],
+      title: `${taskId} task`,
+      status: "completed",
+      active_run_id: null,
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 3,
+    },
+    runs: [
+      {
+        run_id: `run_${taskId}`,
+        task_id: taskId,
+        request_id: `req_${taskId}`,
+        status: "completed",
+        input: "initial question",
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        started_at: CREATED_AT,
+        finished_at: CREATED_AT,
+        error: null,
+      },
+    ],
+    messages: [
+      {
+        message_id: `message_${taskId}`,
+        task_id: taskId,
+        run_id: `run_${taskId}`,
+        ordinal: 1,
+        role: "user",
+        content: `${taskId} question`,
+        created_at: CREATED_AT,
+      },
+    ],
+    older_messages_cursor: olderMessagesCursor,
+  };
+  useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+  useAgentStore.getState().setActiveTaskId(taskId);
+}
 
 function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise
-  })
-  return { promise, resolve }
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("ChatPanel", () => {
@@ -24,288 +101,319 @@ describe("ChatPanel", () => {
       addListener: () => undefined,
       removeListener: () => undefined,
       dispatchEvent: () => false,
-    })
-  })
+    });
+  });
 
   beforeEach(() => {
     useAgentStore.setState({
-      messages: [],
-      traces: [],
-      isConnected: true,
-      isRunning: false,
+      ...createInitialRuntimeState(),
+      connectionStatus: "connected",
       databases: [
-        { id: "pubmed", name: "PubMed", category: "discovery", description: "Literature" },
-        { id: "geo", name: "GEO", category: "acquisition", description: "Expression" },
+        {
+          id: "pubmed",
+          name: "PubMed",
+          category: "discovery",
+          description: "Literature",
+        },
+        {
+          id: "geo",
+          name: "GEO",
+          category: "acquisition",
+          description: "Expression",
+        },
       ],
-      selectedDatabases: [],
-      artifacts: [],
-      taskId: null,
-      fixtureError: null,
-      sessions: [],
-      currentSessionId: null,
-      pipelineStage: "idle",
-    })
-  })
+    });
+  });
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
+  it("shows fixture source validation without mutating task projections", () => {
+    seedBackgroundTask();
+    const before = useAgentStore.getState().tasksById;
+    const startTask = vi.fn<(input: StartTaskInput) => Promise<TaskRunAccepted>>();
+    render(<ChatPanel startTask={startTask} />);
 
-  it("shows fixture source validation next to the research form", () => {
-    render(<ChatPanel send={vi.fn()} />)
     fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
       target: { value: "Review validation" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
+    });
+    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "固定验收案例只能选择 PubMed 和 GEO。",
-    )
-    expect(useAgentStore.getState().traces).toEqual([])
-  })
+    );
+    expect(startTask).not.toHaveBeenCalled();
+    expect(useAgentStore.getState().tasksById).toBe(before);
+  });
 
-  it("does not carry a fixture validation error into a corrected run", async () => {
-    const fetchMock = vi.fn((input: string | URL | Request) => Promise.resolve({
-      ok: true,
-      json: async () => input === "/api/v1/tasks"
-        ? { task_id: "task_fixture", status: "completed" }
-        : { artifacts: [] },
-    }))
-    vi.stubGlobal("fetch", fetchMock)
-    render(<ChatPanel send={vi.fn()} />)
+  it("submits corrected fixture input through the semantic REST controller", async () => {
+    const accepted: TaskRunAccepted = {
+      request_id: "req_fixture",
+      task_id: "task_fixture",
+      run_id: "run_fixture",
+      status: "queued",
+    };
+    const startTask = vi.fn().mockResolvedValue(accepted);
+    render(<ChatPanel startTask={startTask} />);
     fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Run corrected fixture" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
-    expect(screen.getByRole("alert")).toBeInTheDocument()
+      target: { value: "  Run fixture  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "全选" }))
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
-
-    await waitFor(() => {
-      expect(useAgentStore.getState().taskId).toBe("task_fixture")
-      expect(useAgentStore.getState().isRunning).toBe(false)
-    })
-    expect(useAgentStore.getState().traces).toEqual([])
-  })
-
-  it("clears fixture errors when the workspace is reset", () => {
-    render(<ChatPanel send={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Invalid fixture" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
-    expect(screen.getByRole("alert")).toBeInTheDocument()
-
-    act(() => useAgentStore.getState().reset())
-
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-  })
-
-  it("clears fixture errors when a saved session is loaded", () => {
-    useAgentStore.setState({
-      sessions: [{
-        taskId: "task_saved",
-        topic: "Saved task",
+    await waitFor(() =>
+      expect(startTask).toHaveBeenCalledWith({
+        input: "Run fixture",
         databases: ["pubmed", "geo"],
-        createdAt: 1,
-        messageCount: 1,
-        messages: [{ id: "saved-message", role: "user", content: "Saved task" }],
-        traces: [],
-        artifacts: [],
-        pipelineStage: "done",
-      }],
-    })
-    render(<ChatPanel send={vi.fn()} />)
-    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Invalid fixture" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
-    expect(screen.getByRole("alert")).toBeInTheDocument()
-
-    act(() => useAgentStore.getState().loadSession("task_saved"))
-
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-  })
-
-  it("ignores artifacts returned for a task that is no longer active", async () => {
-    const artifactRequest = deferred<{
-      ok: boolean
-      json: () => Promise<{
-        artifacts: Array<{
-          artifact_id: string
-          name: string
-          size: number
-          sha256: string
-          media_type: string
-        }>
-      }>
-    }>()
-    const fetchMock = vi.fn().mockReturnValue(artifactRequest.promise)
-    vi.stubGlobal("fetch", fetchMock)
-    useAgentStore.setState({ taskId: "task_old" })
-
-    render(<ChatPanel send={vi.fn()} />)
-
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/tasks/task_old/artifacts", undefined)
-    act(() => {
-      useAgentStore.setState({
-        taskId: "task_new",
-        isRunning: true,
-        artifacts: [{ artifactId: "current", name: "current.csv", size: 10 }],
-      })
-    })
-    await act(async () => {
-      artifactRequest.resolve({
-        ok: true,
-        json: async () => ({
-          artifacts: [{
-            artifact_id: "stale",
-            name: "stale.csv",
-            size: 20,
-            sha256: "hash",
-            media_type: "text/csv",
-          }],
-        }),
-      })
-      await artifactRequest.promise
-    })
-
-    await waitFor(() => {
-      expect(useAgentStore.getState().artifacts).toEqual([
-        { artifactId: "current", name: "current.csv", size: 10 },
-      ])
-    })
-  })
-
-  it("archives and clears an old task before starting a fixture", async () => {
-    const createRequest = deferred<{
-      ok: boolean
-      json: () => Promise<{ task_id: string; status: string }>
-    }>()
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      if (input === "/api/v1/tasks") return createRequest.promise
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ artifacts: [] }),
-      })
-    })
-    vi.stubGlobal("fetch", fetchMock)
-    useAgentStore.setState({
-      taskId: "task_old",
-      currentSessionId: "task_old",
-      selectedDatabases: ["pubmed", "geo"],
-      messages: [{ id: "old-message", role: "assistant", content: "Old answer" }],
-      traces: [{ id: "old-trace", kind: "tool_output", output: "Old trace" }],
-      artifacts: [{ artifactId: "old-artifact", name: "old.csv", size: 10 }],
-      pipelineStage: "done",
-    })
-    render(<ChatPanel send={vi.fn()} />)
-    fireEvent.click(screen.getByRole("tab", { name: "设置" }))
-    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Run fresh fixture" },
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
-
-    const runningState = useAgentStore.getState()
-    expect(runningState.sessions).toEqual([
-      expect.objectContaining({
-        taskId: "task_old",
-        messages: [{ id: "old-message", role: "assistant", content: "Old answer" }],
-        traces: [{ id: "old-trace", kind: "tool_output", output: "Old trace" }],
-        artifacts: [{ artifactId: "old-artifact", name: "old.csv", size: 10 }],
+        mode: "fixture",
       }),
-    ])
-    expect(runningState.taskId).toBeNull()
-    expect(runningState.selectedDatabases).toEqual(["pubmed", "geo"])
-    expect(runningState.messages).toEqual([
-      expect.objectContaining({ role: "user", content: "Run fresh fixture" }),
-    ])
-    expect(runningState.traces).toEqual([])
-    expect(runningState.artifacts).toEqual([])
+    );
+    expect(useAgentStore.getState().draft.error).toBeNull();
+  });
 
-    await act(async () => {
-      createRequest.resolve({
-        ok: true,
-        json: async () => ({ task_id: "task_new", status: "completed" }),
-      })
-      await createRequest.promise
-    })
-    await waitFor(() => {
-      expect(useAgentStore.getState().taskId).toBe("task_new")
-      expect(useAgentStore.getState().isRunning).toBe(false)
-    })
-  })
+  it("keeps a blank draft usable while another task is running", async () => {
+    seedBackgroundTask();
+    const before = useAgentStore.getState().tasksById;
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_new",
+      task_id: "task_new",
+      run_id: "run_new",
+      status: "queued",
+    });
+    render(<ChatPanel startTask={startTask} />);
 
-  it("clears an untracked draft before starting a fixture", async () => {
-    const createRequest = deferred<{
-      ok: boolean
-      json: () => Promise<{ task_id: string; status: string }>
-    }>()
-    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
-      if (input === "/api/v1/tasks") return createRequest.promise
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ artifacts: [] }),
-      })
-    }))
-    useAgentStore.setState({
-      selectedDatabases: ["pubmed", "geo"],
-      messages: [{ id: "draft-message", role: "user", content: "Failed draft" }],
-      traces: [{ id: "draft-error", kind: "error", message: "Failed before start" }],
-      artifacts: [{ artifactId: "draft-artifact", name: "draft.csv", size: 10 }],
-      pipelineStage: "error",
-    })
-    render(<ChatPanel send={vi.fn()} />)
-    fireEvent.click(screen.getByRole("tab", { name: "设置" }))
+    expect(screen.getByPlaceholderText("输入研究目标...")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "全选" })).toBeEnabled();
     fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Clean fixture" },
-    })
+      target: { value: "  New research  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }))
+    await waitFor(() =>
+      expect(startTask).toHaveBeenCalledWith({
+        input: "New research",
+        databases: [],
+        mode: "agent",
+      }),
+    );
+    expect(useAgentStore.getState().tasksById).toBe(before);
+  });
 
-    const runningState = useAgentStore.getState()
-    expect(runningState.messages).toEqual([
-      expect.objectContaining({ role: "user", content: "Clean fixture" }),
-    ])
-    expect(runningState.traces).toEqual([])
-    expect(runningState.artifacts).toEqual([])
-    expect(runningState.selectedDatabases).toEqual(["pubmed", "geo"])
+  it("stores draft text canonically and clears it for new research", () => {
+    render(<ChatPanel startTask={vi.fn()} />);
+    const input = screen.getByPlaceholderText("输入研究目标...");
+
+    fireEvent.change(input, { target: { value: "draft question" } });
+    expect(useAgentStore.getState().draft.input).toBe("draft question");
+    act(() => useAgentStore.getState().showNewDraft());
+
+    expect(input).toHaveValue("");
+  });
+
+  it("notifies consumers when selecting and clearing all draft databases", () => {
+    const onToggle = vi.fn();
+    render(<DatabaseSelector onToggle={onToggle} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    expect(onToggle).toHaveBeenNthCalledWith(1, "pubmed", true);
+    expect(onToggle).toHaveBeenNthCalledWith(2, "geo", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    expect(onToggle).toHaveBeenNthCalledWith(3, "pubmed", false);
+    expect(onToggle).toHaveBeenNthCalledWith(4, "geo", false);
+  });
+
+  it("enables continuation only for an idle terminal agent task", async () => {
+    seedTerminalTask();
+    const continueTask = vi.fn().mockResolvedValue({
+      request_id: "req_follow",
+      task_id: "task_terminal",
+      run_id: "run_follow",
+      status: "queued",
+    });
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "follow up" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+
+    await waitFor(() =>
+      expect(continueTask).toHaveBeenCalledWith("task_terminal", {
+        input: "follow up",
+      }),
+    );
+  });
+
+  it("disables continuation while a task is active or fixture-only", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    const { rerender } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+
+    act(() => seedTerminalTask("fixture"));
+    rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+  });
+
+  it("keeps continuation text and projection unchanged on a 409 response", async () => {
+    seedTerminalTask();
+    const before = useAgentStore.getState().tasksById.task_terminal;
+    const continueTask = vi.fn().mockRejectedValue(new Error("409 conflict"));
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "keep this" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("409 conflict"));
+    expect(input).toHaveValue("keep this");
+    expect(useAgentStore.getState().tasksById.task_terminal).toBe(before);
+  });
+
+  it("submits the new draft when Enter follows a task view", async () => {
+    seedTerminalTask();
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_new_draft",
+      task_id: "task_new_draft",
+      run_id: "run_new_draft",
+      status: "queued",
+    } satisfies TaskRunAccepted);
+    render(<ChatPanel startTask={startTask} continueTask={vi.fn()} />);
+
+    act(() => useAgentStore.getState().showNewDraft());
+    const input = screen.getByPlaceholderText("输入研究目标...");
+    fireEvent.change(input, { target: { value: "new draft" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() =>
+      expect(startTask).toHaveBeenCalledWith({
+        input: "new draft",
+        databases: [],
+        mode: "agent",
+      }),
+    );
+  });
+
+  it("does not let an earlier submission clear a newer draft", async () => {
+    const submission = deferred<TaskRunAccepted>();
+    const startTask = vi.fn().mockReturnValue(submission.promise);
+    render(<ChatPanel startTask={startTask} />);
+
+    const input = screen.getByPlaceholderText("输入研究目标...");
+    fireEvent.change(input, { target: { value: "first draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+    act(() => useAgentStore.getState().showNewDraft());
+    fireEvent.change(input, { target: { value: "newer draft" } });
 
     await act(async () => {
-      createRequest.resolve({
-        ok: true,
-        json: async () => ({ task_id: "task_clean", status: "completed" }),
-      })
-      await createRequest.promise
-    })
-    await waitFor(() => {
-      expect(useAgentStore.getState().taskId).toBe("task_clean")
-    })
-  })
+      submission.resolve({
+        request_id: "req_first",
+        task_id: "task_first",
+        run_id: "run_first",
+        status: "queued",
+      });
+      await submission.promise;
+    });
 
-  it("disables every database selection control while a task is running", () => {
-    useAgentStore.setState({ isRunning: true })
+    expect(input).toHaveValue("newer draft");
+    expect(screen.getByPlaceholderText("输入研究目标...")).toBeVisible();
+  });
 
-    render(<DatabaseSelector />)
+  it("keeps Task B continuation enabled while Task A is pending", async () => {
+    seedTerminalTask("agent", "task_a");
+    seedTerminalTask("agent", "task_b");
+    useAgentStore.getState().setActiveTaskId("task_a");
+    const continuation = deferred<TaskRunAccepted>();
+    const continueTask = vi.fn().mockReturnValue(continuation.promise);
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
 
-    expect(screen.getByRole("button", { name: "全选" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: /PubMed/ })).toBeDisabled()
-    expect(screen.getByRole("button", { name: /GEO/ })).toBeDisabled()
-  })
+    const inputA = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(inputA, { target: { value: "question A" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+    act(() => useAgentStore.getState().setActiveTaskId("task_b"));
 
-  it("notifies consumers when selecting and clearing all databases", () => {
-    const onToggle = vi.fn()
-    render(<DatabaseSelector onToggle={onToggle} />)
+    const inputB = screen.getByRole("textbox", { name: "继续提问" });
+    expect(inputB).toBeEnabled();
+    fireEvent.change(inputB, { target: { value: "question B" } });
+    expect(screen.getByRole("button", { name: "发送继续问题" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "全选" }))
-    expect(onToggle).toHaveBeenNthCalledWith(1, "pubmed", true)
-    expect(onToggle).toHaveBeenNthCalledWith(2, "geo", true)
+    await act(async () => {
+      continuation.resolve({
+        request_id: "req_follow_a",
+        task_id: "task_a",
+        run_id: "run_follow_a",
+        status: "queued",
+      });
+      await continuation.promise;
+    });
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "取消全选" }))
-    expect(onToggle).toHaveBeenNthCalledWith(3, "pubmed", false)
-    expect(onToggle).toHaveBeenNthCalledWith(4, "geo", false)
-  })
-})
+  it("shows a task-scoped load-earlier action only when a cursor exists", async () => {
+    seedTerminalTask("agent", "task_history", "cursor_before_latest");
+    const loading = deferred<void>();
+    const loadOlderMessages = vi.fn(() => loading.promise);
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={loadOlderMessages}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    );
+
+    expect(loadOlderMessages).toHaveBeenCalledWith("task_history");
+    expect(
+      screen.getByRole("button", { name: "正在加载更早消息" }),
+    ).toBeDisabled();
+    await act(async () => {
+      loading.resolve();
+      await loading.promise;
+    });
+    expect(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps load-earlier errors scoped to the task when switching", async () => {
+    seedTerminalTask("agent", "task_a", "cursor_a");
+    seedTerminalTask("agent", "task_b", "cursor_b");
+    useAgentStore.getState().setActiveTaskId("task_a");
+    const loadOlderMessages = vi.fn().mockRejectedValue(new Error("history failed"));
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={loadOlderMessages}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早消息" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("history failed"),
+    );
+
+    act(() => useAgentStore.getState().setActiveTaskId("task_b"));
+    expect(screen.queryByText("history failed")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "加载更早消息" }),
+    ).toBeEnabled();
+
+    act(() => useAgentStore.getState().setActiveTaskId("task_a"));
+    expect(screen.getByRole("alert")).toHaveTextContent("history failed");
+  });
+
+  it("hides the load-earlier action after the full history is loaded", () => {
+    seedTerminalTask();
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        loadOlderMessages={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "加载更早消息" }),
+    ).not.toBeInTheDocument();
+  });
+});

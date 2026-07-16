@@ -1,255 +1,135 @@
-import {
-	ChartBarIcon,
-	CheckCircleIcon,
-	DatabaseIcon,
-	GearIcon,
-	MagnifyingGlassIcon,
-} from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import {
-	Progress,
-	ProgressIndicator,
-	ProgressTrack,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
 } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
-import { type TraceItem, useAgentStore } from "@/stores/agentStore";
+import { TaskStatusIcon } from "@/components/taskStatus";
+import { TASK_STATUS_META } from "@/components/taskStatusMeta";
+import type { AttemptStatus, StageName } from "@/runtime/contracts";
+import type { FixtureStageProjection, TaskProjection } from "@/runtime/types";
 
-// ---------------------------------------------------------------------------
-// Stage definitions: each stage maps a set of tool-call names to a pipeline
-// step via a predicate.  Complete (index 4) is special — it can only be
-// reached when isRunning === false and pipelineStage === "done".
-// ---------------------------------------------------------------------------
-interface StageDef {
-	label: string;
-	/** Returns true when a tool-call name belongs to this stage. */
-	toolMatches: (name: string) => boolean;
-	icon: React.ElementType;
-}
-
-const STAGES: StageDef[] = [
-	{
-		label: "文献检索",
-		toolMatches: (name: string) =>
-			["search_literature", "read_file", "list_files"].includes(name),
-		icon: MagnifyingGlassIcon,
-	},
-	{
-		label: "数据获取",
-		toolMatches: (name: string) =>
-			name === "parse_pdf" ||
-			name.startsWith("download_") ||
-			name.startsWith("fetch_"),
-		icon: DatabaseIcon,
-	},
-	{
-		label: "数据处理",
-		toolMatches: (name: string) =>
-			name === "parse_pdf" ||
-			name.startsWith("clean_") ||
-			name.startsWith("merge_") ||
-			name.startsWith("transform_"),
-		icon: GearIcon,
-	},
-	{
-		label: "数据分析",
-		toolMatches: (name: string) =>
-			name === "analyze_records" || name === "write_file",
-		icon: ChartBarIcon,
-	},
-	{
-		label: "完成",
-		toolMatches: () => false,
-		icon: CheckCircleIcon,
-	},
+const FIXTURE_STAGE_ORDER: readonly StageName[] = [
+  "discovery",
+  "acquisition",
+  "processing",
+  "artifact_build",
+  "validation",
 ];
 
-type StageStatus = "pending" | "active" | "completed" | "failed";
+const STAGE_LABELS: Record<StageName, string> = {
+  discovery: "文献/数据发现",
+  acquisition: "数据获取",
+  processing: "数据处理",
+  artifact_build: "产物构建",
+  validation: "结果验证",
+};
 
-// ---------------------------------------------------------------------------
-// Infer the highest stage index that has been reached by at least one
-// tool-call trace.  Returns -1 when nothing has been matched yet.
-// ---------------------------------------------------------------------------
-function inferMaxStage(
-	toolCallTraces: TraceItem[],
-	isRunning: boolean,
-	pipelineStage: string,
-): number {
-	let max = -1;
+const ATTEMPT_LABELS: Record<AttemptStatus, string> = {
+  pending: "待处理",
+  running: "执行中",
+  succeeded: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  skipped: "已跳过",
+};
 
-	for (const trace of toolCallTraces) {
-		const name = trace.name;
-		if (!name) continue;
+const ATTEMPT_VARIANTS: Record<
+  AttemptStatus,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
+  pending: "outline",
+  running: "default",
+  succeeded: "secondary",
+  failed: "destructive",
+  cancelled: "destructive",
+  skipped: "outline",
+};
 
-		// Walk stages from highest to lowest so that parse_pdf (which appears in
-		// two stages) resolves to the later one.
-		for (let i = STAGES.length - 1; i >= 0; i--) {
-			if (STAGES[i].toolMatches(name)) {
-				if (i > max) max = i;
-				break;
-			}
-		}
-	}
-
-	// Override: the "完成" stage is reached when the runner signals done.
-	if (!isRunning && pipelineStage === "done") {
-		max = Math.max(max, STAGES.length - 1);
-	}
-
-	return max;
+function stageProjection(
+  task: TaskProjection,
+  stage: StageName,
+): FixtureStageProjection {
+  return (
+    task.fixtureStages[stage] ?? {
+      stage,
+      stageAttemptId: `pending:${stage}`,
+      attempt: 0,
+      status: "pending",
+      startedAt: null,
+      finishedAt: null,
+      outputDigest: null,
+      error: null,
+      skipReason: null,
+      reusedStageAttemptId: null,
+    }
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-export default function ResearchPipeline() {
-	const traces = useAgentStore((s) => s.traces);
-	const isRunning = useAgentStore((s) => s.isRunning);
-	const pipelineStage = useAgentStore((s) => s.pipelineStage);
+export interface ResearchPipelineProps {
+  task?: TaskProjection;
+}
 
-	// ---- failsafe: 30 s with no tool calls while running --------------------
-	const [failsafeActive, setFailsafeActive] = useState(false);
-	const failsafeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+export default function ResearchPipeline({ task }: ResearchPipelineProps) {
+  if (task === undefined || task.summary.mode !== "fixture") {
+    return (
+      <Empty className="min-h-24 border-0 p-4">
+        <EmptyHeader>
+          <EmptyTitle>暂无固定流程</EmptyTitle>
+          <EmptyDescription>固定验收任务的阶段进度会显示在这里。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
 
-	useEffect(() => {
-		const hasToolCalls = traces.some((t) => t.kind === "tool_call");
+  const stages = FIXTURE_STAGE_ORDER.map((stage) => stageProjection(task, stage));
+  const completedStages = stages.filter(
+    (stage) => stage.status === "succeeded" || stage.status === "skipped",
+  ).length;
+  const progress = Math.round((completedStages / FIXTURE_STAGE_ORDER.length) * 100);
+  const terminalMeta = TASK_STATUS_META[task.summary.status];
 
-		if (isRunning && !hasToolCalls) {
-			if (!failsafeTimer.current) {
-				failsafeTimer.current = setTimeout(
-					() => setFailsafeActive(true),
-					30_000,
-				);
-			}
-		} else {
-			if (failsafeTimer.current) {
-				clearTimeout(failsafeTimer.current);
-				failsafeTimer.current = null;
-			}
-			const resetTimer = setTimeout(() => setFailsafeActive(false), 0);
-			return () => clearTimeout(resetTimer);
-		}
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid="research-pipeline">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <Progress value={progress} className="min-w-0 flex-1" aria-label="固定流程进度">
+          <ProgressLabel>固定流程进度</ProgressLabel>
+          <ProgressValue>{() => `${progress}%`}</ProgressValue>
+        </Progress>
+        <Badge variant={terminalMeta.badgeVariant} className="shrink-0">
+          <TaskStatusIcon status={task.summary.status} />
+          {terminalMeta.label}
+        </Badge>
+      </div>
 
-		return () => {
-			if (failsafeTimer.current) {
-				clearTimeout(failsafeTimer.current);
-				failsafeTimer.current = null;
-			}
-		};
-	}, [isRunning, traces]);
-
-	// ---- derive stage statuses from trace stream ----------------------------
-	const toolCallTraces = useMemo(
-		() => traces.filter((t) => t.kind === "tool_call"),
-		[traces],
-	);
-
-	const maxStageIndex = useMemo(
-		() => inferMaxStage(toolCallTraces, isRunning, pipelineStage),
-		[toolCallTraces, isRunning, pipelineStage],
-	);
-
-	const stageStatuses = useMemo((): StageStatus[] => {
-		const statuses: StageStatus[] = Array.from<StageStatus>({
-			length: STAGES.length,
-		}).fill("pending");
-
-		if (maxStageIndex >= 0 || pipelineStage !== "idle") {
-			for (let i = 0; i < STAGES.length; i++) {
-				if (i < maxStageIndex) {
-					statuses[i] = "completed";
-				} else if (i === maxStageIndex) {
-					statuses[i] = "active";
-				}
-			}
-		}
-
-		// Error escalation: the current active stage (or the last one if the run
-		// already ended) becomes "failed".
-		if (pipelineStage === "error" && maxStageIndex >= 0) {
-			statuses[maxStageIndex] = "failed";
-		}
-
-		return statuses;
-	}, [maxStageIndex, pipelineStage]);
-
-	// ---- visibility ---------------------------------------------------------
-	if (pipelineStage === "idle" && !isRunning && traces.length === 0) {
-		return null;
-	}
-
-	// ---- progress bar -------------------------------------------------------
-	const completedCount = stageStatuses.filter((s) => s === "completed").length;
-	const progressPct = (completedCount / STAGES.length) * 100;
-
-	return (
-		<Card className="w-full" size="sm">
-			<CardContent>
-				<div className="flex flex-col gap-3 py-1">
-					<Progress value={progressPct}>
-						<ProgressTrack>
-							<ProgressIndicator />
-						</ProgressTrack>
-					</Progress>
-
-					{failsafeActive && (
-						<p className="text-center text-xs text-muted-foreground">
-							等待Agent响应…
-						</p>
-					)}
-
-					<div className="flex items-start gap-2 overflow-x-auto">
-						{STAGES.map((stage, index) => {
-							const status = stageStatuses[index];
-							const Icon = stage.icon;
-
-							return (
-								<div
-									key={stage.label}
-									className={cn(
-										"flex min-w-0 flex-1 flex-col items-center gap-1 text-center",
-										status === "pending" && "opacity-50",
-									)}
-								>
-									<Icon
-										className={cn(
-											"size-5 shrink-0",
-											status === "active" && "text-primary",
-											status === "completed" && "text-secondary-foreground",
-											status === "failed" && "text-destructive",
-											status === "pending" && "text-muted-foreground",
-										)}
-									/>
-									<span className="text-[0.625rem] leading-tight font-medium whitespace-nowrap">
-										{stage.label}
-									</span>
-									<Badge
-										variant={
-											status === "active"
-												? "default"
-												: status === "completed"
-													? "secondary"
-													: status === "failed"
-														? "destructive"
-														: "outline"
-										}
-										className={cn(status === "active" && "animate-pulse")}
-									>
-										{status === "active"
-											? "进行中"
-											: status === "completed"
-												? "已完成"
-												: status === "failed"
-													? "失败"
-													: "等待"}
-									</Badge>
-								</div>
-							);
-						})}
-					</div>
-				</div>
-			</CardContent>
-		</Card>
-	);
+      <div className="flex min-w-0 gap-2 overflow-x-auto pb-1" aria-label="固定流程阶段">
+        {stages.map((stage) => (
+          <div
+            key={stage.stage}
+            data-stage={stage.stage}
+            className="flex min-w-32 shrink-0 flex-col gap-2 rounded-lg border p-2"
+          >
+            <span className="truncate text-xs font-medium" title={STAGE_LABELS[stage.stage]}>
+              {STAGE_LABELS[stage.stage]}
+            </span>
+            <Badge variant={ATTEMPT_VARIANTS[stage.status]} className="w-fit">
+              {ATTEMPT_LABELS[stage.status]}
+            </Badge>
+            {stage.error && (
+              <span className="break-words text-xs text-muted-foreground">{stage.error}</span>
+            )}
+            {stage.skipReason && (
+              <span className="break-words text-xs text-muted-foreground">{stage.skipReason}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

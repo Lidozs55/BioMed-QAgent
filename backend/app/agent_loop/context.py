@@ -4,8 +4,10 @@
 
 对应 TODO.md Section 4.2：扩展 RunContext 字段。
 """
+
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ class RunContext:
         artifacts: 产出物文件路径（CSV、报告、图表等）。
         warnings: 过程中产生的警告列表。
         query_log: 记录每次检索的 query/source/status/records_count。
+        cancellation_requested: Cooperative cancellation token for tools.
     """
 
     task_id: str = "default"
@@ -45,6 +48,10 @@ class RunContext:
 
     query_log: list[dict] = field(default_factory=list)
     query_log_summary: str = ""
+    cancellation_requested: asyncio.Event = field(
+        default_factory=asyncio.Event,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -68,24 +75,35 @@ class RunContext:
         """记录 raw 目录下的本地文件路径。"""
         self.raw_assets.append(path)
 
-    def add_warning(self, severity: str, message: str, source: str | None = None) -> None:
+    def add_warning(
+        self, severity: str, message: str, source: str | None = None
+    ) -> None:
         """记录一条警告。"""
-        self.warnings.append({
-            "severity": severity, "message": message, "source": source,
-        })
+        self.warnings.append(
+            {
+                "severity": severity,
+                "message": message,
+                "source": source,
+            }
+        )
 
-    def log_query(self, query: str, source: str, status: str, records_count: int = 0) -> None:
+    def log_query(
+        self, query: str, source: str, status: str, records_count: int = 0
+    ) -> None:
         """记录一次查询日志。"""
-        self.query_log.append({
-            "query": query,
-            "source": source,
-            "status": status,
-            "records_count": records_count,
-        })
+        self.query_log.append(
+            {
+                "query": query,
+                "source": source,
+                "status": status,
+                "records_count": records_count,
+            }
+        )
 
     def query_log_size(self) -> int:
         """估算 query_log 的字符总量（触发压缩判断用）。"""
         import json
+
         return len(json.dumps(self.query_log, ensure_ascii=False))
 
     def compress_log(self, keep_recent: int, summary: str) -> int:
