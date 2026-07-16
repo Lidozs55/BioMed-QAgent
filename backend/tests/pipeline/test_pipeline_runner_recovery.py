@@ -17,16 +17,238 @@ import pytest
 from app.domain.contracts import (
     AttemptStatus,
     EventEnvelope,
+    RunManifest,
     StageName,
     TaskState,
 )
 from app.pipeline.runner import PipelineRunner
+from app.pipeline.stages import StageResult, ValidationOutput
+from app.pipeline.state import StageOutputEnvelope
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 
 class HardPipelineInterruption(BaseException):
     """Simulate process death without runner-owned terminalization."""
+
+
+def _canonical_json_sha256(payload: object) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _make_artifact_checkpoint_match_validated_staging(task_root: Path) -> None:
+    staging = task_root / "staging" / "run_pinned_fixture"
+    checkpoint_path = task_root / "state" / "artifact_build_output.json"
+    checkpoint = json.loads(checkpoint_path.read_text("utf-8"))
+    for name in ("quality_report.csv", "run_manifest.json"):
+        path = staging / name
+        checkpoint["output"]["artifact_paths"].append(str(path))
+        checkpoint["files"].append(
+            {
+                "schema_version": "1.0",
+                "relative_path": path.relative_to(task_root).as_posix(),
+                "size_bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    checkpoint["files"].sort(key=lambda item: item["relative_path"])
+    checkpoint["output_sha256"] = _canonical_json_sha256(checkpoint["output"])
+    StageOutputEnvelope.model_validate(checkpoint)
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, indent=2) + "\n",
+        "utf-8",
+    )
+
+
+def test_runner_reruns_validation_when_envelope_artifacts_diverge_from_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = "task_validation_envelope_divergence"
+    task_root = base_dir / task_id
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state is TaskState.COMPLETED
+
+    staging = task_root / "staging" / "run_pinned_fixture"
+    _make_artifact_checkpoint_match_validated_staging(task_root)
+
+    validation_checkpoint_path = task_root / "state" / "validation_output.json"
+    validation_checkpoint = json.loads(
+        validation_checkpoint_path.read_text("utf-8")
+    )
+    original_output = ValidationOutput.model_validate(
+        validation_checkpoint["output"]
+    )
+    physical_manifest_before = (staging / "run_manifest.json").read_bytes()
+    removed = validation_checkpoint["output"]["artifacts"].pop()
+    removed_path = f"staging/run_pinned_fixture/{removed['name']}"
+    validation_checkpoint["files"] = [
+        item
+        for item in validation_checkpoint["files"]
+        if item["relative_path"] != removed_path
+    ]
+    validation_checkpoint["output_sha256"] = _canonical_json_sha256(
+        validation_checkpoint["output"]
+    )
+    StageOutputEnvelope.model_validate(validation_checkpoint)
+    validation_checkpoint_path.write_text(
+        json.dumps(validation_checkpoint, indent=2) + "\n",
+        "utf-8",
+    )
+    assert (staging / "run_manifest.json").read_bytes() == physical_manifest_before
+
+    validation_attempt = next(
+        attempt
+        for attempt in runner1.state.stage_attempts
+        if attempt.stage is StageName.VALIDATION
+        and attempt.status is AttemptStatus.SUCCEEDED
+    )
+    calls = 0
+
+    def observed_validation(*args, **kwargs) -> StageResult:
+        nonlocal calls
+        calls += 1
+        return StageResult(
+            output_digest=validation_attempt.output_digest,
+            output=original_output,
+        )
+
+    monkeypatch.setattr("app.pipeline.runner.run_validation", observed_validation)
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    assert manifest2.task_state is TaskState.COMPLETED
+    assert calls == 1
+    validation_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.VALIDATION
+    ]
+    assert [attempt.status for attempt in validation_attempts] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
+
+
+def test_runner_reruns_validation_when_physical_run_manifest_diverges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = "task_physical_manifest_divergence"
+    task_root = base_dir / task_id
+    staging = task_root / "staging" / "run_pinned_fixture"
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state is TaskState.COMPLETED
+    _make_artifact_checkpoint_match_validated_staging(task_root)
+
+    checkpoint_path = task_root / "state" / "validation_output.json"
+    checkpoint = json.loads(checkpoint_path.read_text("utf-8"))
+    original_output = ValidationOutput.model_validate(checkpoint["output"])
+    run_manifest_path = staging / "run_manifest.json"
+    physical_manifest = json.loads(run_manifest_path.read_text("utf-8"))
+    physical_manifest["pipeline_version"] = "tampered-but-schema-valid"
+    RunManifest.model_validate(physical_manifest)
+    run_manifest_path.write_text(
+        json.dumps(physical_manifest, indent=2) + "\n",
+        "utf-8",
+    )
+    run_manifest_relative_path = run_manifest_path.relative_to(task_root).as_posix()
+    run_manifest_file = next(
+        item
+        for item in checkpoint["files"]
+        if item["relative_path"] == run_manifest_relative_path
+    )
+    run_manifest_file["size_bytes"] = run_manifest_path.stat().st_size
+    run_manifest_file["sha256"] = hashlib.sha256(
+        run_manifest_path.read_bytes()
+    ).hexdigest()
+    StageOutputEnvelope.model_validate(checkpoint)
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, indent=2) + "\n",
+        "utf-8",
+    )
+    artifact_checkpoint_path = task_root / "state" / "artifact_build_output.json"
+    artifact_checkpoint = json.loads(
+        artifact_checkpoint_path.read_text("utf-8")
+    )
+    artifact_run_manifest_file = next(
+        item
+        for item in artifact_checkpoint["files"]
+        if item["relative_path"] == run_manifest_relative_path
+    )
+    artifact_run_manifest_file["size_bytes"] = run_manifest_path.stat().st_size
+    artifact_run_manifest_file["sha256"] = hashlib.sha256(
+        run_manifest_path.read_bytes()
+    ).hexdigest()
+    StageOutputEnvelope.model_validate(artifact_checkpoint)
+    artifact_checkpoint_path.write_text(
+        json.dumps(artifact_checkpoint, indent=2) + "\n",
+        "utf-8",
+    )
+
+    validation_attempt = next(
+        attempt
+        for attempt in runner1.state.stage_attempts
+        if attempt.stage is StageName.VALIDATION
+        and attempt.status is AttemptStatus.SUCCEEDED
+    )
+    calls = 0
+
+    def observed_validation(*args, **kwargs) -> StageResult:
+        nonlocal calls
+        calls += 1
+        run_manifest_path.write_text(
+            original_output.manifest.model_dump_json(indent=2) + "\n",
+            "utf-8",
+        )
+        return StageResult(
+            output_digest=validation_attempt.output_digest,
+            output=original_output,
+        )
+
+    monkeypatch.setattr("app.pipeline.runner.run_validation", observed_validation)
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    assert manifest2.task_state is TaskState.COMPLETED
+    assert calls == 1
+    validation_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.VALIDATION
+    ]
+    assert [attempt.status for attempt in validation_attempts] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
 
 
 @pytest.mark.parametrize(

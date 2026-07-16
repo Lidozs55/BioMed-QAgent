@@ -192,3 +192,70 @@ All checks passed!
   the approved integrity contract and is bounded by the explicit stage file
   manifests; no recursive path discovery was added.
 - No known correctness blockers remain in the implemented R3b scope.
+
+## Task-review follow-up: Validation semantic completeness
+
+Task review found that the first R3b implementation treated the top-level
+`ValidationOutput.artifacts` list as authoritative without proving it matched
+the nested `RunManifest` or the physical `run_manifest.json`.
+
+### Self-consistent envelope divergence
+
+The first regression created schema-valid Artifact Build and Validation
+envelopes whose hashes and file records were internally consistent. It removed
+one top-level Validation artifact and its corresponding envelope file record,
+while leaving both the nested manifest and physical manifest unchanged.
+
+RED:
+
+```text
+expected Validation stage call count 1, got 0 (checkpoint was SKIPPED)
+1 failed in 0.71s
+```
+
+GREEN after making the nested manifest authoritative and requiring exact
+top-level artifact and validation-summary equality:
+
+```text
+1 passed in 4.99s
+```
+
+### Schema-valid physical manifest divergence
+
+The second regression changed only the physical manifest's
+`pipeline_version`, kept it schema-valid, and updated both relevant envelope
+file records with its new size and SHA-256. This proved checksum verification
+alone could not detect semantic divergence.
+
+RED:
+
+```text
+expected Validation stage call count 1, got 0 (checkpoint was SKIPPED)
+1 failed in 0.70s
+```
+
+GREEN after parsing the physical manifest and requiring exact typed equality
+with `ValidationOutput.manifest`:
+
+```text
+2 passed in 0.88s
+```
+
+Validation reuse now also requires the physical package's direct entries to
+equal the manifest artifact names plus `run_manifest.json`. The optional
+`.runtime-publication.json` file is the only explicitly allowed non-stage
+marker and is excluded from the checkpoint manifest.
+
+Fresh follow-up verification from `backend/`:
+
+```text
+uv run pytest tests/pipeline/test_pipeline_runner_recovery.py tests/pipeline/test_pipeline_runner_resilience.py tests/pipeline/test_pipeline_e2e.py -q
+39 passed in 14.80s
+```
+
+```text
+uv run ruff check app/ tests/ launcher.py
+All checks passed!
+```
+
+No additional correctness concerns were found in the reviewed R3b scope.

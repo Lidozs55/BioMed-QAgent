@@ -679,12 +679,16 @@ class PipelineRunner:
             return _sorted_stage_output_files(files)
         if stage is StageName.VALIDATION:
             validation = ValidationOutput.model_validate(output)
+            if validation.artifacts != validation.manifest.artifacts:
+                raise ValueError("validation artifacts must match the run manifest")
+            if validation.validation != validation.manifest.validation:
+                raise ValueError("validation summary must match the run manifest")
             build = ArtifactBuildOutput.model_validate(
                 stage_outputs.get(StageName.ARTIFACT_BUILD)
             )
             files = []
             physical_directory: Path | None = None
-            for entry in validation.artifacts:
+            for entry in validation.manifest.artifacts:
                 if Path(entry.relative_path).name != entry.name:
                     raise ValueError("validation artifact name/path mismatch")
                 artifact_path = self.workdir.root / entry.relative_path
@@ -717,10 +721,27 @@ class PipelineRunner:
                 )
             if physical_directory is None:
                 raise ValueError("validation output must contain artifacts")
+            run_manifest_path = physical_directory / "run_manifest.json"
+            physical_manifest = RunManifest.model_validate_json(
+                run_manifest_path.read_text("utf-8")
+            )
+            if physical_manifest != validation.manifest:
+                raise ValueError("physical run manifest must match validation output")
+            package_entries = list(physical_directory.iterdir())
+            if any(path.is_symlink() or not path.is_file() for path in package_entries):
+                raise ValueError("validation package may contain only regular files")
+            expected_names = {
+                *(entry.name for entry in validation.manifest.artifacts),
+                "run_manifest.json",
+            }
+            actual_names = {path.name for path in package_entries}
+            actual_names.discard(".runtime-publication.json")
+            if actual_names != expected_names:
+                raise ValueError("validation package files must match the run manifest")
             files.append(
                 _stage_output_file_from_path(
                     self.workdir.root,
-                    physical_directory / "run_manifest.json",
+                    run_manifest_path,
                 )
             )
             files.append(
