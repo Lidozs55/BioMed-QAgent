@@ -161,6 +161,8 @@ class RunManifest(ContractModel):
     validation: ValidationSummary
     pipeline_version: str = Field(min_length=1)
     model_name: str | None = None
+    mode: Literal["fixture", "live"] = "fixture"
+    live_accepted: bool = False
     started_at: datetime
     finished_at: datetime
 
@@ -185,4 +187,19 @@ class RunManifest(ContractModel):
     def validate_time_order(self) -> RunManifest:
         if self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
+        return self
+
+    @model_validator(mode="after")
+    def validate_mode_acceptance(self) -> RunManifest:
+        """Fixture/mock runs must never be accepted as live.
+
+        Enforces §9 line 292: ``mode == "fixture"`` implies
+        ``live_accepted is False``, so a fixture run can never be confused
+        with a live-accepted run regardless of validation status.
+        """
+        if self.mode == "fixture" and self.live_accepted:
+            raise ValueError(
+                "fixture mode cannot be live_accepted; live acceptance "
+                "requires mode == 'live' with a valid validation gate"
+            )
         return self

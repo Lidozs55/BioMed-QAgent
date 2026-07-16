@@ -151,6 +151,7 @@ async def create_task(request: CreateTaskRequest) -> dict:
         base_dir=_tasks_base(),
         fixture_dir=fixture_dir,
         topic=request.topic,
+        mode=request.mode,
     )
     manifest = await runner.run()
     return {"task_id": task_id, "status": manifest.task_state.value}
@@ -212,6 +213,8 @@ async def get_task(task_id: str) -> dict:
         "current_stage": "validation",
         "validation_status": manifest.validation.status,
         "artifact_count": len(manifest.artifacts) + 1,
+        "mode": manifest.mode,
+        "live_accepted": manifest.live_accepted,
     }
 
 

@@ -42,6 +42,8 @@ async def test_create_fixture_task_runs_pipeline_and_returns_typed_status(
             "current_stage": "validation",
             "validation_status": "valid",
             "artifact_count": 14,
+            "mode": "fixture",
+            "live_accepted": False,
         }
 
         manifest = await client.get(
