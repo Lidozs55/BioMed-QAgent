@@ -8,6 +8,8 @@ Covers:
     4. GET /api/v1/tasks/{task_id}/events?since=N replay endpoint.
     5. WS run_pipeline message type streams EventEnvelope events.
     6. Recovery appends (not overwrites) prior events in events.jsonl.
+    7. Stage failure preserves prior events + failure event in events.jsonl.
+    8. Cancellation preserves prior events + cancel event in events.jsonl.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import app.api.routes as routes_module
 import httpx
 import pytest
 from app.domain.contracts import (
+    AttemptStatus,
     EventEnvelope,
     PipelineEventType,
     TaskState,
@@ -321,3 +324,118 @@ def test_recovery_appends_events_without_overwriting_prior_ones(
     # task_recovered event must appear among the new events.
     new_types = [e["type"] for e in events_run2 if e["sequence"] > run1_max_sequence]
     assert PipelineEventType.TASK_RECOVERED.value in new_types
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: Stage failure preserves prior events + failure event in jsonl
+# ---------------------------------------------------------------------------
+
+
+def test_stage_failure_preserves_prior_events_in_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stage failure must not lose prior successful stage events from events.jsonl.
+
+    Validates TODO §14 line 388: stage failure preserves complete attempt/event
+    history. The events.jsonl file must contain stage_started/stage_completed
+    for successful upstream stages AND stage_failed/task_failed for the failed
+    stage.
+    """
+    import app.pipeline.runner as runner_module
+
+    def failing_processing(ctx, source_asset, dataset_id):
+        raise RuntimeError("simulated processing failure")
+
+    monkeypatch.setattr(runner_module, "run_processing", failing_processing)
+
+    runner = PipelineRunner(
+        task_id="task_failure_preserve",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state == TaskState.FAILED
+
+    events_file = tmp_path / "tasks" / "task_failure_preserve" / "logs" / "events.jsonl"
+    events = _read_jsonl(events_file)
+    event_types = [e["type"] for e in events]
+
+    # Prior successful stages (discovery, acquisition) must be preserved.
+    assert PipelineEventType.STAGE_STARTED.value in event_types
+    assert PipelineEventType.STAGE_COMPLETED.value in event_types
+    # The failure events must also be present.
+    assert PipelineEventType.STAGE_FAILED.value in event_types
+    assert PipelineEventType.TASK_FAILED.value in event_types
+    # task_completed must NOT be present (the pipeline failed).
+    assert PipelineEventType.TASK_COMPLETED.value not in event_types
+
+    # Sequences must be contiguous starting at 1.
+    sequences = [e["sequence"] for e in events]
+    assert sequences == list(range(1, len(events) + 1))
+
+    # Stage attempts in state must also be preserved.
+    attempts = runner.state.stage_attempts
+    succeeded = [a for a in attempts if a.status == AttemptStatus.SUCCEEDED]
+    failed = [a for a in attempts if a.status == AttemptStatus.FAILED]
+    assert len(succeeded) >= 2  # discovery + acquisition succeeded
+    assert len(failed) == 1  # processing failed
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8: Cancellation preserves prior events + cancel event in jsonl
+# ---------------------------------------------------------------------------
+
+
+def test_cancellation_preserves_prior_events_in_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation must not lose prior successful stage events from events.jsonl.
+
+    Validates TODO §14 line 388: cancellation preserves complete attempt/event
+    history. The events.jsonl file must contain stage_completed for successful
+    upstream stages AND task_cancelled for the cancellation.
+    """
+    import app.pipeline.runner as runner_module
+
+    original_acquisition = runner_module.run_acquisition
+    runner_holder: dict[str, PipelineRunner | None] = {"runner": None}
+
+    def cancel_after_acquisition(ctx, retrieved_at):
+        result = original_acquisition(ctx, retrieved_at)
+        runner = runner_holder["runner"]
+        assert runner is not None
+        runner.request_cancel("test cancel for jsonl preservation")
+        return result
+
+    monkeypatch.setattr(runner_module, "run_acquisition", cancel_after_acquisition)
+
+    runner = PipelineRunner(
+        task_id="task_cancel_preserve",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    runner_holder["runner"] = runner
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state == TaskState.CANCELLED
+
+    events_file = tmp_path / "tasks" / "task_cancel_preserve" / "logs" / "events.jsonl"
+    events = _read_jsonl(events_file)
+    event_types = [e["type"] for e in events]
+
+    # Prior successful stages must be preserved.
+    assert PipelineEventType.STAGE_COMPLETED.value in event_types
+    # The cancel events must be present.
+    assert "task_cancel_requested" in event_types
+    assert PipelineEventType.TASK_CANCELLED.value in event_types
+    # task_completed/task_failed must NOT be present.
+    assert PipelineEventType.TASK_COMPLETED.value not in event_types
+    assert PipelineEventType.TASK_FAILED.value not in event_types
+
+    # Sequences must be contiguous starting at 1.
+    sequences = [e["sequence"] for e in events]
+    assert sequences == list(range(1, len(events) + 1))
+
+    # Stage attempts in state must also be preserved.
+    attempts = runner.state.stage_attempts
+    succeeded = [a for a in attempts if a.status == AttemptStatus.SUCCEEDED]
+    assert len(succeeded) >= 2  # discovery + acquisition succeeded
