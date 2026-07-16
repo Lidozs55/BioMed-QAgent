@@ -326,7 +326,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 - [ ] **P1** Agent 使用结构化 TaskSpecification
 - [x] **P1** Pipeline 暴露为单一 SDK Function Tool
-- [ ] **P1** 数据库过滤不加载未选择 acquisition Tool
+- [x] **P1** 数据库过滤不加载未选择 acquisition Tool
 - [x] **P1** Agent 正式产物统一调用 Pipeline Tool，不直接拼装最终 CSV
 - [x] **P1** `POST /api/v1/tasks` 创建 task_id
 - [x] **P1** TaskRequest API 校验
@@ -385,6 +385,6 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] Validation Gate 通过才发布 artifacts/
 - [x] Artifact API 通过 artifact_id 列出并下载完整产物包
 - [x] live PubMed + GEO 获取与完整 counts 校验在总超时内完成
-- [ ] 阶段失败、取消和恢复保留完整 attempt/event 历史
+- [x] 阶段失败、取消和恢复保留完整 attempt/event 历史
 - [x] 真实失败不会转换成 mock success
 - [x] 文档和 TODO 只勾选已有自动测试或浏览器证据的条目
