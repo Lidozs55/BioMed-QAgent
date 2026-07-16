@@ -10,9 +10,8 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
 from app.domain.contracts import AttemptStatus, StageName, TaskState
-from app.pipeline.runner import DEFAULT_STAGE_TIMEOUTS, PipelineRunner
+from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 

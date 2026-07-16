@@ -24,6 +24,7 @@ from app.domain.contracts import (
     Database,
     EventEnvelope,
     RunManifest,
+    TaskState,
     generate_prefixed_uuid,
 )
 from app.pipeline.runner import PipelineRunner
@@ -153,6 +154,42 @@ async def create_task(request: CreateTaskRequest) -> dict:
     )
     manifest = await runner.run()
     return {"task_id": task_id, "status": manifest.task_state.value}
+
+
+class CancelTaskRequest(ContractModel):
+    reason: str | None = None
+
+
+@router.post("/tasks/{task_id}/cancel", status_code=202)
+async def cancel_task(task_id: str, request: CancelTaskRequest) -> dict:
+    """Request cancellation of a running or pending task.
+
+    Sets ``cancel_requested`` on the persisted pipeline state. The pipeline
+    checks this flag before each stage and transitions to CANCELLED. If the
+    task is already terminal, this is a no-op.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise HTTPException(status_code=400, detail="invalid task_id")
+
+    task_dir = _tasks_base() / task_id
+    if not task_dir.exists():
+        raise HTTPException(status_code=404, detail="task not found")
+
+    state_file = task_dir / "state" / "pipeline_state.json"
+    if not state_file.is_file():
+        raise HTTPException(status_code=409, detail="task has no pipeline state")
+
+    from datetime import UTC, datetime
+
+    from app.pipeline.state import load_state, save_state
+
+    state = load_state(state_file.parent, task_id, datetime.now(UTC))
+    if state.task_state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED}:
+        return {"task_id": task_id, "status": state.task_state.value, "cancelled": False}
+    state.cancel_requested = True
+    state.cancel_reason = request.reason
+    save_state(state_file.parent, state)
+    return {"task_id": task_id, "status": "cancelling", "cancelled": True}
 
 
 @router.get("/tasks/{task_id}")
