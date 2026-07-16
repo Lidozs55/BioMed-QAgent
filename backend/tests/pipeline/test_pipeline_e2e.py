@@ -61,14 +61,6 @@ FIXTURE_DIR = (
 # ---------------------------------------------------------------------------
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
-
-
-def _event_types(events: list[dict]) -> list[str]:
-    return [event["type"] for event in events]
-
-
 @asynccontextmanager
 async def _runtime_client(
     output_dir: Path,
@@ -142,14 +134,13 @@ def test_e2e_full_event_sequence_is_ordered_and_complete(tmp_path: Path) -> None
     manifest = asyncio.run(runner.run())
     assert manifest.task_state == TaskState.COMPLETED
 
-    logs = tmp_path / "tasks" / "task_e2e_events" / "logs"
-    events = _read_jsonl(logs / "events.jsonl")
+    events = runner.events
 
     # Sequences are 1..N contiguous with no gaps.
-    sequences = [event["sequence"] for event in events]
+    sequences = [event.sequence for event in events]
     assert sequences == list(range(1, len(events) + 1))
 
-    types = _event_types(events)
+    types = [event.type.value for event in events]
     # First two events: task_created + plan_ready.
     assert types[0] == PipelineEventType.TASK_CREATED.value
     assert types[1] == PipelineEventType.PLAN_READY.value

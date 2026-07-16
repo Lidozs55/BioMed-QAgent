@@ -544,7 +544,6 @@ async def test_fixture_create_returns_202_then_completes_with_durable_bridge(
 ) -> None:
     topic = "  user supplied acceptance topic  "
     async with api_client(tmp_path) as (application, client):
-        repository = application.state.task_repository
         manager = application.state.task_manager
         created = await client.post(
             "/api/v1/tasks",
@@ -600,34 +599,6 @@ async def test_fixture_create_returns_202_then_completes_with_durable_bridge(
         event.type.value for event in events if event.type.value.startswith("run_")
     ]
     assert lifecycle_types[-2:] == ["run_finalizing", "run_completed"]
-    legacy_events = [
-        EventEnvelope.model_validate_json(line)
-        for line in (repository.tasks_dir / accepted.task_id / "logs" / "events.jsonl")
-        .read_text("utf-8")
-        .splitlines()
-        if line.strip()
-    ]
-    bridged = [event for event in events if not event.type.value.startswith("run_")]
-    assert len(bridged) == len(legacy_events)
-    assert [
-        (
-            event.type,
-            event.payload.model_dump(mode="json"),
-            event.stage_attempt_id,
-            event.timestamp,
-        )
-        for event in bridged
-    ] == [
-        (
-            event.type,
-            event.payload.model_dump(mode="json"),
-            event.stage_attempt_id,
-            event.timestamp,
-        )
-        for event in legacy_events
-    ]
-    assert all(event.schema_version == "2.0" for event in bridged)
-    assert all(event.run_id == accepted.run_id for event in bridged)
     assert artifact_response.status_code == 200
     assert artifact_response.json()["artifacts"][0]["artifact_id"] == "run_manifest"
     assert manifest_response.status_code == 200

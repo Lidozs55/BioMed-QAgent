@@ -29,7 +29,9 @@ Key points:
 - The frontend (React/Vite) communicates with FastAPI via HTTP + WebSocket.
 - The FastAPI entry point is `app.main:app`, with routes registered in
   [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
-  [app/api/ws.py](backend/app/api/ws.py) (WebSocket).
+  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). The application lifespan
+  (owned by `app.main:create_app`) initializes the durable runtime:
+  `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
 - The Main Agent is built on the OpenAI Agents SDK and enters the deterministic
   pipeline through a single `run_research_pipeline` Function Tool
   ([app/pipeline/tool.py](backend/app/pipeline/tool.py)). The Agent never
@@ -39,8 +41,15 @@ Key points:
   stages: **Discovery → Acquisition → Processing → Artifact Build → Validation
   Gate**. Only artifacts that pass the Validation Gate are published to
   `artifacts/`.
-- The WebSocket endpoint is `/api/v1/ws`; the streaming entry function is
-  `app.agent_loop.runner.run_agent_stream`.
+- The durable runtime is event-sourced: `TaskManager` owns the Run lifecycle
+  (`QUEUED → RUNNING → FINALIZING → COMPLETED/FAILED/CANCELLED/INTERRUPTED`),
+  `TaskRepository` + `EventStore` provide the authoritative event log
+  (`<task_id>/events.jsonl`), and `TaskSnapshot` is rebuilt via a pure reducer
+  (`app.runtime.state.reduce_task_event`). The pipeline's in-memory
+  `runner.events` list is bridged to the runtime event log by
+  `FixtureRunExecutor`.
+- The WebSocket endpoint is `/api/v1/ws`; the durable event session is served
+  by `app/api/ws_events.py:_run_event_session`.
 - The skill repository is organized into four categories — discovery,
   acquisition, processing, analysis — under
   [backend/app/skills/builtin/](backend/app/skills/builtin/). Learned skills
@@ -52,34 +61,39 @@ Key points:
 | ------ | ------------------------------------------------- | ---------------------------------- |
 | GET    | `/api/v1/health`                                  | Health check                       |
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
-| POST   | `/api/v1/tasks`                                   | Create and run a fixture-mode task |
-| GET    | `/api/v1/tasks/{task_id}`                         | Task status and summary            |
-| POST   | `/api/v1/tasks/{task_id}/cancel`                  | Request cancellation of a running task |
-| GET    | `/api/v1/tasks/{task_id}/events`                  | Replay persisted pipeline events (`?since=N`) |
+| GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
+| POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
+| GET    | `/api/v1/tasks/{task_id}`                         | Task snapshot (authoritative state) |
+| DELETE | `/api/v1/tasks/{task_id}`                         | Delete a terminal task and its history |
+| POST   | `/api/v1/tasks/{task_id}/runs`                    | Enqueue another user turn for an idle Agent task |
+| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | Request cancellation of a queued or running run |
+| GET    | `/api/v1/tasks/{task_id}/messages`                | Paginated task messages            |
+| GET    | `/api/v1/tasks/{task_id}/events`                  | Replay durable events (`?after_sequence=N&limit=N`) |
 | GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
 | GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
 
-**Agent Loop (WebSocket)**
+**Durable Event WebSocket**
 
 1. The client connects to `ws://<host>:8000/api/v1/ws`.
-2. `app/api/ws.py:agent_ws` receives a message:
-   `{"type":"run","input":"...","databases":[...],"task_id":"optional"}`.
-3. The handler calls `run_agent_stream(user_input, task_id, databases)` to
-   stream Agent loop events.
-4. The runner converts SDK stream events into WSMessage dicts and pushes them
-   back. Event types:
-   - `task_started` — sent by `ws.py` immediately after accepting a run
-   - `skill_loaded` — a skill was loaded (name + category)
-   - `text` — LLM text delta
-   - `tool_call` — a tool call started (name + arguments)
-   - `tool_output` — a tool call returned (output + truncated flag)
-   - `file_downloaded` — a source file was downloaded (name + path + size)
-   - `artifact_produced` — a validated artifact was produced (artifact_id + name + size)
-   - `confirm` — a quality / human-in-the-loop confirmation prompt (confirm_message)
-   - `done` — the Agent loop finished (carries `final_output`)
-   - `error` — an exception occurred (message + optional code)
-   - `cancel_ack` — a cancel request was accepted or rejected (task_id + cancelled + optional status)
-5. The frontend renders Markdown, tool-call traces, and artifact events.
+2. `app/api/ws.py:agent_ws` accepts the connection and delegates to
+   `app/api/ws_events.py:_run_event_session`.
+3. The client sends commands:
+   - `{"type":"subscribe","task_id":"..."}` — subscribe to a task's event stream
+   - `{"type":"unsubscribe","task_id":"..."}` — stop receiving events for a task
+   - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
+4. The server pushes `EventEnvelope` objects (same schema as
+   `GET /tasks/{task_id}/events`) and control frames:
+   - `EventEnvelope` — a task event (run_queued, run_started, tool_started,
+     tool_completed, assistant_delta, stage_started, stage_completed,
+     artifact_produced, run_completed, run_failed, run_cancelled, etc.)
+   - `{"type":"pong"}` — response to ping
+   - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
+5. Events are ordered by `sequence` (monotonically increasing per task).
+   Reconnection is supported by replaying events via
+   `GET /tasks/{task_id}/events?after_sequence=N` then re-subscribing.
+6. The frontend `runtime/transport.ts` handles auto-reconnect and event replay;
+   `runtime/controller.ts` orchestrates task lifecycle; `runtime/reducer.ts`
+   applies events to the store.
 
 Always treat the code as the source of truth for skill and tool implementation
 status — do not assume from documentation alone.

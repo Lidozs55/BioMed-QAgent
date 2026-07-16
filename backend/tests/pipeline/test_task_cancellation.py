@@ -11,7 +11,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from app.domain.contracts import (
@@ -23,10 +22,6 @@ from app.pipeline.runner import PipelineRunner
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 )
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
 
 
 # ---------------------------------------------------------------------------
@@ -53,11 +48,8 @@ def test_request_cancel_emits_task_cancel_requested_event(
 
     asyncio.run(_driver())
 
-    events_file = (
-        tmp_path / "tasks" / "task_cancel_req" / "logs" / "events.jsonl"
-    )
-    events = _read_jsonl(events_file)
-    types = [e["type"] for e in events]
+    events = runner.events
+    types = [e.payload.type for e in events]
     assert PipelineEventType.TASK_CANCEL_REQUESTED.value in types
 
 
@@ -84,11 +76,8 @@ def test_pipeline_with_cancel_flag_transitions_to_cancelled(
     manifest = asyncio.run(runner.run())
     assert manifest.task_state == TaskState.CANCELLED
 
-    events_file = (
-        tmp_path / "tasks" / "task_cancel_pre" / "logs" / "events.jsonl"
-    )
-    events = _read_jsonl(events_file)
-    types = [e["type"] for e in events]
+    events = runner.events
+    types = [e.payload.type for e in events]
     assert PipelineEventType.TASK_CANCELLED.value in types
     # task_cancel_requested is NOT emitted here because the cancel flag was
     # set externally (not via request_cancel). Only request_cancel emits it.

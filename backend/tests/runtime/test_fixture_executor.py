@@ -12,7 +12,6 @@ import app.runtime.manager as manager_module
 import pytest
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
-    EventEnvelope,
     MessageRole,
     RunStatus,
     StageName,
@@ -42,6 +41,7 @@ def completed_manifest(task_id: str) -> SimpleNamespace:
 class CompletedRunner:
     def __init__(self, **kwargs) -> None:
         self.task_id = kwargs["task_id"]
+        self.events: list = []
 
     async def run(self) -> SimpleNamespace:
         return completed_manifest(self.task_id)
@@ -64,9 +64,7 @@ async def run_blocking_with_drain(operation):
 @pytest.mark.asyncio
 async def test_fixture_completion_projects_one_user_message_across_restart(
     tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_module, "_load_fixture_events", lambda _path: [])
     output_dir = tmp_path / "output"
     repository = TaskRepository(output_dir)
     fixture_executor = runner_module.FixtureRunExecutor(
@@ -171,26 +169,6 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
             "run_completed",
         ]
 
-        legacy_path = repository.tasks_dir / accepted.task_id / "logs" / "events.jsonl"
-        legacy_events = [
-            EventEnvelope.model_validate_json(line)
-            for line in legacy_path.read_text("utf-8").splitlines()
-        ]
-        bridged_events = [
-            event
-            for event in runtime_events
-            if not event.payload.type.value.startswith("run_")
-        ]
-        assert len(bridged_events) == len(legacy_events)
-        for bridged, legacy in zip(bridged_events, legacy_events, strict=True):
-            assert bridged.schema_version == "2.0"
-            assert bridged.run_id == accepted.run_id
-            assert bridged.type == legacy.type
-            assert bridged.payload == legacy.payload
-            assert bridged.stage_attempt_id == legacy.stage_attempt_id
-            assert bridged.timestamp == legacy.timestamp
-            assert bridged.event_id != legacy.event_id
-
         manifest_path = (
             repository.tasks_dir / accepted.task_id / "artifacts" / "run_manifest.json"
         )
@@ -223,12 +201,12 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
 @pytest.mark.asyncio
 async def test_pipeline_manifest_failure_never_becomes_run_completed(
     tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_module, "_load_fixture_events", lambda _path: [])
-
     def failed_factory(**kwargs):
         class FailedRunner:
+            def __init__(self) -> None:
+                self.events: list = []
+
             async def run(self):
                 return SimpleNamespace(
                     task_id=kwargs["task_id"],
@@ -271,13 +249,14 @@ async def test_pipeline_manifest_failure_never_becomes_run_completed(
 @pytest.mark.asyncio
 async def test_pipeline_manifest_cancellation_maps_to_cancelled_run(
     tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner_module, "_load_fixture_events", lambda _path: [])
     worker_started = threading.Event()
 
     def cancellable_factory(**kwargs):
         class CancellableRunner:
+            def __init__(self) -> None:
+                self.events: list = []
+
             async def run(self):
                 worker_started.set()
                 while not kwargs["cancellation_requested"].is_set():
@@ -336,6 +315,9 @@ async def test_fixture_executor_cancellation_sets_token_and_drains_sync_worker(
 
     def controlled_factory(**kwargs):
         class ControlledRunner:
+            def __init__(self) -> None:
+                self.events: list = []
+
             async def run(self):
                 def blocking_run():
                     worker_started.set()
@@ -405,6 +387,9 @@ async def test_manager_close_drains_fixture_worker_before_repository_close(
 
     def controlled_factory(**kwargs):
         class ControlledRunner:
+            def __init__(self) -> None:
+                self.events: list = []
+
             async def run(self):
                 def blocking_run():
                     worker_started.set()
@@ -479,25 +464,20 @@ async def test_manager_close_drains_fixture_worker_before_repository_close(
 @pytest.mark.asyncio
 async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
     tmp_path,
-    monkeypatch,
 ) -> None:
     context = RunContext(task_id="task_fixture_cancel_before_load")
-    loader_called = False
 
     def cancel_before_bridge_factory(**kwargs):
         class CancelBeforeBridgeRunner:
+            def __init__(self) -> None:
+                self.events: list = []
+
             async def run(self):
                 kwargs["cancellation_requested"].set()
                 return completed_manifest(kwargs["task_id"])
 
         return CancelBeforeBridgeRunner()
 
-    def load_events(path):
-        nonlocal loader_called
-        loader_called = True
-        return []
-
-    monkeypatch.setattr(runner_module, "_load_fixture_events", load_events)
     execution = manager_module.RunExecution(
         task_id=context.task_id,
         run_id="run_fixture_cancel_before_load",
@@ -516,14 +496,11 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
     with pytest.raises(PipelineCancelledError):
         await executor(execution)
 
-    assert not loader_called
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_after", [1, 2])
 async def test_fixture_bridge_stops_before_event_after_cancellation(
     tmp_path,
-    monkeypatch,
     cancel_after: int,
 ) -> None:
     context = RunContext(task_id=f"task_fixture_bridge_cancel_{cancel_after}")
@@ -553,11 +530,15 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
     ]
     emitted: list[str] = []
 
-    monkeypatch.setattr(
-        runner_module,
-        "_load_fixture_events",
-        lambda path: legacy_events,
-    )
+    def legacy_events_factory(**kwargs):
+        class LegacyEventsRunner:
+            def __init__(self) -> None:
+                self.events = list(legacy_events)
+
+            async def run(self):
+                return completed_manifest(kwargs["task_id"])
+
+        return LegacyEventsRunner()
 
     async def emit(payload, **kwargs):
         emitted.append(payload.type.value)
@@ -578,7 +559,7 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
     executor = runner_module.FixtureRunExecutor(
         TaskRepository(tmp_path / "output"),
         fixture_dir=tmp_path / "fixture",
-        pipeline_runner_factory=completed_runner_factory,
+        pipeline_runner_factory=legacy_events_factory,
     )
 
     with pytest.raises(PipelineCancelledError):

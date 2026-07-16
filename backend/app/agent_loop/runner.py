@@ -307,14 +307,6 @@ class AgentRunExecutor:
             await build.model.close()
 
 
-def _load_fixture_events(path: Path) -> list[EventEnvelope]:
-    return [
-        EventEnvelope.model_validate_json(line)
-        for line in path.read_text("utf-8").splitlines()
-        if line.strip()
-    ]
-
-
 async def _run_fixture_sync[FixtureSyncResult](
     execution,
     operation: Callable[[], FixtureSyncResult],
@@ -391,21 +383,7 @@ class FixtureRunExecutor:
         )
         manifest = await _run_pipeline_with_cancellation(execution, runner)
         _check_fixture_bridge_cancellation(execution)
-        current_events = getattr(runner, "events", None)
-        legacy_events = (
-            list(current_events)
-            if current_events is not None
-            else await _run_fixture_sync(
-                execution,
-                partial(
-                    _load_fixture_events,
-                    self._repository.tasks_dir
-                    / execution.task_id
-                    / "logs"
-                    / "events.jsonl",
-                ),
-            )
-        )
+        legacy_events = list(runner.events)
         completion_events: list[EventEnvelope] = []
         for event in legacy_events:
             _check_fixture_bridge_cancellation(execution)

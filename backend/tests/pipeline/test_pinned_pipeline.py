@@ -94,17 +94,14 @@ def test_pinned_pipeline_persists_stage_attempts_and_replayable_events(
         json.loads(line)
         for line in (logs / "stage_attempts.jsonl").read_text("utf-8").splitlines()
     ]
-    events = [
-        json.loads(line)
-        for line in (logs / "events.jsonl").read_text("utf-8").splitlines()
-    ]
+    events = runner.events
 
     assert len(attempts) == 5
     assert manifest.stage_attempt_ids == sorted(
         attempt["stage_attempt_id"] for attempt in attempts
     )
     assert all(attempt["status"] == "succeeded" for attempt in attempts)
-    assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
-    assert events[0]["type"] == "task_created"
-    assert events[-1]["type"] == "task_completed"
-    assert any(event["type"] == "artifact_produced" for event in events)
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    assert events[0].type.value == "task_created"
+    assert events[-1].type.value == "task_completed"
+    assert any(event.type.value == "artifact_produced" for event in events)
