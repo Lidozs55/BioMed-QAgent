@@ -45,6 +45,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.pipeline.stages import (
+    STANDALONE_RUN_ID,
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
@@ -139,6 +140,7 @@ class PipelineRunner:
         cancellation_requested: CancellationToken | None = None,
         defer_publication: bool = False,
         event_sink: PipelineEventSink | None = None,
+        run_id: str = STANDALONE_RUN_ID,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -158,6 +160,7 @@ class PipelineRunner:
             fixture_dir=fixture_dir,
             topic=topic,
             started_at=self.state.started_at,
+            run_id=run_id,
             mode=mode,
             cancellation_requested=self._is_cancelled,
         )
@@ -198,24 +201,18 @@ class PipelineRunner:
 
         if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
             raise ValueError("run_id must be a single path-safe component")
+        if run_id != self.ctx.run_id:
+            raise ValueError("publish run_id must match the PipelineRunner run_id")
         staging = self._pending_publication
         if staging is None or not staging.is_dir():
             raise RuntimeError("pipeline has no validated package awaiting publication")
         self.ctx.check_cancelled()
-        manifest_path = staging / "run_manifest.json"
-        manifest_bytes = manifest_path.read_bytes()
-        marker = {
-            "schema_version": 1,
-            "task_id": self.task_id,
-            "run_id": run_id,
-            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-        }
-        (staging / ".runtime-publication.json").write_text(
-            json.dumps(marker, ensure_ascii=False, sort_keys=True) + "\n",
-            "utf-8",
+        publish_artifacts(
+            staging,
+            self.workdir.artifacts,
+            self.ctx,
+            run_id=run_id,
         )
-        self.ctx.check_cancelled()
-        publish_artifacts(staging, self.workdir.artifacts, self.ctx)
         self._pending_publication = None
 
     async def run(self) -> RunManifest:
@@ -786,6 +783,8 @@ class PipelineRunner:
             "topic": self.topic,
             "mode": self.mode,
         }
+        if stage in {StageName.ARTIFACT_BUILD, StageName.VALIDATION}:
+            payload["run_id"] = self.ctx.run_id
         return _sha256_json(payload)
 
     def _build_attempt(

@@ -249,7 +249,7 @@ def test_runner_cancellation_token_stops_before_atomic_publication(
     task_id = "task_cancel_before_publish"
     task_root = tmp_path / "tasks" / task_id
     staged_manifest = (
-        task_root / "staging" / "run_pinned_fixture" / "run_manifest.json"
+        task_root / "staging" / "run_standalone" / "run_manifest.json"
     )
 
     class CancelAtPublication:
@@ -280,6 +280,7 @@ def test_managed_runner_defers_formal_publication_until_runtime_commit(
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
         defer_publication=True,
+        run_id=run_id,
     )
 
     manifest = asyncio.run(runner.run())
@@ -298,6 +299,84 @@ def test_managed_runner_defers_formal_publication_until_runtime_commit(
             (task_root / "artifacts" / "run_manifest.json").read_bytes()
         ).hexdigest(),
     }
+
+
+def test_standalone_runner_uses_explicit_safe_staging_id(tmp_path: Path) -> None:
+    """Standalone callers use a named safe ID, never a shared managed-Run ID."""
+    task_id = "task_standalone_staging"
+    task_root = tmp_path / "tasks" / task_id
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.COMPLETED
+    assert (task_root / "staging" / "run_standalone" / "run_manifest.json").is_file()
+    assert not (task_root / "staging" / "run_pinned_fixture").exists()
+
+
+def test_distinct_deferred_run_ids_use_isolated_staging(
+    tmp_path: Path,
+) -> None:
+    """A recovered second Run must build in its own staging/<run_id>."""
+    task_id = "task_distinct_run_staging"
+    first_run_id = "run_distinct_staging_one"
+    second_run_id = "run_distinct_staging_two"
+    base_dir = tmp_path / "tasks"
+    task_root = base_dir / task_id
+
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=first_run_id,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state is TaskState.COMPLETED
+    first_staging = task_root / "staging" / first_run_id
+    first_manifest_bytes = (first_staging / "run_manifest.json").read_bytes()
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=second_run_id,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    second_staging = task_root / "staging" / second_run_id
+    assert manifest2.task_state is TaskState.COMPLETED
+    assert first_staging != second_staging
+    assert (first_staging / "run_manifest.json").read_bytes() == first_manifest_bytes
+    assert (second_staging / "run_manifest.json").is_file()
+
+
+def test_deferred_publish_rejects_a_different_run_identity(tmp_path: Path) -> None:
+    """staging/run_A must never be committed with a run_B marker."""
+    task_id = "task_publish_run_identity"
+    run_id = "run_publish_identity_expected"
+    task_root = tmp_path / "tasks" / task_id
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=run_id,
+    )
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state is TaskState.COMPLETED
+
+    with pytest.raises(ValueError, match="must match the PipelineRunner run_id"):
+        runner.publish("run_publish_identity_other")
+
+    assert (task_root / "staging" / run_id / "run_manifest.json").is_file()
+    assert not (task_root / "artifacts" / "run_manifest.json").exists()
 
 
 def test_recovered_deferred_runner_revalidates_and_rebuilds_publication(
@@ -320,6 +399,7 @@ def test_recovered_deferred_runner_revalidates_and_rebuilds_publication(
         base_dir=base_dir,
         fixture_dir=FIXTURE_DIR,
         defer_publication=True,
+        run_id=run_id,
     )
 
     manifest1 = asyncio.run(runner1.run())
@@ -330,13 +410,13 @@ def test_recovered_deferred_runner_revalidates_and_rebuilds_publication(
     )
     expected_files = sorted(
         {
-            *(f"staging/run_pinned_fixture/{entry.name}" for entry in manifest1.artifacts),
-            "staging/run_pinned_fixture/run_manifest.json",
+            *(f"staging/{run_id}/{entry.name}" for entry in manifest1.artifacts),
+            f"staging/{run_id}/run_manifest.json",
             "logs/validation_report.json",
         }
     )
     assert [item["relative_path"] for item in checkpoint["files"]] == expected_files
-    assert all("publication" not in path for path in expected_files)
+    assert all(".runtime-publication.json" not in path for path in expected_files)
     assert all("publish_completed" not in path for path in expected_files)
 
     runner2 = PipelineRunner(
@@ -344,6 +424,7 @@ def test_recovered_deferred_runner_revalidates_and_rebuilds_publication(
         base_dir=base_dir,
         fixture_dir=FIXTURE_DIR,
         defer_publication=True,
+        run_id=run_id,
     )
     manifest2 = asyncio.run(runner2.run())
 

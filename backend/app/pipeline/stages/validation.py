@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -21,7 +22,6 @@ from app.domain.contracts import (
 )
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
-    PipelineCancelledError,
     StageContext,
     StageResult,
     ValidationOutput,
@@ -69,7 +69,13 @@ def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[
     return [row for _hash, row in scored[:max_samples]]
 
 
-def publish_artifacts(staging: Path, target: Path, ctx: StageContext) -> None:
+def publish_artifacts(
+    staging: Path,
+    target: Path,
+    ctx: StageContext,
+    *,
+    run_id: str | None = None,
+) -> None:
     """Swap a validated staging directory into place without Windows clobbering.
 
     Writes ``state/publish_completed.json`` only after the rename succeeds,
@@ -78,44 +84,139 @@ def publish_artifacts(staging: Path, target: Path, ctx: StageContext) -> None:
     complete (crash, validation failure, cancellation, or in-flight).
     """
 
+    _publish_artifacts_core(
+        staging,
+        target,
+        ctx.workdir.state,
+        task_id=ctx.task_id if run_id is not None else None,
+        run_id=run_id,
+        check_cancelled=ctx.check_cancelled,
+    )
+
+
+def _publish_artifacts_core(
+    staging: Path,
+    target: Path,
+    state_dir: Path,
+    *,
+    task_id: str | None,
+    run_id: str | None,
+    check_cancelled: Callable[[], None],
+) -> None:
+    """Publish one validated package while holding the shared task lock."""
     target.parent.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = state_dir / "publish.lock"
+    marker_file = state_dir / "publish_completed.json"
     previous = target.with_name(f".{target.name}.previous-{uuid4().hex}")
-    moved_previous = False
-    try:
-        ctx.check_cancelled()
-        if target.exists():
-            if target.is_dir() and not any(target.iterdir()):
-                target.rmdir()
-            else:
+    marker_previous = state_dir / f"publish_completed.previous-{uuid4().hex}.json"
+    marker_tmp = marker_file.with_suffix(".json.part")
+    with TaskLock(lock_file):
+        moved_previous = False
+        moved_candidate = False
+        moved_marker = False
+        marker_commit_started = False
+        cleanup_backups = False
+        try:
+            check_cancelled()
+            if run_id is not None:
+                if task_id is None:
+                    raise ValueError("managed publication requires task_id")
+                _write_runtime_publication_marker(
+                    staging,
+                    task_id=task_id,
+                    run_id=run_id,
+                )
+            _fsync_directory(staging)
+            if target.exists():
                 os.replace(target, previous)
                 moved_previous = True
-        ctx.check_cancelled()
-        os.replace(staging, target)
-    except PipelineCancelledError:
-        if moved_previous and previous.exists() and not target.exists():
-            os.replace(previous, target)
-        raise
-    except BaseException:
-        if moved_previous and previous.exists() and not target.exists():
-            os.replace(previous, target)
-        raise
-    finally:
-        if previous.exists():
-            shutil.rmtree(previous, ignore_errors=True)
+            if marker_file.exists():
+                os.replace(marker_file, marker_previous)
+                moved_marker = True
+            check_cancelled()
+            os.replace(staging, target)
+            moved_candidate = True
+            check_cancelled()
 
-    # Marker written AFTER the rename: if a crash happened before this point,
-    # the marker is absent even though artifacts/ may exist, so recovery can
-    # detect the incomplete publish and re-run.
-    state_dir = ctx.workdir.state
-    state_dir.mkdir(parents=True, exist_ok=True)
-    marker_file = state_dir / "publish_completed.json"
+            # Marker written AFTER the rename: if a crash happened before this
+            # point, the marker is absent even though artifacts/ may exist, so
+            # recovery can detect the incomplete publish and re-run.
+            marker_commit_started = True
+            _write_publish_completed_marker(marker_file, target)
+            cleanup_backups = True
+        except BaseException:
+            try:
+                if moved_candidate and target.exists():
+                    os.replace(target, staging)
+                if moved_previous and previous.exists():
+                    os.replace(previous, target)
+                if marker_commit_started:
+                    marker_file.unlink(missing_ok=True)
+                if moved_marker and marker_previous.exists():
+                    os.replace(marker_previous, marker_file)
+            except BaseException as rollback_error:
+                raise RuntimeError("artifact publication rollback failed") from rollback_error
+            cleanup_backups = True
+            raise
+        finally:
+            _cleanup_publication_path(marker_tmp)
+            if cleanup_backups:
+                _cleanup_publication_path(previous)
+                _cleanup_publication_path(marker_previous)
+
+
+def _cleanup_publication_path(path: Path) -> None:
+    """Best-effort cleanup that never turns a committed publish into failure."""
+    for _attempt in range(2):
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+            return
+        except OSError:
+            continue
+
+
+def _write_publish_completed_marker(marker_file: Path, target: Path) -> None:
     marker_payload = {
         "published_at": datetime.now(UTC).isoformat(),
         "artifacts_dir": str(target.relative_to(target.parents[0])),
     }
     tmp = marker_file.with_suffix(".json.part")
     tmp.write_text(json.dumps(marker_payload, indent=2) + "\n", "utf-8")
+    with tmp.open("r+b") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, marker_file)
+
+
+def _write_runtime_publication_marker(
+    staging: Path,
+    *,
+    task_id: str,
+    run_id: str,
+) -> None:
+    """Write and verify the managed-Run marker before staging is renamed."""
+    manifest_path = staging / "run_manifest.json"
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    expected = {
+        "schema_version": 1,
+        "task_id": task_id,
+        "run_id": run_id,
+        "manifest_sha256": manifest_sha256,
+    }
+    marker_path = staging / ".runtime-publication.json"
+    marker_path.write_text(
+        json.dumps(expected, ensure_ascii=False, sort_keys=True) + "\n",
+        "utf-8",
+    )
+    actual = json.loads(marker_path.read_text("utf-8"))
+    if actual != expected:
+        raise RuntimeError("runtime publication marker changed before publication")
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != manifest_sha256:
+        raise RuntimeError("artifact manifest changed before formal publication")
 
 
 def _validate_package(
@@ -349,10 +450,6 @@ def run_validation(
         manifest.model_dump_json(indent=2) + "\n", "utf-8"
     )
 
-    # Flush all staging files to disk before the atomic rename so a crash
-    # between write and rename cannot leave stale page-cache state.
-    _fsync_directory(build_output.staging_dir)
-
     ctx.check_cancelled()
     if publish:
         publish_artifacts(build_output.staging_dir, ctx.workdir.artifacts, ctx)
@@ -388,42 +485,12 @@ def _fsync_directory(directory: Path) -> None:
 def _publish_artifacts(
     staging: Path, artifacts: Path, state_dir: Path
 ) -> None:
-    """Atomically publish the staging package to ``artifacts/``.
-
-    Guarantees (TODO §8 line 276):
-    1. Exclusive: a task lockfile serializes concurrent publishers in the
-       same workdir (recovery racing with a stuck prior process).
-    2. Atomic rename: on POSIX ``os.replace`` over a directory is atomic;
-       on Windows ``os.replace`` cannot overwrite an existing directory, so
-       the prior ``artifacts/`` is removed first under the lock. The window
-       where ``artifacts/`` does not exist is bounded by the lock — no
-       reader can observe it.
-    3. Marker: ``state/publish_completed.json`` is written only after the
-       rename succeeds, so its presence is a reliable signal that
-       ``artifacts/`` is fully populated. Its absence means the publish did
-       not complete (crash, validation failure, or in-flight).
-    """
-    state_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = state_dir / "publish.lock"
-    marker_file = state_dir / "publish_completed.json"
-
-    with TaskLock(lock_file):
-        # Remove a prior artifacts/ dir (from a recovered re-publish) so
-        # os.replace can rename onto a non-existent path, which is atomic
-        # on both POSIX and Windows.
-        if artifacts.exists():
-            shutil.rmtree(artifacts)
-        os.replace(staging, artifacts)
-
-        # Marker written AFTER the rename: if a crash happened before this
-        # point, the marker is absent even though artifacts/ may exist, so
-        # recovery can detect the incomplete publish and re-run.
-        marker_payload = {
-            "published_at": datetime.now(UTC).isoformat(),
-            "artifacts_dir": str(artifacts.relative_to(artifacts.parents[0])),
-        }
-        tmp = marker_file.with_suffix(".json.part")
-        tmp.write_text(
-            json.dumps(marker_payload, indent=2) + "\n", "utf-8"
-        )
-        os.replace(tmp, marker_file)
+    """Compatibility wrapper for immediate publication without a Run marker."""
+    _publish_artifacts_core(
+        staging,
+        artifacts,
+        state_dir,
+        task_id=None,
+        run_id=None,
+        check_cancelled=lambda: None,
+    )

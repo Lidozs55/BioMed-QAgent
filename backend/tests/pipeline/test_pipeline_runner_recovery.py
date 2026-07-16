@@ -43,7 +43,7 @@ def _canonical_json_sha256(payload: object) -> str:
 
 
 def _make_artifact_checkpoint_match_validated_staging(task_root: Path) -> None:
-    staging = task_root / "staging" / "run_pinned_fixture"
+    staging = task_root / "staging" / "run_standalone"
     checkpoint_path = task_root / "state" / "artifact_build_output.json"
     checkpoint = json.loads(checkpoint_path.read_text("utf-8"))
     for name in ("quality_report.csv", "run_manifest.json"):
@@ -82,7 +82,7 @@ def test_runner_reruns_validation_when_envelope_artifacts_diverge_from_manifest(
     manifest1 = asyncio.run(runner1.run())
     assert manifest1.task_state is TaskState.COMPLETED
 
-    staging = task_root / "staging" / "run_pinned_fixture"
+    staging = task_root / "staging" / "run_standalone"
     _make_artifact_checkpoint_match_validated_staging(task_root)
 
     validation_checkpoint_path = task_root / "state" / "validation_output.json"
@@ -94,7 +94,7 @@ def test_runner_reruns_validation_when_envelope_artifacts_diverge_from_manifest(
     )
     physical_manifest_before = (staging / "run_manifest.json").read_bytes()
     removed = validation_checkpoint["output"]["artifacts"].pop()
-    removed_path = f"staging/run_pinned_fixture/{removed['name']}"
+    removed_path = f"staging/run_standalone/{removed['name']}"
     validation_checkpoint["files"] = [
         item
         for item in validation_checkpoint["files"]
@@ -154,7 +154,7 @@ def test_runner_reruns_validation_when_physical_run_manifest_diverges(
     base_dir = tmp_path / "tasks"
     task_id = "task_physical_manifest_divergence"
     task_root = base_dir / task_id
-    staging = task_root / "staging" / "run_pinned_fixture"
+    staging = task_root / "staging" / "run_standalone"
     runner1 = PipelineRunner(
         task_id=task_id,
         base_dir=base_dir,

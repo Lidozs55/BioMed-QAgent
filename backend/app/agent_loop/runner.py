@@ -403,6 +403,7 @@ class FixtureRunExecutor:
             topic=execution.input,
             cancellation_requested=execution.context.cancellation_requested,
             defer_publication=True,
+            run_id=execution.run_id,
         )
         set_event_sink = getattr(runner, "set_event_sink", None)
         streams_events = callable(set_event_sink)

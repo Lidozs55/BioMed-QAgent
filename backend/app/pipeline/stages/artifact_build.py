@@ -99,7 +99,7 @@ def run_artifact_build(
     Writes all CSVs except ``quality_report.csv`` (which is written by the
     validation stage). Returns the staging directory and artifact paths.
     """
-    staging = ctx.workdir.staging_run("run_pinned_fixture")
+    staging = ctx.workdir.staging_run(ctx.run_id)
     if any(staging.iterdir()):
         shutil.rmtree(staging)
         staging.mkdir(parents=True)

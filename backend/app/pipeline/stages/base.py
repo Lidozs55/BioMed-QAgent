@@ -23,6 +23,8 @@ from app.domain.contracts.discovery import GeoSeriesRecord
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
+STANDALONE_RUN_ID = "run_standalone"
+
 
 class PipelineCancelledError(RuntimeError):
     """Raised when cooperative cancellation reaches a stage boundary."""
@@ -37,8 +39,12 @@ class StageContext:
     fixture_dir: Path
     topic: str
     started_at: datetime
+    run_id: str = STANDALONE_RUN_ID
     mode: Literal["fixture", "live"] = "fixture"
     cancellation_requested: Callable[[], bool] | None = None
+
+    def __post_init__(self) -> None:
+        self.workdir.staging_run(self.run_id)
 
     def check_cancelled(self) -> None:
         if self.cancellation_requested is not None and self.cancellation_requested():

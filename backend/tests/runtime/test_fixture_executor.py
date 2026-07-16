@@ -320,6 +320,18 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
         )
         manifest = json.loads(manifest_path.read_text("utf-8"))
         assert manifest["request"]["topic"] == "durable fixture topic"
+        build_checkpoint = json.loads(
+            (
+                repository.tasks_dir
+                / accepted.task_id
+                / "state"
+                / "artifact_build_output.json"
+            ).read_text("utf-8")
+        )
+        assert (
+            Path(build_checkpoint["output"]["staging_dir"]).name
+            == accepted.run_id
+        )
 
         with pytest.raises(manager_module.FixtureTaskContinuationError):
             await manager.submit_run(

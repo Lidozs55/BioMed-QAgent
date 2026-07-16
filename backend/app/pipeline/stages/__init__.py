@@ -2,6 +2,7 @@
 from app.pipeline.stages.acquisition import run_acquisition
 from app.pipeline.stages.artifact_build import run_artifact_build
 from app.pipeline.stages.base import (
+    STANDALONE_RUN_ID,
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
@@ -21,6 +22,7 @@ __all__ = [
     "DiscoveryOutput",
     "PipelineCancelledError",
     "ProcessingOutput",
+    "STANDALONE_RUN_ID",
     "StageContext",
     "StageResult",
     "ValidationOutput",
