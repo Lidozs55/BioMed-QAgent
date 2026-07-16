@@ -20,7 +20,7 @@ from app.domain.contracts import (
     ToolCompletedPayload,
     ToolStartedPayload,
 )
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 from app.runtime.compaction import CompactionCancelledError
 from app.runtime.manager import RunExecution, TaskManager
 from app.runtime.repository import TaskRepository
@@ -541,11 +541,11 @@ async def test_executor_emits_manifest_artifact_ids_after_success(
     class FakeResult:
         async def stream_events(self):
             nonlocal manifest
-            manifest = run_pinned_fixture(
+            manifest = await PipelineRunner(
                 task_id="task_artifacts",
                 base_dir=output_dir / "tasks",
                 fixture_dir=FIXTURE_DIR,
-            )
+            ).run()
             if False:
                 yield None
 
@@ -597,11 +597,11 @@ async def test_manager_persists_all_executor_artifacts_before_terminal_events(
             self.task_id = task_id
 
         async def stream_events(self):
-            run_pinned_fixture(
+            await PipelineRunner(
                 task_id=self.task_id,
                 base_dir=output_dir / "tasks",
                 fixture_dir=FIXTURE_DIR,
-            )
+            ).run()
             if False:
                 yield None
 
@@ -667,11 +667,11 @@ async def test_executor_does_not_reemit_unchanged_manifest_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output_dir = tmp_path / "output"
-    run_pinned_fixture(
+    await PipelineRunner(
         task_id="task_unchanged_artifacts",
         base_dir=output_dir / "tasks",
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
     emitted: list[object] = []
 
     async def emit(payload: object):
@@ -719,11 +719,11 @@ async def test_executor_changed_manifest_keeps_stable_artifact_ids(
 ) -> None:
     task_id = "task_changed_artifacts"
     output_dir = tmp_path / "output"
-    manifest = run_pinned_fixture(
+    manifest = await PipelineRunner(
         task_id=task_id,
         base_dir=output_dir / "tasks",
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
     expected_ids = {
         "run_manifest",
         *(artifact.artifact_id for artifact in manifest.artifacts),

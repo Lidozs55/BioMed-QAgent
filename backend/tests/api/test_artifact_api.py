@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
@@ -19,7 +18,7 @@ from app.domain.contracts import (
     TaskSummary,
 )
 from app.main import create_app
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 from fastapi import FastAPI
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -85,12 +84,11 @@ async def seed_fixture(application: FastAPI, task_id: str) -> object:
     await repository.save_snapshot(
         snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
     )
-    manifest = await asyncio.to_thread(
-        run_pinned_fixture,
+    manifest = await PipelineRunner(
         task_id=task_id,
         base_dir=repository.tasks_dir,
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
     artifacts_dir = repository.tasks_dir / task_id / "artifacts"
     manifest_path = artifacts_dir / "run_manifest.json"
     (artifacts_dir / ".runtime-publication.json").write_text(
@@ -153,12 +151,11 @@ async def test_artifact_api_requires_authoritative_task_and_handles_no_manifest(
 ) -> None:
     async with api_client(tmp_path) as (application, client):
         repository = application.state.task_repository
-        await asyncio.to_thread(
-            run_pinned_fixture,
+        await PipelineRunner(
             task_id="task_orphan",
             base_dir=repository.tasks_dir,
             fixture_dir=FIXTURE_DIR,
-        )
+        ).run()
         orphan_list = await client.get("/api/v1/tasks/task_orphan/artifacts")
         orphan_download = await client.get(
             "/api/v1/tasks/task_orphan/artifacts/run_manifest"
@@ -189,12 +186,11 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
         await repository.save_snapshot(
             snapshot_with_run(task_id, run_id, RunStatus.CANCELLED)
         )
-        await asyncio.to_thread(
-            run_pinned_fixture,
+        await PipelineRunner(
             task_id=task_id,
             base_dir=repository.tasks_dir,
             fixture_dir=FIXTURE_DIR,
-        )
+        ).run()
         artifacts_dir = repository.tasks_dir / task_id / "artifacts"
         manifest_path = artifacts_dir / "run_manifest.json"
         (artifacts_dir / ".runtime-publication.json").write_text(
