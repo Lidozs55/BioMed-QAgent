@@ -2,6 +2,7 @@ import type { APIClient } from "@/hooks/useAPI";
 import type {
   ContinueTaskInput,
   StartTaskInput,
+  TaskPage,
   TaskRunAccepted,
   TaskSnapshot,
 } from "./contracts";
@@ -29,37 +30,37 @@ interface RuntimeDependencies {
   signal?: AbortSignal;
 }
 
+function errorDescription(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
+}
+
+function excludeDeletedTasks(
+  page: TaskPage,
+  excludedTaskIds: ReadonlySet<string>,
+): TaskPage {
+  if (excludedTaskIds.size === 0) return page;
+  return {
+    ...page,
+    active_items: page.active_items.filter(
+      (task) => !excludedTaskIds.has(task.task_id),
+    ),
+    items: page.items.filter((task) => !excludedTaskIds.has(task.task_id)),
+  };
+}
+
 export function startRuntime({ api, transport, signal }: RuntimeDependencies) {
-  const databasePromise = api
-    .fetchDatabases()
-    .then((databases) => {
-      if (signal?.aborted) return;
-      useAgentStore.getState().setDatabases(databases);
-    });
-  const historyPromise = api.fetchTasks({ limit: TASK_PAGE_SIZE }).then((page) => {
-    if (signal?.aborted) return;
-    useAgentStore.getState().mergeTaskPage(page, false);
-    for (const task of page.active_items) {
-      if (signal?.aborted) return;
-      const lastSequence =
-        useAgentStore.getState().tasksById[task.task_id]?.lastSequence ??
-        task.latest_sequence;
-      transport.subscribe(task.task_id, lastSequence);
-    }
-  });
-  const socketPromise = transport.connect();
-  return Promise.allSettled([
-    databasePromise,
-    historyPromise,
-    socketPromise,
-  ]);
+  return new RuntimeController(api, transport).start(signal);
 }
 
 export class RuntimeController {
   private foregroundIntentGeneration = 0;
+  private readonly deletedTaskIds = new Set<string>();
   private readonly taskHandoffGenerations = new Map<string, number>();
   private readonly taskHandoffTails = new Map<string, Promise<void>>();
-  private readonly selectionHandoffs = new Map<string, Promise<number>>();
+  private readonly selectionHandoffs = new Map<
+    string,
+    Promise<number | null>
+  >();
   private readonly messageHydrations = new Map<string, Promise<void>>();
   private readonly artifactHydrations = new Map<
     string,
@@ -71,22 +72,118 @@ export class RuntimeController {
     private readonly transport: EventTransport,
   ) {}
 
-  async selectTask(taskId: string): Promise<void> {
-    const generation = ++this.foregroundIntentGeneration;
-    const handoffGeneration = await this.getSelectionHandoff(taskId);
-    if (generation === this.foregroundIntentGeneration) {
-      useAgentStore.getState().setActiveTaskId(taskId);
-    }
-    await this.getArtifactHydration(taskId, handoffGeneration);
+  start(signal?: AbortSignal) {
+    const databasePromise = this.api.fetchDatabases().then((databases) => {
+      if (signal?.aborted) return;
+      useAgentStore.getState().setDatabases(databases);
+    });
+    const historyPromise = this.loadTaskHistory(signal);
+    const socketPromise = this.transport.connect();
+    return Promise.allSettled([
+      databasePromise,
+      historyPromise,
+      socketPromise,
+    ]);
   }
 
-  private getSelectionHandoff(taskId: string): Promise<number> {
+  private async loadTaskHistory(signal?: AbortSignal): Promise<void> {
+    const tasksAtRequestStart = useAgentStore.getState().tasksById;
+    useAgentStore.getState().setHistoryState("loading");
+    try {
+      const page = excludeDeletedTasks(
+        await this.api.fetchTasks({ limit: TASK_PAGE_SIZE }),
+        this.deletedTaskIds,
+      );
+      if (signal?.aborted) return;
+      const currentTasks = useAgentStore.getState().tasksById;
+      const changedTaskIds = new Set(
+        Object.entries(currentTasks)
+          .filter(
+            ([taskId, task]) => tasksAtRequestStart[taskId] !== task,
+          )
+          .map(([taskId]) => taskId),
+      );
+      useAgentStore.getState().mergeTaskPage(page, false, changedTaskIds);
+      for (const task of page.active_items) {
+        if (signal?.aborted) return;
+        const state = useAgentStore.getState();
+        if (!state.activeItems.includes(task.task_id)) continue;
+        const lastSequence =
+          state.tasksById[task.task_id]?.lastSequence ?? task.latest_sequence;
+        this.transport.subscribe(task.task_id, lastSequence);
+      }
+      useAgentStore.getState().setHistoryState("ready");
+    } catch (error) {
+      if (!signal?.aborted) {
+        useAgentStore
+          .getState()
+          .setHistoryState("error", errorDescription(error));
+      }
+      throw error;
+    }
+  }
+
+  async selectTask(taskId: string): Promise<void> {
+    const generation = ++this.foregroundIntentGeneration;
+    const previousActiveTaskId = useAgentStore.getState().activeTaskId;
+    if (
+      !this.deletedTaskIds.has(taskId) &&
+      useAgentStore.getState().tasksById[taskId] !== undefined
+    ) {
+      useAgentStore.getState().setActiveTaskId(taskId);
+    }
+    try {
+      const handoffGeneration = await this.getSelectionHandoff(taskId);
+      if (
+        handoffGeneration === null ||
+        !this.isCurrentTaskHandoff(taskId, handoffGeneration)
+      ) {
+        this.restoreForegroundSelection(
+          generation,
+          taskId,
+          previousActiveTaskId,
+        );
+        return;
+      }
+      await this.getArtifactHydration(taskId, handoffGeneration);
+    } catch (error) {
+      this.restoreForegroundSelection(
+        generation,
+        taskId,
+        previousActiveTaskId,
+      );
+      throw error;
+    }
+  }
+
+  private restoreForegroundSelection(
+    generation: number,
+    taskId: string,
+    previousActiveTaskId: string | null,
+  ): void {
+    const state = useAgentStore.getState();
+    if (
+      generation !== this.foregroundIntentGeneration ||
+      state.activeTaskId !== taskId
+    ) {
+      return;
+    }
+    state.setActiveTaskId(
+      previousActiveTaskId !== null &&
+        state.tasksById[previousActiveTaskId] !== undefined
+        ? previousActiveTaskId
+        : null,
+    );
+  }
+
+  private getSelectionHandoff(taskId: string): Promise<number | null> {
+    if (this.deletedTaskIds.has(taskId)) return Promise.resolve(null);
     const existing = this.selectionHandoffs.get(taskId);
     if (existing !== undefined) return existing;
     const handoff = this.enqueueTaskHandoff(taskId, async () => {
       const generation = this.advanceTaskHandoffGeneration(taskId);
-      await this.performSelectionHandoff(taskId);
-      return generation;
+      const selected = await this.performSelectionHandoff(taskId, generation);
+      return selected ? generation : null;
     });
     this.selectionHandoffs.set(taskId, handoff);
     const clear = () => {
@@ -123,16 +220,41 @@ export class RuntimeController {
     return generation;
   }
 
-  private async performSelectionHandoff(taskId: string): Promise<void> {
+  private isCurrentTaskHandoff(taskId: string, generation: number): boolean {
+    return (
+      !this.deletedTaskIds.has(taskId) &&
+      this.taskHandoffGenerations.get(taskId) === generation &&
+      useAgentStore.getState().tasksById[taskId] !== undefined
+    );
+  }
+
+  private async performSelectionHandoff(
+    taskId: string,
+    generation: number,
+  ): Promise<boolean> {
     const wasSubscribed = this.transport.isSubscribed(taskId);
     try {
       if (wasSubscribed) {
         await this.transport.unsubscribeAndWait(taskId);
       }
+      if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       const snapshot = await this.api.fetchTask(taskId);
+      if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
+      const needsRestReplay =
+        useAgentStore.getState().tasksById[taskId]?.hydration === "summary";
+      if (needsRestReplay) {
+        useAgentStore.getState().prepareTaskSnapshotReplay(snapshot);
+        await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
+        if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
+      }
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-      this.transport.subscribe(taskId, snapshot.task.latest_sequence);
+      const lastSequence =
+        useAgentStore.getState().tasksById[taskId]?.lastSequence ??
+        snapshot.task.latest_sequence;
+      this.transport.subscribe(taskId, lastSequence);
+      return true;
     } catch (error) {
+      if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       if (wasSubscribed) {
         const lastSequence =
           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
@@ -170,6 +292,7 @@ export class RuntimeController {
     taskId: string,
     targetSequence: number,
   ): Promise<void> {
+    if (targetSequence <= 0) return;
     let afterSequence = 0;
     for (;;) {
       const events = await this.api.fetchEvents(taskId, {
@@ -366,6 +489,8 @@ export class RuntimeController {
 
   async deleteTask(taskId: string): Promise<void> {
     await this.api.deleteTask(taskId);
+    this.deletedTaskIds.add(taskId);
+    this.advanceTaskHandoffGeneration(taskId);
     if (this.transport.isSubscribed(taskId)) {
       try {
         await this.transport.unsubscribeAndWait(taskId);
@@ -379,10 +504,13 @@ export class RuntimeController {
   async loadMoreTasks(): Promise<void> {
     const cursor = useAgentStore.getState().nextCursor;
     if (cursor === null) return;
-    const page = await this.api.fetchTasks({
-      limit: TASK_PAGE_SIZE,
-      cursor,
-    });
+    const page = excludeDeletedTasks(
+      await this.api.fetchTasks({
+        limit: TASK_PAGE_SIZE,
+        cursor,
+      }),
+      this.deletedTaskIds,
+    );
     useAgentStore.getState().mergeTaskPage(page, true);
     for (const task of page.active_items) {
       const lastSequence =
@@ -390,6 +518,10 @@ export class RuntimeController {
         task.latest_sequence;
       this.transport.subscribe(task.task_id, lastSequence);
     }
+  }
+
+  refreshTaskHistory(): Promise<void> {
+    return this.loadTaskHistory();
   }
 
   loadOlderMessages(taskId: string): Promise<void> {

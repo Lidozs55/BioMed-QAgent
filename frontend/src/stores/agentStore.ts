@@ -16,11 +16,13 @@ import {
   hydrateTaskSnapshot as projectTaskSnapshot,
   mergeOlderMessagePage as projectOlderMessagePage,
   mergeTaskPage as projectTaskPage,
+  prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
   reduceRuntimeEvent,
 } from "@/runtime/reducer";
 import type {
   AgentRuntimeData,
   ConnectionStatus,
+  HistoryStatus,
 } from "@/runtime/types";
 
 export const AGENT_STORE_NAME = "biomed-sessions";
@@ -33,8 +35,13 @@ interface PersistedAgentState {
 }
 
 export interface AgentStore extends AgentRuntimeData {
-  mergeTaskPage: (page: TaskPage, append: boolean) => void;
+  mergeTaskPage: (
+    page: TaskPage,
+    append: boolean,
+    preserveTaskIds?: ReadonlySet<string>,
+  ) => void;
   hydrateTaskSnapshot: (snapshot: TaskSnapshot) => void;
+  prepareTaskSnapshotReplay: (snapshot: TaskSnapshot) => void;
   mergeOlderMessagePage: (
     taskId: string,
     requestedCursor: string,
@@ -43,6 +50,7 @@ export interface AgentStore extends AgentRuntimeData {
   applyEvent: (event: EventEnvelope) => void;
   setActiveTaskId: (taskId: string | null) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
+  setHistoryState: (status: HistoryStatus, error?: string | null) => void;
   setDatabases: (databases: DatabaseRecord[]) => void;
   setDraftInput: (input: string) => void;
   setDraftSelectedDatabaseIds: (databaseIds: string[]) => void;
@@ -272,11 +280,16 @@ export const useAgentStore = create<AgentStore>()(
     (set) => ({
       ...initialState,
 
-      mergeTaskPage: (page, append) =>
-        set((state) => projectTaskPage(state, page, append)),
+      mergeTaskPage: (page, append, preserveTaskIds) =>
+        set((state) =>
+          projectTaskPage(state, page, append, preserveTaskIds),
+        ),
 
       hydrateTaskSnapshot: (snapshot) =>
         set((state) => projectTaskSnapshot(state, snapshot)),
+
+      prepareTaskSnapshotReplay: (snapshot) =>
+        set((state) => projectTaskSnapshotReplay(state, snapshot)),
 
       mergeOlderMessagePage: (taskId, requestedCursor, page) =>
         set((state) =>
@@ -289,6 +302,9 @@ export const useAgentStore = create<AgentStore>()(
       setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
 
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+
+      setHistoryState: (historyStatus, historyError = null) =>
+        set({ historyStatus, historyError }),
 
       setDatabases: (databases) => set({ databases: [...databases] }),
 

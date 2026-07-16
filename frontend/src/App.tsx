@@ -14,7 +14,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI } from "@/hooks/useAPI";
-import { RuntimeController, startRuntime } from "@/runtime/controller";
+import { RuntimeController } from "@/runtime/controller";
 
 function errorDescription(reason: unknown): string {
   return reason instanceof Error ? reason.message : "未知错误";
@@ -34,7 +34,7 @@ export default function App() {
 
   useEffect(() => {
     const startup = new AbortController();
-    void startRuntime({ api, transport, signal: startup.signal }).then(
+    void controller.start(startup.signal).then(
       ([databases, history, socket]) => {
         if (startup.signal.aborted) return;
         if (databases.status === "rejected") {
@@ -58,13 +58,14 @@ export default function App() {
       startup.abort();
       transport.disconnect();
     };
-  }, [api, transport]);
+  }, [controller, transport]);
 
   return (
     <SidebarProvider defaultOpen={true}>
       <SessionSidebar
         onNewDraft={() => controller.showNewDraft()}
         onSelectTask={selectTask}
+        onRetryHistory={() => controller.refreshTaskHistory()}
         onLoadMore={() => controller.loadMoreTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
@@ -73,7 +74,10 @@ export default function App() {
         <header className="flex min-w-0 items-center justify-between gap-2 border-b px-4 py-2">
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed Q-Agent</h1>
-          <ThemeToggle />
+          <div className="flex shrink-0 items-center gap-2">
+            <ToolTrace />
+            <ThemeToggle />
+          </div>
         </header>
         <main className="flex min-w-0 flex-1 overflow-hidden">
           <div className="min-w-0 flex-1">
@@ -87,7 +91,6 @@ export default function App() {
               }
             />
           </div>
-          <ToolTrace />
         </main>
       </SidebarInset>
       <BackgroundTaskNotifications onViewTask={selectTask} />

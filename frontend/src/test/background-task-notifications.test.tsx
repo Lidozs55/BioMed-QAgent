@@ -3,7 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
-import type { EventEnvelope, TaskSummary } from "@/runtime/contracts";
+import type { APIClient } from "@/hooks/useAPI";
+import type {
+  EventEnvelope,
+  TaskSnapshot,
+  TaskSummary,
+} from "@/runtime/contracts";
+import {
+  RuntimeController,
+  type EventTransport,
+} from "@/runtime/controller";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -86,6 +95,24 @@ describe("BackgroundTaskNotifications", () => {
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
+  it("does not lose a fast background transition batched into one render", () => {
+    render(<BackgroundTaskNotifications onViewTask={vi.fn()} />);
+
+    act(() => {
+      useAgentStore.getState().mergeTaskPage(
+        {
+          active_items: [summary("fast", "running")],
+          items: [],
+          next_cursor: null,
+        },
+        false,
+      );
+      useAgentStore.getState().applyEvent(terminalEvent("fast", "completed"));
+    });
+
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
   it("uses error toast for failed and interrupted background tasks", () => {
     useAgentStore.getState().mergeTaskPage(
       {
@@ -115,6 +142,55 @@ describe("BackgroundTaskNotifications", () => {
     render(<BackgroundTaskNotifications onViewTask={vi.fn()} />);
 
     act(() => useAgentStore.getState().applyEvent(terminalEvent("foreground", "completed")));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("treats a task being selected as foreground while its terminal snapshot hydrates", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary("selected", "running")],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    render(<BackgroundTaskNotifications onViewTask={vi.fn()} />);
+    const selectedSnapshot: TaskSnapshot = {
+      task: summary("selected", "completed"),
+      runs: [],
+      messages: [],
+      older_messages_cursor: null,
+    };
+    const apiClient: APIClient = {
+      fetchDatabases: vi.fn(),
+      fetchTasks: vi.fn(),
+      fetchTask: vi.fn().mockResolvedValue(selectedSnapshot),
+      fetchMessages: vi.fn(),
+      fetchEvents: vi.fn(),
+      createTask: vi.fn(),
+      continueTask: vi.fn(),
+      cancelRun: vi.fn(),
+      deleteTask: vi.fn(),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+      getArtifactUrl: vi.fn(),
+    };
+    const eventTransport: EventTransport = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+      subscribe: vi.fn(),
+      isSubscribed: vi.fn().mockReturnValue(false),
+      unsubscribeAndWait: vi.fn().mockResolvedValue(undefined),
+      recoverSubscription: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await act(async () => {
+      await new RuntimeController(apiClient, eventTransport).selectTask(
+        "selected",
+      );
+    });
+
+    expect(useAgentStore.getState().activeTaskId).toBe("selected");
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });

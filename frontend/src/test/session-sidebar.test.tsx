@@ -46,6 +46,7 @@ function renderSidebar(
       <SessionSidebar
         onNewDraft={vi.fn()}
         onSelectTask={vi.fn()}
+        onRetryHistory={vi.fn().mockResolvedValue(undefined)}
         onLoadMore={vi.fn().mockResolvedValue(undefined)}
         onCancelRun={vi.fn().mockResolvedValue(undefined)}
         onDeleteTask={vi.fn().mockResolvedValue(undefined)}
@@ -169,6 +170,20 @@ describe("SessionSidebar", () => {
         expect.objectContaining({ description: "history unavailable" }),
       ),
     );
+  });
+
+  it("keeps a retry action visible after initial history loading fails", async () => {
+    useAgentStore.setState({
+      historyStatus: "error",
+      historyError: "history unavailable",
+    });
+    const onRetryHistory = vi.fn().mockResolvedValue(undefined);
+    renderSidebar({ onRetryHistory });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("history unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "重试加载历史" }));
+
+    await waitFor(() => expect(onRetryHistory).toHaveBeenCalledTimes(1));
   });
 
   it("shows a visible error when selecting a task fails", async () => {

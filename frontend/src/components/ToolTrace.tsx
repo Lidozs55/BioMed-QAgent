@@ -70,7 +70,7 @@ export function ToolTrace() {
           <Button
             variant="outline"
             size="icon"
-            className="fixed right-4 bottom-4 shadow-lg"
+            className="shadow-sm"
             aria-label="Toggle tool trace"
             title="Toggle tool trace"
           />

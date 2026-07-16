@@ -68,4 +68,13 @@ describe("ToolTrace", () => {
     expect(useAgentStore.getState().tasksById.task_trace).toBe(before);
     expect(before.lastSequence).toBe(1);
   });
+
+  it("keeps the trace trigger in normal layout so it cannot cover chat controls", () => {
+    render(<ToolTrace />);
+
+    const trigger = screen.getByRole("button", { name: "Toggle tool trace" });
+    expect(trigger).not.toHaveClass("fixed");
+    expect(trigger).not.toHaveClass("right-4");
+    expect(trigger).not.toHaveClass("bottom-4");
+  });
 });

@@ -294,6 +294,39 @@ describe("ChatPanel", () => {
     );
   });
 
+  it("does not submit a new draft while Chinese IME composition is active", () => {
+    const startTask = vi.fn();
+    render(<ChatPanel startTask={startTask} />);
+
+    const input = screen.getByPlaceholderText("输入研究目标...");
+    fireEvent.change(input, { target: { value: "乳腺癌" } });
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      isComposing: true,
+    });
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(input).toHaveValue("乳腺癌");
+  });
+
+  it("does not submit a continuation while Chinese IME composition is active", () => {
+    seedTerminalTask();
+    const continueTask = vi.fn();
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "继续分析" } });
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      isComposing: true,
+    });
+
+    expect(continueTask).not.toHaveBeenCalled();
+    expect(input).toHaveValue("继续分析");
+  });
+
   it("does not let an earlier submission clear a newer draft", async () => {
     const submission = deferred<TaskRunAccepted>();
     const startTask = vi.fn().mockReturnValue(submission.promise);

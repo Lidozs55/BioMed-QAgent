@@ -14,6 +14,11 @@ import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -54,6 +59,7 @@ interface SessionSidebarProps {
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
   onLoadMore?: () => Promise<void>;
+  onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
 }
@@ -154,6 +160,7 @@ export function SessionSidebar({
   onNewDraft,
   onSelectTask,
   onLoadMore,
+  onRetryHistory,
   onCancelRun,
   onDeleteTask,
 }: SessionSidebarProps) {
@@ -163,6 +170,8 @@ export function SessionSidebar({
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const nextCursor = useAgentStore((state) => state.nextCursor);
   const connectionStatus = useAgentStore((state) => state.connectionStatus);
+  const historyStatus = useAgentStore((state) => state.historyStatus);
+  const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
@@ -213,6 +222,17 @@ export function SessionSidebar({
       });
     } finally {
       setLoadingMore(false);
+    }
+  };
+
+  const retryHistory = async () => {
+    if (onRetryHistory === undefined || historyStatus === "loading") return;
+    try {
+      await onRetryHistory();
+    } catch (error) {
+      toast.error("会话历史加载失败", {
+        description: errorDescription(error),
+      });
     }
   };
 
@@ -307,16 +327,42 @@ export function SessionSidebar({
           <SidebarGroup>
             <SidebarGroupLabel>历史任务</SidebarGroupLabel>
             <SidebarGroupContent>
-              {historyTasks.length > 0 ? (
+              {historyStatus === "error" && (
+                <Alert variant="destructive" className="mb-2">
+                  <AlertTitle>会话历史加载失败</AlertTitle>
+                  <AlertDescription className="flex flex-col gap-2 break-words">
+                    <p>{historyError ?? "暂时无法读取后端会话历史。"}</p>
+                    {onRetryHistory !== undefined && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void retryHistory()}
+                        aria-label="重试加载历史"
+                      >
+                        重试
+                      </Button>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+              {historyStatus === "loading" && historyTasks.length === 0 ? (
+                <div
+                  role="status"
+                  className="flex items-center gap-2 p-4 text-xs text-muted-foreground"
+                >
+                  <Spinner aria-hidden="true" />
+                  正在加载历史任务
+                </div>
+              ) : historyTasks.length > 0 ? (
                 taskRows(historyTasks)
-              ) : (
+              ) : historyStatus !== "error" ? (
                 <Empty className="p-4">
                   <EmptyHeader>
                     <EmptyTitle>暂无历史任务</EmptyTitle>
                     <EmptyDescription>完成的研究会显示在这里。</EmptyDescription>
                   </EmptyHeader>
                 </Empty>
-              )}
+              ) : null}
               {nextCursor !== null && onLoadMore !== undefined && (
                 <Button
                   variant="outline"
