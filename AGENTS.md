@@ -213,7 +213,7 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 - Backend: no import errors, AST intact, `uv run pytest` passes, and
   `uv run uvicorn app.main:app --reload` starts after clearing `__pycache__`.
 - Frontend: `pnpm lint && pnpm tsc` with 0 errors, `pnpm build` succeeds.
-- Commit message format: `[TASK-XXX] summary` or `feat/fix/chore: summary`.
+- Commit message format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
 
 ### 8. Documentation First
 
