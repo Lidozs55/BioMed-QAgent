@@ -338,3 +338,33 @@ responsible for making the board a real-time projection of project progress.
 - Keep `docs/TODO.md` and the board in sync: new `docs/TODO.md` entries should be
   mapped to board tasks, and board status changes should be written back to the
   corresponding `docs/TODO.md` checkboxes.
+
+### 6. End-of-Round Self-Check (Mandatory)
+
+**At the end of every work round** — whether the round completed a task, hit a
+blocker, or ran out of context — the agent must re-read this `AGENTS.md` in
+full and verify the workflow was followed. This is a hard checkpoint, not a
+suggestion.
+
+Checklist to run through:
+
+1. **Commonly check-in**: did this round post `[TASK]` at the start and
+   `[DONE]` (or `[BLOCKED]`) at the end? If not, post the missing message now.
+2. **Branch policy**: were multi-file changes made on a dedicated branch? Were
+   single-file tweaks committed to `main` only after the pre-check in §3?
+3. **Pre-push verification** (Part I §7.3): did `uv run pytest` pass? Did
+   frontend `pnpm lint && pnpm tsc && pnpm build` pass (if FE changed)? Did
+   the backend restart cleanly?
+4. **Board sync** (§2.4): are the `docs/TODO.md` checkboxes and the Commonly
+   board in sync with what was actually done this round?
+5. **Documentation** (Part I §8): did this round introduce a non-obvious
+   decision, integration quirk, or trade-off that should be captured under
+   `docs/`?
+6. **Workflow drift**: did any step skip a mandated check (claim, file lock,
+   rebase, `[DONE]` summary)? If yes, retroactively fix what is recoverable
+   and note what is not.
+
+If any item is missing, complete it before starting the next round. The
+purpose is to prevent workflow drift across long multi-round sessions where
+context is compressed — the `AGENTS.md` is the stable source of truth that
+survives context resets.
