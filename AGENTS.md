@@ -78,7 +78,9 @@ Key points:
 2. `app/api/ws.py:agent_ws` accepts the connection and delegates to
    `app/api/ws_events.py:_run_event_session`.
 3. The client sends commands:
-   - `{"type":"subscribe","task_id":"..."}` — subscribe to a task's event stream
+   - `{"type":"subscribe","task_id":"...","after_sequence":N}` — subscribe to
+     a task's event stream, replaying events with `sequence > after_sequence`
+     first (use `0` to start from the beginning)
    - `{"type":"unsubscribe","task_id":"..."}` — stop receiving events for a task
    - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
 4. The server pushes `EventEnvelope` objects (same schema as

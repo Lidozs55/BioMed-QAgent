@@ -402,6 +402,11 @@ def _publish_artifacts(
        rename succeeds, so its presence is a reliable signal that
        ``artifacts/`` is fully populated. Its absence means the publish did
        not complete (crash, validation failure, or in-flight).
+
+    Note: production code uses ``publish_artifacts`` (which integrates with
+    ``StageContext`` for cancellation and a rename-aside rollback). This
+    helper is kept as a directly-testable unit that verifies the
+    lock + marker contract without requiring a full stage context.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_file = state_dir / "publish.lock"
