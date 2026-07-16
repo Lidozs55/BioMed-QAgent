@@ -269,7 +269,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 固定 GSE178352 案例全量回溯 expression value
 - [ ] **P0** 一般任务全量检查结构，默认确定性抽样 100 个源数据值
 - [x] **P0** 验证 processing log 完整
-- [ ] **P0** 验证非空 warnings 与 metrics 一致
+- [x] **P0** 验证非空 warnings 与 metrics 一致
 - [x] **P0** 验证必需 Artifact 存在且 schema 完整
 - [x] **P0** 失败报告写入 logs/validation_report.json
 - [x] **P0** 任一失败时不发布 artifacts/
@@ -307,7 +307,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** parser 与 long-form 测试
 - [x] **P0** SourceLocator、名称规范化、字段映射和行数测试
 - [x] **P0** StageAttempt、锁、取消、幂等和恢复测试
-- [ ] **P0** 全部 Validation Gate 规则测试
+- [x] **P0** 全部 Validation Gate 规则测试
 - [x] **P0** 完整 fixture Pipeline 集成测试
 - [x] **P0** Artifact API 列表和下载测试
 - [x] **P0** 产物 schema 与固定案例全量值追溯测试
