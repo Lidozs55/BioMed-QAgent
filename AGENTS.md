@@ -205,7 +205,8 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 
 **Each agent is responsible for merging its own branch**. Before merging, all of the following must hold:
 
-1. The branch is functionally stable and the target changes are achieved.
+1. The branch is fully functionally stable and the target changes are achieved. That is, you are recommonded to
+   conduct a detailed review before merging to the main.
 2. `uv run pytest` is fully green with no new failures.
 3. Frontend changes pass `pnpm lint && pnpm tsc` with 0 errors, and `pnpm build`
    succeeds.
