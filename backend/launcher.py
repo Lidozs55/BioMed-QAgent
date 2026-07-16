@@ -2,6 +2,9 @@
 
 Starts a uvicorn server, serves the embedded frontend ``dist/`` as static
 files, and auto-opens the user's browser.
+
+Reuses ``app.main.create_app`` (which owns the durable runtime lifespan)
+and layers static-file serving on top.
 """
 from __future__ import annotations
 
@@ -12,10 +15,8 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
-from app.api.routes import router as routes_router
-from app.api.ws import router as ws_router
+from app.main import create_app as _create_runtime_app
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -63,7 +64,11 @@ def _get_dist_path() -> Path | None:
 
 
 def create_app(dist_path: Path | None = None) -> FastAPI:
-    """Create the FastAPI application instance.
+    """Create the FastAPI application instance with durable runtime lifespan.
+
+    Reuses ``app.main.create_app`` (which registers the lifespan that owns
+    TaskManager, TaskRepository, EventHub, etc.) and layers static-file
+    serving on top when ``dist_path`` is provided.
 
     Args:
         dist_path: Path to the frontend ``dist/`` directory. When provided
@@ -73,40 +78,16 @@ def create_app(dist_path: Path | None = None) -> FastAPI:
     Returns:
         Configured ``FastAPI`` instance.
     """
-    app = FastAPI(title="BioMed-QAgent")
-
-    # CORS — allow frontend dev server, same-origin, and future pywebview
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:8000",
-            "app://.",  # reserved for future pywebview integration
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # ── API routes (takes precedence over static files) ──
-    app.include_router(routes_router)
-    app.include_router(ws_router)
+    app = _create_runtime_app()
 
     # ── Static file serving + SPA fallback ──
     if dist_path is not None and dist_path.is_dir():
-        # Efficiently serve the built assets via StaticFiles.
-        # ``html=True`` makes StaticFiles serve ``index.html`` for paths
-        # that don't match an existing file — i.e. SPA fallback.
         app.mount(
             "/",
             StaticFiles(directory=str(dist_path), html=True),
             name="static",
         )
 
-        # Additional catch-all route for SPA fallback.
-        # (With ``html=True`` above this is technically redundant, but
-        # kept for explicitness and to match the desktop-app contract.)
         @app.get("/{full_path:path}")
         async def _spa_fallback(full_path: str = "") -> FileResponse:
             """Catch-all: serve ``index.html`` for any unmatched route."""

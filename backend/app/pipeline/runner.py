@@ -144,17 +144,13 @@ class PipelineRunner:
         )
         self.events: list[EventEnvelope] = []
         self._persisted_attempt_count = self._load_persisted_attempt_count()
-        # Per-event persistence: events.jsonl is appended in _persist_event
-        # so _persisted_event_count tracks how many were durably written.
-        self._persisted_event_count = 0
-        # Sequence is task-local and monotonically increasing across recovery
-        # runs. On init, resume from the highest sequence already persisted to
-        # events.jsonl so that replay-by-sequence remains unambiguous.
-        self._events_file: Path = self.workdir.logs / "events.jsonl"
-        self._sequence: int = self._load_last_sequence() + 1
+        # Sequence is task-local and monotonically increasing within a single
+        # PipelineRunner instance. Cross-run continuity is handled by the
+        # runtime EventStore, not by the pipeline.
+        self._sequence: int = 1
         # Optional async queue for streaming events to WS consumers. When set,
-        # each emitted event is persisted to events.jsonl THEN pushed here.
-        # The sentinel ``None`` signals stream completion to subscribers.
+        # each emitted event is pushed here after being appended to the
+        # in-memory list. The sentinel ``None`` signals stream completion.
         self._event_queue: asyncio.Queue[EventEnvelope | None] | None = None
         self._pending_publication: Path | None = None
 
@@ -170,26 +166,6 @@ class PipelineRunner:
             if persisted != self.state.stage_attempts[index]:
                 raise ValueError("pipeline attempt log is not a durable state prefix")
         return len(records)
-
-    def _load_last_sequence(self) -> int:
-        """Return the highest sequence number in the existing events.jsonl.
-
-        Returns 0 if the file does not exist or is empty, so the next event
-        gets sequence 1 on a fresh run.
-        """
-        if not self._events_file.is_file():
-            return 0
-        max_seq = 0
-        for line in self._events_file.read_text("utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                seq = json.loads(line).get("sequence", 0)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(seq, int) and seq > max_seq:
-                max_seq = seq
-        return max_seq
 
     def publish(self, run_id: str) -> None:
         """Atomically publish a validated managed-Run package and commit marker."""
@@ -304,7 +280,7 @@ class PipelineRunner:
         if is_recovered:
             self._emit_event(
                 TaskRecoveredPayload(
-                    recovered_from_sequence=self._sequence - 1
+                    recovered_from_sequence=0
                 )
             )
         else:
@@ -625,7 +601,8 @@ class PipelineRunner:
         )
         self.events.append(event)
         self._sequence += 1
-        self._persist_event(event)
+        if self._event_queue is not None:
+            self._event_queue.put_nowait(event)
 
     def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
         event = build_event(
@@ -636,18 +613,6 @@ class PipelineRunner:
         )
         self.events.append(event)
         self._sequence += 1
-        self._persist_event(event)
-
-    def _persist_event(self, event: EventEnvelope) -> None:
-        """Persist-then-push: append the event to events.jsonl before any push.
-
-        This satisfies §11 line 340 (事件先持久化再推送) so that a crash after
-        persist but before push never loses an event, and a WS reconnect can
-        resume by reading events.jsonl from the last seen sequence.
-        """
-        self._events_file.parent.mkdir(parents=True, exist_ok=True)
-        with self._events_file.open("a", encoding="utf-8") as handle:
-            handle.write(event.model_dump_json() + "\n")
         if self._event_queue is not None:
             self._event_queue.put_nowait(event)
 
@@ -733,9 +698,8 @@ class PipelineRunner:
     def _persist_logs(self) -> None:
         """Write stage_attempts.jsonl to logs/.
 
-        events.jsonl is now appended per-event by ``_persist_event`` so that
-        the persist-then-push invariant holds and recovery runs do not
-        overwrite prior events.
+        Event persistence is handled by the runtime EventStore — the pipeline
+        only keeps an in-memory ``events`` list for bridge consumption.
         """
         self.workdir.logs.mkdir(parents=True, exist_ok=True)
         attempts_file = self.workdir.logs / "stage_attempts.jsonl"
