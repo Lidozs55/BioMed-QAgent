@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
 
@@ -21,7 +22,7 @@ from Bio import Entrez
 
 from app.agent_loop.context import RunContext
 from app.config import settings
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
@@ -405,12 +406,14 @@ def download_supplementary(
         }, ensure_ascii=False)
 
     # ---- 4. Track via SourceRecord --------------------------------------------
+    retrieved_at = datetime.now(UTC)
     source_record = SourceRecord(
-        source="pubmed",
+        source_id=make_source_id(Database.PUBMED, pmid, pmc_url),
+        database=Database.PUBMED,
         accession=pmid,
-        source_url=pmc_url,
-        local_files=downloaded,
-        format_hint="supplementary",
+        url=pmc_url,
+        title=f"PubMed supplementary materials for {pmid}",
+        retrieved_at=retrieved_at,
     )
     run_ctx.add_source(source_record)
     for f in downloaded:
@@ -422,6 +425,7 @@ def download_supplementary(
         "source_url": pmc_url,
         "local_files": downloaded,
         "format_hint": "supplementary",
+        "retrieved_at": retrieved_at.isoformat(),
     }
     if errors:
         result["warnings"] = errors

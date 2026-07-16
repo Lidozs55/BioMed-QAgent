@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 from pathlib import Path
 
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -35,11 +36,12 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 def test_pinned_fixture_pipeline_builds_validated_traceable_package(
     tmp_path: Path,
 ) -> None:
-    manifest = run_pinned_fixture(
+    runner = PipelineRunner(
         task_id="task_pinned",
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
     )
+    manifest = asyncio.run(runner.run())
     artifacts = tmp_path / "tasks" / "task_pinned" / "artifacts"
 
     assert {path.name for path in artifacts.iterdir()} == MANDATORY_ARTIFACTS
@@ -80,11 +82,12 @@ def test_pinned_fixture_pipeline_builds_validated_traceable_package(
 def test_pinned_pipeline_persists_stage_attempts_and_replayable_events(
     tmp_path: Path,
 ) -> None:
-    manifest = run_pinned_fixture(
+    runner = PipelineRunner(
         task_id="task_events",
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
     )
+    manifest = asyncio.run(runner.run())
     logs = tmp_path / "tasks" / "task_events" / "logs"
 
     attempts = [

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -20,7 +21,7 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import BROWSER_HEADERS, _rate_limiter, playwright_fetch
 from app.tools.network_safety import async_validate_public_http_request
@@ -173,13 +174,14 @@ async def download_from_page(
         local_path = str(dest)
         run_ctx.add_raw_asset(local_path)
 
+        retrieved_at = datetime.now(UTC)
         source_record = SourceRecord(
-            source="browser_fallback",
+            source_id=make_source_id(Database.BROWSER, filename, url),
+            database=Database.BROWSER,
             accession=filename,
-            source_url=url,
-            local_files=[local_path],
-            mime_type=mime_type,
-            format_hint="browser_download",
+            url=url,
+            title=f"Browser download {filename}",
+            retrieved_at=retrieved_at,
         )
         run_ctx.add_source(source_record)
         run_ctx.log_query(filename, "browser_fallback", "succeeded", 1)
@@ -190,7 +192,7 @@ async def download_from_page(
             "local_files": [local_path],
             "mime_type": mime_type,
             "bytes_received": bytes_received,
-            "retrieved_at": source_record.retrieved_at.isoformat(),
+            "retrieved_at": retrieved_at.isoformat(),
         }, ensure_ascii=False)
     except Exception as exc:
         run_ctx.log_query(filename, "browser_fallback", "failed", 0)

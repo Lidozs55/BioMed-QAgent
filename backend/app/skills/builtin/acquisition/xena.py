@@ -12,13 +12,14 @@ import shutil
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.output import SourceRecord
+from app.domain.contracts import Database, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -315,12 +316,14 @@ def download_xena(
 
     run_ctx.add_raw_asset(local_files[0])
 
+    retrieved_at = datetime.now(UTC)
     source_record = SourceRecord(
-        source="xena",
+        source_id=make_source_id(Database.UCSC_XENA, dataset_id, url),
+        database=Database.UCSC_XENA,
         accession=dataset_id,
-        source_url=url,
-        local_files=local_files,
-        format_hint=f"xena_{file_type}",
+        url=url,
+        title=f"UCSC Xena dataset {dataset_id}",
+        retrieved_at=retrieved_at,
     )
     run_ctx.add_source(source_record)
 
@@ -330,7 +333,7 @@ def download_xena(
         "source_url": url,
         "local_files": local_files,
         "format_hint": f"xena_{file_type}",
-        "retrieved_at": source_record.retrieved_at.isoformat(),
+        "retrieved_at": retrieved_at.isoformat(),
     }, ensure_ascii=False)
 
 

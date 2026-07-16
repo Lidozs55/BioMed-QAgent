@@ -160,7 +160,7 @@ def test_download_xena_success() -> None:
     rc: RunContext = ctx.context
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "xena"
+    assert rc.sources[0].database.value == "ucsc_xena"
 
 
 def test_download_xena_network_error_returns_error_json() -> None:

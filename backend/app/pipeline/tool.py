@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Literal
@@ -10,7 +9,7 @@ from typing import Literal
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 
 
 @function_tool(
@@ -29,17 +28,20 @@ async def run_research_pipeline(
     normalized_databases = [value.lower() for value in databases]
     if set(normalized_databases) != {"pubmed", "geo"} or len(databases) != 2:
         raise ValueError("fixture pipeline supports exactly pubmed and geo")
+    if mode != "fixture":
+        raise ValueError("only fixture mode is supported; live mode is Phase 2 work")
+
     run_context = ctx.context
     fixture_dir = (
         Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     )
-    manifest = await asyncio.to_thread(
-        run_pinned_fixture,
+    runner = PipelineRunner(
         task_id=run_context.task_id,
         base_dir=run_context.work_dir.root.parent,
         fixture_dir=fixture_dir,
         topic=topic,
     )
+    manifest = await runner.run()
     return json.dumps(
         {
             "task_id": manifest.task_id,

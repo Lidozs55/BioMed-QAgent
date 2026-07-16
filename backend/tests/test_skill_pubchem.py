@@ -186,7 +186,7 @@ def test_get_compound_api_success() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.sources) == 1
-    assert rc.sources[0].source == "pubchem"
+    assert rc.sources[0].database.value == "pubchem"
     assert rc.sources[0].accession == "2244"
 
 

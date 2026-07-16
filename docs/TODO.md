@@ -90,6 +90,10 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 定义 `QuerySpecification`
 - [x] **P0** 定义 `DatasetSelection`
 - [ ] **P0** 迁移并删除旧输出层 `SourceRecord` dataclass
+      > **现状（2026-07-15 最小迁移）**：6 个 acquisition skill（pdb/pubchem/reactome/xena/gdc/browser）
+      > 与 pubmed discovery 已迁移到 `app.domain.contracts.SourceRecord`。旧 `app.domain.output.SourceRecord`
+      > dataclass 仍被 `app.tools.export`、`app.tools.parse_*`、`app.tools.cleaning` 等 MVP 通用工具引用，
+      > 暂不删除——见 §4.4 MVP 待清理部分。
 - [x] **P0** 定义权威 `SourceRecord` 契约（旧输出 dataclass 尚待迁移）
 - [x] **P0** 定义 `SourceRelation`
 - [x] **P0** 定义 `DownloadAttempt`
@@ -98,6 +102,10 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 定义 `DataLevel`，区分 raw sequence 与 repository processed
 - [x] **P0** 定义精确 `SourceLocator`
 - [ ] **P0** 将旧 Tool 迁移到 on-disk `ParsedDataset` 契约
+      > **现状（2026-07-15 最小迁移）**：旧 `app.domain.processing.ParsedDataset`（含 `rows: list[dict]`
+      > 内存数据表）与新 `contracts.ParsedDataset`（on-disk 元数据，`file_asset` 指向磁盘文件）语义不同，
+      > 不能简单替换。Pipeline 专用 processor（如 `geo_tximport.py`）已用新契约；MVP 通用工具保留旧模型，
+      > 待后续清理——见 §4.4 MVP 待清理部分。
 - [x] **P0** 定义 on-disk `ParsedDataset` 契约（旧内存模型尚待迁移）
 - [x] **P0** 定义幂等执行所需的 `StageAttempt` 契约
 - [x] **P0** 定义 `ArtifactManifestEntry`
@@ -128,6 +136,29 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 覆盖 SourceAsset checksum、size、data level 和路径约束
 - [x] **P0** 覆盖 dataset/sample/source/asset 外键
 - [x] **P0** 覆盖 staging 未验证时不可下载
+
+### 4.4 MVP 待清理部分（2026-07-15 标注）
+
+> 以下模块是 MVP 阶段的临时兼容层，已被 Pipeline 专用 processor 取代，
+> 但仍被 `app.tools.export`、`app.tools.parse_*`、`app.tools.cleaning`、
+> `app.tools.processing`、`app.tools.alignment` 等通用工具引用。在 §4.1
+> "迁移并删除旧输出层 SourceRecord dataclass" 与 "将旧 Tool 迁移到 on-disk
+> ParsedDataset 契约" 完成前**不得删除**，但新代码必须直接使用
+> `app.domain.contracts`。
+
+| 待清理模块 | 现状 | 替代方案 | 何时清理 |
+| --- | --- | --- | --- |
+| `app/domain/output.py`（旧 `SourceRecord` dataclass） | 被 `tools/export`、`tools/parse_*`、`tools/cleaning`、`tools/processing`、`tools/alignment` 引用 | `app.domain.contracts.SourceRecord` | 旧 Tool 全部迁移到新契约后 |
+| `app/domain/processing.py`（旧 `ParsedDataset` 含 `rows: list[dict]`） | 被 MVP 通用解析工具引用 | `app.domain.contracts.ParsedDataset`（on-disk 元数据） | 旧 Tool 全部迁移到 on-disk 模型后 |
+| `app/tools/export.py` | MVP CSV 导出，使用旧 `ParsedDataset.rows` | Pipeline Artifact Builder（已用新契约） | Pipeline Runner 完成后评估 |
+| `app/tools/parse_geo.py`、`parse_pdb.py`、`parse_excel.py` | MVP 通用解析原语 | Pipeline 专用 processor（如 `geo_tximport.py`） | 各数据源专用 processor 齐备后 |
+| `app/tools/cleaning.py`、`processing.py`、`alignment.py` | MVP 通用清洗/处理/对齐原语 | Pipeline 专用 processor | 各数据源专用 processor 齐备后 |
+| `app/domain/__init__.py` 顶层导出 | 旧 dataclass 仍可从顶层导入 | 仅从 `app.domain.contracts` 导入 | 旧 dataclass 删除时一并清理 |
+
+**约束**：
+- 新增 acquisition skill 或 processor 必须直接使用 `app.domain.contracts`，不得引入旧 dataclass。
+- 修改上述待清理模块时，应优先迁移到新契约而非加固旧实现。
+- 删除任何待清理模块前，必须确认无引用并更新 `app/domain/__init__.py`。
 
 ## 5. Phase 1B：固定真实数据
 
@@ -247,19 +278,19 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 ## 9. Phase 1F：Pipeline Runner
 
-- [ ] **P0** 实现固定阶段状态机与 append-only StageAttempt
-- [ ] **P0** 每个阶段消费和返回明确类型与 input/parameter/output digest
-- [ ] **P0** 阶段操作幂等，重试生成新 attempt
-- [ ] **P0** 摘要匹配时复用已验证输出
-- [ ] **P0** 进程重启后从最近成功阶段恢复
-- [ ] **P0** 阶段失败时停止下游阶段
-- [ ] **P0** 网络、模型、解析和完整任务独立超时
-- [ ] **P0** 每个任务保证 completed 或 failed 终态
-- [ ] **P0** 正式流程失败时禁止自动切换 mock success
+- [x] **P0** 实现固定阶段状态机与 append-only StageAttempt
+- [x] **P0** 每个阶段消费和返回明确类型与 input/parameter/output digest
+- [x] **P0** 阶段操作幂等，重试生成新 attempt
+- [x] **P0** 摘要匹配时复用已验证输出
+- [x] **P0** 进程重启后从最近成功阶段恢复
+- [x] **P0** 阶段失败时停止下游阶段
+- [x] **P0** 网络、模型、解析和完整任务独立超时
+- [x] **P0** 每个任务保证 completed 或 failed 终态
+- [x] **P0** 正式流程失败时禁止自动切换 mock success
 - [x] **P0** 支持离线 fixture 模式
 - [ ] **P0** 支持显式 live 模式
 - [ ] **P0** mock 模式必须显式标记且不能通过 live 验收
-- [ ] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
+- [x] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
 
 ## 10. Phase 1 测试
 
@@ -275,7 +306,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** DownloadAttempt、checksum、cache 和中断测试
 - [x] **P0** parser 与 long-form 测试
 - [x] **P0** SourceLocator、名称规范化、字段映射和行数测试
-- [ ] **P0** StageAttempt、锁、取消、幂等和恢复测试
+- [x] **P0** StageAttempt、锁、取消、幂等和恢复测试
 - [ ] **P0** 全部 Validation Gate 规则测试
 - [x] **P0** 完整 fixture Pipeline 集成测试
 - [x] **P0** Artifact API 列表和下载测试

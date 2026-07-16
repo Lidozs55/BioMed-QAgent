@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import app.agent_loop.runner as runner_module
 import pytest
-from app.pipeline.pinned_case import run_pinned_fixture
+from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -15,11 +15,11 @@ async def test_runner_emits_manifest_artifact_ids_before_done(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_dir = tmp_path / "output"
-    manifest = run_pinned_fixture(
+    manifest = await PipelineRunner(
         task_id="task_runner_artifacts",
         base_dir=output_dir / "tasks",
         fixture_dir=FIXTURE_DIR,
-    )
+    ).run()
 
     class FakeResult:
         final_output = "complete"
