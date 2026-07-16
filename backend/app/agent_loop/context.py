@@ -35,7 +35,7 @@ class RunContext:
     """
 
     task_id: str = "default"
-    base_dir: str | Path | None = field(default=None, repr=False)
+    base_dir: str | Path | None = field(default=None, repr=False, kw_only=True)
     topic: str = ""
     preferred_sources: list[str] = field(default_factory=list)
     plan: str = ""
