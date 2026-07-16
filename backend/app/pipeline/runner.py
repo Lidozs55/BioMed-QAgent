@@ -289,12 +289,12 @@ class PipelineRunner:
         )
 
     async def _run_inner(self) -> RunManifest:
-        # A run is "recovered" when prior progress exists (completed_stages
-        # non-empty) and the task is not in the fresh CREATED state. This
-        # covers COMPLETED (re-run → all SKIPPED), FAILED (retry → prior
-        # stages SKIPPED, failed stage re-executed), and intermediate states
-        # after a process restart.
-        is_recovered = (
+        # A run is recovered after terminalizing persisted inflight work, or
+        # when prior completed-stage progress belongs to a non-fresh task.
+        # This covers process interruption, completed reruns, and failed-task
+        # retries without treating a truly fresh CREATED task as recovery.
+        recovered_inflight = self._recover_inflight_attempt()
+        is_recovered = recovered_inflight or (
             self.state.task_state is not TaskState.CREATED
             and bool(self.state.completed_stages)
         )
@@ -325,6 +325,7 @@ class PipelineRunner:
                     skipped_attempt = self._build_attempt(
                         stage, input_digest, parameter_digest,
                         AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
+                        attempt=self._next_attempt_number(stage),
                     )
                     self.state.append_attempt(skipped_attempt)
                     await self._emit_stage_event(
@@ -339,10 +340,21 @@ class PipelineRunner:
                     save_state(self.workdir.state, self.state)
                     continue
 
-            stage_attempt_id = generate_prefixed_uuid("stage_attempt")
             started = datetime.now(UTC)
+            running_attempt = self._build_attempt(
+                stage,
+                input_digest,
+                parameter_digest,
+                AttemptStatus.RUNNING,
+                attempt=self._next_attempt_number(stage),
+                started=started,
+            )
+            stage_attempt_id = running_attempt.stage_attempt_id
+            self.state.inflight_attempt = running_attempt
+            self.state.current_stage = stage
+            save_state(self.workdir.state, self.state)
             await self._emit_stage_event(
-                StageStartedPayload(stage=stage, attempt=1),
+                StageStartedPayload(stage=stage, attempt=running_attempt.attempt),
                 stage_attempt_id=stage_attempt_id,
             )
             await self._emit_stage_event(
@@ -362,7 +374,7 @@ class PipelineRunner:
                 )
             except TimeoutError:
                 return await self._finalize_stage_failed(
-                    stage, stage_attempt_id, input_digest, parameter_digest, started,
+                    stage,
                     TimeoutError(f"stage {stage.value} timeout exceeded"),
                     ErrorCode.TIMEOUT,
                 )
@@ -370,8 +382,9 @@ class PipelineRunner:
                 return await self._finalize_cancelled()
             except Exception as exc:
                 return await self._finalize_stage_failed(
-                    stage, stage_attempt_id, input_digest, parameter_digest, started,
-                    exc, ErrorCode.INTERNAL_ERROR,
+                    stage,
+                    exc,
+                    ErrorCode.INTERNAL_ERROR,
                 )
 
             await self._emit_stage_event(
@@ -383,16 +396,17 @@ class PipelineRunner:
             )
 
             finished = datetime.now(UTC)
+            save_stage_output(self.workdir.state, stage, result.output)
             attempt = self._build_attempt(
                 stage, input_digest, parameter_digest,
                 AttemptStatus.SUCCEEDED, output_digest=result.output_digest,
                 stage_attempt_id=stage_attempt_id, started=started, finished=finished,
+                attempt=running_attempt.attempt,
             )
             self.state.append_attempt(attempt)
+            self.state.inflight_attempt = None
             self.state.mark_completed(stage, result.output_digest)
-            self.state.current_stage = stage
             save_state(self.workdir.state, self.state)
-            save_stage_output(self.workdir.state, stage, result.output)
 
             stage_outputs[stage] = result.output
             await self._emit_stage_event(
@@ -594,6 +608,7 @@ class PipelineRunner:
         input_digest: str,
         parameter_digest: str,
         status: AttemptStatus,
+        attempt: int = 1,
         output_digest: str | None = None,
         stage_attempt_id: str | None = None,
         started: datetime | None = None,
@@ -604,7 +619,7 @@ class PipelineRunner:
             stage_attempt_id=stage_attempt_id or generate_prefixed_uuid("stage_attempt"),
             task_id=self.task_id,
             stage=stage,
-            attempt=1,
+            attempt=attempt,
             input_digest=input_digest,
             parameter_digest=parameter_digest,
             output_digest=output_digest,
@@ -613,6 +628,37 @@ class PipelineRunner:
             finished_at=finished,
             error=error,
         )
+
+    def _next_attempt_number(self, stage: StageName) -> int:
+        attempts = [
+            attempt.attempt
+            for attempt in self.state.stage_attempts
+            if attempt.stage is stage
+        ]
+        inflight = self.state.inflight_attempt
+        if inflight is not None and inflight.stage is stage:
+            attempts.append(inflight.attempt)
+        return max(attempts, default=0) + 1
+
+    def _recover_inflight_attempt(self) -> bool:
+        inflight = self.state.inflight_attempt
+        if inflight is None:
+            return False
+        cancelled = self._build_attempt(
+            inflight.stage,
+            inflight.input_digest,
+            inflight.parameter_digest,
+            AttemptStatus.CANCELLED,
+            attempt=inflight.attempt,
+            stage_attempt_id=inflight.stage_attempt_id,
+            started=inflight.started_at,
+            finished=datetime.now(UTC),
+        )
+        self.state.append_attempt(cancelled)
+        self.state.inflight_attempt = None
+        save_state(self.workdir.state, self.state)
+        self._persist_logs()
+        return True
 
     def _build_event(
         self,
@@ -653,13 +699,12 @@ class PipelineRunner:
     async def _finalize_stage_failed(
         self,
         stage: StageName,
-        stage_attempt_id: str,
-        input_digest: str,
-        parameter_digest: str,
-        started: datetime,
         exc: Exception,
         error_code: ErrorCode,
     ) -> RunManifest:
+        inflight = self.state.inflight_attempt
+        if inflight is None:
+            raise RuntimeError("stage failure requires an inflight attempt")
         finished = datetime.now(UTC)
         error = ErrorDetail(
             code=error_code,
@@ -668,14 +713,21 @@ class PipelineRunner:
             stage=stage,
         )
         attempt = self._build_attempt(
-            stage, input_digest, parameter_digest,
-            AttemptStatus.FAILED, stage_attempt_id=stage_attempt_id,
-            started=started, finished=finished, error=error,
+            stage,
+            inflight.input_digest,
+            inflight.parameter_digest,
+            AttemptStatus.FAILED,
+            attempt=inflight.attempt,
+            stage_attempt_id=inflight.stage_attempt_id,
+            started=inflight.started_at,
+            finished=finished,
+            error=error,
         )
         self.state.append_attempt(attempt)
+        self.state.inflight_attempt = None
         await self._emit_stage_event(
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
-            stage_attempt_id=stage_attempt_id,
+            stage_attempt_id=inflight.stage_attempt_id,
         )
         # _persist_logs is called once by _finalize_failed; no duplicate call here.
         return await self._finalize_failed(exc, error_code)
@@ -683,6 +735,27 @@ class PipelineRunner:
     async def _finalize_failed(
         self, exc: Exception, error_code: ErrorCode = ErrorCode.INTERNAL_ERROR
     ) -> RunManifest:
+        inflight = self.state.inflight_attempt
+        if inflight is not None:
+            stage_error = ErrorDetail(
+                code=error_code,
+                message=str(exc),
+                retryable=error_code is ErrorCode.TIMEOUT,
+                stage=inflight.stage,
+            )
+            failed = self._build_attempt(
+                inflight.stage,
+                inflight.input_digest,
+                inflight.parameter_digest,
+                AttemptStatus.FAILED,
+                attempt=inflight.attempt,
+                stage_attempt_id=inflight.stage_attempt_id,
+                started=inflight.started_at,
+                finished=datetime.now(UTC),
+                error=stage_error,
+            )
+            self.state.append_attempt(failed)
+            self.state.inflight_attempt = None
         self.state.task_state = TaskState.FAILED
         save_state(self.workdir.state, self.state)
         error = ErrorDetail(
@@ -697,6 +770,20 @@ class PipelineRunner:
         )
 
     async def _finalize_cancelled(self) -> RunManifest:
+        inflight = self.state.inflight_attempt
+        if inflight is not None:
+            cancelled = self._build_attempt(
+                inflight.stage,
+                inflight.input_digest,
+                inflight.parameter_digest,
+                AttemptStatus.CANCELLED,
+                attempt=inflight.attempt,
+                stage_attempt_id=inflight.stage_attempt_id,
+                started=inflight.started_at,
+                finished=datetime.now(UTC),
+            )
+            self.state.append_attempt(cancelled)
+            self.state.inflight_attempt = None
         self.state.task_state = TaskState.CANCELLED
         save_state(self.workdir.state, self.state)
         await self._emit_event(

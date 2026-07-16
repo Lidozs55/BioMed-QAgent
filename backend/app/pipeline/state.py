@@ -21,7 +21,7 @@ from app.domain.contracts import (
 
 
 class PipelineState(ContractModel):
-    """Append-only pipeline state persisted to ``state/pipeline_state.json``."""
+    """Pipeline state with append-only finalized stage-attempt history."""
 
     task_id: str
     task_state: TaskState
@@ -30,6 +30,7 @@ class PipelineState(ContractModel):
     cancel_reason: str | None = None
     started_at: datetime
     stage_attempts: list[StageAttempt] = Field(default_factory=list)
+    inflight_attempt: StageAttempt | None = None
     completed_stages: dict[str, str] = Field(default_factory=dict)
 
     def find_reusable(

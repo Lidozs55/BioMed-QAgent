@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from app.domain.contracts import AttemptStatus, StageName, TaskState
 from app.pipeline.runner import DEFAULT_STAGE_TIMEOUTS, PipelineRunner
+from app.pipeline.stages import PipelineCancelledError
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -56,6 +57,72 @@ def test_runner_cancels_when_requested_before_stage(
 
     event_types = [e.payload.type for e in runner.events]
     assert "task_cancelled" in event_types
+
+
+def test_runner_terminalizes_inflight_attempt_on_stage_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cancelling_discovery(ctx):
+        raise PipelineCancelledError("cancelled inside discovery")
+
+    monkeypatch.setattr("app.pipeline.runner.run_discovery", cancelling_discovery)
+    runner = PipelineRunner(
+        task_id="task_cancel_inflight",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state == TaskState.CANCELLED
+    assert len(runner.state.stage_attempts) == 1
+    cancelled = runner.state.stage_attempts[0]
+    assert cancelled.stage is StageName.DISCOVERY
+    assert cancelled.status is AttemptStatus.CANCELLED
+    assert cancelled.attempt == 1
+    started = next(
+        event for event in runner.events if event.payload.type == "stage_started"
+    )
+    assert cancelled.stage_attempt_id == started.stage_attempt_id
+    assert cancelled.attempt == started.payload.attempt
+    assert runner.state.inflight_attempt is None
+    attempts_path = runner.workdir.logs / "stage_attempts.jsonl"
+    assert [
+        json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
+    ] == [attempt.model_dump(mode="json") for attempt in runner.state.stage_attempts]
+
+
+def test_runner_terminalizes_inflight_attempt_on_stage_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_discovery(ctx):
+        raise RuntimeError("discovery failed")
+
+    monkeypatch.setattr("app.pipeline.runner.run_discovery", failing_discovery)
+    runner = PipelineRunner(
+        task_id="task_fail_inflight",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state == TaskState.FAILED
+    assert len(runner.state.stage_attempts) == 1
+    failed = runner.state.stage_attempts[0]
+    assert failed.stage is StageName.DISCOVERY
+    assert failed.status is AttemptStatus.FAILED
+    assert failed.attempt == 1
+    started = next(
+        event for event in runner.events if event.payload.type == "stage_started"
+    )
+    assert failed.stage_attempt_id == started.stage_attempt_id
+    assert failed.attempt == started.payload.attempt
+    assert runner.state.inflight_attempt is None
+    attempts_path = runner.workdir.logs / "stage_attempts.jsonl"
+    assert [
+        json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
+    ] == [attempt.model_dump(mode="json") for attempt in runner.state.stage_attempts]
 
 
 def test_runner_per_stage_timeout_marks_failed(
@@ -103,6 +170,12 @@ def test_runner_total_timeout_marks_failed(
     manifest = asyncio.run(runner.run())
 
     assert manifest.task_state == TaskState.FAILED
+    assert runner.state.inflight_attempt is None
+    assert runner.state.stage_attempts
+    assert all(
+        attempt.status is not AttemptStatus.RUNNING
+        for attempt in runner.state.stage_attempts
+    )
 
 
 def test_runner_no_silent_fallback_on_failure(

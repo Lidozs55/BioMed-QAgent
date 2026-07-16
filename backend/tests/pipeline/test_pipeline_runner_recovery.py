@@ -9,10 +9,128 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.domain.contracts import AttemptStatus, TaskState
+import pytest
+from app.domain.contracts import (
+    AttemptStatus,
+    EventEnvelope,
+    StageName,
+    TaskState,
+)
 from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+class HardPipelineInterruption(BaseException):
+    """Simulate process death without runner-owned terminalization."""
+
+
+def test_runner_recovers_durable_inflight_attempt_after_hard_interruption(
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = "task_hard_interruption"
+    state_path = base_dir / task_id / "state" / "pipeline_state.json"
+    attempts_path = base_dir / task_id / "logs" / "stage_attempts.jsonl"
+
+    async def interrupt_after_durable_stage_start(event: EventEnvelope) -> None:
+        payload = event.payload
+        if payload.type != "stage_started":
+            return
+        durable_state = json.loads(state_path.read_text("utf-8"))
+        inflight = durable_state.get("inflight_attempt")
+        assert inflight is not None
+        assert inflight["status"] == AttemptStatus.RUNNING.value
+        assert inflight["stage"] == payload.stage.value
+        assert inflight["attempt"] == payload.attempt
+        assert inflight["stage_attempt_id"] == event.stage_attempt_id
+        raise HardPipelineInterruption
+
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        event_sink=interrupt_after_durable_stage_start,
+    )
+    with pytest.raises(HardPipelineInterruption):
+        asyncio.run(runner1.run())
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest = asyncio.run(runner2.run())
+
+    assert manifest.task_state == TaskState.COMPLETED
+    assert runner2.events[0].payload.type == "task_recovered"
+    discovery_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.DISCOVERY
+    ]
+    assert [attempt.attempt for attempt in discovery_attempts] == [1, 2]
+    assert [attempt.status for attempt in discovery_attempts] == [
+        AttemptStatus.CANCELLED,
+        AttemptStatus.SUCCEEDED,
+    ]
+    assert (
+        discovery_attempts[0].stage_attempt_id
+        != discovery_attempts[1].stage_attempt_id
+    )
+    assert runner2.state.inflight_attempt is None
+    assert [
+        json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
+    ] == [attempt.model_dump(mode="json") for attempt in runner2.state.stage_attempts]
+
+
+def test_stage_attempt_numbers_remain_monotonic_across_reuse_and_parameter_change(
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = "task_monotonic_attempts"
+
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    asyncio.run(runner1.run())
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    asyncio.run(runner2.run())
+
+    runner3 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        topic="changed topic forces new parameters",
+    )
+    asyncio.run(runner3.run())
+
+    for stage in StageName:
+        attempts = [
+            attempt
+            for attempt in runner3.state.stage_attempts
+            if attempt.stage is stage
+        ]
+        assert [attempt.attempt for attempt in attempts] == [1, 2, 3]
+        assert [attempt.status for attempt in attempts] == [
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.SKIPPED,
+            AttemptStatus.SUCCEEDED,
+        ]
+
+    started_attempts = {
+        event.payload.stage: event.payload.attempt
+        for event in runner3.events
+        if event.payload.type == "stage_started"
+    }
+    assert started_attempts == dict.fromkeys(StageName, 3)
 
 
 def test_runner_reuses_output_when_digest_matches(tmp_path: Path) -> None:
