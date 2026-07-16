@@ -338,7 +338,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P1** 统一 schema_version、event_id、task_id、stage_attempt_id、sequence、timestamp、payload
 - [x] **P1** payload 使用判别联合，不接受任意 dict
 - [x] **P1** 事件先持久化再推送，支持按 sequence 续读
-- [ ] **P1** 事件覆盖创建、计划、阶段成功/失败/跳过、工具、警告、取消、恢复、Artifact 和终态
+- [x] **P1** 事件覆盖创建、计划、阶段成功/失败/跳过、工具、警告、取消、恢复、Artifact 和终态
 - [x] **P1** API/WebSocket 契约集成测试
 
 ## 12. Phase 3：shadcn 前端重写

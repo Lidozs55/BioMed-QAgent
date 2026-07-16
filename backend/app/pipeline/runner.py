@@ -7,6 +7,7 @@ recovery via digest matching, per-stage timeouts, and cancel support.
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
 from collections.abc import AsyncIterator
@@ -34,6 +35,11 @@ from app.domain.contracts import (
     TaskFailedPayload,
     TaskRecoveredPayload,
     TaskState,
+    ToolCalledPayload,
+    ToolCompletedPayload,
+    WarningPayload,
+    WarningRecord,
+    WarningSeverity,
     build_event,
     generate_prefixed_uuid,
 )
@@ -261,6 +267,13 @@ class PipelineRunner:
                 StageStartedPayload(stage=stage, attempt=1),
                 stage_attempt_id=stage_attempt_id,
             )
+            self._emit_stage_event(
+                ToolCalledPayload(
+                    tool_name=f"run_{stage.value}",
+                    arguments_digest=parameter_digest,
+                ),
+                stage_attempt_id=stage_attempt_id,
+            )
 
             try:
                 result = await asyncio.wait_for(
@@ -280,6 +293,14 @@ class PipelineRunner:
                     stage, stage_attempt_id, input_digest, parameter_digest, started,
                     exc, ErrorCode.INTERNAL_ERROR,
                 )
+
+            self._emit_stage_event(
+                ToolCompletedPayload(
+                    tool_name=f"run_{stage.value}",
+                    output_digest=result.output_digest,
+                ),
+                stage_attempt_id=stage_attempt_id,
+            )
 
             finished = datetime.now(UTC)
             attempt = self._build_attempt(
@@ -304,7 +325,50 @@ class PipelineRunner:
             )
             save_state(self.workdir.state, self.state)
 
+            if stage is StageName.ARTIFACT_BUILD:
+                self._emit_warning_events(stage_outputs, stage_attempt_id)
+
         return self._finalize_completed(stage_outputs)
+
+    def _emit_warning_events(
+        self,
+        stage_outputs: dict[StageName, Any],
+        stage_attempt_id: str,
+    ) -> None:
+        """Emit WarningPayload events for each row in warnings.csv.
+
+        Called after the artifact_build stage writes the staging package.
+        In fixture mode, warnings.csv is empty, so no events are emitted.
+        """
+        build_output = stage_outputs.get(StageName.ARTIFACT_BUILD)
+        if build_output is None:
+            return
+        staging_dir = getattr(build_output, "staging_dir", None)
+        if staging_dir is None:
+            return
+        warnings_csv = Path(staging_dir) / "warnings.csv"
+        if not warnings_csv.is_file():
+            return
+        with warnings_csv.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    warning = WarningRecord(
+                        warning_id=row["warning_id"],
+                        severity=WarningSeverity(row["severity"]),
+                        stage=StageName(row["stage"]),
+                        code=row["code"],
+                        message=row["message"],
+                        source_id=row.get("source_id") or None,
+                        asset_id=row.get("asset_id") or None,
+                        record_id=row.get("record_id") or None,
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                    )
+                except (KeyError, ValueError):
+                    continue
+                self._emit_stage_event(
+                    WarningPayload(warning=warning),
+                    stage_attempt_id=stage_attempt_id,
+                )
 
     def _execute_stage(
         self,
