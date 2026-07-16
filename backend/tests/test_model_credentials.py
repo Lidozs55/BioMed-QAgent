@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import app.agent_loop.model as model_module
-import app.agent_loop.runner as runner_module
 import pytest
 from app.agent_loop.agent import create_agent
 from app.agent_loop.model import (
@@ -48,57 +47,52 @@ def test_execution_guard_raises_stable_configuration_error_without_key(
     assert "DASHSCOPE_API_KEY" in str(caught.value)
 
 
-@pytest.mark.asyncio
-async def test_runner_stops_before_sdk_boundary_without_key(
+def test_lazy_model_first_use_raises_stable_error_without_key(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     configure_model(monkeypatch, "")
-    monkeypatch.setattr(runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path)))
-    sdk_called = False
+    model = LazyDashScopeModel()
 
-    def fail_if_called(*args, **kwargs):
-        nonlocal sdk_called
-        sdk_called = True
-        raise AssertionError("SDK boundary must not run")
+    with pytest.raises(ModelConfigurationError) as caught:
+        model.stream_response("test")
 
-    monkeypatch.setattr(runner_module.Runner, "run_streamed", fail_if_called)
-
-    events = [event async for event in runner_module.run_agent_stream("test")]
-
-    assert sdk_called is False
-    assert events == [{
-        "type": "error",
-        "code": "configuration_error",
-        "message": "DASHSCOPE_API_KEY is required to run the model",
-    }]
+    assert caught.value.code == "configuration_error"
+    assert str(caught.value) == "DASHSCOPE_API_KEY is required to run the model"
 
 
 @pytest.mark.asyncio
-async def test_runner_reaches_sdk_boundary_with_configured_key(
+async def test_lazy_model_builds_reuses_and_closes_configured_delegate(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     configure_model(monkeypatch, "configured")
-    monkeypatch.setattr(runner_module, "settings", SimpleNamespace(output_dir=str(tmp_path)))
-    sdk_called = False
+    client = object()
+    delegate = SimpleNamespace(
+        get_response=AsyncMock(return_value="response"),
+        stream_response=Mock(return_value="stream"),
+        close=AsyncMock(),
+    )
+    client_factory = Mock(return_value=client)
+    delegate_factory = Mock(return_value=delegate)
+    monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
+    monkeypatch.setattr(
+        model_module,
+        "OpenAIChatCompletionsModel",
+        delegate_factory,
+    )
+    model = LazyDashScopeModel()
 
-    class FakeResult:
-        final_output = "complete"
+    assert model.stream_response("one", option=True) == "stream"
+    assert await model.get_response("two") == "response"
+    await model.close()
 
-        async def stream_events(self):
-            if False:
-                yield None
-
-    def fake_run_streamed(*args, **kwargs):
-        nonlocal sdk_called
-        sdk_called = True
-        return FakeResult()
-
-    monkeypatch.setattr(runner_module.Runner, "run_streamed", fake_run_streamed)
-    monkeypatch.setattr(runner_module, "get_loaded_skill_names", lambda: [])
-
-    events = [event async for event in runner_module.run_agent_stream("test")]
-
-    assert sdk_called is True
-    assert events == [{"type": "done", "final_output": "complete"}]
+    client_factory.assert_called_once_with(
+        api_key="configured",
+        base_url="https://example.test/v1",
+    )
+    delegate_factory.assert_called_once_with(
+        model="test-model",
+        openai_client=client,
+    )
+    delegate.stream_response.assert_called_once_with("one", option=True)
+    delegate.get_response.assert_awaited_once_with("two")
+    delegate.close.assert_awaited_once_with()

@@ -1,8 +1,59 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { render } from "@testing-library/react"
-import { SessionSidebar } from "@/components/SessionSidebar"
-import { SidebarProvider } from "@/components/ui/sidebar"
-import { useAgentStore } from "@/stores/agentStore"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+
+import { SessionSidebar } from "@/components/SessionSidebar";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import type { RunStatus, TaskSummary } from "@/runtime/contracts";
+import { createInitialRuntimeState } from "@/runtime/reducer";
+import { useAgentStore } from "@/stores/agentStore";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn() },
+}));
+
+const CREATED_AT = "2026-07-14T00:00:00Z";
+
+function summary(
+  taskId: string,
+  status: RunStatus,
+  title = taskId,
+): TaskSummary {
+  return {
+    task_id: taskId,
+    mode: "agent",
+    databases: [],
+    title,
+    status,
+    active_run_id:
+      status === "queued" ||
+      status === "running" ||
+      status === "finalizing" ||
+      status === "cancel_requested"
+        ? `run_${taskId}`
+        : null,
+    created_at: CREATED_AT,
+    updated_at: CREATED_AT,
+    latest_sequence: 1,
+  };
+}
+
+function renderSidebar(
+  props: Partial<React.ComponentProps<typeof SessionSidebar>> = {},
+) {
+  return render(
+    <SidebarProvider>
+      <SessionSidebar
+        onNewDraft={vi.fn()}
+        onSelectTask={vi.fn()}
+        onLoadMore={vi.fn().mockResolvedValue(undefined)}
+        onCancelRun={vi.fn().mockResolvedValue(undefined)}
+        onDeleteTask={vi.fn().mockResolvedValue(undefined)}
+        {...props}
+      />
+    </SidebarProvider>,
+  );
+}
 
 describe("SessionSidebar", () => {
   beforeAll(() => {
@@ -15,39 +66,259 @@ describe("SessionSidebar", () => {
       addListener: () => undefined,
       removeListener: () => undefined,
       dispatchEvent: () => false,
-    })
-  })
+    });
+  });
 
   beforeEach(() => {
-    useAgentStore.setState({
-      sessions: [{
-        taskId: "task-sidebar",
-        topic: "Sidebar structure",
-        databases: ["pubmed", "geo"],
-        createdAt: 1,
-        messageCount: 0,
-        messages: [],
-        traces: [],
-        artifacts: [],
-        pipelineStage: "done",
-      }],
-      currentSessionId: "task-sidebar",
-      isConnected: true,
-      isRunning: false,
-      artifacts: [],
-      taskId: "task-sidebar",
-      pipelineStage: "done",
-    })
-  })
+    vi.clearAllMocks();
+    useAgentStore.setState(createInitialRuntimeState());
+  });
 
-  it("renders session navigation and delete as sibling controls", () => {
-    const { container, getByRole } = render(
-      <SidebarProvider>
-        <SessionSidebar />
-      </SidebarProvider>,
-    )
+  it("renders active tasks separately from the first 30 history tasks", () => {
+    const history = Array.from({ length: 30 }, (_, index) =>
+      summary(`history_${index}`, "completed", `History ${index + 1}`),
+    );
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          summary("task_running", "running", "Running task"),
+          summary("task_queued", "queued", "Queued task"),
+        ],
+        items: history,
+        next_cursor: "page_2",
+      },
+      false,
+    );
 
-    expect(container.querySelector("button button")).toBeNull()
-    expect(getByRole("button", { name: "删除 Sidebar structure" })).toBeVisible()
-  })
-})
+    renderSidebar();
+
+    const activeGroup = screen
+      .getByText("正在进行")
+      .closest('[data-slot="sidebar-group"]');
+    const historyGroup = screen
+      .getByText("历史任务")
+      .closest('[data-slot="sidebar-group"]');
+    expect(activeGroup).not.toBeNull();
+    expect(historyGroup).not.toBeNull();
+    expect(within(activeGroup as HTMLElement).getByText("Running task")).toBeVisible();
+    expect(within(activeGroup as HTMLElement).getByText("Queued task")).toBeVisible();
+    expect(within(activeGroup as HTMLElement).queryByText("History 1")).toBeNull();
+    expect(
+      within(historyGroup as HTMLElement).getAllByRole("button", {
+        name: /^History \d+ 已完成$/,
+      }),
+    ).toHaveLength(30);
+  });
+
+  it("loads another stable page without changing foreground selection", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary("active_a", "running", "Active A")],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: "page_2",
+      },
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("history_a");
+    let resolveLoad: (() => void) | undefined;
+    const onLoadMore = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveLoad = () => {
+            useAgentStore.getState().mergeTaskPage(
+              {
+                active_items: [summary("active_a", "running", "Active A")],
+                items: [summary("history_b", "completed", "History B")],
+                next_cursor: null,
+              },
+              true,
+            );
+            resolve();
+          };
+        }),
+    );
+    renderSidebar({ onLoadMore });
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(screen.getByRole("button", { name: "加载中" })).toBeDisabled();
+    expect(screen.getAllByText("Active A")).toHaveLength(1);
+    act(() => resolveLoad?.());
+
+    await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
+    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+    expect(useAgentStore.getState().activeTaskId).toBe("history_a");
+  });
+
+  it("shows a visible error when loading another history page fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: "page_2",
+      },
+      false,
+    );
+    const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
+    renderSidebar({ onLoadMore });
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "历史任务加载失败",
+        expect.objectContaining({ description: "history unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when selecting a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [summary("history_a", "completed", "History A")], next_cursor: null },
+      false,
+    );
+    const onSelectTask = vi.fn().mockRejectedValue(new Error("task unavailable"));
+    renderSidebar({ onSelectTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "History A 已完成" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "打开任务失败",
+        expect.objectContaining({ description: "task unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when cancelling a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [summary("running", "running", "Running")], items: [], next_cursor: null },
+      false,
+    );
+    const onCancelRun = vi.fn().mockRejectedValue(new Error("cancel unavailable"));
+    renderSidebar({ onCancelRun });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消 Running" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "取消任务失败",
+        expect.objectContaining({ description: "cancel unavailable" }),
+      ),
+    );
+  });
+
+  it("shows a visible error when deleting a task fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [summary("finished", "completed", "Finished")], next_cursor: null },
+      false,
+    );
+    const onDeleteTask = vi.fn().mockRejectedValue(new Error("delete unavailable"));
+    renderSidebar({ onDeleteTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 Finished" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "删除任务失败",
+        expect.objectContaining({ description: "delete unavailable" }),
+      ),
+    );
+  });
+
+  it("keeps navigation and new research available while other tasks run", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          summary("task_a", "running", "Task A"),
+          summary("task_b", "running", "Task B"),
+        ],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().setDraftInput("independent draft");
+    const onNewDraft = vi.fn();
+    const onSelectTask = vi.fn();
+    renderSidebar({ onNewDraft, onSelectTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "Task B 运行中" }));
+    expect(onSelectTask).toHaveBeenCalledWith("task_b");
+    const newResearch = screen.getByRole("button", { name: "新建研究" });
+    expect(newResearch).toBeEnabled();
+    fireEvent.click(newResearch);
+    expect(onNewDraft).toHaveBeenCalledTimes(1);
+    expect(useAgentStore.getState().tasksById.task_a.summary.status).toBe("running");
+  });
+
+  it("separates active cancellation from terminal deletion", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          summary("running", "running", "Running"),
+          summary("cancelling", "cancel_requested", "Cancelling"),
+        ],
+        items: [summary("finished", "completed", "Finished")],
+        next_cursor: null,
+      },
+      false,
+    );
+    const onCancelRun = vi.fn().mockResolvedValue(undefined);
+    const onDeleteTask = vi.fn().mockResolvedValue(undefined);
+    renderSidebar({ onCancelRun, onDeleteTask });
+
+    expect(screen.getByRole("button", { name: "取消 Running" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "正在取消 Cancelling" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "删除 Running" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消 Finished" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 Finished" }));
+    expect(onDeleteTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(onDeleteTask).toHaveBeenCalledWith("finished"));
+  });
+
+  it("keeps the full long title accessible without nested buttons", () => {
+    const title = "A very long biomedical research task title ".repeat(8).trim();
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary("long", "running", title)],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    const { container } = renderSidebar();
+
+    expect(
+      screen.getByRole("button", { name: `${title} 运行中` }),
+    ).toBeVisible();
+    expect(screen.getByText(title)).toHaveClass("truncate", "min-w-0");
+    expect(container.querySelector("button button")).toBeNull();
+  });
+
+  it("shows connection and worker occupancy as separate footer rows", () => {
+    useAgentStore.setState({ connectionStatus: "reconnecting" });
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          summary("running", "running"),
+          summary("finalizing", "finalizing"),
+          summary("cancelling", "cancel_requested"),
+          summary("queued", "queued"),
+        ],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    renderSidebar();
+
+    expect(screen.getByText("重新连接中")).toBeVisible();
+    expect(screen.getByText("运行中 3 / 4")).toBeVisible();
+    expect(screen.getByText("重新连接中").parentElement).not.toBe(
+      screen.getByText("运行中 3 / 4").parentElement,
+    );
+  });
+});

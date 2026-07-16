@@ -23,7 +23,6 @@ Output directory: ``data/demo_output/``
 from __future__ import annotations
 
 import asyncio
-import csv
 import json
 import logging
 import os
@@ -40,8 +39,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-import app.config  # noqa: E402  — loads .env
-from app.agent_loop.agent import create_agent  # noqa: E402
+import app.config  # noqa: E402, F401  — loads .env
+from app.agent_loop.agent import build_agent  # noqa: E402
 from app.agent_loop.context import RunContext  # noqa: E402
 from app.core.metrics import MetricsTracker  # noqa: E402
 from app.domain.output import (  # noqa: E402
@@ -165,29 +164,33 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
         tracker.record_processing(row_count=len(MOCK_PUBMED_RECORDS))
 
         for paper in MOCK_PUBMED_RECORDS:
-            bundle.records.append(DataRecord(
+            bundle.records.append(
+                DataRecord(
+                    source="pubmed",
+                    accession=paper["pmid"],
+                    source_url=f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/",
+                    raw_file="",
+                    doi=paper.get("doi"),
+                    pmid=paper.get("pmid"),
+                    pmcid=paper.get("pmcid"),
+                    fields={
+                        "title": paper["title"],
+                        "journal": paper["journal"],
+                        "pub_date": paper["pub_date"],
+                        "abstract": paper["abstract"][:200] + "…",
+                    },
+                )
+            )
+        bundle.sources.append(
+            SourceRecord(
                 source="pubmed",
-                accession=paper["pmid"],
-                source_url=f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/",
-                raw_file="",
-                doi=paper.get("doi"),
-                pmid=paper.get("pmid"),
-                pmcid=paper.get("pmcid"),
-                fields={
-                    "title": paper["title"],
-                    "journal": paper["journal"],
-                    "pub_date": paper["pub_date"],
-                    "abstract": paper["abstract"][:200] + "…",
-                },
-            ))
-        bundle.sources.append(SourceRecord(
-            source="pubmed",
-            accession="query:breast+cancer+gene+expression",
-            source_url="https://pubmed.ncbi.nlm.nih.gov/",
-            local_files=[],
-            format_hint="pubmed_json",
-            retrieved_at=datetime.now(timezone.utc),
-        ))
+                accession="query:breast+cancer+gene+expression",
+                source_url="https://pubmed.ncbi.nlm.nih.gov/",
+                local_files=[],
+                format_hint="pubmed_json",
+                retrieved_at=datetime.now(timezone.utc),
+            )
+        )
 
     # ---- Stage 2: analyze_papers -------------------------------------------
     with tracker.stage("analyze_papers"):
@@ -218,26 +221,30 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
         tracker.record_processing(row_count=len(MOCK_GEO_RECORDS))
 
         for ds in MOCK_GEO_RECORDS:
-            bundle.records.append(DataRecord(
+            bundle.records.append(
+                DataRecord(
+                    source="geo",
+                    accession=ds["accession"],
+                    source_url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={ds['accession']}",
+                    raw_file="",
+                    fields={
+                        "title": ds["title"],
+                        "organism": ds["organism"],
+                        "sample_count": ds["sample_count"],
+                        "platform_count": ds["platform_count"],
+                    },
+                )
+            )
+        bundle.sources.append(
+            SourceRecord(
                 source="geo",
-                accession=ds["accession"],
-                source_url=f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={ds['accession']}",
-                raw_file="",
-                fields={
-                    "title": ds["title"],
-                    "organism": ds["organism"],
-                    "sample_count": ds["sample_count"],
-                    "platform_count": ds["platform_count"],
-                },
-            ))
-        bundle.sources.append(SourceRecord(
-            source="geo",
-            accession="query:breast+cancer+gene+expression",
-            source_url="https://www.ncbi.nlm.nih.gov/geo/",
-            local_files=[],
-            format_hint="geo_search_json",
-            retrieved_at=datetime.now(timezone.utc),
-        ))
+                accession="query:breast+cancer+gene+expression",
+                source_url="https://www.ncbi.nlm.nih.gov/geo/",
+                local_files=[],
+                format_hint="geo_search_json",
+                retrieved_at=datetime.now(timezone.utc),
+            )
+        )
 
     # ---- Stage 4: download_geo ---------------------------------------------
     with tracker.stage("download_geo"):
@@ -259,15 +266,17 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
                 encoding="utf-8",
             )
             ctx.add_raw_asset(str(local_path))
-            bundle.sources.append(SourceRecord(
-                source="geo",
-                accession=accession,
-                source_url=f"https://ftp.ncbi.nlm.nih.gov/geo/series/{accession[:5].lower()}nnn/{accession}/matrix/{accession}_series_matrix.txt.gz",
-                local_files=[str(local_path)],
-                format_hint="geo_series_matrix",
-                mime_type="text/plain",
-                retrieved_at=datetime.now(timezone.utc),
-            ))
+            bundle.sources.append(
+                SourceRecord(
+                    source="geo",
+                    accession=accession,
+                    source_url=f"https://ftp.ncbi.nlm.nih.gov/geo/series/{accession[:5].lower()}nnn/{accession}/matrix/{accession}_series_matrix.txt.gz",
+                    local_files=[str(local_path)],
+                    format_hint="geo_series_matrix",
+                    mime_type="text/plain",
+                    retrieved_at=datetime.now(timezone.utc),
+                )
+            )
 
     # ---- Stage 5: parse_files ----------------------------------------------
     with tracker.stage("parse_files"):
@@ -277,17 +286,20 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
         tracker.record_processing(row_count=len(MOCK_EXPRESSION_DATA))
 
         for rec in MOCK_EXPRESSION_DATA:
-            bundle.records.append(DataRecord(
-                source="geo", accession="GSE200001",
-                source_url="https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE200001",
-                raw_file=str(ctx.work_dir.raw / "GSE200001_series_matrix.txt"),
-                fields={
-                    "gene": rec["gene"],
-                    "log2FC": rec["log2FC"],
-                    "p_value": rec["p_value"],
-                    "subtype": rec["subtype"],
-                },
-            ))
+            bundle.records.append(
+                DataRecord(
+                    source="geo",
+                    accession="GSE200001",
+                    source_url="https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE200001",
+                    raw_file=str(ctx.work_dir.raw / "GSE200001_series_matrix.txt"),
+                    fields={
+                        "gene": rec["gene"],
+                        "log2FC": rec["log2FC"],
+                        "p_value": rec["p_value"],
+                        "subtype": rec["subtype"],
+                    },
+                )
+            )
 
         bundle.add_processing_step(
             tool="parse_csv",
@@ -305,7 +317,10 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
 
         bundle.add_processing_step(
             tool="run_statistics",
-            params={"dataset": "merged", "metrics": ["mean_log2FC", "count_by_subtype"]},
+            params={
+                "dataset": "merged",
+                "metrics": ["mean_log2FC", "count_by_subtype"],
+            },
             affected_count=len(MOCK_EXPRESSION_DATA),
             description="Computed differential expression summary statistics",
         )
@@ -324,23 +339,27 @@ def _run_mock_pipeline(ctx: RunContext, tracker: MetricsTracker) -> OutputBundle
     # ---- Field descriptions ------------------------------------------------
     bundle.field_descriptions = [
         FieldDescription(
-            name="gene", dtype="string",
+            name="gene",
+            dtype="string",
             description="HUGO gene symbol",
             source="GEO series matrix",
         ),
         FieldDescription(
-            name="log2FC", dtype="float",
+            name="log2FC",
+            dtype="float",
             description="Log2 fold change vs. control",
             unit="log2 ratio",
             source="GEO series matrix",
         ),
         FieldDescription(
-            name="p_value", dtype="float",
+            name="p_value",
+            dtype="float",
             description="Adjusted p-value from differential expression test",
             source="GEO series matrix",
         ),
         FieldDescription(
-            name="subtype", dtype="string",
+            name="subtype",
+            dtype="string",
             description="Breast cancer molecular subtype",
             source="inferred from sample metadata",
         ),
@@ -376,73 +395,96 @@ async def _run_agent_pipeline(
     """Run the real Agent loop with Live LLM + tools."""
     from agents import Runner
 
-    agent = create_agent()
+    build = build_agent()
+    try:
+        bundle = OutputBundle()
+        logger.info("Starting Agent loop for topic %r …", TOPIC)
 
-    bundle = OutputBundle()
-    logger.info("Starting Agent loop for topic %r …", TOPIC)
+        total_start = time.monotonic()
 
-    total_start = time.monotonic()
+        with tracker.stage("agent_loop"):
+            logger.info("Calling Runner.run_streamed …")
+            result = Runner.run_streamed(
+                build.agent,
+                f"Research topic: {TOPIC}. Search PubMed, analyze papers, "
+                f"find GEO datasets, download relevant data, parse files, "
+                f"and produce the standard output bundle (CSV, field docs, "
+                f"source manifest, processing log).",
+                context=ctx,
+            )
 
-    with tracker.stage("agent_loop"):
-        logger.info("Calling Runner.run_streamed …")
-        result = Runner.run_streamed(
-            agent,
-            f"Research topic: {TOPIC}. Search PubMed, analyze papers, "
-            f"find GEO datasets, download relevant data, parse files, "
-            f"and produce the standard output bundle (CSV, field docs, "
-            f"source manifest, processing log).",
-            context=ctx,
-        )
+            async for event in result.stream_events():
+                from agents.stream_events import (
+                    RawResponsesStreamEvent,
+                    RunItemStreamEvent,
+                )
 
-        async for event in result.stream_events():
-            from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
-            if isinstance(event, RawResponsesStreamEvent):
-                choices = getattr(event.data, "choices", None)
-                if choices:
-                    delta = getattr(getattr(choices[0], "delta", None), "content", None)
-                    if delta:
-                        tracker.record_processing(row_count=0)
-            elif isinstance(event, RunItemStreamEvent):
-                if event.name == "tool_called":
-                    raw = getattr(event.item, "raw_item", None)
-                    tname = getattr(raw, "name", "?") if raw else "?"
-                    logger.info("  → tool call: %s", tname)
-                    tracker.record_skill(tname)
-                elif event.name == "tool_output":
-                    out = str(getattr(event.item, "output", ""))[:200]
-                    logger.info("  ← tool output: %s", out)
+                if isinstance(event, RawResponsesStreamEvent):
+                    choices = getattr(event.data, "choices", None)
+                    if choices:
+                        delta = getattr(
+                            getattr(choices[0], "delta", None),
+                            "content",
+                            None,
+                        )
+                        if delta:
+                            tracker.record_processing(row_count=0)
+                elif isinstance(event, RunItemStreamEvent):
+                    if event.name == "tool_called":
+                        raw = getattr(event.item, "raw_item", None)
+                        tname = getattr(raw, "name", "?") if raw else "?"
+                        logger.info("  → tool call: %s", tname)
+                        tracker.record_skill(tname)
+                    elif event.name == "tool_output":
+                        out = str(getattr(event.item, "output", ""))[:200]
+                        logger.info("  ← tool output: %s", out)
 
-        final = result.final_output or ""
-        logger.info("Agent loop finished (%d chars of output)", len(final))
+            final = result.final_output or ""
+            logger.info("Agent loop finished (%d chars of output)", len(final))
 
-    total_end = time.monotonic()
-    logger.info("Total wall-clock time: %.1f s", total_end - total_start)
+        total_end = time.monotonic()
+        logger.info("Total wall-clock time: %.1f s", total_end - total_start)
 
-    # Harvest records and sources from the RunContext
-    for src in ctx.sources:
-        if hasattr(src, "source"):
-            bundle.sources.append(src)
-    for rec in ctx.records:
-        if isinstance(rec, dict):
-            bundle.records.append(DataRecord(
-                source=rec.get("source", "unknown"),
-                accession=rec.get("accession", ""),
-                source_url=rec.get("source_url", ""),
-                raw_file=rec.get("raw_file", ""),
-                fields={k: v for k, v in rec.items()
-                        if k not in ("source", "accession", "source_url", "raw_file")},
-            ))
-    for warn in ctx.warnings:
-        bundle.warnings.append(WarningEntry(
-            severity=warn.get("severity", "warning"),
-            message=warn.get("message", ""),
-            source=warn.get("source"),
-        ))
+        # Harvest records and sources from the RunContext
+        for src in ctx.sources:
+            if hasattr(src, "source"):
+                bundle.sources.append(src)
+        for rec in ctx.records:
+            if isinstance(rec, dict):
+                bundle.records.append(
+                    DataRecord(
+                        source=rec.get("source", "unknown"),
+                        accession=rec.get("accession", ""),
+                        source_url=rec.get("source_url", ""),
+                        raw_file=rec.get("raw_file", ""),
+                        fields={
+                            k: v
+                            for k, v in rec.items()
+                            if k
+                            not in (
+                                "source",
+                                "accession",
+                                "source_url",
+                                "raw_file",
+                            )
+                        },
+                    )
+                )
+        for warn in ctx.warnings:
+            bundle.warnings.append(
+                WarningEntry(
+                    severity=warn.get("severity", "warning"),
+                    message=warn.get("message", ""),
+                    source=warn.get("source"),
+                )
+            )
 
-    tracker.record_download("pipeline", file_count=len(ctx.raw_assets))
-    tracker.record_processing(row_count=len(bundle.records))
+        tracker.record_download("pipeline", file_count=len(ctx.raw_assets))
+        tracker.record_processing(row_count=len(bundle.records))
 
-    return bundle
+        return bundle
+    finally:
+        await build.model.close()
 
 
 # ---------------------------------------------------------------------------
@@ -513,9 +555,7 @@ def _main() -> int:
             bundle = asyncio.run(_run_agent_pipeline(ctx, tracker))
             mode = "real"
         except Exception as exc:
-            logger.warning(
-                "Agent pipeline failed (%s), falling back to mock mode", exc
-            )
+            logger.warning("Agent pipeline failed (%s), falling back to mock mode", exc)
             # Reset context for clean mock run
             ctx = RunContext(task_id=TASK_ID, topic=TOPIC)
             tracker = MetricsTracker(task_id=TASK_ID)

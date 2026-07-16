@@ -5,6 +5,7 @@ from app.pipeline.stages.base import (
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
+    PipelineCancelledError,
     ProcessingOutput,
     StageContext,
     StageResult,
@@ -12,12 +13,13 @@ from app.pipeline.stages.base import (
 )
 from app.pipeline.stages.discovery import run_discovery
 from app.pipeline.stages.processing import run_processing
-from app.pipeline.stages.validation import run_validation
+from app.pipeline.stages.validation import publish_artifacts, run_validation
 
 __all__ = [
     "AcquisitionOutput",
     "ArtifactBuildOutput",
     "DiscoveryOutput",
+    "PipelineCancelledError",
     "ProcessingOutput",
     "StageContext",
     "StageResult",
@@ -26,5 +28,6 @@ __all__ = [
     "run_artifact_build",
     "run_discovery",
     "run_processing",
+    "publish_artifacts",
     "run_validation",
 ]

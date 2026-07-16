@@ -40,6 +40,7 @@ async def run_research_pipeline(
         fixture_dir=fixture_dir,
         topic=topic,
         mode=mode,
+        cancellation_requested=run_context.cancellation_requested,
     )
     manifest = await runner.run()
     return json.dumps(

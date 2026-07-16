@@ -1,6 +1,7 @@
 """Base types for pipeline stages: context, result, and per-stage output models."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,10 @@ from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
 
+class PipelineCancelledError(RuntimeError):
+    """Raised when cooperative cancellation reaches a stage boundary."""
+
+
 @dataclass
 class StageContext:
     """Immutable context shared by all stages in one pipeline run."""
@@ -33,6 +38,11 @@ class StageContext:
     topic: str
     started_at: datetime
     mode: Literal["fixture", "live"] = "fixture"
+    cancellation_requested: Callable[[], bool] | None = None
+
+    def check_cancelled(self) -> None:
+        if self.cancellation_requested is not None and self.cancellation_requested():
+            raise PipelineCancelledError("pipeline was cancelled")
 
 
 @dataclass

@@ -7,6 +7,7 @@ custom_output_extractor 通过 result.context_wrapper.context 访问 RunContext�
 未来扩展：同一子 Agent 体系可增加压缩 records/warnings、
 注入背景知识等上下文管理能力。
 """
+
 from __future__ import annotations
 
 import json
@@ -15,7 +16,7 @@ from agents import Agent, RunContextWrapper
 from agents.result import RunResult, RunResultStreaming
 
 from app.agent_loop.context import RunContext
-from app.agent_loop.model import get_model
+from app.agent_loop.model import LazyDashScopeModel
 
 KEEP_RECENT = 5  # 压缩时保留的最近查询条数
 COMPRESS_THRESHOLD_CHARS = 8000  # 触发压缩的字符数阈值（约 2000 token）
@@ -36,13 +37,6 @@ async def _summarizer_instructions(ctx: RunContextWrapper) -> str:
     )
 
 
-_context_manager_agent = Agent(
-    name="ContextManager",
-    instructions=_summarizer_instructions,
-    model=get_model(),
-)
-
-
 async def _compress_extractor(result: RunResult | RunResultStreaming) -> str:
     """as_tool 的 custom_output_extractor：把摘要写回 RunContext。
 
@@ -60,9 +54,14 @@ async def _compress_extractor(result: RunResult | RunResultStreaming) -> str:
     )
 
 
-def build_compress_query_log_tool():
+def build_compress_query_log_tool(model: LazyDashScopeModel):
     """构造 compress_query_log 工具（ContextManager Agent 经 as_tool 包装）。"""
-    return _context_manager_agent.as_tool(
+    context_manager_agent = Agent(
+        name="ContextManager",
+        instructions=_summarizer_instructions,
+        model=model,
+    )
+    return context_manager_agent.as_tool(
         tool_name="compress_query_log",
         tool_description=(
             "压缩查询日志历史。当本次任务的查询日志累计较长（超过约 8000 字符）时调用此工具，"

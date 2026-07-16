@@ -11,9 +11,10 @@ import csv
 import hashlib
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from app.domain.contracts import (
     AttemptStatus,
@@ -47,10 +48,12 @@ from app.pipeline.stages import (
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
+    PipelineCancelledError,
     ProcessingOutput,
     StageContext,
     StageResult,
     ValidationOutput,
+    publish_artifacts,
     run_acquisition,
     run_artifact_build,
     run_discovery,
@@ -64,6 +67,7 @@ from app.pipeline.state import (
     save_stage_output,
     save_state,
 )
+from app.runtime.event_store import append_jsonl_records, read_jsonl
 from app.tools.workdir import create_task_workdir
 
 DEFAULT_STAGE_TIMEOUTS: dict[StageName, float] = {
@@ -74,6 +78,10 @@ DEFAULT_STAGE_TIMEOUTS: dict[StageName, float] = {
     StageName.VALIDATION: 60.0,
 }
 TOTAL_TIMEOUT: float = 300.0
+
+
+class CancellationToken(Protocol):
+    def is_set(self) -> bool: ...
 
 _STAGES: list[StageName] = [
     StageName.DISCOVERY,
@@ -111,6 +119,8 @@ class PipelineRunner:
         stage_timeouts: dict[StageName, float] | None = None,
         total_timeout: float = TOTAL_TIMEOUT,
         mode: Literal["fixture", "live"] = "fixture",
+        cancellation_requested: CancellationToken | None = None,
+        defer_publication: bool = False,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -118,6 +128,8 @@ class PipelineRunner:
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
         self.total_timeout = total_timeout
         self.mode = mode
+        self.cancellation_requested = cancellation_requested
+        self.defer_publication = defer_publication
         self.workdir = create_task_workdir(task_id, base_dir=str(base_dir))
         self.started_at = datetime.now(UTC)
         self.state = load_state(self.workdir.state, task_id, self.started_at)
@@ -128,8 +140,13 @@ class PipelineRunner:
             topic=topic,
             started_at=self.state.started_at,
             mode=mode,
+            cancellation_requested=self._is_cancelled,
         )
         self.events: list[EventEnvelope] = []
+        self._persisted_attempt_count = self._load_persisted_attempt_count()
+        # Per-event persistence: events.jsonl is appended in _persist_event
+        # so _persisted_event_count tracks how many were durably written.
+        self._persisted_event_count = 0
         # Sequence is task-local and monotonically increasing across recovery
         # runs. On init, resume from the highest sequence already persisted to
         # events.jsonl so that replay-by-sequence remains unambiguous.
@@ -139,6 +156,20 @@ class PipelineRunner:
         # each emitted event is persisted to events.jsonl THEN pushed here.
         # The sentinel ``None`` signals stream completion to subscribers.
         self._event_queue: asyncio.Queue[EventEnvelope | None] | None = None
+        self._pending_publication: Path | None = None
+
+    def _load_persisted_attempt_count(self) -> int:
+        """Validate the append-only attempt prefix and detect crash gaps."""
+
+        path = self.workdir.logs / "stage_attempts.jsonl"
+        records = read_jsonl(path).records
+        if len(records) > len(self.state.stage_attempts):
+            raise ValueError("pipeline attempt log is ahead of durable state")
+        for index, (_, value) in enumerate(records):
+            persisted = StageAttempt.model_validate(value)
+            if persisted != self.state.stage_attempts[index]:
+                raise ValueError("pipeline attempt log is not a durable state prefix")
+        return len(records)
 
     def _load_last_sequence(self) -> int:
         """Return the highest sequence number in the existing events.jsonl.
@@ -160,6 +191,31 @@ class PipelineRunner:
                 max_seq = seq
         return max_seq
 
+    def publish(self, run_id: str) -> None:
+        """Atomically publish a validated managed-Run package and commit marker."""
+
+        if not run_id or run_id in {".", ".."} or Path(run_id).name != run_id:
+            raise ValueError("run_id must be a single path-safe component")
+        staging = self._pending_publication
+        if staging is None or not staging.is_dir():
+            raise RuntimeError("pipeline has no validated package awaiting publication")
+        self.ctx.check_cancelled()
+        manifest_path = staging / "run_manifest.json"
+        manifest_bytes = manifest_path.read_bytes()
+        marker = {
+            "schema_version": 1,
+            "task_id": self.task_id,
+            "run_id": run_id,
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        (staging / ".runtime-publication.json").write_text(
+            json.dumps(marker, ensure_ascii=False, sort_keys=True) + "\n",
+            "utf-8",
+        )
+        self.ctx.check_cancelled()
+        publish_artifacts(staging, self.workdir.artifacts, self.ctx)
+        self._pending_publication = None
+
     async def run(self) -> RunManifest:
         """Execute the pipeline, guaranteeing a terminal task state.
 
@@ -175,6 +231,8 @@ class PipelineRunner:
             return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         try:
             return await asyncio.wait_for(self._run_inner(), self.total_timeout)
+        except PipelineCancelledError:
+            return self._finalize_cancelled()
         except TimeoutError:
             return self._finalize_failed(
                 TimeoutError(f"total pipeline timeout ({self.total_timeout}s) exceeded"),
@@ -227,6 +285,12 @@ class PipelineRunner:
         self.state.cancel_reason = reason
         save_state(self.workdir.state, self.state)
 
+    def _is_cancelled(self) -> bool:
+        return self.state.cancel_requested or (
+            self.cancellation_requested is not None
+            and self.cancellation_requested.is_set()
+        )
+
     async def _run_inner(self) -> RunManifest:
         # A run is "recovered" when prior progress exists (completed_stages
         # non-empty) and the task is not in the fresh CREATED state. This
@@ -250,7 +314,7 @@ class PipelineRunner:
 
         stage_outputs: dict[StageName, Any] = {}
         for stage in _STAGES:
-            if self.state.cancel_requested:
+            if self._is_cancelled():
                 return self._finalize_cancelled()
 
             input_digest = self._compute_input_digest(stage, stage_outputs)
@@ -293,10 +357,10 @@ class PipelineRunner:
             )
 
             try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        self._execute_stage, stage, stage_outputs, stage_attempt_id
-                    ),
+                result = await self._run_stage(
+                    stage,
+                    stage_outputs,
+                    stage_attempt_id,
                     self.stage_timeouts[stage],
                 )
             except TimeoutError:
@@ -305,6 +369,8 @@ class PipelineRunner:
                     TimeoutError(f"stage {stage.value} timeout exceeded"),
                     ErrorCode.TIMEOUT,
                 )
+            except PipelineCancelledError:
+                return self._finalize_cancelled()
             except Exception as exc:
                 return self._finalize_stage_failed(
                     stage, stage_attempt_id, input_digest, parameter_digest, started,
@@ -387,6 +453,41 @@ class PipelineRunner:
                     stage_attempt_id=stage_attempt_id,
                 )
 
+    async def _run_stage(
+        self,
+        stage: StageName,
+        stage_outputs: dict[StageName, Any],
+        stage_attempt_id: str,
+        timeout: float,
+    ) -> StageResult:
+        """Run sync stage work while draining threads before terminalization."""
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                self._execute_stage,
+                stage,
+                stage_outputs,
+                stage_attempt_id,
+            )
+        )
+        try:
+            return await asyncio.wait_for(asyncio.shield(worker), timeout)
+        except TimeoutError as timeout_error:
+            with suppress(BaseException):
+                await asyncio.shield(worker)
+            raise timeout_error
+        except asyncio.CancelledError:
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not worker.cancelled():
+                worker.exception()
+            raise
+
     def _execute_stage(
         self,
         stage: StageName,
@@ -394,6 +495,7 @@ class PipelineRunner:
         stage_attempt_id: str,
     ) -> StageResult:
         """Dispatch to the appropriate stage function with upstream outputs."""
+        self.ctx.check_cancelled()
         if stage is StageName.DISCOVERY:
             return run_discovery(self.ctx)
         if stage is StageName.ACQUISITION:
@@ -425,9 +527,13 @@ class PipelineRunner:
             )
         if stage is StageName.VALIDATION:
             build = self._get_output(stage_outputs, StageName.ARTIFACT_BUILD, ArtifactBuildOutput)
-            return run_validation(
+            result = run_validation(
                 self.ctx, build, self.state.stage_attempts, stage_attempt_id,
+                publish=not self.defer_publication,
             )
+            if self.defer_publication:
+                self._pending_publication = build.staging_dir
+            return result
         raise ValueError(f"unknown stage: {stage}")
 
     def _get_output(
@@ -633,10 +739,12 @@ class PipelineRunner:
         """
         self.workdir.logs.mkdir(parents=True, exist_ok=True)
         attempts_file = self.workdir.logs / "stage_attempts.jsonl"
-        attempts_file.write_text(
-            "".join(a.model_dump_json() + "\n" for a in self.state.stage_attempts),
-            "utf-8",
+        new_attempts = self.state.stage_attempts[self._persisted_attempt_count :]
+        append_jsonl_records(
+            attempts_file,
+            [attempt.model_dump(mode="json") for attempt in new_attempts],
         )
+        self._persisted_attempt_count += len(new_attempts)
 
 
 def _sha256_json(payload: Any) -> str:

@@ -6,6 +6,9 @@ total task timeout, no silent fallback to mock on failure.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import threading
 import time
 from pathlib import Path
 
@@ -127,3 +130,87 @@ def test_runner_no_silent_fallback_on_failure(
     ]
     assert len(failed) == 1
     assert failed[0].stage == StageName.VALIDATION
+
+
+def test_runner_cancellation_token_stops_before_atomic_publication(
+    tmp_path: Path,
+) -> None:
+    task_id = "task_cancel_before_publish"
+    task_root = tmp_path / "tasks" / task_id
+    staged_manifest = (
+        task_root / "staging" / "run_pinned_fixture" / "run_manifest.json"
+    )
+
+    class CancelAtPublication:
+        def is_set(self) -> bool:
+            return staged_manifest.is_file()
+
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        cancellation_requested=CancelAtPublication(),
+    )
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state == TaskState.CANCELLED
+    assert not (task_root / "artifacts" / "run_manifest.json").exists()
+    assert not any(event.type == "artifact_produced" for event in runner.events)
+
+
+def test_managed_runner_defers_formal_publication_until_runtime_commit(
+    tmp_path: Path,
+) -> None:
+    task_id = "task_deferred_publication"
+    run_id = "run_deferred_publication"
+    task_root = tmp_path / "tasks" / task_id
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state == TaskState.COMPLETED
+    assert not (task_root / "artifacts" / "run_manifest.json").exists()
+    runner.publish(run_id)
+    marker = json.loads(
+        (task_root / "artifacts" / ".runtime-publication.json").read_text("utf-8")
+    )
+    assert marker == {
+        "schema_version": 1,
+        "task_id": task_id,
+        "run_id": run_id,
+        "manifest_sha256": hashlib.sha256(
+            (task_root / "artifacts" / "run_manifest.json").read_bytes()
+        ).hexdigest(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_stage_timeout_drains_worker_before_terminal_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_exited = threading.Event()
+
+    def slow_discovery(ctx):
+        try:
+            time.sleep(0.2)
+        finally:
+            worker_exited.set()
+
+    monkeypatch.setattr("app.pipeline.runner.run_discovery", slow_discovery)
+    runner = PipelineRunner(
+        task_id="task_timeout_drain",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        stage_timeouts={**DEFAULT_STAGE_TIMEOUTS, StageName.DISCOVERY: 0.01},
+    )
+
+    manifest = await runner.run()
+
+    assert manifest.task_state == TaskState.FAILED
+    assert worker_exited.is_set()
