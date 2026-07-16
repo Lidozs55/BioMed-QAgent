@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,6 +60,20 @@ async def run_blocking_with_drain(operation):
         with suppress(BaseException):
             await asyncio.shield(worker)
         raise
+
+
+async def wait_for_runtime_event(repository, task_id: str, event_type: str):
+    async def find_event():
+        while True:
+            events = await repository.list_events(task_id)
+            matching = [
+                event for event in events if event.payload.type.value == event_type
+            ]
+            if matching:
+                return matching[-1]
+            await asyncio.sleep(0)
+
+    return await asyncio.wait_for(find_event(), timeout=2)
 
 
 @pytest.mark.asyncio
@@ -216,6 +231,170 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
         unchanged = await repository.get_snapshot(accepted.task_id)
         assert unchanged is not None
         assert len(unchanged.runs) == 1
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_stage_event_is_durable_while_stage_is_still_running(
+    tmp_path,
+) -> None:
+    stage_entered = asyncio.Event()
+    release_stage = asyncio.Event()
+    legacy_timestamp = datetime.now(UTC)
+    stage_attempt_id = "stage_attempt_streamed_discovery"
+
+    def controlled_factory(**kwargs):
+        events = [
+            build_event(
+                task_id=kwargs["task_id"],
+                sequence=1,
+                payload=TaskCreatedPayload(topic=kwargs["topic"]),
+            ),
+            build_event(
+                task_id=kwargs["task_id"],
+                sequence=2,
+                payload=StageStartedPayload(stage=StageName.DISCOVERY, attempt=1),
+                stage_attempt_id=stage_attempt_id,
+                timestamp=legacy_timestamp,
+            ),
+        ]
+
+        class ControlledRunner:
+            def __init__(self) -> None:
+                self.events = events
+
+            async def run(self):
+                sink = kwargs.get("event_sink")
+                if sink is not None:
+                    for event in events:
+                        sink(event)
+                stage_entered.set()
+                await release_stage.wait()
+                return completed_manifest(kwargs["task_id"])
+
+        return ControlledRunner()
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=tmp_path / "fixture",
+            pipeline_runner_factory=controlled_factory,
+        ),
+    )
+    await manager.start()
+    accepted = await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_streaming_stage",
+            input="stream fixture stages",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    try:
+        await asyncio.wait_for(stage_entered.wait(), timeout=2)
+        stage_event = await wait_for_runtime_event(
+            repository,
+            accepted.task_id,
+            "stage_started",
+        )
+
+        assert not release_stage.is_set()
+        assert stage_event.run_id == accepted.run_id
+        assert stage_event.stage_attempt_id == stage_attempt_id
+        assert stage_event.timestamp == legacy_timestamp
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[0].status is RunStatus.RUNNING
+
+        release_stage.set()
+        await manager.wait_until_idle()
+    finally:
+        release_stage.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_cancellation_retains_events_emitted_before_request(
+    tmp_path,
+) -> None:
+    stage_entered = asyncio.Event()
+    legacy_timestamp = datetime.now(UTC)
+    stage_attempt_id = "stage_attempt_cancelled_discovery"
+
+    def cancellable_factory(**kwargs):
+        events = [
+            build_event(
+                task_id=kwargs["task_id"],
+                sequence=1,
+                payload=TaskCreatedPayload(topic=kwargs["topic"]),
+            ),
+            build_event(
+                task_id=kwargs["task_id"],
+                sequence=2,
+                payload=StageStartedPayload(stage=StageName.DISCOVERY, attempt=1),
+                stage_attempt_id=stage_attempt_id,
+                timestamp=legacy_timestamp,
+            ),
+        ]
+
+        class CancellableRunner:
+            def __init__(self) -> None:
+                self.events = events
+
+            async def run(self):
+                sink = kwargs.get("event_sink")
+                if sink is not None:
+                    for event in events:
+                        sink(event)
+                stage_entered.set()
+                await kwargs["cancellation_requested"].wait()
+                return SimpleNamespace(
+                    task_id=kwargs["task_id"],
+                    task_state=TaskState.CANCELLED,
+                    artifacts=[],
+                    validation=SimpleNamespace(status="invalid"),
+                )
+
+        return CancellableRunner()
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=tmp_path / "fixture",
+            pipeline_runner_factory=cancellable_factory,
+        ),
+    )
+    await manager.start()
+    accepted = await manager.create_task(
+        StartTaskRequest(
+            request_id="req_fixture_streaming_cancel",
+            input="cancel streaming fixture",
+            databases=["pubmed", "geo"],
+            mode=TaskMode.FIXTURE,
+        )
+    )
+    try:
+        await asyncio.wait_for(stage_entered.wait(), timeout=2)
+        await manager.cancel_run(accepted.task_id, accepted.run_id)
+
+        events = await repository.list_events(accepted.task_id)
+        stage_event = next(
+            event for event in events if event.payload.type.value == "stage_started"
+        )
+        cancelled_event = next(
+            event for event in events if event.payload.type.value == "run_cancelled"
+        )
+        assert stage_event.sequence < cancelled_event.sequence
+        assert stage_event.stage_attempt_id == stage_attempt_id
+        assert stage_event.timestamp == legacy_timestamp
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[0].status is RunStatus.CANCELLED
     finally:
         await manager.close()
 
@@ -477,12 +656,13 @@ async def test_manager_close_drains_fixture_worker_before_repository_close(
 
 
 @pytest.mark.asyncio
-async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
+async def test_fixture_bridge_loads_durable_events_before_rejecting_cancelled_publication(
     tmp_path,
     monkeypatch,
 ) -> None:
     context = RunContext(task_id="task_fixture_cancel_before_load")
     loader_called = False
+    emitted: list[str] = []
 
     def cancel_before_bridge_factory(**kwargs):
         class CancelBeforeBridgeRunner:
@@ -495,7 +675,17 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
     def load_events(path):
         nonlocal loader_called
         loader_called = True
-        return []
+        return [
+            build_event(
+                task_id=context.task_id,
+                sequence=1,
+                payload=TaskCreatedPayload(topic="cancelled fixture audit"),
+            )
+        ]
+
+    async def emit(payload, **kwargs):
+        emitted.append(payload.type.value)
+        return SimpleNamespace()
 
     monkeypatch.setattr(runner_module, "_load_fixture_events", load_events)
     execution = manager_module.RunExecution(
@@ -506,6 +696,7 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
         context=context,
         mode=TaskMode.FIXTURE,
         databases=["pubmed", "geo"],
+        _event_emitter=emit,
     )
     executor = runner_module.FixtureRunExecutor(
         TaskRepository(tmp_path / "output"),
@@ -516,12 +707,13 @@ async def test_fixture_bridge_checks_cancellation_before_loading_legacy_events(
     with pytest.raises(PipelineCancelledError):
         await executor(execution)
 
-    assert not loader_called
+    assert loader_called
+    assert emitted == ["task_created"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_after", [1, 2])
-async def test_fixture_bridge_stops_before_event_after_cancellation(
+async def test_fixture_bridge_retains_noncompletion_events_after_cancellation(
     tmp_path,
     monkeypatch,
     cancel_after: int,
@@ -584,9 +776,7 @@ async def test_fixture_bridge_stops_before_event_after_cancellation(
     with pytest.raises(PipelineCancelledError):
         await executor(execution)
 
-    assert emitted == [
-        event.payload.type.value for event in legacy_events[:cancel_after]
-    ]
+    assert emitted == ["task_created", "stage_started"]
 
 
 @pytest.mark.asyncio

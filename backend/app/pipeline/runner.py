@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -111,6 +112,7 @@ class PipelineRunner:
         total_timeout: float = TOTAL_TIMEOUT,
         cancellation_requested: CancellationToken | None = None,
         defer_publication: bool = False,
+        event_sink: Callable[[EventEnvelope], None] | None = None,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -119,6 +121,7 @@ class PipelineRunner:
         self.total_timeout = total_timeout
         self.cancellation_requested = cancellation_requested
         self.defer_publication = defer_publication
+        self.event_sink = event_sink
         self.workdir = create_task_workdir(task_id, base_dir=str(base_dir))
         self.started_at = datetime.now(UTC)
         self.state = load_state(self.workdir.state, task_id, self.started_at)
@@ -241,15 +244,22 @@ class PipelineRunner:
 
             input_digest = self._compute_input_digest(stage, stage_outputs)
             parameter_digest = self._compute_parameter_digest(stage)
+            attempt_number = self.state.next_attempt_number(stage)
 
             reusable = self.state.find_reusable(stage, input_digest, parameter_digest)
             if reusable is not None and reusable.output_digest is not None:
-                loaded = load_stage_output(self.workdir.state, stage)
+                loaded = load_stage_output(
+                    self.workdir.state,
+                    stage,
+                    reusable.output_digest,
+                )
                 if loaded is not None:
                     stage_outputs[stage] = loaded
                     skipped_attempt = self._build_attempt(
                         stage, input_digest, parameter_digest,
-                        AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
+                        AttemptStatus.SKIPPED,
+                        attempt_number,
+                        output_digest=reusable.output_digest,
                     )
                     self.state.append_attempt(skipped_attempt)
                     self._emit_stage_event(
@@ -267,7 +277,7 @@ class PipelineRunner:
             stage_attempt_id = generate_prefixed_uuid("stage_attempt")
             started = datetime.now(UTC)
             self._emit_stage_event(
-                StageStartedPayload(stage=stage, attempt=1),
+                StageStartedPayload(stage=stage, attempt=attempt_number),
                 stage_attempt_id=stage_attempt_id,
             )
 
@@ -280,7 +290,12 @@ class PipelineRunner:
                 )
             except TimeoutError:
                 return self._finalize_stage_failed(
-                    stage, stage_attempt_id, input_digest, parameter_digest, started,
+                    stage,
+                    stage_attempt_id,
+                    attempt_number,
+                    input_digest,
+                    parameter_digest,
+                    started,
                     TimeoutError(f"stage {stage.value} timeout exceeded"),
                     ErrorCode.TIMEOUT,
                 )
@@ -288,21 +303,34 @@ class PipelineRunner:
                 return self._finalize_cancelled()
             except Exception as exc:
                 return self._finalize_stage_failed(
-                    stage, stage_attempt_id, input_digest, parameter_digest, started,
-                    exc, ErrorCode.INTERNAL_ERROR,
+                    stage,
+                    stage_attempt_id,
+                    attempt_number,
+                    input_digest,
+                    parameter_digest,
+                    started,
+                    exc,
+                    ErrorCode.INTERNAL_ERROR,
                 )
 
             finished = datetime.now(UTC)
             attempt = self._build_attempt(
                 stage, input_digest, parameter_digest,
-                AttemptStatus.SUCCEEDED, output_digest=result.output_digest,
+                AttemptStatus.SUCCEEDED,
+                attempt_number,
+                output_digest=result.output_digest,
                 stage_attempt_id=stage_attempt_id, started=started, finished=finished,
             )
             self.state.append_attempt(attempt)
             self.state.mark_completed(stage, result.output_digest)
             self.state.current_stage = stage
             save_state(self.workdir.state, self.state)
-            save_stage_output(self.workdir.state, stage, result.output)
+            save_stage_output(
+                self.workdir.state,
+                stage,
+                result.output,
+                result.output_digest,
+            )
 
             stage_outputs[stage] = result.output
             self._emit_stage_event(
@@ -409,7 +437,14 @@ class PipelineRunner:
         """Get a stage output, reconstructing from persisted dict if needed."""
         output = stage_outputs.get(stage)
         if output is None:
-            loaded = load_stage_output(self.workdir.state, stage)
+            expected_output_digest = self.state.completed_stages.get(stage.value)
+            if expected_output_digest is None:
+                raise RuntimeError(f"missing output digest for stage {stage.value}")
+            loaded = load_stage_output(
+                self.workdir.state,
+                stage,
+                expected_output_digest,
+            )
             if loaded is None:
                 raise RuntimeError(f"missing output for stage {stage.value}")
             output = expected_type.model_validate(loaded)
@@ -459,6 +494,7 @@ class PipelineRunner:
         input_digest: str,
         parameter_digest: str,
         status: AttemptStatus,
+        attempt_number: int,
         output_digest: str | None = None,
         stage_attempt_id: str | None = None,
         started: datetime | None = None,
@@ -469,7 +505,7 @@ class PipelineRunner:
             stage_attempt_id=stage_attempt_id or generate_prefixed_uuid("stage_attempt"),
             task_id=self.task_id,
             stage=stage,
-            attempt=1,
+            attempt=attempt_number,
             input_digest=input_digest,
             parameter_digest=parameter_digest,
             output_digest=output_digest,
@@ -485,8 +521,7 @@ class PipelineRunner:
             sequence=self._sequence,
             payload=payload,
         )
-        self.events.append(event)
-        self._sequence += 1
+        self._record_event(event)
 
     def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
         event = build_event(
@@ -495,13 +530,26 @@ class PipelineRunner:
             payload=payload,
             stage_attempt_id=stage_attempt_id,
         )
+        self._record_event(event)
+
+    def _record_event(self, event: EventEnvelope) -> None:
+        """Persist a v1 audit event before making it observable to consumers."""
+
+        append_jsonl_records(
+            self.workdir.logs / "events.jsonl",
+            [event.model_dump(mode="json")],
+        )
         self.events.append(event)
+        self._persisted_event_count += 1
         self._sequence += 1
+        if self.event_sink is not None:
+            self.event_sink(event)
 
     def _finalize_stage_failed(
         self,
         stage: StageName,
         stage_attempt_id: str,
+        attempt_number: int,
         input_digest: str,
         parameter_digest: str,
         started: datetime,
@@ -517,7 +565,9 @@ class PipelineRunner:
         )
         attempt = self._build_attempt(
             stage, input_digest, parameter_digest,
-            AttemptStatus.FAILED, stage_attempt_id=stage_attempt_id,
+            AttemptStatus.FAILED,
+            attempt_number,
+            stage_attempt_id=stage_attempt_id,
             started=started, finished=finished, error=error,
         )
         self.state.append_attempt(attempt)
@@ -582,14 +632,7 @@ class PipelineRunner:
             attempts_file,
             [attempt.model_dump(mode="json") for attempt in new_attempts],
         )
-        events_file = self.workdir.logs / "events.jsonl"
-        new_events = self.events[self._persisted_event_count :]
-        append_jsonl_records(
-            events_file,
-            [event.model_dump(mode="json") for event in new_events],
-        )
         self._persisted_attempt_count += len(new_attempts)
-        self._persisted_event_count += len(new_events)
 
 
 def _sha256_json(payload: Any) -> str:

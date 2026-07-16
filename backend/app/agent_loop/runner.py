@@ -377,10 +377,33 @@ class FixtureRunExecutor:
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
-        await self._repository.task_session(execution.task_id).add_run_input_once(
-            execution.run_id,
-            execution.input,
-        )
+        event_queue: asyncio.Queue[EventEnvelope | None] = asyncio.Queue()
+        completion_events: list[EventEnvelope] = []
+        seen_event_ids: set[str] = set()
+
+        async def bridge_event(event: EventEnvelope) -> None:
+            if event.event_id in seen_event_ids:
+                return
+            if isinstance(
+                event.payload,
+                (ArtifactProducedPayload, TaskCompletedPayload),
+            ):
+                completion_events.append(event)
+            else:
+                await execution.emit(
+                    event.payload,
+                    stage_attempt_id=event.stage_attempt_id,
+                    timestamp=event.timestamp,
+                )
+            seen_event_ids.add(event.event_id)
+
+        async def consume_streamed_events() -> None:
+            while True:
+                event = await event_queue.get()
+                if event is None:
+                    return
+                await bridge_event(event)
+
         runner = self._pipeline_runner_factory(
             task_id=execution.task_id,
             base_dir=self._repository.tasks_dir,
@@ -388,9 +411,48 @@ class FixtureRunExecutor:
             topic=execution.input,
             cancellation_requested=execution.context.cancellation_requested,
             defer_publication=True,
+            event_sink=event_queue.put_nowait,
         )
-        manifest = await _run_pipeline_with_cancellation(execution, runner)
-        _check_fixture_bridge_cancellation(execution)
+        pipeline_task = asyncio.create_task(
+            _run_pipeline_with_cancellation(execution, runner)
+        )
+        pipeline_task.add_done_callback(lambda _task: event_queue.put_nowait(None))
+        event_pump_task = asyncio.create_task(consume_streamed_events())
+        try:
+            manifest = await asyncio.shield(pipeline_task)
+        except asyncio.CancelledError:
+            execution.context.cancellation_requested.set()
+            pipeline_task.cancel()
+            while not pipeline_task.done():
+                try:
+                    await asyncio.shield(pipeline_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not pipeline_task.cancelled():
+                pipeline_task.exception()
+            while not event_pump_task.done():
+                try:
+                    await asyncio.shield(event_pump_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not event_pump_task.cancelled():
+                event_pump_task.exception()
+            raise
+        except BaseException as error:
+            try:
+                await event_pump_task
+            except BaseException as pump_error:
+                error.add_note(
+                    "fixture event bridge also failed: "
+                    f"{type(pump_error).__name__}: {pump_error}"
+                )
+            raise
+        await event_pump_task
+
         current_events = getattr(runner, "events", None)
         legacy_events = (
             list(current_events)
@@ -406,20 +468,8 @@ class FixtureRunExecutor:
                 ),
             )
         )
-        completion_events: list[EventEnvelope] = []
         for event in legacy_events:
-            _check_fixture_bridge_cancellation(execution)
-            if isinstance(
-                event.payload,
-                (ArtifactProducedPayload, TaskCompletedPayload),
-            ):
-                completion_events.append(event)
-                continue
-            await execution.emit(
-                event.payload,
-                stage_attempt_id=event.stage_attempt_id,
-                timestamp=event.timestamp,
-            )
+            await bridge_event(event)
         if manifest.task_state is TaskState.CANCELLED:
             raise PipelineCancelledError("fixture pipeline was cancelled")
         if manifest.task_state is TaskState.FAILED:

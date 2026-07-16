@@ -52,10 +52,15 @@ class RunContext:
         default_factory=asyncio.Event,
         repr=False,
     )
+    base_dir: str | Path | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
-        self._work_dir: TaskWorkDir = create_task_workdir(self.task_id)
+        base_dir = str(self.base_dir) if self.base_dir is not None else None
+        self._work_dir: TaskWorkDir = create_task_workdir(
+            self.task_id,
+            base_dir=base_dir,
+        )
 
     @property
     def work_dir(self) -> TaskWorkDir:
