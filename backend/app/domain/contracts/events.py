@@ -156,6 +156,7 @@ _STAGE_EVENTS = {
 
 
 class EventEnvelope(ContractModel):
+    schema_version: str = Field(default="1.0", min_length=1)
     event_id: str = Field(min_length=1)
     type: PipelineEventType
     task_id: str = Field(min_length=1)

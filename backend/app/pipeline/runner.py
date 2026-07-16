@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,35 @@ class PipelineRunner:
             started_at=self.state.started_at,
         )
         self.events: list[EventEnvelope] = []
-        self._sequence: int = 1
+        # Sequence is task-local and monotonically increasing across recovery
+        # runs. On init, resume from the highest sequence already persisted to
+        # events.jsonl so that replay-by-sequence remains unambiguous.
+        self._events_file: Path = self.workdir.logs / "events.jsonl"
+        self._sequence: int = self._load_last_sequence() + 1
+        # Optional async queue for streaming events to WS consumers. When set,
+        # each emitted event is persisted to events.jsonl THEN pushed here.
+        # The sentinel ``None`` signals stream completion to subscribers.
+        self._event_queue: asyncio.Queue[EventEnvelope | None] | None = None
+
+    def _load_last_sequence(self) -> int:
+        """Return the highest sequence number in the existing events.jsonl.
+
+        Returns 0 if the file does not exist or is empty, so the next event
+        gets sequence 1 on a fresh run.
+        """
+        if not self._events_file.is_file():
+            return 0
+        max_seq = 0
+        for line in self._events_file.read_text("utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                seq = json.loads(line).get("sequence", 0)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(seq, int) and seq > max_seq:
+                max_seq = seq
+        return max_seq
 
     async def run(self) -> RunManifest:
         """Execute the pipeline, guaranteeing a terminal task state."""
@@ -131,6 +160,36 @@ class PipelineRunner:
             )
         except Exception as exc:
             return self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
+
+    async def run_streamed(self) -> AsyncIterator[EventEnvelope]:
+        """Execute the pipeline, yielding each EventEnvelope as it is emitted.
+
+        Persists every event to events.jsonl before yielding (persist-then-push)
+        so a WS disconnect can resume via ``GET /tasks/{task_id}/events?since=N``.
+        After the generator is exhausted, ``self.manifest`` holds the terminal
+        RunManifest (or None if the run has not reached a terminal state).
+        """
+        if self._event_queue is not None:
+            raise RuntimeError("run_streamed() cannot be called concurrently")
+        self._event_queue = asyncio.Queue()
+        self.manifest: RunManifest | None = None
+
+        async def _drive() -> None:
+            try:
+                self.manifest = await self.run()
+            finally:
+                self._event_queue.put_nowait(None)
+
+        driver = asyncio.create_task(_drive())
+        try:
+            while True:
+                event = await self._event_queue.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            await driver
+            self._event_queue = None
 
     def request_cancel(self, reason: str | None = None) -> None:
         """Request cancellation; checked before each stage."""
@@ -370,6 +429,7 @@ class PipelineRunner:
         )
         self.events.append(event)
         self._sequence += 1
+        self._persist_event(event)
 
     def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
         event = build_event(
@@ -380,6 +440,20 @@ class PipelineRunner:
         )
         self.events.append(event)
         self._sequence += 1
+        self._persist_event(event)
+
+    def _persist_event(self, event: EventEnvelope) -> None:
+        """Persist-then-push: append the event to events.jsonl before any push.
+
+        This satisfies §11 line 340 (事件先持久化再推送) so that a crash after
+        persist but before push never loses an event, and a WS reconnect can
+        resume by reading events.jsonl from the last seen sequence.
+        """
+        self._events_file.parent.mkdir(parents=True, exist_ok=True)
+        with self._events_file.open("a", encoding="utf-8") as handle:
+            handle.write(event.model_dump_json() + "\n")
+        if self._event_queue is not None:
+            self._event_queue.put_nowait(event)
 
     def _finalize_stage_failed(
         self,
@@ -457,16 +531,16 @@ class PipelineRunner:
         self._emit_event(payload)
 
     def _persist_logs(self) -> None:
-        """Write stage_attempts.jsonl and events.jsonl to logs/."""
+        """Write stage_attempts.jsonl to logs/.
+
+        events.jsonl is now appended per-event by ``_persist_event`` so that
+        the persist-then-push invariant holds and recovery runs do not
+        overwrite prior events.
+        """
         self.workdir.logs.mkdir(parents=True, exist_ok=True)
         attempts_file = self.workdir.logs / "stage_attempts.jsonl"
         attempts_file.write_text(
             "".join(a.model_dump_json() + "\n" for a in self.state.stage_attempts),
-            "utf-8",
-        )
-        events_file = self.workdir.logs / "events.jsonl"
-        events_file.write_text(
-            "".join(e.model_dump_json() + "\n" for e in self.events),
             "utf-8",
         )
 
