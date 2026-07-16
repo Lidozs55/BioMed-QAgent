@@ -10,15 +10,12 @@ custom_output_extractor 通过 result.context_wrapper.context 访问 RunContext�
 from __future__ import annotations
 
 import json
-import logging
 
 from agents import Agent, RunContextWrapper
 from agents.result import RunResult, RunResultStreaming
 
 from app.agent_loop.context import RunContext
 from app.agent_loop.model import get_model
-
-logger = logging.getLogger(__name__)
 
 KEEP_RECENT = 5  # 压缩时保留的最近查询条数
 COMPRESS_THRESHOLD_CHARS = 8000  # 触发压缩的字符数阈值（约 2000 token）

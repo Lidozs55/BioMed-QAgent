@@ -54,6 +54,8 @@ Key points:
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
 | POST   | `/api/v1/tasks`                                   | Create and run a fixture-mode task |
 | GET    | `/api/v1/tasks/{task_id}`                         | Task status and summary            |
+| POST   | `/api/v1/tasks/{task_id}/cancel`                  | Request cancellation of a running task |
+| GET    | `/api/v1/tasks/{task_id}/events`                  | Replay persisted pipeline events (`?since=N`) |
 | GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
 | GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
 

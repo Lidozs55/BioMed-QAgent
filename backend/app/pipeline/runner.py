@@ -465,7 +465,6 @@ class PipelineRunner:
         fixture_hash = _hash_directory(self.fixture_dir)
         payload = {
             "stage": stage.value,
-            "fixture_dir": str(self.fixture_dir),
             "fixture_hash": fixture_hash,
             "topic": self.topic,
             "mode": self.mode,
