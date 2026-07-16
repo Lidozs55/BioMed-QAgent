@@ -16,7 +16,7 @@ import {
   type EventTransport,
 } from "@/runtime/controller";
 import { createInitialRuntimeState } from "@/runtime/reducer";
-import { useAgentStore } from "@/stores/agentStore";
+import { addAcceptedTask, useAgentStore } from "@/stores/agentStore";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
@@ -81,6 +81,20 @@ function runStartedEvent(taskId: string, sequence: number): EventEnvelope {
     sequence,
     timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
     payload: { type: "run_started" },
+  };
+}
+
+function runCompletedEvent(taskId: string, sequence: number): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "run_completed",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
+    payload: { type: "run_completed" },
   };
 }
 
@@ -158,7 +172,22 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     fetchTasks: vi.fn().mockResolvedValue(page([])),
     fetchTask: vi.fn().mockResolvedValue(snapshot("task_default", 0)),
     fetchMessages: vi.fn(),
-    fetchEvents: vi.fn(),
+    fetchEvents: vi.fn((taskId, options) => {
+      const latestSequence =
+        useAgentStore.getState().tasksById[taskId]?.summary.latest_sequence ??
+        options.afterSequence;
+      const endSequence = Math.min(
+        latestSequence,
+        options.afterSequence + options.limit,
+      );
+      return Promise.resolve(
+        Array.from(
+          { length: Math.max(0, endSequence - options.afterSequence) },
+          (_, index) =>
+            runStartedEvent(taskId, options.afterSequence + index + 1),
+        ),
+      );
+    }),
     createTask: vi.fn(),
     continueTask: vi.fn(),
     cancelRun: vi.fn(),
@@ -266,6 +295,122 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().databases).toHaveLength(1);
   });
 
+  it("preserves a task created and completed after the first history request began", async () => {
+    const firstPage = deferred<TaskPage>();
+    const apiClient = api({
+      fetchTasks: vi.fn(() => firstPage.promise),
+    });
+    const startup = startRuntime({
+      api: apiClient,
+      transport: transport(),
+    });
+
+    useAgentStore.setState((state) =>
+      addAcceptedTask(
+        state,
+        {
+          taskId: "task_created_during_history",
+          runId: "run_task_created_during_history",
+          requestId: "req_task_created_during_history",
+        },
+        "new research",
+        [],
+        "agent",
+        false,
+      ),
+    );
+    useAgentStore
+      .getState()
+      .applyEvent(runCompletedEvent("task_created_during_history", 1));
+    expect(useAgentStore.getState().taskOrder).toContain(
+      "task_created_during_history",
+    );
+
+    firstPage.resolve(
+      page([], [summary("task_existing_history", "completed", 1)]),
+    );
+    await startup;
+
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_created_during_history",
+      "task_existing_history",
+    ]);
+  });
+
+  it("preserves only history changed while the first page request is pending", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [summary("task_changed_during_history", "running", 0)],
+        [summary("task_stale_history", "completed", 1)],
+      ),
+      false,
+    );
+    const firstPage = deferred<TaskPage>();
+    const startup = startRuntime({
+      api: api({ fetchTasks: vi.fn(() => firstPage.promise) }),
+      transport: transport(),
+    });
+
+    useAgentStore
+      .getState()
+      .applyEvent(runCompletedEvent("task_changed_during_history", 1));
+    firstPage.resolve(
+      page([], [summary("task_current_history", "completed", 1)]),
+    );
+    await startup;
+
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_changed_during_history",
+      "task_current_history",
+    ]);
+    expect(useAgentStore.getState().taskOrder).not.toContain(
+      "task_stale_history",
+    );
+  });
+
+  it("does not merge or subscribe a confirmed deletion from a late first history page", async () => {
+    const firstPage = deferred<TaskPage>();
+    const apiClient = api({
+      fetchTasks: vi.fn(() => firstPage.promise),
+      deleteTask: vi.fn().mockResolvedValue(undefined),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+    const startup = controller.start();
+
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_deleted_during_startup", "completed", 2)]),
+      false,
+    );
+    await controller.deleteTask("task_deleted_during_startup");
+
+    firstPage.resolve(
+      page(
+        [
+          summary("task_deleted_during_startup", "running", 3),
+          summary("task_startup_survivor", "running", 1),
+        ],
+        [],
+      ),
+    );
+    await startup;
+
+    expect(
+      useAgentStore.getState().tasksById.task_deleted_during_startup,
+    ).toBeUndefined();
+    expect(
+      useAgentStore.getState().tasksById.task_startup_survivor,
+    ).toBeDefined();
+    expect(eventTransport.subscribe).not.toHaveBeenCalledWith(
+      "task_deleted_during_startup",
+      expect.any(Number),
+    );
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_startup_survivor",
+      1,
+    );
+  });
+
   it("subscribes active startup tasks from the merged replay watermark", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([summary("task_active", "running", 8)]),
@@ -306,6 +451,30 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeTaskId).toBeNull();
   });
 
+  it("records a startup history error and recovers it through an explicit retry", async () => {
+    const fetchTasks = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("history unavailable"))
+      .mockResolvedValueOnce(page([summary("task_recovered", "running", 5)]));
+    const apiClient = api({ fetchTasks });
+    const eventTransport = transport();
+
+    await startRuntime({ api: apiClient, transport: eventTransport });
+    expect(useAgentStore.getState()).toMatchObject({
+      historyStatus: "error",
+      historyError: "history unavailable",
+    });
+
+    await new RuntimeController(apiClient, eventTransport).refreshTaskHistory();
+
+    expect(useAgentStore.getState()).toMatchObject({
+      historyStatus: "ready",
+      historyError: null,
+      activeItems: ["task_recovered"],
+    });
+    expect(eventTransport.subscribe).toHaveBeenCalledWith("task_recovered", 5);
+  });
+
   it("ignores an aborted startup page that resolves after a newer startup", async () => {
     const olderPage = deferred<TaskPage>();
     const newerPage = deferred<TaskPage>();
@@ -334,7 +503,7 @@ describe("runtime orchestration", () => {
     expect(eventTransport.subscribe).toHaveBeenCalledWith("task_newer", 4);
   });
 
-  it("selects a background task only after the unsubscribe barrier and snapshot", async () => {
+  it("records foreground selection intent before the unsubscribe barrier and snapshot", async () => {
     useAgentStore.getState().mergeTaskPage(page([summary("task_a")]), false);
     const barrier = deferred<void>();
     const detail = deferred<TaskSnapshot>();
@@ -367,10 +536,11 @@ describe("runtime orchestration", () => {
     const selection = controller.selectTask("task_a");
     await Promise.resolve();
     expect(order).toEqual(["barrier"]);
+    expect(useAgentStore.getState().activeTaskId).toBe("task_a");
     barrier.resolve();
     await Promise.resolve();
     expect(order).toEqual(["barrier", "fetch"]);
-    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    expect(useAgentStore.getState().activeTaskId).toBe("task_a");
     detail.resolve(snapshot("task_a", 9));
     await selection;
 
@@ -380,6 +550,115 @@ describe("runtime orchestration", () => {
     expect(
       useAgentStore.getState().tasksById.task_a.artifactOrder,
     ).toEqual(["artifact_selected"]);
+  });
+
+  it("replays a summary-only fixture task through its snapshot watermark before subscribing", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_fixture_history", "completed", 2, "fixture")]),
+      false,
+    );
+    const order: string[] = [];
+    const events = [
+      stageStartedEvent("task_fixture_history", 1),
+      {
+        ...stageStartedEvent("task_fixture_history", 2),
+        event_id: "event_task_fixture_history_2",
+        stage_attempt_id: "attempt_task_fixture_history_processing",
+        payload: {
+          type: "stage_started" as const,
+          stage: "processing" as const,
+          attempt: 1,
+        },
+      },
+    ];
+    const apiClient = api({
+      fetchTask: vi.fn(async () => {
+        order.push("snapshot");
+        return snapshot("task_fixture_history", 2, "fixture");
+      }),
+      fetchEvents: vi.fn(async () => {
+        order.push("events");
+        return events;
+      }),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({
+      subscribe: vi.fn(() => order.push("subscribe")),
+    });
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask("task_fixture_history");
+
+    expect(apiClient.fetchEvents).toHaveBeenCalledWith(
+      "task_fixture_history",
+      { afterSequence: 0, limit: 1000 },
+    );
+    expect(order).toEqual(["snapshot", "events", "subscribe"]);
+    expect(
+      useAgentStore.getState().tasksById.task_fixture_history.fixtureStages,
+    ).toMatchObject({
+      discovery: { stageAttemptId: "attempt_task_fixture_history" },
+      processing: {
+        stageAttemptId: "attempt_task_fixture_history_processing",
+      },
+    });
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_fixture_history",
+      2,
+    );
+  });
+
+  it("restarts summary event replay from zero after a later replay page fails", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_replay_retry", "completed", 1001, "fixture")]),
+      false,
+    );
+    const firstReplayPage = Array.from({ length: 1000 }, (_, index) =>
+      stageStartedEvent("task_replay_retry", index + 1),
+    );
+    const replayedStage = stageStartedEvent("task_replay_retry", 1001);
+    let replayAttempt = 0;
+    const fetchEvents = vi.fn<APIClient["fetchEvents"]>((_taskId, options) => {
+      if (options.afterSequence === 0) {
+        replayAttempt += 1;
+        return Promise.resolve(firstReplayPage);
+      }
+      if (replayAttempt === 1) {
+        return Promise.reject(new Error("events temporarily unavailable"));
+      }
+      return Promise.resolve([replayedStage]);
+    });
+    const apiClient = api({
+      fetchTask: vi
+        .fn()
+        .mockResolvedValue(snapshot("task_replay_retry", 1001, "fixture")),
+      fetchEvents,
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await expect(controller.selectTask("task_replay_retry")).rejects.toThrow(
+      "events temporarily unavailable",
+    );
+    expect(useAgentStore.getState().tasksById.task_replay_retry).toMatchObject({
+      hydration: "summary",
+      lastSequence: 1000,
+    });
+    await controller.selectTask("task_replay_retry");
+
+    expect(fetchEvents).toHaveBeenCalledTimes(4);
+    expect(fetchEvents).toHaveBeenNthCalledWith(3, "task_replay_retry", {
+      afterSequence: 0,
+      limit: 1000,
+    });
+    expect(
+      useAgentStore.getState().tasksById.task_replay_retry.fixtureStages.discovery,
+    ).toMatchObject({ stageAttemptId: replayedStage.stage_attempt_id });
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_replay_retry",
+      1001,
+    );
   });
 
   it("restores a background subscription when selection hydration fails", async () => {
@@ -1796,6 +2075,70 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().tasksById.task_delete).toBeUndefined();
     expect(useAgentStore.getState().taskOrder).not.toContain("task_delete");
     expect(useAgentStore.getState().activeTaskId).toBeNull();
+  });
+
+  it("does not resurrect a deleted task when an earlier selection snapshot resolves late", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_delete_race", "completed", 2)]),
+      false,
+    );
+    const detail = deferred<TaskSnapshot>();
+    const apiClient = api({
+      fetchTask: vi.fn(() => detail.promise),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+      deleteTask: vi.fn().mockResolvedValue(undefined),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    const selection = controller.selectTask("task_delete_race");
+    await vi.waitFor(() => expect(apiClient.fetchTask).toHaveBeenCalledTimes(1));
+    await controller.deleteTask("task_delete_race");
+    detail.resolve(snapshot("task_delete_race", 2));
+    await selection;
+
+    expect(useAgentStore.getState().tasksById.task_delete_race).toBeUndefined();
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    expect(eventTransport.subscribe).not.toHaveBeenCalled();
+    expect(apiClient.fetchArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect a deleted task from an earlier history page request", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [],
+        [summary("task_delete_page_race", "completed", 2)],
+        "cursor_delete_race",
+      ),
+      false,
+    );
+    const nextPage = deferred<TaskPage>();
+    const apiClient = api({
+      fetchTasks: vi.fn(() => nextPage.promise),
+      deleteTask: vi.fn().mockResolvedValue(undefined),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const loading = controller.loadMoreTasks();
+    await vi.waitFor(() => expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1));
+    await controller.deleteTask("task_delete_page_race");
+    nextPage.resolve(
+      page(
+        [],
+        [
+          summary("task_delete_page_race", "completed", 2),
+          summary("task_history_survivor", "completed", 1),
+        ],
+      ),
+    );
+    await loading;
+
+    expect(
+      useAgentStore.getState().tasksById.task_delete_page_race,
+    ).toBeUndefined();
+    expect(
+      useAgentStore.getState().tasksById.task_history_survivor,
+    ).toBeDefined();
   });
 
   it("retains a terminal task when authoritative deletion fails", async () => {

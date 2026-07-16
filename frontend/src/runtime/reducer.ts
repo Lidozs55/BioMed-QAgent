@@ -4,6 +4,7 @@ import type {
   MessageRecord,
   RunRecord,
   RunStatus,
+  StageName,
   TaskPage,
   TaskSnapshot,
   TaskSummary,
@@ -37,6 +38,8 @@ export function createInitialRuntimeState(): AgentRuntimeData {
     activeItems: [],
     nextCursor: null,
     connectionStatus: "idle",
+    historyStatus: "idle",
+    historyError: null,
     draft: {
       input: "",
       selectedDatabaseIds: [],
@@ -97,6 +100,7 @@ export function mergeTaskPage(
   state: AgentRuntimeData,
   page: TaskPage,
   append: boolean,
+  preserveTaskIds?: ReadonlySet<string>,
 ): AgentRuntimeData {
   const tasksById = { ...state.tasksById };
   for (const item of [...page.active_items, ...page.items]) {
@@ -117,9 +121,12 @@ export function mergeTaskPage(
   const incomingHistory = [...page.active_items, ...page.items]
     .map((item) => item.task_id)
     .filter((taskId) => !isActiveStatus(tasksById[taskId].summary.status));
+  const preservedHistory = append
+    ? []
+    : state.taskOrder.filter((taskId) => preserveTaskIds?.has(taskId));
   const history = append
     ? [...state.taskOrder, ...incomingHistory]
-    : incomingHistory;
+    : [...preservedHistory, ...incomingHistory];
   const taskOrder = [...new Set(history)]
     .filter((taskId) => !activeItems.includes(taskId));
 
@@ -328,6 +335,41 @@ export function hydrateTaskSnapshot(
   };
 }
 
+export function prepareTaskSnapshotReplay(
+  state: AgentRuntimeData,
+  snapshot: TaskSnapshot,
+): AgentRuntimeData {
+  const existing = state.tasksById[snapshot.task.task_id];
+  if (existing === undefined || existing.hydration !== "summary") {
+    return state;
+  }
+  const replayBase = {
+    ...createTaskProjection(snapshot.task),
+    lastSequence: 0,
+  };
+  const hydrated = hydrateTaskSnapshot(
+    {
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        [snapshot.task.task_id]: replayBase,
+      },
+    },
+    snapshot,
+  );
+  return {
+    ...hydrated,
+    tasksById: {
+      ...hydrated.tasksById,
+      [snapshot.task.task_id]: {
+        ...hydrated.tasksById[snapshot.task.task_id],
+        lastSequence: 0,
+        hydration: "summary",
+      },
+    },
+  };
+}
+
 function placeholderRun(
   taskId: string,
   runId: string,
@@ -346,6 +388,29 @@ function placeholderRun(
     finishedAt: null,
     error: null,
   };
+}
+
+function terminalizeRunningFixtureStages(
+  task: TaskProjection,
+  status: "failed" | "cancelled",
+  timestamp: string,
+  error: string | null,
+): TaskProjection {
+  if (task.summary.mode !== "fixture") return task;
+  const fixtureStages = { ...task.fixtureStages };
+  let changed = false;
+  for (const stage of Object.keys(fixtureStages) as StageName[]) {
+    const projection = fixtureStages[stage];
+    if (projection?.status !== "running") continue;
+    fixtureStages[stage] = {
+      ...projection,
+      status,
+      finishedAt: timestamp,
+      error,
+    };
+    changed = true;
+  }
+  return changed ? { ...task, fixtureStages } : task;
 }
 
 function upsertRun(
@@ -550,6 +615,14 @@ export function reduceRuntimeEvent(
           ...task,
           summary: { ...task.summary, status, active_run_id: null },
         };
+      }
+      if (payload.type !== "run_completed") {
+        task = terminalizeRunningFixtureStages(
+          task,
+          payload.type === "run_failed" ? "failed" : "cancelled",
+          envelope.timestamp,
+          error,
+        );
       }
       break;
     }

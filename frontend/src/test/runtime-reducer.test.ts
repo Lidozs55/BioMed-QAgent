@@ -279,6 +279,43 @@ describe("runtime event projection", () => {
     ]);
   });
 
+  it.each(["run_cancelled", "run_failed", "run_interrupted"] as const)(
+    "terminalizes the running fixture stage when %s ends the authoritative Run",
+    (type) => {
+      let state = mergeTaskPage(
+        createInitialRuntimeState(),
+        page(summary("task_fixture", "running", 0, "fixture")),
+        false,
+      );
+      state = reduceRuntimeEvent(
+        state,
+        envelope(
+          "task_fixture",
+          "run_fixture",
+          1,
+          { type: "stage_started", stage: "processing", attempt: 1 },
+          "stage_attempt_processing",
+        ),
+      );
+      const terminalPayload: EventPayload =
+        type === "run_failed"
+          ? { type, error: "processing failed" }
+          : { type, reason: "processing stopped" };
+
+      state = reduceRuntimeEvent(
+        state,
+        envelope("task_fixture", "run_fixture", 2, terminalPayload),
+      );
+
+      expect(state.tasksById.task_fixture.fixtureStages.processing).toMatchObject({
+        status: type === "run_failed" ? "failed" : "cancelled",
+        finishedAt: "2026-07-14T00:00:02Z",
+        error:
+          type === "run_failed" ? "processing failed" : "processing stopped",
+      });
+    },
+  );
+
   it("advances agent task watermarks without projecting fixture stage events", () => {
     const initial = mergeTaskPage(
       createInitialRuntimeState(),

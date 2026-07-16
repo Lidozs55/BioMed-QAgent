@@ -16,6 +16,8 @@ export type ConnectionStatus =
   | "reconnecting"
   | "disconnected";
 
+export type HistoryStatus = "idle" | "loading" | "ready" | "error";
+
 export interface DraftState {
   input: string;
   selectedDatabaseIds: string[];
@@ -111,6 +113,8 @@ export interface AgentRuntimeData {
   activeItems: string[];
   nextCursor: string | null;
   connectionStatus: ConnectionStatus;
+  historyStatus: HistoryStatus;
+  historyError: string | null;
   draft: DraftState;
   databases: DatabaseRecord[];
 }
