@@ -334,12 +334,12 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P1** Artifact API 只列出 manifest 中已验证文件
 - [x] **P1** Artifact 下载使用 artifact_id，不接受任意 path
 - [ ] **P1** 支持任务取消
-- [ ] **P1** 统一 WebSocket event envelope
-- [ ] **P1** 统一 schema_version、event_id、task_id、stage_attempt_id、sequence、timestamp、payload
-- [ ] **P1** payload 使用判别联合，不接受任意 dict
-- [ ] **P1** 事件先持久化再推送，支持按 sequence 续读
+- [x] **P1** 统一 WebSocket event envelope
+- [x] **P1** 统一 schema_version、event_id、task_id、stage_attempt_id、sequence、timestamp、payload
+- [x] **P1** payload 使用判别联合，不接受任意 dict
+- [x] **P1** 事件先持久化再推送，支持按 sequence 续读
 - [ ] **P1** 事件覆盖创建、计划、阶段成功/失败/跳过、工具、警告、取消、恢复、Artifact 和终态
-- [ ] **P1** API/WebSocket 契约集成测试
+- [x] **P1** API/WebSocket 契约集成测试
 
 ## 12. Phase 3：shadcn 前端重写
 

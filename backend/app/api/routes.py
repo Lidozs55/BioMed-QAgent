@@ -22,6 +22,7 @@ from app.config import settings
 from app.domain.contracts import (
     ContractModel,
     Database,
+    EventEnvelope,
     RunManifest,
     generate_prefixed_uuid,
 )
@@ -175,6 +176,44 @@ async def get_task(task_id: str) -> dict:
         "validation_status": manifest.validation.status,
         "artifact_count": len(manifest.artifacts) + 1,
     }
+
+
+# ---------------------------------------------------------------------------
+# Event replay (resume by sequence)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tasks/{task_id}/events")
+async def list_events(task_id: str, since: int = 0) -> dict:
+    """Replay persisted events with sequence > ``since``.
+
+    Reads the append-only ``logs/events.jsonl`` written by PipelineRunner.
+    A WS reconnect can resume by passing the last seen sequence as ``since``.
+    Returns 404 if the task directory does not exist; returns an empty list
+    if no events have been persisted yet.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise HTTPException(status_code=400, detail="invalid task_id")
+    if since < 0:
+        raise HTTPException(status_code=400, detail="since must be >= 0")
+
+    task_dir = _tasks_base() / task_id
+    if not task_dir.exists():
+        raise HTTPException(status_code=404, detail="task not found")
+
+    events_file = task_dir / "logs" / "events.jsonl"
+    events: list[dict] = []
+    if events_file.is_file():
+        for line in events_file.read_text("utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                envelope = EventEnvelope.model_validate_json(line)
+            except ValidationError:
+                continue
+            if envelope.sequence > since:
+                events.append(envelope.model_dump(mode="json"))
+    return {"task_id": task_id, "since": since, "events": events}
 
 
 # ---------------------------------------------------------------------------
