@@ -258,7 +258,7 @@ def run_artifact_build(
         staging_dir=staging,
         artifact_paths=artifact_paths,
         source_assets=source_assets,
-        source_path=ctx.workdir.source_assets / "GSE178352_tximportCounts.fixture.txt.gz",
+        source_path=ctx.workdir.root / source_asset.relative_path,
         literature=literature,
         geo=geo,
         specification=specification,

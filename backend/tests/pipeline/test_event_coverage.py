@@ -124,7 +124,7 @@ def test_no_tool_events_for_skipped_stages(tmp_path: Path) -> None:
     )
     asyncio.run(runner1.run())
 
-    # Second run — all stages should be skipped (digests match)
+    # Second run — durable data stages skip; package stages rerun after publish.
     runner2 = PipelineRunner(
         task_id="task_skip_tools",
         base_dir=base_dir,
@@ -134,9 +134,18 @@ def test_no_tool_events_for_skipped_stages(tmp_path: Path) -> None:
 
     assert manifest2.task_state == TaskState.COMPLETED
 
-    types2 = _event_types(runner2)
-    assert PipelineEventType.TOOL_CALLED.value not in types2
-    assert PipelineEventType.TOOL_COMPLETED.value not in types2
+    called = [
+        event.payload.tool_name
+        for event in runner2.events
+        if event.type is PipelineEventType.TOOL_CALLED
+    ]
+    completed = [
+        event.payload.tool_name
+        for event in runner2.events
+        if event.type is PipelineEventType.TOOL_COMPLETED
+    ]
+    assert called == ["run_artifact_build", "run_validation"]
+    assert completed == called
 
 
 def test_no_warning_events_when_warnings_csv_is_empty(tmp_path: Path) -> None:

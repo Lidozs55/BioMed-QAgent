@@ -6,6 +6,7 @@ from last successful stage, independent skipped status identifier.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import subprocess
 import sys
@@ -26,6 +27,154 @@ FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 class HardPipelineInterruption(BaseException):
     """Simulate process death without runner-owned terminalization."""
+
+
+@pytest.mark.parametrize(
+    "checkpoint_corruption",
+    [
+        "invalid_json",
+        "old_raw",
+        "missing_schema_version",
+        "wrong_schema_version",
+        "wrong_output_digest",
+        "wrong_output_sha256",
+    ],
+)
+def test_runner_reruns_stage_when_persisted_output_checkpoint_is_invalid(
+    tmp_path: Path,
+    checkpoint_corruption: str,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = f"task_invalid_checkpoint_{checkpoint_corruption}"
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state is TaskState.COMPLETED
+
+    checkpoint_path = (
+        base_dir / task_id / "state" / "discovery_output.json"
+    )
+    if checkpoint_corruption == "invalid_json":
+        checkpoint_path.write_text("{", "utf-8")
+    else:
+        checkpoint = json.loads(checkpoint_path.read_text("utf-8"))
+        raw_output = checkpoint.get("output", checkpoint)
+        if checkpoint_corruption == "old_raw":
+            checkpoint_path.write_text(
+                json.dumps(raw_output, indent=2) + "\n",
+                "utf-8",
+            )
+        else:
+            serialized = json.dumps(
+                raw_output,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            first_attempt = next(
+                attempt
+                for attempt in runner1.state.stage_attempts
+                if attempt.stage is StageName.DISCOVERY
+                and attempt.status is AttemptStatus.SUCCEEDED
+            )
+            checkpoint = {
+                "schema_version": "1.0",
+                "task_id": task_id,
+                "stage": StageName.DISCOVERY.value,
+                "stage_attempt_id": first_attempt.stage_attempt_id,
+                "output_digest": first_attempt.output_digest,
+                "output_sha256": hashlib.sha256(serialized).hexdigest(),
+                "output": raw_output,
+                "files": [],
+            }
+            if checkpoint_corruption == "missing_schema_version":
+                checkpoint.pop("schema_version")
+            elif checkpoint_corruption == "wrong_schema_version":
+                checkpoint["schema_version"] = "9.9"
+            else:
+                field = (
+                    "output_digest"
+                    if checkpoint_corruption == "wrong_output_digest"
+                    else "output_sha256"
+                )
+                checkpoint[field] = "0" * 64
+            checkpoint_path.write_text(
+                json.dumps(checkpoint, indent=2) + "\n",
+                "utf-8",
+            )
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    assert manifest2.task_state is TaskState.COMPLETED
+    discovery_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.DISCOVERY
+    ]
+    assert [attempt.attempt for attempt in discovery_attempts] == [1, 2]
+    assert [attempt.status for attempt in discovery_attempts] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
+
+
+@pytest.mark.parametrize("file_corruption", ["deleted", "size", "sha256"])
+def test_runner_reruns_processing_when_referenced_file_is_corrupt(
+    tmp_path: Path,
+    file_corruption: str,
+) -> None:
+    base_dir = tmp_path / "tasks"
+    task_id = f"task_processing_file_{file_corruption}"
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state is TaskState.COMPLETED
+
+    checkpoint_path = base_dir / task_id / "state" / "processing_output.json"
+    checkpoint = json.loads(checkpoint_path.read_text("utf-8"))
+    parsed_relative_path = checkpoint["output"]["parsed_datasets"][0][
+        "file_asset"
+    ]["relative_path"]
+    parsed_path = base_dir / task_id / Path(parsed_relative_path)
+    if file_corruption == "deleted":
+        parsed_path.unlink()
+    elif file_corruption == "size":
+        parsed_path.write_bytes(parsed_path.read_bytes() + b"x")
+    else:
+        original = parsed_path.read_bytes()
+        replacement = bytes([original[0] ^ 1]) + original[1:]
+        assert len(replacement) == len(original)
+        parsed_path.write_bytes(replacement)
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    assert manifest2.task_state is TaskState.COMPLETED
+    processing_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.PROCESSING
+    ]
+    assert [attempt.attempt for attempt in processing_attempts] == [1, 2]
+    assert [attempt.status for attempt in processing_attempts] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
 
 
 def test_runner_recovers_durable_inflight_attempt_after_hard_interruption(
@@ -191,9 +340,19 @@ def test_stage_attempt_numbers_remain_monotonic_across_reuse_and_parameter_chang
             if attempt.stage is stage
         ]
         assert [attempt.attempt for attempt in attempts] == [1, 2, 3]
+        expected_second = (
+            AttemptStatus.SKIPPED
+            if stage
+            in {
+                StageName.DISCOVERY,
+                StageName.ACQUISITION,
+                StageName.PROCESSING,
+            }
+            else AttemptStatus.SUCCEEDED
+        )
         assert [attempt.status for attempt in attempts] == [
             AttemptStatus.SUCCEEDED,
-            AttemptStatus.SKIPPED,
+            expected_second,
             AttemptStatus.SUCCEEDED,
         ]
 
@@ -205,7 +364,7 @@ def test_stage_attempt_numbers_remain_monotonic_across_reuse_and_parameter_chang
     assert started_attempts == dict.fromkeys(StageName, 3)
 
 
-def test_runner_reuses_output_when_digest_matches(tmp_path: Path) -> None:
+def test_runner_reuses_only_durable_outputs_after_publication(tmp_path: Path) -> None:
     base_dir = tmp_path / "tasks"
 
     runner1 = PipelineRunner(
@@ -228,12 +387,18 @@ def test_runner_reuses_output_when_digest_matches(tmp_path: Path) -> None:
         a for a in runner2.state.stage_attempts
         if a.status == AttemptStatus.SKIPPED
     ]
-    assert len(skipped) == 5
+    assert [attempt.stage for attempt in skipped] == [
+        StageName.DISCOVERY,
+        StageName.ACQUISITION,
+        StageName.PROCESSING,
+    ]
 
-    # Second run must not produce new SUCCEEDED attempts — only SKIPPED.
-    # Total attempts = 5 (first run SUCCEEDED) + 5 (second run SKIPPED).
-    event_types = [e.payload.type for e in runner2.events]
-    assert "stage_completed" not in event_types
+    completed = [
+        event.payload.stage
+        for event in runner2.events
+        if event.payload.type == "stage_completed"
+    ]
+    assert completed == [StageName.ARTIFACT_BUILD, StageName.VALIDATION]
 
 
 def test_runner_recovers_from_last_successful_stage(tmp_path: Path) -> None:
@@ -341,10 +506,24 @@ def test_runner_skipped_status_independent(tmp_path: Path) -> None:
         if a.status == AttemptStatus.SUCCEEDED
     ]
 
-    assert len(skipped) == 5
+    assert [attempt.stage for attempt in skipped] == [
+        StageName.DISCOVERY,
+        StageName.ACQUISITION,
+        StageName.PROCESSING,
+    ]
     assert len(succeeded_first) == 5
 
-    for skip, succ in zip(skipped, succeeded_first, strict=True):
+    reusable_successes = [
+        attempt
+        for attempt in succeeded_first
+        if attempt.stage
+        in {
+            StageName.DISCOVERY,
+            StageName.ACQUISITION,
+            StageName.PROCESSING,
+        }
+    ]
+    for skip, succ in zip(skipped, reusable_successes, strict=True):
         assert skip.input_digest == succ.input_digest
         assert skip.parameter_digest == succ.parameter_digest
         assert skip.stage_attempt_id != succ.stage_attempt_id
@@ -353,4 +532,4 @@ def test_runner_skipped_status_independent(tmp_path: Path) -> None:
     skipped_payloads = [
         e for e in skipped_event if e.payload.type == "stage_skipped"
     ]
-    assert len(skipped_payloads) == 5
+    assert len(skipped_payloads) == 3

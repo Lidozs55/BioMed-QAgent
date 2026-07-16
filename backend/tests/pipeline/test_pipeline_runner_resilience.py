@@ -300,6 +300,71 @@ def test_managed_runner_defers_formal_publication_until_runtime_commit(
     }
 
 
+def test_recovered_deferred_runner_revalidates_and_rebuilds_publication(
+    tmp_path: Path,
+) -> None:
+    task_id = "task_recovered_deferred_publication"
+    run_id = "run_recovered_deferred_publication"
+    base_dir = tmp_path / "tasks"
+    task_root = base_dir / task_id
+    published_runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+    )
+    published_manifest = asyncio.run(published_runner.run())
+    assert published_manifest.task_state is TaskState.COMPLETED
+
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+
+    manifest1 = asyncio.run(runner1.run())
+
+    assert manifest1.task_state is TaskState.COMPLETED
+    checkpoint = json.loads(
+        (task_root / "state" / "validation_output.json").read_text("utf-8")
+    )
+    expected_files = sorted(
+        {
+            *(f"staging/run_pinned_fixture/{entry.name}" for entry in manifest1.artifacts),
+            "staging/run_pinned_fixture/run_manifest.json",
+            "logs/validation_report.json",
+        }
+    )
+    assert [item["relative_path"] for item in checkpoint["files"]] == expected_files
+    assert all("publication" not in path for path in expected_files)
+    assert all("publish_completed" not in path for path in expected_files)
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=base_dir,
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+    )
+    manifest2 = asyncio.run(runner2.run())
+
+    assert manifest2.task_state is TaskState.COMPLETED
+    validation_attempts = [
+        attempt
+        for attempt in runner2.state.stage_attempts
+        if attempt.stage is StageName.VALIDATION
+    ]
+    assert [attempt.status for attempt in validation_attempts] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
+    runner2.publish(run_id)
+    marker = json.loads(
+        (task_root / "artifacts" / ".runtime-publication.json").read_text("utf-8")
+    )
+    assert marker["run_id"] == run_id
+
+
 @pytest.mark.asyncio
 async def test_stage_timeout_drains_worker_before_terminal_state(
     tmp_path: Path,

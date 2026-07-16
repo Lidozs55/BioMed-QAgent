@@ -61,6 +61,7 @@ from app.pipeline.stages import (
     run_validation,
 )
 from app.pipeline.state import (
+    StageOutputFile,
     TaskLock,
     load_stage_output,
     load_state,
@@ -98,6 +99,14 @@ _STAGES: list[StageName] = [
     StageName.ARTIFACT_BUILD,
     StageName.VALIDATION,
 ]
+
+_STAGE_OUTPUT_TYPES: dict[StageName, type] = {
+    StageName.DISCOVERY: DiscoveryOutput,
+    StageName.ACQUISITION: AcquisitionOutput,
+    StageName.PROCESSING: ProcessingOutput,
+    StageName.ARTIFACT_BUILD: ArtifactBuildOutput,
+    StageName.VALIDATION: ValidationOutput,
+}
 
 # Direct upstream stages per stage — used for input_digest computation.
 # Only direct upstream digests are included so that the digest is stable
@@ -310,6 +319,7 @@ class PipelineRunner:
             await self._emit_event(PlanReadyPayload(specification=specification))
 
         stage_outputs: dict[StageName, Any] = {}
+        reuse_allowed = True
         for stage in _STAGES:
             if self._is_cancelled():
                 return await self._finalize_cancelled()
@@ -317,11 +327,43 @@ class PipelineRunner:
             input_digest = self._compute_input_digest(stage, stage_outputs)
             parameter_digest = self._compute_parameter_digest(stage)
 
-            reusable = self.state.find_reusable(stage, input_digest, parameter_digest)
-            if reusable is not None and reusable.output_digest is not None:
-                loaded = load_stage_output(self.workdir.state, stage)
+            reusable = (
+                self.state.find_reusable(stage, input_digest, parameter_digest)
+                if reuse_allowed
+                and not (
+                    self.defer_publication and stage is StageName.VALIDATION
+                )
+                else None
+            )
+            completed_digest = self.state.completed_stages.get(stage.value)
+            if (
+                reusable is not None
+                and reusable.output_digest is not None
+                and completed_digest == reusable.output_digest
+            ):
+                loaded = load_stage_output(
+                    self.workdir.state,
+                    task_root=self.workdir.root,
+                    task_id=self.task_id,
+                    stage=stage,
+                    stage_attempt_id=reusable.stage_attempt_id,
+                    output_digest=reusable.output_digest,
+                    expected_type=_STAGE_OUTPUT_TYPES[stage],
+                )
                 if loaded is not None:
-                    stage_outputs[stage] = loaded
+                    loaded_output, recorded_files = loaded
+                    try:
+                        expected_files = self._collect_stage_output_files(
+                            stage,
+                            loaded_output,
+                            stage_outputs,
+                        )
+                    except Exception:
+                        expected_files = None
+                    if expected_files != recorded_files:
+                        loaded = None
+                if loaded is not None:
+                    stage_outputs[stage] = loaded_output
                     skipped_attempt = self._build_attempt(
                         stage, input_digest, parameter_digest,
                         AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
@@ -340,6 +382,7 @@ class PipelineRunner:
                     save_state(self.workdir.state, self.state)
                     continue
 
+            reuse_allowed = False
             started = datetime.now(UTC)
             running_attempt = self._build_attempt(
                 stage,
@@ -396,7 +439,19 @@ class PipelineRunner:
             )
 
             finished = datetime.now(UTC)
-            save_stage_output(self.workdir.state, stage, result.output)
+            save_stage_output(
+                self.workdir.state,
+                task_id=self.task_id,
+                stage=stage,
+                stage_attempt_id=stage_attempt_id,
+                output_digest=result.output_digest,
+                output=result.output,
+                files=self._collect_stage_output_files(
+                    stage,
+                    result.output,
+                    stage_outputs,
+                ),
+            )
             attempt = self._build_attempt(
                 stage, input_digest, parameter_digest,
                 AttemptStatus.SUCCEEDED, output_digest=result.output_digest,
@@ -553,19 +608,129 @@ class PipelineRunner:
         stage: StageName,
         expected_type: type,
     ) -> Any:
-        """Get a stage output, reconstructing from persisted dict if needed."""
+        """Get a stage output already verified for the current run."""
         output = stage_outputs.get(stage)
         if output is None:
-            loaded = load_stage_output(self.workdir.state, stage)
-            if loaded is None:
-                raise RuntimeError(f"missing output for stage {stage.value}")
-            output = expected_type.model_validate(loaded)
-            stage_outputs[stage] = output
-            return output
+            raise RuntimeError(f"missing verified output for stage {stage.value}")
         if isinstance(output, dict):
             output = expected_type.model_validate(output)
             stage_outputs[stage] = output
         return output
+
+    def _collect_stage_output_files(
+        self,
+        stage: StageName,
+        output: Any,
+        stage_outputs: dict[StageName, Any],
+    ) -> list[StageOutputFile]:
+        """Enumerate checkpoint files from the typed output for one stage."""
+        if stage is StageName.DISCOVERY:
+            return []
+        if stage is StageName.ACQUISITION:
+            acquisition = AcquisitionOutput.model_validate(output)
+            files = [
+                _stage_output_file_from_asset(asset)
+                for asset in acquisition.source_assets
+            ]
+            source_path = _task_relative_path(
+                self.workdir.root,
+                acquisition.source_path,
+            )
+            if source_path not in {item.relative_path for item in files}:
+                raise ValueError("acquisition source_path must alias a SourceAsset")
+            return _sorted_stage_output_files(files)
+        if stage is StageName.PROCESSING:
+            processing = ProcessingOutput.model_validate(output)
+            return _sorted_stage_output_files(
+                [
+                    _stage_output_file_from_asset(dataset.file_asset)
+                    for dataset in processing.parsed_datasets
+                ]
+            )
+        if stage is StageName.ARTIFACT_BUILD:
+            build = ArtifactBuildOutput.model_validate(output)
+            files = [
+                _stage_output_file_from_asset(asset)
+                for asset in build.source_assets
+            ]
+            source_path = _task_relative_path(
+                self.workdir.root,
+                build.source_path,
+            )
+            if source_path not in {item.relative_path for item in files}:
+                raise ValueError("artifact build source_path must alias a SourceAsset")
+
+            staging = _task_directory(self.workdir.root, build.staging_dir)
+            direct_files = sorted(staging.iterdir(), key=lambda item: item.name)
+            if any(path.is_symlink() or not path.is_file() for path in direct_files):
+                raise ValueError("artifact build staging may contain only regular files")
+            artifact_paths = sorted(
+                (Path(path).resolve() for path in build.artifact_paths),
+                key=lambda path: path.name,
+            )
+            if any(path.parent != staging for path in artifact_paths):
+                raise ValueError("artifact build paths must be direct staging files")
+            if artifact_paths != [path.resolve() for path in direct_files]:
+                raise ValueError("artifact build paths must exactly match staging contents")
+            files.extend(
+                _stage_output_file_from_path(self.workdir.root, path)
+                for path in artifact_paths
+            )
+            return _sorted_stage_output_files(files)
+        if stage is StageName.VALIDATION:
+            validation = ValidationOutput.model_validate(output)
+            build = ArtifactBuildOutput.model_validate(
+                stage_outputs.get(StageName.ARTIFACT_BUILD)
+            )
+            files = []
+            physical_directory: Path | None = None
+            for entry in validation.artifacts:
+                if Path(entry.relative_path).name != entry.name:
+                    raise ValueError("validation artifact name/path mismatch")
+                artifact_path = self.workdir.root / entry.relative_path
+                staging_path = Path(build.staging_dir) / entry.name
+                if staging_path.is_file():
+                    physical_path = staging_path
+                elif artifact_path.is_file():
+                    physical_path = artifact_path
+                else:
+                    raise FileNotFoundError(entry.name)
+                if (
+                    physical_path.stat().st_size != entry.size_bytes
+                    or hashlib.sha256(physical_path.read_bytes()).hexdigest()
+                    != entry.sha256
+                ):
+                    raise ValueError("validation artifact metadata mismatch")
+                if physical_directory is None:
+                    physical_directory = physical_path.parent
+                elif physical_path.parent.resolve() != physical_directory.resolve():
+                    raise ValueError("validation artifacts must share one directory")
+                files.append(
+                    StageOutputFile(
+                        relative_path=_task_relative_path(
+                            self.workdir.root,
+                            physical_path,
+                        ),
+                        size_bytes=entry.size_bytes,
+                        sha256=entry.sha256,
+                    )
+                )
+            if physical_directory is None:
+                raise ValueError("validation output must contain artifacts")
+            files.append(
+                _stage_output_file_from_path(
+                    self.workdir.root,
+                    physical_directory / "run_manifest.json",
+                )
+            )
+            files.append(
+                _stage_output_file_from_path(
+                    self.workdir.root,
+                    self.workdir.root / validation.validation.report_path,
+                )
+            )
+            return _sorted_stage_output_files(files)
+        raise ValueError(f"unknown stage output: {stage.value}")
 
     def _compute_input_digest(
         self, stage: StageName, stage_outputs: dict[StageName, Any]
@@ -837,6 +1002,49 @@ class PipelineRunner:
 def _sha256_json(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _task_relative_path(task_root: Path, path: Path) -> str:
+    root = task_root.resolve()
+    resolved = Path(path).resolve()
+    return resolved.relative_to(root).as_posix()
+
+
+def _stage_output_file_from_asset(asset: Any) -> StageOutputFile:
+    return StageOutputFile(
+        relative_path=asset.relative_path,
+        size_bytes=asset.size_bytes,
+        sha256=asset.sha256,
+    )
+
+
+def _stage_output_file_from_path(task_root: Path, path: Path) -> StageOutputFile:
+    resolved = Path(path).resolve(strict=True)
+    if Path(path).is_symlink() or not resolved.is_file():
+        raise ValueError("stage output checkpoint references a non-regular file")
+    return StageOutputFile(
+        relative_path=resolved.relative_to(task_root.resolve()).as_posix(),
+        size_bytes=resolved.stat().st_size,
+        sha256=hashlib.sha256(resolved.read_bytes()).hexdigest(),
+    )
+
+
+def _task_directory(task_root: Path, path: Path) -> Path:
+    resolved = Path(path).resolve(strict=True)
+    resolved.relative_to(task_root.resolve())
+    if not resolved.is_dir():
+        raise ValueError("stage output directory is not a directory")
+    return resolved
+
+
+def _sorted_stage_output_files(
+    files: list[StageOutputFile],
+) -> list[StageOutputFile]:
+    ordered = sorted(files, key=lambda item: item.relative_path)
+    paths = [item.relative_path for item in ordered]
+    if len(paths) != len(set(paths)):
+        raise ValueError("stage output file references must be unique")
+    return ordered
 
 
 def _hash_directory(directory: Path) -> str:

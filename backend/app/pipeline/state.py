@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import json
 import os
+import re
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import Any, BinaryIO
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any, BinaryIO, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.domain.contracts import (
     AttemptStatus,
@@ -19,6 +21,59 @@ from app.domain.contracts import (
     StageName,
     TaskState,
 )
+
+
+class StageOutputFile(ContractModel):
+    """One file bound to a persisted stage-output checkpoint."""
+
+    relative_path: str
+    size_bytes: int = Field(ge=0)
+    sha256: str
+
+    @field_validator("relative_path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if (
+            not value
+            or "\\" in value
+            or path.is_absolute()
+            or PureWindowsPath(value).is_absolute()
+            or ".." in path.parts
+        ):
+            raise ValueError("checkpoint file path must stay relative to task root")
+        return path.as_posix()
+
+    @field_validator("sha256")
+    @classmethod
+    def validate_sha256(cls, value: str) -> str:
+        checksum = value.lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise ValueError("checkpoint file sha256 must be 64 hexadecimal characters")
+        return checksum
+
+
+class StageOutputEnvelope(ContractModel):
+    """Versioned, attempt-bound checkpoint for one typed stage output."""
+
+    schema_version: Literal["1.0"]
+    task_id: str
+    stage: StageName
+    stage_attempt_id: str
+    output_digest: str
+    output_sha256: str
+    output: dict[str, Any]
+    files: list[StageOutputFile]
+
+    @field_validator("files")
+    @classmethod
+    def validate_file_order(
+        cls, value: list[StageOutputFile]
+    ) -> list[StageOutputFile]:
+        paths = [item.relative_path for item in value]
+        if paths != sorted(set(paths)):
+            raise ValueError("checkpoint files must be sorted and unique by path")
+        return value
 
 
 class PipelineState(ContractModel):
@@ -41,7 +96,7 @@ class PipelineState(ContractModel):
         parameter_digest: str,
     ) -> StageAttempt | None:
         """Find a SUCCEEDED attempt matching the given digests (for idempotency)."""
-        for attempt in self.stage_attempts:
+        for attempt in reversed(self.stage_attempts):
             if (
                 attempt.stage == stage
                 and attempt.status is AttemptStatus.SUCCEEDED
@@ -97,7 +152,14 @@ def save_state(state_dir: Path, state: PipelineState) -> None:
 
 
 def save_stage_output(
-    state_dir: Path, stage: StageName, output: Any
+    state_dir: Path,
+    *,
+    task_id: str,
+    stage: StageName,
+    stage_attempt_id: str,
+    output_digest: str,
+    output: ContractModel,
+    files: list[StageOutputFile] | None = None,
 ) -> None:
     """Serialize a stage's output to ``state/<stage>_output.json`` for recovery.
 
@@ -106,18 +168,83 @@ def save_stage_output(
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     output_file = state_dir / f"{stage.value}_output.json"
-    payload = output.model_dump_json(indent=2)
+    serialized_output = output.model_dump(mode="json")
+    envelope = StageOutputEnvelope(
+        schema_version="1.0",
+        task_id=task_id,
+        stage=stage,
+        stage_attempt_id=stage_attempt_id,
+        output_digest=output_digest,
+        output_sha256=_sha256_json(serialized_output),
+        output=serialized_output,
+        files=files or [],
+    )
+    payload = envelope.model_dump_json(indent=2)
     tmp = output_file.with_suffix(".json.part")
     tmp.write_text(payload + "\n", "utf-8")
     os.replace(tmp, output_file)
 
 
-def load_stage_output(state_dir: Path, stage: StageName) -> dict[str, Any] | None:
-    """Load a serialized stage output from disk (returns None if missing)."""
+def load_stage_output(
+    state_dir: Path,
+    *,
+    task_root: Path,
+    task_id: str,
+    stage: StageName,
+    stage_attempt_id: str,
+    output_digest: str,
+    expected_type: type[ContractModel],
+) -> tuple[ContractModel, list[StageOutputFile]] | None:
+    """Load and validate an attempt-bound typed stage output checkpoint."""
     output_file = state_dir / f"{stage.value}_output.json"
     if not output_file.exists():
         return None
-    return json.loads(output_file.read_text("utf-8"))
+    try:
+        envelope = StageOutputEnvelope.model_validate_json(
+            output_file.read_text("utf-8")
+        )
+        if (
+            envelope.task_id != task_id
+            or envelope.stage is not stage
+            or envelope.stage_attempt_id != stage_attempt_id
+            or envelope.output_digest != output_digest
+            or envelope.output_sha256 != _sha256_json(envelope.output)
+        ):
+            return None
+        root = task_root.resolve()
+        for file in envelope.files:
+            path = task_root.joinpath(*PurePosixPath(file.relative_path).parts)
+            if path.is_symlink():
+                return None
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(root)
+            if not resolved.is_file():
+                return None
+            if resolved.stat().st_size != file.size_bytes:
+                return None
+            if _sha256_file(resolved) != file.sha256:
+                return None
+        return expected_type.model_validate(envelope.output), envelope.files
+    except Exception:
+        return None
+
+
+def _sha256_json(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 class TaskLock:
