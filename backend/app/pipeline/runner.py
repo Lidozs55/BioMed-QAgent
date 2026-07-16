@@ -16,6 +16,7 @@ from typing import Any
 
 from app.domain.contracts import (
     AttemptStatus,
+    CancelRequestedPayload,
     ErrorCode,
     ErrorDetail,
     EventEnvelope,
@@ -192,7 +193,13 @@ class PipelineRunner:
             self._event_queue = None
 
     def request_cancel(self, reason: str | None = None) -> None:
-        """Request cancellation; checked before each stage."""
+        """Request cancellation; checked before each stage.
+
+        Emits a ``task_cancel_requested`` event (persisted + pushed) so WS
+        clients see the request immediately, then sets the in-memory and
+        persisted state flag checked by ``_run_inner`` before each stage.
+        """
+        self._emit_event(CancelRequestedPayload(reason=reason))
         self.state.cancel_requested = True
         self.state.cancel_reason = reason
         save_state(self.workdir.state, self.state)

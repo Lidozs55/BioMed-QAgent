@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from app.domain.contracts import AttemptStatus, StageName, TaskState
+from app.domain.contracts import AttemptStatus, TaskState
 from app.pipeline.runner import PipelineRunner
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"

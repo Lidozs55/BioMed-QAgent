@@ -333,7 +333,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P1** Task status 返回当前 stage 和终态
 - [x] **P1** Artifact API 只列出 manifest 中已验证文件
 - [x] **P1** Artifact 下载使用 artifact_id，不接受任意 path
-- [ ] **P1** 支持任务取消
+- [x] **P1** 支持任务取消
 - [x] **P1** 统一 WebSocket event envelope
 - [x] **P1** 统一 schema_version、event_id、task_id、stage_attempt_id、sequence、timestamp、payload
 - [x] **P1** payload 使用判别联合，不接受任意 dict
