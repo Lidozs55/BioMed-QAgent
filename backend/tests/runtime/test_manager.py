@@ -1872,6 +1872,60 @@ async def test_queued_cancellation_is_ordered_and_skips_executor(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_queued_cancellation_keeps_admitted_input_after_restart(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+
+    async def run(_execution) -> None:
+        raise AssertionError("queued cancelled Run must not reach its executor")
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager._semaphore.acquire()
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_cancelled_queued_input"))
+        accepted = await manager.submit_run(
+            "task_cancelled_queued_input",
+            StartRunRequest(
+                request_id="req_cancelled_queued_input",
+                input="keep this queued question",
+            ),
+        )
+
+        admitted = await repository.get_snapshot(accepted.task_id)
+        assert admitted is not None
+        assert [message.content for message in admitted.messages] == [
+            "keep this queued question"
+        ]
+
+        cancelled = await manager.cancel_run(accepted.task_id, accepted.run_id)
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        assert [message.content for message in cancelled.messages] == [
+            "keep this queued question"
+        ]
+    finally:
+        await manager.close()
+        manager._semaphore.release()
+
+    reopened = TaskRepository(output_dir)
+    await reopened.initialize()
+    try:
+        recovered = await reopened.get_snapshot(accepted.task_id)
+        assert recovered is not None
+        assert recovered.runs[-1].status is RunStatus.CANCELLED
+        assert [
+            (message.run_id, message.content) for message in recovered.messages
+        ] == [(accepted.run_id, "keep this queued question")]
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "blocked_payload_type",
     [RunCancelRequestedPayload, RunCancelledPayload],
@@ -2859,6 +2913,43 @@ async def test_worker_survives_finalization_failure_and_runs_next_item(
 
 
 @pytest.mark.asyncio
+async def test_default_context_uses_repository_task_root_for_execution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ambient_output = tmp_path / "ambient-output"
+    monkeypatch.setattr(
+        "app.tools.workdir.settings",
+        Settings(output_dir=str(ambient_output)),
+    )
+    repository = TaskRepository(tmp_path / "configured-output")
+    contexts: list[RunContext] = []
+
+    async def run(execution) -> None:
+        contexts.append(execution.context)
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_repository_context_root",
+                input="write into the configured task root",
+            )
+        )
+        await manager.wait_until_idle()
+
+        assert len(contexts) == 1
+        expected_root = (repository.tasks_dir / accepted.task_id).resolve()
+        assert contexts[0].work_dir.root == expected_root
+        assert expected_root.is_dir()
+        assert not (ambient_output / "tasks" / accepted.task_id).exists()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_context_setup_failure_terminalizes_before_worker_continues(
     tmp_path,
 ) -> None:
@@ -2907,10 +2998,45 @@ async def test_context_setup_failure_terminalizes_before_worker_continues(
         assert failed.runs[-1].run_id == first.run_id
         assert failed.runs[-1].status is RunStatus.FAILED
         assert "simulated context setup failure" in (failed.runs[-1].error or "")
+        assert [
+            (message.run_id, message.content) for message in failed.messages
+        ] == [(first.run_id, "first")]
         assert completed is not None
         assert completed.runs[-1].status is RunStatus.COMPLETED
         assert executor_tasks == ["task_setup_next"]
         assert manager._queue.qsize() == 0
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_executor_failure_before_sdk_keeps_admitted_input(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def fail_before_sdk(_execution) -> None:
+        raise RuntimeError("simulated pre-SDK executor failure")
+
+    manager = manager_module.TaskManager(repository, run_executor=fail_before_sdk)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_executor_input_failure"))
+        accepted = await manager.submit_run(
+            "task_executor_input_failure",
+            StartRunRequest(
+                request_id="req_executor_input_failure",
+                input="preserve this failed question",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert failed.runs[-1].error == "simulated pre-SDK executor failure"
+        assert [
+            (message.run_id, message.content) for message in failed.messages
+        ] == [(accepted.run_id, "preserve this failed question")]
     finally:
         await manager.close()
 

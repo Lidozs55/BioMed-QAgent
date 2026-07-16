@@ -117,6 +117,224 @@ async def test_unscoped_session_projects_explicit_fixture_run_input(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_admitted_inputs_are_hidden_from_the_current_sdk_turn_and_deduplicated(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    first = DurableTaskSession("task_123", tasks_dir, run_id="run_first")
+
+    assert await first.add_run_input_once("run_first", "repeat this question")
+    assert await first.get_items() == []
+    assert [
+        (message.run_id, message.role.value, message.content)
+        for message in (await first.get_message_page()).messages
+    ] == [("run_first", "user", "repeat this question")]
+
+    await first.add_items(
+        [
+            user_item("repeat this question"),
+            assistant_item("first answer"),
+        ]
+    )
+    assert await first.get_items() == [
+        user_item("repeat this question"),
+        assistant_item("first answer"),
+    ]
+
+    second = DurableTaskSession("task_123", tasks_dir, run_id="run_second")
+    assert await second.add_run_input_once("run_second", "repeat this question")
+    assert await second.get_items() == [
+        user_item("repeat this question"),
+        assistant_item("first answer"),
+    ]
+
+    await second.add_items(
+        [
+            user_item("repeat this question"),
+            assistant_item("second answer"),
+        ]
+    )
+    future = DurableTaskSession("task_123", tasks_dir, run_id="run_future")
+    assert await future.get_items() == [
+        user_item("repeat this question"),
+        assistant_item("first answer"),
+        user_item("repeat this question"),
+        assistant_item("second answer"),
+    ]
+    assert [
+        (message.run_id, message.role.value, message.content)
+        for message in (await future.get_message_page()).messages
+    ] == [
+        ("run_first", "user", "repeat this question"),
+        ("run_first", "assistant", "first answer"),
+        ("run_second", "user", "repeat this question"),
+        ("run_second", "assistant", "second answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admitted_input_reconciles_sdk_structured_user_content(tmp_path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    current = DurableTaskSession("task_123", tasks_dir, run_id="run_structured")
+    structured_user = {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "structured question"}],
+    }
+
+    assert await current.add_run_input_once("run_structured", "structured question")
+    await current.add_items([structured_user, assistant_item("structured answer")])
+
+    future = DurableTaskSession("task_123", tasks_dir, run_id="run_future")
+    assert await future.get_items() == [
+        structured_user,
+        assistant_item("structured answer"),
+    ]
+    assert [
+        (message.role.value, message.content)
+        for message in (await future.get_message_page()).messages
+    ] == [
+        ("user", "structured question"),
+        ("assistant", "structured answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_add_run_input_once_recognizes_legacy_equivalent_sdk_user_input(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    legacy_item = {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "legacy question"}],
+    }
+    legacy = DurableTaskSession(
+        "task_123",
+        tasks_dir,
+        run_id="run_legacy",
+    )
+    await legacy.add_items([legacy_item])
+    original_record = json.loads(legacy.path.read_text("utf-8"))
+    assert original_record["source_run_id"] == "run_legacy"
+    assert "manager_run_input" not in original_record
+
+    manager_session = DurableTaskSession("task_123", tasks_dir)
+    assert not await manager_session.add_run_input_once(
+        "run_legacy",
+        "legacy question",
+    )
+
+    assert await manager_session.get_items() == [legacy_item]
+    assert [
+        (message.run_id, message.role.value, message.content)
+        for message in (await manager_session.get_message_page()).messages
+    ] == [("run_legacy", "user", "legacy question")]
+    assert len(legacy.path.read_text("utf-8").splitlines()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_item",
+    [
+        assistant_item("expected question"),
+        {
+            "type": "function_call_output",
+            "call_id": "call_legacy",
+            "output": "expected question",
+        },
+        user_item("different question"),
+    ],
+    ids=["assistant", "tool", "different-user-content"],
+)
+async def test_add_run_input_once_does_not_mistake_other_legacy_items_for_input(
+    tmp_path,
+    legacy_item,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    legacy = DurableTaskSession(
+        "task_123",
+        tasks_dir,
+        run_id="run_legacy",
+    )
+    await legacy.add_items([legacy_item])
+
+    manager_session = DurableTaskSession("task_123", tasks_dir)
+    assert await manager_session.add_run_input_once(
+        "run_legacy",
+        "expected question",
+    )
+
+    records = [
+        json.loads(line) for line in legacy.path.read_text("utf-8").splitlines()
+    ]
+    assert len(records) == 2
+    assert records[-1]["manager_run_input"] is True
+    page = await manager_session.get_message_page()
+    assert page.messages[-1].role.value == "user"
+    assert page.messages[-1].content == "expected question"
+
+
+@pytest.mark.asyncio
+async def test_pop_returns_none_when_current_run_has_only_a_hidden_input(
+    tmp_path,
+) -> None:
+    session = DurableTaskSession(
+        "task_123",
+        tmp_path / "tasks",
+        run_id="run_current",
+    )
+    assert await session.add_run_input_once("run_current", "current question")
+    persisted = session.path.read_bytes()
+    assert await session.get_items() == []
+
+    assert await session.pop_item() is None
+
+    assert session.path.read_bytes() == persisted
+    page = await session.get_message_page()
+    assert [(message.run_id, message.content) for message in page.messages] == [
+        ("run_current", "current question")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pop_removes_sdk_visible_tail_before_hidden_current_run_input(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    previous = DurableTaskSession(
+        "task_123",
+        tasks_dir,
+        run_id="run_previous",
+    )
+    await previous.add_items([assistant_item("previous answer")])
+    current = DurableTaskSession(
+        "task_123",
+        tasks_dir,
+        run_id="run_current",
+    )
+    assert await current.add_run_input_once("run_current", "current question")
+    assert await current.get_items() == [assistant_item("previous answer")]
+
+    assert await current.pop_item() == assistant_item("previous answer")
+    assert await current.get_items() == []
+
+    records = [
+        json.loads(line) for line in current.path.read_text("utf-8").splitlines()
+    ]
+    assert records[-1]["op"] == "pop"
+    assert records[-1]["target_ordinal"] == 1
+    reopened = DurableTaskSession(
+        "task_123",
+        tasks_dir,
+        run_id="run_current",
+    )
+    assert await reopened.get_items() == []
+    reopened_page = await reopened.get_message_page()
+    assert [message.content for message in reopened_page.messages] == [
+        "current question"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_session_recovers_a_malformed_trailing_jsonl_record(
     tmp_path,
 ) -> None:

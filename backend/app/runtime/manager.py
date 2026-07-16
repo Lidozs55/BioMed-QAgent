@@ -385,9 +385,13 @@ class TaskManager:
         self.max_active_runs = max_active_runs
         self.max_queued_runs = max_queued_runs
         self.event_hub = event_hub or EventHub()
-        self._context_factory = context_factory or (
-            lambda task_id: RunContext(task_id=task_id)
-        )
+        if context_factory is None:
+            self._context_factory = lambda task_id: RunContext(
+                task_id=task_id,
+                base_dir=repository.tasks_dir,
+            )
+        else:
+            self._context_factory = context_factory
         self._queue = _RemovableRunQueue(max_queued_runs)
         self._semaphore = asyncio.Semaphore(max_active_runs)
         self._admission_lock = asyncio.Lock()
@@ -606,6 +610,10 @@ class TaskManager:
         )
         await self.repository.append_event(event)
         try:
+            await self.repository.task_session(accepted.task_id).add_run_input_once(
+                accepted.run_id,
+                input_value,
+            )
             await self.repository.record_request(accepted)
             await self.event_hub.publish(event)
         finally:
@@ -677,11 +685,12 @@ class TaskManager:
                         task_id=task_id,
                         run_id=run_id,
                     )
-                    return await self._append_status(
+                    await self._append_status(
                         accepted,
                         RunCancelledPayload(reason=reason),
                         after_persist=lambda _: self._queue.remove((task_id, run_id)),
                     )
+                    return await self._require_snapshot(task_id)
                 if run.status not in {
                     RunStatus.RUNNING,
                     RunStatus.FINALIZING,
@@ -713,12 +722,12 @@ class TaskManager:
                     RunCancelRequestedPayload(reason=reason),
                     after_persist=lambda _: self._queue.remove((task_id, run_id)),
                 )
-                cancelled = await self._append_status(
+                await self._append_status(
                     accepted,
                     RunCancelledPayload(reason=reason),
                     after_persist=lambda _: self._queue.remove((task_id, run_id)),
                 )
-                return cancelled
+                return await self._require_snapshot(task_id)
 
         await execution.cancel_after_turn()
         await execution.wait_until_drained()
@@ -734,7 +743,7 @@ class TaskManager:
                 return snapshot
             if run.status is not RunStatus.CANCEL_REQUESTED:
                 raise RuntimeError(f"run {run_id} left cancellation state")
-            cancelled = await self._append_status(
+            await self._append_status(
                 accepted,
                 RunCancelledPayload(reason=reason),
                 after_persist=lambda _: self._running.pop(
@@ -742,7 +751,13 @@ class TaskManager:
                     None,
                 ),
             )
-            return cancelled
+            return await self._require_snapshot(task_id)
+
+    async def _require_snapshot(self, task_id: str) -> TaskSnapshot:
+        snapshot = await self.repository.get_snapshot(task_id)
+        if snapshot is None:
+            raise LookupError(task_id)
+        return snapshot
 
     async def wait_until_idle(self) -> None:
         await self._queue.join()
@@ -771,6 +786,10 @@ class TaskManager:
                 request_id=run.request_id,
                 task_id=summary.task_id,
                 run_id=run.run_id,
+            )
+            await self.repository.task_session(summary.task_id).add_run_input_once(
+                run.run_id,
+                run.input,
             )
             if run.status is RunStatus.QUEUED:
                 queued.append(
