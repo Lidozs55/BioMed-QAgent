@@ -66,7 +66,7 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 - [ ] **P0** Xena 不再因固定 URL 返回 403
 - [x] **P0** 数据库 API 启动后稳定列出数据库，不依赖模块导入顺序
 - [x] **P0** 数据库 API 不混入 analysis/self-evolution 等非数据库 Skill
-- [ ] **P0** WebSocket 事件前后端使用同一 schema
+- [x] **P0** WebSocket 事件前后端使用同一 schema
 - [x] **P0** 前端 WebSocket 连接与发送使用同一 client 实例
 - [x] **P0** fixture REST 流程的 task_id 从创建、执行到 Artifact 下载完整贯通
 - [x] **P0** fixture 真实流程输出可追溯产物，而非 mock 数据

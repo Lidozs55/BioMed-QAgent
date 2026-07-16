@@ -104,12 +104,22 @@ export function ToolTrace() {
 											</div>
 										</CardHeader>
 										{(t.arguments || t.output || t.message) && (
-											<CardContent>
-												<pre className="whitespace-pre-wrap break-all font-mono text-[0.625rem] leading-relaxed text-muted-foreground">
-													{t.arguments ?? t.output ?? t.message}
-												</pre>
-											</CardContent>
-										)}
+										<CardContent>
+											<pre className="whitespace-pre-wrap break-all font-mono text-[0.625rem] leading-relaxed text-muted-foreground">
+												{t.arguments ?? t.output ?? t.message}
+											</pre>
+											{t.truncated && (
+												<p className="mt-1 text-[0.625rem] text-amber-600 dark:text-amber-400">
+													输出已截断
+												</p>
+											)}
+											{t.code && (
+												<p className="mt-1 text-[0.625rem] text-muted-foreground">
+													code: {t.code}
+												</p>
+											)}
+										</CardContent>
+									)}
 									</Card>
 								);
 							})}
