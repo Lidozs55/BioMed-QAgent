@@ -48,10 +48,31 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+_DEFAULT_MAX_LINEAGE_CHECKS = 100
+
+
+def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[dict[str, str]]:
+    """Select up to ``max_samples`` rows deterministically by record_id hash.
+
+    The sampling is stable across runs: the same input always yields the same
+    subset, which makes validation failures reproducible.
+    """
+    if len(rows) <= max_samples:
+        return rows
+    scored = [
+        (hashlib.sha256(row["record_id"].encode("utf-8")).digest(), row)
+        for row in rows
+    ]
+    scored.sort(key=lambda item: item[0])
+    return [row for _hash, row in scored[:max_samples]]
+
+
 def _validate_package(
     staging: Path,
     source_path: Path,
     report_path: Path,
+    *,
+    max_lineage_checks: int = _DEFAULT_MAX_LINEAGE_CHECKS,
 ) -> tuple[ValidationSummary, list[dict[str, object]]]:
     """Run all validation checks on the staging package."""
     main_rows = _read_csv(staging / "main_data.csv")
@@ -141,8 +162,9 @@ def _validate_package(
 
     with gzip.open(source_path, "rt", encoding="utf-8", newline="") as handle:
         source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    sampled_rows = _deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
-    for row in main_rows:
+    for row in sampled_rows:
         line_index = int(row["source_line_number"]) - 1
         column_index = int(row["source_column_index"])
         try:
@@ -158,11 +180,13 @@ def _validate_package(
         {
             "check_id": "source_value_lineage",
             "scope": "main_data",
-            "check_name": "every pinned value matches its source locator",
+            "check_name": "sampled values match source locator",
             "status": "passed" if lineage_failures == 0 else "failed",
-            "checked_count": len(main_rows),
+            "checked_count": len(sampled_rows),
             "failed_count": lineage_failures,
-            "details": "",
+            "details": json.dumps(
+                {"total_rows": len(main_rows), "sampled": len(sampled_rows)}
+            ),
         }
     )
     # Warnings ↔ processing-log metrics consistency.

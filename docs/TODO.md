@@ -61,7 +61,7 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 ### 3.2 未通过验收的现状
 
 - [x] **P0** 干净环境不配置模型 Key 时测试仍可运行（235 passed，2026-07-13）
-- [ ] **P0** 真实 Agent Demo 在总超时内产生终态
+- [x] **P0** 真实 Agent Demo 在总超时内产生终态
 - [x] **P0** GEO 查询返回真实 GSE accession，而不是把数值 GDS ID 传给 GEOparse
 - [ ] **P0** Xena 不再因固定 URL 返回 403
 - [x] **P0** 数据库 API 启动后稳定列出数据库，不依赖模块导入顺序
@@ -72,7 +72,7 @@ Mock 流程只能用于开发烟雾测试，不作为比赛验收结果。
 - [x] **P0** fixture 真实流程输出可追溯产物，而非 mock 数据
 - [x] **P0** 主数据只包含 gene + sample 一种记录粒度
 - [x] **P0** 每个源数据派生测量有精确 SourceLocator
-- [ ] **P0** 非空 warnings 与汇总 metrics 计数一致（fixture 当前为 0 warning）
+- [x] **P0** 非空 warnings 与汇总 metrics 计数一致（fixture 当前为 0 warning）
 - [x] **P0** 正式产物实际位于任务 artifacts/ 并可通过 API 下载
 - [x] **P1** 建立前端 Vitest、TypeScript、ESLint 和 build 门禁
 
@@ -124,9 +124,9 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 来源文件不可被覆盖
 - [x] **P0** Artifact 只能从 staging 验证后提升
 - [x] **P0** API 只公开已验证 manifest 注册的 artifacts/
-- [ ] **P0** 增加任务级锁
+- [x] **P0** 增加任务级锁
 - [x] **P0** 增加 SHA-256 内容寻址 blob cache
-- [ ] **P0** accession/URL/request 参数映射查询缓存，关键词不作资产身份
+- [x] **P0** accession/URL/request 参数映射查询缓存，关键词不作资产身份
 
 ### 4.3 TDD 验收
 
@@ -267,7 +267,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 验证所有主表字段都有字段说明
 - [x] **P0** 验证每个源数据派生测量有完整 SourceLocator
 - [x] **P0** 固定 GSE178352 案例全量回溯 expression value
-- [ ] **P0** 一般任务全量检查结构，默认确定性抽样 100 个源数据值
+- [x] **P0** 一般任务全量检查结构，默认确定性抽样 100 个源数据值
 - [x] **P0** 验证 processing log 完整
 - [x] **P0** 验证非空 warnings 与 metrics 一致
 - [x] **P0** 验证必需 Artifact 存在且 schema 完整
@@ -288,7 +288,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 每个任务保证 completed 或 failed 终态
 - [x] **P0** 正式流程失败时禁止自动切换 mock success
 - [x] **P0** 支持离线 fixture 模式
-- [ ] **P0** 支持显式 live 模式
+- [x] **P0** 支持显式 live 模式
 - [x] **P0** mock 模式必须显式标记且不能通过 live 验收
 - [x] **P0** 支持 cancel requested、cancelled、recovered 和 skipped 状态
 
@@ -319,8 +319,8 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 实时获取 GSE178352 元数据
 - [x] **P0** 实时下载完整 4,597,797 bytes counts 文件
 - [x] **P0** 校验样本 ID、size 和 SHA-256
-- [ ] **P0** 最小 Qwen TaskSpecification 测试
-- [ ] **P0** 完整 live 流程在总超时内产生终态
+- [x] **P0** 最小 Qwen TaskSpecification 测试
+- [x] **P0** 完整 live 流程在总超时内产生终态
 
 ## 11. Phase 2：Agent 与 API
 
@@ -374,7 +374,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 
 以下条件必须在同一轮新鲜验证中全部满足：
 
-- [x] 默认 pytest 无真实 Key 通过（235 passed，1 live deselected，2026-07-13）
+- [x] 默认 pytest 无真实 Key 通过（434 passed，20 live deselected，2026-07-16）
 - [x] pinned fixture Pipeline 生成全部 14 个必需文件及正式 RunManifest
 - [x] 主数据只包含 gene + sample 粒度
 - [x] dataset_id、sample_id、source_id 和 asset_id 外键全部有效

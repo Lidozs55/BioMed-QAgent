@@ -135,12 +135,20 @@ async def _handle_run_pipeline(websocket: WebSocket, msg: dict) -> None:
         await websocket.send_json({"type": "error", "message": "无效 task_id"})
         return
 
+    mode = msg.get("mode", "fixture")
+    if mode not in ("fixture", "live"):
+        await websocket.send_json(
+            {"type": "error", "message": "mode must be 'fixture' or 'live'"}
+        )
+        return
+
     base_dir = Path(settings.output_dir) / "tasks"
     runner = PipelineRunner(
         task_id=task_id,
         base_dir=base_dir,
         fixture_dir=_FIXTURE_DIR,
         topic=topic,
+        mode=mode,
     )
     _active_runners[task_id] = runner
 

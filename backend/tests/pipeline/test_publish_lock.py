@@ -189,3 +189,81 @@ def test_publish_to_empty_artifacts(tmp_path: Path) -> None:
     assert artifacts.is_dir()
     assert (artifacts / "main_data.csv").read_text(encoding="utf-8") == "h\n"
     assert (state_dir / "publish_completed.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Task-level runner lock (TODO §4.2 line 127)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_task_lock_created_during_run(tmp_path: Path) -> None:
+    """PipelineRunner holds task_running.lock for the duration of run()."""
+    lock_file = tmp_path / "tasks" / "task_runner_lock" / "state" / "task_running.lock"
+    observed: list[bool] = []
+
+    runner = PipelineRunner(
+        task_id="task_runner_lock",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    # Patch _run_inner to observe the lock file mid-execution.
+    real_run_inner = runner._run_inner  # noqa: SLF001
+
+    async def patched_run_inner():
+        # Observe lock file exists while we are inside _run_inner.
+        observed.append(lock_file.is_file())
+        return await real_run_inner()
+
+    runner._run_inner = patched_run_inner  # type: ignore[method-assign] # noqa: SLF001
+
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state.value == "completed"
+    assert observed == [True], "lock file must exist during _run_inner"
+    # Lock is released after run completes.
+    assert not lock_file.is_file(), "lock file must be released after run"
+
+
+def test_runner_lock_blocks_concurrent_runner(tmp_path: Path) -> None:
+    """A second PipelineRunner on the same task_id times out waiting for the lock."""
+    lock_file = tmp_path / "tasks" / "task_concurrent" / "state" / "task_running.lock"
+
+    # Hold the lock manually to simulate an in-progress run.
+    holder = TaskLock(lock_file, timeout=1.0)
+    holder.acquire()
+    try:
+        runner = PipelineRunner(
+            task_id="task_concurrent",
+            base_dir=tmp_path / "tasks",
+            fixture_dir=FIXTURE_DIR,
+        )
+        # Reduce total timeout so the test doesn't wait the full 300s.
+        runner.total_timeout = 2.0
+        # The lock acquisition should time out and the manifest be failed.
+        manifest = asyncio.run(runner.run())
+        assert manifest.task_state.value == "failed"
+        assert manifest.validation.status == "invalid"
+        assert manifest.validation.failed_count >= 1
+    finally:
+        holder.release()
+
+
+def test_runner_lock_released_on_exception(tmp_path: Path) -> None:
+    """If _run_inner raises, the task lock is still released."""
+    lock_file = tmp_path / "tasks" / "task_lock_exc" / "state" / "task_running.lock"
+
+    runner = PipelineRunner(
+        task_id="task_lock_exc",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    async def raise_inner():
+        msg = "simulated inner failure"
+        raise ValueError(msg)
+
+    runner._run_inner = raise_inner  # type: ignore[method-assign] # noqa: SLF001
+
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state.value == "failed"
+    assert not lock_file.is_file(), "lock must be released even on exception"

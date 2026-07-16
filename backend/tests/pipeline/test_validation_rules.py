@@ -87,13 +87,14 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _build_source_tsv() -> bytes:
-    """Build a minimal gzipped TSV source file with 2 genes × 2 samples."""
-    lines = [
-        "gene_id\tsample1\tsample2",
-        "ENSG001\t10.0\t20.0",
-        "ENSG002\t30.0\t40.0",
-    ]
+def _build_source_tsv(num_genes: int = 2, num_samples: int = 2) -> bytes:
+    """Build a gzipped TSV source file with the given number of genes and samples."""
+    header = "gene_id\t" + "\t".join(f"sample{i}" for i in range(1, num_samples + 1))
+    lines = [header]
+    for g in range(1, num_genes + 1):
+        gene_id = f"ENSG{g:03d}"
+        values = [str(float(g * 10 + s)) for s in range(1, num_samples + 1)]
+        lines.append(gene_id + "\t" + "\t".join(values))
     text = "\n".join(lines) + "\n"
     return gzip.compress(text.encode("utf-8"))
 
@@ -102,6 +103,8 @@ def _build_valid_staging(
     staging: Path,
     source_path: Path,
     source_content: bytes | None = None,
+    num_genes: int = 2,
+    num_samples: int = 2,
 ) -> None:
     """Build a complete valid staging package in *staging*.
 
@@ -109,7 +112,7 @@ def _build_valid_staging(
     All CSVs are internally consistent so every validation check passes.
     """
     if source_content is None:
-        source_content = _build_source_tsv()
+        source_content = _build_source_tsv(num_genes, num_samples)
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_bytes(source_content)
 
@@ -119,73 +122,54 @@ def _build_valid_staging(
     size_bytes = len(source_content)
     sha256 = _sha256_bytes(source_content)
 
-    # --- main_data.csv (long form: 4 rows = 2 genes × 2 samples) ---
-    main_rows = [
-        {"record_id": "r1", "dataset_id": "ds1", "source_id": "src_geo",
-         "asset_id": "asset_1", "gene_id_raw": "ENSG001", "gene_id": "ENSG001",
-         "gene_id_namespace": "Ensembl", "gene_id_version": "",
-         "sample_id": "GSM001", "source_sample_alias": "sample1",
-         "measurement_type": "count", "value_semantics": "float",
-         "value_scale": "raw", "is_normalized": "false",
-         "is_integer_expected": "false", "expression_value": "10.0",
-         "expression_unit": "count", "source_logical_file": "source.tsv",
-         "source_line_number": "2", "source_column_index": "1",
-         "source_column_name": "sample1", "source_raw_value": "10.0"},
-        {"record_id": "r2", "dataset_id": "ds1", "source_id": "src_geo",
-         "asset_id": "asset_1", "gene_id_raw": "ENSG002", "gene_id": "ENSG002",
-         "gene_id_namespace": "Ensembl", "gene_id_version": "",
-         "sample_id": "GSM001", "source_sample_alias": "sample1",
-         "measurement_type": "count", "value_semantics": "float",
-         "value_scale": "raw", "is_normalized": "false",
-         "is_integer_expected": "false", "expression_value": "30.0",
-         "expression_unit": "count", "source_logical_file": "source.tsv",
-         "source_line_number": "3", "source_column_index": "1",
-         "source_column_name": "sample1", "source_raw_value": "30.0"},
-        {"record_id": "r3", "dataset_id": "ds1", "source_id": "src_geo",
-         "asset_id": "asset_1", "gene_id_raw": "ENSG001", "gene_id": "ENSG001",
-         "gene_id_namespace": "Ensembl", "gene_id_version": "",
-         "sample_id": "GSM002", "source_sample_alias": "sample2",
-         "measurement_type": "count", "value_semantics": "float",
-         "value_scale": "raw", "is_normalized": "false",
-         "is_integer_expected": "false", "expression_value": "20.0",
-         "expression_unit": "count", "source_logical_file": "source.tsv",
-         "source_line_number": "2", "source_column_index": "2",
-         "source_column_name": "sample2", "source_raw_value": "20.0"},
-        {"record_id": "r4", "dataset_id": "ds1", "source_id": "src_geo",
-         "asset_id": "asset_1", "gene_id_raw": "ENSG002", "gene_id": "ENSG002",
-         "gene_id_namespace": "Ensembl", "gene_id_version": "",
-         "sample_id": "GSM002", "source_sample_alias": "sample2",
-         "measurement_type": "count", "value_semantics": "float",
-         "value_scale": "raw", "is_normalized": "false",
-         "is_integer_expected": "false", "expression_value": "40.0",
-         "expression_unit": "count", "source_logical_file": "source.tsv",
-         "source_line_number": "3", "source_column_index": "2",
-         "source_column_name": "sample2", "source_raw_value": "40.0"},
-    ]
+    # --- main_data.csv (long form: num_genes * num_samples rows) ---
+    main_rows = []
+    record_idx = 0
+    for g in range(1, num_genes + 1):
+        gene_id = f"ENSG{g:03d}"
+        source_line = g + 1  # 1-based, header is line 1
+        for s in range(1, num_samples + 1):
+            sample_id = f"GSM{s:03d}"
+            sample_alias = f"sample{s}"
+            source_col = s  # 0-based, gene_id is column 0
+            value = str(float(g * 10 + s))
+            record_idx += 1
+            main_rows.append({
+                "record_id": f"r{record_idx}",
+                "dataset_id": "ds1", "source_id": "src_geo",
+                "asset_id": "asset_1", "gene_id_raw": gene_id, "gene_id": gene_id,
+                "gene_id_namespace": "Ensembl", "gene_id_version": "",
+                "sample_id": sample_id, "source_sample_alias": sample_alias,
+                "measurement_type": "count", "value_semantics": "float",
+                "value_scale": "raw", "is_normalized": "false",
+                "is_integer_expected": "false", "expression_value": value,
+                "expression_unit": "count", "source_logical_file": "source.tsv",
+                "source_line_number": str(source_line),
+                "source_column_index": str(source_col),
+                "source_column_name": sample_alias, "source_raw_value": value,
+            })
     _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, main_rows)
 
     # --- dataset_catalog.csv ---
     _write_csv(staging / "dataset_catalog.csv", _DATASET_CATALOG_COLUMNS, [
         {"dataset_id": "ds1", "source_id": "src_geo", "database": "geo",
          "accession": "GSE999999", "title": "Test", "organism": "Homo sapiens",
-         "experiment_type": "RNA-Seq", "sample_count": 2,
+         "experiment_type": "RNA-Seq", "sample_count": str(num_samples),
          "platform_ids": "[]", "related_pmids": "[]",
          "source_url": "https://example.test", "retrieved_at": "2026-01-01T00:00:00"},
     ])
 
     # --- sample_metadata.csv ---
-    _write_csv(staging / "sample_metadata.csv", _SAMPLE_METADATA_COLUMNS, [
-        {"sample_id": "GSM001", "dataset_id": "ds1", "source_id": "src_geo",
-         "source_sample_alias": "sample1", "cell_line_raw": "",
-         "cell_line_canonical": "", "normalization_rule": "",
-         "treatment": "", "replicate": "", "organism": "Homo sapiens",
-         "source_url": "https://example.test"},
-        {"sample_id": "GSM002", "dataset_id": "ds1", "source_id": "src_geo",
-         "source_sample_alias": "sample2", "cell_line_raw": "",
-         "cell_line_canonical": "", "normalization_rule": "",
-         "treatment": "", "replicate": "", "organism": "Homo sapiens",
-         "source_url": "https://example.test"},
-    ])
+    sample_rows = []
+    for s in range(1, num_samples + 1):
+        sample_rows.append({
+            "sample_id": f"GSM{s:03d}", "dataset_id": "ds1", "source_id": "src_geo",
+            "source_sample_alias": f"sample{s}", "cell_line_raw": "",
+            "cell_line_canonical": "", "normalization_rule": "",
+            "treatment": "", "replicate": "", "organism": "Homo sapiens",
+            "source_url": "https://example.test",
+        })
+    _write_csv(staging / "sample_metadata.csv", _SAMPLE_METADATA_COLUMNS, sample_rows)
 
     # --- source_list.csv ---
     _write_csv(staging / "source_list.csv", _SOURCE_LIST_COLUMNS, [
@@ -541,6 +525,38 @@ def test_warnings_consistency_passes_when_empty(tmp_path: Path) -> None:
     assert wc["status"] == "passed"
 
 
+def test_warnings_consistency_passes_when_non_empty_and_matched(tmp_path: Path) -> None:
+    """Non-empty warnings that match processing_log warnings count should pass."""
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    # Add 2 warning rows to warnings.csv
+    _write_csv(staging / "warnings.csv", _WARNINGS_COLUMNS, [
+        {"warning_id": "w1", "severity": "low", "stage": "processing",
+         "code": "non_numeric_value", "message": "test warning 1",
+         "source_id": "src_geo", "asset_id": "asset_1",
+         "record_id": "r1", "created_at": "2026-01-01T00:00:00"},
+        {"warning_id": "w2", "severity": "medium", "stage": "processing",
+         "code": "duplicate_gene", "message": "test warning 2",
+         "source_id": "src_geo", "asset_id": "asset_1",
+         "record_id": "r2", "created_at": "2026-01-01T00:00:00"},
+    ])
+
+    # Update processing_log.csv warnings field to contain 2 matching warning objects
+    proc_rows = _read_csv(staging / "processing_log.csv")
+    proc_rows[0]["warnings"] = json.dumps([
+        {"code": "non_numeric_value", "message": "test warning 1"},
+        {"code": "duplicate_gene", "message": "test warning 2"},
+    ])
+    _write_csv(staging / "processing_log.csv", _PROCESSING_LOG_COLUMNS, proc_rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    wc = _check_by_id(checks, "warnings_metrics_consistency")
+    assert wc["status"] == "passed"
+    assert wc["failed_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -549,3 +565,99 @@ def test_warnings_consistency_passes_when_empty(tmp_path: Path) -> None:
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+# ---------------------------------------------------------------------------
+# Rule 7 (NEW): deterministic sampling of source_value_lineage
+# Default 100 samples; small datasets checked fully; sampling is deterministic.
+# ---------------------------------------------------------------------------
+
+
+def test_lineage_sampling_when_rows_exceed_max(tmp_path: Path) -> None:
+    """When main_data has more rows than max_lineage_checks, only a sample is checked."""
+    import app.pipeline.stages.validation as validation_module
+
+    staging = tmp_path / "tasks" / "task_big" / "staging"
+    source_path = tmp_path / "tasks" / "task_big" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path, num_genes=30, num_samples=10)
+
+    max_checks = 5
+    summary, checks = validation_module._validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_big" / "logs" / "r.json",
+        max_lineage_checks=max_checks,
+    )
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert int(svl["checked_count"]) == max_checks
+    details = json.loads(svl["details"])
+    assert details["total_rows"] > max_checks
+    assert details["sampled"] == max_checks
+    assert svl["status"] == "passed"
+
+
+def test_lineage_full_when_rows_under_max(tmp_path: Path) -> None:
+    """When main_data has fewer rows than max_lineage_checks, all rows are checked."""
+    import app.pipeline.stages.validation as validation_module
+
+    staging = tmp_path / "tasks" / "task_small" / "staging"
+    source_path = tmp_path / "tasks" / "task_small" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)  # default 2 genes x 2 samples = 4 rows
+
+    max_checks = 100
+    summary, checks = validation_module._validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_small" / "logs" / "r.json",
+        max_lineage_checks=max_checks,
+    )
+    svl = _check_by_id(checks, "source_value_lineage")
+    rows = _read_csv(staging / "main_data.csv")
+    assert int(svl["checked_count"]) == len(rows)
+    details = json.loads(svl["details"])
+    assert details["total_rows"] == len(rows)
+    assert details["sampled"] == len(rows)
+
+
+def test_lineage_sampling_is_deterministic(tmp_path: Path) -> None:
+    """Same input produces the same sampled rows every run."""
+    import app.pipeline.stages.validation as validation_module
+
+    staging = tmp_path / "tasks" / "task_det" / "staging"
+    source_path = tmp_path / "tasks" / "task_det" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path, num_genes=20, num_samples=10)
+
+    max_checks = 8
+    _s1, checks1 = validation_module._validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_det" / "logs" / "r1.json",
+        max_lineage_checks=max_checks,
+    )
+    _s2, checks2 = validation_module._validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_det" / "logs" / "r2.json",
+        max_lineage_checks=max_checks,
+    )
+    svl1 = _check_by_id(checks1, "source_value_lineage")
+    svl2 = _check_by_id(checks2, "source_value_lineage")
+    assert svl1["checked_count"] == svl2["checked_count"]
+    assert svl1["details"] == svl2["details"]
+    assert svl1["failed_count"] == svl2["failed_count"]
+
+
+def test_sampling_detects_failure_in_sampled_row(tmp_path: Path) -> None:
+    """A corrupted value that falls in the sampled set is still detected."""
+    import app.pipeline.stages.validation as validation_module
+
+    staging = tmp_path / "tasks" / "task_fail" / "staging"
+    source_path = tmp_path / "tasks" / "task_fail" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path, num_genes=50, num_samples=10)
+
+    rows = _read_csv(staging / "main_data.csv")
+    # Corrupt several rows — with 500 rows and sample size 50, at least
+    # one corrupted row should land in the sample with overwhelming probability.
+    for i in range(0, len(rows), 10):
+        rows[i]["expression_value"] = "999999.0"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = validation_module._validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_fail" / "logs" / "r.json",
+        max_lineage_checks=50,
+    )
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert int(svl["failed_count"]) >= 1

@@ -71,7 +71,7 @@ def _tasks_base() -> Path:
 class CreateTaskRequest(ContractModel):
     topic: str = Field(min_length=1)
     databases: list[Database]
-    mode: Literal["fixture"] = "fixture"
+    mode: Literal["fixture", "live"] = "fixture"
 
     @field_validator("topic", mode="before")
     @classmethod
@@ -79,11 +79,11 @@ class CreateTaskRequest(ContractModel):
         return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def validate_fixture_sources(self) -> CreateTaskRequest:
+    def validate_sources(self) -> CreateTaskRequest:
         if set(self.databases) != {Database.PUBMED, Database.GEO}:
-            raise ValueError("fixture mode supports exactly pubmed and geo")
+            raise ValueError("pipeline supports exactly pubmed and geo")
         if len(self.databases) != 2:
-            raise ValueError("fixture databases must not contain duplicates")
+            raise ValueError("databases must not contain duplicates")
         return self
 
 
