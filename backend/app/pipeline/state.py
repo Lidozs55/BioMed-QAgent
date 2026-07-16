@@ -1,8 +1,10 @@
 """Persistent pipeline state for crash recovery and idempotent stage execution."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -114,3 +116,88 @@ def load_stage_output(state_dir: Path, stage: StageName) -> dict[str, Any] | Non
     if not output_file.exists():
         return None
     return json.loads(output_file.read_text("utf-8"))
+
+
+class TaskLock:
+    """File-based exclusive lock for the publish step (TODO §8 line 276).
+
+    Uses ``O_CREAT | O_EXCL`` atomic file creation: on both POSIX and Windows,
+    only one caller can create the lockfile; concurrent callers receive
+    ``FileExistsError`` and retry until the holder releases (deletes) the file
+    or ``timeout`` elapses, in which case ``TimeoutError`` is raised.
+
+    The lock is advisory (cooperative) — it protects the atomic publish step
+    against concurrent publishers in the same workdir (e.g. a recovery run
+    racing with a stuck prior process). It does NOT protect against external
+    writers that bypass the lock.
+    """
+
+    _DEFAULT_TIMEOUT: float = 30.0
+    _POLL_INTERVAL: float = 0.05
+
+    def __init__(
+        self, lock_file: Path, timeout: float = _DEFAULT_TIMEOUT
+    ) -> None:
+        self.lock_file = Path(lock_file)
+        self.timeout = timeout
+        self._held = False
+
+    def acquire(self) -> None:
+        """Block until the lock is acquired or ``timeout`` elapses.
+
+        Raises:
+            TimeoutError: if the lock cannot be acquired within ``timeout``.
+        """
+        if self._held:
+            raise RuntimeError("TaskLock.acquire() called while already held")
+        deadline = time.monotonic() + self.timeout
+        while True:
+            self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                fd = os.open(
+                    str(self.lock_file),
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o644,
+                )
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"could not acquire lock {self.lock_file} "
+                        f"within {self.timeout}s"
+                    ) from None
+                time.sleep(self._POLL_INTERVAL)
+                continue
+            # Write the holder PID for diagnostics; the lock is still enforced
+            # by the existence of the file, not by its contents.
+            try:
+                os.write(fd, str(os.getpid()).encode("ascii"))
+            finally:
+                os.close(fd)
+            self._held = True
+            return
+
+    def release(self) -> None:
+        """Release the lock by removing the lockfile.
+
+        Silently no-ops if the lock is not held or the file is already gone,
+        so callers can safely invoke ``release()`` in a ``finally`` block even
+        if ``acquire()`` raised.
+        """
+        if not self._held:
+            return
+        self._held = False
+        with contextlib.suppress(FileNotFoundError):
+            self.lock_file.unlink()
+
+    def __enter__(self) -> TaskLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.release()
+
+    def __del__(self) -> None:
+        # Best-effort cleanup so a forgotten release does not leak the lock
+        # until process exit. DO NOT rely on this for correctness.
+        with contextlib.suppress(Exception):
+            self.release()

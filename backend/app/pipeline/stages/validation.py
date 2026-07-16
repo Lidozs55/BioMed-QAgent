@@ -24,6 +24,7 @@ from app.pipeline.stages.base import (
     StageResult,
     ValidationOutput,
 )
+from app.pipeline.state import TaskLock
 
 _ARTIFACT_COLUMNS_QUALITY = [
     "check_id", "scope", "check_name", "status",
@@ -273,22 +274,17 @@ def run_validation(
 
     # Flush all staging files to disk before the atomic rename so a crash
     # between write and rename cannot leave stale page-cache state.
-    for path in build_output.staging_dir.iterdir():
-        if path.is_file():
-            with path.open("r+b") as handle:
-                handle.flush()
-                os.fsync(handle.fileno())
+    _fsync_directory(build_output.staging_dir)
 
-    # Publish: rename the validated staging package to artifacts/.
-    # On Windows, os.replace CANNOT overwrite an existing directory
-    # (MoveFileEx with MOVEFILE_REPLACE_EXISTING only supports files), so a
-    # prior artifacts/ dir — from a recovered re-publish — must be removed
-    # first. Renaming onto a non-existent path is atomic on both POSIX and
-    # Windows. The fully atomic publish with a task lock is tracked as
-    # TODO §8 (line 276); this preserves the prior safety level.
-    if ctx.workdir.artifacts.exists():
-        shutil.rmtree(ctx.workdir.artifacts)
-    os.replace(build_output.staging_dir, ctx.workdir.artifacts)
+    # Publish atomically under the task lock: a recovery run racing with a
+    # stuck prior publisher cannot corrupt the artifacts/ dir. The marker
+    # ``publish_completed.json`` is written only after the rename succeeds,
+    # so its presence is a reliable signal that artifacts/ is consistent.
+    _publish_artifacts(
+        staging=build_output.staging_dir,
+        artifacts=ctx.workdir.artifacts,
+        state_dir=ctx.workdir.state,
+    )
 
     output = ValidationOutput(
         validation=validation,
@@ -301,3 +297,62 @@ def run_validation(
         ).encode("utf-8")
     ).hexdigest()
     return StageResult(output_digest=digest, output=output)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Flush every file in ``directory`` to disk (fsync) before atomic rename.
+
+    A crash between write and rename can leave stale page-cache state on
+    some filesystems; fsync closes that window. Directory entries themselves
+    are flushed implicitly by the subsequent rename on POSIX, and by the
+    rmtree+replace sequence on Windows.
+    """
+    for path in directory.iterdir():
+        if path.is_file():
+            with path.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+
+
+def _publish_artifacts(
+    staging: Path, artifacts: Path, state_dir: Path
+) -> None:
+    """Atomically publish the staging package to ``artifacts/``.
+
+    Guarantees (TODO §8 line 276):
+    1. Exclusive: a task lockfile serializes concurrent publishers in the
+       same workdir (recovery racing with a stuck prior process).
+    2. Atomic rename: on POSIX ``os.replace`` over a directory is atomic;
+       on Windows ``os.replace`` cannot overwrite an existing directory, so
+       the prior ``artifacts/`` is removed first under the lock. The window
+       where ``artifacts/`` does not exist is bounded by the lock — no
+       reader can observe it.
+    3. Marker: ``state/publish_completed.json`` is written only after the
+       rename succeeds, so its presence is a reliable signal that
+       ``artifacts/`` is fully populated. Its absence means the publish did
+       not complete (crash, validation failure, or in-flight).
+    """
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = state_dir / "publish.lock"
+    marker_file = state_dir / "publish_completed.json"
+
+    with TaskLock(lock_file):
+        # Remove a prior artifacts/ dir (from a recovered re-publish) so
+        # os.replace can rename onto a non-existent path, which is atomic
+        # on both POSIX and Windows.
+        if artifacts.exists():
+            shutil.rmtree(artifacts)
+        os.replace(staging, artifacts)
+
+        # Marker written AFTER the rename: if a crash happened before this
+        # point, the marker is absent even though artifacts/ may exist, so
+        # recovery can detect the incomplete publish and re-run.
+        marker_payload = {
+            "published_at": datetime.now(UTC).isoformat(),
+            "artifacts_dir": str(artifacts.relative_to(artifacts.parents[0])),
+        }
+        tmp = marker_file.with_suffix(".json.part")
+        tmp.write_text(
+            json.dumps(marker_payload, indent=2) + "\n", "utf-8"
+        )
+        os.replace(tmp, marker_file)

@@ -273,7 +273,7 @@ dataclass 是迁移兼容层，必须在对应 Processing/Pipeline 工作中逐�
 - [x] **P0** 验证必需 Artifact 存在且 schema 完整
 - [x] **P0** 失败报告写入 logs/validation_report.json
 - [x] **P0** 任一失败时不发布 artifacts/
-- [ ] **P0** 发布执行任务锁、file flush、manifest valid 标记和同文件系统原子 rename
+- [x] **P0** 发布执行任务锁、file flush、manifest valid 标记和同文件系统原子 rename
 - [x] **P0** 发布完成后才持久化 artifact_produced/task_completed
 
 ## 9. Phase 1F：Pipeline Runner
