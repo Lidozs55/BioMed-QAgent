@@ -8,14 +8,29 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from app.domain.contracts import EventEnvelope, UserInputResumedPayload
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
+
+
+UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedPipelineBridge:
+    """Run-owned bridge from an Agent Function Tool to the durable runtime."""
+
+    run_id: str
+    event_sink: Callable[[EventEnvelope], Awaitable[None]]
+    install_user_input_submitter: Callable[[UserInputSubmitter], None]
+    clear_user_input_submitter: Callable[[UserInputSubmitter], None]
 
 
 @dataclass
@@ -69,6 +84,16 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _managed_pipeline_bridge: ManagedPipelineBridge | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _managed_terminal_error: BaseException | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -106,6 +131,37 @@ class RunContext:
         if self.managed_run_id is not None and self.managed_run_id != run_id:
             raise RuntimeError("managed run is already bound")
         self.managed_run_id = run_id
+
+    def bind_managed_pipeline_bridge(self, bridge: ManagedPipelineBridge) -> None:
+        """Bind one durable event/resume bridge to the authoritative Run."""
+
+        if self.managed_run_id != bridge.run_id:
+            raise ValueError("managed pipeline bridge run_id must match managed run")
+        if self._managed_pipeline_bridge is not None:
+            raise RuntimeError("managed pipeline bridge is already bound")
+        self._managed_pipeline_bridge = bridge
+
+    @property
+    def managed_pipeline_bridge(self) -> ManagedPipelineBridge | None:
+        """Return the authoritative Run bridge, if this is a managed context."""
+
+        return self._managed_pipeline_bridge
+
+    def set_managed_terminal_error(self, error: BaseException) -> None:
+        """Retain a Pipeline decision that must fail the authoritative Run."""
+
+        if self.managed_run_id is None:
+            raise RuntimeError("managed terminal errors require a managed run")
+        if self._managed_terminal_error is not None:
+            raise RuntimeError("managed terminal error is already installed")
+        self._managed_terminal_error = error
+
+    def take_managed_terminal_error(self) -> BaseException | None:
+        """Transfer a managed terminal error to the Agent executor once."""
+
+        error = self._managed_terminal_error
+        self._managed_terminal_error = None
+        return error
 
     def release_pipeline_publication_reservation(self) -> None:
         """Release a failed managed Pipeline Tool reservation."""

@@ -12,9 +12,9 @@ import hashlib
 import json
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -85,6 +85,7 @@ DEFAULT_STAGE_TIMEOUTS: dict[StageName, float] = {
     StageName.VALIDATION: 60.0,
 }
 TOTAL_TIMEOUT: float = 300.0
+USER_INPUT_TIMEOUT: float = 300.0
 
 
 class CancellationToken(Protocol):
@@ -96,6 +97,14 @@ PipelineEventSink = Callable[[EventEnvelope], Awaitable[None]]
 
 class PipelineEventSinkError(RuntimeError):
     """Raised when the runtime cannot durably accept a Pipeline event."""
+
+
+class PipelinePlanRejectedError(RuntimeError):
+    """Raised after a durable human rejection stops the Pipeline plan."""
+
+
+class PipelineUserInputTimeoutError(RuntimeError):
+    """Raised when an independently budgeted human-input request expires."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +170,7 @@ class PipelineRunner:
         topic: str = "breast cancer gene expression under Hsp70 inhibition",
         stage_timeouts: dict[StageName, float] | None = None,
         total_timeout: float = TOTAL_TIMEOUT,
+        user_input_timeout: float = USER_INPUT_TIMEOUT,
         mode: Literal["fixture", "live"] = "fixture",
         cancellation_requested: CancellationToken | None = None,
         defer_publication: bool = False,
@@ -172,6 +182,7 @@ class PipelineRunner:
         self.topic = topic
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
         self.total_timeout = total_timeout
+        self.user_input_timeout = user_input_timeout
         self.mode = mode
         self.cancellation_requested = cancellation_requested
         self.defer_publication = defer_publication
@@ -205,7 +216,10 @@ class PipelineRunner:
         # ``submit_user_input`` call from the runtime (POST /resume). The
         # ``_user_input_decision`` holds the resumed decision payload.
         self._user_input_event: asyncio.Event | None = None
+        self._user_input_request_id: str | None = None
         self._user_input_decision: UserInputResumedPayload | None = None
+        self._managed_terminal_error: BaseException | None = None
+        self._total_timeout_scope: asyncio.Timeout | None = None
 
     def set_event_sink(self, sink: PipelineEventSink) -> None:
         """Attach the awaitable in-memory handoff used by the durable runtime."""
@@ -301,9 +315,20 @@ class PipelineRunner:
         except TimeoutError as exc:
             return await self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         try:
-            return await asyncio.wait_for(self._run_inner(), self.total_timeout)
+            async with asyncio.timeout(self.total_timeout) as timeout_scope:
+                self._total_timeout_scope = timeout_scope
+                try:
+                    return await self._run_inner()
+                finally:
+                    self._total_timeout_scope = None
         except PipelineCancelledError:
             return await self._finalize_cancelled()
+        except PipelinePlanRejectedError as exc:
+            self._managed_terminal_error = exc
+            return await self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
+        except PipelineUserInputTimeoutError as exc:
+            self._managed_terminal_error = exc
+            return await self._finalize_failed(exc, ErrorCode.TIMEOUT)
         except PipelineEventSinkError:
             raise
         except TimeoutError:
@@ -368,11 +393,39 @@ class PipelineRunner:
         input (e.g. already cancelled, timed out, or never paused).
         """
 
-        if self._user_input_event is None:
+        if (
+            self._user_input_event is None
+            or self._user_input_request_id != decision.request_id
+            or self._user_input_decision is not None
+        ):
             return False
         self._user_input_decision = decision
         self._user_input_event.set()
         return True
+
+    def take_managed_terminal_error(self) -> BaseException | None:
+        """Return a managed-only terminal decision at most once."""
+
+        error = self._managed_terminal_error
+        self._managed_terminal_error = None
+        return error
+
+    @asynccontextmanager
+    async def _pause_total_timeout(self) -> AsyncIterator[None]:
+        """Exclude one HIL pause from the active Pipeline timeout budget."""
+
+        timeout_scope = self._total_timeout_scope
+        deadline = timeout_scope.when() if timeout_scope is not None else None
+        if timeout_scope is None or deadline is None:
+            yield
+            return
+        loop = asyncio.get_running_loop()
+        paused_at = loop.time()
+        timeout_scope.reschedule(None)
+        try:
+            yield
+        finally:
+            timeout_scope.reschedule(deadline + (loop.time() - paused_at))
 
     async def _await_user_input(
         self,
@@ -382,7 +435,7 @@ class PipelineRunner:
         summary: str,
         detail: dict[str, object] | None = None,
         expires_at: datetime | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = None,
     ) -> UserInputResumedPayload:
         """Pause the pipeline and wait for human input via POST /resume.
 
@@ -393,37 +446,84 @@ class PipelineRunner:
         seconds elapse (which raises ``TimeoutError`` handled by ``run``).
         """
 
+        timeout_seconds = self.user_input_timeout if timeout is None else timeout
+        effective_expires_at = expires_at or (
+            datetime.now(UTC) + timedelta(seconds=timeout_seconds)
+        )
         fixture_exempt = self.mode == "fixture"
         if fixture_exempt:
-            # Fixture mode auto-approves without pausing and without emitting
-            # a user_input_required event — there is no real pause to signal.
-            return UserInputResumedPayload(
+            decision = UserInputResumedPayload(
                 request_id=request_id,
                 decision="approve",
                 detail=detail or {},
             )
-        await self._emit_event(
-            UserInputRequiredPayload(
-                request_id=request_id,
-                prompt_kind=prompt_kind,
-                summary=summary,
-                expires_at=expires_at,
-                fixture_exempt=fixture_exempt,
-                detail=detail or {},
+            await self._emit_event(
+                UserInputRequiredPayload(
+                    request_id=request_id,
+                    prompt_kind=prompt_kind,
+                    summary=summary,
+                    expires_at=effective_expires_at,
+                    fixture_exempt=True,
+                    detail=detail or {},
+                )
             )
-        )
-
+            await self._emit_event(decision)
+            return decision
         event = asyncio.Event()
+        if self._user_input_event is not None:
+            raise RuntimeError("pipeline is already awaiting user input")
         self._user_input_event = event
+        self._user_input_request_id = request_id
         self._user_input_decision = None
+        decision: UserInputResumedPayload | None = None
+        wait_deadline = asyncio.get_running_loop().time() + timeout_seconds
+        input_waiter = asyncio.create_task(event.wait())
+        waiters = {input_waiter}
+        cancellation_waiter: asyncio.Task[bool] | None = None
+        if isinstance(self.cancellation_requested, asyncio.Event):
+            cancellation_waiter = asyncio.create_task(
+                self.cancellation_requested.wait()
+            )
+            waiters.add(cancellation_waiter)
         try:
-            await asyncio.wait_for(event.wait(), timeout=timeout)
-        except TimeoutError:
-            self._user_input_event = None
-            raise
-        decision = self._user_input_decision
-        self._user_input_event = None
-        self._user_input_decision = None
+            async with self._pause_total_timeout():
+                await self._emit_event(
+                    UserInputRequiredPayload(
+                        request_id=request_id,
+                        prompt_kind=prompt_kind,
+                        summary=summary,
+                        expires_at=effective_expires_at,
+                        fixture_exempt=fixture_exempt,
+                        detail=detail or {},
+                    )
+                )
+                done, _ = await asyncio.wait(
+                    waiters,
+                    timeout=max(
+                        0.0,
+                        wait_deadline - asyncio.get_running_loop().time(),
+                    ),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    raise PipelineUserInputTimeoutError(
+                        f"user input timeout for request {request_id} "
+                        f"after {timeout_seconds}s"
+                    )
+                if self._is_cancelled():
+                    raise PipelineCancelledError(
+                        "pipeline was cancelled while paused"
+                    )
+                decision = self._user_input_decision
+        finally:
+            for waiter in waiters:
+                if not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+            if self._user_input_event is event:
+                self._user_input_event = None
+                self._user_input_request_id = None
+                self._user_input_decision = None
         if decision is None:
             raise RuntimeError("user input event was set without a decision")
         await self._emit_event(decision)
@@ -457,12 +557,14 @@ class PipelineRunner:
             await self._emit_event(PlanReadyPayload(specification=specification))
             # Pause for plan confirmation (human-in-the-loop). In fixture mode
             # this is informational only and the pipeline auto-approves.
-            await self._await_user_input(
+            decision = await self._await_user_input(
                 request_id=f"plan-{self.task_id}",
                 prompt_kind="plan_confirmation",
                 summary=f"Confirm research plan for topic: {self.topic}",
                 detail=specification.model_dump(),
             )
+            if decision.decision == "reject":
+                raise PipelinePlanRejectedError("research plan was rejected by user")
 
         stage_outputs: dict[StageName, Any] = {}
         reuse_allowed = True

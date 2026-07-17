@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import app.agent_loop.runner as runner_module
+import app.pipeline.runner as pipeline_runner_module
 import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents import Agent
@@ -22,10 +23,14 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
     StartTaskRequest,
+    TaskFailedPayload,
     ToolCompletedPayload,
     ToolStartedPayload,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     build_event,
 )
 from app.pipeline.runner import PipelineRunner
@@ -58,7 +63,14 @@ class NoopCompactor:
 
 
 class ScriptedPipelineModel(Model):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str = "fixture",
+        topic: str = "real SDK managed fixture",
+    ) -> None:
+        self.mode = mode
+        self.topic = topic
         self.allow_tool_call = asyncio.Event()
         self.tool_round_entered = asyncio.Event()
         self.final_round_entered = asyncio.Event()
@@ -85,9 +97,9 @@ class ScriptedPipelineModel(Model):
             item = ResponseFunctionToolCall(
                 arguments=json.dumps(
                     {
-                        "topic": "real SDK managed fixture",
+                        "topic": self.topic,
                         "databases": ["pubmed", "geo"],
-                        "mode": "fixture",
+                        "mode": self.mode,
                     }
                 ),
                 call_id="call_real_pipeline",
@@ -1216,6 +1228,379 @@ async def test_publish_success_with_nondurable_artifact_event_stays_hidden(
             isinstance(event.payload, RunCompletedPayload) for event in events
         )
     finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_live_pipeline_pauses_durably_before_discovery_and_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery_started = asyncio.Event()
+    real_discovery = pipeline_runner_module.run_discovery
+
+    def offline_discovery(context):
+        discovery_started.set()
+        context.mode = "fixture"
+        return real_discovery(context)
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "run_discovery",
+        offline_discovery,
+    )
+    model = ScriptedPipelineModel(
+        mode="live",
+        topic="durable live approval boundary",
+    )
+    agent = Agent[RunContext](
+        name="Scripted live approval Agent",
+        instructions="Call run_research_pipeline, then answer.",
+        tools=[run_research_pipeline],
+        model=model,
+    )
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    subscription = None
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_real_sdk_live_approval",
+                input="pause the real live Tool for approval",
+                databases=["pubmed", "geo"],
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        subscription = await manager.event_hub.subscribe(
+            task_ids={accepted.task_id}
+        )
+        model.allow_tool_call.set()
+
+        while True:
+            event = await asyncio.wait_for(subscription.receive(), timeout=3)
+            if isinstance(event.payload, UserInputRequiredPayload):
+                required = event.payload
+                break
+
+        paused = await repository.get_snapshot(accepted.task_id)
+        assert paused is not None
+        assert paused.runs[-1].status.value == "awaiting_user_input"
+        assert required.request_id == f"plan-{accepted.task_id}"
+        assert not discovery_started.is_set()
+        events_before_resume = await repository.list_events(accepted.task_id)
+        assert not any(
+            event.payload.type.value == "stage_started"
+            for event in events_before_resume
+        )
+
+        await manager.resume_run(
+            accepted.task_id,
+            accepted.run_id,
+            request_id=required.request_id,
+            decision="approve",
+        )
+        await asyncio.wait_for(model.final_round_entered.wait(), timeout=5)
+        model.release_final_answer.set()
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status.value == "completed"
+        assert discovery_started.is_set()
+        events = await repository.list_events(accepted.task_id)
+        required_index = next(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.payload, UserInputRequiredPayload)
+        )
+        resumed_index = next(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.payload, UserInputResumedPayload)
+        )
+        assert required_index < resumed_index
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        if subscription is not None:
+            await subscription.close()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_live_pipeline_rejection_fails_authoritative_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery_started = asyncio.Event()
+
+    def unexpected_discovery(context):
+        discovery_started.set()
+        raise AssertionError("Discovery must not start after plan rejection")
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "run_discovery",
+        unexpected_discovery,
+    )
+    model = ScriptedPipelineModel(
+        mode="live",
+        topic="durable live rejection boundary",
+    )
+    agent = Agent[RunContext](
+        name="Scripted live rejection Agent",
+        instructions="Call run_research_pipeline, then answer.",
+        tools=[run_research_pipeline],
+        model=model,
+    )
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    subscription = None
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_real_sdk_live_rejection",
+                input="reject the real live Tool plan",
+                databases=["pubmed", "geo"],
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        subscription = await manager.event_hub.subscribe(
+            task_ids={accepted.task_id}
+        )
+        model.allow_tool_call.set()
+
+        while True:
+            event = await asyncio.wait_for(subscription.receive(), timeout=3)
+            if isinstance(event.payload, UserInputRequiredPayload):
+                required = event.payload
+                break
+
+        await manager.resume_run(
+            accepted.task_id,
+            accepted.run_id,
+            request_id=required.request_id,
+            decision="reject",
+            detail={"reason": "plan is off-topic"},
+        )
+        model.release_final_answer.set()
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status.value == "failed"
+        assert "rejected" in (failed.runs[-1].error or "").lower()
+        assert not discovery_started.is_set()
+        events = await repository.list_events(accepted.task_id)
+        rejected = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, UserInputResumedPayload)
+        ]
+        assert len(rejected) == 1
+        assert rejected[0].decision == "reject"
+        assert any(isinstance(event.payload, TaskFailedPayload) for event in events)
+        assert any(isinstance(event.payload, RunFailedPayload) for event in events)
+        assert not any(
+            event.payload.type.value == "stage_started" for event in events
+        )
+        assert not any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert not any(
+            isinstance(event.payload, RunCompletedPayload) for event in events
+        )
+        assert model.close_calls == 1
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        if subscription is not None:
+            await subscription.close()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_live_pipeline_user_input_timeout_fails_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery_started = asyncio.Event()
+
+    def unexpected_discovery(context):
+        discovery_started.set()
+        raise AssertionError("Discovery must not start after user-input timeout")
+
+    def timeout_runner(**kwargs: object) -> PipelineRunner:
+        return PipelineRunner(**kwargs, user_input_timeout=0.02)
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "run_discovery",
+        unexpected_discovery,
+    )
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", timeout_runner)
+    model = ScriptedPipelineModel(
+        mode="live",
+        topic="durable live user-input timeout",
+    )
+    agent = Agent[RunContext](
+        name="Scripted live timeout Agent",
+        instructions="Call run_research_pipeline, then answer.",
+        tools=[run_research_pipeline],
+        model=model,
+    )
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_real_sdk_live_input_timeout",
+                input="let the real live Tool prompt expire",
+                databases=["pubmed", "geo"],
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        model.release_final_answer.set()
+        model.allow_tool_call.set()
+        await asyncio.wait_for(manager.wait_until_idle(), timeout=3)
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status.value == "failed"
+        assert "user input timeout" in (failed.runs[-1].error or "").lower()
+        assert not discovery_started.is_set()
+        events = await repository.list_events(accepted.task_id)
+        required = next(
+            event
+            for event in events
+            if isinstance(event.payload, UserInputRequiredPayload)
+        )
+        assert required.payload.expires_at is not None
+        assert any(isinstance(event.payload, TaskFailedPayload) for event in events)
+        assert any(isinstance(event.payload, RunFailedPayload) for event in events)
+        assert not any(
+            event.payload.type.value == "stage_started" for event in events
+        )
+        assert not any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert not any(
+            isinstance(event.payload, RunCompletedPayload) for event in events
+        )
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_live_pipeline_pause_is_promptly_cancellable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery_started = asyncio.Event()
+
+    def unexpected_discovery(context):
+        discovery_started.set()
+        raise AssertionError("Discovery must not start before plan approval")
+
+    monkeypatch.setattr(
+        pipeline_runner_module,
+        "run_discovery",
+        unexpected_discovery,
+    )
+    model = ScriptedPipelineModel(
+        mode="live",
+        topic="durable live cancellation boundary",
+    )
+    agent = Agent[RunContext](
+        name="Scripted live cancellation Agent",
+        instructions="Call run_research_pipeline, then answer.",
+        tools=[run_research_pipeline],
+        model=model,
+    )
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    subscription = None
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_real_sdk_live_pause_cancel",
+                input="cancel the paused real live Tool",
+                databases=["pubmed", "geo"],
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        task_root = repository.tasks_dir / accepted.task_id
+        artifacts = task_root / "artifacts"
+        state = task_root / "state"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
+        old_artifacts = {
+            "run_manifest.json": b'{"old":"manifest"}\n',
+            "old-result.csv": b"old,result\n1,2\n",
+            ".runtime-publication.json": b'{"old":"runtime"}\n',
+        }
+        for name, content in old_artifacts.items():
+            (artifacts / name).write_bytes(content)
+        old_state_marker = b'{"old":"state"}\n'
+        (state / "publish_completed.json").write_bytes(old_state_marker)
+        subscription = await manager.event_hub.subscribe(
+            task_ids={accepted.task_id}
+        )
+        model.allow_tool_call.set()
+
+        while True:
+            event = await asyncio.wait_for(subscription.receive(), timeout=3)
+            if isinstance(event.payload, UserInputRequiredPayload):
+                break
+
+        model.release_final_answer.set()
+        cancelled = await asyncio.wait_for(
+            manager.cancel_run(accepted.task_id, accepted.run_id),
+            timeout=3,
+        )
+
+        assert cancelled.runs[-1].status.value == "cancelled"
+        assert not discovery_started.is_set()
+        assert not (task_root / "staging" / accepted.run_id).exists()
+        assert {
+            path.name: path.read_bytes()
+            for path in artifacts.iterdir()
+            if path.is_file()
+        } == old_artifacts
+        assert (state / "publish_completed.json").read_bytes() == old_state_marker
+        events = await repository.list_events(accepted.task_id)
+        assert not any(
+            isinstance(event.payload, UserInputResumedPayload) for event in events
+        )
+        assert not any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert not any(
+            isinstance(event.payload, RunCompletedPayload) for event in events
+        )
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        if subscription is not None:
+            await subscription.close()
         await manager.close()
 
 
