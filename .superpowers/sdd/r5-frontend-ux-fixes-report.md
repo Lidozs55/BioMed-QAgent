@@ -229,13 +229,63 @@ Build-info restoration:
 
 ## Files changed
 
+- `frontend/src/App.tsx`
 - `frontend/src/components/BackgroundTaskNotifications.tsx`
 - `frontend/src/components/ChatPanel.tsx`
 - `frontend/src/components/ResultsViewer.tsx`
 - `frontend/src/runtime/reducer.ts`
 - `frontend/src/test/background-task-notifications.test.tsx`
+- `frontend/src/test/app.test.tsx`
 - `frontend/src/test/chat-panel.test.tsx`
 - `frontend/src/test/results-viewer.test.tsx`
 - `frontend/src/test/runtime-controller.test.ts`
 - `frontend/src/test/runtime-reducer.test.ts`
 - `.superpowers/sdd/r5-frontend-ux-fixes-report.md`
+
+## Browser QA follow-up — App viewport boundary
+
+Browser evidence at 1280x720 showed the final artifact at y=2514 and the
+artifact `ScrollArea` root at height 2544. The ancestor trace remained 2544–2672
+pixels tall through `ResultsViewer`, `TabsContent`, `Tabs`, `ChatPanel`, the App
+content wrappers, `SidebarInset`, and the `SidebarProvider` wrapper. The outer
+wrapper used only `min-h-svh`, so it grew with content instead of bounding the
+workspace to the viewport.
+
+Test-first change:
+
+- Added an App regression test requiring the composed viewport chain:
+  `SidebarProvider` wrapper `h-svh min-h-0 overflow-hidden`, `SidebarInset`
+  `min-h-0 overflow-hidden`, a shrinkable header boundary, and `min-h-0` on the
+  content main and ChatPanel wrapper.
+
+RED:
+
+```text
+node vitest.mjs run src/test/app.test.tsx
+Test Files  1 failed (1)
+Tests       1 failed | 2 passed (3)
+Failure     sidebar-wrapper had min-h-svh only; h-svh/min-h-0/overflow-hidden missing
+```
+
+GREEN:
+
+```text
+Test Files  1 passed (1)
+Tests       3 passed (3)
+```
+
+Follow-up verification:
+
+```text
+App + ChatPanel + ResultsViewer focused Vitest: 3 files, 25 tests passed
+ESLint --max-warnings 0: exit 0
+tsc --noEmit: exit 0
+```
+
+Implementation:
+
+- Added the viewport-bound classes at the App composition layer only.
+- Added `shrink-0` to the App header and `min-h-0` to the remaining content
+  chain.
+- Did not modify the shadcn sidebar primitive or Chat `MessageScroller`
+  ownership.
