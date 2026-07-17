@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
+from app.api.routes import load_database_skills
 from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
@@ -76,6 +77,9 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.task_repository = repository
         application.state.event_hub = event_hub
         application.state.task_manager = manager
+        # Register stable user-selectable database skills once at startup so
+        # GET /api/v1/databases does not re-register them on every request.
+        load_database_skills()
         try:
             await manager.start()
             yield

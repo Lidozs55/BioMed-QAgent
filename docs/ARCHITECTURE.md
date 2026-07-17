@@ -383,9 +383,11 @@ FastAPI 提供：
 ```
 
 当前 fixture Pipeline 保证 sequence 在单任务内严格递增，各 payload 使用判别联合
-Pydantic schema。将相同 envelope 推送到 WebSocket、按 sequence 续读、任务取消与
-进程恢复仍是后续工作；现有 Agent WebSocket 暂时保留旧流式事件，不能宣称已完成
-上述能力。
+Pydantic schema。同一 envelope 已通过 WebSocket 推送给订阅客户端
+（`app/api/ws_events.py:_run_event_session`），支持按 `after_sequence` 续读、
+任务取消与进程恢复重放；前端 `runtime/transport.ts` 负责自动重连并在重连后用
+`after_sequence` 补齐缺失事件。任务暂停-恢复（人在回路）仍为后续工作，参见
+[TODO.md](TODO.md) §4.2.1。
 
 ## 9. 前端目标架构
 
@@ -437,9 +439,9 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 - 自动生成缺乏数据依据的科研或临床结论；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
-## 12. 当前实现证据（2026-07-13）
+## 12. 当前实现证据（2026-07-17）
 
-- 默认离线后端测试：`235 passed, 1 deselected`；默认不访问网络。
+- 默认离线后端测试：`770 passed`；默认不访问网络。
 - live 验收：PMID 34180400、GSE178352 元数据和官方
   `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
   `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
@@ -451,6 +453,11 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
   `run_research_pipeline` Function Tool 进入确定性 Pipeline。
 - 前端：保留用户提交的 shadcn 工作台，引入确定性 fixture 入口和 Artifact 下载；
   Vitest、TypeScript、ESLint、production build 与真实浏览器主流程已通过。
+- Durable runtime：`TaskManager` 已实现任务锁（per-task `asyncio.Lock`）、运行取消
+  （`cancel_run` + `RunStatus.CANCEL_REQUESTED → CANCELLED`）、统一 WebSocket
+  `EventEnvelope` 推送与按 `sequence` 续读
+  （`app/api/ws_events.py` + `frontend/src/runtime/transport.ts` 自动重连重放）。
 
-未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是任务锁、取消、
-恢复、统一 WebSocket envelope、第二个真实案例和 GDC/PDB/Xena live 验收。
+未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.1 人在回路
+暂停-恢复（统一 `AWAITING_USER_INPUT` 子状态 + `POST /resume` API）、
+§1 系列硬编码解除、第二个真实案例和 GDC/PDB/Xena live 验收。
