@@ -15,22 +15,22 @@
 
 ### 1.1 解除 pipeline 硬编码
 
-- [ ] **P0** 让 `run_research_pipeline` Function Tool 从 Agent 接收 `TaskSpecification`
+- [x] **P0** 让 `run_research_pipeline` Function Tool 从 Agent 接收 `TaskSpecification`
 
       （含用户 topic 驱动的 query / dataset 选择），而不是无视 Agent 决策
       （`backend/app/pipeline/tool.py`）
       —— 同时移除 `tool.py:29-31` 的 `databases == {"pubmed","geo"}` 二次硬编码校验
 
-- [ ] **P0** 修复 `_build_specification_for_plan` 硬编码
+- [x] **P0** 修复 `_build_specification_for_plan` 硬编码
 
       （`backend/app/pipeline/runner.py:737-781`，`source_id="src_placeholder"`）
 
-- [ ] **P0** 修复 discovery 阶段 `_PMID = "34180400"` / `_GSE = "GSE178352"` 硬编码
+- [x] **P0** 修复 discovery 阶段 `_PMID = "34180400"` / `_GSE = "GSE178352"` 硬编码
 
       （`backend/app/pipeline/stages/discovery.py:22-23`）
       —— 阶段应从 `TaskSpecification.queries` / `datasets` 读取目标
 
-- [ ] **P0** 修复 acquisition 阶段 `_DOWNLOAD_URL` 硬编码
+- [x] **P0** 修复 acquisition 阶段 `_DOWNLOAD_URL` 硬编码
 
       （`backend/app/pipeline/stages/acquisition.py:30-34`）
 
@@ -91,7 +91,7 @@
 
 ### 1.4 解除数据库选择硬编码
 
-- [ ] **P0** 修复 `routes.py:157` 的 `skill.name in {"pubmed", "geo"}` 限制
+- [x] **P0** 修复 `routes.py:157` 的 `skill.name in {"pubmed", "geo"}` 限制
 
       —— 应展示所有已注册的真实数据库 skill（GEO/GDC/PDB/PubChem/Reactome/Xena）
 
@@ -200,7 +200,7 @@
       —— 至少提交 GSE178352 fixture 的一次完整 artifacts/ 输出样例到 `backend/data/examples/`
       —— 让评委克隆仓库即可查看真实产物
 
-- [ ] **P0** 完善 `agent_loop/agent.py` 的 INSTRUCTIONS
+- [x] **P0** 完善 `agent_loop/agent.py` 的 INSTRUCTIONS
 
       （`backend/app/agent_loop/agent.py:24-63`）
       —— 新增"主题→数据库"决策表（如：癌症表达谱→GEO+PubMed；蛋白结构→PDB；通路→Reactome）

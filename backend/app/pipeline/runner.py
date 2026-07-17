@@ -38,6 +38,7 @@ from app.domain.contracts import (
     TaskCreatedPayload,
     TaskFailedPayload,
     TaskRecoveredPayload,
+    TaskSpecification,
     TaskState,
     ToolCalledPayload,
     ToolCompletedPayload,
@@ -172,6 +173,8 @@ class PipelineRunner:
         total_timeout: float = TOTAL_TIMEOUT,
         user_input_timeout: float = USER_INPUT_TIMEOUT,
         mode: Literal["fixture", "live"] = "fixture",
+        databases: list[str] | None = None,
+        specification: TaskSpecification | None = None,
         cancellation_requested: CancellationToken | None = None,
         defer_publication: bool = False,
         event_sink: PipelineEventSink | None = None,
@@ -180,6 +183,8 @@ class PipelineRunner:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
         self.topic = topic
+        self.databases = databases or []
+        self.specification = specification
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
         self.total_timeout = total_timeout
         self.user_input_timeout = user_input_timeout
@@ -198,6 +203,8 @@ class PipelineRunner:
             started_at=self.state.started_at,
             run_id=run_id,
             mode=mode,
+            databases=self.databases,
+            specification=self.specification,
             cancellation_requested=self._is_cancelled,
         )
         self.events: list[EventEnvelope] = []
@@ -1337,8 +1344,15 @@ def _hash_directory(directory: Path) -> str:
     return hasher.hexdigest()
 
 
-def _build_specification_for_plan(ctx: StageContext) -> Any:
-    """Build a TaskSpecification for the plan_ready event (reuses discovery logic)."""
+def _build_specification_for_plan(ctx: StageContext) -> TaskSpecification:
+    """Build a TaskSpecification for the plan_ready event.
+
+    If the runner was constructed with an explicit ``specification``, return it.
+    In fixture mode fall back to the pinned Phase 1 regression case
+    (GSE178352 + PMID 34180400) so existing regression tests keep passing.
+    In live mode derive a topic-driven specification from the selected
+    ``databases``.
+    """
     from app.domain.contracts import (
         Database,
         DatasetSelection,
@@ -1346,35 +1360,110 @@ def _build_specification_for_plan(ctx: StageContext) -> Any:
         RequestedOutput,
         TaskSpecification,
     )
-    return TaskSpecification(
-        topic=ctx.topic,
-        queries=[
+    if ctx.specification is not None:
+        return ctx.specification
+
+    # Fixture mode default: pinned Phase 1 regression case.
+    if ctx.mode == "fixture":
+        return TaskSpecification(
+            topic=ctx.topic,
+            queries=[
+                QuerySpecification(
+                    query_id="query_geo_1",
+                    database=Database.GEO,
+                    query="GSE178352[Accession]",
+                    generated_by="pipeline",
+                    purpose="pinned dataset",
+                    order=1,
+                ),
+                QuerySpecification(
+                    query_id="query_pubmed_1",
+                    database=Database.PUBMED,
+                    query="34180400[PMID]",
+                    generated_by="pipeline",
+                    purpose="pinned literature",
+                    order=2,
+                ),
+            ],
+            datasets=[
+                DatasetSelection(
+                    dataset_id="ds_geo_gse178352",
+                    database=Database.GEO,
+                    accession="GSE178352",
+                    source_id="",
+                    reason="linked from PMID 34180400",
+                )
+            ],
+            requested_outputs=[
+                RequestedOutput.MAIN_DATA,
+                RequestedOutput.LITERATURE,
+                RequestedOutput.DATASET_CATALOG,
+                RequestedOutput.SAMPLE_METADATA,
+            ],
+        )
+
+    # Live mode: topic-driven derivation from selected databases.
+    selected = {value.lower() for value in ctx.databases}
+    queries: list[QuerySpecification] = []
+    datasets: list[DatasetSelection] = []
+    order = 0
+
+    def _next_order() -> int:
+        nonlocal order
+        order += 1
+        return order
+
+    if "geo" in selected:
+        queries.append(
             QuerySpecification(
                 query_id="query_geo_1",
                 database=Database.GEO,
-                query="GSE178352[Accession]",
+                query=f"{ctx.topic} GEO[DataSet]",
                 generated_by="pipeline",
-                purpose="pinned dataset",
-                order=1,
-            ),
+                purpose="find expression dataset by topic",
+                order=_next_order(),
+            )
+        )
+    if "pubmed" in selected:
+        queries.append(
             QuerySpecification(
                 query_id="query_pubmed_1",
                 database=Database.PUBMED,
-                query="34180400[PMID]",
+                query=ctx.topic,
                 generated_by="pipeline",
-                purpose="pinned literature",
-                order=2,
-            ),
-        ],
-        datasets=[
-            DatasetSelection(
-                dataset_id="ds_geo_gse178352",
-                database=Database.GEO,
-                accession="GSE178352",
-                source_id="src_placeholder",
-                reason="linked from PMID 34180400",
+                purpose="find literature by topic",
+                order=_next_order(),
             )
-        ],
+        )
+
+    if not queries:
+        _DB_NAME_MAP: dict[str, Database] = {
+            "xena": Database.UCSC_XENA,
+        }
+        for db_name in ctx.databases:
+            if db_name == "browser_fallback":
+                continue
+            database = _DB_NAME_MAP.get(db_name)
+            if database is None:
+                try:
+                    database = Database(db_name)
+                except ValueError:
+                    continue
+            queries.append(
+                QuerySpecification(
+                    query_id=f"query_{db_name}_1",
+                    database=database,
+                    query=ctx.topic,
+                    generated_by="pipeline",
+                    purpose=f"topic-driven {db_name} query",
+                    order=_next_order(),
+                )
+            )
+
+    return TaskSpecification(
+        topic=ctx.topic,
+        queries=queries,
+        datasets=datasets,
         requested_outputs=[
             RequestedOutput.MAIN_DATA,
             RequestedOutput.LITERATURE,

@@ -21,7 +21,7 @@ async def test_database_api_lists_only_user_selectable_data_sources(
 
     assert response.status_code == 200
     identifiers = {item["id"] for item in response.json()["databases"]}
-    assert identifiers == {"pubmed", "geo"}
+    assert identifiers == {"pubmed", "geo", "gdc", "pdb", "xena", "pubchem", "reactome"}
     assert identifiers.isdisjoint(
         {
             "analysis",

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +41,8 @@ class StageContext:
     started_at: datetime
     run_id: str = STANDALONE_RUN_ID
     mode: Literal["fixture", "live"] = "fixture"
+    databases: list[str] = field(default_factory=list)
+    specification: TaskSpecification | None = None
     cancellation_requested: Callable[[], bool] | None = None
 
     def __post_init__(self) -> None:

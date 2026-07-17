@@ -231,12 +231,12 @@ async def test_pipeline_function_tool_rejects_parallel_managed_invocation(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_function_tool_rejects_unimplemented_fixture_sources(
+async def test_pipeline_function_tool_ignores_extra_databases_in_fixture_mode(
     tmp_path: Path,
 ) -> None:
-    context = RunContext(task_id="task_tool_invalid")
+    context = RunContext(task_id="task_tool_extra_dbs")
     context._work_dir = create_task_workdir(  # noqa: SLF001
-        "task_tool_invalid", base_dir=str(tmp_path / "tasks")
+        "task_tool_extra_dbs", base_dir=str(tmp_path / "tasks")
     )
     tool_context = ToolContext(
         context=context,
@@ -256,9 +256,13 @@ async def test_pipeline_function_tool_rejects_unimplemented_fixture_sources(
         ),
     )
 
-    assert "exactly pubmed and geo" in result
-    assert not (
-        tmp_path / "tasks" / "task_tool_invalid" / "artifacts" / "run_manifest.json"
+    # Fixture mode always runs the pinned Phase 1 case; extra selected databases
+    # are ignored rather than rejected.
+    payload = json.loads(result)
+    assert payload["status"] == "completed"
+    assert payload["mode"] == "fixture"
+    assert (
+        tmp_path / "tasks" / "task_tool_extra_dbs" / "artifacts" / "run_manifest.json"
     ).exists()
 
 

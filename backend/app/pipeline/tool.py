@@ -11,6 +11,7 @@ from typing import Literal
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
+from app.domain.contracts import TaskSpecification
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import STANDALONE_RUN_ID
 
@@ -35,9 +36,11 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
 @function_tool(
     name_override="run_research_pipeline",
     description_override=(
-        "Run the deterministic validated research-data pipeline. Supports "
-        "fixture mode (offline, pinned GSE178352/PMID 34180400) and live "
-        "mode (real NCBI E-utilities + FTP download)."
+        "Run the deterministic validated research-data pipeline. Accepts an "
+        "optional TaskSpecification (queries/datasets/requested_outputs). "
+        "When no specification is supplied the runner derives one from the "
+        "topic and selected databases. Supports fixture mode (offline regression "
+        "case) and live mode (real external APIs)."
     ),
 )
 async def run_research_pipeline(
@@ -45,10 +48,11 @@ async def run_research_pipeline(
     topic: str,
     databases: list[str],
     mode: Literal["fixture", "live"] = "fixture",
+    specification: TaskSpecification | None = None,
 ) -> str:
     normalized_databases = [value.lower() for value in databases]
-    if set(normalized_databases) != {"pubmed", "geo"} or len(databases) != 2:
-        raise ValueError("pipeline supports exactly pubmed and geo")
+    if not normalized_databases:
+        raise ValueError("databases must be a non-empty list of database identifiers")
 
     run_context = ctx.context
     managed_run_id = run_context.reserve_pipeline_publication()
@@ -91,6 +95,8 @@ async def run_research_pipeline(
             fixture_dir=fixture_dir,
             topic=topic,
             mode=mode,
+            databases=normalized_databases,
+            specification=specification,
             cancellation_requested=run_context.cancellation_requested,
             defer_publication=managed_run_id is not None,
             event_sink=bridge.event_sink if bridge is not None else None,
