@@ -241,13 +241,13 @@ export class RuntimeController {
       if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       const snapshot = await this.api.fetchTask(taskId);
       if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
-      const needsRestReplay =
+      const needsFullReplay =
         useAgentStore.getState().tasksById[taskId]?.hydration === "summary";
-      if (needsRestReplay) {
+      if (needsFullReplay) {
         useAgentStore.getState().prepareTaskSnapshotReplay(snapshot);
-        await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
-        if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       }
+      await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
+      if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
       const lastSequence =
         useAgentStore.getState().tasksById[taskId]?.lastSequence ??
@@ -293,8 +293,9 @@ export class RuntimeController {
     taskId: string,
     targetSequence: number,
   ): Promise<void> {
-    if (targetSequence <= 0) return;
-    let afterSequence = 0;
+    let afterSequence =
+      useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0;
+    if (targetSequence <= afterSequence) return;
     for (;;) {
       const events = await this.api.fetchEvents(taskId, {
         afterSequence,

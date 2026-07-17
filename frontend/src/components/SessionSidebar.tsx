@@ -69,6 +69,7 @@ const OCCUPYING_STATUSES = new Set<RunStatus>([
   "running",
   "finalizing",
   "cancel_requested",
+  "awaiting_user_input",
 ]);
 
 const CONNECTION_META: Record<

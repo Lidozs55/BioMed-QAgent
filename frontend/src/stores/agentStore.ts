@@ -11,6 +11,7 @@ import type {
   TaskSnapshot,
 } from "@/runtime/contracts";
 import {
+  compareTaskIds,
   createInitialRuntimeState,
   createTaskProjection,
   hydrateTaskSnapshot as projectTaskSnapshot,
@@ -23,6 +24,7 @@ import type {
   AgentRuntimeData,
   ConnectionStatus,
   HistoryStatus,
+  TaskProjection,
 } from "@/runtime/types";
 
 export const AGENT_STORE_NAME = "biomed-sessions";
@@ -109,6 +111,24 @@ export function mergeTaskArtifacts(
   };
 }
 
+function admitExistingTask(
+  state: AgentRuntimeData,
+  projection: TaskProjection,
+  activate: boolean,
+): AgentRuntimeData {
+  const taskId = projection.summary.task_id;
+  const tasksById = { ...state.tasksById, [taskId]: projection };
+  return {
+    ...state,
+    tasksById,
+    activeItems: [...new Set([...state.activeItems, taskId])].sort((left, right) =>
+      compareTaskIds(tasksById, left, right),
+    ),
+    taskOrder: state.taskOrder.filter((candidate) => candidate !== taskId),
+    activeTaskId: activate ? taskId : state.activeTaskId,
+  };
+}
+
 export function addAcceptedTask(
   state: AgentRuntimeData,
   accepted: { taskId: string; runId: string; requestId: string },
@@ -159,18 +179,9 @@ export function addAcceptedTask(
         },
         runOrder: [...existing.runOrder, accepted.runId],
         messages: [...existing.messages, acceptedMessage],
+        pendingUserInput: null,
       };
-      return {
-        ...state,
-        tasksById: { ...state.tasksById, [accepted.taskId]: projection },
-        activeItems: state.activeItems.includes(accepted.taskId)
-          ? state.activeItems
-          : [accepted.taskId, ...state.activeItems],
-        taskOrder: state.taskOrder.filter(
-          (taskId) => taskId !== accepted.taskId,
-        ),
-        activeTaskId: activate ? accepted.taskId : state.activeTaskId,
-      };
+      return admitExistingTask(state, projection, activate);
     }
     const summaryProjection = createTaskProjection(existing.summary);
     const projection = {
@@ -186,17 +197,7 @@ export function addAcceptedTask(
       lastSequence: 0,
       hydration: "accepted" as const,
     };
-    return {
-      ...state,
-      tasksById: { ...state.tasksById, [accepted.taskId]: projection },
-      activeItems: state.activeItems.includes(accepted.taskId)
-        ? state.activeItems
-        : [accepted.taskId, ...state.activeItems],
-      taskOrder: state.taskOrder.filter(
-        (taskId) => taskId !== accepted.taskId,
-      ),
-      activeTaskId: activate ? accepted.taskId : state.activeTaskId,
-    };
+    return admitExistingTask(state, projection, activate);
   }
   const summary = {
     task_id: accepted.taskId,

@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -21,6 +21,16 @@ vi.mock("sonner", () => ({
 }));
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function summary(
   taskId: string,
@@ -93,6 +103,46 @@ describe("BackgroundTaskNotifications", () => {
 
     act(() => useAgentStore.getState().applyEvent(terminalEvent("background", "completed")));
     expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the existing selection error toast when View rejects", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary("background", "running")],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    const selection = deferred<void>();
+    const onViewTask = vi.fn(() => selection.promise);
+    render(<BackgroundTaskNotifications onViewTask={onViewTask} />);
+
+    act(() =>
+      useAgentStore
+        .getState()
+        .applyEvent(terminalEvent("background", "completed")),
+    );
+    const options = vi.mocked(toast.success).mock.calls[0][1];
+    if (
+      options?.action !== null &&
+      typeof options?.action === "object" &&
+      "onClick" in options.action
+    ) {
+      options.action.onClick({} as React.MouseEvent<HTMLButtonElement>);
+    }
+
+    await act(async () => {
+      selection.reject(new Error("task unavailable"));
+      await selection.promise.catch(() => undefined);
+    });
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "打开任务失败",
+        expect.objectContaining({ description: "task unavailable" }),
+      ),
+    );
   });
 
   it("does not lose a fast background transition batched into one render", () => {
@@ -171,6 +221,7 @@ describe("BackgroundTaskNotifications", () => {
       createTask: vi.fn(),
       continueTask: vi.fn(),
       cancelRun: vi.fn(),
+      resumeRun: vi.fn(),
       deleteTask: vi.fn(),
       fetchArtifacts: vi.fn().mockResolvedValue([]),
       getArtifactUrl: vi.fn(),

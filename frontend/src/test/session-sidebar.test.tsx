@@ -29,7 +29,8 @@ function summary(
       status === "queued" ||
       status === "running" ||
       status === "finalizing" ||
-      status === "cancel_requested"
+      status === "cancel_requested" ||
+      status === "awaiting_user_input"
         ? `run_${taskId}`
         : null,
     created_at: CREATED_AT,
@@ -321,6 +322,7 @@ describe("SessionSidebar", () => {
           summary("running", "running"),
           summary("finalizing", "finalizing"),
           summary("cancelling", "cancel_requested"),
+          summary("paused", "awaiting_user_input"),
           summary("queued", "queued"),
         ],
         items: [],
@@ -331,9 +333,9 @@ describe("SessionSidebar", () => {
     renderSidebar();
 
     expect(screen.getByText("重新连接中")).toBeVisible();
-    expect(screen.getByText("运行中 3 / 4")).toBeVisible();
+    expect(screen.getByText("运行中 4 / 4")).toBeVisible();
     expect(screen.getByText("重新连接中").parentElement).not.toBe(
-      screen.getByText("运行中 3 / 4").parentElement,
+      screen.getByText("运行中 4 / 4").parentElement,
     );
   });
 });

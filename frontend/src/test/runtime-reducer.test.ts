@@ -5,6 +5,7 @@ import type {
   EventPayload,
   MessagePage,
   MessageRecord,
+  RunRecord,
   TaskPage,
   TaskSnapshot,
   TaskSummary,
@@ -24,6 +25,7 @@ function summary(
   status: TaskSummary["status"] = "running",
   latestSequence = 0,
   mode: TaskSummary["mode"] = "agent",
+  createdAt = CREATED_AT,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -32,8 +34,8 @@ function summary(
     title: `Task ${taskId}`,
     status,
     active_run_id: status === "running" ? `run_${taskId}` : null,
-    created_at: CREATED_AT,
-    updated_at: CREATED_AT,
+    created_at: createdAt,
+    updated_at: createdAt,
     latest_sequence: latestSequence,
   };
 }
@@ -77,6 +79,25 @@ function taskSnapshot(
   };
 }
 
+function runRecord(
+  taskId: string,
+  runId: string,
+  status: RunRecord["status"],
+): RunRecord {
+  return {
+    run_id: runId,
+    task_id: taskId,
+    request_id: `request_${runId}`,
+    status,
+    input: "input",
+    created_at: CREATED_AT,
+    updated_at: CREATED_AT,
+    started_at: CREATED_AT,
+    finished_at: status === "awaiting_user_input" ? null : CREATED_AT,
+    error: null,
+  };
+}
+
 function envelope(
   taskId: string,
   runId: string | null,
@@ -98,6 +119,74 @@ function envelope(
 }
 
 describe("runtime event projection", () => {
+  it("deduplicates and sorts merged task groups by immutable creation order", () => {
+    const preservedActive = summary(
+      "task_active_new",
+      "running",
+      2,
+      "agent",
+      "2026-07-15T00:00:00Z",
+    );
+    const preservedHistory = summary(
+      "task_history_old",
+      "completed",
+      2,
+      "agent",
+      "2026-07-13T00:00:00Z",
+    );
+    const initial = mergeTaskPage(
+      createInitialRuntimeState(),
+      {
+        active_items: [preservedActive],
+        items: [preservedHistory],
+        next_cursor: null,
+      },
+      false,
+    );
+    const incomingActive = summary(
+      "task_active_old",
+      "running",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+    const incomingHistoryA = summary(
+      "task_history_a",
+      "completed",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+    const incomingHistoryZ = summary(
+      "task_history_z",
+      "completed",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+
+    const state = mergeTaskPage(
+      initial,
+      {
+        active_items: [incomingActive, incomingActive],
+        items: [incomingHistoryA, incomingHistoryZ, incomingHistoryZ],
+        next_cursor: null,
+      },
+      false,
+      new Set([preservedHistory.task_id]),
+    );
+
+    expect(state.activeItems).toEqual([
+      "task_active_new",
+      "task_active_old",
+    ]);
+    expect(state.taskOrder).toEqual([
+      "task_history_z",
+      "task_history_a",
+      "task_history_old",
+    ]);
+  });
+
   it("routes overlapping task-local sequences independently", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
@@ -242,6 +331,256 @@ describe("runtime event projection", () => {
     expect(state.tasksById.task_a.runsById.run_first.status).toBe("completed");
     expect(state.tasksById.task_a.runsById.run_second.status).toBe("running");
     expect(state.tasksById.task_a.summary.active_run_id).toBe("run_second");
+  });
+
+  it("binds pending user input to the authoritative Run", () => {
+    const initial = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+
+    const state = reduceRuntimeEvent(
+      initial,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it("preserves pending input while its snapshot Run is still awaiting input", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    const hydrated = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_a", "awaiting_user_input", 2),
+        active_run_id: "run_prompt",
+      },
+      runs: [runRecord("task_a", "run_prompt", "awaiting_user_input")],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    expect(hydrated.tasksById.task_a.pendingUserInput).toEqual(
+      state.tasksById.task_a.pendingUserInput,
+    );
+  });
+
+  it("clears pending input when a cancellation snapshot terminalizes its Run", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    const hydrated = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_a", "cancelled", 2),
+        active_run_id: null,
+      },
+      runs: [runRecord("task_a", "run_prompt", "cancelled")],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    expect(hydrated.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("does not clear pending user input when another Run resumes", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, {
+        type: "user_input_resumed",
+        request_id: "request_other",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it.each([
+    "run_completed",
+    "run_failed",
+    "run_cancelled",
+    "run_interrupted",
+  ] as const)("clears pending input on %s only for its owning Run", (type) => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    const terminalPayload: EventPayload =
+      type === "run_completed"
+        ? { type }
+        : type === "run_failed"
+          ? { type, error: "failed" }
+          : { type, reason: "stopped" };
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, terminalPayload),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 3, terminalPayload),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("clears an older pending prompt when a new Run is queued", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_old", 1, {
+        type: "user_input_required",
+        request_id: "request_old",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the old plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_new", 2, {
+        type: "run_queued",
+        request_id: "request_new",
+        input: "new turn",
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("projects fixture input-required before its automatic resume", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_fixture", "running", 0, "fixture")),
+      false,
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_fixture", 1, {
+        type: "user_input_required",
+        request_id: "request_fixture",
+        prompt_kind: "plan_confirmation",
+        summary: "Fixture plan",
+        expires_at: null,
+        fixture_exempt: true,
+        detail: {},
+      }),
+    );
+    expect(state.tasksById.task_fixture.pendingUserInput).toMatchObject({
+      runId: "run_fixture",
+      requestId: "request_fixture",
+      fixtureExempt: true,
+    });
+    expect(state.tasksById.task_fixture.summary.status).toBe(
+      "awaiting_user_input",
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_fixture", 2, {
+        type: "user_input_resumed",
+        request_id: "request_fixture",
+        decision: "approve",
+        detail: { automatic: true },
+      }),
+    );
+
+    expect(state.tasksById.task_fixture.pendingUserInput).toBeNull();
+    expect(state.tasksById.task_fixture.summary).toMatchObject({
+      status: "running",
+      active_run_id: "run_fixture",
+      latest_sequence: 2,
+    });
   });
 
   it("projects fixture stages without inventing stages for generic activity", () => {

@@ -71,7 +71,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
   };
 }
 
-function compareTaskIds(
+export function compareTaskIds(
   tasksById: Record<string, TaskProjection>,
   left: string,
   right: string,
@@ -118,7 +118,9 @@ export function mergeTaskPage(
       tasksById[taskId] !== undefined &&
       isActiveStatus(tasksById[taskId].summary.status),
   );
-  const activeItems = [...pageActive, ...preservedActive];
+  const activeItems = [...new Set([...pageActive, ...preservedActive])].sort(
+    (left, right) => compareTaskIds(tasksById, left, right),
+  );
 
   const incomingHistory = [...page.active_items, ...page.items]
     .map((item) => item.task_id)
@@ -130,7 +132,8 @@ export function mergeTaskPage(
     ? [...state.taskOrder, ...incomingHistory]
     : [...preservedHistory, ...incomingHistory];
   const taskOrder = [...new Set(history)]
-    .filter((taskId) => !activeItems.includes(taskId));
+    .filter((taskId) => !activeItems.includes(taskId))
+    .sort((left, right) => compareTaskIds(tasksById, left, right));
 
   return {
     ...state,
@@ -305,6 +308,10 @@ export function hydrateTaskSnapshot(
   }
   const base = existing ?? createTaskProjection(snapshot.task);
   const runs = snapshot.runs.map(projectRun);
+  const pendingRun =
+    base.pendingUserInput === null
+      ? undefined
+      : runs.find((run) => run.runId === base.pendingUserInput?.runId);
   const snapshotMessages = snapshot.messages.map(projectMessage);
   const snapshotRunIds = new Set(runs.map((run) => run.runId));
   const runOrder = [
@@ -321,6 +328,12 @@ export function hydrateTaskSnapshot(
     runsById,
     runOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
+    pendingUserInput:
+      base.pendingUserInput !== null &&
+      snapshot.task.active_run_id === base.pendingUserInput.runId &&
+      pendingRun?.status === "awaiting_user_input"
+        ? base.pendingUserInput
+        : null,
     olderMessagesCursor:
       existing?.hydration === "snapshot" &&
       snapshotConnectsToExistingHistory(base, snapshotMessages)
@@ -550,6 +563,7 @@ export function reduceRuntimeEvent(
           status: "queued",
           active_run_id: runId,
         },
+        pendingUserInput: null,
       };
       break;
     }
@@ -618,6 +632,9 @@ export function reduceRuntimeEvent(
           summary: { ...task.summary, status, active_run_id: null },
         };
       }
+      if (task.pendingUserInput?.runId === runId) {
+        task = { ...task, pendingUserInput: null };
+      }
       if (payload.type !== "run_completed") {
         task = terminalizeRunningFixtureStages(
           task,
@@ -649,6 +666,7 @@ export function reduceRuntimeEvent(
           active_run_id: runId,
         },
         pendingUserInput: {
+          runId,
           requestId: payload.request_id,
           promptKind: payload.prompt_kind,
           summary: payload.summary,
@@ -681,7 +699,11 @@ export function reduceRuntimeEvent(
           status: "running",
           active_run_id: runId,
         },
-        pendingUserInput: null,
+        pendingUserInput:
+          task.pendingUserInput?.runId === runId &&
+          task.pendingUserInput.requestId === payload.request_id
+            ? null
+            : task.pendingUserInput,
       };
       break;
     }

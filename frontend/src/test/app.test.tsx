@@ -128,6 +128,33 @@ describe("App startup ownership", () => {
     expect(useAgentStore.getState().connectionStatus).toBe("disconnected");
   });
 
+  it("bounds the App viewport chain for non-chat tab scrolling", async () => {
+    const { container } = render(<App />);
+    await waitFor(() =>
+      expect(useAgentStore.getState().activeItems).toEqual(["task_active"]),
+    );
+
+    const sidebarWrapper = container.querySelector<HTMLElement>(
+      '[data-slot="sidebar-wrapper"]',
+    );
+    const sidebarInset = container.querySelector<HTMLElement>(
+      '[data-slot="sidebar-inset"]',
+    );
+    const header = sidebarInset?.querySelector<HTMLElement>(":scope > header");
+    const contentMain = sidebarInset?.querySelector<HTMLElement>(":scope > main");
+    const chatPanelWrapper = contentMain?.firstElementChild;
+
+    expect(sidebarWrapper).toHaveClass(
+      "h-svh",
+      "min-h-0",
+      "overflow-hidden",
+    );
+    expect(sidebarInset).toHaveClass("min-h-0", "overflow-hidden");
+    expect(header).toHaveClass("shrink-0");
+    expect(contentMain).toHaveClass("min-h-0");
+    expect(chatPanelWrapper).toHaveClass("min-h-0");
+  });
+
   it("shows a visible error when startup history loading fails", async () => {
     historyFailure = true;
     render(<App />);

@@ -61,7 +61,10 @@ export default function App() {
   }, [controller, transport]);
 
   return (
-    <SidebarProvider defaultOpen={true}>
+    <SidebarProvider
+      defaultOpen={true}
+      className="h-svh min-h-0 overflow-hidden"
+    >
       <SessionSidebar
         onNewDraft={() => controller.showNewDraft()}
         onSelectTask={selectTask}
@@ -70,8 +73,8 @@ export default function App() {
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
       />
-      <SidebarInset className="min-w-0">
-        <header className="flex min-w-0 items-center justify-between gap-2 border-b px-4 py-2">
+      <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+        <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed Q-Agent</h1>
           <div className="flex shrink-0 items-center gap-2">
@@ -79,8 +82,8 @@ export default function App() {
             <ThemeToggle />
           </div>
         </header>
-        <main className="flex min-w-0 flex-1 overflow-hidden">
-          <div className="min-w-0 flex-1">
+        <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="min-h-0 min-w-0 flex-1">
             <ChatPanel
               startTask={(input) => controller.startTask(input)}
               continueTask={(taskId, input) =>

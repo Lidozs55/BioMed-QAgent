@@ -91,6 +91,7 @@ export interface FixtureStageProjection {
 }
 
 export interface PendingUserInput {
+  runId: string;
   requestId: string;
   promptKind: UserInputPromptKind;
   summary: string;
