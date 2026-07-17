@@ -10,9 +10,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.tools.workdir import TaskWorkDir, create_task_workdir
+
+if TYPE_CHECKING:
+    from app.pipeline.runner import PendingPublication
 
 
 @dataclass
@@ -36,6 +39,7 @@ class RunContext:
 
     task_id: str = "default"
     base_dir: str | Path | None = field(default=None, repr=False, kw_only=True)
+    managed_run_id: str | None = field(default=None, repr=False, kw_only=True)
     topic: str = ""
     preferred_sources: list[str] = field(default_factory=list)
     plan: str = ""
@@ -51,6 +55,16 @@ class RunContext:
     query_log_summary: str = ""
     cancellation_requested: asyncio.Event = field(
         default_factory=asyncio.Event,
+        repr=False,
+    )
+    _pipeline_publication_reserved: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+    )
+    _pending_publication: PendingPublication | None = field(
+        default=None,
+        init=False,
         repr=False,
     )
 
@@ -71,6 +85,52 @@ class RunContext:
     def output_dir(self) -> Path:
         """兼容旧版：返回 artifacts 目录路径。"""
         return self._work_dir.artifacts
+
+    def reserve_pipeline_publication(self) -> str | None:
+        """Reserve the managed Run's single Pipeline publication slot."""
+
+        if self.managed_run_id is None:
+            return None
+        if self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is already reserved")
+        self._pipeline_publication_reserved = True
+        return self.managed_run_id
+
+    def bind_managed_run(self, run_id: str) -> None:
+        """Bind this context to the manager's authoritative Run identity."""
+
+        if self._pipeline_publication_reserved or self._pending_publication is not None:
+            raise RuntimeError("managed run cannot change after Pipeline reservation")
+        if self.managed_run_id is not None and self.managed_run_id != run_id:
+            raise RuntimeError("managed run is already bound")
+        self.managed_run_id = run_id
+
+    def release_pipeline_publication_reservation(self) -> None:
+        """Release a failed managed Pipeline Tool reservation."""
+
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        self._pipeline_publication_reserved = False
+
+    def set_pending_publication(self, handle: PendingPublication) -> None:
+        """Install the validated package reserved for this managed Run."""
+
+        if self.managed_run_id is None or not self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is not reserved")
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        if handle.run_id != self.managed_run_id:
+            raise ValueError("pending publication run_id must match managed run_id")
+        self._pending_publication = handle
+
+    def take_pending_publication(self) -> PendingPublication | None:
+        """Transfer the managed Run's validated package at most once."""
+
+        handle = self._pending_publication
+        if handle is not None:
+            self._pending_publication = None
+            self._pipeline_publication_reserved = False
+        return handle
 
     def add_source(self, source: Any) -> None:
         """记录一个数据来源（SourceRecord）。"""

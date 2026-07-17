@@ -10,13 +10,16 @@ import asyncio
 import csv
 import hashlib
 import json
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from app.domain.contracts import (
+    ArtifactManifestEntry,
     AttemptStatus,
     CancelRequestedPayload,
     ErrorCode,
@@ -91,6 +94,17 @@ PipelineEventSink = Callable[[EventEnvelope], Awaitable[None]]
 
 class PipelineEventSinkError(RuntimeError):
     """Raised when the runtime cannot durably accept a Pipeline event."""
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPublication:
+    """Validated Pipeline package awaiting manager-owned publication."""
+
+    run_id: str
+    manifest: RunManifest
+    manifest_entry: ArtifactManifestEntry
+    publish: Callable[[], None]
+    abort: Callable[[], None]
 
 
 _STAGES: list[StageName] = [
@@ -214,6 +228,47 @@ class PipelineRunner:
             run_id=run_id,
         )
         self._pending_publication = None
+
+    def pending_publication(self) -> PendingPublication:
+        """Return callbacks bound to this runner's validated managed package."""
+
+        staging = self._pending_publication
+        if not self.defer_publication or staging is None or not staging.is_dir():
+            raise RuntimeError("pipeline has no validated package awaiting publication")
+        manifest_path = staging / "run_manifest.json"
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = RunManifest.model_validate_json(manifest_bytes)
+        if manifest.task_id != self.task_id:
+            raise RuntimeError("pending publication manifest task_id mismatch")
+        manifest_entry = ArtifactManifestEntry(
+            artifact_id="run_manifest",
+            name="run_manifest.json",
+            relative_path="artifacts/run_manifest.json",
+            media_type="application/json",
+            size_bytes=len(manifest_bytes),
+            sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            generated_by_step_id="step_artifact_builder_v1",
+        )
+        run_id = self.ctx.run_id
+        return PendingPublication(
+            run_id=run_id,
+            manifest=manifest,
+            manifest_entry=manifest_entry,
+            publish=lambda: self.publish(run_id),
+            abort=self.abort,
+        )
+
+    def abort(self) -> None:
+        """Idempotently discard only this runner's staging package."""
+
+        staging = self.workdir.staging / self.ctx.run_id
+        with TaskLock(self.workdir.state / "publish.lock"):
+            if staging.exists():
+                if staging.is_symlink() or not staging.is_dir():
+                    raise RuntimeError("pipeline staging path is not a directory")
+                shutil.rmtree(staging)
+            if self._pending_publication == staging:
+                self._pending_publication = None
 
     async def run(self) -> RunManifest:
         """Execute the pipeline, guaranteeing a terminal task state.

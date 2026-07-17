@@ -301,6 +301,49 @@ def test_managed_runner_defers_formal_publication_until_runtime_commit(
     }
 
 
+def test_deferred_runner_exposes_run_bound_abortable_publication(
+    tmp_path: Path,
+) -> None:
+    task_id = "task_abortable_publication"
+    run_id = "run_abortable_publication"
+    task_root = tmp_path / "tasks" / task_id
+    artifacts = task_root / "artifacts"
+    state = task_root / "state"
+    artifacts.mkdir(parents=True)
+    state.mkdir(parents=True)
+    old_artifact = artifacts / "old-result.csv"
+    old_marker = state / "publish_completed.json"
+    old_artifact.write_bytes(b"old artifact bytes\n")
+    old_marker.write_bytes(b'{"old":true}\n')
+    cancellation = threading.Event()
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=run_id,
+        cancellation_requested=cancellation,
+    )
+
+    manifest = asyncio.run(runner.run())
+    pending = runner.pending_publication()
+
+    assert pending.run_id == run_id
+    assert pending.manifest == manifest
+    assert pending.manifest_entry.name == "run_manifest.json"
+    assert pending.manifest_entry.sha256 == hashlib.sha256(
+        (task_root / "staging" / run_id / "run_manifest.json").read_bytes()
+    ).hexdigest()
+
+    cancellation.set()
+    pending.abort()
+    pending.abort()
+
+    assert not (task_root / "staging" / run_id).exists()
+    assert old_artifact.read_bytes() == b"old artifact bytes\n"
+    assert old_marker.read_bytes() == b'{"old":true}\n'
+
+
 def test_standalone_runner_uses_explicit_safe_staging_id(tmp_path: Path) -> None:
     """Standalone callers use a named safe ID, never a shared managed-Run ID."""
     task_id = "task_standalone_staging"

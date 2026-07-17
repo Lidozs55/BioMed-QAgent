@@ -21,6 +21,7 @@ from app.domain.contracts import (
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
     RunInterruptedPayload,
     RunQueuedPayload,
@@ -2088,6 +2089,473 @@ async def test_running_cancellation_signals_cancels_drains_then_persists(
 
 
 @pytest.mark.asyncio
+async def test_running_cancellation_aborts_completion_before_drained(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    abort_started = asyncio.Event()
+    release_abort = asyncio.Event()
+    abort_finished = asyncio.Event()
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            abort_started.set()
+            await release_abort.wait()
+            abort_finished.set()
+
+        execution.set_completion_operations(commit, abort)
+        executor_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_abort_before_drained"))
+        accepted = await manager.submit_run(
+            "task_abort_before_drained",
+            StartRunRequest(
+                request_id="req_abort_before_drained",
+                input="cancel with cleanup",
+            ),
+        )
+        await asyncio.wait_for(executor_ready.wait(), timeout=1)
+
+        cancellation = asyncio.create_task(
+            manager.cancel_run(accepted.task_id, accepted.run_id)
+        )
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        await asyncio.wait_for(
+            execution.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_executor.set()
+        await asyncio.wait_for(abort_started.wait(), timeout=1)
+
+        assert not cancellation.done()
+        cancelling = await repository.get_snapshot(accepted.task_id)
+        assert cancelling is not None
+        assert cancelling.runs[-1].status is RunStatus.CANCEL_REQUESTED
+
+        release_abort.set()
+        cancelled = await asyncio.wait_for(cancellation, timeout=1)
+
+        assert abort_finished.is_set()
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+    finally:
+        release_abort.set()
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_executor_error_aborts_completion_before_run_failed(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    abort_statuses: list[RunStatus] = []
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            snapshot = await repository.get_snapshot(execution.task_id)
+            assert snapshot is not None
+            abort_statuses.append(snapshot.runs[-1].status)
+
+        execution.set_completion_operations(commit, abort)
+        raise RuntimeError("executor failed after Tool completion")
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_error_abort_order"))
+        accepted = await manager.submit_run(
+            "task_error_abort_order",
+            StartRunRequest(
+                request_id="req_error_abort_order",
+                input="fail after Tool",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert abort_statuses == [RunStatus.RUNNING]
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert "executor failed after Tool completion" in (
+            failed.runs[-1].error or ""
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_abort_failure_does_not_terminalize_cancellation_as_cancelled(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            raise OSError("staging cleanup failed")
+
+        execution.set_completion_operations(commit, abort)
+        executor_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_cancel_abort_failure"))
+        accepted = await manager.submit_run(
+            "task_cancel_abort_failure",
+            StartRunRequest(
+                request_id="req_cancel_abort_failure",
+                input="cancel cleanup failure",
+            ),
+        )
+        await asyncio.wait_for(executor_ready.wait(), timeout=1)
+        cancellation = asyncio.create_task(
+            manager.cancel_run(accepted.task_id, accepted.run_id)
+        )
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        await asyncio.wait_for(
+            execution.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_executor.set()
+
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(cancellation, timeout=1)
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        assert "staging cleanup failed" in (failed.runs[-1].error or "")
+        events = await repository.list_events(accepted.task_id)
+        assert not any(
+            isinstance(event.payload, RunCancelledPayload) for event in events
+        )
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_abort_failure_blocks_cancelled_when_failure_event_cannot_persist(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+    real_append_event = repository.append_event
+
+    async def fail_run_failed_append(event):
+        if isinstance(event.payload, RunFailedPayload):
+            raise OSError("run_failed event unavailable")
+        return await real_append_event(event)
+
+    monkeypatch.setattr(repository, "append_event", fail_run_failed_append)
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            raise OSError("unpersisted staging cleanup failure")
+
+        execution.set_completion_operations(commit, abort)
+        executor_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_unpersisted_abort_failure"))
+        accepted = await manager.submit_run(
+            "task_unpersisted_abort_failure",
+            StartRunRequest(
+                request_id="req_unpersisted_abort_failure",
+                input="do not fake cancellation",
+            ),
+        )
+        await asyncio.wait_for(executor_ready.wait(), timeout=1)
+        cancellation = asyncio.create_task(
+            manager.cancel_run(accepted.task_id, accepted.run_id)
+        )
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        await asyncio.wait_for(
+            execution.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_executor.set()
+
+        with pytest.raises(RuntimeError, match="completion abort failed"):
+            await asyncio.wait_for(cancellation, timeout=1)
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.CANCEL_REQUESTED
+        events = await repository.list_events(accepted.task_id)
+        assert not any(
+            isinstance(event.payload, RunCancelledPayload) for event in events
+        )
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_executor_and_abort_failures_are_both_durable_diagnostics(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            raise OSError("abort diagnostic")
+
+        execution.set_completion_operations(commit, abort)
+        raise RuntimeError("executor diagnostic")
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_dual_failure"))
+        accepted = await manager.submit_run(
+            "task_dual_failure",
+            StartRunRequest(
+                request_id="req_dual_failure",
+                input="preserve both failures",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        diagnostic = failed.runs[-1].error or ""
+        assert "executor diagnostic" in diagnostic
+        assert "completion abort also failed: OSError: abort diagnostic" in diagnostic
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_commit_and_abort_failures_are_both_durable_diagnostics(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            raise RuntimeError("commit diagnostic")
+
+        async def abort() -> None:
+            raise OSError("abort after commit diagnostic")
+
+        execution.set_completion_operations(commit, abort)
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_commit_dual_failure"))
+        accepted = await manager.submit_run(
+            "task_commit_dual_failure",
+            StartRunRequest(
+                request_id="req_commit_dual_failure",
+                input="preserve commit and abort failures",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        diagnostic = failed.runs[-1].error or ""
+        assert "commit diagnostic" in diagnostic
+        assert (
+            "completion abort also failed: OSError: abort after commit diagnostic"
+            in diagnostic
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_durable_artifact_event_survives_hub_projection_failure(
+    tmp_path,
+    caplog,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    abort_calls = 0
+
+    class FailingArtifactHub(EventHub):
+        async def publish(self, event) -> None:
+            if isinstance(event.payload, ArtifactProducedPayload):
+                raise OSError("artifact hub projection failed")
+            await super().publish(event)
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return [
+                build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=1,
+                    payload=ArtifactProducedPayload(
+                        artifact=ArtifactManifestEntry(
+                            artifact_id="artifact_durable_hub_failure",
+                            name="durable.csv",
+                            relative_path="artifacts/durable.csv",
+                            media_type="text/csv",
+                            size_bytes=1,
+                            sha256="ef" * 32,
+                            generated_by_step_id="step_durable_hub_failure",
+                        )
+                    ),
+                )
+            ]
+
+        async def abort() -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+
+        execution.set_completion_operations(commit, abort)
+
+    hub = FailingArtifactHub()
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        event_hub=hub,
+    )
+    caplog.set_level(logging.ERROR, logger="app.runtime.manager")
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_durable_artifact_hub"))
+        accepted = await manager.submit_run(
+            "task_durable_artifact_hub",
+            StartRunRequest(
+                request_id="req_durable_artifact_hub",
+                input="survive artifact hub failure",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert abort_calls == 0
+        events = await repository.list_events(accepted.task_id)
+        assert any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert isinstance(events[-1].payload, RunCompletedPayload)
+        assert "durable completion event projection failed" in caplog.text
+    finally:
+        await manager.close()
+        await hub.close()
+
+
+@pytest.mark.asyncio
+async def test_durable_artifact_event_survives_append_projection_failure(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    real_append_event = repository.append_event
+    failed_once = False
+
+    async def append_then_fail(event):
+        nonlocal failed_once
+        snapshot = await real_append_event(event)
+        if isinstance(event.payload, ArtifactProducedPayload) and not failed_once:
+            failed_once = True
+            raise OSError("artifact append projection failed")
+        return snapshot
+
+    monkeypatch.setattr(repository, "append_event", append_then_fail)
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return [
+                build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=1,
+                    payload=ArtifactProducedPayload(
+                        artifact=ArtifactManifestEntry(
+                            artifact_id="artifact_durable_append_failure",
+                            name="durable-append.csv",
+                            relative_path="artifacts/durable-append.csv",
+                            media_type="text/csv",
+                            size_bytes=1,
+                            sha256="cd" * 32,
+                            generated_by_step_id="step_durable_append_failure",
+                        )
+                    ),
+                )
+            ]
+
+        async def abort() -> None:
+            raise AssertionError("durable append failure must not abort completion")
+
+        execution.set_completion_operations(commit, abort)
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    caplog.set_level(logging.ERROR, logger="app.runtime.manager")
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_durable_artifact_append"))
+        accepted = await manager.submit_run(
+            "task_durable_artifact_append",
+            StartRunRequest(
+                request_id="req_durable_artifact_append",
+                input="survive durable append failure",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        events = await repository.list_events(accepted.task_id)
+        assert any(
+            isinstance(event.payload, ArtifactProducedPayload) for event in events
+        )
+        assert isinstance(events[-1].payload, RunCompletedPayload)
+        assert "durable completion event projection failed" in caplog.text
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_startup_recovers_queued_and_interrupts_in_flight_runs_once(
     tmp_path,
 ) -> None:
@@ -2543,7 +3011,7 @@ async def test_late_cancellation_signal_does_not_retain_completed_execution(
 
     manager = manager_module.TaskManager(repository, run_executor=run)
     await manager.start()
-    real_append_status = manager._append_status
+    real_append_status = manager._append_completion_status
 
     async def pause_after_completed_persist(accepted, payload, **kwargs):
         updated = await real_append_status(accepted, payload, **kwargs)
@@ -2552,7 +3020,11 @@ async def test_late_cancellation_signal_does_not_retain_completed_execution(
             await release_completion.wait()
         return updated
 
-    monkeypatch.setattr(manager, "_append_status", pause_after_completed_persist)
+    monkeypatch.setattr(
+        manager,
+        "_append_completion_status",
+        pause_after_completed_persist,
+    )
     try:
         await repository.save_snapshot(empty_snapshot("task_late_cancel_signal"))
         accepted = await manager.submit_run(
@@ -2906,7 +3378,7 @@ async def test_worker_survives_finalization_failure_and_runs_next_item(
         assert "simulated finalization append failure" in (failed.runs[-1].error or "")
         assert completed is not None
         assert completed.runs[-1].status is RunStatus.COMPLETED
-        assert "run worker failed" in caplog.text
+        assert "run worker failed" not in caplog.text
     finally:
         release_first.set()
         await manager.close()
@@ -2943,6 +3415,7 @@ async def test_default_context_uses_repository_task_root_for_execution(
         assert len(contexts) == 1
         expected_root = (repository.tasks_dir / accepted.task_id).resolve()
         assert contexts[0].work_dir.root == expected_root
+        assert contexts[0].managed_run_id == accepted.run_id
         assert expected_root.is_dir()
         assert not (ambient_output / "tasks" / accepted.task_id).exists()
     finally:
@@ -3078,6 +3551,54 @@ async def test_close_cancels_live_workers_without_waiting_for_executor(
     finally:
         release_executor.set()
         await close_task
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_completion_abort_before_repository_shutdown(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_started = asyncio.Event()
+    abort_started = asyncio.Event()
+    release_abort = asyncio.Event()
+    abort_finished = asyncio.Event()
+
+    async def run(execution) -> None:
+        async def commit() -> list:
+            return []
+
+        async def abort() -> None:
+            abort_started.set()
+            await release_abort.wait()
+            abort_finished.set()
+
+        execution.set_completion_operations(commit, abort)
+        executor_started.set()
+        await asyncio.Event().wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    await repository.save_snapshot(empty_snapshot("task_close_abort"))
+    await manager.submit_run(
+        "task_close_abort",
+        StartRunRequest(request_id="req_close_abort", input="close with abort"),
+    )
+    await asyncio.wait_for(executor_started.wait(), timeout=1)
+
+    close_task = asyncio.create_task(manager.close())
+    try:
+        await asyncio.wait_for(abort_started.wait(), timeout=1)
+        assert not close_task.done()
+
+        release_abort.set()
+        await asyncio.wait_for(close_task, timeout=1)
+
+        assert abort_finished.is_set()
+        assert manager._running == {}
+    finally:
+        release_abort.set()
+        await asyncio.gather(close_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

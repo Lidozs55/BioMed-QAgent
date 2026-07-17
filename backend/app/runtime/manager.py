@@ -76,6 +76,7 @@ RunCompactionCommit = Callable[
     Awaitable[bool],
 ]
 RunCompletionCommit = Callable[[], Awaitable[list[EventEnvelope]]]
+RunCompletionAbort = Callable[[], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -96,6 +97,20 @@ class RunExecution:
     )
     _completion_committer: RunCompletionCommit | None = field(
         default=None,
+        repr=False,
+    )
+    _completion_aborter: RunCompletionAbort | None = field(
+        default=None,
+        repr=False,
+    )
+    _commit_task: asyncio.Task[list[EventEnvelope]] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _abort_task: asyncio.Task[None] | None = field(
+        default=None,
+        init=False,
         repr=False,
     )
     _streaming_result: StreamingRunResult | None = field(
@@ -120,6 +135,12 @@ class RunExecution:
     )
     _cancel_sent: bool = field(default=False, init=False, repr=False)
     _completion_sealed: bool = field(default=False, init=False, repr=False)
+    _completion_committed: bool = field(default=False, init=False, repr=False)
+    _completion_abort_error: BaseException | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def set_streaming_result(self, result: StreamingRunResult) -> None:
         if self._streaming_result is not None and self._streaming_result is not result:
@@ -157,21 +178,70 @@ class RunExecution:
             raise RuntimeError("run execution has no compaction committer")
         return await self._compaction_committer(record, payload)
 
-    def set_completion_committer(self, committer: RunCompletionCommit) -> None:
-        """Attach the executor's one-shot formal publication operation."""
+    def set_completion_operations(
+        self,
+        committer: RunCompletionCommit,
+        aborter: RunCompletionAbort,
+    ) -> None:
+        """Atomically attach one managed package's commit and abort operations."""
 
-        if self._completion_committer is not None:
-            raise RuntimeError("completion committer is already attached")
+        if self._completion_committer is not None or self._completion_aborter is not None:
+            raise RuntimeError("completion operations are already attached")
         if self._completion_sealed:
             raise RuntimeError("run completion is already sealed")
         self._completion_committer = committer
+        self._completion_aborter = aborter
 
     async def commit_completion(self) -> list[EventEnvelope]:
         if not self._completion_sealed:
             raise RuntimeError("run completion must be sealed before commit")
         if self._completion_committer is None:
             return []
-        return await self._completion_committer()
+        if self._abort_task is not None:
+            raise RuntimeError("run completion abort already started")
+        if self._commit_task is None:
+            self._commit_task = asyncio.create_task(self._commit_completion_once())
+        return await asyncio.shield(self._commit_task)
+
+    async def _commit_completion_once(self) -> list[EventEnvelope]:
+        if self._completion_committer is None:
+            return []
+        events = await self._completion_committer()
+        self._completion_committed = True
+        return events
+
+    async def abort_completion(self) -> None:
+        """Run cleanup once without letting a waiting caller cancel it."""
+
+        if self._abort_task is None:
+            self._abort_task = asyncio.create_task(self._abort_completion_once())
+        await asyncio.shield(self._abort_task)
+
+    async def _abort_completion_once(self) -> None:
+        if self._commit_task is not None:
+            try:
+                await asyncio.shield(self._commit_task)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if self._completion_committed or self._completion_aborter is None:
+            return
+        try:
+            await self._completion_aborter()
+        except BaseException as error:
+            self._completion_abort_error = error
+            raise
+
+    @property
+    def completion_abort_error(self) -> BaseException | None:
+        return self._completion_abort_error
+
+    def discard_completion(self) -> None:
+        """Release in-memory callbacks after durable completion or cleanup."""
+
+        self._completion_committer = None
+        self._completion_aborter = None
 
     def request_cancellation(self) -> bool:
         """Set the cooperative token unless formal completion already won."""
@@ -731,6 +801,10 @@ class TaskManager:
 
         await execution.cancel_after_turn()
         await execution.wait_until_drained()
+        if execution.completion_abort_error is not None:
+            raise RuntimeError("completion abort failed") from (
+                execution.completion_abort_error
+            )
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)
             if snapshot is None:
@@ -891,6 +965,7 @@ class TaskManager:
             await self._append_status(accepted, RunStartedPayload())
             try:
                 context = self._context_factory(accepted.task_id)
+                context.bind_managed_run(accepted.run_id)
                 execution = RunExecution(
                     task_id=accepted.task_id,
                     run_id=accepted.run_id,
@@ -929,6 +1004,9 @@ class TaskManager:
 
         try:
             retain_cancellation = False
+            completion_durable = False
+            completion_cleanup_attempted = False
+            cleanup_error: BaseException | None = None
             error: BaseException | None = None
             try:
                 await self.run_executor(execution)
@@ -939,44 +1017,189 @@ class TaskManager:
                 error = caught
             except Exception as caught:
                 error = caught
+
+            if error is not None:
+                completion_cleanup_attempted = True
+                try:
+                    await self._abort_completion_and_drain(execution)
+                except BaseException as caught:
+                    cleanup_error = caught
+                else:
+                    execution.discard_completion()
+
+            if error is not None:
+                async with lock:
+                    snapshot = await self.repository.get_snapshot(accepted.task_id)
+                    if snapshot is None:
+                        raise LookupError(accepted.task_id)
+                    run = next(
+                        candidate
+                        for candidate in snapshot.runs
+                        if candidate.run_id == accepted.run_id
+                    )
+                    if (
+                        run.status is RunStatus.CANCEL_REQUESTED
+                        and cleanup_error is None
+                    ):
+                        retain_cancellation = True
+                        return
+                    await self._append_status(
+                        accepted,
+                        RunFailedPayload(
+                            error=self._format_completion_error(error, cleanup_error)
+                        ),
+                    )
+                    return
+
+            finalization_error: BaseException | None = None
+            try:
+                async with lock:
+                    snapshot = await self.repository.get_snapshot(accepted.task_id)
+                    if snapshot is None:
+                        raise LookupError(accepted.task_id)
+                    run = next(
+                        candidate
+                        for candidate in snapshot.runs
+                        if candidate.run_id == accepted.run_id
+                    )
+                    if run.status is RunStatus.CANCEL_REQUESTED:
+                        retain_cancellation = True
+                        return
+                    await self._append_completion_status(
+                        accepted,
+                        RunFinalizingPayload(),
+                    )
+                    if execution.context.cancellation_requested.is_set():
+                        retain_cancellation = True
+                        return
+                    execution.seal_completion()
+                    completion_events = await execution.commit_completion()
+                    for completion_event in completion_events:
+                        await self._append_completion_status(
+                            accepted,
+                            completion_event.payload,
+                            stage_attempt_id=completion_event.stage_attempt_id,
+                            timestamp=completion_event.timestamp,
+                        )
+                    await self._append_completion_status(
+                        accepted,
+                        RunCompletedPayload(),
+                    )
+                    completion_durable = True
+                    execution.discard_completion()
+            except asyncio.CancelledError as caught:
+                worker_task = asyncio.current_task()
+                if worker_task is not None and worker_task.cancelling() > 0:
+                    raise
+                finalization_error = caught
+            except Exception as caught:
+                finalization_error = caught
+
+            if finalization_error is not None:
+                completion_cleanup_attempted = True
+                cleanup_error = None
+                try:
+                    await self._abort_completion_and_drain(execution)
+                except BaseException as caught:
+                    cleanup_error = caught
+                else:
+                    execution.discard_completion()
+                async with lock:
+                    snapshot = await self.repository.get_snapshot(accepted.task_id)
+                    if snapshot is None:
+                        raise LookupError(accepted.task_id)
+                    run = next(
+                        candidate
+                        for candidate in snapshot.runs
+                        if candidate.run_id == accepted.run_id
+                    )
+                    if run.status is RunStatus.COMPLETED:
+                        completion_durable = True
+                        execution.discard_completion()
+                        return
+                    await self._append_status(
+                        accepted,
+                        RunFailedPayload(
+                            error=self._format_completion_error(
+                                finalization_error,
+                                cleanup_error,
+                            )
+                        ),
+                    )
+                return
+        finally:
+            try:
+                if not completion_durable and not completion_cleanup_attempted:
+                    completion_cleanup_attempted = True
+                    try:
+                        await self._abort_completion_and_drain(execution)
+                    except BaseException as cleanup_error:
+                        retain_cancellation = False
+                        await self._record_completion_cleanup_failure(
+                            accepted,
+                            cleanup_error,
+                        )
+                    else:
+                        execution.discard_completion()
             finally:
                 execution._mark_drained()
+                if not retain_cancellation:
+                    self._running.pop((accepted.task_id, accepted.run_id), None)
 
-            async with lock:
-                snapshot = await self.repository.get_snapshot(accepted.task_id)
-                if snapshot is None:
-                    raise LookupError(accepted.task_id)
-                run = next(
-                    candidate
-                    for candidate in snapshot.runs
-                    if candidate.run_id == accepted.run_id
-                )
-                if run.status is RunStatus.CANCEL_REQUESTED:
-                    retain_cancellation = True
-                    return
-                if error is not None:
-                    await self._append_status(
-                        accepted,
-                        RunFailedPayload(error=str(error) or type(error).__name__),
+    @staticmethod
+    async def _abort_completion_and_drain(execution: RunExecution) -> None:
+        cleanup = asyncio.create_task(execution.abort_completion())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+
+    async def _record_completion_cleanup_failure(
+        self,
+        accepted: TaskRunAccepted,
+        cleanup_error: BaseException,
+    ) -> None:
+        lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
+        async with lock:
+            snapshot = await self.repository.get_snapshot(accepted.task_id)
+            if snapshot is None:
+                return
+            run = next(
+                candidate
+                for candidate in snapshot.runs
+                if candidate.run_id == accepted.run_id
+            )
+            if run.status not in {
+                RunStatus.RUNNING,
+                RunStatus.FINALIZING,
+                RunStatus.CANCEL_REQUESTED,
+            }:
+                return
+            await self._append_status(
+                accepted,
+                RunFailedPayload(
+                    error=(
+                        "completion abort failed: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
                     )
-                    return
-                await self._append_status(accepted, RunFinalizingPayload())
-                if execution.context.cancellation_requested.is_set():
-                    retain_cancellation = True
-                    return
-                execution.seal_completion()
-                completion_events = await execution.commit_completion()
-                for completion_event in completion_events:
-                    await self._append_status(
-                        accepted,
-                        completion_event.payload,
-                        stage_attempt_id=completion_event.stage_attempt_id,
-                        timestamp=completion_event.timestamp,
-                    )
-                await self._append_status(accepted, RunCompletedPayload())
-        finally:
-            if not retain_cancellation:
-                self._running.pop((accepted.task_id, accepted.run_id), None)
+                ),
+            )
+
+    @staticmethod
+    def _format_completion_error(
+        primary_error: BaseException,
+        cleanup_error: BaseException | None,
+    ) -> str:
+        primary = str(primary_error) or type(primary_error).__name__
+        if cleanup_error is None:
+            return primary
+        cleanup = str(cleanup_error) or type(cleanup_error).__name__
+        return (
+            f"{primary}; completion abort also failed: "
+            f"{type(cleanup_error).__name__}: {cleanup}"
+        )
 
     async def _emit_activity(
         self,
@@ -1103,6 +1326,58 @@ class TaskManager:
         )
         return any(event == expected for event in events)
 
+    async def _append_completion_status(
+        self,
+        accepted: TaskRunAccepted,
+        payload: object,
+        *,
+        stage_attempt_id: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> TaskSnapshot:
+        """Persist completion state and reconcile projection-only failures."""
+
+        event = await self._build_status_event(
+            accepted,
+            payload,
+            stage_attempt_id=stage_attempt_id,
+            timestamp=timestamp,
+        )
+        try:
+            updated = await self.repository.append_event(event)
+        except BaseException as error:
+            if not await self._event_is_durable(event):
+                raise
+            current = asyncio.current_task()
+            if (
+                isinstance(error, asyncio.CancelledError)
+                and current is not None
+                and current.cancelling() > 0
+            ):
+                raise
+            logger.error(
+                "durable completion event projection failed for task %s run %s",
+                accepted.task_id,
+                accepted.run_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            updated = await self._require_snapshot(accepted.task_id)
+        try:
+            await self.event_hub.publish(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            if not await self._event_is_durable(event):
+                raise RuntimeError(
+                    "completion event was not durable after projection failure"
+                ) from error
+            logger.error(
+                "durable completion event projection failed for task %s run %s",
+                accepted.task_id,
+                accepted.run_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        return updated
+
     async def _persist_status(
         self,
         accepted: TaskRunAccepted,
@@ -1149,6 +1424,7 @@ __all__ = [
     "RunExecution",
     "RunEventEmitter",
     "RunCompactionCommit",
+    "RunCompletionAbort",
     "RunCompletionCommit",
     "RunExecutor",
     "StreamingRunResult",

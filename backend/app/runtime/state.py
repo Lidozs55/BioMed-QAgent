@@ -50,6 +50,7 @@ _LEGAL_TRANSITIONS = {
     },
     RunStatus.CANCEL_REQUESTED: {
         RunStatus.CANCELLED,
+        RunStatus.FAILED,
         RunStatus.INTERRUPTED,
     },
     RunStatus.COMPLETED: set(),

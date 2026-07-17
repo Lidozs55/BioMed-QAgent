@@ -3,22 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import build_agent
 from app.domain.contracts import (
-    ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     CancelRequestedPayload,
     EventEnvelope,
-    RunManifest,
     TaskCompletedPayload,
     TaskMode,
     TaskState,
@@ -30,13 +28,17 @@ from app.domain.contracts.runtime import validate_task_databases
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
-from app.runtime.repository import atomic_write_json
+
+if TYPE_CHECKING:
+    from app.runtime.manager import RunExecution
 
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
     Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
 )
+
+
 class _AssistantTextBuffer:
     def __init__(
         self,
@@ -93,67 +95,6 @@ def _tool_identity(item: object) -> tuple[str, str | None]:
         raise ValueError("tool stream item is missing call_id")
     name = _value(raw_item, "name")
     return call_id, name if isinstance(name, str) and name else None
-
-
-def _artifact_manifest_fingerprint(output_dir: Path, task_id: str) -> str | None:
-    manifest_path = output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
-    if not manifest_path.is_file():
-        return None
-    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-
-
-def _load_artifact_payloads(
-    output_dir: Path,
-    task_id: str,
-    *,
-    previous_fingerprint: str | None = None,
-) -> list[object]:
-    manifest_path = output_dir / "tasks" / task_id / "artifacts" / "run_manifest.json"
-    if not manifest_path.is_file():
-        return []
-    manifest_bytes = manifest_path.read_bytes()
-    manifest_fingerprint = hashlib.sha256(manifest_bytes).hexdigest()
-    if manifest_fingerprint == previous_fingerprint:
-        return []
-    manifest = RunManifest.model_validate_json(manifest_bytes)
-    manifest_entry = ArtifactManifestEntry(
-        artifact_id="run_manifest",
-        name="run_manifest.json",
-        relative_path="artifacts/run_manifest.json",
-        media_type="application/json",
-        size_bytes=len(manifest_bytes),
-        sha256=hashlib.sha256(manifest_bytes).hexdigest(),
-        generated_by_step_id="step_artifact_builder_v1",
-    )
-    return [
-        ArtifactProducedPayload(artifact=manifest_entry),
-        *(
-            ArtifactProducedPayload(artifact=artifact)
-            for artifact in manifest.artifacts
-        ),
-    ]
-
-
-def _write_artifact_publication_marker(
-    output_dir: Path,
-    task_id: str,
-    run_id: str,
-    expected_manifest_sha256: str,
-) -> None:
-    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
-    manifest_path = artifacts_dir / "run_manifest.json"
-    actual_manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-    if actual_manifest_sha256 != expected_manifest_sha256:
-        raise RuntimeError("artifact manifest changed before formal publication")
-    atomic_write_json(
-        artifacts_dir / ".runtime-publication.json",
-        {
-            "schema_version": 1,
-            "task_id": task_id,
-            "run_id": run_id,
-            "manifest_sha256": actual_manifest_sha256,
-        },
-    )
 
 
 class AgentRunExecutor:
@@ -237,18 +178,7 @@ class AgentRunExecutor:
         )
         build = build_agent(execution.databases)
         text_buffer = _AssistantTextBuffer(execution.emit)
-        output_dir_value = getattr(self._repository, "output_dir", None)
-        output_dir = Path(output_dir_value) if output_dir_value is not None else None
         try:
-            previous_manifest_fingerprint = (
-                await asyncio.to_thread(
-                    _artifact_manifest_fingerprint,
-                    output_dir,
-                    execution.task_id,
-                )
-                if output_dir is not None
-                else None
-            )
             preparation = await self._compactor.prepare(
                 execution.task_id,
                 model_handle=build.model,
@@ -272,51 +202,62 @@ class AgentRunExecutor:
                 await self._consume_events(execution, result, text_buffer)
             finally:
                 await text_buffer.flush()
-            if (
-                output_dir is not None
-                and not execution.context.cancellation_requested.is_set()
-            ):
-                payloads = await asyncio.to_thread(
-                    _load_artifact_payloads,
-                    output_dir,
-                    execution.task_id,
-                    previous_fingerprint=previous_manifest_fingerprint,
-                )
-                if payloads:
-                    manifest_sha256 = payloads[0].artifact.sha256
-
-                    async def commit_agent_artifacts() -> list[EventEnvelope]:
-                        await asyncio.to_thread(
-                            _write_artifact_publication_marker,
-                            output_dir,
-                            execution.task_id,
-                            execution.run_id,
-                            manifest_sha256,
-                        )
-                        return [
-                            build_event(
-                                task_id=execution.task_id,
-                                run_id=execution.run_id,
-                                sequence=index,
-                                payload=payload,
-                            )
-                            for index, payload in enumerate(payloads, start=1)
-                        ]
-
-                    execution.set_completion_committer(commit_agent_artifacts)
         finally:
-            await build.model.close()
+            try:
+                await self._transfer_pending_publication(execution)
+            finally:
+                await build.model.close()
+
+    @staticmethod
+    async def _transfer_pending_publication(execution: RunExecution) -> None:
+        take_pending = getattr(execution.context, "take_pending_publication", None)
+        if not callable(take_pending):
+            return
+        pending = take_pending()
+        if pending is None:
+            return
+        try:
+            if pending.run_id != execution.run_id:
+                raise RuntimeError("pending publication run_id does not match execution")
+            payloads = [
+                ArtifactProducedPayload(artifact=pending.manifest_entry),
+                *(
+                    ArtifactProducedPayload(artifact=artifact)
+                    for artifact in pending.manifest.artifacts
+                ),
+            ]
+
+            async def commit_agent_artifacts() -> list[EventEnvelope]:
+                await _run_sync_operation(pending.publish)
+                return [
+                    build_event(
+                        task_id=execution.task_id,
+                        run_id=execution.run_id,
+                        sequence=index,
+                        payload=payload,
+                    )
+                    for index, payload in enumerate(payloads, start=1)
+                ]
+
+            async def abort_agent_artifacts() -> None:
+                await _run_sync_operation(pending.abort)
+
+            execution.set_completion_operations(
+                commit_agent_artifacts,
+                abort_agent_artifacts,
+            )
+        except BaseException:
+            await _run_sync_operation(pending.abort)
+            raise
 
 
-async def _run_fixture_sync[FixtureSyncResult](
-    execution,
-    operation: Callable[[], FixtureSyncResult],
-) -> FixtureSyncResult:
+async def _run_sync_operation[ResultT](
+    operation: Callable[[], ResultT],
+) -> ResultT:
     worker_task = asyncio.create_task(asyncio.to_thread(operation))
     try:
         return await asyncio.shield(worker_task)
     except asyncio.CancelledError:
-        execution.context.cancellation_requested.set()
         while not worker_task.done():
             try:
                 await asyncio.shield(worker_task)
@@ -405,32 +346,68 @@ class FixtureRunExecutor:
             defer_publication=True,
             run_id=execution.run_id,
         )
+        abort = getattr(runner, "abort", None)
+        transferred = False
         set_event_sink = getattr(runner, "set_event_sink", None)
         streams_events = callable(set_event_sink)
         if callable(set_event_sink):
             set_event_sink(persist_pipeline_event)
-        manifest = await _run_pipeline_with_cancellation(execution, runner)
-        if not streams_events:
-            for event in list(runner.events):
-                await persist_pipeline_event(event)
-        if manifest.task_state is TaskState.CANCELLED:
-            raise PipelineCancelledError("fixture pipeline was cancelled")
-        if manifest.task_state is TaskState.FAILED:
-            raise RuntimeError("fixture pipeline failed validation or execution")
-        _check_fixture_bridge_cancellation(execution)
+        try:
+            manifest = await _run_pipeline_with_cancellation(execution, runner)
+            if not streams_events:
+                for event in list(runner.events):
+                    await persist_pipeline_event(event)
+            if manifest.task_state is TaskState.CANCELLED:
+                raise PipelineCancelledError("fixture pipeline was cancelled")
+            if manifest.task_state is TaskState.FAILED:
+                raise RuntimeError("fixture pipeline failed validation or execution")
+            _check_fixture_bridge_cancellation(execution)
 
-        publish = getattr(runner, "publish", None)
-        if callable(publish) or completion_events:
+            pending_factory = getattr(runner, "pending_publication", None)
+            pending = pending_factory() if callable(pending_factory) else None
+            publish = pending.publish if pending is not None else getattr(
+                runner,
+                "publish",
+                None,
+            )
+            abort = pending.abort if pending is not None else abort
+            if pending is not None:
+                completion_events.insert(
+                    0,
+                    build_event(
+                        task_id=execution.task_id,
+                        run_id=execution.run_id,
+                        sequence=1,
+                        payload=ArtifactProducedPayload(
+                            artifact=pending.manifest_entry
+                        ),
+                    ),
+                )
+            if callable(publish) or completion_events or callable(abort):
 
-            async def commit_fixture_completion() -> list[EventEnvelope]:
-                if callable(publish):
-                    await _run_fixture_sync(
-                        execution,
-                        partial(publish, execution.run_id),
-                    )
-                return completion_events
+                async def commit_fixture_completion() -> list[EventEnvelope]:
+                    if callable(publish):
+                        operation = (
+                            publish
+                            if pending is not None
+                            else partial(publish, execution.run_id)
+                        )
+                        await _run_sync_operation(operation)
+                    return completion_events
 
-            execution.set_completion_committer(commit_fixture_completion)
+                async def abort_fixture_completion() -> None:
+                    if callable(abort):
+                        await _run_sync_operation(abort)
+
+                execution.set_completion_operations(
+                    commit_fixture_completion,
+                    abort_fixture_completion,
+                )
+                transferred = True
+        except BaseException:
+            if not transferred and callable(abort):
+                await _run_sync_operation(abort)
+            raise
 
 
 class ModeDispatchRunExecutor:

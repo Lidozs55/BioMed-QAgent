@@ -534,6 +534,51 @@ async def test_fixture_executor_cancellation_sets_token_and_drains_sync_worker(
 
 
 @pytest.mark.asyncio
+async def test_fixture_executor_aborts_validated_runner_on_cancellation(
+    tmp_path,
+) -> None:
+    abort_calls = 0
+    context = RunContext(
+        task_id="task_fixture_abort",
+        base_dir=tmp_path / "output" / "tasks",
+        managed_run_id="run_fixture_abort",
+    )
+    context.cancellation_requested.set()
+
+    class AbortableRunner:
+        def __init__(self) -> None:
+            self.events: list = []
+
+        async def run(self):
+            return completed_manifest(context.task_id)
+
+        def abort(self) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+
+    runner = AbortableRunner()
+    execution = manager_module.RunExecution(
+        task_id=context.task_id,
+        run_id="run_fixture_abort",
+        request_id="req_fixture_abort",
+        input="cancel validated fixture",
+        context=context,
+        mode=TaskMode.FIXTURE,
+        databases=["pubmed", "geo"],
+    )
+    executor = runner_module.FixtureRunExecutor(
+        TaskRepository(tmp_path / "output"),
+        fixture_dir=tmp_path / "fixture",
+        pipeline_runner_factory=lambda **kwargs: runner,
+    )
+
+    with pytest.raises(PipelineCancelledError):
+        await executor(execution)
+
+    assert abort_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_manager_close_drains_fixture_worker_before_repository_close(
     tmp_path,
     monkeypatch,
@@ -846,12 +891,18 @@ async def test_runtime_completion_seals_fixture_publication_against_late_cancel(
 ) -> None:
     publication_finished = threading.Event()
     release_publication = threading.Event()
+    abort_calls = 0
 
     class BlockingPublicationRunner(runner_module.PipelineRunner):
         def publish(self, run_id: str) -> None:
             super().publish(run_id)
             publication_finished.set()
             release_publication.wait()
+
+        def abort(self) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+            super().abort()
 
     def blocking_factory(**kwargs):
         return BlockingPublicationRunner(**kwargs)
@@ -887,6 +938,8 @@ async def test_runtime_completion_seals_fixture_publication_against_late_cancel(
         )
         await asyncio.sleep(0.05)
         assert not cancel_task.done()
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        assert not execution.context.cancellation_requested.is_set()
 
         release_publication.set()
         await manager.wait_until_idle()
@@ -896,6 +949,7 @@ async def test_runtime_completion_seals_fixture_publication_against_late_cancel(
         snapshot = await repository.get_snapshot(accepted.task_id)
         assert snapshot is not None
         assert snapshot.runs[-1].status is RunStatus.COMPLETED
+        assert abort_calls == 0
         task_root = repository.tasks_dir / accepted.task_id
         assert (task_root / "artifacts" / "run_manifest.json").is_file()
         marker = json.loads(
