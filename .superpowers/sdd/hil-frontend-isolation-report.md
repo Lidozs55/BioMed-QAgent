@@ -60,3 +60,11 @@ The Codex pnpm wrapper aborted on its no-TTY modules-purge guard (`ERR_PNPM_ABOR
 - `frontend/src/test/background-task-notifications.test.tsx` (build-only API mock completeness)
 - `frontend/src/test/runtime-controller.test.ts` (build-only optional parameter narrowing)
 - `.superpowers/sdd/hil-frontend-isolation-report.md`
+
+## Post-`99ba098` full verification
+
+- Full Vitest command: `& 'C:\Users\cheng\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'D:\coding\BioMed-QAgent\frontend\node_modules\vitest\vitest.mjs' run` (cwd `frontend/`) — Vitest 3.2.7, 14 test files passed, 174 tests passed, 0 failed; duration 12.32s.
+- TypeScript build command: the same local Node runtime with `D:\coding\BioMed-QAgent\frontend\node_modules\typescript\bin\tsc -b` — exit 0, no diagnostics.
+- Production build command: the same local Node runtime with `D:\coding\BioMed-QAgent\frontend\node_modules\vite\bin\vite.js build` — exit 0; Vite 5.4.21 transformed 4,954 modules and built in 5.26s. Output included `index-BELmD_KE.js` (684.40 kB / 205.49 kB gzip) and `index-nsHEqMME.css` (121.50 kB / 19.44 kB gzip); only the existing >500 kB chunk advisory was emitted.
+- Restored `frontend/tsconfig.app.tsbuildinfo` exactly from the current HEAD index after the build with `git checkout-index --force -- frontend/tsconfig.app.tsbuildinfo`.
+- `git status --short` was empty after restoration, confirming that `dist/` and generated build metadata introduced no tracked changes.
