@@ -53,6 +53,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     FINALIZING = "finalizing"
     CANCEL_REQUESTED = "cancel_requested"
+    AWAITING_USER_INPUT = "awaiting_user_input"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

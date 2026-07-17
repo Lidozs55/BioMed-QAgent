@@ -53,6 +53,8 @@ from app.domain.contracts.events import (
     ToolCalledPayload,
     ToolCompletedPayload,
     ToolStartedPayload,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     WarningPayload,
     build_event,
 )
@@ -172,6 +174,8 @@ __all__ = [
     "TaskSnapshot",
     "TaskState",
     "TaskSummary",
+    "UserInputRequiredPayload",
+    "UserInputResumedPayload",
     "ValidationSummary",
     "WarningRecord",
     "ToolCalledPayload",

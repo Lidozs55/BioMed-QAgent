@@ -6,6 +6,7 @@ import type {
   DatabaseRecord,
   EventPage,
   MessagePage,
+  ResumeRunInput,
   StartTaskInput,
   TaskPage,
   TaskRunAccepted,
@@ -60,6 +61,11 @@ export interface APIClient {
     options?: AdmissionOptions,
   ) => Promise<TaskRunAccepted>;
   cancelRun: (taskId: string, runId: string) => Promise<TaskSnapshot>;
+  resumeRun: (
+    taskId: string,
+    runId: string,
+    input: ResumeRunInput,
+  ) => Promise<TaskSnapshot>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
@@ -201,6 +207,20 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
       request<TaskSnapshot>(
         `${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/cancel`,
         { method: "POST" },
+      ),
+
+    resumeRun: (taskId, runId, input) =>
+      request<TaskSnapshot>(
+        `${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/resume`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            request_id: input.request_id,
+            decision: input.decision,
+            detail: input.detail,
+          }),
+        },
       ),
 
     deleteTask: (taskId) =>

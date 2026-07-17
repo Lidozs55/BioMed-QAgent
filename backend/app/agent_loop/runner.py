@@ -381,6 +381,9 @@ class FixtureRunExecutor:
             cancellation_requested=execution.context.cancellation_requested,
             defer_publication=True,
         )
+        submitter = getattr(runner, "submit_user_input", None)
+        if callable(submitter):
+            execution.set_user_input_submitter(submitter)
         manifest = await _run_pipeline_with_cancellation(execution, runner)
         _check_fixture_bridge_cancellation(execution)
         legacy_events = list(runner.events)

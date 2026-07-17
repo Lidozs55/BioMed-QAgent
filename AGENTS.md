@@ -67,6 +67,7 @@ Key points:
 | DELETE | `/api/v1/tasks/{task_id}`                         | Delete a terminal task and its history |
 | POST   | `/api/v1/tasks/{task_id}/runs`                    | Enqueue another user turn for an idle Agent task |
 | POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | Request cancellation of a queued or running run |
+| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | Submit a human-in-the-loop resume decision to a paused run |
 | GET    | `/api/v1/tasks/{task_id}/messages`                | Paginated task messages            |
 | GET    | `/api/v1/tasks/{task_id}/events`                  | Replay durable events (`?after_sequence=N&limit=N`) |
 | GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
@@ -87,7 +88,8 @@ Key points:
    `GET /tasks/{task_id}/events`) and control frames:
    - `EventEnvelope` — a task event (run_queued, run_started, tool_started,
      tool_completed, assistant_delta, stage_started, stage_completed,
-     artifact_produced, run_completed, run_failed, run_cancelled, etc.)
+     artifact_produced, run_completed, run_failed, run_cancelled,
+     user_input_required, user_input_resumed, plan_ready, etc.)
    - `{"type":"pong"}` — response to ping
    - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
 5. Events are ordered by `sequence` (monotonically increasing per task).

@@ -82,6 +82,9 @@ export default function App() {
               continueTask={(taskId, input) =>
                 controller.continueTask(taskId, input)
               }
+              resumeRun={(taskId, runId, input) =>
+                controller.resumeRun(taskId, runId, input)
+              }
               loadOlderMessages={(taskId) =>
                 controller.loadOlderMessages(taskId)
               }

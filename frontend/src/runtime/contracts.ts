@@ -5,6 +5,7 @@ export type RunStatus =
   | "running"
   | "finalizing"
   | "cancel_requested"
+  | "awaiting_user_input"
   | "completed"
   | "failed"
   | "cancelled"
@@ -119,6 +120,12 @@ export interface ContinueTaskInput {
   input: string;
 }
 
+export interface ResumeRunInput {
+  request_id: string;
+  decision: UserInputDecision;
+  detail: Record<string, JsonValue>;
+}
+
 export interface ArtifactRecord {
   artifact_id: string;
   name: string;
@@ -160,9 +167,28 @@ export interface WarningRecord {
   created_at: string;
 }
 
+export type UserInputPromptKind = "plan_confirmation" | "data_correction";
+
+export type UserInputDecision = "approve" | "reject";
+
 export type EventPayload =
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
+  | {
+      type: "user_input_required";
+      request_id: string;
+      prompt_kind: UserInputPromptKind;
+      summary: string;
+      expires_at: string | null;
+      fixture_exempt: boolean;
+      detail: Record<string, JsonValue>;
+    }
+  | {
+      type: "user_input_resumed";
+      request_id: string;
+      decision: UserInputDecision;
+      detail: Record<string, JsonValue>;
+    }
   | { type: "stage_started"; stage: StageName; attempt: number }
   | {
       type: "stage_completed";

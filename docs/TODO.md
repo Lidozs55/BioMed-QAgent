@@ -389,13 +389,13 @@
 
 #### 4.2.1 共享底层架构（P1，必须先于 4.2.2/4.2.3 完成）
 
-- [ ] **P1** 新增 `RunStatus.AWAITING_USER_INPUT` 运行子状态
+- [x] **P1** 新增 `RunStatus.AWAITING_USER_INPUT` 运行子状态
   
       （`backend/app/domain/contracts/runtime.py` + `app/runtime/state.py`）
       —— 合法转换：`RUNNING → AWAITING_USER_INPUT → RUNNING | CANCEL_REQUESTED | FAILED`
       —— `TaskManager` 暂停 Run worker（不释放 semaphore slot，避免被新任务抢占）
 
-- [ ] **P1** 新增统一 `UserInputRequiredPayload` 事件
+- [x] **P1** 新增统一 `UserInputRequiredPayload` 事件
   
       （`backend/app/domain/contracts/events.py`）
       —— 字段：`request_id` / `prompt_kind`（判别联合：`plan_confirmation` | `data_correction`）/
@@ -403,21 +403,21 @@
       —— 将 `PlanReadyPayload` 重构为 `UserInputRequiredPayload` 的
       `prompt_kind="plan_confirmation"` 子类型的别名（保持向后兼容）
 
-- [ ] **P1** PipelineRunner 新增 `_await_user_input(request)` 暂停原语
+- [x] **P1** PipelineRunner 新增 `_await_user_input(request)` 暂停原语
   
       （`backend/app/pipeline/runner.py`）
       —— 发射事件 → 设置 Run 为 AWAITING_USER_INPUT → 阻塞 `asyncio.Event`
       —— fixture 模式自动批准（`fixture_exempt=True`，仅发射事件不阻塞）
       —— 超时后转 FAILED（与 stage timeout 一致）
 
-- [ ] **P1** 新增 `POST /api/v1/tasks/{task_id}/runs/{run_id}/resume` API
+- [x] **P1** 新增 `POST /api/v1/tasks/{task_id}/runs/{run_id}/resume` API
   
       （`backend/app/api/routes.py`）
       —— Body：`{request_id, decision: "approve"|"reject", payload?: object}`
       —— 校验 `request_id` 匹配当前等待中的请求
       —— 触发 Run 恢复，将 decision 传给 `_await_user_input`
 
-- [ ] **P1** 前端 `reducer.ts` 接入 `user_input_required` / `plan_ready` /
+- [x] **P1** 前端 `reducer.ts` 接入 `user_input_required` / `plan_ready` /
       `task_created` / `task_recovered`
   
       （`frontend/src/runtime/reducer.ts` + `contracts.ts`）
@@ -425,23 +425,23 @@
       —— 新增 `TaskProjection.pendingUserInput: UserInputRequest | null`
       —— 在 `RunStatus` 类型增加 `"awaiting_user_input"`
 
-- [ ] **P1** 新增统一 `UserInputDialog` 组件（复用 shadcn Dialog）
+- [x] **P1** 新增统一 `UserInputDialog` 组件（复用 shadcn Dialog）
   
       （`frontend/src/components/UserInputDialog.tsx`）
       —— 由 `prompt_kind` 判别渲染不同表单（plan / corrections）
       —— 提交时调用 `POST /runs/{run_id}/resume`
 
-- [ ] **P1** AGENTS.md §2 HTTP 路由表补充 `/resume` 端点
+- [x] **P1** AGENTS.md §2 HTTP 路由表补充 `/resume` 端点
   （保持文档与代码同步）
 
 #### 4.2.2 实例 A：计划确认（原 §4.2）
 
-- [ ] **P1** PipelineRunner 在 `PlanReadyPayload` 后调用 `_await_user_input`
+- [x] **P1** PipelineRunner 在 `PlanReadyPayload` 后调用 `_await_user_input`
   
       —— fixture 模式豁免（`fixture_exempt=True`，自动批准）
       —— agent 模式真正阻塞，等待 `POST /resume`
 
-- [ ] **P1** `PlanConfirmCard` 视图作为 `UserInputDialog` 的
+- [x] **P1** `PlanConfirmCard` 视图作为 `UserInputDialog` 的
       `prompt_kind="plan_confirmation"` 渲染
   
       —— 展示 `TaskSpecification` 摘要（queries / datasets / requested_outputs）

@@ -13,11 +13,11 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.contracts import (
     EventEnvelope,
@@ -327,6 +327,73 @@ async def cancel_task_run(
             raise HTTPException(
                 status_code=409,
                 detail="Run is not cancellable",
+            ) from error
+        raise
+
+
+class ResumeRunRequest(BaseModel):
+    """Body for ``POST /runs/{run_id}/resume``.
+
+    Attributes:
+        request_id: Must match the ``request_id`` of the pending
+            ``user_input_required`` event for the run.
+        decision: ``approve`` to continue the pipeline, ``reject`` to
+            abort with a failure.
+        detail: Optional structured payload (e.g. corrected fields).
+    """
+
+    request_id: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+@router.post(
+    "/tasks/{task_id}/runs/{run_id}/resume",
+    status_code=202,
+    response_model=TaskSnapshot,
+)
+async def resume_task_run(
+    task_id: str,
+    run_id: str,
+    body: ResumeRunRequest,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> TaskSnapshot:
+    """Submit a human-in-the-loop resume decision to a paused run."""
+
+    snapshot = await _require_snapshot(repository, task_id)
+    _require_run(snapshot, run_id)
+    try:
+        return await manager.resume_run(
+            task_id,
+            run_id,
+            request_id=body.request_id,
+            decision=body.decision,
+            detail=body.detail,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Run not found") from error
+    except RuntimeError as error:
+        detail = str(error)
+        if detail == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        if detail.startswith(f"run {run_id} is not awaiting user input"):
+            raise HTTPException(
+                status_code=409,
+                detail="Run is not awaiting user input",
+            ) from error
+        if detail == f"run {run_id} has no live execution":
+            raise HTTPException(
+                status_code=409,
+                detail="Run is not awaiting user input",
+            ) from error
+        if detail == f"run {run_id} executor rejected the resume decision":
+            raise HTTPException(
+                status_code=409,
+                detail="Run is not awaiting user input",
             ) from error
         raise
 

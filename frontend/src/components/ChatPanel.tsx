@@ -11,6 +11,7 @@ import {
 import { AgentProgress } from "@/components/AgentProgress";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
 import ResultsViewer from "@/components/ResultsViewer";
+import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +50,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
-import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
+import type { ResumeRunInput, StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
 import {
   selectActiveArtifacts,
   selectActiveMessages,
@@ -67,6 +68,11 @@ interface ChatPanelProps {
     taskId: string,
     input: { input: string },
   ) => Promise<TaskRunAccepted>;
+  resumeRun?: (
+    taskId: string,
+    runId: string,
+    input: ResumeRunInput,
+  ) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
 }
 
@@ -90,6 +96,7 @@ function draftKey(input: string, databases: readonly string[]): string {
 export function ChatPanel({
   startTask,
   continueTask,
+  resumeRun,
   loadOlderMessages,
 }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
@@ -173,6 +180,8 @@ export function ChatPanel({
           return "任务收尾中，请稍候";
         case "cancel_requested":
           return "任务正在取消，请稍候";
+        case "awaiting_user_input":
+          return "等待确认计划，请在弹窗中决策";
       }
     }
     return "选择已完成的 Agent 任务后继续提问";
@@ -588,6 +597,9 @@ export function ChatPanel({
           <ResultsViewer />
         </TabsContent>
       </Tabs>
+      {resumeRun !== undefined && (
+        <UserInputDialog task={activeTask} onResumeRun={resumeRun} />
+      )}
     </div>
   );
 }
