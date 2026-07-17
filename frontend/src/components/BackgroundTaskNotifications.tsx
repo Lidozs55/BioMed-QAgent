@@ -4,6 +4,10 @@ import { toast } from "sonner";
 import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
+function errorDescription(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
+}
+
 export function BackgroundTaskNotifications({
   onViewTask,
 }: {
@@ -11,6 +15,13 @@ export function BackgroundTaskNotifications({
 }) {
   useEffect(() => {
     const notifiedTransitions = new Set<string>();
+    const viewTask = async (taskId: string) => {
+      try {
+        await onViewTask(taskId);
+      } catch (error) {
+        toast.error("打开任务失败", { description: errorDescription(error) });
+      }
+    };
     return useAgentStore.subscribe((state, previousState) => {
       for (const [taskId, task] of Object.entries(state.tasksById)) {
         const status = task.summary.status;
@@ -31,7 +42,7 @@ export function BackgroundTaskNotifications({
 
         const action = {
           label: "查看",
-          onClick: () => void onViewTask(taskId),
+          onClick: () => void viewTask(taskId),
         };
         if (status === "completed") {
           toast.success("后台任务已完成", {

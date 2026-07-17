@@ -196,6 +196,22 @@ describe("ChatPanel", () => {
     expect(useAgentStore.getState().tasksById).toBe(before);
   });
 
+  it("keeps setup controls inside a bounded vertical scroll panel", () => {
+    render(<ChatPanel startTask={vi.fn()} />);
+
+    const setupPanel = screen
+      .getByText("研究设置")
+      .closest('[data-slot="tabs-content"]');
+
+    expect(setupPanel).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(setupPanel).toContainElement(
+      screen.getByRole("button", { name: "开始研究" }),
+    );
+    expect(setupPanel).toContainElement(
+      screen.getByRole("button", { name: "运行固定验收案例" }),
+    );
+  });
+
   it("stores draft text canonically and clears it for new research", () => {
     render(<ChatPanel startTask={vi.fn()} />);
     const input = screen.getByPlaceholderText("输入研究目标...");
@@ -240,6 +256,77 @@ describe("ChatPanel", () => {
         input: "follow up",
       }),
     );
+  });
+
+  it("leaves chat vertical scrolling owned by MessageScroller", () => {
+    seedTerminalTask();
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+
+    const chatPanel = screen
+      .getByRole("textbox", { name: "继续提问" })
+      .closest('[data-slot="tabs-content"]');
+    const messageScroller = container.querySelector<HTMLElement>(
+      '[data-slot="message-scroller"]',
+    );
+    const messageViewport = container.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-viewport"]',
+    );
+
+    expect(chatPanel).toHaveClass("min-h-0");
+    expect(chatPanel).not.toHaveClass("overflow-y-auto");
+    expect(chatPanel).toContainElement(messageScroller);
+    expect(messageViewport).toHaveClass("overflow-y-auto");
+  });
+
+  it("preserves assistant newlines and blank lines in BubbleContent", () => {
+    seedTerminalTask();
+    const content = "Summary line\n\n- first item\n  indented detail";
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      return {
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            messages: [
+              {
+                ...task.messages[0],
+                role: "assistant",
+                content,
+              },
+            ],
+          },
+        },
+      };
+    });
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+
+    const bubbleContent = container.querySelector<HTMLElement>(
+      '[data-slot="bubble-content"]',
+    );
+    if (bubbleContent === null) {
+      throw new Error("Expected assistant BubbleContent");
+    }
+
+    expect(bubbleContent.textContent).toBe(content);
+    expect(bubbleContent).toHaveClass("whitespace-pre-wrap");
+    expect(bubbleContent.closest('[data-slot="bubble"]')).not.toBeNull();
+  });
+
+  it("bounds the results tab for its internal artifact scroll area", () => {
+    seedTerminalTask();
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "结果" }));
+    const resultsPanel = screen
+      .getByText("暂无结果")
+      .closest('[data-slot="tabs-content"]');
+
+    expect(resultsPanel).toHaveClass("min-h-0", "overflow-hidden");
   });
 
   it("disables continuation while a task is active or fixture-only", () => {

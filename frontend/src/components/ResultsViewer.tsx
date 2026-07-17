@@ -284,7 +284,7 @@ export default function ResultsViewer() {
 
   const sourceData = parseSourceManifest(activities);
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-4">
       {sourceData.length > 0 && (
         <Accordion>
           <AccordionItem value="source-manifest">
@@ -310,7 +310,7 @@ export default function ResultsViewer() {
           </AccordionItem>
         </Accordion>
       )}
-      <ScrollArea className="h-full min-w-0">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
         <div className="flex min-w-0 flex-col gap-3">
           {taskId !== null && artifacts.map((artifact) => (
             <ArtifactCard key={artifact.artifact_id} artifact={artifact} taskId={taskId} />

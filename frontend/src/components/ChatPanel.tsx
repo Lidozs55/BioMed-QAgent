@@ -315,11 +315,11 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       <Tabs
         value={visibleTab}
         onValueChange={(value) => setActiveTab(value as TabMode)}
-        className="flex h-full min-w-0 flex-col"
+        className="flex h-full min-h-0 min-w-0 flex-col"
       >
         <TabsList className="mx-4 mt-2 shrink-0">
           <TabsTrigger value="setup">设置</TabsTrigger>
@@ -327,7 +327,10 @@ export function ChatPanel({
           <TabsTrigger value="results">结果</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="setup" className="min-w-0 p-4">
+        <TabsContent
+          value="setup"
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4"
+        >
           <Card>
             <CardHeader>
               <CardTitle>研究设置</CardTitle>
@@ -387,7 +390,10 @@ export function ChatPanel({
           </Card>
         </TabsContent>
 
-        <TabsContent value="chat" className="flex min-w-0 flex-1 flex-col">
+        <TabsContent
+          value="chat"
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+        >
           {!connected && activeTask !== undefined && (
             <Alert variant="destructive" className="mx-4 mt-2">
               <WarningCircleIcon />
@@ -484,7 +490,9 @@ export function ChatPanel({
                           </MessageAvatar>
                           <MessageContent>
                             <Bubble>
-                              <BubbleContent>{message.content}</BubbleContent>
+                              <BubbleContent className="whitespace-pre-wrap">
+                                {message.content}
+                              </BubbleContent>
                             </Bubble>
                           </MessageContent>
                         </Message>
@@ -599,7 +607,10 @@ export function ChatPanel({
           </MessageScrollerProvider>
         </TabsContent>
 
-        <TabsContent value="results" className="min-w-0 flex-1 p-4">
+        <TabsContent
+          value="results"
+          className="min-h-0 min-w-0 flex-1 overflow-hidden p-4"
+        >
           <ResultsViewer />
         </TabsContent>
       </Tabs>

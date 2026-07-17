@@ -118,7 +118,9 @@ export function mergeTaskPage(
       tasksById[taskId] !== undefined &&
       isActiveStatus(tasksById[taskId].summary.status),
   );
-  const activeItems = [...pageActive, ...preservedActive];
+  const activeItems = [...new Set([...pageActive, ...preservedActive])].sort(
+    (left, right) => compareTaskIds(tasksById, left, right),
+  );
 
   const incomingHistory = [...page.active_items, ...page.items]
     .map((item) => item.task_id)
@@ -130,7 +132,8 @@ export function mergeTaskPage(
     ? [...state.taskOrder, ...incomingHistory]
     : [...preservedHistory, ...incomingHistory];
   const taskOrder = [...new Set(history)]
-    .filter((taskId) => !activeItems.includes(taskId));
+    .filter((taskId) => !activeItems.includes(taskId))
+    .sort((left, right) => compareTaskIds(tasksById, left, right));
 
   return {
     ...state,

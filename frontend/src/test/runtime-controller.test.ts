@@ -35,6 +35,7 @@ function summary(
   status: TaskSummary["status"] = "running",
   latestSequence = 0,
   mode: TaskSummary["mode"] = "agent",
+  createdAt = CREATED_AT,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -43,8 +44,8 @@ function summary(
     title: taskId,
     status,
     active_run_id: status === "running" ? `run_${taskId}` : null,
-    created_at: CREATED_AT,
-    updated_at: CREATED_AT,
+    created_at: createdAt,
+    updated_at: createdAt,
     latest_sequence: latestSequence,
   };
 }
@@ -333,16 +334,32 @@ describe("runtime orchestration", () => {
     await startup;
 
     expect(useAgentStore.getState().taskOrder).toEqual([
-      "task_created_during_history",
       "task_existing_history",
+      "task_created_during_history",
     ]);
   });
 
   it("preserves only history changed while the first page request is pending", async () => {
     useAgentStore.getState().mergeTaskPage(
       page(
-        [summary("task_changed_during_history", "running", 0)],
-        [summary("task_stale_history", "completed", 1)],
+        [
+          summary(
+            "task_changed_during_history",
+            "running",
+            0,
+            "agent",
+            "2026-07-16T00:00:00Z",
+          ),
+        ],
+        [
+          summary(
+            "task_stale_history",
+            "completed",
+            1,
+            "agent",
+            "2026-07-13T00:00:00Z",
+          ),
+        ],
       ),
       false,
     );
@@ -356,13 +373,83 @@ describe("runtime orchestration", () => {
       .getState()
       .applyEvent(runCompletedEvent("task_changed_during_history", 1));
     firstPage.resolve(
-      page([], [summary("task_current_history", "completed", 1)]),
+      page(
+        [],
+        [
+          summary(
+            "task_current_history",
+            "completed",
+            1,
+            "agent",
+            "2026-07-15T00:00:00Z",
+          ),
+        ],
+      ),
     );
     await startup;
 
     expect(useAgentStore.getState().taskOrder).toEqual([
       "task_changed_during_history",
       "task_current_history",
+    ]);
+    expect(useAgentStore.getState().taskOrder).not.toContain(
+      "task_stale_history",
+    );
+  });
+
+  it("restores immutable history order after an older task changes during refresh", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [
+          summary(
+            "task_older_changed",
+            "running",
+            0,
+            "agent",
+            "2026-07-12T00:00:00Z",
+          ),
+        ],
+        [
+          summary(
+            "task_stale_history",
+            "completed",
+            1,
+            "agent",
+            "2026-07-11T00:00:00Z",
+          ),
+        ],
+      ),
+      false,
+    );
+    const refreshedPage = deferred<TaskPage>();
+    const controller = new RuntimeController(
+      api({ fetchTasks: vi.fn(() => refreshedPage.promise) }),
+      transport(),
+    );
+
+    const refresh = controller.refreshTaskHistory();
+    useAgentStore
+      .getState()
+      .applyEvent(runCompletedEvent("task_older_changed", 1));
+    refreshedPage.resolve(
+      page(
+        [],
+        [
+          summary(
+            "task_newer_history",
+            "completed",
+            1,
+            "agent",
+            "2026-07-16T00:00:00Z",
+          ),
+        ],
+      ),
+    );
+    await refresh;
+
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_newer_history",
+      "task_older_changed",
     ]);
     expect(useAgentStore.getState().taskOrder).not.toContain(
       "task_stale_history",
@@ -2173,7 +2260,15 @@ describe("runtime orchestration", () => {
       fetchTasks: vi.fn().mockResolvedValue(
         page(
           [summary("task_active")],
-          [summary("task_older", "completed")],
+          [
+            summary(
+              "task_older",
+              "completed",
+              0,
+              "agent",
+              "2026-07-13T00:00:00Z",
+            ),
+          ],
           null,
         ),
       ),

@@ -24,6 +24,7 @@ function summary(
   status: TaskSummary["status"] = "running",
   latestSequence = 0,
   mode: TaskSummary["mode"] = "agent",
+  createdAt = CREATED_AT,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -32,8 +33,8 @@ function summary(
     title: `Task ${taskId}`,
     status,
     active_run_id: status === "running" ? `run_${taskId}` : null,
-    created_at: CREATED_AT,
-    updated_at: CREATED_AT,
+    created_at: createdAt,
+    updated_at: createdAt,
     latest_sequence: latestSequence,
   };
 }
@@ -98,6 +99,74 @@ function envelope(
 }
 
 describe("runtime event projection", () => {
+  it("deduplicates and sorts merged task groups by immutable creation order", () => {
+    const preservedActive = summary(
+      "task_active_new",
+      "running",
+      2,
+      "agent",
+      "2026-07-15T00:00:00Z",
+    );
+    const preservedHistory = summary(
+      "task_history_old",
+      "completed",
+      2,
+      "agent",
+      "2026-07-13T00:00:00Z",
+    );
+    const initial = mergeTaskPage(
+      createInitialRuntimeState(),
+      {
+        active_items: [preservedActive],
+        items: [preservedHistory],
+        next_cursor: null,
+      },
+      false,
+    );
+    const incomingActive = summary(
+      "task_active_old",
+      "running",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+    const incomingHistoryA = summary(
+      "task_history_a",
+      "completed",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+    const incomingHistoryZ = summary(
+      "task_history_z",
+      "completed",
+      1,
+      "agent",
+      "2026-07-14T00:00:00Z",
+    );
+
+    const state = mergeTaskPage(
+      initial,
+      {
+        active_items: [incomingActive, incomingActive],
+        items: [incomingHistoryA, incomingHistoryZ, incomingHistoryZ],
+        next_cursor: null,
+      },
+      false,
+      new Set([preservedHistory.task_id]),
+    );
+
+    expect(state.activeItems).toEqual([
+      "task_active_new",
+      "task_active_old",
+    ]);
+    expect(state.taskOrder).toEqual([
+      "task_history_z",
+      "task_history_a",
+      "task_history_old",
+    ]);
+  });
+
   it("routes overlapping task-local sequences independently", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
