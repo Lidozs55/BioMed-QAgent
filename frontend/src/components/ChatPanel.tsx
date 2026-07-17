@@ -10,6 +10,7 @@ import {
 
 import { AgentProgress } from "@/components/AgentProgress";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
+import { MarkdownContent } from "@/components/MarkdownContent";
 import ResultsViewer from "@/components/ResultsViewer";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -490,8 +491,8 @@ export function ChatPanel({
                           </MessageAvatar>
                           <MessageContent>
                             <Bubble>
-                              <BubbleContent className="whitespace-pre-wrap">
-                                {message.content}
+                              <BubbleContent>
+                                <MarkdownContent content={message.content} />
                               </BubbleContent>
                             </Bubble>
                           </MessageContent>

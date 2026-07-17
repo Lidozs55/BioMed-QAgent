@@ -523,6 +523,64 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("history failed");
   });
 
+  it("renders assistant messages as Markdown", () => {
+    const snapshot: TaskSnapshot = {
+      task: {
+        task_id: "task_md",
+        mode: "agent",
+        databases: ["pubmed"],
+        title: "Markdown task",
+        status: "completed",
+        active_run_id: null,
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        latest_sequence: 4,
+      },
+      runs: [
+        {
+          run_id: "run_md",
+          task_id: "task_md",
+          request_id: "req_md",
+          status: "completed",
+          input: "md question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: CREATED_AT,
+          error: null,
+        },
+      ],
+      messages: [
+        {
+          message_id: "message_md",
+          task_id: "task_md",
+          run_id: "run_md",
+          ordinal: 1,
+          role: "assistant",
+          content:
+            "# 标题\n\n- item 1\n- item 2\n\n`code`\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n[link](https://example.com)",
+          created_at: CREATED_AT,
+        },
+      ],
+      older_messages_cursor: null,
+    };
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    useAgentStore.getState().setActiveTaskId("task_md");
+
+    render(<ChatPanel startTask={vi.fn()} />);
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "标题" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("code")).toHaveClass("font-mono");
+    expect(screen.getByRole("table")).toBeInTheDocument();
+
+    const link = screen.getByRole("link", { name: "link" });
+    expect(link).toHaveAttribute("href", "https://example.com");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
   it("hides the load-earlier action after the full history is loaded", () => {
     seedTerminalTask();
     render(
