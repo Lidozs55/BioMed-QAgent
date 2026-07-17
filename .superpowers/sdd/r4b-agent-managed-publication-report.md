@@ -37,8 +37,9 @@ a pending handle.
   before the Tool's first `await`.
 - A managed context permits only one reserved or pending Pipeline publication.
   Parallel/repeated Tool calls fail before a second runner is constructed.
-- Failed/cancelled Tool execution aborts its runner in a drained worker thread
-  and releases the reservation even if abort itself raises.
+- Failed/cancelled Tool execution aborts its runner in a drained worker thread.
+  If abort raises, cleanup ownership and the reservation remain held until the
+  executor transfers them to `RunExecution` for a manager-owned retry.
 - Successful Tool execution installs one `PendingPublication`; standalone
   execution publishes immediately and leaves no pending handle.
 
