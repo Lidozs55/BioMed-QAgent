@@ -651,7 +651,7 @@
 
 - [x] 默认 pytest 无真实 Key 通过（867 passed, 18 deselected, 2026-07-17）
 - [x] Live 测试覆盖 PubMed + GEO + 完整 counts 校验
-- [x] 前端 Vitest（14 files / 183 tests）+ TypeScript + ESLint + build 门禁
+- [x] 前端 Vitest（14 files / 188 tests）+ TypeScript + ESLint + build 门禁
 
 ### 7.8 Agent 与 API（原 §11）
 

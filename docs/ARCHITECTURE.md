@@ -507,7 +507,7 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
   queued/running/paused 取消和重启恢复均已实现。
 - HIL：真实 Agent Tool 路径已接入权威 event/resume bridge，覆盖 exact one-shot
   request identity、拒绝/超时失败、paused cancellation 和 fixture 自动批准审计。
-- 前端：full Vitest 为 `14 files / 183 tests passed`；ESLint 0 warning、TypeScript
+- 前端：full Vitest 为 `14 files / 188 tests passed`；ESLint 0 warning、TypeScript
   typecheck 和 production build 均通过。HIL prompt/Dialog 按 Run 与 submission
   attempt 隔离，R5 workspace UX 修复已通过 review。
 - 浏览器 QA 已在当前分支重新执行：启动时保留新研究草稿并加载后端历史，fixture
