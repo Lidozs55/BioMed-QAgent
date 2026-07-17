@@ -31,6 +31,7 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
     TaskSummary,
+    UserInputRequiredPayload,
     UserInputResumedPayload,
     WarningPayload,
     build_event,
@@ -119,6 +120,11 @@ class RunExecution:
         default=None,
         repr=False,
     )
+    _pending_user_input_request_id: str | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
     _streaming_result: StreamingRunResult | None = field(
         default=None,
         init=False,
@@ -157,14 +163,35 @@ class RunExecution:
     def set_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
         """Attach the executor-side resume channel (e.g. PipelineRunner)."""
 
+        if self._user_input_submitter is not None:
+            raise RuntimeError("user input submitter is already attached")
         self._user_input_submitter = submitter
+
+    def clear_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
+        """Clear a Tool-owned resume channel without removing a newer owner."""
+
+        if self._user_input_submitter is submitter:
+            self._user_input_submitter = None
+            self._pending_user_input_request_id = None
 
     def submit_user_input(self, decision: UserInputResumedPayload) -> bool:
         """Forward a resume decision to the executor's user-input channel."""
 
-        if self._user_input_submitter is None:
+        submitter = self._user_input_submitter
+        if (
+            submitter is None
+            or self._pending_user_input_request_id != decision.request_id
+        ):
             return False
-        return self._user_input_submitter(decision)
+        self._pending_user_input_request_id = None
+        try:
+            accepted = submitter(decision)
+        except BaseException:
+            self._pending_user_input_request_id = decision.request_id
+            raise
+        if not accepted:
+            self._pending_user_input_request_id = decision.request_id
+        return accepted
 
     async def emit(
         self,
@@ -177,13 +204,26 @@ class RunExecution:
 
         if self._event_emitter is None:
             raise RuntimeError("run execution has no event emitter")
-        if stage_attempt_id is None and timestamp is None:
-            return await self._event_emitter(payload)
-        return await self._event_emitter(
-            payload,
-            stage_attempt_id=stage_attempt_id,
-            timestamp=timestamp,
-        )
+        pending_request_id: str | None = None
+        if isinstance(payload, UserInputRequiredPayload) and not payload.fixture_exempt:
+            if self._user_input_submitter is None:
+                raise RuntimeError("user input request has no live submitter")
+            if self._pending_user_input_request_id is not None:
+                raise RuntimeError("user input request is already pending")
+            pending_request_id = payload.request_id
+            self._pending_user_input_request_id = pending_request_id
+        try:
+            if stage_attempt_id is None and timestamp is None:
+                return await self._event_emitter(payload)
+            return await self._event_emitter(
+                payload,
+                stage_attempt_id=stage_attempt_id,
+                timestamp=timestamp,
+            )
+        except BaseException:
+            if self._pending_user_input_request_id == pending_request_id:
+                self._pending_user_input_request_id = None
+            raise
 
     async def commit_compaction(
         self,
@@ -790,6 +830,7 @@ class TaskManager:
                     return await self._require_snapshot(task_id)
                 if run.status not in {
                     RunStatus.RUNNING,
+                    RunStatus.AWAITING_USER_INPUT,
                     RunStatus.FINALIZING,
                     RunStatus.CANCEL_REQUESTED,
                 }:

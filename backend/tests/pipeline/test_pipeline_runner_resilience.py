@@ -13,7 +13,13 @@ import time
 from pathlib import Path
 
 import pytest
-from app.domain.contracts import AttemptStatus, StageName, TaskState
+from app.domain.contracts import (
+    AttemptStatus,
+    StageName,
+    TaskState,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
+)
 from app.pipeline.runner import (
     DEFAULT_STAGE_TIMEOUTS,
     PipelineEventSinkError,
@@ -22,6 +28,171 @@ from app.pipeline.runner import (
 from app.pipeline.stages import PipelineCancelledError
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+@pytest.mark.asyncio
+async def test_user_input_submission_matches_request_and_is_one_shot(
+    tmp_path: Path,
+) -> None:
+    required_visible = asyncio.Event()
+    release_sink = asyncio.Event()
+    runner: PipelineRunner
+
+    async def event_sink(event) -> None:
+        if isinstance(event.payload, UserInputRequiredPayload):
+            required_visible.set()
+            await release_sink.wait()
+
+    runner = PipelineRunner(
+        task_id="task_user_input_identity",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        event_sink=event_sink,
+    )
+    waiting = asyncio.create_task(
+        runner._await_user_input(  # noqa: SLF001
+            request_id="plan-identity",
+            prompt_kind="plan_confirmation",
+            summary="confirm identity",
+            timeout=1,
+        )
+    )
+    await asyncio.wait_for(required_visible.wait(), timeout=1)
+
+    assert not runner.submit_user_input(
+        UserInputResumedPayload(
+            request_id="wrong-id",
+            decision="approve",
+        )
+    )
+    accepted = UserInputResumedPayload(
+        request_id="plan-identity",
+        decision="approve",
+        detail={"sequence": 1},
+    )
+    assert runner.submit_user_input(accepted)
+    assert not runner.submit_user_input(
+        UserInputResumedPayload(
+            request_id="plan-identity",
+            decision="reject",
+            detail={"sequence": 2},
+        )
+    )
+
+    release_sink.set()
+    assert await asyncio.wait_for(waiting, timeout=1) == accepted
+
+
+def test_fixture_plan_confirmation_emits_required_and_auto_resume_in_order(
+    tmp_path: Path,
+) -> None:
+    runner = PipelineRunner(
+        task_id="task_fixture_user_input_audit",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="fixture",
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.COMPLETED
+    required = [
+        event
+        for event in runner.events
+        if isinstance(event.payload, UserInputRequiredPayload)
+    ]
+    resumed = [
+        event
+        for event in runner.events
+        if isinstance(event.payload, UserInputResumedPayload)
+    ]
+    assert len(required) == 1
+    assert len(resumed) == 1
+    assert required[0].payload.fixture_exempt
+    assert resumed[0].payload.request_id == required[0].payload.request_id
+    assert resumed[0].payload.decision == "approve"
+    first_stage = next(
+        index
+        for index, event in enumerate(runner.events)
+        if event.payload.type.value == "stage_started"
+    )
+    assert runner.events.index(required[0]) < runner.events.index(resumed[0])
+    assert runner.events.index(resumed[0]) < first_stage
+
+
+@pytest.mark.asyncio
+async def test_user_input_timeout_is_distinct_and_populates_expiry(
+    tmp_path: Path,
+) -> None:
+    runner = PipelineRunner(
+        task_id="task_user_input_timeout",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        total_timeout=1,
+        user_input_timeout=0.02,
+    )
+
+    manifest = await runner.run()
+
+    assert manifest.task_state is TaskState.FAILED
+    required = next(
+        event
+        for event in runner.events
+        if isinstance(event.payload, UserInputRequiredPayload)
+    )
+    assert required.payload.expires_at is not None
+    assert required.payload.expires_at > required.timestamp
+    failed = next(
+        event for event in runner.events if event.payload.type.value == "task_failed"
+    )
+    assert "user input timeout" in failed.payload.error.message.lower()
+    assert not any(
+        event.payload.type.value == "stage_started" for event in runner.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_input_wait_does_not_consume_total_timeout_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner: PipelineRunner
+
+    async def event_sink(event) -> None:
+        if isinstance(event.payload, UserInputRequiredPayload):
+            await asyncio.sleep(0.08)
+            assert runner.submit_user_input(
+                UserInputResumedPayload(
+                    request_id=event.payload.request_id,
+                    decision="approve",
+                )
+            )
+
+    runner = PipelineRunner(
+        task_id="task_user_input_budget",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        total_timeout=0.05,
+        user_input_timeout=0.5,
+        event_sink=event_sink,
+    )
+    expected = object()
+
+    async def controlled_inner() -> object:
+        await runner._await_user_input(  # noqa: SLF001
+            request_id="plan-budget",
+            prompt_kind="plan_confirmation",
+            summary="confirm budget",
+        )
+        await asyncio.sleep(0.02)
+        return expected
+
+    monkeypatch.setattr(runner, "_run_inner", controlled_inner)
+
+    assert await runner.run() is expected
 
 
 def test_runner_cancels_when_requested_before_stage(

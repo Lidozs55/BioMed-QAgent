@@ -59,6 +59,9 @@ async def run_research_pipeline(
     transferred = False
     reservation_released = False
     cleanup_attempted = False
+    bridge = run_context.managed_pipeline_bridge
+    submitter = None
+    submitter_installed = False
 
     async def abort_reserved_runner() -> None:
         nonlocal cleanup_attempted, reservation_released, transferred
@@ -90,8 +93,13 @@ async def run_research_pipeline(
             mode=mode,
             cancellation_requested=run_context.cancellation_requested,
             defer_publication=managed_run_id is not None,
+            event_sink=bridge.event_sink if bridge is not None else None,
             run_id=managed_run_id or STANDALONE_RUN_ID,
         )
+        if bridge is not None:
+            submitter = runner.submit_user_input
+            bridge.install_user_input_submitter(submitter)
+            submitter_installed = True
         manifest = await runner.run()
         if managed_run_id is not None:
             if manifest.task_state.value == "completed":
@@ -99,6 +107,9 @@ async def run_research_pipeline(
                 transferred = True
             else:
                 await abort_reserved_runner()
+                terminal_error = runner.take_managed_terminal_error()
+                if terminal_error is not None:
+                    run_context.set_managed_terminal_error(terminal_error)
     except BaseException:
         if (
             managed_run_id is not None
@@ -107,6 +118,9 @@ async def run_research_pipeline(
         ):
             await abort_reserved_runner()
         raise
+    finally:
+        if bridge is not None and submitter_installed and submitter is not None:
+            bridge.clear_user_input_submitter(submitter)
     return json.dumps(
         {
             "task_id": manifest.task_id,

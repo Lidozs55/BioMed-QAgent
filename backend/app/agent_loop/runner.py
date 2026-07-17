@@ -12,6 +12,7 @@ from agents import Runner
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import build_agent
+from app.agent_loop.context import ManagedPipelineBridge
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
@@ -178,6 +179,35 @@ class AgentRunExecutor:
         )
         build = build_agent(execution.databases)
         text_buffer = _AssistantTextBuffer(execution.emit)
+        bind_pipeline_bridge = getattr(
+            execution.context,
+            "bind_managed_pipeline_bridge",
+            None,
+        )
+        if callable(bind_pipeline_bridge):
+
+            async def persist_pipeline_event(event: EventEnvelope) -> None:
+                if isinstance(event.payload, CancelRequestedPayload):
+                    return
+                if isinstance(
+                    event.payload,
+                    (ArtifactProducedPayload, TaskCompletedPayload),
+                ):
+                    return
+                await execution.emit(
+                    event.payload,
+                    stage_attempt_id=event.stage_attempt_id,
+                    timestamp=event.timestamp,
+                )
+
+            bind_pipeline_bridge(
+                ManagedPipelineBridge(
+                    run_id=execution.run_id,
+                    event_sink=persist_pipeline_event,
+                    install_user_input_submitter=execution.set_user_input_submitter,
+                    clear_user_input_submitter=execution.clear_user_input_submitter,
+                )
+            )
         try:
             preparation = await self._compactor.prepare(
                 execution.task_id,
@@ -203,10 +233,20 @@ class AgentRunExecutor:
             finally:
                 await text_buffer.flush()
         finally:
+            terminal_error: BaseException | None = None
             try:
                 await self._transfer_pending_publication(execution)
+                take_terminal_error = getattr(
+                    execution.context,
+                    "take_managed_terminal_error",
+                    None,
+                )
+                if callable(take_terminal_error):
+                    terminal_error = take_terminal_error()
             finally:
                 await build.model.close()
+            if terminal_error is not None:
+                raise terminal_error
 
     @staticmethod
     async def _transfer_pending_publication(execution: RunExecution) -> None:

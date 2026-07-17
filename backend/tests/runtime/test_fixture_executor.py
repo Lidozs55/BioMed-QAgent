@@ -26,6 +26,8 @@ from app.domain.contracts import (
     TaskCreatedPayload,
     TaskMode,
     TaskState,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     ValidationSummary,
     build_event,
 )
@@ -315,6 +317,26 @@ async def test_real_pinned_fixture_first_run_bridges_legacy_events_durably(
             "run_finalizing",
             "run_completed",
         ]
+        user_input_events = [
+            event
+            for event in runtime_events
+            if isinstance(
+                event.payload,
+                (UserInputRequiredPayload, UserInputResumedPayload),
+            )
+        ]
+        assert [event.payload.type.value for event in user_input_events] == [
+            "user_input_required",
+            "user_input_resumed",
+        ]
+        assert all(event.run_id == accepted.run_id for event in user_input_events)
+        assert isinstance(user_input_events[0].payload, UserInputRequiredPayload)
+        assert user_input_events[0].payload.fixture_exempt
+        assert isinstance(user_input_events[1].payload, UserInputResumedPayload)
+        assert user_input_events[1].payload.request_id == (
+            user_input_events[0].payload.request_id
+        )
+        assert user_input_events[1].payload.decision == "approve"
 
         manifest_path = (
             repository.tasks_dir / accepted.task_id / "artifacts" / "run_manifest.json"

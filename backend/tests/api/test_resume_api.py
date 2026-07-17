@@ -23,6 +23,7 @@ from app.domain.contracts import (
     UserInputResumedPayload,
 )
 from app.main import create_app
+from app.runtime.manager import RunExecution
 from fastapi import FastAPI
 
 
@@ -51,14 +52,18 @@ class PausingExecutor:
     forwarded by the manager.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, delay_resume_event: bool = False) -> None:
         self.started = asyncio.Event()
         self.paused = asyncio.Event()
         self._release = asyncio.Event()
+        self._resume_event_gate = asyncio.Event()
+        if not delay_resume_event:
+            self._resume_event_gate.set()
+        self.decision_received = asyncio.Event()
         self._decision: UserInputResumedPayload | None = None
-        self.executions: list[object] = []
+        self.executions: list[RunExecution] = []
 
-    async def __call__(self, execution: object) -> None:
+    async def __call__(self, execution: RunExecution) -> None:
         self.executions.append(execution)
         self.started.set()
 
@@ -66,11 +71,12 @@ class PausingExecutor:
             decision: UserInputResumedPayload,
         ) -> bool:
             self._decision = decision
+            self.decision_received.set()
             self._release.set()
             return True
 
-        execution.set_user_input_submitter(submitter)  # type: ignore[attr-defined]
-        await execution.emit(  # type: ignore[attr-defined]
+        execution.set_user_input_submitter(submitter)
+        await execution.emit(
             UserInputRequiredPayload(
                 request_id="plan-test",
                 prompt_kind="plan_confirmation",
@@ -79,11 +85,12 @@ class PausingExecutor:
         )
         self.paused.set()
         await self._release.wait()
+        await self._resume_event_gate.wait()
         # Mirror the real pipeline: emit UserInputResumedPayload after waking
         # so the reducer transitions AWAITING_USER_INPUT -> RUNNING before the
         # manager emits RunFinalizingPayload (RUNNING -> FINALIZING).
         assert self._decision is not None
-        await execution.emit(self._decision)  # type: ignore[attr-defined]
+        await execution.emit(self._decision)
 
 
 @pytest.mark.asyncio
@@ -143,7 +150,7 @@ async def test_resume_run_not_awaiting_returns_409(tmp_path: Path) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def run_without_pause(execution: object) -> None:
+    async def run_without_pause(execution: RunExecution) -> None:
         executor.executions.append(execution)
         started.set()
         await release.wait()
@@ -323,14 +330,9 @@ async def test_resume_reject_decision_is_forwarded(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_unknown_request_id_still_unblocks(tmp_path: Path) -> None:
-    """The manager does not validate request_id matching — the executor decides.
-
-    This documents current behavior: the manager forwards any decision to the
-    executor's submitter. Request-id matching, if needed, is the executor's
-    responsibility (the pipeline's ``_await_user_input`` consumes whatever
-    decision wakes it).
-    """
+async def test_resume_wrong_request_id_returns_409_and_keeps_request_pending(
+    tmp_path: Path,
+) -> None:
 
     executor = PausingExecutor()
     async with api_client(tmp_path) as (application, client):
@@ -358,8 +360,72 @@ async def test_resume_unknown_request_id_still_unblocks(tmp_path: Path) -> None:
             },
         )
 
-        assert response.status_code == 202
-        assert executor._decision is not None
-        assert executor._decision.request_id == "wrong-id"
+        assert response.status_code == 409
+        assert response.json() == {"detail": "Run is not awaiting user input"}
+        assert executor._decision is None
 
+        accepted = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/resume",
+            json={
+                "request_id": "plan-test",
+                "decision": "approve",
+                "detail": {},
+            },
+        )
+
+        assert accepted.status_code == 202
+        assert executor._decision is not None
+        assert executor._decision.request_id == "plan-test"
+
+        await manager.wait_until_idle()
+
+
+@pytest.mark.asyncio
+async def test_resume_duplicate_decision_returns_409_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    executor = PausingExecutor(delay_resume_event=True)
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        manager.run_executor = executor
+
+        create_response = await client.post(
+            "/api/v1/tasks",
+            json={
+                "request_id": "req_resume_duplicate",
+                "input": "pause",
+                "databases": [],
+                "mode": "agent",
+            },
+        )
+        task_id = create_response.json()["task_id"]
+        run_id = create_response.json()["run_id"]
+        await asyncio.wait_for(executor.paused.wait(), timeout=2)
+
+        first = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/resume",
+            json={
+                "request_id": "plan-test",
+                "decision": "approve",
+                "detail": {"sequence": 1},
+            },
+        )
+        await asyncio.wait_for(executor.decision_received.wait(), timeout=1)
+        duplicate = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/resume",
+            json={
+                "request_id": "plan-test",
+                "decision": "reject",
+                "detail": {"sequence": 2},
+            },
+        )
+
+        assert first.status_code == 202
+        assert duplicate.status_code == 409
+        assert duplicate.json() == {"detail": "Run is not awaiting user input"}
+        assert executor._decision is not None
+        assert executor._decision.decision == "approve"
+        assert executor._decision.detail == {"sequence": 1}
+
+        executor._resume_event_gate.set()
         await manager.wait_until_idle()
