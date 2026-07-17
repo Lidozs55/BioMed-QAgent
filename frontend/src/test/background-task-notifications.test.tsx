@@ -171,6 +171,7 @@ describe("BackgroundTaskNotifications", () => {
       createTask: vi.fn(),
       continueTask: vi.fn(),
       cancelRun: vi.fn(),
+      resumeRun: vi.fn(),
       deleteTask: vi.fn(),
       fetchArtifacts: vi.fn().mockResolvedValue([]),
       getArtifactUrl: vi.fn(),

@@ -244,6 +244,190 @@ describe("runtime event projection", () => {
     expect(state.tasksById.task_a.summary.active_run_id).toBe("run_second");
   });
 
+  it("binds pending user input to the authoritative Run", () => {
+    const initial = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+
+    const state = reduceRuntimeEvent(
+      initial,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it("does not clear pending user input when another Run resumes", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, {
+        type: "user_input_resumed",
+        request_id: "request_other",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it.each([
+    "run_completed",
+    "run_failed",
+    "run_cancelled",
+    "run_interrupted",
+  ] as const)("clears pending input on %s only for its owning Run", (type) => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    const terminalPayload: EventPayload =
+      type === "run_completed"
+        ? { type }
+        : type === "run_failed"
+          ? { type, error: "failed" }
+          : { type, reason: "stopped" };
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, terminalPayload),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 3, terminalPayload),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("clears an older pending prompt when a new Run is queued", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_old", 1, {
+        type: "user_input_required",
+        request_id: "request_old",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the old plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_new", 2, {
+        type: "run_queued",
+        request_id: "request_new",
+        input: "new turn",
+      }),
+    );
+
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("projects fixture input-required before its automatic resume", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_fixture", "running", 0, "fixture")),
+      false,
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_fixture", 1, {
+        type: "user_input_required",
+        request_id: "request_fixture",
+        prompt_kind: "plan_confirmation",
+        summary: "Fixture plan",
+        expires_at: null,
+        fixture_exempt: true,
+        detail: {},
+      }),
+    );
+    expect(state.tasksById.task_fixture.pendingUserInput).toMatchObject({
+      runId: "run_fixture",
+      requestId: "request_fixture",
+      fixtureExempt: true,
+    });
+    expect(state.tasksById.task_fixture.summary.status).toBe(
+      "awaiting_user_input",
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_fixture", "run_fixture", 2, {
+        type: "user_input_resumed",
+        request_id: "request_fixture",
+        decision: "approve",
+        detail: { automatic: true },
+      }),
+    );
+
+    expect(state.tasksById.task_fixture.pendingUserInput).toBeNull();
+    expect(state.tasksById.task_fixture.summary).toMatchObject({
+      status: "running",
+      active_run_id: "run_fixture",
+      latest_sequence: 2,
+    });
+  });
+
   it("projects fixture stages without inventing stages for generic activity", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

@@ -343,6 +343,51 @@ describe("agent task projection store", () => {
     expect(task.messages[0].messageId).toBe("live:run_shell:user");
   });
 
+  it("does not carry an older Run prompt into a newly accepted Run", () => {
+    useAgentStore.setState((state) =>
+      addAcceptedTask(
+        state,
+        { taskId: "task_shell", runId: "run_old", requestId: "req_old" },
+        "old question",
+        ["pubmed"],
+        "agent",
+      ),
+    );
+    useAgentStore.getState().applyEvent({
+      schema_version: "2.0",
+      event_id: "event_prompt_1",
+      type: "user_input_required",
+      task_id: "task_shell",
+      run_id: "run_old",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: {
+        type: "user_input_required",
+        request_id: "prompt_old",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the old plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      },
+    });
+
+    useAgentStore.setState((state) =>
+      addAcceptedTask(
+        state,
+        { taskId: "task_shell", runId: "run_new", requestId: "req_new" },
+        "new question",
+        ["pubmed"],
+        "agent",
+      ),
+    );
+
+    expect(
+      useAgentStore.getState().tasksById.task_shell.pendingUserInput,
+    ).toBeNull();
+  });
+
   it("retains an accepted user shell when the first snapshot has no messages", () => {
     useAgentStore.setState((state) =>
       addAcceptedTask(

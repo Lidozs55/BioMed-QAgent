@@ -159,6 +159,7 @@ export function addAcceptedTask(
         },
         runOrder: [...existing.runOrder, accepted.runId],
         messages: [...existing.messages, acceptedMessage],
+        pendingUserInput: null,
       };
       return {
         ...state,

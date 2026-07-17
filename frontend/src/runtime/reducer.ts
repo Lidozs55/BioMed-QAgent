@@ -550,6 +550,7 @@ export function reduceRuntimeEvent(
           status: "queued",
           active_run_id: runId,
         },
+        pendingUserInput: null,
       };
       break;
     }
@@ -618,6 +619,9 @@ export function reduceRuntimeEvent(
           summary: { ...task.summary, status, active_run_id: null },
         };
       }
+      if (task.pendingUserInput?.runId === runId) {
+        task = { ...task, pendingUserInput: null };
+      }
       if (payload.type !== "run_completed") {
         task = terminalizeRunningFixtureStages(
           task,
@@ -649,6 +653,7 @@ export function reduceRuntimeEvent(
           active_run_id: runId,
         },
         pendingUserInput: {
+          runId,
           requestId: payload.request_id,
           promptKind: payload.prompt_kind,
           summary: payload.summary,
@@ -681,7 +686,11 @@ export function reduceRuntimeEvent(
           status: "running",
           active_run_id: runId,
         },
-        pendingUserInput: null,
+        pendingUserInput:
+          task.pendingUserInput?.runId === runId &&
+          task.pendingUserInput.requestId === payload.request_id
+            ? null
+            : task.pendingUserInput,
       };
       break;
     }

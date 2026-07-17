@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { CheckIcon, XCircleIcon } from "@phosphor-icons/react";
 
@@ -25,6 +25,12 @@ interface UserInputDialogProps {
   ) => Promise<void>;
 }
 
+interface SubmissionState {
+  promptKey: string | null;
+  pendingDecision: UserInputDecision | null;
+  error: string | null;
+}
+
 function tryStringifyPlan(detail: PendingUserInput["detail"]): string | null {
   try {
     const text = JSON.stringify(detail, null, 2);
@@ -37,10 +43,21 @@ function tryStringifyPlan(detail: PendingUserInput["detail"]): string | null {
 export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   const pending = task?.pendingUserInput ?? null;
   const taskId = task?.summary.task_id ?? null;
-  const runId = task?.summary.active_run_id ?? null;
-  const [pendingDecision, setPendingDecision] =
-    useState<UserInputDecision | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const runId = pending?.runId ?? null;
+  const promptKey =
+    pending === null || taskId === null
+      ? null
+      : `${taskId}:${pending.runId}:${pending.requestId}`;
+  const latestPromptKey = useRef(promptKey);
+  latestPromptKey.current = promptKey;
+  const [submission, setSubmission] = useState<SubmissionState>({
+    promptKey: null,
+    pendingDecision: null,
+    error: null,
+  });
+  const pendingDecision =
+    submission.promptKey === promptKey ? submission.pendingDecision : null;
+  const error = submission.promptKey === promptKey ? submission.error : null;
 
   const open = pending !== null && taskId !== null && runId !== null;
   const planText = useMemo(
@@ -49,9 +66,20 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   );
 
   const submit = async (decision: UserInputDecision) => {
-    if (pending === null || taskId === null || runId === null) return;
-    setPendingDecision(decision);
-    setError(null);
+    if (
+      pending === null ||
+      taskId === null ||
+      runId === null ||
+      promptKey === null
+    ) {
+      return;
+    }
+    const submittedPromptKey = promptKey;
+    setSubmission({
+      promptKey: submittedPromptKey,
+      pendingDecision: decision,
+      error: null,
+    });
     try {
       await onResumeRun(taskId, runId, {
         request_id: pending.requestId,
@@ -59,11 +87,20 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         detail: {},
       });
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "提交决策失败，请重试",
-      );
+      if (latestPromptKey.current === submittedPromptKey) {
+        setSubmission((current) => ({
+          ...current,
+          error:
+            caught instanceof Error ? caught.message : "提交决策失败，请重试",
+        }));
+      }
     } finally {
-      setPendingDecision(null);
+      if (latestPromptKey.current === submittedPromptKey) {
+        setSubmission((current) => ({
+          ...current,
+          pendingDecision: null,
+        }));
+      }
     }
   };
 

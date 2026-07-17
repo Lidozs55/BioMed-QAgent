@@ -620,7 +620,7 @@ describe("runtime orchestration", () => {
     const replayedStage = stageStartedEvent("task_replay_retry", 1001);
     let replayAttempt = 0;
     const fetchEvents = vi.fn<APIClient["fetchEvents"]>((_taskId, options) => {
-      if (options.afterSequence === 0) {
+      if (options?.afterSequence === 0) {
         replayAttempt += 1;
         return Promise.resolve(firstReplayPage);
       }
