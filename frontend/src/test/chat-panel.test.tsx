@@ -280,7 +280,7 @@ describe("ChatPanel", () => {
     expect(messageViewport).toHaveClass("overflow-y-auto");
   });
 
-  it("preserves assistant newlines and blank lines in BubbleContent", () => {
+  it("renders assistant messages as Markdown in BubbleContent", () => {
     seedTerminalTask();
     const content = "Summary line\n\n- first item\n  indented detail";
     useAgentStore.setState((state) => {
@@ -312,8 +312,10 @@ describe("ChatPanel", () => {
       throw new Error("Expected assistant BubbleContent");
     }
 
-    expect(bubbleContent.textContent).toBe(content);
-    expect(bubbleContent).toHaveClass("whitespace-pre-wrap");
+    expect(bubbleContent.textContent).toContain("Summary line");
+    expect(bubbleContent.querySelector("ul")).toBeInTheDocument();
+    expect(bubbleContent.textContent).toContain("first item");
+    expect(bubbleContent).not.toHaveClass("whitespace-pre-wrap");
     expect(bubbleContent.closest('[data-slot="bubble"]')).not.toBeNull();
   });
 
