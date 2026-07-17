@@ -5,11 +5,13 @@ import csv
 import gzip
 import hashlib
 import json
+import logging
 import os
+import re
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from app.domain.contracts import (
@@ -51,6 +53,11 @@ def _sha256(path: Path) -> str:
 
 
 _DEFAULT_MAX_LINEAGE_CHECKS = 100
+_ARTIFACT_BACKUP_NAME = re.compile(r"^\.artifacts\.previous-[0-9a-f]{32}$")
+_MARKER_BACKUP_NAME = re.compile(
+    r"^publish_completed\.previous-[0-9a-f]{32}\.json$"
+)
+_LOGGER = logging.getLogger(__name__)
 
 
 def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[dict[str, str]]:
@@ -112,11 +119,15 @@ def _publish_artifacts_core(
     marker_previous = state_dir / f"publish_completed.previous-{uuid4().hex}.json"
     marker_tmp = marker_file.with_suffix(".json.part")
     with TaskLock(lock_file):
+        _drain_pending_publication_cleanup(state_dir)
+        had_target = target.exists()
+        had_marker = marker_file.exists()
         moved_previous = False
         moved_candidate = False
         moved_marker = False
         marker_commit_started = False
-        cleanup_backups = False
+        cleanup_previous = False
+        cleanup_marker_previous = False
         try:
             check_cancelled()
             if run_id is not None:
@@ -128,10 +139,10 @@ def _publish_artifacts_core(
                     run_id=run_id,
                 )
             _fsync_directory(staging)
-            if target.exists():
+            if had_target:
                 os.replace(target, previous)
                 moved_previous = True
-            if marker_file.exists():
+            if had_marker:
                 os.replace(marker_file, marker_previous)
                 moved_marker = True
             check_cancelled()
@@ -144,39 +155,222 @@ def _publish_artifacts_core(
             # recovery can detect the incomplete publish and re-run.
             marker_commit_started = True
             _write_publish_completed_marker(marker_file, target)
-            cleanup_backups = True
+            cleanup_previous = True
+            cleanup_marker_previous = True
         except BaseException:
-            try:
-                if moved_candidate and target.exists():
-                    os.replace(target, staging)
-                if moved_previous and previous.exists():
-                    os.replace(previous, target)
-                if marker_commit_started:
-                    marker_file.unlink(missing_ok=True)
-                if moved_marker and marker_previous.exists():
-                    os.replace(marker_previous, marker_file)
-            except BaseException as rollback_error:
-                raise RuntimeError("artifact publication rollback failed") from rollback_error
-            cleanup_backups = True
+            rollback_errors: list[Exception] = []
+            if moved_candidate and target.exists():
+                error = _retry_rollback_action(
+                    lambda: os.replace(target, staging)
+                )
+                if error is not None:
+                    rollback_errors.append(error)
+            if moved_previous and previous.exists():
+                error = _retry_rollback_action(
+                    lambda: os.replace(previous, target)
+                )
+                if error is not None:
+                    rollback_errors.append(error)
+            if marker_commit_started:
+                error = _retry_rollback_action(
+                    lambda: marker_file.unlink(missing_ok=True)
+                )
+                if error is not None:
+                    rollback_errors.append(error)
+            if moved_marker and marker_previous.exists():
+                error = _retry_rollback_action(
+                    lambda: os.replace(marker_previous, marker_file)
+                )
+                if error is not None:
+                    rollback_errors.append(error)
+
+            artifact_restored = (
+                (not moved_candidate or staging.is_dir())
+                and (
+                    target.is_dir() and not previous.exists()
+                    if had_target
+                    else not target.exists()
+                )
+            )
+            marker_restored = (
+                marker_file.is_file() and not marker_previous.exists()
+                if had_marker
+                else not marker_file.exists()
+            )
+            cleanup_previous = artifact_restored
+            cleanup_marker_previous = marker_restored
+            if not artifact_restored:
+                rollback_errors.append(
+                    RuntimeError("artifact directory rollback is incomplete")
+                )
+            if not marker_restored:
+                rollback_errors.append(
+                    RuntimeError("publish marker rollback is incomplete")
+                )
+            if rollback_errors:
+                details = "; ".join(str(error) for error in rollback_errors)
+                raise RuntimeError(
+                    f"artifact publication rollback failed: {details}"
+                ) from rollback_errors[0]
             raise
         finally:
-            _cleanup_publication_path(marker_tmp)
-            if cleanup_backups:
-                _cleanup_publication_path(previous)
-                _cleanup_publication_path(marker_previous)
+            pending_cleanup: list[Path] = []
+            if not _cleanup_publication_path(marker_tmp):
+                pending_cleanup.append(marker_tmp)
+            if cleanup_previous and not _cleanup_publication_path(previous):
+                pending_cleanup.append(previous)
+            if cleanup_marker_previous and not _cleanup_publication_path(
+                marker_previous
+            ):
+                pending_cleanup.append(marker_previous)
+            if pending_cleanup:
+                try:
+                    _write_cleanup_pending_record(state_dir, pending_cleanup)
+                except Exception:
+                    _LOGGER.exception(
+                        "could not persist publication cleanup journal"
+                    )
 
 
-def _cleanup_publication_path(path: Path) -> None:
-    """Best-effort cleanup that never turns a committed publish into failure."""
+def _retry_rollback_action(
+    operation: Callable[[], None],
+) -> Exception | None:
+    error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            operation()
+            return None
+        except Exception as exc:
+            error = exc
+    return error
+
+
+def _cleanup_publication_path(path: Path) -> bool:
+    """Retry cleanup and report whether the task-local path is now absent."""
     for _attempt in range(2):
         try:
             if path.is_dir():
                 shutil.rmtree(path)
             else:
                 path.unlink(missing_ok=True)
-            return
+            if not os.path.lexists(path):
+                return True
         except OSError:
             continue
+    return not os.path.lexists(path)
+
+
+def _write_cleanup_pending_record(state_dir: Path, paths: list[Path]) -> None:
+    task_root = state_dir.parent.resolve()
+    relative_paths = sorted(
+        {
+            _cleanup_pending_relative_path(task_root, path)
+            for path in paths
+        }
+    )
+    pending_file = state_dir / "publish_cleanup_pending.json"
+    pending_tmp = pending_file.with_suffix(".json.part")
+    payload = {
+        "schema_version": 1,
+        "paths": relative_paths,
+    }
+    try:
+        pending_tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            "utf-8",
+        )
+        with pending_tmp.open("r+b") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(pending_tmp, pending_file)
+    finally:
+        _cleanup_publication_path(pending_tmp)
+
+
+def _drain_pending_publication_cleanup(state_dir: Path) -> None:
+    pending_file = state_dir / "publish_cleanup_pending.json"
+    pending_tmp = pending_file.with_suffix(".json.part")
+    if not _cleanup_publication_path(pending_tmp):
+        raise RuntimeError("pending publication cleanup journal temp remains")
+    if pending_file.is_file():
+        try:
+            payload = json.loads(pending_file.read_text("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError("invalid pending publication cleanup record") from exc
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"schema_version", "paths"}
+            or payload.get("schema_version") != 1
+            or not isinstance(payload.get("paths"), list)
+            or not payload["paths"]
+            or not all(isinstance(value, str) for value in payload["paths"])
+            or len(payload["paths"]) != len(set(payload["paths"]))
+        ):
+            raise RuntimeError("invalid pending publication cleanup record")
+
+        task_root = state_dir.parent.resolve()
+        cleanup_paths = [
+            _resolve_cleanup_pending_path(task_root, value)
+            for value in payload["paths"]
+        ]
+        remaining = [
+            path for path in cleanup_paths if not _cleanup_publication_path(path)
+        ]
+        if remaining:
+            _write_cleanup_pending_record(state_dir, remaining)
+            raise RuntimeError("pending publication cleanup could not be completed")
+        pending_file.unlink()
+
+    publish_tmp = state_dir / "publish_completed.json.part"
+    if not _cleanup_publication_path(publish_tmp):
+        raise RuntimeError("untracked publication cleanup could not be completed")
+    task_root = state_dir.parent
+    untracked = [
+        *task_root.glob(".artifacts.previous-*"),
+        *state_dir.glob("publish_completed.previous-*.json"),
+    ]
+    if untracked:
+        raise RuntimeError("untracked publication cleanup paths remain")
+
+
+def _cleanup_pending_relative_path(task_root: Path, path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(task_root)
+    except ValueError as exc:
+        raise ValueError("cleanup path must remain inside the task root") from exc
+    value = relative.as_posix()
+    _resolve_cleanup_pending_path(task_root, value)
+    return value
+
+
+def _resolve_cleanup_pending_path(task_root: Path, value: str) -> Path:
+    relative = PurePosixPath(value)
+    parts = relative.parts
+    if relative.is_absolute() or not parts or any(
+        part in {"", ".", ".."} for part in parts
+    ):
+        raise ValueError("cleanup path must be a safe task-local path")
+    allowed = (
+        len(parts) == 1
+        and _ARTIFACT_BACKUP_NAME.fullmatch(parts[0]) is not None
+    ) or (
+        len(parts) == 2
+        and parts[0] == "state"
+        and (
+            parts[1] == "publish_completed.json.part"
+            or parts[1] == "publish_cleanup_pending.json.part"
+            or _MARKER_BACKUP_NAME.fullmatch(parts[1]) is not None
+        )
+    )
+    if not allowed:
+        raise ValueError("cleanup path is not publication-owned")
+    resolved = (task_root / Path(*parts)).resolve()
+    try:
+        resolved.relative_to(task_root)
+    except ValueError as exc:
+        raise ValueError("cleanup path must remain inside the task root") from exc
+    return resolved
 
 
 def _write_publish_completed_marker(marker_file: Path, target: Path) -> None:

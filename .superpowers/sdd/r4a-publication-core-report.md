@@ -210,3 +210,132 @@ backend\.venv\Scripts\python.exe -m pytest -q
   including checkpoint recovery.
 - Successful rollback removes transient backups; a post-commit cleanup error
   cannot misreport an irreversible commit as failed.
+
+## Task-review follow-up
+
+Task review identified two recovery gaps after commit `21a3712`. They were
+fixed without changing Agent, `RunContext`, `RunExecution`, or manager
+completion ownership.
+
+### Independent rollback actions with bounded retry
+
+The original rollback placed candidate restoration, prior-artifact
+restoration, state-marker removal, and prior-marker restoration in one `try`.
+A transient Windows rename error in the first action prevented every later,
+independent recovery action.
+
+RED with the first `os.replace(artifacts, staging/<run_id>)` rollback call
+raising `PermissionError`:
+
+```text
+RuntimeError: artifact publication rollback failed
+caused by PermissionError: transient candidate rollback failure
+1 failed in 0.70s
+```
+
+GREEN after giving each recovery action two bounded attempts, continuing the
+independent actions, collecting terminal errors, and verifying artifact and
+marker restoration before marking each backup safe for cleanup:
+
+```text
+1 passed in 1.33s
+```
+
+The regression verifies the old artifact package, embedded runtime marker, and
+state marker byte-for-byte; the candidate returns to its original staging
+directory and no backup or marker temp remains.
+
+### Durable cleanup-pending journal
+
+Two cleanup failures were previously retried twice and then silently ignored.
+Publication cleanup debt is now persisted as
+`state/publish_cleanup_pending.json` with schema version 1 and a sorted list of
+strictly validated task-local, publication-owned relative paths.
+
+RED before cleanup debt was recorded:
+
+```text
+assert pending_file.is_file()
+1 failed in 0.61s
+```
+
+GREEN after adding lock-owned cleanup replay:
+
+```text
+1 passed in 0.66s
+```
+
+On every later acquisition of `state/publish.lock`, the core drains and
+verifies the journal before reading or moving the current artifact package. If
+any recorded path still cannot be removed, the remaining paths are persisted
+and the new publication is rejected before mutation. Once the filesystem fault
+is removed, the next call clears the old artifact and marker backups, deletes
+the journal, and then publishes normally.
+
+### Atomic journal and journal-write fallback
+
+The cleanup journal is committed through
+`state/publish_cleanup_pending.json.part`, file fsync, and `os.replace`. A stale
+journal temp is removed and verified absent during preflight before the
+candidate rename.
+
+RED for a pre-existing partial journal temp:
+
+```text
+assert observed == [True]
+observed was [False]
+1 failed in 0.61s
+```
+
+GREEN:
+
+```text
+1 passed in 0.52s
+```
+
+A journal-write error after the state marker commits is logged and cannot turn
+the committed publish into a reported failure. Cleanup-owned backups without a
+valid journal are treated as untracked recovery state, so the next publisher
+is blocked instead of accumulating another backup.
+
+RED:
+
+```text
+OSError: cleanup journal write failed
+1 failed in 0.77s
+```
+
+GREEN, including an asserted ERROR diagnostic and next-publish block:
+
+```text
+1 passed in 0.59s
+```
+
+### Follow-up verification
+
+Requested focused suites:
+
+```text
+backend\.venv\Scripts\python.exe -m pytest \
+  tests/pipeline/test_publish_lock.py \
+  tests/pipeline/test_pipeline_runner_resilience.py \
+  tests/pipeline/test_pipeline_runner_recovery.py \
+  tests/pipeline/test_pipeline_e2e.py \
+  tests/runtime/test_fixture_executor.py -q
+
+73 passed in 27.58s
+```
+
+Full backend suite:
+
+```text
+backend\.venv\Scripts\python.exe -m pytest -q
+816 passed, 18 deselected in 84.49s
+```
+
+Full Ruff gate:
+
+```text
+backend\.venv\Scripts\python.exe -m ruff check app/ tests/ launcher.py
+All checks passed!
+```

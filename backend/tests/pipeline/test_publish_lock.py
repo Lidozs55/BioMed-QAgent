@@ -11,6 +11,8 @@ Covers the Validation Gate publish step:
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import threading
 from pathlib import Path
 from typing import BinaryIO
@@ -320,6 +322,93 @@ def test_publish_marker_write_failure_restores_previous_package(
     assert not marker_tmp.exists()
 
 
+def test_transient_candidate_rollback_rename_restores_everything(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback retries a transient candidate rename failure before restoring."""
+    import app.pipeline.stages.validation as validation_module
+
+    task_id = "task_publish_rollback_retry"
+    run_id = "run_publish_rollback_retry"
+    task_root = tmp_path / "tasks" / task_id
+    staging = task_root / "staging" / run_id
+    artifacts = task_root / "artifacts"
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=run_id,
+    )
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state.value == "completed"
+
+    old_files = {
+        "run_manifest.json": b'{"old":"manifest"}\n',
+        "old_data.csv": b"old,value\r\n3,4\r\n",
+        ".runtime-publication.json": b'{"old":"runtime-marker"}\n',
+    }
+    for name, contents in old_files.items():
+        (artifacts / name).write_bytes(contents)
+    state_marker = task_root / "state" / "publish_completed.json"
+    old_state_marker = b'{"old":"state-marker"}\n'
+    state_marker.write_bytes(old_state_marker)
+    marker_tmp = state_marker.with_suffix(".json.part")
+
+    real_replace = validation_module.os.replace
+    candidate_rollback_failures = 0
+
+    def fail_candidate_rollback_once(source: Path, destination: Path) -> None:
+        nonlocal candidate_rollback_failures
+        if (
+            Path(source) == artifacts
+            and Path(destination) == staging
+            and candidate_rollback_failures == 0
+        ):
+            candidate_rollback_failures += 1
+            raise PermissionError("transient candidate rollback failure")
+        real_replace(source, destination)
+
+    real_write_text = Path.write_text
+
+    def fail_publish_marker_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == marker_tmp:
+            raise OSError("publish marker write failed")
+        return real_write_text(
+            path,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(validation_module.os, "replace", fail_candidate_rollback_once)
+    monkeypatch.setattr(Path, "write_text", fail_publish_marker_write)
+
+    with pytest.raises(OSError, match="publish marker write failed"):
+        runner.publish(run_id)
+
+    restored_files = {
+        path.relative_to(artifacts).as_posix(): path.read_bytes()
+        for path in artifacts.rglob("*")
+        if path.is_file()
+    }
+    assert candidate_rollback_failures == 1
+    assert restored_files == old_files
+    assert state_marker.read_bytes() == old_state_marker
+    assert (staging / "run_manifest.json").is_file()
+    assert list(task_root.glob(".artifacts.previous-*")) == []
+    assert list((task_root / "state").glob("publish_completed.previous-*")) == []
+    assert not marker_tmp.exists()
+
+
 def test_transient_backup_cleanup_failure_does_not_fail_committed_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -364,6 +453,257 @@ def test_transient_backup_cleanup_failure_does_not_fail_committed_publish(
     assert not (task_root / "artifacts" / "old.csv").exists()
     assert list(task_root.glob(".artifacts.previous-*")) == []
     assert (task_root / "state" / "publish_completed.json").is_file()
+
+
+def test_persistent_cleanup_is_recorded_and_drained_before_next_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Committed cleanup debt is persisted and drained before later mutation."""
+    import app.pipeline.stages.validation as validation_module
+
+    task_id = "task_publish_cleanup_pending"
+    first_run_id = "run_publish_cleanup_pending_one"
+    second_run_id = "run_publish_cleanup_pending_two"
+    task_root = tmp_path / "tasks" / task_id
+    artifacts = task_root / "artifacts"
+    state_dir = task_root / "state"
+    pending_file = state_dir / "publish_cleanup_pending.json"
+
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=first_run_id,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state.value == "completed"
+    (artifacts / "old.csv").write_bytes(b"old\n")
+    (state_dir / "publish_completed.json").write_bytes(b'{"old":true}\n')
+
+    real_rmtree = validation_module.shutil.rmtree
+    real_unlink = Path.unlink
+
+    def fail_artifact_backup_cleanup(path: Path, *args, **kwargs) -> None:
+        if Path(path).name.startswith(".artifacts.previous-"):
+            raise PermissionError("persistent artifact backup cleanup failure")
+        real_rmtree(path, *args, **kwargs)
+
+    def fail_marker_backup_cleanup(
+        path: Path,
+        missing_ok: bool = False,
+    ) -> None:
+        if path.name.startswith("publish_completed.previous-"):
+            raise PermissionError("persistent marker backup cleanup failure")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(
+        validation_module.shutil,
+        "rmtree",
+        fail_artifact_backup_cleanup,
+    )
+    monkeypatch.setattr(Path, "unlink", fail_marker_backup_cleanup)
+
+    runner1.publish(first_run_id)
+
+    assert (artifacts / "run_manifest.json").is_file()
+    assert pending_file.is_file()
+    pending = json.loads(pending_file.read_text("utf-8"))
+    assert pending["schema_version"] == 1
+    assert len(pending["paths"]) == 2
+    assert all(not Path(relative).is_absolute() for relative in pending["paths"])
+    assert all(".." not in Path(relative).parts for relative in pending["paths"])
+    pending_paths = [task_root / relative for relative in pending["paths"]]
+    assert all(path.exists() for path in pending_paths)
+    first_manifest_bytes = (artifacts / "run_manifest.json").read_bytes()
+
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=second_run_id,
+    )
+    manifest2 = asyncio.run(runner2.run())
+    assert manifest2.task_state.value == "completed"
+
+    with pytest.raises(RuntimeError, match="pending publication cleanup"):
+        runner2.publish(second_run_id)
+
+    assert pending_file.is_file()
+    assert (artifacts / "run_manifest.json").read_bytes() == first_manifest_bytes
+
+    monkeypatch.setattr(validation_module.shutil, "rmtree", real_rmtree)
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+    real_replace = validation_module.os.replace
+    cleanup_observed_before_mutation: list[bool] = []
+
+    def observe_new_publish_mutation(source: Path, destination: Path) -> None:
+        if Path(source) == artifacts and Path(destination).name.startswith(
+            ".artifacts.previous-"
+        ):
+            cleanup_observed_before_mutation.append(
+                not pending_file.exists()
+                and all(not path.exists() for path in pending_paths)
+            )
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        validation_module.os,
+        "replace",
+        observe_new_publish_mutation,
+    )
+
+    runner2.publish(second_run_id)
+
+    assert cleanup_observed_before_mutation == [True]
+    assert not pending_file.exists()
+    assert all(not path.exists() for path in pending_paths)
+    assert list(task_root.glob(".artifacts.previous-*")) == []
+    assert list(state_dir.glob("publish_completed.previous-*")) == []
+    runtime_marker = json.loads(
+        (artifacts / ".runtime-publication.json").read_text("utf-8")
+    )
+    assert runtime_marker["run_id"] == second_run_id
+
+
+def test_stale_cleanup_journal_temp_is_removed_before_publish_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale cleanup-journal temp is drained before the candidate rename."""
+    import app.pipeline.stages.validation as validation_module
+
+    task_id = "task_cleanup_journal_temp"
+    run_id = "run_cleanup_journal_temp"
+    task_root = tmp_path / "tasks" / task_id
+    staging = task_root / "staging" / run_id
+    artifacts = task_root / "artifacts"
+    state_dir = task_root / "state"
+    pending_file = state_dir / "publish_cleanup_pending.json"
+    journal_tmp = state_dir / "publish_cleanup_pending.json.part"
+    runner = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=run_id,
+    )
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state.value == "completed"
+    journal_tmp.write_bytes(b'{"incomplete":')
+    pending_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "paths": ["state/publish_cleanup_pending.json.part"],
+            }
+        ),
+        "utf-8",
+    )
+
+    real_replace = validation_module.os.replace
+    observed: list[bool] = []
+
+    def observe_candidate_rename(source: Path, destination: Path) -> None:
+        if Path(source) == staging and Path(destination) == artifacts:
+            observed.append(not journal_tmp.exists())
+        real_replace(source, destination)
+
+    monkeypatch.setattr(
+        validation_module.os,
+        "replace",
+        observe_candidate_rename,
+    )
+
+    runner.publish(run_id)
+
+    assert observed == [True]
+    assert not journal_tmp.exists()
+    assert not pending_file.exists()
+
+
+def test_cleanup_journal_write_failure_does_not_reverse_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Journal I/O failure is diagnosed without misreporting a committed publish."""
+    import app.pipeline.stages.validation as validation_module
+
+    task_id = "task_cleanup_journal_write_failure"
+    first_run_id = "run_cleanup_journal_write_failure_one"
+    second_run_id = "run_cleanup_journal_write_failure_two"
+    task_root = tmp_path / "tasks" / task_id
+    artifacts = task_root / "artifacts"
+    state_dir = task_root / "state"
+    pending_file = state_dir / "publish_cleanup_pending.json"
+    pending_tmp = pending_file.with_suffix(".json.part")
+    runner1 = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=first_run_id,
+    )
+    manifest1 = asyncio.run(runner1.run())
+    assert manifest1.task_state.value == "completed"
+    (artifacts / "old.csv").write_bytes(b"old\n")
+
+    real_rmtree = validation_module.shutil.rmtree
+    real_write_text = Path.write_text
+
+    def fail_backup_cleanup(path: Path, *args, **kwargs) -> None:
+        if Path(path).name.startswith(".artifacts.previous-"):
+            raise PermissionError("persistent backup cleanup failure")
+        real_rmtree(path, *args, **kwargs)
+
+    def fail_journal_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == pending_tmp:
+            raise OSError("cleanup journal write failed")
+        return real_write_text(
+            path,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(validation_module.shutil, "rmtree", fail_backup_cleanup)
+    monkeypatch.setattr(Path, "write_text", fail_journal_write)
+    caplog.set_level(logging.ERROR, logger=validation_module.__name__)
+
+    runner1.publish(first_run_id)
+
+    first_manifest_bytes = (artifacts / "run_manifest.json").read_bytes()
+    assert not pending_file.exists()
+    assert "could not persist publication cleanup journal" in caplog.text
+    assert len(list(task_root.glob(".artifacts.previous-*"))) == 1
+
+    monkeypatch.setattr(validation_module.shutil, "rmtree", real_rmtree)
+    monkeypatch.setattr(Path, "write_text", real_write_text)
+    runner2 = PipelineRunner(
+        task_id=task_id,
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        defer_publication=True,
+        run_id=second_run_id,
+    )
+    manifest2 = asyncio.run(runner2.run())
+    assert manifest2.task_state.value == "completed"
+
+    with pytest.raises(RuntimeError, match="untracked publication cleanup"):
+        runner2.publish(second_run_id)
+
+    assert (artifacts / "run_manifest.json").read_bytes() == first_manifest_bytes
 
 
 # ---------------------------------------------------------------------------
