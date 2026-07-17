@@ -10,7 +10,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import matplotlib
 import numpy as np
@@ -586,7 +586,7 @@ def generate_correlation_matrix(
     ctx: RunContextWrapper[Any],
     csv_path: str,
     columns: list[str] | None = None,
-    method: str = "pearson",
+    method: Literal["pearson", "spearman", "kendall"] = "pearson",
     cmap: str = "coolwarm",
 ) -> str:
     """Compute pairwise correlation matrix for numeric columns and save a heatmap.
@@ -635,7 +635,7 @@ def generate_correlation_matrix(
             )
 
         # Compute correlation matrix
-        corr_df = df[num_cols].corr(method=method)  # type: ignore[arg-type]
+        corr_df = df[num_cols].corr(method=method)
 
         # --- Heatmap ---
         fig, ax = plt.subplots(figsize=(max(8, len(num_cols) * 0.8),

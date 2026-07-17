@@ -3,9 +3,6 @@ import { useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   DownloadIcon,
-  FileCodeIcon,
-  FileCsvIcon,
-  FileTextIcon,
   RobotIcon,
   UserIcon,
   WarningCircleIcon,
@@ -51,6 +48,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
 import type { StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
 import {
   selectActiveArtifacts,
@@ -78,32 +76,6 @@ const TERMINAL_STATUSES = new Set([
   "cancelled",
   "interrupted",
 ]);
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-function getExtension(name: string): string {
-  const index = name.lastIndexOf(".");
-  return index === -1 ? "" : name.slice(index + 1).toLowerCase();
-}
-
-function getFileIcon(name: string) {
-  switch (getExtension(name)) {
-    case "csv":
-    case "tsv":
-      return FileCsvIcon;
-    case "json":
-    case "jsonl":
-      return FileCodeIcon;
-    case "md":
-    case "txt":
-    default:
-      return FileTextIcon;
-  }
-}
 
 function latestRunIsTerminal(task: NonNullable<ReturnType<typeof selectActiveTask>>) {
   const latestRunId = task.runOrder[task.runOrder.length - 1];
@@ -514,7 +486,7 @@ export function ChatPanel({
                       <MessageScrollerItem messageId="artifacts">
                         <Accordion>
                           {artifacts.map((artifact) => {
-                            const Icon = getFileIcon(artifact.name);
+                            const { Icon } = fileType(artifact.name);
                             const extension = getExtension(artifact.name);
                             return (
                               <AccordionItem key={artifact.artifact_id} value={artifact.artifact_id}>

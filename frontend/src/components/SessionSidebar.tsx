@@ -53,6 +53,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import type { RunStatus } from "@/runtime/contracts";
 import type { ConnectionStatus, TaskProjection } from "@/runtime/types";
+import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
 interface SessionSidebarProps {
@@ -63,13 +64,6 @@ interface SessionSidebarProps {
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
 }
-
-const ACTIVE_STATUSES = new Set<RunStatus>([
-  "queued",
-  "running",
-  "finalizing",
-  "cancel_requested",
-]);
 
 const OCCUPYING_STATUSES = new Set<RunStatus>([
   "running",
@@ -109,7 +103,7 @@ function TaskRow({
 }) {
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
-  const active = ACTIVE_STATUSES.has(summary.status);
+  const active = isActiveStatus(summary.status);
   const cancelling = summary.status === "cancel_requested" || pendingCancel;
 
   return (

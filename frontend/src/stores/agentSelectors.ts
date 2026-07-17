@@ -12,9 +12,6 @@ const EMPTY_RUNS: readonly RunProjection[] = [];
 const EMPTY_ACTIVITIES: readonly ActivityProjection[] = [];
 const EMPTY_ARTIFACTS: readonly ArtifactProjection[] = [];
 
-export const selectTaskById = (taskId: string | null) => (state: AgentStore) =>
-  taskId === null ? undefined : state.tasksById[taskId];
-
 export const selectActiveTask = (state: AgentStore): TaskProjection | undefined =>
   state.activeTaskId === null ? undefined : state.tasksById[state.activeTaskId];
 
@@ -44,16 +41,6 @@ export const selectActiveArtifacts = (
   return (
     task?.artifactOrder.map((artifactId) => task.artifactsById[artifactId]) ??
     EMPTY_ARTIFACTS
-  );
-};
-
-export const selectActiveTaskIsBusy = (state: AgentStore): boolean => {
-  const status = selectActiveTask(state)?.summary.status;
-  return (
-    status === "queued" ||
-    status === "running" ||
-    status === "finalizing" ||
-    status === "cancel_requested"
   );
 };
 

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
@@ -20,6 +21,8 @@ from app.domain.contracts import (
     RunStatus,
     WarningPayload,
 )
+
+logger = logging.getLogger(__name__)
 
 COMPACTION_CHARACTER_THRESHOLD = 60_000
 RAW_RUNS_AFTER_COMPACTION = 5
@@ -412,6 +415,17 @@ class ConversationCompactor:
         cancellation_requested: asyncio.Event | None,
     ) -> CompactionPreparation:
         self._raise_if_cancelled(cancellation_requested)
+        # Compaction is a context-management optimization, not report
+        # generation: emit a warning event and continue with truncated
+        # history rather than failing the whole run. The warning is
+        # surfaced both via the durable event stream (below) and via
+        # server logs (here) for observability.
+        logger.warning(
+            "conversation compaction failed; falling back to last %d runs: %s",
+            COMPACTION_FAILURE_RUNS,
+            error,
+            exc_info=True,
+        )
         await emit(
             WarningPayload(
                 message=f"conversation compaction failed: {error}",

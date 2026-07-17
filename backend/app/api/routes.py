@@ -129,8 +129,14 @@ def _display_name(skill_name: str) -> str:
     return _SKILL_DISPLAY_NAMES.get(skill_name, skill_name.replace("_", " ").title())
 
 
-def _load_database_skills() -> None:
-    """Register the stable user-selectable database integrations."""
+def load_database_skills() -> None:
+    """Register the stable user-selectable database integrations.
+
+    Called once at application lifespan startup (see ``app.main``) so that
+    every ``GET /api/v1/databases`` request reads from the already-populated
+    skill registry instead of re-registering skills per request.
+    """
+
     import app.skills.builtin.acquisition.gdc  # noqa: F401
     import app.skills.builtin.acquisition.geo  # noqa: F401
     import app.skills.builtin.acquisition.pdb  # noqa: F401
@@ -147,7 +153,6 @@ def _load_database_skills() -> None:
 @router.get("/databases")
 async def get_databases() -> dict:
     """List all available databases derived from enabled skills."""
-    _load_database_skills()
     skills = [
         skill
         for skill in skill_registry.list_enabled()

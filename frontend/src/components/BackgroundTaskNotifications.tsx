@@ -1,15 +1,8 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
 
-import type { RunStatus } from "@/runtime/contracts";
+import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
-
-const ACTIVE_STATUSES = new Set<RunStatus>([
-  "queued",
-  "running",
-  "finalizing",
-  "cancel_requested",
-]);
 
 export function BackgroundTaskNotifications({
   onViewTask,
@@ -24,8 +17,8 @@ export function BackgroundTaskNotifications({
         const previous = previousState.tasksById[taskId]?.summary.status;
         if (
           previous === undefined ||
-          !ACTIVE_STATUSES.has(previous) ||
-          ACTIVE_STATUSES.has(status) ||
+          !isActiveStatus(previous) ||
+          isActiveStatus(status) ||
           taskId === state.activeTaskId
         ) {
           continue;
