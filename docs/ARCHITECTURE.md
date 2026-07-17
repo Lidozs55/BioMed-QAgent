@@ -358,40 +358,76 @@ Phase 1 固定案例：
 Mock Demo 仅作为开发烟雾测试，不能满足正式验收，也不能在真实流程失败后自动
 转为成功。
 
-## 8. API 与事件
+## 8. Durable API、控制面与事件面
 
-FastAPI 提供：
+FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、`EventHub` 和
+`TaskIndex`。当前 REST surface 如下（统一前缀 `/api/v1`）：
 
-- `POST /api/v1/tasks`
-- `GET /api/v1/tasks/{task_id}`
-- `GET /api/v1/tasks/{task_id}/artifacts`
-- `GET /api/v1/tasks/{task_id}/artifacts/{artifact_id}`
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | 健康检查 |
+| GET | `/databases` | 列出用户可选数据库 |
+| GET | `/tasks` | 返回全部 active Task 与 cursor 分页的历史 Task |
+| POST | `/tasks` | 创建 durable Task 并排队首个 Run |
+| GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` |
+| DELETE | `/tasks/{task_id}` | 删除 terminal Task 及其历史 |
+| POST | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
+| POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued/running/paused/finalizing/cancel-requested Run |
+| POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |
+| GET | `/tasks/{task_id}/messages` | cursor 分页读取 durable messages |
+| GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events |
+| GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
+| GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
 
-确定性 Pipeline 已将事件按统一 envelope 写入 `logs/events.jsonl`：
+### 8.1 后端权威状态
 
-```json
-{
-  "schema_version": "1.0",
-  "event_id": "event-...",
-  "type": "stage_started",
-  "task_id": "task-...",
-  "stage_attempt_id": "stage-attempt-...",
-  "sequence": 1,
-  "timestamp": "2026-07-12T00:00:00Z",
-  "payload": {}
-}
-```
+每个 Task 的 durable runtime 数据都保存在后端：
 
-当前 fixture Pipeline 保证 sequence 在单任务内严格递增，各 payload 使用判别联合
-Pydantic schema。同一 envelope 已通过 WebSocket 推送给订阅客户端
-（`app/api/ws_events.py:_run_event_session`），支持按 `after_sequence` 续读、
-任务取消与进程恢复重放；前端 `runtime/transport.ts` 负责自动重连并在重连后用
-`after_sequence` 补齐缺失事件。任务暂停-恢复（人在回路）仍为后续工作，参见
-[TODO.md](TODO.md) §4.2.1。
+- `<task_id>/events.jsonl` 是 append-only 事件日志；`EventStore` 强制 sequence 从 1
+  开始连续递增，`TaskRepository` 先持久化再向 `EventHub` 发布；
+- `<task_id>/state/task_snapshot.json` 是原子写入的权威状态投影；snapshot 落后于
+  event log 时，repository 通过纯函数 `reduce_task_event` 补齐投影；
+- `<task_id>/state/session_items.jsonl` 保存 OpenAI Agents SDK 的原始 Session 历史，
+  `conversation_summary.json` 保存 compaction 摘要；前端不保存会话事实；
+- `task_index.sqlite3` 只承担分页和 request-id 幂等查询，可由 snapshot/event 重建，
+  不是会话事实来源。
 
-## 9. 前端目标架构
+`EventEnvelope` v2 为 managed Run 增加 `run_id`。Run 生命周期、Agent 活动和经
+Agent Tool 桥接的 Pipeline 事件都使用 `schema_version="2.0"`；sequence 是
+**Task 级单调递增**，不是每个 Run 重新计数。旧 fixture envelope 仍兼容 v1，
+可以没有 `run_id`，stage 事件继续校验 `stage_attempt_id`。
 
-前端在后端契约稳定后重写为任务工作台，而不是聊天窗口加日志：
+### 8.2 WebSocket 重放
+
+WebSocket 端点为 `/api/v1/ws`，只接受三类命令：
+
+- `{"type":"subscribe","task_id":"...","after_sequence":N}`：先重放
+  `sequence > N` 的 durable events，再无缝进入 live fan-out；
+- `{"type":"unsubscribe","task_id":"..."}`：取消该 Task 的订阅；
+- `{"type":"ping"}`：返回 `{"type":"pong"}`。
+
+服务端按 Task watermark 去重；若 live sequence 出现间隙，会先从 repository
+补齐。慢消费者以可重连状态关闭；`runtime/transport.ts` 自动重连并携带每个 Task
+的 watermark 重新 subscribe，由服务端重放缺失事件。`runtime/controller.ts` 在
+snapshot/accepted-Task handoff 时使用 REST `/events` 重放。WebSocket 不再接受创建
+Run 的命令。
+
+### 8.3 人在回路与并发
+
+Agent 模式的计划确认会持久化 `user_input_required`，纯 reducer 将 Run 投影为
+`awaiting_user_input`。`POST /resume` 必须匹配当前 Run 的 exact `request_id`，且
+同一请求只消费一次；批准后持久化 `user_input_resumed` 并回到 `running`，拒绝或
+独立 HIL timeout 会使权威 Run 失败。取消 paused Run 会唤醒 Pipeline 的协作式
+取消等待，不必等到 HIL timeout。fixture 模式仍记录 required/resumed 审计事件，
+但以 `fixture_exempt=true` 自动批准且不阻塞。
+
+默认全局有 4 个 active Run slot 和 4 个 worker；不同 Task 可以并行执行，同一
+Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user_input` 期间仍
+占用原 slot，避免暂停任务被队列中的新任务抢占。
+
+## 9. 前端实现架构
+
+前端已按后端 durable 契约实现为任务工作台，而不是聊天窗口加日志：
 
 ```text
 任务创建
@@ -407,6 +443,20 @@ Pydantic schema。同一 envelope 已通过 WebSocket 推送给订阅客户端
 
 使用 shadcn 的 Form、Card、Tabs、Table、Badge、Progress、Dialog、Sheet 和
 Toast。全局只保留一个任务/Event client，避免连接与发送属于不同实例。
+
+启动时并发加载数据库、第一分页后端历史（全部 active Task + 默认 30 条 inactive
+history）和 WebSocket，但保持 `activeTaskId=null`，展示独立的新研究草稿；后续
+历史通过 cursor 加载并按不可变 `(created_at DESC, task_id DESC)` 排序去重。
+
+`tasksById` 中每个 Task 都有独立的 Run、message、activity、artifact、fixture
+stage 和 `lastSequence` 投影。HIL prompt 同时绑定 `task_id + run_id + request_id`；
+`UserInputDialog` 使用该 Run 提交，并用 prompt key 与 submission attempt ID 隔离
+A → B → A 切换中的旧 Promise settlement。resume 事件只清理匹配 Run 与 request
+的 prompt，terminal 事件按所属 Run 清理，新 Run admission 则清理上一轮 prompt。
+侧栏把 `awaiting_user_input` 计入“运行中 N / 4”，与后端 slot 占用一致。
+
+R5 前端修复还补齐了非聊天区域的有界滚动、刷新竞态下的稳定 Task 排序、后台
+通知“查看”失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。
 
 ## 10. 开发阶段
 
@@ -441,23 +491,27 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 
 ## 12. 当前实现证据（2026-07-17）
 
-- 默认离线后端测试：`770 passed`；默认不访问网络。
+- 默认离线后端测试：收集 885 项，`867 passed, 18 deselected`；Ruff
+  `app/ tests/ launcher.py` 为 `All checks passed!`，默认不访问网络。
 - live 验收：PMID 34180400、GSE178352 元数据和官方
   `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
   `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
 - fixture 闭环：48 条 gene + sample 记录（4 genes × 12 samples），全部通过精确
   SourceLocator 回溯，生成 14 个正式文件。
-- API：显式 `mode=fixture` 创建任务，任务状态和 Artifact 均使用类型化契约，下载
-  只接受 manifest 注册的 `artifact_id`。
+- API：完整 task/run/history/messages/events/cancel/resume/artifact 控制面已接入
+  lifespan-owned durable runtime；下载只接受 manifest 注册的 `artifact_id`。
 - Agent：OpenAI Agents SDK 保留为 Runtime，正式产物通过单一
   `run_research_pipeline` Function Tool 进入确定性 Pipeline。
-- 前端：保留用户提交的 shadcn 工作台，引入确定性 fixture 入口和 Artifact 下载；
-  Vitest、TypeScript、ESLint、production build 与真实浏览器主流程已通过。
-- Durable runtime：`TaskManager` 已实现任务锁（per-task `asyncio.Lock`）、运行取消
-  （`cancel_run` + `RunStatus.CANCEL_REQUESTED → CANCELLED`）、统一 WebSocket
-  `EventEnvelope` 推送与按 `sequence` 续读
-  （`app/api/ws_events.py` + `frontend/src/runtime/transport.ts` 自动重连重放）。
+- Durable runtime：`events.jsonl`、snapshot 和 Session 历史均由后端持久化；
+  `EventEnvelope` v2、按 Task sequence 续读、4-slot 跨 Task 并发、同 Task 串行、
+  queued/running/paused 取消和重启恢复均已实现。
+- HIL：真实 Agent Tool 路径已接入权威 event/resume bridge，覆盖 exact one-shot
+  request identity、拒绝/超时失败、paused cancellation 和 fixture 自动批准审计。
+- 前端：full Vitest 为 `14 files / 182 tests passed`；ESLint 0 warning、TypeScript
+  typecheck 和 production build 均通过。HIL prompt/Dialog 按 Run 与 submission
+  attempt 隔离，R5 workspace UX 修复已通过 review。
+- 浏览器证据仅指此前 fixture 创建、执行、结果展示和下载的历史验收；本轮 HIL/
+  concurrency/R5 文档同步没有重新执行浏览器 QA，当前整体验收仍需补做该项。
 
-未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.1 人在回路
-暂停-恢复（统一 `AWAITING_USER_INPUT` 子状态 + `POST /resume` API）、
-§1 系列硬编码解除、第二个真实案例和 GDC/PDB/Xena live 验收。
+未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.3 数据修正
+实例、§1 系列硬编码解除、第二个真实案例和 GDC/PDB/Xena live 验收。

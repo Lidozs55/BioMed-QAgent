@@ -443,7 +443,8 @@ class PipelineRunner:
         emitted but the pipeline auto-approves without blocking. In live
         mode the pipeline blocks on an ``asyncio.Event`` until
         ``submit_user_input`` is called by the runtime, or until ``timeout``
-        seconds elapse (which raises ``TimeoutError`` handled by ``run``).
+        seconds elapse (which raises ``PipelineUserInputTimeoutError`` handled
+        by ``run``).
         """
 
         timeout_seconds = self.user_input_timeout if timeout is None else timeout

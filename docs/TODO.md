@@ -189,11 +189,10 @@
 
       —— 修正：shadcn 组件清单（26→31）、测试覆盖（1→13）、新增 `runtime/` 目录说明
 
-- [ ] **P0** 修复 `docs/ARCHITECTURE.md` §8 与 §12 自相矛盾
+- [x] **P0** 同步 `docs/ARCHITECTURE.md` §8、§9 与 §12
 
-      —— §8 说 WebSocket "暂时保留旧流式事件，不能宣称已完成"
-      —— §12 说 "统一 WebSocket event envelope 已完成" —— 二者冲突
-      —— §12 日期 2026-07-13 过时，"235 passed" 是旧值（当前 770）
+      —— 已记录完整 durable REST/WS/HIL/并发契约、前端 Run 隔离与
+      2026-07-17 最新后端/前端验证证据
 
 - [ ] **P0** 提交 1-2 个 artifact 样例到版本控制
 
@@ -374,46 +373,52 @@
 > Pipeline 运行到某点 → 发射"请求用户输入"事件 → 前端展示 Dialog →
 > 用户提交决策 → Pipeline 恢复执行。两者必须共享同一底层原语，而非各自独立实现。
 >
-> **现状**（2026-07-17 review）：
-> - `PlanReadyPayload` 已存在但是"发射即继续"，无暂停语义
->   ([runner.py:289](backend/app/pipeline/runner.py#L289))
-> - 前端 `reducer.ts` 的 `reduceRuntimeEvent` switch 完全没有 `plan_ready` /
->   `task_created` / `task_recovered` case，被 `default: break` 静默丢弃
->   ([reducer.ts:450-796](frontend/src/runtime/reducer.ts#L450))
-> - 运行时无 `awaiting_user_input` 子状态、无 resume API、无统一前端 Dialog
-> - `RunStatus` 状态机无 pause-resume 转换
->   ([state.py:37-59](backend/app/runtime/state.py#L37))
+> **现状**（2026-07-17 implemented + reviewed）：
+> - §4.2.1 共享暂停原语与 §4.2.2 计划确认已完成；`user_input_required` /
+>   `user_input_resumed` 会进入后端 durable event log，并驱动
+>   `AWAITING_USER_INPUT → RUNNING | CANCEL_REQUESTED | FAILED | INTERRUPTED`。
+> - 真实 Agent Function Tool 已接入 Run-owned event/resume bridge；resume 使用
+>   exact one-shot request identity，reject/HIL timeout 会失败权威 Run，paused
+>   cancellation 会立即唤醒 Pipeline，fixture 会记录自动批准审计事件。
+> - 前端 prompt 按 Run 保存，Dialog 按 `task_id + run_id + request_id` 提交，并以
+>   submission attempt 隔离 A → B → A 切换中的旧异步结果；paused Run 计入 4 个
+>   并发 slot。
+> - §4.2.3 数据修正实例仍未实现，继续复用同一底层原语，不另建 pause-resume
+>   机制。
 >
-> **统一架构原则**：4.2.1 共享底层必须先于 4.2.2 / 4.2.3 完成，避免两个实例
-> 各自实现一套 pause-resume 机制造成不可复用。
+> **统一架构原则**：§4.2.3 必须复用已完成的 §4.2.1 共享底层，不能再实现一套
+> 独立 pause-resume 机制。
 
-#### 4.2.1 共享底层架构（P1，必须先于 4.2.2/4.2.3 完成）
+#### 4.2.1 共享底层架构（P1，已完成，供 4.2.2/4.2.3 复用）
 
 - [x] **P1** 新增 `RunStatus.AWAITING_USER_INPUT` 运行子状态
 
       （`backend/app/domain/contracts/runtime.py` + `app/runtime/state.py`）
-      —— 合法转换：`RUNNING → AWAITING_USER_INPUT → RUNNING | CANCEL_REQUESTED | FAILED`
+      —— 合法转换：`RUNNING → AWAITING_USER_INPUT → RUNNING |
+      CANCEL_REQUESTED | FAILED | INTERRUPTED`
       —— `TaskManager` 暂停 Run worker（不释放 semaphore slot，避免被新任务抢占）
 
 - [x] **P1** 新增统一 `UserInputRequiredPayload` 事件
 
       （`backend/app/domain/contracts/events.py`）
       —— 字段：`request_id` / `prompt_kind`（判别联合：`plan_confirmation` | `data_correction`）/
-      `summary` / `expires_at` / `fixture_exempt`
-      —— 将 `PlanReadyPayload` 重构为 `UserInputRequiredPayload` 的
-      `prompt_kind="plan_confirmation"` 子类型的别名（保持向后兼容）
+      `summary` / `expires_at` / `fixture_exempt` / `detail`
+      —— 保留 `PlanReadyPayload` 作为计划摘要/兼容审计事件，真正暂停语义由
+      `UserInputRequiredPayload(prompt_kind="plan_confirmation")` 承担
 
 - [x] **P1** PipelineRunner 新增 `_await_user_input(request)` 暂停原语
 
       （`backend/app/pipeline/runner.py`）
       —— 发射事件 → 设置 Run 为 AWAITING_USER_INPUT → 阻塞 `asyncio.Event`
-      —— fixture 模式自动批准（`fixture_exempt=True`，仅发射事件不阻塞）
-      —— 超时后转 FAILED（与 stage timeout 一致）
+      —— fixture 模式自动批准（`fixture_exempt=True`，发射 required/resumed
+      审计事件但不阻塞）
+      —— HIL timeout 独立于 stage/total timeout；等待期间暂停 total budget，超时以
+      `PipelineUserInputTimeoutError` 转 FAILED
 
 - [x] **P1** 新增 `POST /api/v1/tasks/{task_id}/runs/{run_id}/resume` API
 
       （`backend/app/api/routes.py`）
-      —— Body：`{request_id, decision: "approve"|"reject", payload?: object}`
+      —— Body：`{request_id, decision: "approve"|"reject", detail?: object}`
       —— 校验 `request_id` 匹配当前等待中的请求
       —— 触发 Run 恢复，将 decision 传给 `_await_user_input`
 
@@ -421,14 +426,16 @@
       `task_created` / `task_recovered`
 
       （`frontend/src/runtime/reducer.ts` + `contracts.ts`）
-      —— 当前上述事件被 `default: break` 静默丢弃
-      —— 新增 `TaskProjection.pendingUserInput: UserInputRequest | null`
+      —— 上述事件均进入 Task/Run-scoped reducer 投影
+      —— 新增 `TaskProjection.pendingUserInput: PendingUserInput | null`，包含
+      authoritative `runId` / `requestId`
       —— 在 `RunStatus` 类型增加 `"awaiting_user_input"`
 
 - [x] **P1** 新增统一 `UserInputDialog` 组件（复用 shadcn Dialog）
 
       （`frontend/src/components/UserInputDialog.tsx`）
-      —— 由 `prompt_kind` 判别渲染不同表单（plan / corrections）
+      —— 当前按 `prompt_kind="plan_confirmation"` 渲染计划确认；
+      `data_correction` 表单由 §4.2.3 补充
       —— 提交时调用 `POST /runs/{run_id}/resume`
 
 - [x] **P1** AGENTS.md §2 HTTP 路由表补充 `/resume` 端点
@@ -441,8 +448,7 @@
       —— fixture 模式豁免（`fixture_exempt=True`，自动批准）
       —— agent 模式真正阻塞，等待 `POST /resume`
 
-- [x] **P1** `PlanConfirmCard` 视图作为 `UserInputDialog` 的
-      `prompt_kind="plan_confirmation"` 渲染
+- [x] **P1** `UserInputDialog` 的 `prompt_kind="plan_confirmation"` 分支渲染
 
       —— 展示 `TaskSpecification` 摘要（queries / datasets / requested_outputs）
 
@@ -643,9 +649,9 @@
 
 ### 7.7 测试（原 §10）
 
-- [x] 默认 pytest 无真实 Key 通过（770 passed, 2026-07-17）
+- [x] 默认 pytest 无真实 Key 通过（867 passed, 18 deselected, 2026-07-17）
 - [x] Live 测试覆盖 PubMed + GEO + 完整 counts 校验
-- [x] 前端 Vitest + TypeScript + ESLint + build 门禁（145 passed）
+- [x] 前端 Vitest（14 files / 182 tests）+ TypeScript + ESLint + build 门禁
 
 ### 7.8 Agent 与 API（原 §11）
 
@@ -676,3 +682,8 @@
 - [x] 前端接入 WS error 帧 toast
 - [x] 删除前端死代码
 - [x] 修复 AGENTS.md subscribe 命令文档漂移
+- [x] Agent HIL bridge 权威化：exact one-shot resume identity、reject/timeout
+      failure、paused cancellation 与 fixture auto-approval audit
+- [x] 前端 HIL prompt/提交 attempt 按 Run 隔离，修复 A → B → A 异步串扰并将
+      paused Run 计入并发 slot
+- [x] R5 UX 修复：有界滚动、稳定 Task 排序、通知 View 失败反馈与多行 Bubble
