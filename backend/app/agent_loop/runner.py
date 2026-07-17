@@ -25,7 +25,7 @@ from app.domain.contracts import (
     build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
-from app.pipeline.runner import PipelineRunner
+from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 
@@ -216,6 +216,21 @@ class AgentRunExecutor:
         pending = take_pending()
         if pending is None:
             return
+        if isinstance(pending, PendingPublicationCleanup):
+            try:
+                if pending.run_id != execution.run_id:
+                    raise RuntimeError(
+                        "pending publication run_id does not match execution"
+                    )
+
+                async def abort_agent_cleanup() -> None:
+                    await _run_sync_operation(pending.abort)
+
+                execution.set_completion_cleanup(abort_agent_cleanup)
+            except BaseException:
+                await _run_sync_operation(pending.abort)
+                raise
+            raise pending.error
         try:
             if pending.run_id != execution.run_id:
                 raise RuntimeError("pending publication run_id does not match execution")
@@ -406,7 +421,16 @@ class FixtureRunExecutor:
                 transferred = True
         except BaseException:
             if not transferred and callable(abort):
-                await _run_sync_operation(abort)
+                try:
+                    await _run_sync_operation(abort)
+                except BaseException:
+
+                    async def abort_fixture_cleanup() -> None:
+                        await _run_sync_operation(abort)
+
+                    execution.set_completion_cleanup(abort_fixture_cleanup)
+                    transferred = True
+                    raise
             raise
 
 

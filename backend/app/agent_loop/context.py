@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
-    from app.pipeline.runner import PendingPublication
+    from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
 
 
 @dataclass
@@ -62,7 +62,9 @@ class RunContext:
         init=False,
         repr=False,
     )
-    _pending_publication: PendingPublication | None = field(
+    _pending_publication: (
+        PendingPublication | PendingPublicationCleanup | None
+    ) = field(
         default=None,
         init=False,
         repr=False,
@@ -123,8 +125,24 @@ class RunContext:
             raise ValueError("pending publication run_id must match managed run_id")
         self._pending_publication = handle
 
-    def take_pending_publication(self) -> PendingPublication | None:
-        """Transfer the managed Run's validated package at most once."""
+    def set_pending_publication_cleanup(
+        self,
+        handle: PendingPublicationCleanup,
+    ) -> None:
+        """Retain failed cleanup for transfer to the managed Run owner."""
+
+        if self.managed_run_id is None or not self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is not reserved")
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        if handle.run_id != self.managed_run_id:
+            raise ValueError("pending publication run_id must match managed run_id")
+        self._pending_publication = handle
+
+    def take_pending_publication(
+        self,
+    ) -> PendingPublication | PendingPublicationCleanup | None:
+        """Transfer the managed Run's publication ownership at most once."""
 
         handle = self._pending_publication
         if handle is not None:

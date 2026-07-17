@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import threading
 from contextlib import suppress
 from pathlib import Path
@@ -576,6 +577,148 @@ async def test_fixture_executor_aborts_validated_runner_on_cancellation(
         await executor(execution)
 
     assert abort_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fixture_pretransfer_abort_failure_cannot_be_cancelled(
+    tmp_path: Path,
+) -> None:
+    abort_calls = 0
+    runner_entered = asyncio.Event()
+
+    class AbortFailingRunner:
+        def __init__(self, **kwargs) -> None:
+            self.task_id = str(kwargs["task_id"])
+            self.run_id = str(kwargs["run_id"])
+            self.cancellation_requested = kwargs["cancellation_requested"]
+            self.events: list = []
+            self.staging = Path(kwargs["base_dir"]) / self.task_id / "staging" / self.run_id
+            self.staging.mkdir(parents=True, exist_ok=True)
+            (self.staging / "cleanup-diagnostic.txt").write_text(
+                "preserve failed cleanup\n",
+                encoding="utf-8",
+            )
+
+        async def run(self) -> SimpleNamespace:
+            runner_entered.set()
+            await self.cancellation_requested.wait()
+            return completed_manifest(self.task_id)
+
+        def abort(self) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+            raise OSError("fixture pretransfer staging cleanup failed")
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=tmp_path / "fixture",
+            pipeline_runner_factory=AbortFailingRunner,
+        ),
+    )
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_fixture_pretransfer_abort_failure",
+                input="cancel fixture with persistent cleanup failure",
+                databases=["pubmed", "geo"],
+                mode=TaskMode.FIXTURE,
+            )
+        )
+        await asyncio.wait_for(runner_entered.wait(), timeout=2)
+
+        with pytest.raises(RuntimeError, match="completion abort failed"):
+            await asyncio.wait_for(
+                manager.cancel_run(accepted.task_id, accepted.run_id),
+                timeout=5,
+            )
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status is RunStatus.FAILED
+        failure_error = failed.runs[-1].error or ""
+        assert "fixture pretransfer staging cleanup failed" in failure_error
+        assert "completion abort also failed" in failure_error
+        staging = repository.tasks_dir / accepted.task_id / "staging" / accepted.run_id
+        assert (staging / "cleanup-diagnostic.txt").is_file()
+        assert abort_calls == 2
+        events = await repository.list_events(accepted.task_id)
+        assert not any(event.payload.type.value == "run_cancelled" for event in events)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_pretransfer_abort_retry_success_can_be_cancelled(
+    tmp_path: Path,
+) -> None:
+    abort_calls = 0
+    runner_entered = asyncio.Event()
+
+    class TransientAbortFailingRunner:
+        def __init__(self, **kwargs) -> None:
+            self.task_id = str(kwargs["task_id"])
+            self.run_id = str(kwargs["run_id"])
+            self.cancellation_requested = kwargs["cancellation_requested"]
+            self.events: list = []
+            self.staging = Path(kwargs["base_dir"]) / self.task_id / "staging" / self.run_id
+            self.staging.mkdir(parents=True, exist_ok=True)
+            (self.staging / "cleanup-diagnostic.txt").write_text(
+                "remove after retry\n",
+                encoding="utf-8",
+            )
+
+        async def run(self) -> SimpleNamespace:
+            runner_entered.set()
+            await self.cancellation_requested.wait()
+            return completed_manifest(self.task_id)
+
+        def abort(self) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+            if abort_calls == 1:
+                raise OSError("fixture transient staging cleanup failed")
+            shutil.rmtree(self.staging)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=tmp_path / "fixture",
+            pipeline_runner_factory=TransientAbortFailingRunner,
+        ),
+    )
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_fixture_pretransfer_abort_retry",
+                input="cancel fixture after transient cleanup failure",
+                databases=["pubmed", "geo"],
+                mode=TaskMode.FIXTURE,
+            )
+        )
+        await asyncio.wait_for(runner_entered.wait(), timeout=2)
+
+        cancelled = await asyncio.wait_for(
+            manager.cancel_run(accepted.task_id, accepted.run_id),
+            timeout=5,
+        )
+        await manager.wait_until_idle()
+
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        staging = repository.tasks_dir / accepted.task_id / "staging" / accepted.run_id
+        assert not staging.exists()
+        assert abort_calls == 2
+        events = await repository.list_events(accepted.task_id)
+        assert any(event.payload.type.value == "run_cancelled" for event in events)
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

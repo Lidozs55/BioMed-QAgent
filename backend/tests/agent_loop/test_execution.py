@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import app.agent_loop.runner as runner_module
+import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents import Agent
 from agents.items import ModelResponse
@@ -1424,6 +1425,97 @@ async def test_real_sdk_managed_pipeline_publishes_once_in_completion_order(
         model.release_final_answer.set()
         if subscription is not None:
             await subscription.close()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_pretransfer_abort_failure_cannot_be_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    abort_calls = 0
+
+    class AbortFailingRunner:
+        def __init__(self, **kwargs: object) -> None:
+            self.task_id = str(kwargs["task_id"])
+            self.run_id = str(kwargs["run_id"])
+            base_dir = Path(kwargs["base_dir"])
+            self.staging = base_dir / self.task_id / "staging" / self.run_id
+            self.staging.mkdir(parents=True, exist_ok=True)
+            (self.staging / "cleanup-diagnostic.txt").write_text(
+                "preserve failed cleanup\n",
+                encoding="utf-8",
+            )
+
+        async def run(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                task_id=self.task_id,
+                task_state=SimpleNamespace(value="failed"),
+                validation=SimpleNamespace(status="invalid"),
+                artifacts=[],
+            )
+
+        def abort(self) -> None:
+            nonlocal abort_calls
+            abort_calls += 1
+            raise OSError("agent pretransfer staging cleanup failed")
+
+    monkeypatch.setattr(
+        pipeline_tool_module,
+        "PipelineRunner",
+        AbortFailingRunner,
+    )
+    model = ScriptedPipelineModel()
+    agent = Agent[RunContext](
+        name="Scripted abort-failing Pipeline Agent",
+        instructions="Call run_research_pipeline, then answer.",
+        tools=[run_research_pipeline],
+        model=model,
+    )
+    build = SimpleNamespace(agent=agent, skill_names=(), model=model)
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_agent_pretransfer_abort_failure",
+                input="run the abort-failing Agent Tool",
+                databases=["pubmed", "geo"],
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        model.allow_tool_call.set()
+        await asyncio.wait_for(model.final_round_entered.wait(), timeout=2)
+
+        cancellation = asyncio.create_task(manager.cancel_run(accepted.task_id, accepted.run_id))
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        await asyncio.wait_for(
+            execution.context.cancellation_requested.wait(),
+            timeout=2,
+        )
+        model.release_final_answer.set()
+
+        with pytest.raises(RuntimeError, match="completion abort failed"):
+            await asyncio.wait_for(cancellation, timeout=5)
+        await manager.wait_until_idle()
+
+        failed = await repository.get_snapshot(accepted.task_id)
+        assert failed is not None
+        assert failed.runs[-1].status.value == "failed"
+        failure_error = failed.runs[-1].error or ""
+        assert "agent pretransfer staging cleanup failed" in failure_error
+        assert "completion abort also failed" in failure_error
+        staging = repository.tasks_dir / accepted.task_id / "staging" / accepted.run_id
+        assert (staging / "cleanup-diagnostic.txt").is_file()
+        assert abort_calls == 2
+        events = await repository.list_events(accepted.task_id)
+        assert not any(event.payload.type.value == "run_cancelled" for event in events)
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
         await manager.close()
 
 

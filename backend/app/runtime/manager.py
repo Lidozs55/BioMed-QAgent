@@ -192,6 +192,15 @@ class RunExecution:
         self._completion_committer = committer
         self._completion_aborter = aborter
 
+    def set_completion_cleanup(self, aborter: RunCompletionAbort) -> None:
+        """Attach cleanup-only ownership after a pre-transfer abort failure."""
+
+        if self._completion_committer is not None or self._completion_aborter is not None:
+            raise RuntimeError("completion operations are already attached")
+        if self._completion_sealed:
+            raise RuntimeError("run completion is already sealed")
+        self._completion_aborter = aborter
+
     async def commit_completion(self) -> list[EventEnvelope]:
         if not self._completion_sealed:
             raise RuntimeError("run completion must be sealed before commit")

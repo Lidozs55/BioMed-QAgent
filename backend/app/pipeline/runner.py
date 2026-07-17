@@ -107,6 +107,15 @@ class PendingPublication:
     abort: Callable[[], None]
 
 
+@dataclass(frozen=True, slots=True)
+class PendingPublicationCleanup:
+    """Failed pre-transfer cleanup awaiting a manager-owned retry."""
+
+    run_id: str
+    abort: Callable[[], None]
+    error: BaseException
+
+
 _STAGES: list[StageName] = [
     StageName.DISCOVERY,
     StageName.ACQUISITION,

@@ -9,6 +9,7 @@ import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.pipeline.runner import PendingPublicationCleanup
 from app.pipeline.tool import run_research_pipeline
 from app.tools.workdir import create_task_workdir
 
@@ -110,7 +111,7 @@ async def test_pipeline_function_tool_defers_managed_run_publication(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_function_tool_releases_reservation_when_abort_fails(
+async def test_pipeline_function_tool_retains_cleanup_when_abort_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -151,6 +152,13 @@ async def test_pipeline_function_tool_releases_reservation_when_abort_fails(
     )
 
     assert "abort failed" in result
+    with pytest.raises(RuntimeError, match="already reserved"):
+        context.reserve_pipeline_publication()
+    cleanup = context.take_pending_publication()
+    assert isinstance(cleanup, PendingPublicationCleanup)
+    assert cleanup.run_id == run_id
+    assert isinstance(cleanup.error, OSError)
+    assert str(cleanup.error) == "abort failed"
     assert context.reserve_pipeline_publication() == run_id
 
 

@@ -11,7 +11,7 @@ from typing import Literal
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.pipeline.runner import PipelineRunner
+from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import STANDALONE_RUN_ID
 
 
@@ -61,16 +61,25 @@ async def run_research_pipeline(
     cleanup_attempted = False
 
     async def abort_reserved_runner() -> None:
-        nonlocal cleanup_attempted, reservation_released
+        nonlocal cleanup_attempted, reservation_released, transferred
         if managed_run_id is None or cleanup_attempted:
             return
         cleanup_attempted = True
-        try:
-            if runner is not None:
+        if runner is not None:
+            try:
                 await _run_sync_cleanup(runner.abort)
-        finally:
-            run_context.release_pipeline_publication_reservation()
-            reservation_released = True
+            except BaseException as error:
+                run_context.set_pending_publication_cleanup(
+                    PendingPublicationCleanup(
+                        run_id=managed_run_id,
+                        abort=runner.abort,
+                        error=error,
+                    )
+                )
+                transferred = True
+                raise
+        run_context.release_pipeline_publication_reservation()
+        reservation_released = True
 
     try:
         runner = PipelineRunner(

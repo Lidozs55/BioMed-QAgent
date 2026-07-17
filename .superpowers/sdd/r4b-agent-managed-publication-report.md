@@ -506,3 +506,90 @@ Report:
   later restart converts it to `INTERRUPTED`; it is never falsely cancelled.
 - No changes were made to the approved Artifact API visibility rule, restart
   policy, frontend, or subsequent R5 work.
+
+## Follow-up — pre-transfer cleanup ownership review finding
+
+The independent R4b review found that a failed abort before ownership reached
+`RunExecution` was forgotten. The Agent Tool released its `RunContext`
+reservation in `finally`, and the Fixture executor propagated the abort error
+without attaching cleanup. `TaskManager` then observed no aborter, treated
+completion abort as a successful no-op, and could persist `run_cancelled` while
+the Run staging directory remained.
+
+The follow-up retains a cleanup-only owner with the authoritative Run ID, the
+runner-bound abort callback, and the initial cleanup error. The Agent executor
+transfers that owner before model close and re-raises the retained error; the
+Fixture executor attaches the cleanup callback directly before re-raising.
+`RunExecution` therefore exposes a real abort operation to the Manager without
+inventing a committer. The initial failure remains the primary diagnostic, but
+only the Manager-owned retry decides cancellation cleanup: a successful retry
+allows `CANCELLED`, while another failure produces `FAILED`, prevents
+`run_cancelled`, and surfaces `completion abort failed` to the cancellation
+caller.
+
+### RED evidence
+
+Real SDK Agent plus real `TaskManager`:
+
+```text
+uv run pytest \
+  tests/agent_loop/test_execution.py::test_agent_pretransfer_abort_failure_cannot_be_cancelled -q
+Failed: DID NOT RAISE RuntimeError
+1 failed
+```
+
+Fixture executor plus real `TaskManager`:
+
+```text
+uv run pytest \
+  tests/runtime/test_fixture_executor.py::test_fixture_pretransfer_abort_failure_cannot_be_cancelled -q
+Failed: DID NOT RAISE RuntimeError
+1 failed in 2.46s
+```
+
+Both failures proved the same defect: the cancellation caller returned
+success instead of receiving the persistent staging cleanup failure.
+
+### GREEN and boundary coverage
+
+The focused boundary set includes:
+
+- Tool abort failure keeps the reservation occupied until cleanup ownership is
+  transferred.
+- Persistent Agent and Fixture abort failure retries exactly once under the
+  Manager, yields `FAILED`, preserves staging diagnostics, emits no
+  `run_cancelled`, and errors the cancellation caller.
+- A transient first abort failure followed by a successful Manager retry
+  removes staging and permits `CANCELLED`.
+
+```text
+uv run pytest \
+  tests/pipeline/test_pipeline_tool.py::test_pipeline_function_tool_retains_cleanup_when_abort_fails \
+  tests/agent_loop/test_execution.py::test_agent_pretransfer_abort_failure_cannot_be_cancelled \
+  tests/runtime/test_fixture_executor.py::test_fixture_pretransfer_abort_failure_cannot_be_cancelled \
+  tests/runtime/test_fixture_executor.py::test_fixture_pretransfer_abort_retry_success_can_be_cancelled -q
+4 passed in 4.10s
+```
+
+Fresh covering ownership/runtime verification:
+
+```text
+uv run pytest \
+  tests/agent_loop/test_context.py \
+  tests/pipeline/test_pipeline_tool.py \
+  tests/pipeline/test_pipeline_runner_resilience.py \
+  tests/agent_loop/test_execution.py \
+  tests/runtime/test_fixture_executor.py \
+  tests/runtime/test_manager.py -q
+140 passed in 34.70s
+```
+
+Fresh full backend verification:
+
+```text
+uv run ruff check app/ tests/ launcher.py
+All checks passed!
+
+uv run pytest
+843 passed, 18 deselected in 73.17s
+```
