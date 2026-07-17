@@ -27,6 +27,7 @@ interface UserInputDialogProps {
 
 interface SubmissionState {
   promptKey: string | null;
+  attemptId: number;
   pendingDecision: UserInputDecision | null;
   error: string | null;
 }
@@ -48,15 +49,21 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
     pending === null || taskId === null
       ? null
       : `${taskId}:${pending.runId}:${pending.requestId}`;
-  const latestPromptKey = useRef(promptKey);
-  latestPromptKey.current = promptKey;
+  const nextAttemptId = useRef(0);
   const [submission, setSubmission] = useState<SubmissionState>({
     promptKey: null,
+    attemptId: 0,
     pendingDecision: null,
     error: null,
   });
   useEffect(() => {
-    setSubmission({ promptKey, pendingDecision: null, error: null });
+    nextAttemptId.current += 1;
+    setSubmission({
+      promptKey,
+      attemptId: nextAttemptId.current,
+      pendingDecision: null,
+      error: null,
+    });
   }, [promptKey]);
   const pendingDecision =
     submission.promptKey === promptKey ? submission.pendingDecision : null;
@@ -78,8 +85,11 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       return;
     }
     const submittedPromptKey = promptKey;
+    nextAttemptId.current += 1;
+    const submittedAttemptId = nextAttemptId.current;
     setSubmission({
       promptKey: submittedPromptKey,
+      attemptId: submittedAttemptId,
       pendingDecision: decision,
       error: null,
     });
@@ -90,20 +100,25 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         detail: {},
       });
     } catch (caught) {
-      if (latestPromptKey.current === submittedPromptKey) {
-        setSubmission((current) => ({
-          ...current,
-          error:
-            caught instanceof Error ? caught.message : "提交决策失败，请重试",
-        }));
-      }
+      setSubmission((current) =>
+        current.promptKey === submittedPromptKey &&
+        current.attemptId === submittedAttemptId
+          ? {
+              ...current,
+              error:
+                caught instanceof Error
+                  ? caught.message
+                  : "提交决策失败，请重试",
+            }
+          : current,
+      );
     } finally {
-      if (latestPromptKey.current === submittedPromptKey) {
-        setSubmission((current) => ({
-          ...current,
-          pendingDecision: null,
-        }));
-      }
+      setSubmission((current) =>
+        current.promptKey === submittedPromptKey &&
+        current.attemptId === submittedAttemptId
+          ? { ...current, pendingDecision: null }
+          : current,
+      );
     }
   };
 

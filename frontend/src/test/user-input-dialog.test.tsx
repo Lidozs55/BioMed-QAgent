@@ -99,4 +99,67 @@ describe("UserInputDialog", () => {
       detail: {},
     });
   });
+
+  it("ignores an old attempt after returning to the same prompt and retrying", async () => {
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    let resolveSecond: (() => void) | undefined;
+    const firstResume = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const secondResume = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun
+      .mockReturnValueOnce(firstResume)
+      .mockReturnValueOnce(secondResume);
+    const taskA = taskWithPrompt(
+      "task_a",
+      "run_a",
+      "run_a",
+      "request_a",
+    );
+    const taskB = taskWithPrompt(
+      "task_b",
+      "run_b",
+      "run_b",
+      "request_b",
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={taskA} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    rerender(<UserInputDialog task={taskB} onResumeRun={onResumeRun} />);
+    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+
+    await act(async () => {
+      rejectFirst?.(new Error("Stale A1 failure"));
+      await firstResume.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Stale A1 failure")).toBeNull();
+      expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
+    });
+
+    await act(async () => {
+      resolveSecond?.();
+      await secondResume;
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Stale A1 failure")).toBeNull();
+      expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+    });
+    expect(onResumeRun).toHaveBeenCalledTimes(2);
+  });
 });

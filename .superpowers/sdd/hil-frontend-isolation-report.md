@@ -37,6 +37,15 @@ The Codex pnpm wrapper aborted on its no-TTY modules-purge guard (`ERR_PNPM_ABOR
 - Lint GREEN: the same local Node entry with `frontend/node_modules/eslint/bin/eslint.js . --max-warnings 0` — exit 0.
 - TypeScript GREEN: the same local Node entry with `frontend/node_modules/typescript/bin/tsc --noEmit` — exit 0.
 
+## Second re-review race follow-up
+
+- RED: the local Node/Vitest entry with `run src/test/user-input-dialog.test.tsx -t 'ignores an old attempt after returning to the same prompt and retrying'` — 1 failed; rejecting stale A1 after A -> B -> A and starting A2 displayed A1's error and allowed A1 cleanup to target the fresh A state.
+- GREEN: the same targeted command — 1 passed, 1 skipped after adding a unique `attemptId` to `SubmissionState`, invalidating it on prompt transitions, and matching both prompt key and attempt ID in `catch`/`finally` updates.
+- Dialog GREEN: the same entry with `run src/test/user-input-dialog.test.tsx` — 2 tests passed.
+- Focused GREEN: the same entry with `run src/test/runtime-reducer.test.ts src/test/store.test.ts src/test/user-input-dialog.test.tsx src/test/session-sidebar.test.tsx` — 4 files, 61 tests passed.
+- Lint GREEN: local ESLint entry with `. --max-warnings 0` — exit 0.
+- TypeScript GREEN: local TypeScript entry with `--noEmit` — exit 0.
+
 ## Files changed
 
 - `frontend/src/runtime/types.ts`
