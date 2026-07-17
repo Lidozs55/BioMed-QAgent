@@ -99,6 +99,23 @@ function runCompletedEvent(taskId: string, sequence: number): EventEnvelope {
   };
 }
 
+function runCancelRequestedEvent(
+  taskId: string,
+  sequence: number,
+): EventEnvelope {
+  return {
+    schema_version: "2.0",
+    event_id: `event_${taskId}_${sequence}`,
+    type: "run_cancel_requested",
+    task_id: taskId,
+    run_id: `run_${taskId}`,
+    stage_attempt_id: null,
+    sequence,
+    timestamp: `2026-07-14T00:00:${String(sequence % 60).padStart(2, "0")}Z`,
+    payload: { type: "run_cancel_requested", reason: null },
+  };
+}
+
 function toolStartedEvent(
   taskId: string,
   sequence: number,
@@ -2238,6 +2255,74 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().taskOrder).not.toContain("task_older");
   });
 
+  it("re-sorts an active continuation when run_queued arrives before admission", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [
+          summary(
+            "task_active_old",
+            "running",
+            1,
+            "agent",
+            "2026-07-13T00:00:00Z",
+          ),
+        ],
+        [
+          summary(
+            "task_middle",
+            "completed",
+            1,
+            "agent",
+            "2026-07-15T00:00:00Z",
+          ),
+        ],
+      ),
+      false,
+    );
+    const accepted: TaskRunAccepted = {
+      request_id: "req_continue_middle",
+      task_id: "task_middle",
+      run_id: "run_continue_middle",
+      status: "queued",
+    };
+    const continuation = deferred<TaskRunAccepted>();
+    const apiClient = api({
+      continueTask: vi.fn(() => continuation.promise),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const pending = controller.continueTask("task_middle", {
+      input: "follow up",
+    });
+    useAgentStore.getState().applyEvent({
+      schema_version: "2.0",
+      event_id: "event_continue_middle_queued",
+      type: "run_queued",
+      task_id: "task_middle",
+      run_id: "run_continue_middle",
+      stage_attempt_id: null,
+      sequence: 2,
+      timestamp: "2026-07-15T00:00:01Z",
+      payload: {
+        type: "run_queued",
+        request_id: "req_continue_middle",
+        input: "follow up",
+      },
+    });
+    expect(useAgentStore.getState().activeItems).toEqual([
+      "task_active_old",
+      "task_middle",
+    ]);
+
+    continuation.resolve(accepted);
+    await pending;
+
+    expect(useAgentStore.getState().activeItems).toEqual([
+      "task_middle",
+      "task_active_old",
+    ]);
+  });
+
   it("hydrates the authoritative snapshot returned by run cancellation", async () => {
     useAgentStore.getState().mergeTaskPage(page([summary("task_cancel")]), false);
     const cancelledSnapshot: TaskSnapshot = {
@@ -2265,6 +2350,11 @@ describe("runtime orchestration", () => {
     };
     const apiClient = api({
       cancelRun: vi.fn().mockResolvedValue(cancelledSnapshot),
+      fetchEvents: vi.fn().mockResolvedValue([
+        runStartedEvent("task_cancel", 1),
+        toolStartedEvent("task_cancel", 2, "call_before_cancel"),
+        runCancelRequestedEvent("task_cancel", 3),
+      ]),
     });
     const controller = new RuntimeController(apiClient, transport());
 
@@ -2277,6 +2367,58 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().tasksById.task_cancel.summary.status).toBe(
       "cancel_requested",
     );
+  });
+
+  it("replays diagnostic events before hydrating a cancellation snapshot", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_cancel_replay", "running", 1)]),
+      false,
+    );
+    const cancelledSnapshot: TaskSnapshot = {
+      task: {
+        ...summary("task_cancel_replay", "running", 2),
+        status: "cancel_requested",
+        active_run_id: "run_task_cancel_replay",
+      },
+      runs: [
+        {
+          run_id: "run_task_cancel_replay",
+          task_id: "task_cancel_replay",
+          request_id: "req_cancel_replay",
+          status: "cancel_requested",
+          input: "question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: null,
+          error: null,
+        },
+      ],
+      messages: [],
+      older_messages_cursor: null,
+    };
+    const apiClient = api({
+      cancelRun: vi.fn().mockResolvedValue(cancelledSnapshot),
+      fetchEvents: vi
+        .fn()
+        .mockResolvedValue([
+          toolStartedEvent("task_cancel_replay", 2, "call_before_cancel"),
+        ]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.cancelRun(
+      "task_cancel_replay",
+      "run_task_cancel_replay",
+    );
+
+    expect(apiClient.fetchEvents).toHaveBeenCalledWith("task_cancel_replay", {
+      afterSequence: 1,
+      limit: 1000,
+    });
+    expect(
+      useAgentStore.getState().tasksById.task_cancel_replay.activityOrder,
+    ).toEqual(["tool:run_task_cancel_replay:call_before_cancel"]);
   });
 
   it("does not let stale artifact hydration overwrite a cancellation snapshot", async () => {
@@ -2299,6 +2441,14 @@ describe("runtime orchestration", () => {
       fetchTask: vi.fn().mockResolvedValue(selectedSnapshot),
       fetchArtifacts: vi.fn(() => artifacts.promise),
       cancelRun: vi.fn().mockResolvedValue(cancelledSnapshot),
+      fetchEvents: vi
+        .fn<APIClient["fetchEvents"]>()
+        .mockResolvedValueOnce([
+          runStartedEvent("task_cancel_generation", 2),
+        ])
+        .mockResolvedValueOnce([
+          runCancelRequestedEvent("task_cancel_generation", 3),
+        ]),
     });
     const controller = new RuntimeController(apiClient, transport());
 

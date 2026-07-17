@@ -485,6 +485,8 @@ export class RuntimeController {
       const generation = this.advanceTaskHandoffGeneration(taskId);
       const snapshot = await this.api.cancelRun(taskId, runId);
       if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     });
   }
