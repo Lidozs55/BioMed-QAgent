@@ -29,6 +29,14 @@ The Codex pnpm wrapper aborted on its no-TTY modules-purge guard (`ERR_PNPM_ABOR
 - `git diff --check` — exit 0.
 - Generated `frontend/tsconfig.app.tsbuildinfo` restored after build.
 
+## Review finding follow-up
+
+- RED: `& 'C:\Users\cheng\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'D:\coding\BioMed-QAgent\frontend\node_modules\vitest\vitest.mjs' run src/test/user-input-dialog.test.tsx` — 1 failed; after A rejected while B was visible, returning to A left `确认执行` disabled.
+- GREEN: the same command — 1 file, 1 test passed after resetting `SubmissionState` on prompt identity changes.
+- Focused GREEN: the same local Node/Vitest entry with `run src/test/runtime-reducer.test.ts src/test/store.test.ts src/test/user-input-dialog.test.tsx src/test/session-sidebar.test.tsx` — 4 files, 60 tests passed.
+- Lint GREEN: the same local Node entry with `frontend/node_modules/eslint/bin/eslint.js . --max-warnings 0` — exit 0.
+- TypeScript GREEN: the same local Node entry with `frontend/node_modules/typescript/bin/tsc --noEmit` — exit 0.
+
 ## Files changed
 
 - `frontend/src/runtime/types.ts`

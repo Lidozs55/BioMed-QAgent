@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CheckIcon, XCircleIcon } from "@phosphor-icons/react";
 
@@ -55,6 +55,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
     pendingDecision: null,
     error: null,
   });
+  useEffect(() => {
+    setSubmission({ promptKey, pendingDecision: null, error: null });
+  }, [promptKey]);
   const pendingDecision =
     submission.promptKey === promptKey ? submission.pendingDecision : null;
   const error = submission.promptKey === promptKey ? submission.error : null;

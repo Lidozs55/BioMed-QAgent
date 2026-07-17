@@ -86,6 +86,11 @@ describe("UserInputDialog", () => {
       expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
     });
 
+    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.queryByText("Task A resume failed")).toBeNull();
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+
+    rerender(<UserInputDialog task={taskB} onResumeRun={onResumeRun} />);
     fireEvent.click(screen.getByRole("button", { name: "确认执行" }));
     await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(2));
     expect(onResumeRun).toHaveBeenLastCalledWith("task_b", "run_b", {
