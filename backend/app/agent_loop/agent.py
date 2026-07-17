@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from agents import Agent
 
-from app.agent_loop.model import get_model
+from app.agent_loop.model import LazyDashScopeModel, get_model
 from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.pipeline.tool import run_research_pipeline
 from app.skills.registry import (
@@ -56,27 +58,27 @@ INSTRUCTIONS = """\
 - 压缩后仅保留最近 5 条完整记录，更早的记录转为摘要
 - 上下文管理子 Agent 后续会扩展更多能力（如压缩 records、注入背景等）
 
-当前确定性闭环仅支持显式 fixture 案例（PubMed + GEO）。其他数据库不得伪装成正式成功产物。
+当前确定性闭环支持 fixture 模式（离线）和 live 模式（真实 NCBI 网络），
+均限于 PubMed + GEO。其他数据库不得伪装成正式成功产物。
 """
 
 
-# Module-level store for skill names loaded in the most recent create_agent() call.
-_loaded_skill_names: list[str] = []
+@dataclass(frozen=True, slots=True)
+class AgentBuild:
+    """One isolated Agent build and the resources owned by its Run."""
+
+    agent: Agent
+    skill_names: tuple[str, ...]
+    model: LazyDashScopeModel
 
 
-def get_loaded_skill_names() -> list[str]:
-    """Return skill names loaded in the last create_agent() invocation."""
-    return list(_loaded_skill_names)
-
-
-def create_agent(databases: list[str] | None = None) -> Agent:
+def build_agent(databases: list[str] | None = None) -> AgentBuild:
     """构造主 Agent。
 
     Args:
         databases: 用户选择的数据库列表。None 时加载所有已启用的技能；
                    给定列表时，仅加载匹配的 acquisition 技能 + 全部非 acquisition 技能。
     """
-    global _loaded_skill_names
     _import_skill_modules()
 
     if databases is not None:
@@ -89,11 +91,12 @@ def create_agent(databases: list[str] | None = None) -> Agent:
     else:
         skills = skill_registry.list_enabled()
 
-    _loaded_skill_names = [s.name for s in skills]
+    skill_names = tuple(skill.name for skill in skills)
 
+    model = get_model()
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([run_research_pipeline, read_file, write_file, list_files])
-    tools.append(build_compress_query_log_tool())
+    tools.append(build_compress_query_log_tool(model))
     seen: set[str] = set()
     unique_tools: list = []
     for t in tools:
@@ -106,9 +109,20 @@ def create_agent(databases: list[str] | None = None) -> Agent:
         if instructions_suffix
         else INSTRUCTIONS
     )
-    return Agent(
+    agent = Agent(
         name="BioMedResearcher",
         instructions=merged_instructions,
         tools=unique_tools,
-        model=get_model(),
+        model=model,
     )
+    return AgentBuild(
+        agent=agent,
+        skill_names=skill_names,
+        model=model,
+    )
+
+
+def create_agent(databases: list[str] | None = None) -> Agent:
+    """Build a standalone Agent for callers that do not need owned metadata."""
+
+    return build_agent(databases=databases).agent

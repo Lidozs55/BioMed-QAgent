@@ -4,13 +4,18 @@
 
 对应 TODO.md Section 4.2：扩展 RunContext 字段。
 """
+
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.tools.workdir import TaskWorkDir, create_task_workdir
+
+if TYPE_CHECKING:
+    from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
 
 
 @dataclass
@@ -29,9 +34,12 @@ class RunContext:
         artifacts: 产出物文件路径（CSV、报告、图表等）。
         warnings: 过程中产生的警告列表。
         query_log: 记录每次检索的 query/source/status/records_count。
+        cancellation_requested: Cooperative cancellation token for tools.
     """
 
     task_id: str = "default"
+    base_dir: str | Path | None = field(default=None, repr=False, kw_only=True)
+    managed_run_id: str | None = field(default=None, repr=False, kw_only=True)
     topic: str = ""
     preferred_sources: list[str] = field(default_factory=list)
     plan: str = ""
@@ -45,10 +53,30 @@ class RunContext:
 
     query_log: list[dict] = field(default_factory=list)
     query_log_summary: str = ""
+    cancellation_requested: asyncio.Event = field(
+        default_factory=asyncio.Event,
+        repr=False,
+    )
+    _pipeline_publication_reserved: bool = field(
+        default=False,
+        init=False,
+        repr=False,
+    )
+    _pending_publication: (
+        PendingPublication | PendingPublicationCleanup | None
+    ) = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
-        self._work_dir: TaskWorkDir = create_task_workdir(self.task_id)
+        base_dir = str(self.base_dir) if self.base_dir is not None else None
+        self._work_dir: TaskWorkDir = create_task_workdir(
+            self.task_id,
+            base_dir=base_dir,
+        )
 
     @property
     def work_dir(self) -> TaskWorkDir:
@@ -60,6 +88,68 @@ class RunContext:
         """兼容旧版：返回 artifacts 目录路径。"""
         return self._work_dir.artifacts
 
+    def reserve_pipeline_publication(self) -> str | None:
+        """Reserve the managed Run's single Pipeline publication slot."""
+
+        if self.managed_run_id is None:
+            return None
+        if self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is already reserved")
+        self._pipeline_publication_reserved = True
+        return self.managed_run_id
+
+    def bind_managed_run(self, run_id: str) -> None:
+        """Bind this context to the manager's authoritative Run identity."""
+
+        if self._pipeline_publication_reserved or self._pending_publication is not None:
+            raise RuntimeError("managed run cannot change after Pipeline reservation")
+        if self.managed_run_id is not None and self.managed_run_id != run_id:
+            raise RuntimeError("managed run is already bound")
+        self.managed_run_id = run_id
+
+    def release_pipeline_publication_reservation(self) -> None:
+        """Release a failed managed Pipeline Tool reservation."""
+
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        self._pipeline_publication_reserved = False
+
+    def set_pending_publication(self, handle: PendingPublication) -> None:
+        """Install the validated package reserved for this managed Run."""
+
+        if self.managed_run_id is None or not self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is not reserved")
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        if handle.run_id != self.managed_run_id:
+            raise ValueError("pending publication run_id must match managed run_id")
+        self._pending_publication = handle
+
+    def set_pending_publication_cleanup(
+        self,
+        handle: PendingPublicationCleanup,
+    ) -> None:
+        """Retain failed cleanup for transfer to the managed Run owner."""
+
+        if self.managed_run_id is None or not self._pipeline_publication_reserved:
+            raise RuntimeError("pipeline publication is not reserved")
+        if self._pending_publication is not None:
+            raise RuntimeError("pending pipeline publication is already installed")
+        if handle.run_id != self.managed_run_id:
+            raise ValueError("pending publication run_id must match managed run_id")
+        self._pending_publication = handle
+
+    def take_pending_publication(
+        self,
+    ) -> PendingPublication | PendingPublicationCleanup | None:
+        """Transfer the managed Run's publication ownership at most once."""
+
+        handle = self._pending_publication
+        if handle is not None:
+            self._pending_publication = None
+            self._pipeline_publication_reserved = False
+        return handle
+
     def add_source(self, source: Any) -> None:
         """记录一个数据来源（SourceRecord）。"""
         self.sources.append(source)
@@ -68,24 +158,35 @@ class RunContext:
         """记录 raw 目录下的本地文件路径。"""
         self.raw_assets.append(path)
 
-    def add_warning(self, severity: str, message: str, source: str | None = None) -> None:
+    def add_warning(
+        self, severity: str, message: str, source: str | None = None
+    ) -> None:
         """记录一条警告。"""
-        self.warnings.append({
-            "severity": severity, "message": message, "source": source,
-        })
+        self.warnings.append(
+            {
+                "severity": severity,
+                "message": message,
+                "source": source,
+            }
+        )
 
-    def log_query(self, query: str, source: str, status: str, records_count: int = 0) -> None:
+    def log_query(
+        self, query: str, source: str, status: str, records_count: int = 0
+    ) -> None:
         """记录一次查询日志。"""
-        self.query_log.append({
-            "query": query,
-            "source": source,
-            "status": status,
-            "records_count": records_count,
-        })
+        self.query_log.append(
+            {
+                "query": query,
+                "source": source,
+                "status": status,
+                "records_count": records_count,
+            }
+        )
 
     def query_log_size(self) -> int:
         """估算 query_log 的字符总量（触发压缩判断用）。"""
         import json
+
         return len(json.dumps(self.query_log, ensure_ascii=False))
 
     def compress_log(self, keep_recent: int, summary: str) -> int:

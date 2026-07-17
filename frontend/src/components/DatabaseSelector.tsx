@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo } from "react"
 import { useAgentStore } from "@/stores/agentStore"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -15,6 +13,7 @@ import {
 interface DatabaseSelectorProps {
   /** Optional callback when a database is toggled. */
   onToggle?: (id: string, selected: boolean) => void
+  disabled?: boolean
 }
 
 type CategoryKey = "discovery" | "acquisition" | "processing"
@@ -48,11 +47,10 @@ function resolveCategory(
   )
 }
 
-export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
+export function DatabaseSelector({ onToggle, disabled = false }: DatabaseSelectorProps) {
   const databases = useAgentStore((s) => s.databases)
-  const selectedDatabases = useAgentStore((s) => s.selectedDatabases)
-  const isRunning = useAgentStore((s) => s.isRunning)
-  const setSelectedDatabases = useAgentStore((s) => s.setSelectedDatabases)
+  const selectedDatabases = useAgentStore((s) => s.draft.selectedDatabaseIds)
+  const setSelectedDatabases = useAgentStore((s) => s.setDraftSelectedDatabaseIds)
 
   // Group databases by category, preserving insertion order.
   const grouped = useMemo(() => {
@@ -100,7 +98,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
           variant="outline"
           size="sm"
           onClick={handleToggleAll}
-          disabled={isRunning}
+          disabled={disabled}
         >
           {allSelected ? "取消全选" : "全选"}
         </Button>
@@ -114,7 +112,7 @@ export function DatabaseSelector({ onToggle }: DatabaseSelectorProps) {
         value={selectedDatabases}
         onValueChange={handleValueChange}
         multiple
-        disabled={isRunning}
+        disabled={disabled}
         orientation="vertical"
         spacing={0}
         className="w-full"

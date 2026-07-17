@@ -43,6 +43,30 @@ class TaskState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class TaskMode(StrEnum):
+    AGENT = "agent"
+    FIXTURE = "fixture"
+
+
+class RunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    FINALIZING = "finalizing"
+    CANCEL_REQUESTED = "cancel_requested"
+    AWAITING_USER_INPUT = "awaiting_user_input"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class MessageRole(StrEnum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
 class StageName(StrEnum):
     DISCOVERY = "discovery"
     ACQUISITION = "acquisition"

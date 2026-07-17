@@ -32,6 +32,18 @@ def generate_prefixed_uuid(prefix: str) -> str:
     return f"{prefix}_{uuid4()}"
 
 
+def generate_task_id() -> str:
+    return generate_prefixed_uuid("task")
+
+
+def generate_run_id() -> str:
+    return generate_prefixed_uuid("run")
+
+
+def generate_message_id() -> str:
+    return generate_prefixed_uuid("message")
+
+
 def make_dataset_id(database: Database, accession: str) -> str:
     canonical_accession = accession.strip().lower()
     if not canonical_accession:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -23,6 +23,8 @@ from app.domain.contracts.task import TaskSpecification
 class PipelineEventType(StrEnum):
     TASK_CREATED = "task_created"
     PLAN_READY = "plan_ready"
+    USER_INPUT_REQUIRED = "user_input_required"
+    USER_INPUT_RESUMED = "user_input_resumed"
     STAGE_STARTED = "stage_started"
     STAGE_COMPLETED = "stage_completed"
     STAGE_FAILED = "stage_failed"
@@ -36,6 +38,20 @@ class PipelineEventType(StrEnum):
     TASK_RECOVERED = "task_recovered"
     TASK_COMPLETED = "task_completed"
     TASK_FAILED = "task_failed"
+
+
+class RuntimeEventType(StrEnum):
+    RUN_QUEUED = "run_queued"
+    RUN_STARTED = "run_started"
+    RUN_FINALIZING = "run_finalizing"
+    RUN_COMPLETED = "run_completed"
+    RUN_FAILED = "run_failed"
+    RUN_CANCEL_REQUESTED = "run_cancel_requested"
+    RUN_CANCELLED = "run_cancelled"
+    RUN_INTERRUPTED = "run_interrupted"
+    ASSISTANT_DELTA = "assistant_delta"
+    TOOL_STARTED = "tool_started"
+    CONVERSATION_COMPACTED = "conversation_compacted"
 
 
 class TaskCreatedPayload(ContractModel):
@@ -85,12 +101,31 @@ class ToolCalledPayload(ContractModel):
 class ToolCompletedPayload(ContractModel):
     type: Literal[PipelineEventType.TOOL_COMPLETED] = PipelineEventType.TOOL_COMPLETED
     tool_name: str = Field(min_length=1)
-    output_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    tool_call_id: str | None = Field(default=None, min_length=1)
+    output: str | None = None
+    is_error: bool = False
+
+    @model_validator(mode="after")
+    def validate_fixture_or_runtime_shape(self) -> Self:
+        if self.output_digest is None and self.tool_call_id is None:
+            raise ValueError("tool completion requires output_digest or tool_call_id")
+        return self
 
 
 class WarningPayload(ContractModel):
     type: Literal[PipelineEventType.WARNING] = PipelineEventType.WARNING
-    warning: WarningRecord
+    warning: WarningRecord | None = None
+    message: str | None = Field(default=None, min_length=1)
+    code: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_fixture_or_runtime_shape(self) -> Self:
+        fixture_shape = self.warning is not None
+        runtime_shape = self.message is not None and self.code is not None
+        if fixture_shape == runtime_shape:
+            raise ValueError("warning requires either warning record or message and code")
+        return self
 
 
 class ArtifactProducedPayload(ContractModel):
@@ -127,6 +162,99 @@ class TaskFailedPayload(ContractModel):
     error: ErrorDetail
 
 
+class RunQueuedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_QUEUED] = RuntimeEventType.RUN_QUEUED
+    request_id: str = Field(min_length=1)
+    input: str = Field(min_length=1)
+
+
+class RunStartedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_STARTED] = RuntimeEventType.RUN_STARTED
+
+
+class RunFinalizingPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_FINALIZING] = RuntimeEventType.RUN_FINALIZING
+
+
+class RunCompletedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_COMPLETED] = RuntimeEventType.RUN_COMPLETED
+
+
+class RunFailedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_FAILED] = RuntimeEventType.RUN_FAILED
+    error: str = Field(min_length=1)
+
+
+class RunCancelRequestedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_CANCEL_REQUESTED] = (
+        RuntimeEventType.RUN_CANCEL_REQUESTED
+    )
+    reason: str | None = Field(default=None, min_length=1)
+
+
+class RunCancelledPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_CANCELLED] = RuntimeEventType.RUN_CANCELLED
+    reason: str | None = Field(default=None, min_length=1)
+
+
+class RunInterruptedPayload(ContractModel):
+    type: Literal[RuntimeEventType.RUN_INTERRUPTED] = RuntimeEventType.RUN_INTERRUPTED
+    reason: str = Field(min_length=1)
+
+
+class UserInputRequiredPayload(ContractModel):
+    """Unified human-in-the-loop pause request.
+
+    The pipeline emits this payload when it needs a human decision before
+    continuing. ``prompt_kind`` discriminates between plan confirmation
+    (``plan_confirmation``) and data correction (``data_correction``). When
+    ``fixture_exempt`` is true the run is in fixture mode and the request is
+    informational only — the pipeline auto-approves and does not block.
+    """
+
+    type: Literal[PipelineEventType.USER_INPUT_REQUIRED] = (
+        PipelineEventType.USER_INPUT_REQUIRED
+    )
+    request_id: str = Field(min_length=1)
+    prompt_kind: Literal["plan_confirmation", "data_correction"]
+    summary: str = Field(min_length=1)
+    expires_at: datetime | None = None
+    fixture_exempt: bool = False
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class UserInputResumedPayload(ContractModel):
+    """Resume decision submitted via ``POST /runs/{run_id}/resume``."""
+
+    type: Literal[PipelineEventType.USER_INPUT_RESUMED] = (
+        PipelineEventType.USER_INPUT_RESUMED
+    )
+    request_id: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class AssistantDeltaPayload(ContractModel):
+    type: Literal[RuntimeEventType.ASSISTANT_DELTA] = (
+        RuntimeEventType.ASSISTANT_DELTA
+    )
+    delta: str = Field(min_length=1)
+
+
+class ToolStartedPayload(ContractModel):
+    type: Literal[RuntimeEventType.TOOL_STARTED] = RuntimeEventType.TOOL_STARTED
+    tool_call_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+
+
+class ConversationCompactedPayload(ContractModel):
+    type: Literal[RuntimeEventType.CONVERSATION_COMPACTED] = (
+        RuntimeEventType.CONVERSATION_COMPACTED
+    )
+    covered_through_run_id: str = Field(min_length=1)
+    summary_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 EventPayload = Annotated[
     TaskCreatedPayload
     | PlanReadyPayload
@@ -142,7 +270,20 @@ EventPayload = Annotated[
     | TaskCancelledPayload
     | TaskRecoveredPayload
     | TaskCompletedPayload
-    | TaskFailedPayload,
+    | TaskFailedPayload
+    | RunQueuedPayload
+    | RunStartedPayload
+    | RunFinalizingPayload
+    | RunCompletedPayload
+    | RunFailedPayload
+    | RunCancelRequestedPayload
+    | RunCancelledPayload
+    | RunInterruptedPayload
+    | UserInputRequiredPayload
+    | UserInputResumedPayload
+    | AssistantDeltaPayload
+    | ToolStartedPayload
+    | ConversationCompactedPayload,
     Field(discriminator="type"),
 ]
 
@@ -156,10 +297,11 @@ _STAGE_EVENTS = {
 
 
 class EventEnvelope(ContractModel):
-    schema_version: str = Field(default="1.0", min_length=1)
+    schema_version: Literal["1.0", "2.0"] = "1.0"
     event_id: str = Field(min_length=1)
-    type: PipelineEventType
+    type: PipelineEventType | RuntimeEventType
     task_id: str = Field(min_length=1)
+    run_id: str | None = Field(default=None, min_length=1)
     stage_attempt_id: str | None = None
     sequence: int = Field(ge=1)
     timestamp: datetime
@@ -167,10 +309,27 @@ class EventEnvelope(ContractModel):
 
     @model_validator(mode="after")
     def validate_envelope(self) -> EventEnvelope:
-        if self.type is not self.payload.type:
+        if self.type != self.payload.type:
             raise ValueError("event type must match payload type")
         if self.type in _STAGE_EVENTS and not self.stage_attempt_id:
             raise ValueError("stage events require stage_attempt_id")
+        runtime_scoped = (
+            isinstance(self.type, RuntimeEventType)
+            or (
+                isinstance(self.payload, ToolCompletedPayload)
+                and self.payload.tool_call_id is not None
+            )
+            or (
+                isinstance(self.payload, WarningPayload)
+                and self.payload.warning is None
+            )
+        )
+        if (
+            self.run_id is not None or runtime_scoped
+        ) and self.schema_version != "2.0":
+            raise ValueError("run linkage and runtime events require schema_version 2.0")
+        if runtime_scoped and not self.run_id:
+            raise ValueError("run-scoped events require run_id")
         return self
 
 
@@ -179,15 +338,19 @@ def build_event(
     task_id: str,
     sequence: int,
     payload: EventPayload,
+    run_id: str | None = None,
     stage_attempt_id: str | None = None,
     timestamp: datetime | None = None,
+    schema_version: Literal["1.0", "2.0"] | None = None,
 ) -> EventEnvelope:
     """Build a validated event; persistence assigns task-local sequence."""
 
     return EventEnvelope(
+        schema_version=schema_version or ("2.0" if run_id else "1.0"),
         event_id=generate_prefixed_uuid("event"),
         type=payload.type,
         task_id=task_id,
+        run_id=run_id,
         stage_attempt_id=stage_attempt_id,
         sequence=sequence,
         timestamp=timestamp or datetime.now(UTC),

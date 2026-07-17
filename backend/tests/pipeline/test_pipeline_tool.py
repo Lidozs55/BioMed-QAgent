@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.pipeline.runner import PendingPublicationCleanup
 from app.pipeline.tool import run_research_pipeline
 from app.tools.workdir import create_task_workdir
 
@@ -50,6 +54,180 @@ async def test_pipeline_function_tool_runs_explicit_fixture_mode(
         ).read_text("utf-8")
     )
     assert manifest["request"]["topic"] == ("tool supplied acceptance topic")
+    assert context.take_pending_publication() is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_defers_managed_run_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "run_tool_managed"
+    context = RunContext(
+        task_id="task_tool_managed",
+        base_dir=tmp_path / "tasks",
+        managed_run_id=run_id,
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_managed",
+        tool_arguments="{}",
+    )
+    pending = SimpleNamespace(run_id=run_id)
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+        def pending_publication(self):
+            return pending
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "managed publication",
+                "databases": ["pubmed", "geo"],
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    assert captured["run_id"] == run_id
+    assert captured["defer_publication"] is True
+    assert context.take_pending_publication() is pending
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_retains_cleanup_when_abort_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "run_tool_abort_failure"
+    context = RunContext(
+        task_id="task_tool_abort_failure",
+        base_dir=tmp_path / "tasks",
+        managed_run_id=run_id,
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_abort_failure",
+        tool_arguments="{}",
+    )
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def run(self):
+            raise RuntimeError("pipeline failed")
+
+        def abort(self) -> None:
+            raise OSError("abort failed")
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "failed managed publication",
+                "databases": ["pubmed", "geo"],
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    assert "abort failed" in result
+    with pytest.raises(RuntimeError, match="already reserved"):
+        context.reserve_pipeline_publication()
+    cleanup = context.take_pending_publication()
+    assert isinstance(cleanup, PendingPublicationCleanup)
+    assert cleanup.run_id == run_id
+    assert isinstance(cleanup.error, OSError)
+    assert str(cleanup.error) == "abort failed"
+    assert context.reserve_pipeline_publication() == run_id
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_rejects_parallel_managed_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "run_tool_parallel"
+    context = RunContext(
+        task_id="task_tool_parallel",
+        base_dir=tmp_path / "tasks",
+        managed_run_id=run_id,
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    constructed = 0
+    pending = SimpleNamespace(run_id=run_id)
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            nonlocal constructed
+            constructed += 1
+
+        async def run(self):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+        def pending_publication(self):
+            return pending
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    def tool_context(call_id: str) -> ToolContext[RunContext]:
+        return ToolContext(
+            context=context,
+            tool_name="run_research_pipeline",
+            tool_call_id=call_id,
+            tool_arguments="{}",
+        )
+
+    arguments = json.dumps(
+        {
+            "topic": "parallel managed invocation",
+            "databases": ["pubmed", "geo"],
+            "mode": "fixture",
+        }
+    )
+    first = asyncio.create_task(
+        run_research_pipeline.on_invoke_tool(tool_context("call_parallel_1"), arguments)
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    second = await run_research_pipeline.on_invoke_tool(
+        tool_context("call_parallel_2"),
+        arguments,
+    )
+
+    assert "already reserved" in second
+    assert constructed == 1
+    release.set()
+    await first
+    assert context.take_pending_publication() is pending
 
 
 @pytest.mark.asyncio
@@ -82,3 +260,49 @@ async def test_pipeline_function_tool_rejects_unimplemented_fixture_sources(
     assert not (
         tmp_path / "tasks" / "task_tool_invalid" / "artifacts" / "run_manifest.json"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_forwards_run_cancellation_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = RunContext(task_id="task_tool_cancel_token")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        context.task_id,
+        base_dir=str(tmp_path / "tasks"),
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_cancel",
+        tool_arguments="{}",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "cancellation token",
+                "databases": ["pubmed", "geo"],
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    assert captured["cancellation_requested"] is context.cancellation_requested

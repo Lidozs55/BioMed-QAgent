@@ -2,7 +2,7 @@
 
 > This document has two parts: universal rules that all agents must follow, and
 > Commonly MCP extensions that apply mandatorily when connected.
-> 
+>
 > The authoritative source for system architecture and design decisions is
 > [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This file is a concise guide
 > only — it does not duplicate architecture diagrams, to avoid drift.
@@ -29,7 +29,9 @@ Key points:
 - The frontend (React/Vite) communicates with FastAPI via HTTP + WebSocket.
 - The FastAPI entry point is `app.main:app`, with routes registered in
   [app/api/routes.py](backend/app/api/routes.py) (HTTP) and
-  [app/api/ws.py](backend/app/api/ws.py) (WebSocket).
+  [app/api/ws.py](backend/app/api/ws.py) (WebSocket). The application lifespan
+  (owned by `app.main:create_app`) initializes the durable runtime:
+  `TaskManager`, `TaskRepository`, `EventHub`, and `TaskIndex`.
 - The Main Agent is built on the OpenAI Agents SDK and enters the deterministic
   pipeline through a single `run_research_pipeline` Function Tool
   ([app/pipeline/tool.py](backend/app/pipeline/tool.py)). The Agent never
@@ -39,8 +41,15 @@ Key points:
   stages: **Discovery → Acquisition → Processing → Artifact Build → Validation
   Gate**. Only artifacts that pass the Validation Gate are published to
   `artifacts/`.
-- The WebSocket endpoint is `/api/v1/ws`; the streaming entry function is
-  `app.agent_loop.runner.run_agent_stream`.
+- The durable runtime is event-sourced: `TaskManager` owns the Run lifecycle
+  (`QUEUED → RUNNING → FINALIZING → COMPLETED/FAILED/CANCELLED/INTERRUPTED`),
+  `TaskRepository` + `EventStore` provide the authoritative event log
+  (`<task_id>/events.jsonl`), and `TaskSnapshot` is rebuilt via a pure reducer
+  (`app.runtime.state.reduce_task_event`). The pipeline's in-memory
+  `runner.events` list is bridged to the runtime event log by
+  `FixtureRunExecutor`.
+- The WebSocket endpoint is `/api/v1/ws`; the durable event session is served
+  by `app/api/ws_events.py:_run_event_session`.
 - The skill repository is organized into four categories — discovery,
   acquisition, processing, analysis — under
   [backend/app/skills/builtin/](backend/app/skills/builtin/). Learned skills
@@ -52,31 +61,43 @@ Key points:
 | ------ | ------------------------------------------------- | ---------------------------------- |
 | GET    | `/api/v1/health`                                  | Health check                       |
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
-| POST   | `/api/v1/tasks`                                   | Create and run a fixture-mode task |
-| GET    | `/api/v1/tasks/{task_id}`                         | Task status and summary            |
+| GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
+| POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
+| GET    | `/api/v1/tasks/{task_id}`                         | Task snapshot (authoritative state) |
+| DELETE | `/api/v1/tasks/{task_id}`                         | Delete a terminal task and its history |
+| POST   | `/api/v1/tasks/{task_id}/runs`                    | Enqueue another user turn for an idle Agent task |
+| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | Request cancellation of a queued or running run |
+| POST   | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | Submit a human-in-the-loop resume decision to a paused run |
+| GET    | `/api/v1/tasks/{task_id}/messages`                | Paginated task messages            |
+| GET    | `/api/v1/tasks/{task_id}/events`                  | Replay durable events (`?after_sequence=N&limit=N`) |
 | GET    | `/api/v1/tasks/{task_id}/artifacts`               | List validated artifact files      |
 | GET    | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | Download a specific artifact       |
 
-**Agent Loop (WebSocket)**
+**Durable Event WebSocket**
 
 1. The client connects to `ws://<host>:8000/api/v1/ws`.
-2. `app/api/ws.py:agent_ws` receives a message:
-   `{"type":"run","input":"...","databases":[...],"task_id":"optional"}`.
-3. The handler calls `run_agent_stream(user_input, task_id, databases)` to
-   stream Agent loop events.
-4. The runner converts SDK stream events into WSMessage dicts and pushes them
-   back. Event types:
-   - `task_started` — sent by `ws.py` immediately after accepting a run
-   - `skill_loaded` — a skill was loaded (name + category)
-   - `text` — LLM text delta
-   - `tool_call` — a tool call started (name + arguments)
-   - `tool_output` — a tool call returned (output, possibly truncated)
-   - `file_downloaded` — a source file was downloaded (name + path + size)
-   - `artifact_produced` — a validated artifact was produced (name + size)
-   - `confirm` — a quality / human-in-the-loop confirmation prompt
-   - `done` — the Agent loop finished (carries `final_output`)
-   - `error` — an exception occurred
-5. The frontend renders Markdown, tool-call traces, and artifact events.
+2. `app/api/ws.py:agent_ws` accepts the connection and delegates to
+   `app/api/ws_events.py:_run_event_session`.
+3. The client sends commands:
+   - `{"type":"subscribe","task_id":"...","after_sequence":N}` — subscribe to
+     a task's event stream, replaying events with `sequence > after_sequence`
+     first (use `0` to start from the beginning)
+   - `{"type":"unsubscribe","task_id":"..."}` — stop receiving events for a task
+   - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
+4. The server pushes `EventEnvelope` objects (same schema as
+   `GET /tasks/{task_id}/events`) and control frames:
+   - `EventEnvelope` — a task event (run_queued, run_started, tool_started,
+     tool_completed, assistant_delta, stage_started, stage_completed,
+     artifact_produced, run_completed, run_failed, run_cancelled,
+     user_input_required, user_input_resumed, plan_ready, etc.)
+   - `{"type":"pong"}` — response to ping
+   - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
+5. Events are ordered by `sequence` (monotonically increasing per task).
+   Reconnection is supported by replaying events via
+   `GET /tasks/{task_id}/events?after_sequence=N` then re-subscribing.
+6. The frontend `runtime/transport.ts` handles auto-reconnect and event replay;
+   `runtime/controller.ts` orchestrates task lifecycle; `runtime/reducer.ts`
+   applies events to the store.
 
 Always treat the code as the source of truth for skill and tool implementation
 status — do not assume from documentation alone.
@@ -189,31 +210,41 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 **Each agent is responsible for merging its own branch**. Before merging, all of the following must hold:
 
 1. The branch is functionally stable and the target changes are achieved.
-2. `uv run pytest` is fully green with no new failures.
-3. Frontend changes pass `pnpm lint && pnpm tsc` with 0 errors, and `pnpm build`
-   succeeds.
-4. The backend has no import errors, AST is intact, and
-   `uv run uvicorn app.main:app --reload` starts normally.
+2. All checks in **7.3 Quality Gates** pass.
+3. The merge represents one complete functional unit (see merge constraints below).
 
 **Merge steps**:
 
 - `git pull --rebase origin main` and resolve conflicts.
-- After resolving conflicts, re-run tests and frontend/backend verification.
+- After resolving conflicts, **re-run the Quality Gates**.
 - Prefer `git merge --no-ff` to preserve branch history, or rebase then push.
 - Before pushing, confirm local `main` can start.
-- After merging, post a `[DONE]` message in Commonly summarizing the result. (If connected to Commonly)
+- After merging, post a `[DONE]` message in Commonly summarizing the result (if connected to Commonly).
 
-**Constraints**:
+**Merge constraints**:
 
 - **Never force-push to shared branches** (main, dev). If push is rejected, run
   `git pull --rebase` first, then push.
+- **Merge granularity**: one merge to `main` must represent one
+  complete functional unit. Bundle related `feat` + `fix` + test + doc
+  changes into the same branch and merge them together.
+- **One feature, one merge**: do not chain multiple merges for sub-steps of the
+  same feature. If the feature is not yet complete, keep committing on the
+  branch; only merge when the functional unit is whole and self-verifying.
 
-#### 7.3 Pre-Push Checklist
+#### 7.3 Quality Gates
 
-- Backend: no import errors, AST intact, `uv run pytest` passes, and
-  `uv run uvicorn app.main:app --reload` starts after clearing `__pycache__`.
-- Frontend: `pnpm lint && pnpm tsc` with 0 errors, `pnpm build` succeeds.
-- Commit message format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
+The following checks **must all pass** before pushing a branch **and** before merging to `main`.
+
+- **Backend**
+  - No import errors, AST intact;
+  - `uv run pytest` passes with no failures;
+  - After clearing `__pycache__`, `uv run uvicorn app.main:app --reload` starts normally.
+- **Frontend**
+  - `pnpm lint && pnpm tsc` with 0 errors;
+  - `pnpm build` succeeds.
+- **Commit message**
+  - Format: `[TASK-XXX] summary` or `feat/fix/chore: summary`. Prefer conventional commit message style.
 
 ### 8. Documentation First
 

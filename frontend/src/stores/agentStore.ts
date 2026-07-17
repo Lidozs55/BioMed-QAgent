@@ -1,338 +1,378 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-/** WS 事件类型 */
-export interface WSEvent {
-  type:
-    | "task_started"
-    | "text"
-    | "tool_call"
-    | "tool_output"
-    | "done"
-    | "error"
-    | "skill_loaded"
-    | "artifact_produced"
-    | "file_downloaded"
-    | "confirm";
-  delta?: string;
-  name?: string;
-  arguments?: string;
-  output?: string;
-  final_output?: string;
-  message?: string;
-  confirm_message?: string;
-  category?: string;
-  path?: string;
-  size?: number;
-  task_id?: string;
-  artifact_id?: string;
-}
+import type {
+  ArtifactRecord,
+  DatabaseRecord,
+  EventEnvelope,
+  MessagePage,
+  TaskMode,
+  TaskPage,
+  TaskSnapshot,
+} from "@/runtime/contracts";
+import {
+  createInitialRuntimeState,
+  createTaskProjection,
+  hydrateTaskSnapshot as projectTaskSnapshot,
+  mergeOlderMessagePage as projectOlderMessagePage,
+  mergeTaskPage as projectTaskPage,
+  prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
+  reduceRuntimeEvent,
+} from "@/runtime/reducer";
+import type {
+  AgentRuntimeData,
+  ConnectionStatus,
+  HistoryStatus,
+} from "@/runtime/types";
 
-/** 工具调用轨迹项 */
-export interface TraceItem {
-  id: string;
-  kind: "tool_call" | "tool_output" | "error";
-  name?: string;
-  arguments?: string;
-  output?: string;
-  message?: string;
-}
+export const AGENT_STORE_NAME = "biomed-sessions";
+export const AGENT_STORE_VERSION = 2;
 
-/** 对话消息 */
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface Session {
-  taskId: string;
-  topic: string;
-  databases: string[];
-  createdAt: number;
-  messageCount: number;
-  messages: ChatMessage[];
-  traces: TraceItem[];
-  artifacts: { artifactId: string; name: string; size: number }[];
-  pipelineStage: PipelineStage;
-}
-
-export type PipelineStage =
-  | "idle"
-  | "setup"
-  | "discovery"
-  | "acquisition"
-  | "processing"
-  | "analysis"
-  | "done"
-  | "error";
-
-interface AgentState {
-  messages: ChatMessage[];
-  traces: TraceItem[];
-  isConnected: boolean;
-  isRunning: boolean;
-
-  /** New state fields */
-  databases: { id: string; name: string; category: string; description: string }[];
-  selectedDatabases: string[];
-  artifacts: { artifactId: string; name: string; size: number }[];
-  taskId: string | null;
-  fixtureError: string | null;
-
-  /** Session sidebar */
-  sessions: Session[];
-  currentSessionId: string | null;
-
-  /** Pipeline progress */
-  pipelineStage: PipelineStage;
-
-  /** Existing actions */
-  addMessage: (role: "user" | "assistant", content: string) => void;
-  appendAssistantText: (delta: string) => void;
-  addTrace: (item: Omit<TraceItem, "id">) => void;
-  setConnected: (v: boolean) => void;
-  setRunning: (v: boolean) => void;
-  reset: () => void;
-
-  /** New actions */
-  setDatabases: (dbs: { id: string; name: string; category: string; description: string }[]) => void;
-  setSelectedDatabases: (ids: string[]) => void;
-  addArtifact: (artifactId: string, name: string, size: number) => void;
-  setArtifacts: (artifacts: { artifactId: string; name: string; size: number }[]) => void;
-  setTaskId: (id: string) => void;
-  setFixtureError: (message: string | null) => void;
-  prepareNewTask: (databases: string[]) => void;
-
-  /** Session actions */
-  addSession: (taskId: string, topic: string, databases: string[]) => void;
-  setCurrentSession: (sessionId: string) => void;
-  removeSession: (sessionId: string) => void;
-  saveCurrentSession: () => void;
-  loadSession: (taskId: string) => void;
-  deleteSession: (taskId: string) => void;
-
-  /** Pipeline actions */
-  setPipelineStage: (stage: PipelineStage) => void;
-}
-
-let idCounter = 0;
-const nextId = () => `id-${++idCounter}`;
-
-export function migratePersistedAgentState(persistedState: unknown) {
-  const state = (persistedState ?? {}) as { sessions?: Session[] };
-  return {
-    ...state,
-    sessions: (state.sessions ?? []).map((session) => ({
-      ...session,
-      artifacts: (session.artifacts ?? []).filter(
-        (artifact) => typeof artifact.artifactId === "string",
-      ),
-    })),
+interface PersistedAgentState {
+  draftPreferences: {
+    selectedDatabaseIds: string[];
   };
 }
 
-export const useAgentStore = create<AgentState>()(
-  persist(
-    (set, get) => ({
-      messages: [],
-      traces: [],
-      isConnected: false,
-      isRunning: false,
-      databases: [],
-      selectedDatabases: [],
-      artifacts: [],
-      taskId: null,
-      fixtureError: null,
-      sessions: [],
-      currentSessionId: null,
-      pipelineStage: "idle",
+export interface AgentStore extends AgentRuntimeData {
+  mergeTaskPage: (
+    page: TaskPage,
+    append: boolean,
+    preserveTaskIds?: ReadonlySet<string>,
+  ) => void;
+  hydrateTaskSnapshot: (snapshot: TaskSnapshot) => void;
+  prepareTaskSnapshotReplay: (snapshot: TaskSnapshot) => void;
+  mergeOlderMessagePage: (
+    taskId: string,
+    requestedCursor: string,
+    page: MessagePage,
+  ) => void;
+  applyEvent: (event: EventEnvelope) => void;
+  setActiveTaskId: (taskId: string | null) => void;
+  setConnectionStatus: (status: ConnectionStatus) => void;
+  setHistoryState: (status: HistoryStatus, error?: string | null) => void;
+  setDatabases: (databases: DatabaseRecord[]) => void;
+  setDraftInput: (input: string) => void;
+  setDraftSelectedDatabaseIds: (databaseIds: string[]) => void;
+  setDraftMode: (mode: TaskMode) => void;
+  setDraftError: (error: string | null) => void;
+  showNewDraft: () => void;
+  removeTask: (taskId: string) => void;
+}
 
-      addMessage: (role, content) =>
-        set((s) => ({
-          messages: [...s.messages, { id: nextId(), role, content }],
+export function mergeTaskArtifacts(
+  state: AgentRuntimeData,
+  taskId: string,
+  artifacts: ArtifactRecord[],
+  requestSequence: number,
+): AgentRuntimeData {
+  const task = state.tasksById[taskId];
+  if (task === undefined) return state;
+  if (
+    task.artifactManifestSequence !== null &&
+    task.artifactManifestSequence > requestSequence
+  ) {
+    return state;
+  }
+  const liveArtifactIds = task.artifactOrder.filter(
+    (artifactId) =>
+      (task.artifactEventSequences[artifactId] ?? 0) > requestSequence,
+  );
+  const liveArtifactIdSet = new Set(liveArtifactIds);
+  const artifactsById = Object.fromEntries(
+    liveArtifactIds.map((artifactId) => [
+      artifactId,
+      task.artifactsById[artifactId],
+    ]),
+  );
+  const artifactOrder = [...liveArtifactIds];
+  const orderedArtifactIds = new Set(liveArtifactIds);
+  for (const artifact of artifacts) {
+    if (liveArtifactIdSet.has(artifact.artifact_id)) continue;
+    artifactsById[artifact.artifact_id] = {
+      ...artifact,
+      taskId,
+      generatedByStepId:
+        task.artifactsById[artifact.artifact_id]?.generatedByStepId ?? null,
+    };
+    if (!orderedArtifactIds.has(artifact.artifact_id)) {
+      artifactOrder.push(artifact.artifact_id);
+      orderedArtifactIds.add(artifact.artifact_id);
+    }
+  }
+  return {
+    ...state,
+    tasksById: {
+      ...state.tasksById,
+      [taskId]: { ...task, artifactsById, artifactOrder },
+    },
+  };
+}
+
+export function addAcceptedTask(
+  state: AgentRuntimeData,
+  accepted: { taskId: string; runId: string; requestId: string },
+  input: string,
+  databases: string[],
+  mode: TaskMode,
+  activate = true,
+): AgentRuntimeData {
+  const timestamp = new Date(0).toISOString();
+  const acceptedRun = {
+    runId: accepted.runId,
+    taskId: accepted.taskId,
+    requestId: accepted.requestId,
+    status: "queued" as const,
+    input,
+    createdAt: null,
+    updatedAt: timestamp,
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+  };
+  const acceptedMessage = {
+    messageId: `live:${accepted.runId}:user`,
+    taskId: accepted.taskId,
+    runId: accepted.runId,
+    ordinal: null,
+    role: "user" as const,
+    content: input,
+    createdAt: timestamp,
+    sequence: null,
+  };
+  const existing = state.tasksById[accepted.taskId];
+  if (existing !== undefined) {
+    if (existing.runsById[accepted.runId] !== undefined) {
+      return activate ? { ...state, activeTaskId: accepted.taskId } : state;
+    }
+    if (existing.hydration !== "summary") {
+      const projection = {
+        ...existing,
+        summary: {
+          ...existing.summary,
+          status: "queued" as const,
+          active_run_id: accepted.runId,
+        },
+        runsById: {
+          ...existing.runsById,
+          [accepted.runId]: acceptedRun,
+        },
+        runOrder: [...existing.runOrder, accepted.runId],
+        messages: [...existing.messages, acceptedMessage],
+      };
+      return {
+        ...state,
+        tasksById: { ...state.tasksById, [accepted.taskId]: projection },
+        activeItems: state.activeItems.includes(accepted.taskId)
+          ? state.activeItems
+          : [accepted.taskId, ...state.activeItems],
+        taskOrder: state.taskOrder.filter(
+          (taskId) => taskId !== accepted.taskId,
+        ),
+        activeTaskId: activate ? accepted.taskId : state.activeTaskId,
+      };
+    }
+    const summaryProjection = createTaskProjection(existing.summary);
+    const projection = {
+      ...summaryProjection,
+      summary: {
+        ...summaryProjection.summary,
+        status: "queued" as const,
+        active_run_id: accepted.runId,
+      },
+      runsById: { [accepted.runId]: acceptedRun },
+      runOrder: [accepted.runId],
+      messages: [acceptedMessage],
+      lastSequence: 0,
+      hydration: "accepted" as const,
+    };
+    return {
+      ...state,
+      tasksById: { ...state.tasksById, [accepted.taskId]: projection },
+      activeItems: state.activeItems.includes(accepted.taskId)
+        ? state.activeItems
+        : [accepted.taskId, ...state.activeItems],
+      taskOrder: state.taskOrder.filter(
+        (taskId) => taskId !== accepted.taskId,
+      ),
+      activeTaskId: activate ? accepted.taskId : state.activeTaskId,
+    };
+  }
+  const summary = {
+    task_id: accepted.taskId,
+    mode,
+    databases: [...databases],
+    title: input,
+    status: "queued" as const,
+    active_run_id: accepted.runId,
+    created_at: timestamp,
+    updated_at: timestamp,
+    latest_sequence: 0,
+  };
+  const projection = {
+    summary,
+    runsById: {
+      [accepted.runId]: acceptedRun,
+    },
+    runOrder: [accepted.runId],
+    messages: [acceptedMessage],
+    olderMessagesCursor: null,
+    activitiesById: {},
+    activityOrder: [],
+    artifactsById: {},
+    artifactOrder: [],
+    artifactEventSequences: {},
+    artifactManifestSequence: null,
+    fixtureStages: {},
+    pendingUserInput: null,
+    lastSequence: 0,
+    hydration: "accepted" as const,
+  };
+  return {
+    ...state,
+    tasksById: { ...state.tasksById, [accepted.taskId]: projection },
+    activeItems: state.activeItems.includes(accepted.taskId)
+      ? state.activeItems
+      : [accepted.taskId, ...state.activeItems],
+    activeTaskId: activate ? accepted.taskId : state.activeTaskId,
+  };
+}
+
+function selectedDatabaseIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item, index, values): item is string =>
+      typeof item === "string" && item.length > 0 && values.indexOf(item) === index,
+  );
+}
+
+export function migratePersistedAgentState(
+  persistedState: unknown,
+  version: number,
+): PersistedAgentState {
+  if (version < AGENT_STORE_VERSION) {
+    return { draftPreferences: { selectedDatabaseIds: [] } };
+  }
+  if (typeof persistedState !== "object" || persistedState === null) {
+    return { draftPreferences: { selectedDatabaseIds: [] } };
+  }
+  const preferences = Reflect.get(persistedState, "draftPreferences");
+  const ids =
+    typeof preferences === "object" && preferences !== null
+      ? Reflect.get(preferences, "selectedDatabaseIds")
+      : undefined;
+  return {
+    draftPreferences: { selectedDatabaseIds: selectedDatabaseIds(ids) },
+  };
+}
+
+function persistedState(state: AgentStore): PersistedAgentState {
+  return {
+    draftPreferences: {
+      selectedDatabaseIds: [...state.draft.selectedDatabaseIds],
+    },
+  };
+}
+
+const initialState = createInitialRuntimeState();
+
+export const useAgentStore = create<AgentStore>()(
+  persist<AgentStore, [], [], PersistedAgentState>(
+    (set) => ({
+      ...initialState,
+
+      mergeTaskPage: (page, append, preserveTaskIds) =>
+        set((state) =>
+          projectTaskPage(state, page, append, preserveTaskIds),
+        ),
+
+      hydrateTaskSnapshot: (snapshot) =>
+        set((state) => projectTaskSnapshot(state, snapshot)),
+
+      prepareTaskSnapshotReplay: (snapshot) =>
+        set((state) => projectTaskSnapshotReplay(state, snapshot)),
+
+      mergeOlderMessagePage: (taskId, requestedCursor, page) =>
+        set((state) =>
+          projectOlderMessagePage(state, taskId, requestedCursor, page),
+        ),
+
+      applyEvent: (event) =>
+        set((state) => reduceRuntimeEvent(state, event)),
+
+      setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
+
+      setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+
+      setHistoryState: (historyStatus, historyError = null) =>
+        set({ historyStatus, historyError }),
+
+      setDatabases: (databases) => set({ databases: [...databases] }),
+
+      setDraftInput: (input) =>
+        set((state) => ({ draft: { ...state.draft, input } })),
+
+      setDraftSelectedDatabaseIds: (databaseIds) =>
+        set((state) => ({
+          draft: {
+            ...state.draft,
+            selectedDatabaseIds: [...databaseIds],
+          },
         })),
 
-      appendAssistantText: (delta) =>
-        set((s) => {
-          const last = s.messages[s.messages.length - 1];
-          if (last && last.role === "assistant") {
-            const updated = { ...last, content: last.content + delta };
-            return { messages: [...s.messages.slice(0, -1), updated] };
-          }
+      setDraftMode: (mode) =>
+        set((state) => ({ draft: { ...state.draft, mode } })),
+
+      setDraftError: (error) =>
+        set((state) => ({ draft: { ...state.draft, error } })),
+
+      showNewDraft: () =>
+        set((state) => ({
+          activeTaskId: null,
+          draft: {
+            ...state.draft,
+            input: "",
+            mode: "agent",
+            error: null,
+          },
+        })),
+
+      removeTask: (taskId) =>
+        set((state) => {
+          const tasksById = { ...state.tasksById };
+          delete tasksById[taskId];
           return {
-            messages: [
-              ...s.messages,
-              { id: nextId(), role: "assistant", content: delta },
-            ],
+            tasksById,
+            activeItems: state.activeItems.filter(
+              (candidate) => candidate !== taskId,
+            ),
+            taskOrder: state.taskOrder.filter(
+              (candidate) => candidate !== taskId,
+            ),
+            activeTaskId:
+              state.activeTaskId === taskId ? null : state.activeTaskId,
           };
         }),
-
-      addTrace: (item) =>
-        set((s) => ({
-          traces: [...s.traces, { ...item, id: nextId() }],
-        })),
-
-      setConnected: (v) => set({ isConnected: v }),
-
-      setRunning: (v) => {
-        if (!v) {
-          get().saveCurrentSession();
-        }
-        set({ isRunning: v });
-      },
-
-      prepareNewTask: (databases) => {
-        if (get().taskId) {
-          get().saveCurrentSession();
-        }
-        set({
-          messages: [],
-          traces: [],
-          artifacts: [],
-          isRunning: false,
-          selectedDatabases: databases,
-          taskId: null,
-          fixtureError: null,
-          pipelineStage: "idle" as PipelineStage,
-          currentSessionId: null,
-        });
-      },
-
-      reset: () => get().prepareNewTask([]),
-
-      setDatabases: (dbs) => set({ databases: dbs }),
-      setSelectedDatabases: (ids) => set({ selectedDatabases: ids }),
-      addArtifact: (artifactId, name, size) =>
-        set((s) => ({
-          artifacts: s.artifacts.some((item) => item.artifactId === artifactId)
-            ? s.artifacts
-            : [...s.artifacts, { artifactId, name, size }],
-        })),
-      setArtifacts: (artifacts) => set({ artifacts }),
-      setTaskId: (id) => set({ taskId: id }),
-      setFixtureError: (message) => set({ fixtureError: message }),
-
-      /** Save current state into sessions array */
-      saveCurrentSession: () => {
-        const state = get();
-        if (!state.taskId) return;
-
-        const firstUserMsg = state.messages.find((m) => m.role === "user");
-        const existingSession = state.sessions.find(
-          (s) => s.taskId === state.taskId
-        );
-        const topic = firstUserMsg
-          ? firstUserMsg.content.slice(0, 80)
-          : (existingSession?.topic || state.taskId);
-
-        const session: Session = {
-          taskId: state.taskId,
-          topic,
-          databases: state.selectedDatabases,
-          createdAt: existingSession?.createdAt || Date.now(),
-          messageCount: state.messages.length,
-          messages: state.messages,
-          traces: state.traces,
-          artifacts: state.artifacts,
-          pipelineStage: state.pipelineStage,
-        };
-
-        set((s) => {
-          const existingIdx = s.sessions.findIndex(
-            (se) => se.taskId === state.taskId
-          );
-          if (existingIdx >= 0) {
-            const updated = [...s.sessions];
-            updated[existingIdx] = session;
-            return { sessions: updated, currentSessionId: state.taskId };
-          }
-          return {
-            sessions: [...s.sessions, session],
-            currentSessionId: state.taskId,
-          };
-        });
-      },
-
-      /** Restore a previously saved session */
-      loadSession: (taskId) => {
-        const session = get().sessions.find((s) => s.taskId === taskId);
-        if (!session) return;
-
-        set({
-          messages: session.messages,
-          traces: session.traces,
-          artifacts: session.artifacts,
-          selectedDatabases: session.databases,
-          taskId: session.taskId,
-          pipelineStage: session.pipelineStage,
-          currentSessionId: taskId,
-          fixtureError: null,
-        });
-      },
-
-      /** Delete a session from state and localStorage */
-      deleteSession: (taskId) =>
-        set((s) => {
-          const sessions = s.sessions.filter((se) => se.taskId !== taskId);
-          if (s.taskId !== taskId) {
-            return {
-              sessions,
-              currentSessionId:
-                s.currentSessionId === taskId ? null : s.currentSessionId,
-            };
-          }
-          return {
-            sessions,
-            currentSessionId: null,
-            taskId: null,
-            messages: [],
-            traces: [],
-            artifacts: [],
-            selectedDatabases: [],
-            pipelineStage: "idle" as PipelineStage,
-            isRunning: false,
-            fixtureError: null,
-          };
-        }),
-
-      addSession: (taskId, topic, databases) => {
-        get().saveCurrentSession();
-        set((s) => {
-          const session: Session = {
-            taskId,
-            topic,
-            databases,
-            createdAt: Date.now(),
-            messageCount: 0,
-            messages: [],
-            traces: [],
-            artifacts: [],
-            pipelineStage: "idle",
-          };
-          return {
-            sessions: [...s.sessions, session],
-            currentSessionId: taskId,
-          };
-        });
-      },
-
-      setCurrentSession: (sessionId) => set({ currentSessionId: sessionId }),
-
-      removeSession: (sessionId) =>
-        set((s) => ({
-          sessions: s.sessions.filter((se) => se.taskId !== sessionId),
-          currentSessionId:
-            s.currentSessionId === sessionId ? null : s.currentSessionId,
-        })),
-
-      setPipelineStage: (stage) => set({ pipelineStage: stage }),
     }),
     {
-      name: "biomed-sessions",
-      version: 1,
+      name: AGENT_STORE_NAME,
+      version: AGENT_STORE_VERSION,
+      partialize: persistedState,
       migrate: migratePersistedAgentState,
-      partialize: (state) => ({ sessions: state.sessions }),
-    }
-  )
+      merge: (persisted, current) => {
+        const migrated = migratePersistedAgentState(
+          persisted,
+          AGENT_STORE_VERSION,
+        );
+        return {
+          ...current,
+          draft: {
+            ...current.draft,
+            selectedDatabaseIds:
+              migrated.draftPreferences.selectedDatabaseIds,
+          },
+        };
+      },
+    },
+  ),
 );

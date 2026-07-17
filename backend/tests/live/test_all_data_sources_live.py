@@ -21,17 +21,16 @@ from pathlib import Path
 
 import pytest
 from agents.tool_context import ToolContext
-
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, SourceRecord
+from app.integrations.ncbi.factory import open_ncbi_services
 from app.skills.builtin.acquisition.gdc import describe_gdc, download_gdc, search_gdc
+from app.skills.builtin.acquisition.geo import search_geo_adapter
 from app.skills.builtin.acquisition.pdb import download_pdb, search_pdb
 from app.skills.builtin.acquisition.pubchem import get_compound
 from app.skills.builtin.acquisition.reactome import get_pathway, search_reactome
 from app.skills.builtin.acquisition.xena import download_xena, search_xena
 from app.skills.builtin.discovery.pubmed import search_pubmed_adapter
-from app.integrations.ncbi.factory import open_ncbi_services
-from app.skills.builtin.acquisition.geo import search_geo_adapter
 from app.tools.workdir import create_task_workdir
 
 pytestmark = pytest.mark.live

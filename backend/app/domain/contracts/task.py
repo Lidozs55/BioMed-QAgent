@@ -18,6 +18,7 @@ class TaskRequest(ContractModel):
     keywords: list[str] = Field(default_factory=list)
     target_fields: list[str] = Field(default_factory=list)
     time_range: tuple[str, str] | None = None
+    mode: Literal["fixture", "live"] = "fixture"
 
     @field_validator("topic")
     @classmethod

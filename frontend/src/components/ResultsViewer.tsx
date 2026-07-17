@@ -1,84 +1,53 @@
-import { useAgentStore } from "@/stores/agentStore";
-import { useAPI } from "@/hooks/useAPI";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Papa from "papaparse";
+
+import { useAPI } from "@/hooks/useAPI";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   DatabaseIcon,
   DownloadIcon,
-  FileArchiveIcon,
-  FileCodeIcon,
-  FileCsvIcon,
-  FileDashedIcon,
-  FileTextIcon,
 } from "@phosphor-icons/react";
+import type { ActivityProjection, ArtifactProjection } from "@/runtime/types";
 import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-  CardFooter,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import {
-  Accordion,
-  AccordionItem,
-  AccordionTrigger,
-  AccordionContent,
-} from "@/components/ui/accordion";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Spinner } from "@/components/ui/spinner";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table";
+  selectActiveActivities,
+  selectActiveArtifacts,
+  selectActiveTask,
+} from "@/stores/agentSelectors";
+import { useAgentStore } from "@/stores/agentStore";
+import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
+import { isActiveStatus } from "@/runtime/reducer";
 
-
-/** Format bytes to human-readable size */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-/** Get file extension from filename */
-function getExtension(name: string): string {
-  const idx = name.lastIndexOf(".");
-  if (idx === -1) return "";
-  return name.slice(idx + 1).toLowerCase();
-}
-
-/** Choose icon and label based on file extension */
-function getFileTypeInfo(name: string) {
-  const ext = getExtension(name);
-  switch (ext) {
-    case "csv":
-      return { Icon: FileCsvIcon, label: ext.toUpperCase() };
-    case "txt":
-    case "md":
-    case "tsv":
-      return { Icon: FileTextIcon, label: ext.toUpperCase() };
-    case "json":
-    case "jsonl":
-      return { Icon: FileCodeIcon, label: ext.toUpperCase() };
-    default:
-      if (ext) return { Icon: FileDashedIcon, label: ext.toUpperCase() };
-      return { Icon: FileArchiveIcon, label: "FILE" };
-  }
-}
-
-/** Determine if a filename looks like a CSV/spreadsheet */
-function isCSV(filename: string): boolean {
-  const ext = getExtension(filename);
-  return ext === "csv";
-}
-
-/** Parse at most 100 preview rows with standard CSV quoting rules. */
 function parseCSV(text: string): {
   headers: string[];
   rows: string[][];
@@ -88,9 +57,7 @@ function parseCSV(text: string): {
     preview: 101,
     skipEmptyLines: "greedy",
   });
-  if (parsed.errors.length > 0) {
-    throw new Error(parsed.errors[0].message);
-  }
+  if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
   const [headers = [], ...rows] = parsed.data;
   return {
     headers: headers.map((header) => header.trim()),
@@ -99,138 +66,98 @@ function parseCSV(text: string): {
   };
 }
 
-/** Parse traces to extract source provenance data */
-let _sourceId = 0;
-
 interface SourceEntry {
-  id: number;
+  id: string;
   tool: string;
   summary: string;
   details: string;
 }
 
-function parseSourceManifest(
-  traces: { kind: string; name?: string; output?: string }[],
-): SourceEntry[] {
-  const entries: SourceEntry[] = [];
-
-  for (let i = 0; i < traces.length; i++) {
-    const item = traces[i];
-
-    // Find tool_output entries preceded by a search_literature tool_call
-    if (item.kind !== "tool_output" || !item.output) continue;
-
-    const prevItem = i > 0 ? traces[i - 1] : null;
-    const toolName =
-      prevItem?.kind === "tool_call" ? prevItem.name : item.name;
-
-    if (toolName?.toLowerCase().includes("search") !== true) continue;
-
-    try {
-      const parsed = JSON.parse(item.output);
-
-      // Try to extract database-related fields
-      if (parsed.databases && Array.isArray(parsed.databases)) {
-        entries.push({
-          id: ++_sourceId,
-          tool: toolName,
-          summary: `${parsed.databases.length} 个数据库`,
-          details: parsed.databases.join("、"),
-        });
-      } else if (parsed.count !== undefined) {
-        entries.push({
-          id: ++_sourceId,
-          tool: toolName,
-          summary: `${parsed.count} 条记录`,
-          details: JSON.stringify(parsed.results ?? parsed).slice(0, 200),
-        });
-      } else if (parsed.results !== undefined) {
-        const len = Array.isArray(parsed.results)
-          ? parsed.results.length
-          : "?";
-        entries.push({
-          id: ++_sourceId,
-          tool: toolName,
-          summary: `${len} 条结果`,
-          details: JSON.stringify(parsed.results).slice(0, 200),
-        });
-      } else {
-        entries.push({
-          id: ++_sourceId,
-          tool: toolName,
-          summary: "来源信息已获取",
-          details: item.output.slice(0, 200),
-        });
-      }
-    } catch {
-      // Fallback: show raw output truncated
-      entries.push({
-        id: ++_sourceId,
-        tool: toolName,
-        summary: "来源信息已获取",
-        details: item.output.slice(0, 200),
-      });
+function parseSourceManifest(activities: readonly ActivityProjection[]): SourceEntry[] {
+  return activities.flatMap((activity) => {
+    if (
+      activity.kind !== "tool" ||
+      activity.status !== "completed" ||
+      activity.output === null ||
+      !activity.name?.toLowerCase().includes("search")
+    ) {
+      return [];
     }
-  }
-
-  return entries;
+    try {
+      const parsed: unknown = JSON.parse(activity.output);
+      if (typeof parsed !== "object" || parsed === null) {
+        return [{ id: activity.activityId, tool: activity.name, summary: "来源信息已获取", details: activity.output }];
+      }
+      const record = parsed as Record<string, unknown>;
+      if (Array.isArray(record.databases)) {
+        return [{
+          id: activity.activityId,
+          tool: activity.name,
+          summary: `${record.databases.length} 个数据库`,
+          details: record.databases.join("、"),
+        }];
+      }
+      if (typeof record.count === "number") {
+        return [{
+          id: activity.activityId,
+          tool: activity.name,
+          summary: `${record.count} 条记录`,
+          details: JSON.stringify(record.results ?? record).slice(0, 200),
+        }];
+      }
+      const results = record.results;
+      return [{
+        id: activity.activityId,
+        tool: activity.name,
+        summary: `${Array.isArray(results) ? results.length : "?"} 条结果`,
+        details: JSON.stringify(results ?? record).slice(0, 200),
+      }];
+    } catch {
+      return [{
+        id: activity.activityId,
+        tool: activity.name,
+        summary: "来源信息已获取",
+        details: activity.output.slice(0, 200),
+      }];
+    }
+  });
 }
 
-/** Trigger file download by creating a hidden anchor */
 function triggerDownload(url: string, filename: string) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
   document.body.appendChild(link);
   link.click();
-  document.body.removeChild(link);
+  link.remove();
 }
 
-/** Inline CSV preview component — fetches and renders CSV data */
-function CsvPreview({
-  artifactUrl,
-}: {
-  artifactUrl: string;
-}) {
-  const [requestState, setRequestState] = useState<{
-    artifactUrl: string;
-    csvData: {
-      headers: string[];
-      rows: string[][];
-      truncated: boolean;
-    } | null;
+function CsvPreview({ artifactUrl }: { artifactUrl: string }) {
+  const [state, setState] = useState<{
+    url: string;
+    data: ReturnType<typeof parseCSV> | null;
     error: boolean;
   } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-
-    fetch(artifactUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error("fetch failed");
-        return res.text();
+    void fetch(artifactUrl)
+      .then((response) => {
+        if (!response.ok) throw new Error("fetch failed");
+        return response.text();
       })
       .then((text) => {
-        if (!cancelled) {
-          setRequestState({
-            artifactUrl,
-            csvData: parseCSV(text),
-            error: false,
-          });
-        }
+        if (!cancelled) setState({ url: artifactUrl, data: parseCSV(text), error: false });
       })
       .catch(() => {
-        if (!cancelled) {
-          setRequestState({ artifactUrl, csvData: null, error: true });
-        }
+        if (!cancelled) setState({ url: artifactUrl, data: null, error: true });
       });
-
     return () => {
       cancelled = true;
     };
   }, [artifactUrl]);
 
-  if (requestState?.artifactUrl !== artifactUrl) {
+  if (state?.url !== artifactUrl) {
     return (
       <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
         <Spinner />
@@ -238,51 +165,30 @@ function CsvPreview({
       </div>
     );
   }
-
-  if (requestState.error) {
-    return (
-      <div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-muted-foreground">
-        <FileTextIcon className="size-6 opacity-30" />
-        <span>无法加载 CSV 数据</span>
-      </div>
-    );
+  if (state.error) {
+    return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无法加载 CSV 数据</EmptyTitle></EmptyHeader></Empty>;
   }
-
-  const { csvData } = requestState;
-
-  if (!csvData || csvData.headers.length === 0) {
-    return (
-      <div className="py-4 text-center text-sm text-muted-foreground">
-        无数据
-      </div>
-    );
+  if (state.data === null || state.data.headers.length === 0) {
+    return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无数据</EmptyTitle></EmptyHeader></Empty>;
   }
-
-  const displayRows = csvData.rows.slice(0, 100);
 
   return (
-    <div className="max-h-64 overflow-auto rounded-md border">
+    <div className="max-w-full overflow-x-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
-            {csvData.headers.map((header, idx) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: CSV headers have no IDs
-              <TableHead key={idx} className="text-xs">
+            {state.data.headers.map((header, index) => (
+              <TableHead key={`${header}-${index}`} className="whitespace-nowrap text-xs">
                 {header}
               </TableHead>
             ))}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {displayRows.map((row, rowIdx) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: CSV rows have no IDs
-            <TableRow key={rowIdx}>
-              {row.map((cell, cellIdx) => (
-                <TableCell
-                  // biome-ignore lint/suspicious/noArrayIndexKey: CSV cells have no IDs
-                  key={`${rowIdx}-${cellIdx}`}
-                  className="text-xs"
-                >
+          {state.data.rows.slice(0, 100).map((row, rowIndex) => (
+            <TableRow key={`row-${rowIndex}`}>
+              {row.map((cell, cellIndex) => (
+                <TableCell key={`${rowIndex}-${cellIndex}`} className="whitespace-nowrap text-xs">
                   {cell}
                 </TableCell>
               ))}
@@ -290,74 +196,112 @@ function CsvPreview({
           ))}
         </TableBody>
       </Table>
-      {csvData.truncated && (
-        <div className="px-2 py-1 text-xs text-muted-foreground">
-          仅显示前 100 行
-        </div>
+      {state.data.truncated && (
+        <p className="px-2 py-1 text-xs text-muted-foreground">仅显示前 100 行</p>
       )}
     </div>
   );
 }
 
-export default function ResultsViewer() {
-  const artifacts = useAgentStore((s) => s.artifacts);
-  const taskId = useAgentStore((s) => s.taskId);
-  const isRunning = useAgentStore((s) => s.isRunning);
-  const traces = useAgentStore((s) => s.traces);
-
+function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; taskId: string }) {
   const { getArtifactUrl } = useAPI();
+  const { Icon, label } = fileType(artifact.name);
+  const url = getArtifactUrl(taskId, artifact.artifact_id);
+  const isCsv = getExtension(artifact.name) === "csv";
 
-  const sourceData = parseSourceManifest(traces);
-
-  // ── Loading state ──────────────────────────────────────────
-  if (isRunning && artifacts.length === 0) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-          <Spinner />
-          处理中...
-        </div>
-      </div>
-    );
-  }
-
-  // ── Empty state ────────────────────────────────────────────
-  if (artifacts.length === 0 && !isRunning) {
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-sm text-muted-foreground">
-          <FileTextIcon className="size-8 opacity-30" />
-          <span>暂无结果</span>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Main content ───────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-4">
-      {/* Source Manifest Accordion */}
+    <Card size="sm" className="min-w-0">
+      <CardHeader>
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          <CardTitle className="min-w-0 truncate" title={artifact.name}>
+            {artifact.name}
+          </CardTitle>
+          <Badge variant="outline" className="shrink-0">{label}</Badge>
+        </div>
+        <CardDescription>{formatSize(artifact.size)}</CardDescription>
+      </CardHeader>
+      {isCsv && (
+        <CardContent>
+          <Accordion>
+            <AccordionItem value={`csv-preview-${artifact.artifact_id}`}>
+              <AccordionTrigger>CSV 预览</AccordionTrigger>
+              <AccordionContent><CsvPreview artifactUrl={url} /></AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </CardContent>
+      )}
+      <CardFooter>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => triggerDownload(url, artifact.name)}
+        >
+          <DownloadIcon data-icon="inline-start" />
+          下载
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+export default function ResultsViewer() {
+  const task = useAgentStore(selectActiveTask);
+  const taskId = task?.summary.task_id ?? null;
+  const artifacts = useAgentStore(selectActiveArtifacts);
+  const activities = useAgentStore(selectActiveActivities);
+
+  if (task === undefined) {
+    return (
+      <Empty className="min-h-48">
+        <EmptyHeader>
+          <EmptyTitle>选择任务查看结果</EmptyTitle>
+          <EmptyDescription>选择一个任务后，这里会显示其产物和来源。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  const isActive = isActiveStatus(task.summary.status);
+  if (artifacts.length === 0 && isActive) {
+    return (
+      <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+        <Spinner />
+        处理中...
+      </div>
+    );
+  }
+  if (artifacts.length === 0) {
+    return (
+      <Empty className="min-h-48">
+        <EmptyHeader>
+          <EmptyTitle>暂无结果</EmptyTitle>
+          <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  const sourceData = parseSourceManifest(activities);
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
       {sourceData.length > 0 && (
         <Accordion>
           <AccordionItem value="source-manifest">
             <AccordionTrigger>
-              <DatabaseIcon className="size-4" />
+              <DatabaseIcon aria-hidden="true" />
               数据来源
             </AccordionTrigger>
             <AccordionContent>
-              <div className="flex flex-col gap-2">
+              <div className="flex min-w-0 flex-col gap-2">
                 {sourceData.map((entry) => (
-                  <Card key={entry.id} size="sm">
+                  <Card key={entry.id} size="sm" className="min-w-0">
                     <CardHeader>
-                      <CardTitle className="text-xs font-mono">
-                        {entry.tool}
-                      </CardTitle>
+                      <CardTitle className="truncate text-xs font-mono" title={entry.tool}>{entry.tool}</CardTitle>
                       <CardDescription>{entry.summary}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <pre className="whitespace-pre-wrap break-all font-mono text-[0.625rem] leading-relaxed text-muted-foreground">
-                        {entry.details}
-                      </pre>
+                      <pre className="max-w-full whitespace-pre-wrap break-words font-mono text-[0.625rem] leading-relaxed text-muted-foreground">{entry.details}</pre>
                     </CardContent>
                   </Card>
                 ))}
@@ -366,66 +310,11 @@ export default function ResultsViewer() {
           </AccordionItem>
         </Accordion>
       )}
-
-      {/* Artifact Cards */}
-      <ScrollArea className="h-full">
-        <div className="flex flex-col gap-3">
-          {artifacts.map((artifact) => {
-            const { Icon, label } = getFileTypeInfo(artifact.name);
-            const isCsvFile = isCSV(artifact.name);
-
-            return (
-              <Card key={artifact.name} size="sm">
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <Icon className="size-4 shrink-0 text-muted-foreground" />
-                    <CardTitle className="truncate">{artifact.name}</CardTitle>
-                    <Badge variant="outline">{label}</Badge>
-                  </div>
-                  <CardDescription>
-                    {formatSize(artifact.size)}
-                  </CardDescription>
-                </CardHeader>
-
-                {/* CSV Preview Section — real inline table */}
-                {isCsvFile && (
-                  <CardContent>
-                    <Accordion>
-                      <AccordionItem value={`csv-preview-${artifact.name}`}>
-                        <AccordionTrigger>
-                          CSV 预览
-                        </AccordionTrigger>
-                        <AccordionContent>
-                          <CsvPreview
-                            artifactUrl={getArtifactUrl(
-                              taskId ?? "",
-                              artifact.artifactId,
-                            )}
-                          />
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
-                  </CardContent>
-                )}
-
-                <CardFooter className="border-t pt-(--card-spacing)">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      triggerDownload(
-                        getArtifactUrl(taskId ?? "", artifact.artifactId),
-                        artifact.name,
-                      )
-                    }
-                  >
-                    <DownloadIcon data-icon="inline-start" />
-                    下载
-                  </Button>
-                </CardFooter>
-              </Card>
-            );
-          })}
+      <ScrollArea className="h-full min-w-0">
+        <div className="flex min-w-0 flex-col gap-3">
+          {taskId !== null && artifacts.map((artifact) => (
+            <ArtifactCard key={artifact.artifact_id} artifact={artifact} taskId={taskId} />
+          ))}
         </div>
       </ScrollArea>
     </div>

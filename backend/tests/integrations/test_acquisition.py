@@ -191,7 +191,8 @@ async def test_content_cache_is_reused_across_tasks(tmp_path: Path) -> None:
             expected_sha256=first.asset.sha256 if first.asset else None,
         )
 
-    assert calls == 2
+    # Request-level cache: second call skips the network entirely.
+    assert calls == 1
     assert first.asset is not None and second.asset is not None
     assert first.asset.asset_id == second.asset.asset_id
     assert cache.blob_path(first.asset.sha256).read_bytes() == content
@@ -575,3 +576,85 @@ async def test_existing_task_asset_is_idempotent_only_for_same_content(
     assert different.attempt.error_code is ErrorCode.CHECKSUM_MISMATCH
     assert different.asset is None
     assert destination.read_bytes() == b"different"
+
+
+@pytest.mark.asyncio
+async def test_request_level_cache_skips_network_on_second_call(
+    tmp_path: Path,
+) -> None:
+    """Request-level metadata cache skips the network on the second call."""
+    content = b"cached content for request-level test"
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=content)
+
+    cache = ContentCache(tmp_path / "cache")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        first = await acquire_source(
+            source=source_record(),
+            filename="counts.gz",
+            workdir=create_task_workdir("task_req1", base_dir=str(tmp_path / "tasks")),
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=1024,
+        )
+        # Different source_id but same (database, accession, url) → cache hit
+        other_source = source_record().model_copy(
+            update={"source_id": "src_geo_other"}
+        )
+        second = await acquire_source(
+            source=other_source,
+            filename="counts.gz",
+            workdir=create_task_workdir("task_req2", base_dir=str(tmp_path / "tasks")),
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=1024,
+        )
+
+    assert calls == 1
+    assert first.asset is not None and second.asset is not None
+    assert first.asset.sha256 == second.asset.sha256
+    assert first.asset.asset_id == second.asset.asset_id
+    assert second.attempt.status is DownloadStatus.SUCCEEDED
+    # The second source_id should be reflected in the asset
+    assert second.asset.source_id == "src_geo_other"
+
+
+def test_canonical_request_hash_is_deterministic() -> None:
+    """Same (database, accession, url) always produces the same hash."""
+    from app.tools.content_cache import canonical_request_hash
+
+    h1 = canonical_request_hash("geo", "GSE178352", "https://example.test/file.gz")
+    h2 = canonical_request_hash("GEO", "gse178352", "https://example.test/file.gz")
+    assert h1 == h2
+    assert len(h1) == 64
+
+    h3 = canonical_request_hash("geo", "GSE999999", "https://example.test/file.gz")
+    assert h1 != h3
+
+
+def test_read_write_metadata_roundtrip(tmp_path: Path) -> None:
+    """Metadata written and read back should match."""
+    cache = ContentCache(tmp_path / "cache")
+    req_hash = "ab" * 32
+    metadata = {
+        "sha256": "cd" * 32,
+        "size_bytes": "1024",
+        "media_type": "application/gzip",
+    }
+    cache.write_metadata(req_hash, metadata)
+    result = cache.read_metadata(req_hash)
+    assert result is not None
+    assert result["sha256"] == metadata["sha256"]
+    assert result["size_bytes"] == "1024"
+
+
+def test_read_metadata_returns_none_when_absent(tmp_path: Path) -> None:
+    """Reading metadata for a non-existent request should return None."""
+    cache = ContentCache(tmp_path / "cache")
+    assert cache.read_metadata("ab" * 32) is None

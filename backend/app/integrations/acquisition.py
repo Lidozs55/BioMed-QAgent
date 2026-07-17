@@ -24,7 +24,7 @@ from app.domain.contracts import (
     asset_id_from_sha256,
     generate_prefixed_uuid,
 )
-from app.tools.content_cache import ContentCache
+from app.tools.content_cache import ContentCache, canonical_request_hash
 from app.tools.workdir import TaskWorkDir
 
 _ALLOWED_HOSTS = frozenset(
@@ -204,6 +204,45 @@ async def acquire_source(
             raise AcquisitionFailure(
                 ErrorCode.VALIDATION_ERROR, "max_bytes must be positive"
             )
+
+        # --- Request-level cache hit: skip network if metadata + blob exist ---
+        req_hash = canonical_request_hash(
+            source.database.value, source.accession, source.url
+        )
+        cached = cache.read_metadata(req_hash)
+        if cached is not None:
+            cached_sha = cached["sha256"]
+            cached_blob = cache.blob_path(cached_sha)
+            if cached_blob.is_file() and _sha256_file(cached_blob) == cached_sha:
+                asset_id = asset_id_from_sha256(cached_sha)
+                destination = _publish_task_asset(
+                    cached_blob, workdir, asset_id, filename, cached_sha
+                )
+                finished_at = datetime.now(UTC)
+                attempt = DownloadAttempt(
+                    attempt_id=attempt_id,
+                    source_id=source.source_id,
+                    url=source.url,
+                    status=DownloadStatus.SUCCEEDED,
+                    bytes_received=int(cached.get("size_bytes", "0")),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                return AcquisitionResult(
+                    attempt=attempt,
+                    asset=SourceAsset(
+                        asset_id=asset_id,
+                        kind="source",
+                        relative_path=destination.relative_to(workdir.root).as_posix(),
+                        sha256=cached_sha,
+                        size_bytes=int(cached.get("size_bytes", "0")),
+                        media_type=cached.get("media_type", "application/octet-stream"),
+                        source_id=source.source_id,
+                        successful_attempt_id=attempt_id,
+                        data_level=data_level,
+                    ),
+                )
+
         digest = hashlib.sha256()
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
         current_url = source.url
@@ -288,6 +327,15 @@ async def acquire_source(
         asset_id = asset_id_from_sha256(checksum)
         destination = _publish_task_asset(
             blob_path, workdir, asset_id, filename, checksum
+        )
+        # Persist request-level metadata so future requests skip the network.
+        cache.write_metadata(
+            req_hash,
+            {
+                "sha256": checksum,
+                "size_bytes": str(bytes_received),
+                "media_type": media_type.split(";", 1)[0],
+            },
         )
         finished_at = datetime.now(UTC)
         attempt = DownloadAttempt(
