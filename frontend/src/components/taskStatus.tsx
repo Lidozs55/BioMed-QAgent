@@ -16,6 +16,7 @@ export function TaskStatusIcon({ status }: { status: RunStatus }) {
     case "running":
     case "finalizing":
     case "cancel_requested":
+    case "awaiting_user_input":
       return <Spinner aria-hidden="true" />;
     case "completed":
       return <CheckCircleIcon aria-hidden="true" />;

@@ -15,6 +15,8 @@ from app.domain.contracts import (
     RunStartedPayload,
     RunStatus,
     TaskSnapshot,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
 )
 
 _STATUS_PAYLOADS = {
@@ -25,6 +27,8 @@ _STATUS_PAYLOADS = {
     RunCancelRequestedPayload: RunStatus.CANCEL_REQUESTED,
     RunCancelledPayload: RunStatus.CANCELLED,
     RunInterruptedPayload: RunStatus.INTERRUPTED,
+    UserInputRequiredPayload: RunStatus.AWAITING_USER_INPUT,
+    UserInputResumedPayload: RunStatus.RUNNING,
 }
 
 _TERMINAL_STATUSES = {
@@ -38,6 +42,13 @@ _LEGAL_TRANSITIONS = {
     RunStatus.QUEUED: {RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED},
     RunStatus.RUNNING: {
         RunStatus.FINALIZING,
+        RunStatus.CANCEL_REQUESTED,
+        RunStatus.AWAITING_USER_INPUT,
+        RunStatus.FAILED,
+        RunStatus.INTERRUPTED,
+    },
+    RunStatus.AWAITING_USER_INPUT: {
+        RunStatus.RUNNING,
         RunStatus.CANCEL_REQUESTED,
         RunStatus.FAILED,
         RunStatus.INTERRUPTED,
@@ -116,7 +127,9 @@ def reduce_task_event(
             "status": status,
             "updated_at": event.timestamp,
         }
-        if status is RunStatus.RUNNING:
+        # Only stamp started_at on a fresh RUNNING transition; a resume from
+        # AWAITING_USER_INPUT preserves the original start time.
+        if status is RunStatus.RUNNING and current_status is not RunStatus.AWAITING_USER_INPUT:
             updates["started_at"] = event.timestamp
         if status in _TERMINAL_STATUSES:
             updates["finished_at"] = event.timestamp

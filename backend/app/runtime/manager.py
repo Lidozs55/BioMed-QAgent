@@ -31,6 +31,7 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
     TaskSummary,
+    UserInputResumedPayload,
     WarningPayload,
     build_event,
     generate_run_id,
@@ -77,6 +78,7 @@ RunCompactionCommit = Callable[
 ]
 RunCompletionCommit = Callable[[], Awaitable[list[EventEnvelope]]]
 RunCompletionAbort = Callable[[], Awaitable[None]]
+UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
 
 
 @dataclass(slots=True)
@@ -113,6 +115,10 @@ class RunExecution:
         init=False,
         repr=False,
     )
+    _user_input_submitter: UserInputSubmitter | None = field(
+        default=None,
+        repr=False,
+    )
     _streaming_result: StreamingRunResult | None = field(
         default=None,
         init=False,
@@ -147,6 +153,18 @@ class RunExecution:
             raise RuntimeError("streaming result is already attached")
         self._streaming_result = result
         self._stream_ready.set()
+
+    def set_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
+        """Attach the executor-side resume channel (e.g. PipelineRunner)."""
+
+        self._user_input_submitter = submitter
+
+    def submit_user_input(self, decision: UserInputResumedPayload) -> bool:
+        """Forward a resume decision to the executor's user-input channel."""
+
+        if self._user_input_submitter is None:
+            return False
+        return self._user_input_submitter(decision)
 
     async def emit(
         self,
@@ -842,6 +860,62 @@ class TaskManager:
             raise LookupError(task_id)
         return snapshot
 
+    async def resume_run(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        request_id: str,
+        decision: Literal["approve", "reject"],
+        detail: dict[str, object] | None = None,
+    ) -> TaskSnapshot:
+        """Submit a human-in-the-loop resume decision to a paused run.
+
+        Validates that the run is in ``AWAITING_USER_INPUT`` state and that
+        ``request_id`` matches the pending request, then forwards the decision
+        to the executor's user-input channel (e.g. PipelineRunner). The
+        ``UserInputResumedPayload`` is persisted by the pipeline after the
+        run wakes up, so this method returns the snapshot as-is if the
+        executor has not yet emitted the resume event.
+        """
+
+        if not self._started or self._closing:
+            raise RuntimeError("task manager is not running")
+        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+            snapshot = await self.repository.get_snapshot(task_id)
+            if snapshot is None:
+                raise LookupError(task_id)
+            run = next(
+                (
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == run_id
+                ),
+                None,
+            )
+            if run is None:
+                raise LookupError(run_id)
+            if run.status is not RunStatus.AWAITING_USER_INPUT:
+                raise RuntimeError(
+                    f"run {run_id} is not awaiting user input "
+                    f"(status: {run.status.value})"
+                )
+            live_execution = self._running.get((task_id, run_id))
+            if live_execution is None:
+                raise RuntimeError(f"run {run_id} has no live execution")
+            payload = UserInputResumedPayload(
+                request_id=request_id,
+                decision=decision,
+                detail=detail or {},
+            )
+            accepted = live_execution.submit_user_input(payload)
+            if not accepted:
+                raise RuntimeError(
+                    f"run {run_id} executor rejected the resume decision"
+                )
+            return await self.repository.get_snapshot(task_id) or snapshot
+
     async def wait_until_idle(self) -> None:
         await self._queue.join()
 
@@ -853,6 +927,7 @@ class TaskManager:
             RunStatus.RUNNING,
             RunStatus.FINALIZING,
             RunStatus.CANCEL_REQUESTED,
+            RunStatus.AWAITING_USER_INPUT,
         }
         for summary in page.tasks:
             if summary.status not in recoverable or summary.active_run_id is None:

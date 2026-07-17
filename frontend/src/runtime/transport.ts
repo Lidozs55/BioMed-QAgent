@@ -10,6 +10,8 @@ const OPEN = 1;
 const EVENT_TYPES = new Set([
   "task_created",
   "plan_ready",
+  "user_input_required",
+  "user_input_resumed",
   "stage_started",
   "stage_completed",
   "stage_failed",

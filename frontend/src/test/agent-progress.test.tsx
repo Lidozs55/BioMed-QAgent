@@ -11,6 +11,7 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   running: "运行中",
   finalizing: "收尾中",
   cancel_requested: "正在取消",
+  awaiting_user_input: "等待确认",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
@@ -22,7 +23,8 @@ function projectedTask(status: RunStatus, mode: TaskMode = "agent"): TaskProject
     status === "queued" ||
     status === "running" ||
     status === "finalizing" ||
-    status === "cancel_requested";
+    status === "cancel_requested" ||
+    status === "awaiting_user_input";
   const task = createTaskProjection({
     task_id: `task_${status}`,
     mode,

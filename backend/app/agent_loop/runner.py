@@ -367,6 +367,9 @@ class FixtureRunExecutor:
         streams_events = callable(set_event_sink)
         if callable(set_event_sink):
             set_event_sink(persist_pipeline_event)
+        submitter = getattr(runner, "submit_user_input", None)
+        if callable(submitter):
+            execution.set_user_input_submitter(submitter)
         try:
             manifest = await _run_pipeline_with_cancellation(execution, runner)
             if not streams_events:

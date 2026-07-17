@@ -41,6 +41,8 @@ from app.domain.contracts import (
     TaskState,
     ToolCalledPayload,
     ToolCompletedPayload,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     WarningPayload,
     WarningRecord,
     WarningSeverity,
@@ -198,6 +200,12 @@ class PipelineRunner:
         # in-memory list. The sentinel ``None`` signals stream completion.
         self._event_queue: asyncio.Queue[EventEnvelope | None] | None = None
         self._pending_publication: Path | None = None
+        # Human-in-the-loop pause-resume primitives. ``_user_input_event`` is
+        # set when the pipeline is blocked in ``_await_user_input`` awaiting a
+        # ``submit_user_input`` call from the runtime (POST /resume). The
+        # ``_user_input_decision`` holds the resumed decision payload.
+        self._user_input_event: asyncio.Event | None = None
+        self._user_input_decision: UserInputResumedPayload | None = None
 
     def set_event_sink(self, sink: PipelineEventSink) -> None:
         """Attach the awaitable in-memory handoff used by the durable runtime."""
@@ -352,6 +360,75 @@ class PipelineRunner:
         self.state.cancel_reason = reason
         save_state(self.workdir.state, self.state)
 
+    def submit_user_input(self, decision: UserInputResumedPayload) -> bool:
+        """Submit a resume decision from the runtime (POST /resume).
+
+        Returns ``True`` if the decision was accepted and the blocked
+        pipeline will wake up, ``False`` if the pipeline is not awaiting
+        input (e.g. already cancelled, timed out, or never paused).
+        """
+
+        if self._user_input_event is None:
+            return False
+        self._user_input_decision = decision
+        self._user_input_event.set()
+        return True
+
+    async def _await_user_input(
+        self,
+        *,
+        request_id: str,
+        prompt_kind: Literal["plan_confirmation", "data_correction"],
+        summary: str,
+        detail: dict[str, object] | None = None,
+        expires_at: datetime | None = None,
+        timeout: float = 300.0,
+    ) -> UserInputResumedPayload:
+        """Pause the pipeline and wait for human input via POST /resume.
+
+        In fixture mode the request is informational only — the event is
+        emitted but the pipeline auto-approves without blocking. In live
+        mode the pipeline blocks on an ``asyncio.Event`` until
+        ``submit_user_input`` is called by the runtime, or until ``timeout``
+        seconds elapse (which raises ``TimeoutError`` handled by ``run``).
+        """
+
+        fixture_exempt = self.mode == "fixture"
+        if fixture_exempt:
+            # Fixture mode auto-approves without pausing and without emitting
+            # a user_input_required event — there is no real pause to signal.
+            return UserInputResumedPayload(
+                request_id=request_id,
+                decision="approve",
+                detail=detail or {},
+            )
+        await self._emit_event(
+            UserInputRequiredPayload(
+                request_id=request_id,
+                prompt_kind=prompt_kind,
+                summary=summary,
+                expires_at=expires_at,
+                fixture_exempt=fixture_exempt,
+                detail=detail or {},
+            )
+        )
+
+        event = asyncio.Event()
+        self._user_input_event = event
+        self._user_input_decision = None
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except TimeoutError:
+            self._user_input_event = None
+            raise
+        decision = self._user_input_decision
+        self._user_input_event = None
+        self._user_input_decision = None
+        if decision is None:
+            raise RuntimeError("user input event was set without a decision")
+        await self._emit_event(decision)
+        return decision
+
     def _is_cancelled(self) -> bool:
         return self.state.cancel_requested or (
             self.cancellation_requested is not None
@@ -378,6 +455,14 @@ class PipelineRunner:
             await self._emit_event(TaskCreatedPayload(topic=self.topic))
             specification = _build_specification_for_plan(self.ctx)
             await self._emit_event(PlanReadyPayload(specification=specification))
+            # Pause for plan confirmation (human-in-the-loop). In fixture mode
+            # this is informational only and the pipeline auto-approves.
+            await self._await_user_input(
+                request_id=f"plan-{self.task_id}",
+                prompt_kind="plan_confirmation",
+                summary=f"Confirm research plan for topic: {self.topic}",
+                detail=specification.model_dump(),
+            )
 
         stage_outputs: dict[StageName, Any] = {}
         reuse_allowed = True

@@ -24,6 +24,7 @@ const ACTIVE_STATUSES = new Set<RunStatus>([
   "running",
   "finalizing",
   "cancel_requested",
+  "awaiting_user_input",
 ]);
 
 export function isActiveStatus(status: RunStatus): boolean {
@@ -64,6 +65,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     artifactEventSequences: {},
     artifactManifestSequence: null,
     fixtureStages: {},
+    pendingUserInput: null,
     lastSequence: summary.latest_sequence,
     hydration: "summary",
   };
@@ -624,6 +626,102 @@ export function reduceRuntimeEvent(
           error,
         );
       }
+      break;
+    }
+    case "user_input_required": {
+      if (runId === null) break;
+      task = upsertRun(
+        task,
+        runId,
+        (run) => ({
+          ...run,
+          status: "awaiting_user_input",
+          updatedAt: envelope.timestamp,
+        }),
+        "awaiting_user_input",
+        envelope.timestamp,
+      );
+      task = {
+        ...task,
+        summary: {
+          ...task.summary,
+          status: "awaiting_user_input",
+          active_run_id: runId,
+        },
+        pendingUserInput: {
+          requestId: payload.request_id,
+          promptKind: payload.prompt_kind,
+          summary: payload.summary,
+          expiresAt: payload.expires_at,
+          fixtureExempt: payload.fixture_exempt,
+          detail: payload.detail,
+          sequence: envelope.sequence,
+          timestamp: envelope.timestamp,
+        },
+      };
+      break;
+    }
+    case "user_input_resumed": {
+      if (runId === null) break;
+      task = upsertRun(
+        task,
+        runId,
+        (run) => ({
+          ...run,
+          status: "running",
+          updatedAt: envelope.timestamp,
+        }),
+        "running",
+        envelope.timestamp,
+      );
+      task = {
+        ...task,
+        summary: {
+          ...task.summary,
+          status: "running",
+          active_run_id: runId,
+        },
+        pendingUserInput: null,
+      };
+      break;
+    }
+    case "plan_ready": {
+      task = upsertActivity(task, {
+        activityId: `event:${envelope.sequence}`,
+        taskId: envelope.task_id,
+        runId,
+        sequence: envelope.sequence,
+        timestamp: envelope.timestamp,
+        kind: "fixture_event",
+        status: "completed",
+        name: "plan_ready",
+        input: null,
+        output: JSON.stringify(payload.specification),
+        isError: false,
+        code: null,
+        message: null,
+      });
+      break;
+    }
+    case "task_created":
+    case "task_recovered": {
+      if (task.summary.mode !== "fixture") break;
+      task = upsertActivity(task, {
+        activityId: `event:${envelope.sequence}`,
+        taskId: envelope.task_id,
+        runId,
+        sequence: envelope.sequence,
+        timestamp: envelope.timestamp,
+        kind: "fixture_event",
+        status: "completed",
+        name: payload.type,
+        input: null,
+        output:
+          payload.type === "task_created" ? payload.topic : null,
+        isError: false,
+        code: null,
+        message: null,
+      });
       break;
     }
     case "assistant_delta": {

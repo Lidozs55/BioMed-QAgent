@@ -28,6 +28,8 @@ def test_pipeline_event_enum_contains_every_mandatory_type() -> None:
     assert {event.value for event in PipelineEventType} == {
         "task_created",
         "plan_ready",
+        "user_input_required",
+        "user_input_resumed",
         "stage_started",
         "stage_completed",
         "stage_failed",
