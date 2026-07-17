@@ -91,4 +91,5 @@ coverage.xml
 *.bak
 .sisyphus/
 opencode.json
+.codex/config.toml
 fix_ruff.py
