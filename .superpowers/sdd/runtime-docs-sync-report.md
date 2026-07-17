@@ -22,7 +22,7 @@ Date: 2026-07-17
 
 The initial documentation task did not rerun broad gates. Final branch evidence
 was subsequently refreshed: backend 867 passed / 18 deselected plus Ruff and
-startup health; frontend 14 files / 188 tests plus ESLint, TypeScript, and
+startup health; frontend 14 files / 191 tests plus ESLint, TypeScript, and
 production build; desktop/mobile browser QA covered backend history startup,
 fixture completion, final-artifact reachability, reduced-height setup scrolling,
 and long-title control layout.

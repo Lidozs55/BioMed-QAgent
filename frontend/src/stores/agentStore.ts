@@ -163,7 +163,16 @@ export function addAcceptedTask(
   const existing = state.tasksById[accepted.taskId];
   if (existing !== undefined) {
     if (existing.runsById[accepted.runId] !== undefined) {
-      return activate ? { ...state, activeTaskId: accepted.taskId } : state;
+      const admitted = activate
+        ? { ...state, activeTaskId: accepted.taskId }
+        : state;
+      if (!admitted.activeItems.includes(accepted.taskId)) return admitted;
+      return {
+        ...admitted,
+        activeItems: [...admitted.activeItems].sort((left, right) =>
+          compareTaskIds(admitted.tasksById, left, right),
+        ),
+      };
     }
     if (existing.hydration !== "summary") {
       const projection = {
