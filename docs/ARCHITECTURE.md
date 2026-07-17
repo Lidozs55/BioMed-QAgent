@@ -507,11 +507,12 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
   queued/running/paused 取消和重启恢复均已实现。
 - HIL：真实 Agent Tool 路径已接入权威 event/resume bridge，覆盖 exact one-shot
   request identity、拒绝/超时失败、paused cancellation 和 fixture 自动批准审计。
-- 前端：full Vitest 为 `14 files / 182 tests passed`；ESLint 0 warning、TypeScript
+- 前端：full Vitest 为 `14 files / 183 tests passed`；ESLint 0 warning、TypeScript
   typecheck 和 production build 均通过。HIL prompt/Dialog 按 Run 与 submission
   attempt 隔离，R5 workspace UX 修复已通过 review。
-- 浏览器证据仅指此前 fixture 创建、执行、结果展示和下载的历史验收；本轮 HIL/
-  concurrency/R5 文档同步没有重新执行浏览器 QA，当前整体验收仍需补做该项。
+- 浏览器 QA 已在当前分支重新执行：启动时保留新研究草稿并加载后端历史，fixture
+  完整运行并展示 14 个产物；1440×900 与 390×844 下结果列表可滚动至最后产物，
+  390×520 压缩高度下设置提交控件仍可达，长标题截断且不遮挡状态/删除控件。
 
 未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.3 数据修正
 实例、§1 系列硬编码解除、第二个真实案例和 GDC/PDB/Xena live 验收。

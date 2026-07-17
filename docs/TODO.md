@@ -651,7 +651,7 @@
 
 - [x] 默认 pytest 无真实 Key 通过（867 passed, 18 deselected, 2026-07-17）
 - [x] Live 测试覆盖 PubMed + GEO + 完整 counts 校验
-- [x] 前端 Vitest（14 files / 182 tests）+ TypeScript + ESLint + build 门禁
+- [x] 前端 Vitest（14 files / 183 tests）+ TypeScript + ESLint + build 门禁
 
 ### 7.8 Agent 与 API（原 §11）
 
@@ -686,4 +686,5 @@
       failure、paused cancellation 与 fixture auto-approval audit
 - [x] 前端 HIL prompt/提交 attempt 按 Run 隔离，修复 A → B → A 异步串扰并将
       paused Run 计入并发 slot
-- [x] R5 UX 修复：有界滚动、稳定 Task 排序、通知 View 失败反馈与多行 Bubble
+- [x] R5 UX 修复：App 视口边界 + 非聊天页有界滚动、稳定 Task 排序、通知 View
+      失败反馈与多行 Bubble；桌面/移动浏览器复验通过

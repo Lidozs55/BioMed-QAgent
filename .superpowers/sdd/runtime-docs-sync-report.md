@@ -20,11 +20,12 @@ Date: 2026-07-17
 | `uv run ruff check app/pipeline/runner.py` (from `backend/`) | PASS — `All checks passed!` |
 | `git diff --check` | PASS — exit 0 |
 
-Per assignment, full test suites and browser QA were not rerun. The documented
-current evidence comes from the branch's fresh reports: backend 867 passed / 18
-deselected plus Ruff, and frontend 14 files / 182 tests plus ESLint,
-TypeScript, and production build. Browser coverage is identified only as
-historical, with current HIL/concurrency/R5 browser QA still pending.
+The initial documentation task did not rerun broad gates. Final branch evidence
+was subsequently refreshed: backend 867 passed / 18 deselected plus Ruff and
+startup health; frontend 14 files / 183 tests plus ESLint, TypeScript, and
+production build; desktop/mobile browser QA covered backend history startup,
+fixture completion, final-artifact reachability, reduced-height setup scrolling,
+and long-title control layout.
 
 ## Worktree hygiene
 
