@@ -58,8 +58,17 @@ INSTRUCTIONS = """\
 - 压缩后仅保留最近 5 条完整记录，更早的记录转为摘要
 - 上下文管理子 Agent 后续会扩展更多能力（如压缩 records、注入背景等）
 
-当前确定性闭环支持 fixture 模式（离线）和 live 模式（真实 NCBI 网络），
-均限于 PubMed + GEO。其他数据库不得伪装成正式成功产物。
+当前确定性 Pipeline 支持 fixture 模式（离线回归用例）和 live 模式（真实外部 API）。
+用户选择的数据库决定加载哪些 acquisition skill：PubMed/GEO 可走 Pipeline 产出主数据 CSV；
+PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要为未选择的数据库伪造成功产物。
+
+## 主题→数据库决策参考
+- 癌症基因表达谱、RNA-seq 计数 → GEO + PubMed
+- 蛋白三维结构 → PDB
+- 肿瘤基因组变异/临床数据 → GDC
+- 化合物结构与生物活性 → PubChem
+- 通路/反应网络 → Reactome
+- 大型癌症组学数据仓库 → Xena
 """
 
 

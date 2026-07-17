@@ -121,6 +121,8 @@ _SKILL_DISPLAY_NAMES: dict[str, str] = {
     "browser_fallback": "Browser Fallback",
     "self_evolution": "Self Evolution",
     "analysis": "Analysis",
+    "pubchem": "PubChem",
+    "reactome": "Reactome",
 }
 
 
@@ -140,6 +142,8 @@ def load_database_skills() -> None:
     import app.skills.builtin.acquisition.gdc  # noqa: F401
     import app.skills.builtin.acquisition.geo  # noqa: F401
     import app.skills.builtin.acquisition.pdb  # noqa: F401
+    import app.skills.builtin.acquisition.pubchem  # noqa: F401
+    import app.skills.builtin.acquisition.reactome  # noqa: F401
     import app.skills.builtin.acquisition.xena  # noqa: F401
     import app.skills.builtin.discovery.pubmed  # noqa: F401
 
@@ -159,7 +163,6 @@ async def get_databases() -> dict:
         if skill.supported_sources
         and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
         and skill.name != "browser_fallback"
-        and skill.name in {"pubmed", "geo"}
     ]
     databases = []
     for skill in skills:
