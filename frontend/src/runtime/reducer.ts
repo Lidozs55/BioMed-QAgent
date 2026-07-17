@@ -71,7 +71,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
   };
 }
 
-function compareTaskIds(
+export function compareTaskIds(
   tasksById: Record<string, TaskProjection>,
   left: string,
   right: string,
@@ -308,6 +308,10 @@ export function hydrateTaskSnapshot(
   }
   const base = existing ?? createTaskProjection(snapshot.task);
   const runs = snapshot.runs.map(projectRun);
+  const pendingRun =
+    base.pendingUserInput === null
+      ? undefined
+      : runs.find((run) => run.runId === base.pendingUserInput?.runId);
   const snapshotMessages = snapshot.messages.map(projectMessage);
   const snapshotRunIds = new Set(runs.map((run) => run.runId));
   const runOrder = [
@@ -324,6 +328,12 @@ export function hydrateTaskSnapshot(
     runsById,
     runOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
+    pendingUserInput:
+      base.pendingUserInput !== null &&
+      snapshot.task.active_run_id === base.pendingUserInput.runId &&
+      pendingRun?.status === "awaiting_user_input"
+        ? base.pendingUserInput
+        : null,
     olderMessagesCursor:
       existing?.hydration === "snapshot" &&
       snapshotConnectsToExistingHistory(base, snapshotMessages)

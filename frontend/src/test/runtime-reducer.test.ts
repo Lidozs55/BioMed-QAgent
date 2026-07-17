@@ -5,6 +5,7 @@ import type {
   EventPayload,
   MessagePage,
   MessageRecord,
+  RunRecord,
   TaskPage,
   TaskSnapshot,
   TaskSummary,
@@ -75,6 +76,25 @@ function taskSnapshot(
     runs: [],
     messages,
     older_messages_cursor: olderMessagesCursor,
+  };
+}
+
+function runRecord(
+  taskId: string,
+  runId: string,
+  status: RunRecord["status"],
+): RunRecord {
+  return {
+    run_id: runId,
+    task_id: taskId,
+    request_id: `request_${runId}`,
+    status,
+    input: "input",
+    created_at: CREATED_AT,
+    updated_at: CREATED_AT,
+    started_at: CREATED_AT,
+    finished_at: status === "awaiting_user_input" ? null : CREATED_AT,
+    error: null,
   };
 }
 
@@ -337,6 +357,72 @@ describe("runtime event projection", () => {
       runId: "run_prompt",
       requestId: "request_prompt",
     });
+  });
+
+  it("preserves pending input while its snapshot Run is still awaiting input", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    const hydrated = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_a", "awaiting_user_input", 2),
+        active_run_id: "run_prompt",
+      },
+      runs: [runRecord("task_a", "run_prompt", "awaiting_user_input")],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    expect(hydrated.tasksById.task_a.pendingUserInput).toEqual(
+      state.tasksById.task_a.pendingUserInput,
+    );
+  });
+
+  it("clears pending input when a cancellation snapshot terminalizes its Run", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    const hydrated = hydrateTaskSnapshot(state, {
+      task: {
+        ...summary("task_a", "cancelled", 2),
+        active_run_id: null,
+      },
+      runs: [runRecord("task_a", "run_prompt", "cancelled")],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    expect(hydrated.tasksById.task_a.pendingUserInput).toBeNull();
   });
 
   it("does not clear pending user input when another Run resumes", () => {

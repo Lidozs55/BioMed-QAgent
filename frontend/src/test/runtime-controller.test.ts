@@ -640,6 +640,118 @@ describe("runtime orchestration", () => {
     ).toEqual(["artifact_selected"]);
   });
 
+  it("replays a user-input prompt emitted during an already-hydrated selection handoff", async () => {
+    const taskId = "task_hil_gap";
+    const runId = `run_${taskId}`;
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: {
+        ...summary(taskId, "running", 5),
+        active_run_id: runId,
+      },
+      runs: [
+        {
+          run_id: runId,
+          task_id: taskId,
+          request_id: "req_existing",
+          status: "running",
+          input: "question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: null,
+          error: null,
+        },
+      ],
+      messages: [],
+      older_messages_cursor: null,
+    });
+    const requiredEvent: EventEnvelope = {
+      schema_version: "2.0",
+      event_id: "event_task_hil_gap_6",
+      type: "user_input_required",
+      task_id: taskId,
+      run_id: runId,
+      stage_attempt_id: null,
+      sequence: 6,
+      timestamp: "2026-07-14T00:00:06Z",
+      payload: {
+        type: "user_input_required",
+        request_id: "req_hil_gap",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      },
+    };
+    const order: string[] = [];
+    const fetchEvents = vi.fn<APIClient["fetchEvents"]>(
+      (_fetchedTaskId, options) => {
+        if (options === undefined) {
+          throw new Error("Replay options are required");
+        }
+        order.push(`events:${options.afterSequence}`);
+        expect(useAgentStore.getState().tasksById[taskId].lastSequence).toBe(5);
+        return Promise.resolve([requiredEvent]);
+      },
+    );
+    const apiClient = api({
+      fetchTask: vi.fn(async () => {
+        order.push("snapshot");
+        return {
+          task: {
+            ...summary(taskId, "awaiting_user_input", 6),
+            active_run_id: runId,
+          },
+          runs: [
+            {
+              run_id: runId,
+              task_id: taskId,
+              request_id: "req_existing",
+              status: "awaiting_user_input" as const,
+              input: "question",
+              created_at: CREATED_AT,
+              updated_at: "2026-07-14T00:00:06Z",
+              started_at: CREATED_AT,
+              finished_at: null,
+              error: null,
+            },
+          ],
+          messages: [],
+          older_messages_cursor: null,
+        };
+      }),
+      fetchEvents,
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport({
+      isSubscribed: vi.fn().mockReturnValue(true),
+      unsubscribeAndWait: vi.fn(async () => {
+        order.push("barrier");
+      }),
+      subscribe: vi.fn((_subscribedTaskId, afterSequence) => {
+        order.push(`subscribe:${afterSequence}`);
+      }),
+    });
+
+    await new RuntimeController(apiClient, eventTransport).selectTask(taskId);
+
+    expect(fetchEvents).toHaveBeenCalledWith(taskId, {
+      afterSequence: 5,
+      limit: 1000,
+    });
+    expect(order).toEqual(["barrier", "snapshot", "events:5", "subscribe:6"]);
+    expect(useAgentStore.getState().tasksById[taskId]).toMatchObject({
+      hydration: "snapshot",
+      lastSequence: 6,
+      pendingUserInput: {
+        runId,
+        requestId: "req_hil_gap",
+      },
+    });
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(taskId, 6);
+  });
+
   it("replays a summary-only fixture task through its snapshot watermark before subscribing", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_fixture_history", "completed", 2, "fixture")]),
@@ -1427,7 +1539,10 @@ describe("runtime orchestration", () => {
         .fn<APIClient["fetchTask"]>()
         .mockResolvedValueOnce(snapshot("task_serial_handoff", 2))
         .mockResolvedValueOnce(snapshot("task_serial_handoff", 3)),
-      fetchEvents: vi.fn(() => replay.promise),
+      fetchEvents: vi
+        .fn<APIClient["fetchEvents"]>()
+        .mockImplementationOnce(() => replay.promise)
+        .mockResolvedValueOnce([runStartedEvent("task_serial_handoff", 3)]),
       fetchArtifacts: vi.fn().mockResolvedValue([]),
     });
     const eventTransport = transport({
@@ -1826,6 +1941,10 @@ describe("runtime orchestration", () => {
         .fn<APIClient["fetchTask"]>()
         .mockResolvedValueOnce(snapshot("task_snapshot_generation", 2))
         .mockResolvedValueOnce(snapshot("task_snapshot_generation", 4)),
+      fetchEvents: vi.fn().mockResolvedValue([
+        runStartedEvent("task_snapshot_generation", 3),
+        runStartedEvent("task_snapshot_generation", 4),
+      ]),
       fetchArtifacts: vi
         .fn<APIClient["fetchArtifacts"]>()
         .mockImplementationOnce(() => artifactsA.promise)
@@ -1903,6 +2022,10 @@ describe("runtime orchestration", () => {
         .fn<APIClient["fetchTask"]>()
         .mockResolvedValueOnce(snapshot("task_start_artifact_generation", 1))
         .mockResolvedValueOnce(snapshot("task_start_artifact_generation", 3)),
+      fetchEvents: vi.fn().mockResolvedValue([
+        runStartedEvent("task_start_artifact_generation", 2),
+        runStartedEvent("task_start_artifact_generation", 3),
+      ]),
       fetchArtifacts: vi
         .fn<APIClient["fetchArtifacts"]>()
         .mockImplementationOnce(() => artifactsA.promise)
@@ -2052,6 +2175,67 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeItems).toContain("task_terminal");
     expect(useAgentStore.getState().taskOrder).not.toContain("task_terminal");
     expect(useAgentStore.getState().activeTaskId).toBe("task_terminal");
+  });
+
+  it("sorts an older continued task among newer active tasks by immutable creation", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [
+          summary(
+            "task_newest",
+            "running",
+            4,
+            "agent",
+            "2026-07-16T00:00:00Z",
+          ),
+          summary(
+            "task_peer_a",
+            "running",
+            3,
+            "agent",
+            "2026-07-15T00:00:00Z",
+          ),
+          summary(
+            "task_peer_b",
+            "running",
+            2,
+            "agent",
+            "2026-07-15T00:00:00Z",
+          ),
+        ],
+        [
+          summary(
+            "task_older",
+            "completed",
+            1,
+            "agent",
+            "2026-07-13T00:00:00Z",
+          ),
+        ],
+      ),
+      false,
+    );
+    const apiClient = api({
+      continueTask: vi.fn().mockResolvedValue({
+        request_id: "req_continue_older",
+        task_id: "task_older",
+        run_id: "run_continue_older",
+        status: "queued",
+      }),
+    });
+
+    await new RuntimeController(apiClient, transport()).continueTask(
+      "task_older",
+      { input: "follow up" },
+    );
+
+    expect(useAgentStore.getState().activeItems).toEqual([
+      "task_newest",
+      "task_peer_b",
+      "task_peer_a",
+      "task_older",
+    ]);
+    expect(useAgentStore.getState().taskOrder).not.toContain("task_older");
   });
 
   it("hydrates the authoritative snapshot returned by run cancellation", async () => {

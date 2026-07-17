@@ -343,6 +343,43 @@ describe("agent task projection store", () => {
     expect(task.messages[0].messageId).toBe("live:run_shell:user");
   });
 
+  it("keeps an immediately accepted brand-new task first until its creation time hydrates", () => {
+    useAgentStore.getState().mergeTaskPage(
+      page(
+        [
+          summary(
+            "task_existing",
+            "running",
+            2,
+            "2026-07-16T00:00:00Z",
+          ),
+        ],
+        [],
+        null,
+      ),
+      false,
+    );
+
+    useAgentStore.setState((current) =>
+      addAcceptedTask(
+        current,
+        {
+          taskId: "task_brand_new",
+          runId: "run_brand_new",
+          requestId: "req_new",
+        },
+        "new question",
+        ["pubmed"],
+        "agent",
+      ),
+    );
+
+    expect(useAgentStore.getState().activeItems).toEqual([
+      "task_brand_new",
+      "task_existing",
+    ]);
+  });
+
   it("does not carry an older Run prompt into a newly accepted Run", () => {
     useAgentStore.setState((state) =>
       addAcceptedTask(
