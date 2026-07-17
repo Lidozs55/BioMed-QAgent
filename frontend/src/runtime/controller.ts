@@ -1,6 +1,7 @@
 import type { APIClient } from "@/hooks/useAPI";
 import type {
   ContinueTaskInput,
+  ResumeRunInput,
   StartTaskInput,
   TaskRunAccepted,
   TaskSnapshot,
@@ -359,6 +360,19 @@ export class RuntimeController {
     await this.enqueueTaskHandoff(taskId, async () => {
       const generation = this.advanceTaskHandoffGeneration(taskId);
       const snapshot = await this.api.cancelRun(taskId, runId);
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    });
+  }
+
+  async resumeRun(
+    taskId: string,
+    runId: string,
+    input: ResumeRunInput,
+  ): Promise<void> {
+    await this.enqueueTaskHandoff(taskId, async () => {
+      const generation = this.advanceTaskHandoffGeneration(taskId);
+      const snapshot = await this.api.resumeRun(taskId, runId, input);
       if (this.taskHandoffGenerations.get(taskId) !== generation) return;
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     });

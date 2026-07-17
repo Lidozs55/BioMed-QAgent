@@ -162,6 +162,7 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     createTask: vi.fn(),
     continueTask: vi.fn(),
     cancelRun: vi.fn(),
+    resumeRun: vi.fn(),
     deleteTask: vi.fn(),
     fetchArtifacts: vi.fn(),
     getArtifactUrl: vi.fn(),

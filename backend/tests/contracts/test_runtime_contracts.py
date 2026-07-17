@@ -123,6 +123,7 @@ def test_runtime_enums_are_stable_wire_values() -> None:
         "running",
         "finalizing",
         "cancel_requested",
+        "awaiting_user_input",
         "completed",
         "failed",
         "cancelled",

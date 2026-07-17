@@ -54,6 +54,7 @@ export function AgentProgress({ task }: AgentProgressProps) {
     running: "Agent 正在运行",
     finalizing: "正在整理最终回复和产物",
     cancel_requested: "已请求取消，正在结束",
+    awaiting_user_input: "等待确认计划",
     completed: "任务已完成",
     failed: "任务执行失败",
     cancelled: "任务已取消",

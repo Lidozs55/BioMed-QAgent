@@ -7,6 +7,7 @@ import type {
   StageName,
   TaskMode,
   TaskSummary,
+  UserInputPromptKind,
 } from "./contracts";
 
 export type ConnectionStatus =
@@ -87,6 +88,17 @@ export interface FixtureStageProjection {
   reusedStageAttemptId: string | null;
 }
 
+export interface PendingUserInput {
+  requestId: string;
+  promptKind: UserInputPromptKind;
+  summary: string;
+  expiresAt: string | null;
+  fixtureExempt: boolean;
+  detail: Record<string, unknown>;
+  sequence: number;
+  timestamp: string;
+}
+
 export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
@@ -100,6 +112,7 @@ export interface TaskProjection {
   artifactEventSequences: Record<string, number>;
   artifactManifestSequence: number | null;
   fixtureStages: Partial<Record<StageName, FixtureStageProjection>>;
+  pendingUserInput: PendingUserInput | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";
 }

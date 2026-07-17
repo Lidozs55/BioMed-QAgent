@@ -34,6 +34,7 @@ _ACTIVE_STATUSES = (
     RunStatus.RUNNING.value,
     RunStatus.FINALIZING.value,
     RunStatus.CANCEL_REQUESTED.value,
+    RunStatus.AWAITING_USER_INPUT.value,
 )
 
 _T = TypeVar("_T")

@@ -23,6 +23,8 @@ from app.domain.contracts.task import TaskSpecification
 class PipelineEventType(StrEnum):
     TASK_CREATED = "task_created"
     PLAN_READY = "plan_ready"
+    USER_INPUT_REQUIRED = "user_input_required"
+    USER_INPUT_RESUMED = "user_input_resumed"
     STAGE_STARTED = "stage_started"
     STAGE_COMPLETED = "stage_completed"
     STAGE_FAILED = "stage_failed"
@@ -200,6 +202,38 @@ class RunInterruptedPayload(ContractModel):
     reason: str = Field(min_length=1)
 
 
+class UserInputRequiredPayload(ContractModel):
+    """Unified human-in-the-loop pause request.
+
+    The pipeline emits this payload when it needs a human decision before
+    continuing. ``prompt_kind`` discriminates between plan confirmation
+    (``plan_confirmation``) and data correction (``data_correction``). When
+    ``fixture_exempt`` is true the run is in fixture mode and the request is
+    informational only — the pipeline auto-approves and does not block.
+    """
+
+    type: Literal[PipelineEventType.USER_INPUT_REQUIRED] = (
+        PipelineEventType.USER_INPUT_REQUIRED
+    )
+    request_id: str = Field(min_length=1)
+    prompt_kind: Literal["plan_confirmation", "data_correction"]
+    summary: str = Field(min_length=1)
+    expires_at: datetime | None = None
+    fixture_exempt: bool = False
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class UserInputResumedPayload(ContractModel):
+    """Resume decision submitted via ``POST /runs/{run_id}/resume``."""
+
+    type: Literal[PipelineEventType.USER_INPUT_RESUMED] = (
+        PipelineEventType.USER_INPUT_RESUMED
+    )
+    request_id: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
 class AssistantDeltaPayload(ContractModel):
     type: Literal[RuntimeEventType.ASSISTANT_DELTA] = (
         RuntimeEventType.ASSISTANT_DELTA
@@ -245,6 +279,8 @@ EventPayload = Annotated[
     | RunCancelRequestedPayload
     | RunCancelledPayload
     | RunInterruptedPayload
+    | UserInputRequiredPayload
+    | UserInputResumedPayload
     | AssistantDeltaPayload
     | ToolStartedPayload
     | ConversationCompactedPayload,
