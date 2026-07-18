@@ -48,7 +48,7 @@ function renderSidebar(
         onNewDraft={vi.fn()}
         onSelectTask={vi.fn()}
         onRetryHistory={vi.fn().mockResolvedValue(undefined)}
-        onLoadMore={vi.fn().mockResolvedValue(undefined)}
+        onLoadAll={vi.fn().mockResolvedValue(undefined)}
         onCancelRun={vi.fn().mockResolvedValue(undefined)}
         onDeleteTask={vi.fn().mockResolvedValue(undefined)}
         {...props}
@@ -76,8 +76,8 @@ describe("SessionSidebar", () => {
     useAgentStore.setState(createInitialRuntimeState());
   });
 
-  it("renders active tasks separately from the first 30 history tasks", () => {
-    const history = Array.from({ length: 30 }, (_, index) =>
+  it("renders active tasks separately from the first 10 history tasks", () => {
+    const history = Array.from({ length: 10 }, (_, index) =>
       summary(`history_${index}`, "completed", `History ${index + 1}`),
     );
     useAgentStore.getState().mergeTaskPage(
@@ -109,7 +109,7 @@ describe("SessionSidebar", () => {
       within(historyGroup as HTMLElement).getAllByRole("button", {
         name: /^History \d+ 已完成$/,
       }),
-    ).toHaveLength(30);
+    ).toHaveLength(10);
   });
 
   it("loads another stable page without changing foreground selection", async () => {
@@ -123,7 +123,7 @@ describe("SessionSidebar", () => {
     );
     useAgentStore.getState().setActiveTaskId("history_a");
     let resolveLoad: (() => void) | undefined;
-    const onLoadMore = vi.fn(
+    const onLoadAll = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           resolveLoad = () => {
@@ -139,15 +139,15 @@ describe("SessionSidebar", () => {
           };
         }),
     );
-    renderSidebar({ onLoadMore });
+    renderSidebar({ onLoadAll });
 
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(screen.getByRole("button", { name: "加载中" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
+    expect(screen.getByRole("button", { name: "正在加载全部会话" })).toBeDisabled();
     expect(screen.getAllByText("Active A")).toHaveLength(1);
     act(() => resolveLoad?.());
 
     await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
-    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "显示更多" })).toBeNull();
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
   });
 
@@ -160,10 +160,10 @@ describe("SessionSidebar", () => {
       },
       false,
     );
-    const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
-    renderSidebar({ onLoadMore });
+    const onLoadAll = vi.fn().mockRejectedValue(new Error("history unavailable"));
+    renderSidebar({ onLoadAll });
 
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -268,6 +268,41 @@ describe("SessionSidebar", () => {
     expect(useAgentStore.getState().tasksById.task_a.summary.status).toBe("running");
   });
 
+  it("uses status icons as the only visible status treatment", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          summary("running", "running", "Running"),
+          summary("queued", "queued", "Queued"),
+        ],
+        items: [
+          summary("completed", "completed", "Completed"),
+          summary("failed", "failed", "Failed"),
+          summary("cancelled", "cancelled", "Cancelled"),
+          summary("interrupted", "interrupted", "Interrupted"),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+    const { container } = renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("Running 运行中")).toHaveClass("text-primary");
+    expect(iconFor("Queued 排队中")).toHaveClass("text-primary");
+    expect(iconFor("Completed 已完成")).not.toHaveClass(
+      "text-primary",
+      "text-destructive",
+    );
+    expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
+    expect(iconFor("Cancelled 已取消")).toHaveClass("text-destructive");
+    expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
+    expect(container.querySelector('[data-slot="badge"]')).not.toHaveTextContent(
+      /运行中|排队中|已完成|失败|已取消|已中断/,
+    );
+  });
+
   it("separates active cancellation from terminal deletion", async () => {
     useAgentStore.getState().mergeTaskPage(
       {
@@ -289,7 +324,13 @@ describe("SessionSidebar", () => {
     expect(screen.queryByRole("button", { name: "删除 Running" })).toBeNull();
     expect(screen.queryByRole("button", { name: "取消 Finished" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "删除 Finished" }));
+    const deleteAction = screen.getByRole("button", { name: "删除 Finished" });
+    expect(deleteAction).toHaveClass(
+      "md:opacity-0",
+      "group-hover/menu-item:opacity-100",
+      "group-focus-within/menu-item:opacity-100",
+    );
+    fireEvent.click(deleteAction);
     expect(onDeleteTask).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(onDeleteTask).toHaveBeenCalledWith("finished"));
