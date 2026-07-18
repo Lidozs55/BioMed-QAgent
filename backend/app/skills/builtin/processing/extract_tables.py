@@ -569,7 +569,12 @@ def extract_pdf_metadata(
     # ── captions ──────────────────────────────────────────────────────
     captions: list[str] = []
     for match in _PDF_CAPTION_RE.finditer(full_text):
-        captions.append(match.group(0).strip())
+        caption_text = match.group(2).strip()
+        if caption_text:
+            captions.append(caption_text)
+        else:
+            # Caption body lives on a later line; keep the label as a fallback.
+            captions.append(match.group(0).strip())
 
     # ── save metadata JSON ────────────────────────────────────────────
     metadata = {
