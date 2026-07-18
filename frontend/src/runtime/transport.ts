@@ -16,6 +16,7 @@ const EVENT_TYPES = new Set([
   "stage_completed",
   "stage_failed",
   "stage_skipped",
+  "stage_progress",
   "tool_called",
   "tool_completed",
   "warning",
