@@ -29,6 +29,7 @@ class PipelineEventType(StrEnum):
     STAGE_COMPLETED = "stage_completed"
     STAGE_FAILED = "stage_failed"
     STAGE_SKIPPED = "stage_skipped"
+    STAGE_PROGRESS = "stage_progress"
     TOOL_CALLED = "tool_called"
     TOOL_COMPLETED = "tool_completed"
     WARNING = "warning"
@@ -90,6 +91,25 @@ class StageSkippedPayload(ContractModel):
     status: Literal[AttemptStatus.SKIPPED] = AttemptStatus.SKIPPED
     reason: str = Field(min_length=1)
     reused_stage_attempt_id: str | None = None
+
+
+class StageProgressPayload(ContractModel):
+    """Mid-stage progress update (records discovered, bytes downloaded, rows cleaned).
+
+    Emitted by Skills (Agent mode via RunContext.emit_progress) or Pipeline
+    stages (Pipeline mode via StageContext.emit_progress). Lets the frontend
+    show concrete numbers ("found 23 papers", "cleaned 4821 rows") instead of
+    only a single "running" stage badge. See docs/REVIEW_2026-07-18.md §4.
+    """
+
+    type: Literal[PipelineEventType.STAGE_PROGRESS] = (
+        PipelineEventType.STAGE_PROGRESS
+    )
+    stage: StageName
+    kind: str = Field(min_length=1)
+    current: int = Field(ge=0)
+    total: int | None = Field(default=None, ge=0)
+    detail: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolCalledPayload(ContractModel):
@@ -262,6 +282,7 @@ EventPayload = Annotated[
     | StageCompletedPayload
     | StageFailedPayload
     | StageSkippedPayload
+    | StageProgressPayload
     | ToolCalledPayload
     | ToolCompletedPayload
     | WarningPayload

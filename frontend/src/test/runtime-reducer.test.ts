@@ -608,12 +608,12 @@ describe("runtime event projection", () => {
       }),
     );
 
-    expect(state.tasksById.task_fixture.fixtureStages.discovery).toMatchObject({
+    expect(state.tasksById.task_fixture.stages.discovery).toMatchObject({
       stageAttemptId: "stage_attempt_1",
       attempt: 1,
       status: "running",
     });
-    expect(Object.keys(state.tasksById.task_fixture.fixtureStages)).toEqual([
+    expect(Object.keys(state.tasksById.task_fixture.stages)).toEqual([
       "discovery",
     ]);
   });
@@ -646,7 +646,7 @@ describe("runtime event projection", () => {
         envelope("task_fixture", "run_fixture", 2, terminalPayload),
       );
 
-      expect(state.tasksById.task_fixture.fixtureStages.processing).toMatchObject({
+      expect(state.tasksById.task_fixture.stages.processing).toMatchObject({
         status: type === "run_failed" ? "failed" : "cancelled",
         finishedAt: "2026-07-14T00:00:02Z",
         error:
@@ -655,7 +655,7 @@ describe("runtime event projection", () => {
     },
   );
 
-  it("advances agent task watermarks without projecting fixture stage events", () => {
+  it("projects stage events for agent tasks (cross-mode stage projection)", () => {
     const initial = mergeTaskPage(
       createInitialRuntimeState(),
       page(summary("task_agent", "running", 0, "agent")),
@@ -673,7 +673,13 @@ describe("runtime event projection", () => {
       ),
     );
 
-    expect(state.tasksById.task_agent.fixtureStages).toEqual({});
+    // Agent mode now projects stage events to task.stages so the frontend
+    // can show concrete progress (see docs/REVIEW_2026-07-18.md §4).
+    expect(state.tasksById.task_agent.stages.discovery).toMatchObject({
+      stageAttemptId: "stage_attempt_agent",
+      attempt: 1,
+      status: "running",
+    });
     expect(state.tasksById.task_agent.lastSequence).toBe(1);
     expect(state.tasksById.task_agent.summary.latest_sequence).toBe(1);
   });
@@ -754,7 +760,7 @@ describe("runtime event projection", () => {
       ),
     );
 
-    expect(state.tasksById.task_fixture.fixtureStages.discovery).toMatchObject({
+    expect(state.tasksById.task_fixture.stages.discovery).toMatchObject({
       stageAttemptId: "attempt_2",
       attempt: 2,
       status: "running",

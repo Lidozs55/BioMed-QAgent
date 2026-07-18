@@ -14,7 +14,7 @@ import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, DataLevel, SourceRecord
+from app.domain.contracts import Database, DataLevel, SourceRecord, StageName
 from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
@@ -101,6 +101,15 @@ async def search_geo_adapter(
         result = await search_geo_series(services.eutils, term, max_results)
         records = [_geo_record_json(record) for record in result.records]
         run_ctx.log_query(term, "geo", "completed", len(records))
+        # Surface mid-stage progress: "GEO: found N datasets (of M total hits)".
+        # See docs/REVIEW_2026-07-18.md §4.
+        await run_ctx.emit_progress(
+            stage=StageName.DISCOVERY,
+            kind="discovered_records",
+            current=len(records),
+            total=result.total_count,
+            detail={"source": "geo", "term": term},
+        )
         return json.dumps(
             {
                 "source": "geo",
@@ -247,6 +256,20 @@ async def download_geo_adapter(
             run_ctx.add_raw_asset(str(path))
             payload["local_files"] = [str(path)]
             payload["format_hint"] = file_type.lower().strip()
+            # Surface download progress: "GEO: downloaded N bytes (1 asset)".
+            # See docs/REVIEW_2026-07-18.md §4.
+            await run_ctx.emit_progress(
+                stage=StageName.ACQUISITION,
+                kind="downloaded_bytes",
+                current=result.asset.size_bytes,
+                total=None,
+                detail={
+                    "source": "geo",
+                    "accession": source.accession,
+                    "filename": selected_filename,
+                    "records": 1,
+                },
+            )
         else:
             payload["error"] = result.attempt.error_message
         return json.dumps(payload, ensure_ascii=False)

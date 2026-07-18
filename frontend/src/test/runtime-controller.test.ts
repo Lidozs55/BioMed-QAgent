@@ -812,7 +812,7 @@ describe("runtime orchestration", () => {
     );
     expect(order).toEqual(["snapshot", "events", "subscribe"]);
     expect(
-      useAgentStore.getState().tasksById.task_fixture_history.fixtureStages,
+      useAgentStore.getState().tasksById.task_fixture_history.stages,
     ).toMatchObject({
       discovery: { stageAttemptId: "attempt_task_fixture_history" },
       processing: {
@@ -870,7 +870,7 @@ describe("runtime orchestration", () => {
       limit: 1000,
     });
     expect(
-      useAgentStore.getState().tasksById.task_replay_retry.fixtureStages.discovery,
+      useAgentStore.getState().tasksById.task_replay_retry.stages.discovery,
     ).toMatchObject({ stageAttemptId: replayedStage.stage_attempt_id });
     expect(eventTransport.subscribe).toHaveBeenCalledWith(
       "task_replay_retry",
@@ -1766,7 +1766,7 @@ describe("runtime orchestration", () => {
 
     expect(fetchEvents).toHaveBeenCalledTimes(1);
     expect(
-      useAgentStore.getState().tasksById.task_empty_replay.fixtureStages.discovery,
+      useAgentStore.getState().tasksById.task_empty_replay.stages.discovery,
     ).toMatchObject({
       stageAttemptId: "attempt_task_empty_replay",
       status: "running",

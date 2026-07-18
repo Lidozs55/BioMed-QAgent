@@ -1,7 +1,8 @@
 """Base types for pipeline stages: context, result, and per-stage output models."""
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.domain.contracts import (
     RunManifest,
     SourceAsset,
     SourceRecord,
+    StageName,
     TaskSpecification,
     ValidationSummary,
 )
@@ -24,6 +26,15 @@ from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
 STANDALONE_RUN_ID = "run_standalone"
+
+# Progress emitter signature: (stage, kind, current, total, detail).
+# PipelineRunner installs one before running stages; in fixture mode without
+# a sink the emitter is None and emit_progress is a no-op.
+# See docs/REVIEW_2026-07-18.md §4.
+StageProgressEmitter = Callable[
+    [StageName, str, int, int | None, dict[str, object]],
+    Awaitable[None],
+]
 
 
 class PipelineCancelledError(RuntimeError):
@@ -44,6 +55,12 @@ class StageContext:
     databases: list[str] = field(default_factory=list)
     specification: TaskSpecification | None = None
     cancellation_requested: Callable[[], bool] | None = None
+    progress_emitter: StageProgressEmitter | None = None
+    _event_loop: asyncio.AbstractEventLoop | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self.workdir.staging_run(self.run_id)
@@ -51,6 +68,62 @@ class StageContext:
     def check_cancelled(self) -> None:
         if self.cancellation_requested is not None and self.cancellation_requested():
             raise PipelineCancelledError("pipeline was cancelled")
+
+    def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the main event loop for sync→async progress bridging.
+
+        PipelineRunner calls this from ``_run_stage`` (async context) before
+        dispatching sync stage work to a worker thread, so stages can call
+        ``emit_progress_sync`` and reach the async emitter on the main loop.
+        """
+
+        self._event_loop = loop
+
+    async def emit_progress(
+        self,
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None = None,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        """Forward a mid-stage progress event to the runner's event sink.
+
+        No-op when no emitter is attached (fixture mode without sink).
+        """
+
+        emitter = self.progress_emitter
+        if emitter is None:
+            return
+        await emitter(stage, kind, current, total, detail or {})
+
+    def emit_progress_sync(
+        self,
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None = None,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        """Sync wrapper callable from sync stage functions running in a thread.
+
+        Uses ``asyncio.run_coroutine_threadsafe`` to invoke the async emitter
+        on the bound main loop. No-op when no emitter or no loop is bound
+        (e.g. fixture mode without sink, or unit tests constructing
+        StageContext directly). See docs/REVIEW_2026-07-18.md §4.
+        """
+
+        emitter = self.progress_emitter
+        if emitter is None:
+            return
+        loop = self._event_loop
+        if loop is None or not loop.is_running():
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            emitter(stage, kind, current, total, detail or {}),
+            loop,
+        )
+        future.result(timeout=5.0)
 
 
 @dataclass

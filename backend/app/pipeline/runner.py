@@ -31,6 +31,7 @@ from app.domain.contracts import (
     StageCompletedPayload,
     StageFailedPayload,
     StageName,
+    StageProgressPayload,
     StageSkippedPayload,
     StageStartedPayload,
     TaskCancelledPayload,
@@ -206,6 +207,7 @@ class PipelineRunner:
             databases=self.databases,
             specification=self.specification,
             cancellation_requested=self._is_cancelled,
+            progress_emitter=self._emit_progress_event,
         )
         self.events: list[EventEnvelope] = []
         self._persisted_attempt_count = self._load_persisted_attempt_count()
@@ -784,6 +786,10 @@ class PipelineRunner:
     ) -> StageResult:
         """Run sync stage work while draining threads before terminalization."""
 
+        # Bind the running loop so sync stage functions can call
+        # ``ctx.emit_progress_sync`` and reach the async emitter via
+        # ``run_coroutine_threadsafe``. See docs/REVIEW_2026-07-18.md §4.
+        self.ctx.bind_event_loop(asyncio.get_running_loop())
         worker = asyncio.create_task(
             asyncio.to_thread(
                 self._execute_stage,
@@ -1138,6 +1144,36 @@ class PipelineRunner:
     async def _emit_stage_event(self, payload: Any, stage_attempt_id: str) -> None:
         await self._publish_event(
             self._build_event(payload, stage_attempt_id=stage_attempt_id)
+        )
+
+    async def _emit_progress_event(
+        self,
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None,
+        detail: dict[str, object],
+    ) -> None:
+        """Forward a StageProgressPayload to the event sink.
+
+        Bound to ``StageContext.progress_emitter`` so stage functions can
+        surface mid-stage numbers without knowing about EventEnvelope.
+        See docs/REVIEW_2026-07-18.md §4.
+        """
+
+        await self._publish_event(
+            self._build_event(
+                StageProgressPayload(
+                    stage=stage,
+                    kind=kind,
+                    current=current,
+                    total=total,
+                    detail=detail,
+                ),
+                stage_attempt_id=self.state.inflight_attempt.stage_attempt_id
+                if self.state.inflight_attempt is not None
+                else None,
+            )
         )
 
     async def _finalize_stage_failed(

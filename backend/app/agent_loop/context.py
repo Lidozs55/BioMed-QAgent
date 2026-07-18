@@ -13,11 +13,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.domain.contracts import EventEnvelope, UserInputResumedPayload
+from app.domain.contracts import EventEnvelope, StageName, UserInputResumedPayload
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
+
+
+ProgressEmitter = Callable[
+    [StageName, str, int, int | None, dict[str, object]],
+    Awaitable[None],
+]
 
 
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
@@ -94,6 +100,11 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _progress_emitter: ProgressEmitter | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -140,6 +151,38 @@ class RunContext:
         if self._managed_pipeline_bridge is not None:
             raise RuntimeError("managed pipeline bridge is already bound")
         self._managed_pipeline_bridge = bridge
+
+    def bind_progress_emitter(self, emitter: ProgressEmitter) -> None:
+        """Attach the Agent executor's progress event channel.
+
+        Skills call ``emit_progress`` to surface mid-stage numbers (papers
+        found, bytes downloaded, rows cleaned) to the frontend without
+        waiting for stage_completed. See docs/REVIEW_2026-07-18.md §4.
+        """
+
+        if self._progress_emitter is not None:
+            raise RuntimeError("progress emitter is already bound")
+        self._progress_emitter = emitter
+
+    async def emit_progress(
+        self,
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None = None,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        """Emit a mid-stage progress event if an emitter is bound.
+
+        No-op when no emitter is attached (e.g. unit tests, fixture mode
+        without bridge). Skills should call this freely; the context decides
+        whether to forward.
+        """
+
+        emitter = self._progress_emitter
+        if emitter is None:
+            return
+        await emitter(stage, kind, current, total, detail or {})
 
     @property
     def managed_pipeline_bridge(self) -> ManagedPipelineBridge | None:

@@ -13,11 +13,13 @@ from app.domain.contracts import (
     StageCompletedPayload,
     StageFailedPayload,
     StageName,
+    StageProgressPayload,
     StageStartedPayload,
     TaskCreatedPayload,
     ToolCalledPayload,
     build_event,
 )
+from app.domain.contracts.events import _STAGE_EVENTS
 from pydantic import ValidationError
 
 NOW = datetime(2026, 7, 12, tzinfo=UTC)
@@ -34,6 +36,7 @@ def test_pipeline_event_enum_contains_every_mandatory_type() -> None:
         "stage_completed",
         "stage_failed",
         "stage_skipped",
+        "stage_progress",
         "tool_called",
         "tool_completed",
         "warning",
@@ -134,3 +137,60 @@ def test_payload_discriminator_rejects_unknown_payload_shape() -> None:
 
     assert ToolCalledPayload(tool_name="search_geo", arguments_digest=SHA256).type \
         is PipelineEventType.TOOL_CALLED
+
+
+def test_stage_progress_payload_is_not_stage_attempt_scoped() -> None:
+    """StageProgressPayload must NOT require stage_attempt_id.
+
+    In Agent mode Skills emit progress through RunContext.emit_progress with
+    no stage_attempt_id (the agent loop has no notion of stage attempts).
+    Adding STAGE_PROGRESS to _STAGE_EVENTS would force the EventEnvelope
+    validator to reject those events. See docs/REVIEW_2026-07-18.md §4.
+    """
+    assert PipelineEventType.STAGE_PROGRESS not in _STAGE_EVENTS
+
+    event = build_event(
+        task_id="task_1",
+        sequence=1,
+        payload=StageProgressPayload(
+            stage=StageName.DISCOVERY,
+            kind="discovered_records",
+            current=2,
+            total=2,
+            detail={"source": "ncbi"},
+        ),
+        timestamp=NOW,
+    )
+    assert event.stage_attempt_id is None
+
+
+def test_stage_progress_payload_enforces_field_constraints() -> None:
+    with pytest.raises(ValidationError):
+        StageProgressPayload(
+            stage=StageName.DISCOVERY,
+            kind="",  # min_length=1
+            current=0,
+        )
+    with pytest.raises(ValidationError):
+        StageProgressPayload(
+            stage=StageName.DISCOVERY,
+            kind="ok",
+            current=-1,  # ge=0
+        )
+    with pytest.raises(ValidationError):
+        StageProgressPayload(
+            stage=StageName.DISCOVERY,
+            kind="ok",
+            current=0,
+            total=-1,  # ge=0
+        )
+
+
+def test_stage_progress_payload_defaults_total_and_detail() -> None:
+    payload = StageProgressPayload(
+        stage=StageName.PROCESSING,
+        kind="cleaned_rows",
+        current=4821,
+    )
+    assert payload.total is None
+    assert payload.detail == {}

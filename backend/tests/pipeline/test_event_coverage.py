@@ -161,6 +161,41 @@ def test_no_warning_events_when_warnings_csv_is_empty(tmp_path: Path) -> None:
     assert PipelineEventType.WARNING.value not in types
 
 
+def test_pipeline_emits_stage_progress_for_discovery_acquisition_processing(
+    tmp_path: Path,
+) -> None:
+    """Pipeline stages must emit STAGE_PROGRESS with stage_attempt_id linkage.
+
+    Discovery emits kind=discovered_records; Acquisition and Processing emit
+    kind=downloaded_bytes / cleaned_rows respectively. Each event must carry
+    the inflight stage_attempt_id so the runtime can correlate it.
+    See docs/REVIEW_2026-07-18.md §4.
+    """
+    runner = PipelineRunner(
+        task_id="task_stage_progress",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    asyncio.run(runner.run())
+
+    progress_events = [
+        e for e in runner.events if e.type is PipelineEventType.STAGE_PROGRESS
+    ]
+    kinds_by_stage: dict[StageName, set[str]] = {}
+    for event in progress_events:
+        payload = event.payload
+        assert event.stage_attempt_id is not None, (
+            "Pipeline-mode progress events must carry stage_attempt_id"
+        )
+        kinds_by_stage.setdefault(payload.stage, set()).add(payload.kind)
+
+    assert kinds_by_stage.get(StageName.DISCOVERY, set()) == {"discovered_records"}
+    assert kinds_by_stage.get(StageName.ACQUISITION, set()) == {
+        "downloaded_bytes"
+    }
+    assert kinds_by_stage.get(StageName.PROCESSING, set()) == {"cleaned_rows"}
+
+
 def test_warning_events_emitted_when_warnings_csv_has_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

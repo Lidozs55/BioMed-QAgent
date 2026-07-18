@@ -22,7 +22,7 @@ from Bio import Entrez
 
 from app.agent_loop.context import RunContext
 from app.config import settings
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, SourceRecord, StageName, make_source_id
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
@@ -131,6 +131,16 @@ async def search_pubmed_adapter(
             source="pubmed",
             status="completed",
             records_count=len(result.records),
+        )
+        # Surface mid-stage progress so the frontend can show
+        # "PubMed: found N papers (of M total hits)" without waiting for
+        # stage_completed. See docs/REVIEW_2026-07-18.md §4.
+        await run_ctx.emit_progress(
+            stage=StageName.DISCOVERY,
+            kind="discovered_records",
+            current=len(result.records),
+            total=result.total_count,
+            detail={"source": "pubmed", "query": query},
         )
         records = [{
             "title": record.title,

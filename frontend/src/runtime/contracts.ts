@@ -209,6 +209,14 @@ export type EventPayload =
       reason: string;
       reused_stage_attempt_id: string | null;
     }
+  | {
+      type: "stage_progress";
+      stage: StageName;
+      kind: string;
+      current: number;
+      total: number | null;
+      detail: Record<string, JsonValue>;
+    }
   | { type: "tool_called"; tool_name: string; arguments_digest: string }
   | {
       type: "tool_completed";
