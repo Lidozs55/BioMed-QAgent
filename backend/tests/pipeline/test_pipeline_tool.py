@@ -48,6 +48,20 @@ async def test_pipeline_function_tool_runs_explicit_fixture_mode(
     assert payload["validation_status"] == "valid"
     assert payload["artifact_count"] == 14
 
+    # Tool 必须返回实际 artifact 文件名清单，避免 LLM 在报告中编造文件名
+    # (例如把 main_data.csv 编造成 merged_comorbidity_data.csv)。
+    # See docs/REVIEW_2026-07-18.md §15.2 / §16.
+    assert "artifacts" in payload
+    artifact_names = [entry["name"] for entry in payload["artifacts"]]
+    assert "main_data.csv" in artifact_names
+    assert "literature.csv" in artifact_names
+    assert "run_manifest.json" not in artifact_names  # manifest 不在 artifacts 列表
+    # 每个 artifact entry 必须包含 name/size_bytes/media_type
+    for entry in payload["artifacts"]:
+        assert {"name", "size_bytes", "media_type"} <= set(entry.keys())
+    # note 字段提示 LLM 不要编造文件名
+    assert "do not invent filenames" in payload["note"]
+
     manifest = json.loads(
         (
             tmp_path / "tasks" / "task_tool" / "artifacts" / "run_manifest.json"
