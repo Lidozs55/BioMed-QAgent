@@ -97,3 +97,73 @@ Result:
 
 None within Task 2B scope. The live hub has no production publisher until the
 separate Agent Runner/model integration task.
+
+## Reviewer follow-up: partial session startup cleanup
+
+### Finding and fix
+
+The initial implementation entered its cleanup block only after both hub
+subscriptions and all three session tasks were created. If acquiring the
+assistant-stream subscription raised or was cancelled after durable
+subscription acquisition, the durable subscription remained registered.
+
+Session ownership now starts before the first subscription acquisition.
+Acquired subscriptions are tracked immediately, created tasks are appended to
+the cleanup list immediately, and the outer `finally` cancels and gathers every
+created task before closing every acquired subscription. Nested subscription
+cleanup still closes the assistant-stream subscription if durable subscription
+cleanup itself raises.
+
+### RED evidence
+
+Command:
+
+```text
+backend/.venv/Scripts/python.exe -m pytest tests/api/test_websocket_replay.py -k partial_startup -q
+```
+
+Result:
+
+```text
+1 failed, 26 deselected in 2.35s
+```
+
+The focused test forced `AssistantStreamHub.subscribe()` to raise after
+`EventHub.subscribe()` succeeded. It failed at `assert captured[0].closed`,
+confirming that the durable subscription leaked.
+
+### GREEN evidence
+
+Command:
+
+```text
+backend/.venv/Scripts/python.exe -m pytest tests/api/test_websocket_replay.py -q
+```
+
+Result:
+
+```text
+27 passed in 10.92s
+```
+
+Lint command:
+
+```text
+backend/.venv/Scripts/ruff.exe check app/ tests/ launcher.py
+```
+
+Result:
+
+```text
+All checks passed!
+```
+
+### Follow-up self-review
+
+- Failure or cancellation during either subscription acquisition reaches the
+  outer cleanup block.
+- Failure during creation of a later session task cancels and gathers every
+  task already created.
+- Partial startup propagates the original exception after cleanup; it does not
+  expose new protocol details or attempt to use an incomplete connection.
+- The established session outcome and close-reason behavior is unchanged.

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import app.api.ws as ws_module
 import app.api.ws_events as ws_events_module
@@ -27,7 +28,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
-from app.runtime.hub import AssistantStreamHub, EventHub
+from app.runtime.hub import AssistantStreamHub, EventHub, EventSubscription
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
 from fastapi import FastAPI, WebSocketDisconnect
@@ -263,6 +264,41 @@ async def stop_socket(
     except TimeoutError:
         endpoint.cancel()
         await asyncio.gather(endpoint, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_partial_startup_closes_durable_subscription_when_live_subscribe_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, _, hub):
+        captured: list[EventSubscription] = []
+        real_subscribe = hub.subscribe
+
+        async def capture_durable_subscription() -> EventSubscription:
+            subscription = await real_subscribe()
+            captured.append(subscription)
+            return subscription
+
+        async def fail_live_subscription() -> NoReturn:
+            raise RuntimeError("live subscription failed")
+
+        monkeypatch.setattr(hub, "subscribe", capture_durable_subscription)
+        monkeypatch.setattr(
+            application.state.assistant_stream_hub,
+            "subscribe",
+            fail_live_subscription,
+        )
+
+        with pytest.raises(RuntimeError, match="live subscription failed"):
+            await ws_events_module._run_event_session(
+                FakeWebSocket(application),
+                asyncio.Lock(),
+            )
+
+        assert len(captured) == 1
+        assert captured[0].closed
+        assert hub.subscriber_count == 0
 
 
 @pytest.mark.asyncio

@@ -110,31 +110,39 @@ async def _run_event_session(
     assistant_stream_hub: AssistantStreamHub = (
         application.state.assistant_stream_hub
     )
-    event_subscription = await hub.subscribe()
-    assistant_stream_subscription = await assistant_stream_hub.subscribe()
-    connection = _EventConnection(
-        websocket=websocket,
-        repository=repository,
-        event_subscription=event_subscription,
-        assistant_stream_subscription=assistant_stream_subscription,
-        send_lock=send_lock,
-    )
-    receiver = asyncio.create_task(
-        _receive_event_commands(connection, first_message),
-        name="task-event-ws-receiver",
-    )
-    durable_sender = asyncio.create_task(
-        _send_durable_events(connection),
-        name="task-event-ws-sender",
-    )
-    assistant_stream_sender = asyncio.create_task(
-        _send_assistant_stream_frames(connection),
-        name="assistant-stream-ws-sender",
-    )
-    tasks = (receiver, durable_sender, assistant_stream_sender)
+    event_subscription: EventSubscription | None = None
+    assistant_stream_subscription: AssistantStreamSubscription | None = None
+    tasks: list[asyncio.Task[_SessionEnd]] = []
     outcomes: list[_SessionEnd] = []
     failure: Exception | None = None
     try:
+        event_subscription = await hub.subscribe()
+        assistant_stream_subscription = await assistant_stream_hub.subscribe()
+        connection = _EventConnection(
+            websocket=websocket,
+            repository=repository,
+            event_subscription=event_subscription,
+            assistant_stream_subscription=assistant_stream_subscription,
+            send_lock=send_lock,
+        )
+        tasks.append(
+            asyncio.create_task(
+                _receive_event_commands(connection, first_message),
+                name="task-event-ws-receiver",
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                _send_durable_events(connection),
+                name="task-event-ws-sender",
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                _send_assistant_stream_frames(connection),
+                name="assistant-stream-ws-sender",
+            )
+        )
         done, pending = await asyncio.wait(
             tasks,
             return_when=asyncio.FIRST_COMPLETED,
@@ -154,10 +162,12 @@ async def _run_event_session(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        try:
-            await event_subscription.close()
-        finally:
-            await assistant_stream_subscription.close()
+        if event_subscription is not None:
+            try:
+                await event_subscription.close()
+            finally:
+                if assistant_stream_subscription is not None:
+                    await assistant_stream_subscription.close()
 
     if _SessionEnd.CLIENT_DISCONNECT in outcomes:
         return
