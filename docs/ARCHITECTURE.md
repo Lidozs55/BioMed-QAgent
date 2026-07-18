@@ -465,8 +465,9 @@ WebSocket 端点为 `/api/v1/ws`，只接受三类命令：
 Agent 收到模型文本 chunk 后，先发布 `assistant_stream_delta`，再放入 durable
 buffer。buffer 按 100 ms / 1 KB 批量写为 `assistant_delta`，并在工具调用、正常或
 截断结束、异常与取消路径上强制结束并 flush。durable payload 可携带
-`stream_id + from_chunk_index + through_chunk_index`；三个字段均可省略，以兼容旧
-事件。实时帧丢失或断线时，完整文本仍由 durable event log 恢复。
+`stream_id + from_chunk_index + through_chunk_index`；三个字段必须同时出现或同时
+省略，省略时兼容旧事件。实时帧丢失或断线时，完整文本仍由 durable event log
+恢复。
 
 `runtime/transport.ts` 自动重连并携带每个 Task 的 durable watermark 重新
 subscribe；`runtime/controller.ts` 在 snapshot/accepted-Task handoff 时使用 REST
@@ -527,9 +528,9 @@ stream end、工具开始、Run finalizing/终态、断连或取消订阅后关�
 
 Chat 主流中的 `ExecutionSummary` 只展示安全的结构化执行摘要：工具状态、阶段与
 progress 数量（检索、下载、清洗等）、验证状态和警告；同一 Run/阶段/progress kind
-原位更新，运行中默认展开。原始工具 input/output 仍只在 `ToolTrace` 中查看。原始
-CoT、模型 reasoning 字段、隐藏提示词和其他模型内部状态不属于 API 契约，也不会
-进入前端投影或 UI。
+原位更新，运行中默认展开。工具事件中已有的 output、digest 和诊断详情保留在
+`ToolTrace` 中；`ExecutionSummary` 不渲染任意 `detail`、reasoning-like keys 或
+隐藏提示词。系统不主动传输模型 CoT。
 
 R5 前端修复还补齐了非聊天区域的有界滚动、刷新竞态下的稳定 Task 排序、后台
 通知“查看”失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。

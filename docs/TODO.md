@@ -903,8 +903,9 @@
       —— 按 Run 读取 tool / stage / progress / warning 活动，同一阶段同一
       progress kind 原位更新，运行中默认展开
       —— Chat 主流只展示工具状态、阶段进度、验证结果和警告等安全结构化摘要
-      —— 原始工具 input/output 详情继续保留在 `ToolTrace.tsx`，不展示原始 CoT、
-      reasoning、隐藏提示词或模型内部状态
+      —— 工具事件中已有的 output、digest 和诊断详情保留在 `ToolTrace.tsx`；
+      `ExecutionSummary` 不渲染任意 detail、reasoning-like keys 或隐藏提示词，系统
+      不主动传输模型 CoT
 
 ### 8.3 P0：数据源硬门控解除
 
