@@ -46,6 +46,8 @@ OFFICIAL_FIXTURE_DIR = (
 )
 #: 单次 Run 最多允许的 max_turns 暂停次数（防止无限续跑）。
 MAX_TURNS_RESUME_LIMIT: int = 3
+#: Qwen 偶发返回非 JSON 的 function.arguments 导致 400，最多重试次数。
+QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
 
 
 class _AssistantTextBuffer:
@@ -95,6 +97,24 @@ def _value(item: object, name: str, default: object = None) -> object:
     if isinstance(item, Mapping):
         return item.get(name, default)
     return getattr(item, name, default)
+
+
+def _is_qwen_function_args_error(exc: BaseException) -> bool:
+    """Detect Qwen/DashScope 400 errors caused by malformed function arguments.
+
+    Qwen 偶发返回非 JSON 的 function.arguments，下次请求时 DashScope 返回:
+    ``<400> InternalError.Algo.InvalidParameter: The "function.arguments"
+    parameter of the code model must be in JSON format.``
+    此类错误可重试:重新跑一遍 Run,Qwen 通常会生成合法 JSON。
+    """
+    message = str(exc)
+    if "function.arguments" not in message:
+        return False
+    return (
+        "must be in JSON format" in message
+        or "InvalidParameter" in message
+        or "invalid_parameter_error" in message
+    )
 
 
 def _tool_identity(item: object) -> tuple[str, str | None]:
@@ -283,6 +303,7 @@ class AgentRunExecutor:
             agent_input: str | list = execution.input
             result = None
             resume_count = 0
+            qwen_retry_count = 0
             while True:
                 # reset_streaming_result 让续跑的 Runner.run_streamed 能挂载新的
                 # RunResultStreaming (上一轮已 exhausted),保持 cancel 通道对准
@@ -317,6 +338,32 @@ class AgentRunExecutor:
                     # 用上一轮的 to_input_list() 续跑，保留完整上下文。
                     agent_input = result.to_input_list()
                     continue
+                except Exception as exc:
+                    # Qwen 偶发返回非 JSON 的 function.arguments 导致 400。
+                    # 重试时用原始 execution.input 从头跑,Qwen 通常会生成合法 JSON。
+                    # See docs/REVIEW_2026-07-18.md §3.
+                    if (
+                        _is_qwen_function_args_error(exc)
+                        and qwen_retry_count < QWEN_FUNCTION_ARGS_RETRY_LIMIT
+                    ):
+                        qwen_retry_count += 1
+                        await text_buffer.flush()
+                        await execution.emit(
+                            WarningPayload(
+                                code="llm_function_args_retry",
+                                message=(
+                                    f"LLM returned malformed function arguments "
+                                    f"(400); retrying Run "
+                                    f"({qwen_retry_count}/"
+                                    f"{QWEN_FUNCTION_ARGS_RETRY_LIMIT})"
+                                ),
+                            )
+                        )
+                        # 从原始用户输入重新开始,避免把 malformed tool call
+                        # 带入下一轮 conversation history 再次触发 400。
+                        agent_input = execution.input
+                        continue
+                    raise
                 finally:
                     await text_buffer.flush()
                 break

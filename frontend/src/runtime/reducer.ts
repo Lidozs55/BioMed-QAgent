@@ -977,19 +977,23 @@ export function reduceRuntimeEvent(
         detail: payload.detail as Record<string, unknown>,
         updatedAt: envelope.timestamp,
       };
-      const stage: StageProjection = existing ?? {
-        stage: payload.stage,
-        stageAttemptId,
-        attempt: existing?.attempt ?? 1,
-        status: existing?.status ?? "running",
-        startedAt: existing?.startedAt ?? envelope.timestamp,
-        finishedAt: existing?.finishedAt ?? null,
-        outputDigest: existing?.outputDigest ?? null,
-        error: existing?.error ?? null,
-        skipReason: existing?.skipReason ?? null,
-        reusedStageAttemptId: existing?.reusedStageAttemptId ?? null,
-        progress,
-      };
+      // `existing ?? {...}` 的右分支里 existing 被 TS 收窄为 never,
+      // 导致 existing?.attempt 等访问报 TS2339。改为显式 if/else。
+      const stage: StageProjection = existing !== undefined
+        ? existing
+        : {
+            stage: payload.stage,
+            stageAttemptId,
+            attempt: 1,
+            status: "running",
+            startedAt: envelope.timestamp,
+            finishedAt: null,
+            outputDigest: null,
+            error: null,
+            skipReason: null,
+            reusedStageAttemptId: null,
+            progress,
+          };
       task = {
         ...task,
         stages: {

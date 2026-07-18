@@ -71,8 +71,13 @@ INSTRUCTIONS = """\
 用户选择的数据库决定加载哪些 acquisition skill：PubMed/GEO 可走 Pipeline 产出主数据 CSV；
 PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要为未选择的数据库伪造成功产物。
 
-**调用 `run_research_pipeline` 时不要传 `mode` 参数**（默认即 live，对接真实外部 API）。
-fixture 模式仅供单元测试使用，agent 任务中绝不使用。
+**调用 `run_research_pipeline` 时传 `topic` 和 `databases`（必填）**，
+**并尽量传 `pmid` 和 `gse`（可选）**。
+- `pmid`/`gse` 来自你先前调用 search_pubmed / search_geo / describe_geo 发现的 accession。
+- 传入这两个参数后，Pipeline 会用直接 NCBI 查询替代按主题搜索，避免中文课题在 PubMed 上零结果。
+- 不要传 `mode` 参数（默认即 live，对接真实外部 API）。fixture 模式仅供单元测试使用，
+  agent 任务中绝不使用。Pipeline 会根据 topic/databases/pmid/gse 自动推导数据需求规格，
+  你不需要也无法手动构造 specification。
 
 ## 数据库使用纪律
 用户在 UI 选择的数据库列表已加载为可用 acquisition skill。

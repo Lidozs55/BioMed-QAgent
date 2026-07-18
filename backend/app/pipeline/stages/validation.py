@@ -473,12 +473,23 @@ def _validate_package(
         row["attempt_id"] for row in download_rows if row["status"] == "succeeded"
     }
     asset_failures = 0
+    # row["relative_path"] 是相对于 task_dir 的路径（含 source_assets/ 前缀）。
+    # source_path 可能是 task_dir/source_assets/file（测试场景）或
+    # task_dir/source_assets/asset_dir/file（生产场景），需要动态查找
+    # "source_assets" 组件来确定 task_dir。
+    parts = source_path.parts
+    try:
+        sa_index = parts.index("source_assets")
+    except ValueError:
+        source_rel_base = source_path.parents[1]
+    else:
+        source_rel_base = source_path.parents[len(parts) - sa_index - 1]
     for row in asset_rows:
         asset_failures += (
             row["successful_attempt_id"] not in successful_attempt_ids
             or row["source_id"] not in source_ids
             or row["relative_path"]
-            != source_path.relative_to(source_path.parents[1]).as_posix()
+            != source_path.relative_to(source_rel_base).as_posix()
             or int(row["size_bytes"]) != source_path.stat().st_size
             or row["sha256"] != _sha256(source_path)
         )

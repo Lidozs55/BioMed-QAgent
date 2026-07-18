@@ -11,9 +11,87 @@ from typing import Literal
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import TaskSpecification
+from app.domain.contracts import (
+    Database,
+    DatasetSelection,
+    QuerySpecification,
+    RequestedOutput,
+    TaskSpecification,
+)
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import STANDALONE_RUN_ID
+
+
+def _build_tool_specification(
+    topic: str,
+    databases: list[str],
+    pmid: str | None,
+    gse: str | None,
+) -> TaskSpecification | None:
+    """Build a TaskSpecification when the Agent supplied explicit accessions.
+
+    Returns ``None`` when neither ``pmid`` nor ``gse`` is provided, so the
+    pipeline falls back to its default topic-driven discovery. When at least
+    one accession is supplied, the specification pins those accessions so the
+    discovery stage uses direct NCBI lookups instead of topic search (which
+    fails for non-English topics).
+    """
+    if not pmid and not gse:
+        return None
+    selected = {value.lower() for value in databases}
+    queries: list[QuerySpecification] = []
+    datasets: list[DatasetSelection] = []
+    order = 0
+
+    def _next_order() -> int:
+        nonlocal order
+        order += 1
+        return order
+
+    if gse and "geo" in selected:
+        queries.append(
+            QuerySpecification(
+                query_id="query_geo_1",
+                database=Database.GEO,
+                query=f"{gse}[Accession]",
+                generated_by="agent",
+                purpose="explicit GEO accession from agent discovery",
+                order=_next_order(),
+            )
+        )
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_geo_{gse.lower()}",
+                database=Database.GEO,
+                accession=gse,
+                source_id="",
+                reason="agent-identified GEO series",
+            )
+        )
+    if pmid and "pubmed" in selected:
+        queries.append(
+            QuerySpecification(
+                query_id="query_pubmed_1",
+                database=Database.PUBMED,
+                query=f"{pmid}[PMID]",
+                generated_by="agent",
+                purpose="explicit PMID from agent discovery",
+                order=_next_order(),
+            )
+        )
+    if not queries:
+        return None
+    return TaskSpecification(
+        topic=topic,
+        queries=queries,
+        datasets=datasets,
+        requested_outputs=[
+            RequestedOutput.MAIN_DATA,
+            RequestedOutput.LITERATURE,
+            RequestedOutput.DATASET_CATALOG,
+            RequestedOutput.SAMPLE_METADATA,
+        ],
+    )
 
 
 async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
@@ -36,20 +114,22 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
 @function_tool(
     name_override="run_research_pipeline",
     description_override=(
-        "Run the deterministic validated research-data pipeline. Accepts an "
-        "optional TaskSpecification (queries/datasets/requested_outputs). "
-        "When no specification is supplied the runner derives one from the "
-        "topic and selected databases. Defaults to live mode (real external "
-        "APIs) for production agent runs; fixture mode is reserved for offline "
-        "regression tests and must be set explicitly."
+        "Run the deterministic validated research-data pipeline. "
+        "Pass ``pmid``/``gse`` when you have already discovered explicit "
+        "accessions via search_pubmed/search_geo/describe_geo — this avoids "
+        "re-searching NCBI by topic (which fails for non-English topics). "
+        "Defaults to live mode (real external APIs) for production agent runs; "
+        "fixture mode is reserved for offline regression tests and must be set "
+        "explicitly."
     ),
 )
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
     databases: list[str],
+    pmid: str | None = None,
+    gse: str | None = None,
     mode: Literal["fixture", "live"] = "live",
-    specification: TaskSpecification | None = None,
 ) -> str:
     normalized_databases = [value.lower() for value in databases]
     if not normalized_databases:
@@ -60,6 +140,7 @@ async def run_research_pipeline(
     fixture_dir = (
         Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     )
+    specification = _build_tool_specification(topic, normalized_databases, pmid, gse)
     runner: PipelineRunner | None = None
     transferred = False
     reservation_released = False

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import UTC, datetime
 
@@ -24,6 +25,8 @@ from app.pipeline.stages.base import DiscoveryOutput, StageContext, StageResult
 _DEFAULT_PMID = "34180400"
 _DEFAULT_GSE = "GSE178352"
 
+logger = logging.getLogger(__name__)
+
 
 def _extract_pmid(query: str) -> str | None:
     match = re.search(r"(\d+)(?:\[PMID\])?", query)
@@ -40,21 +43,48 @@ def run_discovery(ctx: StageContext) -> StageResult:
 
     In fixture mode, reads pre-downloaded XML/JSON from ``ctx.fixture_dir``.
     In live mode, calls NCBI E-utilities to fetch real-time metadata for the
-    PubMed/GEO queries defined in ``ctx.specification``.
+    PubMed/GEO queries defined in ``ctx.specification``. When no specific
+    PMID/GSE is provided, searches NCBI by topic to find relevant records.
     """
     specification = ctx.specification
     if specification is None:
         specification = _build_default_specification(ctx)
+        logger.info(
+            "discovery: no agent specification, built default (mode=%s, topic=%r)",
+            ctx.mode,
+            ctx.topic[:80],
+        )
+    else:
+        logger.info(
+            "discovery: using agent specification (%d queries, %d datasets)",
+            len(specification.queries),
+            len(specification.datasets),
+        )
 
     pmid = _resolve_pmid(specification)
     gse = _resolve_gse(specification)
+    logger.info(
+        "discovery: resolved pmid=%s gse=%s (mode=%s, topic=%r)",
+        pmid,
+        gse,
+        ctx.mode,
+        ctx.topic[:80],
+    )
 
     if ctx.mode == "live":
-        literature, geo, retrieved_at = _run_discovery_live(pmid, gse)
+        literature, geo, retrieved_at = _run_discovery_live(
+            pmid, gse, topic=ctx.topic
+        )
     else:
         literature, geo, retrieved_at = _run_discovery_fixture(
-            ctx.fixture_dir, pmid, gse
+            ctx.fixture_dir, pmid or _DEFAULT_PMID, gse or _DEFAULT_GSE
         )
+    logger.info(
+        "discovery: success pmid=%s gse=%s title=%r",
+        literature.pmid,
+        geo.accession,
+        literature.title[:80],
+    )
 
     # Surface discovery progress: "Discovery: found 1 PubMed record + 1 GEO series".
     # See docs/REVIEW_2026-07-18.md §4.
@@ -74,7 +104,42 @@ def run_discovery(ctx: StageContext) -> StageResult:
 
 
 def _build_default_specification(ctx: StageContext) -> TaskSpecification:
-    """Return the pinned Phase 1 specification when none was supplied."""
+    """Return a topic-derived specification when none was supplied.
+
+    For live mode, queries are topic-based (no hardcoded PMID/GSE); the
+    discovery stage searches NCBI by topic. For fixture mode, the pinned
+    Phase 1 case (GSE178352 + PMID 34180400) is used to preserve backward
+    compatibility with offline regression tests.
+    """
+    if ctx.mode == "live":
+        return TaskSpecification(
+            topic=ctx.topic,
+            queries=[
+                QuerySpecification(
+                    query_id="query_pubmed_1",
+                    database=Database.PUBMED,
+                    query=ctx.topic,
+                    generated_by="pipeline",
+                    purpose="find literature by topic",
+                    order=1,
+                ),
+                QuerySpecification(
+                    query_id="query_geo_1",
+                    database=Database.GEO,
+                    query=ctx.topic,
+                    generated_by="pipeline",
+                    purpose="find expression dataset by topic",
+                    order=2,
+                ),
+            ],
+            datasets=[],
+            requested_outputs=[
+                RequestedOutput.MAIN_DATA,
+                RequestedOutput.LITERATURE,
+                RequestedOutput.DATASET_CATALOG,
+                RequestedOutput.SAMPLE_METADATA,
+            ],
+        )
     return TaskSpecification(
         topic=ctx.topic,
         queries=[
@@ -113,16 +178,18 @@ def _build_default_specification(ctx: StageContext) -> TaskSpecification:
     )
 
 
-def _resolve_pmid(specification: TaskSpecification) -> str:
+def _resolve_pmid(specification: TaskSpecification) -> str | None:
+    """Return an explicit PMID from the specification, or None to search by topic."""
     for query in specification.queries:
         if query.database == Database.PUBMED:
             pmid = _extract_pmid(query.query)
             if pmid:
                 return pmid
-    return _DEFAULT_PMID
+    return None
 
 
-def _resolve_gse(specification: TaskSpecification) -> str:
+def _resolve_gse(specification: TaskSpecification) -> str | None:
+    """Return an explicit GSE accession from the specification, or None to search by topic."""
     for query in specification.queries:
         if query.database == Database.GEO:
             gse = _extract_gse_accession(query.query)
@@ -133,7 +200,7 @@ def _resolve_gse(specification: TaskSpecification) -> str:
             gse = _extract_gse_accession(dataset.accession)
             if gse:
                 return gse
-    return _DEFAULT_GSE
+    return None
 
 
 def _run_discovery_fixture(
@@ -153,41 +220,73 @@ def _run_discovery_fixture(
 
 
 def _run_discovery_live(
-    pmid: str, gse: str
+    pmid: str | None,
+    gse: str | None,
+    *,
+    topic: str,
 ) -> tuple[LiteratureRecord, GeoSeriesRecord, datetime]:
-    """Fetch real PubMed and GEO metadata via NCBI E-utilities."""
+    """Fetch real PubMed and GEO metadata via NCBI E-utilities.
+
+    When ``pmid``/``gse`` is None, searches NCBI by ``topic`` and uses the
+    first result. This lets the pipeline serve arbitrary user topics instead
+    of being pinned to the Phase 1 fixture case (GSE178352/PMID 34180400).
+    """
+    from app.integrations.ncbi.discovery import (
+        search_geo_series,
+        search_pubmed,
+    )
     from app.integrations.ncbi.factory import open_ncbi_services
 
     retrieved_at = datetime.now(UTC)
 
     async def _fetch() -> tuple[LiteratureRecord, GeoSeriesRecord]:
         async with open_ncbi_services() as svc:
-            # Fetch PubMed article by PMID
-            pubmed_xml = await svc.eutils.efetch(
-                db="pubmed", ids=[pmid], retmode="xml"
-            )
-            pubmed_records = parse_pubmed_xml(pubmed_xml)
-            if not pubmed_records:
-                raise LookupError(f"PubMed article not found: PMID {pmid}")
-            literature = pubmed_records[0]
+            if pmid is not None:
+                pubmed_xml = await svc.eutils.efetch(
+                    db="pubmed", ids=[pmid], retmode="xml"
+                )
+                pubmed_records = parse_pubmed_xml(pubmed_xml)
+                if not pubmed_records:
+                    raise LookupError(f"PubMed article not found: PMID {pmid}")
+                literature = pubmed_records[0]
+            else:
+                # Search PubMed by topic, use the first result.
+                result = await search_pubmed(svc.eutils, query=topic, max_results=5)
+                if not result.records:
+                    raise LookupError(
+                        f"PubMed search returned no records for topic: {topic}"
+                    )
+                literature = result.records[0]
 
-            # Fetch GEO series metadata by accession
-            geo_payload = await svc.eutils.esearch(
-                db="gds", term=f"{gse}[Accession]", retmax=100
-            )
-            from app.integrations.ncbi.parsers import parse_ncbi_esearch
+            if gse is not None:
+                # Fetch GEO series metadata by accession
+                geo_payload = await svc.eutils.esearch(
+                    db="gds", term=f"{gse}[Accession]", retmax=100
+                )
+                from app.integrations.ncbi.parsers import parse_ncbi_esearch
 
-            page = parse_ncbi_esearch(geo_payload)
-            if not page.ids:
-                raise LookupError(f"GEO series not found: {gse}")
-            geo_summary = await svc.eutils.esummary(db="gds", ids=page.ids[:1])
-            geo_records = parse_geo_esummary(geo_summary)
-            geo = next(
-                (r for r in geo_records if r.accession == gse),
-                geo_records[0] if geo_records else None,
-            )
-            if geo is None:
-                raise LookupError(f"GEO series not found: {gse}")
+                page = parse_ncbi_esearch(geo_payload)
+                if not page.ids:
+                    raise LookupError(f"GEO series not found: {gse}")
+                geo_summary = await svc.eutils.esummary(db="gds", ids=page.ids[:1])
+                geo_records = parse_geo_esummary(geo_summary)
+                geo = next(
+                    (r for r in geo_records if r.accession == gse),
+                    geo_records[0] if geo_records else None,
+                )
+                if geo is None:
+                    raise LookupError(f"GEO series not found: {gse}")
+            else:
+                # Search GEO by topic, use the first GSE result.
+                result = await search_geo_series(svc.eutils, query=topic, max_results=20)
+                geo_records = [
+                    r for r in result.records if r.accession.startswith("GSE")
+                ]
+                if not geo_records:
+                    raise LookupError(
+                        f"GEO search returned no GSE series for topic: {topic}"
+                    )
+                geo = geo_records[0]
             return literature, geo
 
     literature, geo = asyncio.run(_fetch())

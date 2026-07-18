@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
+import logging
 import os
 import re
 from datetime import datetime
@@ -23,7 +24,7 @@ from app.domain.contracts import (
     asset_id_from_sha256,
     make_source_id,
 )
-from app.integrations.acquisition import acquire_source
+from app.integrations.acquisition import AcquisitionResult, acquire_source
 from app.pipeline.stages.base import (
     AcquisitionOutput,
     StageContext,
@@ -33,6 +34,8 @@ from app.tools.content_cache import ContentCache
 
 _DEFAULT_GSE = "GSE178352"
 _MAX_BYTES = 100 * 1024 * 1024  # 100 MB safety cap
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_gse_accession(value: str) -> str | None:
@@ -92,6 +95,47 @@ def _counts_download_url(gse: str) -> str:
         f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
         f"{gse}/suppl/{gse}_tximportCounts.txt.gz"
     )
+
+
+def _series_matrix_url(gse: str) -> str:
+    """Build the NCBI GEO series matrix URL (universally available fallback)."""
+    prefix = gse[:6].upper()
+    return (
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
+        f"{gse}/matrix/{gse}_series_matrix.txt.gz"
+    )
+
+
+async def _try_acquire(
+    source: SourceRecord,
+    filename: str,
+    ctx: StageContext,
+    cache: ContentCache,
+    http: httpx.AsyncClient,
+    gse: str,
+) -> AcquisitionResult | None:
+    """Attempt acquire_source; return None on 404 so caller can try a fallback URL."""
+    try:
+        result = await acquire_source(
+            source=source,
+            filename=filename,
+            workdir=ctx.workdir,
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=_MAX_BYTES,
+        )
+    except Exception as exc:  # noqa: BLE001 — log and fall back
+        logger.warning("acquisition: download failed for %s: %s", source.url, exc)
+        return None
+    if result.asset is None:
+        logger.warning(
+            "acquisition: download failed for %s: %s",
+            source.url,
+            result.attempt.error_message,
+        )
+        return None
+    return result
 
 
 def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
@@ -183,34 +227,51 @@ def _run_acquisition_fixture(
 def _run_acquisition_live(
     ctx: StageContext, retrieved_at: datetime, gse: str
 ) -> StageResult:
-    """Download the real GEO counts file for ``gse`` from NCBI FTP."""
-    download_url = _counts_download_url(gse)
+    """Download the real GEO counts file for ``gse`` from NCBI FTP.
 
+    Tries the tximport counts URL first; if that 404s (many GEO series don't
+    ship tximport counts), falls back to the universally-available series
+    matrix file. The processing stage handles both formats.
+    """
     async def _download() -> StageResult:
         geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gse}"
-        source = SourceRecord(
-            source_id=make_source_id(Database.GEO, gse, geo_url),
-            database=Database.GEO,
-            accession=gse,
-            url=download_url,
-            title=f"{gse} tximport counts",
-            retrieved_at=retrieved_at,
-        )
+        source_id = make_source_id(Database.GEO, gse, geo_url)
         cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
+
+        # Build candidate (url, filename, title) tuples to try in order.
+        candidates: list[tuple[str, str, str]] = [
+            (_counts_download_url(gse), f"{gse}_tximportCounts.txt.gz",
+             f"{gse} tximport counts"),
+            (_series_matrix_url(gse), f"{gse}_series_matrix.txt.gz",
+             f"{gse} series matrix"),
+        ]
+
         async with httpx.AsyncClient() as http:
-            result = await acquire_source(
-                source=source,
-                filename=f"{gse}_tximportCounts.txt.gz",
-                workdir=ctx.workdir,
-                cache=cache,
-                http=http,
-                data_level=DataLevel.REPOSITORY_PROCESSED,
-                max_bytes=_MAX_BYTES,
-            )
-        if result.asset is None:
+            result: AcquisitionResult | None = None
+            used_filename = ""
+            for download_url, filename, title in candidates:
+                logger.info("acquisition: trying %s", download_url)
+                source = SourceRecord(
+                    source_id=source_id,
+                    database=Database.GEO,
+                    accession=gse,
+                    url=download_url,
+                    title=title,
+                    retrieved_at=retrieved_at,
+                )
+                result = await _try_acquire(
+                    source, filename, ctx, cache, http, gse
+                )
+                if result is not None:
+                    used_filename = filename
+                    logger.info("acquisition: success via %s", download_url)
+                    break
+
+        if result is None or result.asset is None:
             raise RuntimeError(
-                f"live download failed: {result.attempt.error_message}"
+                f"live download failed for {gse}: all candidate URLs failed"
             )
+
         # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
         ctx.emit_progress_sync(
             stage=StageName.ACQUISITION,
@@ -220,7 +281,7 @@ def _run_acquisition_live(
             detail={
                 "source": "geo",
                 "accession": gse,
-                "filename": f"{gse}_tximportCounts.txt.gz",
+                "filename": used_filename,
                 "records": 1,
             },
         )
