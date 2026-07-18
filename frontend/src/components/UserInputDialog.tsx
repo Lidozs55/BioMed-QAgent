@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, XCircleIcon } from "@phosphor-icons/react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,13 +33,58 @@ interface SubmissionState {
   error: string | null;
 }
 
-function tryStringifyPlan(detail: PendingUserInput["detail"]): string | null {
-  try {
-    const text = JSON.stringify(detail, null, 2);
-    return text === "{}" ? null : text;
-  } catch {
+interface PlanQuerySpec {
+  query_id?: unknown;
+  database?: unknown;
+  query?: unknown;
+  generated_by?: unknown;
+  purpose?: unknown;
+  order?: unknown;
+  page_size?: unknown;
+  max_results?: unknown;
+}
+
+interface PlanDatasetSpec {
+  dataset_id?: unknown;
+  database?: unknown;
+  accession?: unknown;
+  reason?: unknown;
+}
+
+interface PlanSpec {
+  topic: string;
+  queries: PlanQuerySpec[];
+  datasets: PlanDatasetSpec[];
+  requested_outputs: unknown[];
+}
+
+function parsePlanSpec(detail: PendingUserInput["detail"]): PlanSpec | null {
+  if (
+    detail === null
+    || typeof detail !== "object"
+    || Array.isArray(detail)
+  ) {
     return null;
   }
+  const raw = detail as Record<string, unknown>;
+  const topic = typeof raw.topic === "string" ? raw.topic : null;
+  if (topic === null) return null;
+  const queries = Array.isArray(raw.queries) ? (raw.queries as PlanQuerySpec[]) : [];
+  const datasets = Array.isArray(raw.datasets)
+    ? (raw.datasets as PlanDatasetSpec[])
+    : [];
+  const requestedOutputs = Array.isArray(raw.requested_outputs)
+    ? (raw.requested_outputs as unknown[])
+    : [];
+  return { topic, queries, datasets, requested_outputs: requestedOutputs };
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
@@ -70,8 +116,11 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   const error = submission.promptKey === promptKey ? submission.error : null;
 
   const open = pending !== null && taskId !== null && runId !== null;
-  const planText = useMemo(
-    () => (pending ? tryStringifyPlan(pending.detail) : null),
+  const planSpec = useMemo(
+    () =>
+      pending?.promptKind === "plan_confirmation" && pending.detail
+        ? parsePlanSpec(pending.detail)
+        : null,
     [pending],
   );
 
@@ -146,10 +195,110 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {planText !== null && (
-          <pre className="max-h-64 min-w-0 overflow-auto rounded-md bg-muted/40 p-3 text-xs">
-            {planText}
-          </pre>
+        {planSpec !== null && (
+          <div className="flex max-h-72 min-w-0 flex-col gap-3 overflow-auto rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
+            <section className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                研究主题
+              </p>
+              <p className="break-words">{planSpec.topic}</p>
+            </section>
+
+            {planSpec.queries.length > 0 && (
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  检索查询 ({planSpec.queries.length})
+                </p>
+                <ol className="space-y-2">
+                  {planSpec.queries.map((query, index) => {
+                    const order = asNumber(query.order) ?? index + 1;
+                    const database = asString(query.database) ?? "unknown";
+                    const queryString = asString(query.query) ?? "";
+                    const purpose = asString(query.purpose);
+                    const queryId = asString(query.query_id);
+                    const generatedBy = asString(query.generated_by);
+                    const pageSize = asNumber(query.page_size);
+                    const maxResults = asNumber(query.max_results);
+                    return (
+                      <li
+                        key={queryId ?? `${database}-${index}`}
+                        className="space-y-1 rounded-md border border-border/40 bg-background/60 p-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="secondary">#{order}</Badge>
+                          <Badge variant="outline">{database}</Badge>
+                          {generatedBy !== null && (
+                            <Badge variant="ghost">{generatedBy}</Badge>
+                          )}
+                          {pageSize !== null && (
+                            <Badge variant="ghost">page_size={pageSize}</Badge>
+                          )}
+                          {maxResults !== null && (
+                            <Badge variant="ghost">max={maxResults}</Badge>
+                          )}
+                        </div>
+                        <p className="break-words font-mono text-xs">
+                          {queryString}
+                        </p>
+                        {purpose !== null && (
+                          <p className="text-xs text-muted-foreground">
+                            {purpose}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            )}
+
+            {planSpec.datasets.length > 0 && (
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  数据集 ({planSpec.datasets.length})
+                </p>
+                <ul className="space-y-2">
+                  {planSpec.datasets.map((dataset, index) => {
+                    const datasetId = asString(dataset.dataset_id);
+                    const database = asString(dataset.database) ?? "unknown";
+                    const accession = asString(dataset.accession) ?? "";
+                    const reason = asString(dataset.reason);
+                    return (
+                      <li
+                        key={datasetId ?? `${database}-${index}`}
+                        className="space-y-1 rounded-md border border-border/40 bg-background/60 p-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline">{database}</Badge>
+                          <span className="font-mono text-xs">{accession}</span>
+                        </div>
+                        {reason !== null && (
+                          <p className="text-xs text-muted-foreground">
+                            {reason}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
+            {planSpec.requested_outputs.length > 0 && (
+              <section className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  请求输出
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {planSpec.requested_outputs.map((output, index) => (
+                    <Badge key={index} variant="secondary">
+                      {typeof output === "string" ? output : String(output)}
+                    </Badge>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
         )}
 
         {pending?.fixtureExempt && (
