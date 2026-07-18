@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPanel } from "@/components/ChatPanel";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
-import type { StartTaskInput, TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
+import type { TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -125,51 +125,41 @@ describe("ChatPanel", () => {
     });
   });
 
-  it("shows fixture source validation without mutating task projections", () => {
-    seedBackgroundTask();
-    const before = useAgentStore.getState().tasksById;
-    const startTask = vi.fn<(input: StartTaskInput) => Promise<TaskRunAccepted>>();
-    render(<ChatPanel startTask={startTask} />);
+  it("renders the new conversation as a centered Agent composer", () => {
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "Review validation" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }));
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "固定验收案例只能选择 PubMed 和 GEO。",
-    );
-    expect(startTask).not.toHaveBeenCalled();
-    expect(useAgentStore.getState().tasksById).toBe(before);
+    expect(screen.getByRole("heading", { name: "今天想研究什么？" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "添加附件" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /切换主模型/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
+    expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
   });
 
-  it("submits corrected fixture input through the semantic REST controller", async () => {
-    const accepted: TaskRunAccepted = {
-      request_id: "req_fixture",
-      task_id: "task_fixture",
-      run_id: "run_fixture",
+  it("submits selected data sources through the semantic REST controller", async () => {
+    const startTask = vi.fn().mockResolvedValue({
+      request_id: "req_agent",
+      task_id: "task_agent",
+      run_id: "run_agent",
       status: "queued",
-    };
-    const startTask = vi.fn().mockResolvedValue(accepted);
+    } satisfies TaskRunAccepted);
     render(<ChatPanel startTask={startTask} />);
     fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
-      target: { value: "  Run fixture  " },
+      target: { value: "  Run research  " },
     });
-    fireEvent.click(screen.getByRole("button", { name: "全选" }));
-    fireEvent.click(screen.getByRole("button", { name: "运行固定验收案例" }));
+    fireEvent.click(screen.getByRole("combobox", { name: /选择数据源/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择全部" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
 
-    await waitFor(() =>
-      expect(startTask).toHaveBeenCalledWith({
-        input: "Run fixture",
-        databases: ["pubmed", "geo"],
-        mode: "fixture",
-      }),
-    );
-    expect(useAgentStore.getState().draft.error).toBeNull();
+    await waitFor(() => expect(startTask).toHaveBeenCalledWith({
+      input: "Run research",
+      databases: ["pubmed", "geo"],
+      mode: "agent",
+    }));
   });
 
   it("keeps a blank draft usable while another task is running", async () => {
     seedBackgroundTask();
+    act(() => useAgentStore.getState().showNewDraft());
     const before = useAgentStore.getState().tasksById;
     const startTask = vi.fn().mockResolvedValue({
       request_id: "req_new",
@@ -180,7 +170,7 @@ describe("ChatPanel", () => {
     render(<ChatPanel startTask={startTask} />);
 
     expect(screen.getByPlaceholderText("输入研究目标...")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "全选" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: /选择数据源/ })).toBeEnabled();
     fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
       target: { value: "  New research  " },
     });
@@ -196,20 +186,12 @@ describe("ChatPanel", () => {
     expect(useAgentStore.getState().tasksById).toBe(before);
   });
 
-  it("keeps setup controls inside a bounded vertical scroll panel", () => {
-    render(<ChatPanel startTask={vi.fn()} />);
-
-    const setupPanel = screen
-      .getByText("研究设置")
-      .closest('[data-slot="tabs-content"]');
-
-    expect(setupPanel).toHaveClass("min-h-0", "overflow-y-auto");
-    expect(setupPanel).toContainElement(
-      screen.getByRole("button", { name: "开始研究" }),
-    );
-    expect(setupPanel).toContainElement(
-      screen.getByRole("button", { name: "运行固定验收案例" }),
-    );
+  it("keeps the centered draft composer inside a bounded scroll surface", () => {
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
+    const surface = container.firstElementChild;
+    expect(surface).toHaveClass("min-h-0", "overflow-y-auto", "items-center");
+    expect(surface).toContainElement(screen.getByRole("button", { name: "开始研究" }));
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
   it("stores draft text canonically and clears it for new research", () => {
@@ -227,11 +209,12 @@ describe("ChatPanel", () => {
     const onToggle = vi.fn();
     render(<DatabaseSelector onToggle={onToggle} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("combobox", { name: /选择数据源/ }));
+    fireEvent.click(screen.getByRole("button", { name: "选择全部" }));
     expect(onToggle).toHaveBeenNthCalledWith(1, "pubmed", true);
     expect(onToggle).toHaveBeenNthCalledWith(2, "geo", true);
 
-    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空全部" }));
     expect(onToggle).toHaveBeenNthCalledWith(3, "pubmed", false);
     expect(onToggle).toHaveBeenNthCalledWith(4, "geo", false);
   });
@@ -264,9 +247,7 @@ describe("ChatPanel", () => {
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
 
-    const chatPanel = screen
-      .getByRole("textbox", { name: "继续提问" })
-      .closest('[data-slot="tabs-content"]');
+    const chatPanel = screen.getByRole("textbox", { name: "继续提问" }).closest(".flex.h-full");
     const messageScroller = container.querySelector<HTMLElement>(
       '[data-slot="message-scroller"]',
     );
@@ -281,7 +262,7 @@ describe("ChatPanel", () => {
     expect(chatPanel).not.toHaveClass("overflow-y-auto");
     expect(chatPanel).toContainElement(messageScroller);
     expect(messageViewport).toHaveClass("overflow-y-auto");
-    expect(messageContent).toHaveClass("px-4", "py-4");
+    expect(messageContent).toHaveClass("px-5", "py-6", "max-w-3xl");
   });
 
   it("shows active Agent work until real streamed output arrives", () => {
@@ -291,7 +272,7 @@ describe("ChatPanel", () => {
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("正在处理请求");
+    expect(screen.getByText("正在处理请求…").closest('[data-slot="marker"]')).toHaveAttribute("role", "status");
 
     act(() => {
       useAgentStore.getState().applyEvent({
@@ -308,7 +289,7 @@ describe("ChatPanel", () => {
     });
     rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
   });
 
@@ -338,7 +319,7 @@ describe("ChatPanel", () => {
     const { rerender } = render(
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
 
     act(() => {
       useAgentStore.setState(createInitialRuntimeState());
@@ -358,10 +339,10 @@ describe("ChatPanel", () => {
       useAgentStore.getState().setActiveTaskId("task_background");
     });
     rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
   });
 
-  it("renders assistant messages as Markdown in BubbleContent", () => {
+  it("renders assistant Markdown directly without a bubble", () => {
     seedTerminalTask();
     const content = "Summary line\n\n- first item\n  indented detail";
     useAgentStore.setState((state) => {
@@ -386,30 +367,18 @@ describe("ChatPanel", () => {
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
 
-    const bubbleContent = container.querySelector<HTMLElement>(
-      '[data-slot="bubble-content"]',
-    );
-    if (bubbleContent === null) {
-      throw new Error("Expected assistant BubbleContent");
-    }
-
-    expect(bubbleContent.textContent).toContain("Summary line");
-    expect(bubbleContent.querySelector("ul")).toBeInTheDocument();
-    expect(bubbleContent.textContent).toContain("first item");
-    expect(bubbleContent).not.toHaveClass("whitespace-pre-wrap");
-    expect(bubbleContent.closest('[data-slot="bubble"]')).not.toBeNull();
+    const assistant = container.querySelector<HTMLElement>('[data-message-role="assistant"]');
+    expect(assistant).not.toBeNull();
+    expect(assistant?.textContent).toContain("Summary line");
+    expect(assistant?.querySelector("ul")).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="bubble"]')).not.toBeInTheDocument();
   });
 
-  it("bounds the results tab for its internal artifact scroll area", () => {
+  it("does not render a separate results tab", () => {
     seedTerminalTask();
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "结果" }));
-    const resultsPanel = screen
-      .getByText("暂无结果")
-      .closest('[data-slot="tabs-content"]');
-
-    expect(resultsPanel).toHaveClass("min-h-0", "overflow-hidden");
+    expect(screen.queryByRole("tab", { name: "结果" })).not.toBeInTheDocument();
   });
 
   it("keeps active Agent drafting editable while disabling only Send", () => {
@@ -429,10 +398,8 @@ describe("ChatPanel", () => {
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
     expect(continueTask).not.toHaveBeenCalled();
 
-    const inputGroup = input.closest('[data-slot="input-group"]');
-    const sendAddon = send.closest('[data-slot="input-group-addon"]');
-    expect(inputGroup).toContainElement(send);
-    expect(sendAddon).toHaveAttribute("data-align", "block-end");
+    const composer = input.closest('[data-slot="agent-composer"]');
+    expect(composer).toContainElement(send);
 
     act(() => seedTerminalTask("fixture"));
     rerender(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
