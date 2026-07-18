@@ -490,10 +490,14 @@ function assistantMessage(
   );
 }
 
+function hasOwn(object: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
 function renderAssistantStream(stream: AssistantStreamProjection): string {
   const parts: string[] = [];
   let index = stream.confirmedThroughChunkIndex + 1;
-  while (Object.hasOwn(stream.pendingChunks, index)) {
+  while (hasOwn(stream.pendingChunks, index)) {
     parts.push(stream.pendingChunks[index]);
     index += 1;
   }
@@ -548,7 +552,7 @@ function applyAssistantStreamDelta(
   };
   if (
     frame.chunk_index <= stream.confirmedThroughChunkIndex ||
-    Object.hasOwn(stream.pendingChunks, frame.chunk_index)
+    hasOwn(stream.pendingChunks, frame.chunk_index)
   ) {
     return task;
   }
@@ -1187,6 +1191,31 @@ export function reduceRuntimeEvent(
         ...task,
         stages: { ...task.stages, [payload.stage]: stage },
       };
+      if (runId !== null) {
+        task = upsertActivity(task, {
+          activityId: `stage:${runId}:${payload.stage}`,
+          taskId: envelope.task_id,
+          runId,
+          sequence: envelope.sequence,
+          timestamp: envelope.timestamp,
+          kind: "stage",
+          status:
+            payload.type === "stage_started"
+              ? "started"
+              : payload.type === "stage_completed"
+                ? "completed"
+                : payload.type === "stage_failed"
+                  ? "failed"
+                  : "skipped",
+          name: null,
+          input: null,
+          output: null,
+          isError: payload.type === "stage_failed",
+          code: null,
+          message: null,
+          stage: payload.stage,
+        });
+      }
       break;
     }
     case "stage_progress": {
@@ -1235,6 +1264,29 @@ export function reduceRuntimeEvent(
           [payload.stage]: { ...stage, progress },
         },
       };
+      if (runId !== null) {
+        task = upsertActivity(task, {
+          activityId: `progress:${runId}:${payload.stage}:${payload.kind}`,
+          taskId: envelope.task_id,
+          runId,
+          sequence: envelope.sequence,
+          timestamp: envelope.timestamp,
+          kind: "progress",
+          status: "recorded",
+          name: null,
+          input: null,
+          output: null,
+          isError: false,
+          code: null,
+          message: null,
+          progress: {
+            stage: payload.stage,
+            kind: payload.kind,
+            current: payload.current,
+            total: payload.total,
+          },
+        });
+      }
       break;
     }
     case "task_cancel_requested":

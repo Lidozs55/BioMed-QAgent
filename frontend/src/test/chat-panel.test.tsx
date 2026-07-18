@@ -345,7 +345,7 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
   });
 
-  it("renders assistant Markdown directly without a bubble", () => {
+  it("renders assistant Markdown through the ghost Bubble primitive", () => {
     seedTerminalTask();
     const content = "Summary line\n\n- first item\n  indented detail";
     useAgentStore.setState((state) => {
@@ -374,7 +374,10 @@ describe("ChatPanel", () => {
     expect(assistant).not.toBeNull();
     expect(assistant?.textContent).toContain("Summary line");
     expect(assistant?.querySelector("ul")).toBeInTheDocument();
-    expect(container.querySelector('[data-slot="bubble"]')).not.toBeInTheDocument();
+    expect(assistant?.querySelector('[data-slot="bubble"]')).toHaveAttribute(
+      "data-variant",
+      "ghost",
+    );
   });
 
   it("does not render a separate results tab", () => {

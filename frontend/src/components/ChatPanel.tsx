@@ -7,12 +7,15 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentComposer } from "@/components/AgentComposer";
+import { ExecutionSummary } from "@/components/ExecutionSummary";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
+import { Message, MessageContent } from "@/components/ui/message";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -322,30 +325,66 @@ export function ChatPanel({
                     scrollAnchor={message.role === "user"}
                   >
                     {message.role === "user" ? (
-                      <div className="flex justify-end">
-                        <div className="max-w-[80%] rounded-2xl bg-card px-4 py-2.5 text-sm shadow-sm ring-1 ring-border">
-                          <MarkdownContent content={message.content} />
-                        </div>
-                      </div>
+                      <Message align="end">
+                        <MessageContent>
+                          <Bubble variant="outline" align="end">
+                            <BubbleContent>
+                              <MarkdownContent content={message.content} />
+                            </BubbleContent>
+                          </Bubble>
+                        </MessageContent>
+                      </Message>
                     ) : (
-                      <article className="flex min-w-0 gap-3" data-message-role="assistant">
+                      <Message data-message-role="assistant">
                         <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background">
                           <RobotIcon aria-hidden="true" />
                         </div>
-                        <div className="min-w-0 flex-1 pt-0.5 text-sm leading-7">
-                          <MarkdownContent content={message.content} />
-                        </div>
-                      </article>
+                        <MessageContent className="pt-0.5 text-sm leading-7">
+                          <Bubble variant="ghost" className="w-full">
+                            <BubbleContent className="w-full">
+                              <MarkdownContent
+                                content={message.content}
+                                streaming={
+                                  message.runId !== null &&
+                                  activeTask?.assistantStreamsByRunId[message.runId]?.active === true
+                                }
+                              />
+                              {activeTask !== undefined && message.runId !== null && (
+                                <ExecutionSummary
+                                  task={activeTask}
+                                  runId={message.runId}
+                                  active={activeTask.summary.active_run_id === message.runId}
+                                />
+                              )}
+                            </BubbleContent>
+                          </Bubble>
+                        </MessageContent>
+                      </Message>
                     )}
                   </MessageScrollerItem>
                 ))}
 
                 {showActiveRunStatus && activeRunId !== null && (
                   <MessageScrollerItem messageId={`live:${activeRunId}:assistant:status`}>
-                    <Marker role="status">
-                      <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
-                      <MarkerContent className="shimmer">正在处理请求…</MarkerContent>
-                    </Marker>
+                    <Message data-message-role="assistant-status">
+                      <MessageContent>
+                        <Bubble variant="ghost" className="w-full">
+                          <BubbleContent className="w-full">
+                            <Marker role="status">
+                              <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
+                              <MarkerContent className="shimmer">正在处理请求…</MarkerContent>
+                            </Marker>
+                            {activeTask !== undefined && (
+                              <ExecutionSummary
+                                task={activeTask}
+                                runId={activeRunId}
+                                active
+                              />
+                            )}
+                          </BubbleContent>
+                        </Bubble>
+                      </MessageContent>
+                    </Message>
                   </MessageScrollerItem>
                 )}
 

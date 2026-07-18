@@ -130,3 +130,31 @@
     @apply font-sans;
   }
 }
+
+@keyframes assistant-stream-cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.markdown-content[data-streaming="true"] > :last-child::after {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-inline-start: 0.2em;
+  vertical-align: -0.15em;
+  background-color: currentColor;
+  content: "";
+  animation: assistant-stream-cursor-blink 1s steps(1, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-content[data-streaming="true"] > :last-child::after {
+    animation: none;
+  }
+}

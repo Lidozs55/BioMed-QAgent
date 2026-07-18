@@ -84,8 +84,8 @@ function event(taskId: string, sequence: number, delta: string): EventEnvelope {
 }
 
 interface TransportTestOptions {
-  applyAssistantStreamFrames?: (frames: AssistantStreamFrame[]) => void;
-  deactivateAssistantStreams?: () => void;
+  applyAssistantStreamFrames?: (frames: readonly AssistantStreamFrame[]) => void;
+  deactivateAssistantStreams?: (taskId?: string) => void;
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
 }
@@ -225,7 +225,7 @@ describe("durable event transport", () => {
 
   it("applies valid realtime frames once on the next animation frame without advancing sequence", async () => {
     const scheduled: Array<() => void> = [];
-    const batches: AssistantStreamFrame[][] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
     const { transport, sockets } = setupTransport({
       applyAssistantStreamFrames: (frames) => batches.push(frames),
       scheduleAnimationFrame: (callback) => {
@@ -281,7 +281,7 @@ describe("durable event transport", () => {
 
   it("strictly rejects malformed realtime frames and partial durable ranges", async () => {
     const scheduled: Array<() => void> = [];
-    const batches: AssistantStreamFrame[][] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
     const { transport, sockets } = setupTransport({
       applyAssistantStreamFrames: (frames) => batches.push(frames),
       scheduleAnimationFrame: (callback) => {
@@ -364,7 +364,7 @@ describe("durable event transport", () => {
   it("cancels a queued visual batch and deactivates streams on disconnect", async () => {
     const scheduled: Array<() => void> = [];
     const cancelled: number[] = [];
-    const batches: AssistantStreamFrame[][] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
     let deactivateCount = 0;
     const { transport, sockets } = setupTransport({
       applyAssistantStreamFrames: (frames) => batches.push(frames),
@@ -484,7 +484,7 @@ describe("durable event transport", () => {
   it("cancels queued realtime frames when replay recovery replaces the socket", async () => {
     const scheduled: Array<() => void> = [];
     const cancelled: number[] = [];
-    const batches: AssistantStreamFrame[][] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
     let deactivateCount = 0;
     const { transport, sockets } = setupTransport({
       applyAssistantStreamFrames: (frames) => batches.push(frames),
@@ -601,7 +601,7 @@ describe("durable event transport", () => {
 
   it("discards realtime frames drained before the unsubscribe pong barrier", async () => {
     const scheduled: Array<() => void> = [];
-    const batches: AssistantStreamFrame[][] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
     const { transport, sockets } = setupTransport({
       applyAssistantStreamFrames: (frames) => batches.push(frames),
       scheduleAnimationFrame: (callback) => {

@@ -52,6 +52,8 @@ export interface ProjectedMessage {
 
 export type ActivityKind =
   | "tool"
+  | "stage"
+  | "progress"
   | "warning"
   | "conversation_compacted"
   | "fixture_event";
@@ -63,13 +65,26 @@ export interface ActivityProjection {
   sequence: number;
   timestamp: string;
   kind: ActivityKind;
-  status: "started" | "completed" | "warning" | "recorded";
+  status:
+    | "started"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "warning"
+    | "recorded";
   name: string | null;
   input: string | null;
   output: string | null;
   isError: boolean;
   code: string | null;
   message: string | null;
+  stage?: StageName;
+  progress?: {
+    stage: StageName;
+    kind: string;
+    current: number;
+    total: number | null;
+  };
 }
 
 export interface ArtifactProjection extends ArtifactRecord {
