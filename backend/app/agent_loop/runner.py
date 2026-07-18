@@ -60,13 +60,17 @@ class _AssistantTextBuffer:
         max_bytes: int = ASSISTANT_FLUSH_MAX_BYTES,
         flush_interval: float = ASSISTANT_FLUSH_INTERVAL_SECONDS,
     ) -> None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
         self._execution = execution
         self._max_bytes = max_bytes
         self._flush_interval = flush_interval
         self._parts: list[str] = []
         self._byte_count = 0
         self._started_at: float | None = None
-        self._stream_id = f"assistant:{execution.run_id}"
+        self._base_stream_id = f"assistant:{execution.run_id}"
+        self._segment_index = 0
+        self._stream_id = self._base_stream_id
         self._next_chunk_index = 0
         self._from_chunk_index: int | None = None
         self._through_chunk_index: int | None = None
@@ -76,33 +80,61 @@ class _AssistantTextBuffer:
     async def add(self, delta: str) -> None:
         if not delta:
             return
-        chunk_index = self._next_chunk_index
-        self._next_chunk_index += 1
-        await self._execution.emit_assistant_stream(
-            AssistantStreamDeltaFrame(
-                task_id=self._execution.task_id,
-                run_id=self._execution.run_id,
-                stream_id=self._stream_id,
-                chunk_index=chunk_index,
-                delta=delta,
+        chunks = self._split_delta(delta)
+        if self._has_ended:
+            self._segment_index += 1
+            self._stream_id = f"{self._base_stream_id}:{self._segment_index}"
+            self._next_chunk_index = 0
+            self._has_ended = False
+        for chunk in chunks:
+            chunk_bytes = len(chunk.encode("utf-8"))
+            if self._parts and self._byte_count + chunk_bytes > self._max_bytes:
+                await self.flush()
+            chunk_index = self._next_chunk_index
+            await self._execution.emit_assistant_stream(
+                AssistantStreamDeltaFrame(
+                    task_id=self._execution.task_id,
+                    run_id=self._execution.run_id,
+                    stream_id=self._stream_id,
+                    chunk_index=chunk_index,
+                    delta=chunk,
+                )
             )
-        )
-        chunk_bytes = len(delta.encode("utf-8"))
-        if self._parts and self._byte_count + chunk_bytes > self._max_bytes:
-            await self.flush()
-        if not self._parts:
-            self._started_at = asyncio.get_running_loop().time()
-            self._from_chunk_index = chunk_index
-        self._parts.append(delta)
-        self._through_chunk_index = chunk_index
-        self._byte_count += chunk_bytes
-        self._segment_active = True
-        if self._byte_count >= self._max_bytes:
-            await self.flush()
+            self._next_chunk_index += 1
+            if not self._parts:
+                self._started_at = asyncio.get_running_loop().time()
+                self._from_chunk_index = chunk_index
+            self._parts.append(chunk)
+            self._through_chunk_index = chunk_index
+            self._byte_count += chunk_bytes
+            self._segment_active = True
+            if self._byte_count >= self._max_bytes:
+                await self.flush()
+
+    def _split_delta(self, delta: str) -> list[str]:
+        chunks: list[str] = []
+        characters: list[str] = []
+        byte_count = 0
+        for character in delta:
+            character_bytes = len(character.encode("utf-8"))
+            if character_bytes > self._max_bytes:
+                raise ValueError(
+                    "UTF-8 code point exceeds assistant buffer max_bytes"
+                )
+            if characters and byte_count + character_bytes > self._max_bytes:
+                chunks.append("".join(characters))
+                characters = []
+                byte_count = 0
+            characters.append(character)
+            byte_count += character_bytes
+        if characters:
+            chunks.append("".join(characters))
+        return chunks
 
     async def end(self, finish_reason: str) -> None:
         if not self._segment_active and self._has_ended:
             return
+        await self.flush()
         last_chunk_index = (
             self._next_chunk_index - 1 if self._next_chunk_index else None
         )
@@ -117,7 +149,6 @@ class _AssistantTextBuffer:
         )
         self._segment_active = False
         self._has_ended = True
-        await self.flush()
 
     def seconds_until_flush(self) -> float | None:
         if self._started_at is None:
@@ -131,11 +162,6 @@ class _AssistantTextBuffer:
         delta = "".join(self._parts)
         from_chunk_index = self._from_chunk_index
         through_chunk_index = self._through_chunk_index
-        self._parts.clear()
-        self._byte_count = 0
-        self._started_at = None
-        self._from_chunk_index = None
-        self._through_chunk_index = None
         if from_chunk_index is None or through_chunk_index is None:
             raise RuntimeError("assistant text buffer lost its chunk range")
         await self._execution.emit(
@@ -146,6 +172,11 @@ class _AssistantTextBuffer:
                 through_chunk_index=through_chunk_index,
             )
         )
+        self._parts.clear()
+        self._byte_count = 0
+        self._started_at = None
+        self._from_chunk_index = None
+        self._through_chunk_index = None
 
 
 def _value(item: object, name: str, default: object = None) -> object:
