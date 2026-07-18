@@ -688,3 +688,263 @@
       paused Run 计入并发 slot
 - [x] R5 UX 修复：App 视口边界 + 非聊天页有界滚动、稳定 Task 排序、通知 View
       失败反馈与多行 Bubble；桌面/移动浏览器复验通过
+
+---
+
+## 8. P0/P1：2026-07-18 流程审查发现的新问题
+
+> **背景**：2026-07-18 前后端完整启动测试 + 多轮深度审查发现 12 类问题，
+> 完整分析见 [`docs/REVIEW_2026-07-18.md`](REVIEW_2026-07-18.md)。
+> 本节为 TODO 跟踪入口，与审查报告双向同步。
+> 核心架构性缺陷：`TaskManager._execute`（`runtime/manager.py:1209`）的
+> "成功证据校验"完全缺失——`commit_completion()` 返回 `[]` 时仍无条件发射
+> `RunCompletedPayload`，导致"LLM 完成但无 artifact"与"LLM 截断"都静默 completed。
+
+### 8.1 P0：核心真实性修复（无证据完成 + LLM 截断静默）
+
+> 详见审查报告 §1、§2、§0。
+
+- [ ] **P0** `manager.py:1209` AGENT 模式增加"成功证据校验"
+
+      —— `completion_events` 为空且无 cancellation 时转 `RunFailedPayload`，
+      错误信息"agent 完成但未产出 artifact"
+      —— 同时解决"结果未显示"与"LLM 截断静默完成"两个症状
+      （`backend/app/runtime/manager.py:1201-1212`）
+
+- [ ] **P0** `runner.py:284` 空 payloads 发 warning 事件
+
+      —— `_load_artifact_payloads` 返回 `[]` 时发射
+      `WarningPayload(code="artifact_manifest_missing" | "artifact_unchanged")`
+      —— 前端 reducer 已支持 warning 展示分支
+      （`backend/app/agent_loop/runner.py:104-133, 284-305`）
+
+- [ ] **P0** `runner.py:440-459` `_extract_text_delta` 读取 `finish_reason`
+
+      —— 在 `finish_reason="length"` 时发射
+      `WarningPayload(code="llm_output_truncated")`
+      —— 当前完全忽略 `finish_reason` 字段
+
+- [ ] **P0** `runner.py:271` `_consume_events` 后校验 `result.final_output`
+
+      —— 若为 None 或空字符串则 `raise RuntimeError("agent returned empty final_output")`
+      —— 参考 `summarizer.py:50-55` 的现有校验模式
+
+- [ ] **P0** 新增回归测试 `tests/agent_loop/test_silent_completion.py`
+
+      —— 验证：LLM 不调 tool / final_output 为空 / manifest 缺失时必须 RunFailed
+
+- [ ] **P0** 新增回归测试 `tests/agent_loop/test_llm_truncation.py`
+
+      —— 模拟 `finish_reason="length"`，验证 warning 事件 + 不静默 completed
+
+- [ ] **P0** 新增 Agent 模式 e2e 测试 `tests/agent_loop/test_agent_run_e2e.py`
+
+      —— 用 Mock LLM 走完 AgentRunExecutor 完整链路
+      —— 验证 `artifact_produced` + `RunCompletedPayload` 配对
+      —— 当前 `test_execution.py` 全部用 `NoopCompactor` + Mock SDK，不验证真实交互
+
+- [ ] **P1** `runner.py:115` 指纹未变不应静默返回 `[]`
+
+      —— 应仍发射 `artifact_produced`（让前端至少能 hydration）
+      —— 或显式标记 `artifact_unchanged` 让前端走 HTTP 拉取
+
+- [ ] **P1** `routes.py:548-549` `_load_validated_manifest` 降级回退
+
+      —— `.runtime-publication.json` 缺失时回退到 manifest 文件本身
+      —— 响应中加 `degraded=true` 标记
+
+### 8.2 P0：前端 Agent 动态可见性
+
+> 用户反馈："工具调用（目前有但是更新少）、工具调用结果（找到了多少篇论文、
+> 多少调数据、清洗剩余多少条数据），现在能看到的消息太少"。详见审查报告 §4。
+
+- [ ] **P0** 新增 `StageProgressPayload` 事件类型
+
+      —— 字段：`stage` / `kind` / `current` / `total` / `detail: dict`
+      —— 挂到 `EventPayload` 联合（`backend/app/domain/contracts/events.py`）
+
+- [ ] **P0** Skills 在 `log_query` 后发射 progress 事件
+
+      —— `pubmed.py` / `geo.py` 的 `search_*_adapter` 发射
+      `kind="discovered_records", current=len(records), total=result.total_count`
+      —— 通过 `RunContext` 注入的 emit 回调（`backend/app/skills/builtin/`）
+
+- [ ] **P0** Acquisition / Processing 阶段发射 progress 事件
+
+      —— `acquisition.py:158-164` 在 `SourceAsset` 创建后发射
+      `kind="downloaded_bytes"` / `kind="downloaded_records"`
+      —— `processing.py` 在 `process_geo_tximport_counts` 返回后发射
+      `kind="cleaned_rows", current=parsed.row_count`
+
+- [ ] **P0** Pipeline runner 新增 `_emit_progress_event`
+
+      —— 走 `_publish_event` 通道
+      （`backend/app/pipeline/runner.py`）
+
+- [ ] **P0** 前端删除 stage 事件 Agent 模式丢弃守卫
+
+      —— `reducer.ts:915-957` 当前 `if (task.summary.mode !== "fixture") break;`
+      —— Agent 模式任务调用 `run_research_pipeline` 时所有 stage 事件被丢弃
+      —— 改为跨模式 stage 投影（类似 `fixtureStages`）
+
+- [ ] **P0** `AgentProgress.tsx` agent 模式增加 stage/进度区段
+
+      —— 目前 fixture 模式才有 stage 卡片，agent 模式仅显示单行"当前工具名"
+      （`frontend/src/components/AgentProgress.tsx:40-86`）
+
+- [ ] **P1** `ChatPanel.tsx` 新增 `StageProgressList` 组件
+
+      —— 读取 `task.activitiesById` 中 `kind==="progress"` 的活动
+      —— 在 `assistant_delta` 之间穿插"工具卡片"
+      —— `ToolTrace.tsx` 默认折叠状态需暴露工具 output 摘要到 Chat 主流
+
+### 8.3 P0：数据源硬门控解除
+
+> 详见审查报告 §3。当前 Pipeline 通过两道硬门控强制只用 PubMed+GEO。
+
+- [ ] **P0** `tool.py:30-31` + `runtime.py:112-119` 解除硬门控
+
+      —— 若要扩展 Pipeline 支持其他数据库，需先解除这两道硬门控
+      —— 若维持现状，`/databases` 响应加 `pipeline_supported: bool` 字段
+      标明哪些走 Pipeline、哪些是 Agent 直调
+
+- [ ] **P1** `acquisition.py:113-207` 为 PubMed 新增 SourceAsset 产出
+
+      —— 复用 `discovery/pubmed.py` 中已有的 `download_supplementary` 工具
+      —— 产出 PubMed 全文/附件 `SourceAsset`，使其进入
+      `source_assets.csv` / `download_log.csv`
+      —— 当前 PubMed 只进 `literature.csv` / `source_list.csv` /
+      `source_relations.csv`，不进"数据条目"类产物
+
+- [ ] **P2** 新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等 skill
+
+      —— 用户提到的 10 个数据库需新增 skill 文件 + 枚举值 + fixture
+      —— **工作量很大**，建议先核对 `PROBLEM.md` 确认是必选还是规划中
+
+### 8.4 P0：Follow-up Loop + PDF Fallback + Compaction（与 project_memory 硬约束冲突）
+
+> 详见审查报告 §5、§6、§7。这三项在代码库中完全缺失。
+
+- [ ] **P0** 定义 `QueryStatus` 枚举（`success` / `not_found` / `failed` / `skipped`）
+
+      —— 所有 skill 统一使用，替代当前 "ok"/"failed"/"error"/"succeeded"/"completed" 不一致状态
+      （`backend/app/domain/contracts/` + `backend/app/agent_loop/context.py:229-240`）
+
+- [ ] **P0** Agent INSTRUCTIONS 新增 follow-up 策略
+
+      —— 最多 3 轮，失败查询标记 `not_found` 不重试
+      —— `IterationDecisionAgent` 已被 project_memory 硬约束要求"完全移除"
+      （`backend/app/agent_loop/agent.py`）
+
+- [ ] **P0** 新增 `tests/test_query_log_status_consistency.py`
+
+      —— 遍历所有 skill 的 query_log 输出，断言 status ∈ QueryStatus
+
+- [ ] **P0** 新增 `integrations/unpaywall.py` DOI 查询客户端
+
+      —— 5s timeout，返回 pdf_url
+      —— 实现 project_memory 硬约束的"pdf_url → Unpaywall → EPMC"三级 fallback
+
+- [ ] **P0** 新增 `integrations/europepmc.py` PMCID → fullTextXML 客户端
+
+- [ ] **P0** `acquisition.py` 实现 PDF 三级 fallback 链
+
+      —— `pdf_url`（直接链接）→ Unpaywall（DOI，5s 快失败）→
+      EPMC fullTextXML（PMCID，国内可用）
+      （`backend/app/pipeline/stages/acquisition.py`）
+
+- [ ] **P0** `integrations/acquisition.py:30-49` `_ALLOWED_HOSTS` 新增域名
+
+      —— `api.unpaywall.org` / `www.ebi.ac.uk`
+
+- [ ] **P0** `compaction.py:216-244` summarizer 显式校验 `finish_reason`
+
+      —— `length` 时抛异常而非降级
+      —— 与 project_memory 硬约束"LLM 失败必须抛异常"一致
+
+- [ ] **P0** 实现 ReviewerAgent
+
+      —— project_memory 硬约束"压缩前完整传递 query log 给 ReviewerAgent"完全未实现
+      —— 当前 `query_log_summary` 仅 task-local（`summarizer.py:254-260`）
+
+- [ ] **P1** 新增 `tests/test_pdf_fallback_chain.py` 验证三级 fallback 各分支
+
+- [ ] **P1** `runner.py` Agent loop 增加 turn counter
+
+      —— 达到 3 轮 follow-up 后强制停止并标记 `max_followup_reached`
+
+### 8.5 P1：Agent max_turns 谨慎设置 + 用户"继续工作"按钮
+
+> 用户明确要求：达到 max_turns 后要提供按钮让用户可以选择继续工作。
+> 详见审查报告 §11。**不能简单设置一个较小值了事**。
+
+- [ ] **P1** `agent.py:112-117` 设置 `max_turns=15`
+
+      —— 覆盖正常 4-8 轮 + followup 3 轮 + 余量
+      —— summarizer 保持 `max_turns=1`
+      —— 当前使用 SDK 默认值（约 10），无硬约束
+
+- [ ] **P1** `runner.py:271` 检测 max_turns 用尽后走 `_await_user_input`
+
+      —— **不直接转 FAILED**，而是发射
+      `UserInputRequiredPayload(prompt_kind="max_turns_reached")`
+      —— 暂停 Run，进入 `AWAITING_USER_INPUT` 状态
+      —— **复用 §4.2.1 已完成的 pause-resume 底层架构**，不另建机制
+
+- [ ] **P1** `events.py` `PromptKind` 联合新增 `"max_turns_reached"`
+
+- [ ] **P1** `UserInputDialog.tsx` 新增 `max_turns_reached` 渲染分支
+
+      —— 展示"Agent 已达到最大轮次，是否继续？"
+      —— [继续] 按钮 → `POST /api/v1/tasks/{task_id}/runs/{run_id}/resume`
+      —— [停止] 按钮 → 转 CANCELLED
+
+- [ ] **P2** `agent.py` INSTRUCTIONS 新增"达到 max_turns 后应输出 `[MAX_TURNS_REACHED]` 标记"指导
+
+### 8.6 P1：并发与资源管理
+
+> 详见审查报告 §8。
+
+- [ ] **P1** `crawler.py:206-225` 引入 BrowserPool
+
+      —— 单例 Chromium + 多 context
+      —— 4 并发 task 共享一个 browser，每个 task 用 `browser.new_context()` 隔离
+      —— 当前每次调用新建 browser，4 并发可同时启动 4 个 Chromium，内存峰值高
+
+- [ ] **P2** `crawler.py` 监控并发 Chromium 实例数，超阈值时排队
+
+### 8.7 P1：错误处理与可观测性
+
+> 详见审查报告 §9。与 §1.7 "Pipeline 全链路接入结构化日志"协同。
+
+- [ ] **P1** `main.py:25-28` 引入 structlog 或 python-json-logger
+
+      —— 所有日志带 `task_id` / `run_id` / `stage` 上下文
+      —— 当前仅 `logging.basicConfig` 无 JSON formatter、无 task_id 关联
+
+- [ ] **P1** 修复关键错误吞掉点
+
+      —— `pipeline/state.py:228` `load_stage_output` 异常返回 None 无日志
+      —— `pipeline/runner.py:617` `_collect_stage_output_files` 异常无日志
+      —— `api/ws_events.py:362, 375, 381` WebSocket 错误静默吞掉
+
+- [ ] **P2** 新增 `docs/observability.md` 文档化可观测性策略
+
+### 8.8 P2：配置硬编码
+
+> 详见审查报告 §12。
+
+- [ ] **P2** `config.py` 扩展配置项
+
+      —— `crawler_ua` / `crawler_rate_limit_seconds` / `compaction_*` /
+      `stage_timeouts` / `max_download_bytes`
+      —— 当前 `crawler.py:35-39, 58` / `compaction.py:27-29` /
+      `runner.py:81-89` / `acquisition.py:34` 均硬编码
+
+- [ ] **P2** `config.py` 启动时校验 `DASHSCOPE_API_KEY` 非空
+
+      —— 否则 fail fast，避免延迟失败掩盖配置问题
+
+- [ ] **P2** `config.py` `OUTPUT_DIR` 改为绝对路径默认值
+
+      —— 当前默认 `data/output`（相对路径）cwd 依赖，生产环境风险

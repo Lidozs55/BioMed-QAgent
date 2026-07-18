@@ -23,6 +23,7 @@ from app.domain.contracts import (
     TaskState,
     ToolCompletedPayload,
     ToolStartedPayload,
+    WarningPayload,
     build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
@@ -114,6 +115,7 @@ class AgentRunExecutor:
         iterator = result.stream_events().__aiter__()
         pending_event: asyncio.Task | None = None
         tool_names: dict[str, str] = {}
+        truncation_warned = False
         try:
             while True:
                 if pending_event is None:
@@ -135,6 +137,24 @@ class AgentRunExecutor:
                     text_delta = _extract_text_delta(event.data)
                     if text_delta:
                         await text_buffer.add(text_delta)
+                    # 检测 LLM 截断:finish_reason="length" 时发射 warning
+                    # (见 docs/REVIEW_2026-07-18.md §2)。
+                    finish_reason = _extract_finish_reason(event.data)
+                    if (
+                        finish_reason == "length"
+                        and not truncation_warned
+                    ):
+                        truncation_warned = True
+                        await text_buffer.flush()
+                        await execution.emit(
+                            WarningPayload(
+                                code="llm_output_truncated",
+                                message=(
+                                    "LLM output was truncated due to max_tokens "
+                                    "(finish_reason=length)"
+                                ),
+                            )
+                        )
                     continue
                 if not isinstance(event, RunItemStreamEvent):
                     continue
@@ -232,6 +252,22 @@ class AgentRunExecutor:
                 await self._consume_events(execution, result, text_buffer)
             finally:
                 await text_buffer.flush()
+            # final_output 校验:若 Agent 未产出有效输出则抛异常,
+            # 避免 LLM 截断/不调 tool 时静默 completed。
+            # 见 docs/REVIEW_2026-07-18.md §2。
+            # 用 getattr 安全访问:mock result 可能没有 final_output 属性,
+            # 此时跳过校验(测试场景由测试自身保证语义)。
+            if not execution.context.cancellation_requested.is_set():
+                final_output = getattr(result, "final_output", None)
+                if isinstance(final_output, str) and not final_output.strip():
+                    raise RuntimeError(
+                        "agent returned empty final_output; "
+                        "refusing to silently complete without output"
+                    )
+                # 真实 SDK result 有 final_output 属性，标记 agent_executed
+                # 让 manager 的成功证据校验生效。
+                if hasattr(result, "final_output"):
+                    execution.mark_agent_executed()
         finally:
             terminal_error: BaseException | None = None
             try:
@@ -255,6 +291,23 @@ class AgentRunExecutor:
             return
         pending = take_pending()
         if pending is None:
+            # Agent 未产出 pending publication(未调 tool 或 tool 未产出 artifact)。
+            # 发射 warning 让用户知道无 artifact 产出。
+            # manager 的成功证据校验会把空 completion_events 转 RunFailed
+            # (见 docs/REVIEW_2026-07-18.md §1)。
+            if (
+                not execution.context.cancellation_requested.is_set()
+                and execution.agent_executed
+            ):
+                await execution.emit(
+                    WarningPayload(
+                        code="artifact_manifest_missing",
+                        message=(
+                            "agent completed but no pending publication "
+                            "was produced (manifest missing)"
+                        ),
+                    )
+                )
             return
         if isinstance(pending, PendingPublicationCleanup):
             try:
@@ -513,4 +566,21 @@ def _extract_text_delta(data) -> str | None:
     direct_delta = getattr(data, "delta", None)
     if direct_delta:
         return direct_delta
+    return None
+
+
+def _extract_finish_reason(data) -> str | None:
+    """从 ChatCompletions 原始事件中提取 finish_reason。
+
+    DashScope/Qwen 走 Chat Completions 路径，finish_reason 位于
+    chunk.choices[0].finish_reason。SDK 在 finish_reason="length" 时
+    不抛异常，把 partial content 当 final_output 返回，因此需要
+    主动检测并发射 warning（见 docs/REVIEW_2026-07-18.md §2）。
+    """
+    choices = getattr(data, "choices", None)
+    if not choices:
+        return None
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    if isinstance(finish_reason, str) and finish_reason:
+        return finish_reason
     return None

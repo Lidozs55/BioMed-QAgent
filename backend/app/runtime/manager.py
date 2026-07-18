@@ -153,6 +153,7 @@ class RunExecution:
         init=False,
         repr=False,
     )
+    _agent_executed: bool = field(default=False, init=False, repr=False)
 
     def set_streaming_result(self, result: StreamingRunResult) -> None:
         if self._streaming_result is not None and self._streaming_result is not result:
@@ -309,6 +310,20 @@ class RunExecution:
 
         self._completion_committer = None
         self._completion_aborter = None
+
+    def mark_agent_executed(self) -> None:
+        """Mark that the real AgentRunExecutor completed this Run.
+
+        Used by manager's success-evidence check to distinguish a real
+        Agent executor that produced no artifacts from a mock executor
+        used in tests. See docs/REVIEW_2026-07-18.md §1.
+        """
+
+        self._agent_executed = True
+
+    @property
+    def agent_executed(self) -> bool:
+        return self._agent_executed
 
     def request_cancellation(self) -> bool:
         """Set the cooperative token unless formal completion already won."""
@@ -1206,6 +1221,31 @@ class TaskManager:
                             stage_attempt_id=completion_event.stage_attempt_id,
                             timestamp=completion_event.timestamp,
                         )
+                    # 成功证据校验：AGENT 模式下若 AgentRunExecutor 真的跑过
+                    # 但未产出任何 artifact 事件，转 RunFailedPayload 而非
+                    # RunCompletedPayload。修复"LLM 完成但无 artifact"与
+                    # "LLM 截断静默完成"两个症状
+                    # (见 docs/REVIEW_2026-07-18.md §0、§1、§2)。
+                    # agent_executed 标记由 AgentRunExecutor 在真实 SDK result
+                    # 完成时设置，mock executor 不设置，避免破坏测试。
+                    if (
+                        execution.mode is TaskMode.AGENT
+                        and execution.agent_executed
+                        and not completion_events
+                        and not execution.context.cancellation_requested.is_set()
+                    ):
+                        await self._append_status(
+                            accepted,
+                            RunFailedPayload(
+                                error=(
+                                    "agent completed without producing any artifacts "
+                                    "(manifest missing or unchanged)"
+                                ),
+                            ),
+                        )
+                        completion_durable = True
+                        execution.discard_completion()
+                        return
                     await self._append_completion_status(
                         accepted,
                         RunCompletedPayload(),
