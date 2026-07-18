@@ -1,6 +1,6 @@
 """Tests for the reactome skill — search_reactome and get_pathway.
 
-Tests the three-tier fallback chain (api > httpx > requires_crawl) using
+Tests the three-tier fallback chain (api > httpx > crawl) using
 mocked crawler functions.
 """
 from __future__ import annotations

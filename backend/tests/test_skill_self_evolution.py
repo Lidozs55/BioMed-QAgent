@@ -25,6 +25,8 @@ from app.skills.evolution import (
     list_learned_skills,
     load_learned_skill,
     save_learned_skill,
+    validate_skill_code,
+    validate_skill_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -248,3 +250,193 @@ def test_list_my_learned_skills_tool_returns_skills(learned_base: Path) -> None:
     assert data["status"] == "ok"
     assert data["count"] >= 1
     assert any(s["name"] == "listable_skill" for s in data["skills"])
+
+
+# ---------------------------------------------------------------------------
+# Security regression tests (BLOCKER fix — docs/REVIEW_2026-07-18.md §17.3 #6)
+#
+# save_workflow_as_skill is an LLM-facing @function_tool. ``name`` and
+# ``code`` are attacker-controlled via prompt injection. These tests pin the
+# path-traversal regex and the AST code validator so the RCE chain stays
+# blocked across future refactors.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "../escape",           # path traversal
+        "..\\escape",          # windows path traversal
+        "/abs/path",           # absolute path
+        "evil.py",             # file extension injection
+        "MySkill",             # uppercase
+        "123skill",            # starts with digit
+        "skill-name",          # hyphen
+        "skill name",          # space
+        "",                    # empty
+        "skill.with.dots",     # dots
+    ],
+)
+def test_validate_skill_name_rejects_invalid_formats(bad_name: str) -> None:
+    """validate_skill_name rejects path-traversal and non-identifier names."""
+    with pytest.raises(ValueError, match="Invalid skill name"):
+        validate_skill_name(bad_name)
+
+
+@pytest.mark.parametrize(
+    "good_name",
+    ["s", "skill", "my_skill", "skill123", "a_b_c_123"],
+)
+def test_validate_skill_name_accepts_valid_formats(good_name: str) -> None:
+    """validate_skill_name accepts lowercase identifiers."""
+    validate_skill_name(good_name)  # must not raise
+
+
+def test_validate_skill_code_accepts_sample_skill_code() -> None:
+    """The existing sample skill code passes AST validation."""
+    validate_skill_code(_SAMPLE_SKILL_CODE)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "bad_code",
+    [
+        "import os\n",                       # bare import
+        "import subprocess\n",               # bare import (subprocess)
+        "from os import system\n",           # non-whitelisted from import
+        "from subprocess import run\n",      # non-whitelisted from import
+        "from pathlib import Path\n",        # non-whitelisted (path traversal)
+        "exec('print(1)')\n",                # exec
+        "eval('1+1')\n",                     # eval
+        "compile('x', '<s>', 'exec')\n",     # compile
+        "open('/etc/passwd').read()\n",      # open
+        "__import__('os')\n",                # __import__ call
+        "globals()\n",                       # globals
+        "locals()\n",                        # locals
+        "vars()\n",                          # vars
+        "breakpoint()\n",                    # breakpoint
+        "obj.__class__\n",                   # dunder attribute access
+        "obj.__subclasses__()\n",            # dunder attribute (subclasses escape)
+        "x = __builtins__\n",                # dunder name
+    ],
+)
+def test_validate_skill_code_rejects_dangerous_constructs(
+    bad_code: str,
+) -> None:
+    """validate_skill_code blocks RCE primitives and sandbox escapes."""
+    with pytest.raises(ValueError):
+        validate_skill_code(bad_code)
+
+
+def test_validate_skill_code_reports_line_number() -> None:
+    """Error message includes the offending line number for triage."""
+    code = "x = 1\nexec('boom')\n"
+    with pytest.raises(ValueError, match="line 2"):
+        validate_skill_code(code)
+
+
+def test_save_learned_skill_rejects_path_traversal_name(
+    learned_base: Path,
+) -> None:
+    """save_learned_skill refuses names that would escape learned/."""
+    with pytest.raises(ValueError, match="Invalid skill name"):
+        save_learned_skill(
+            name="../malicious",
+            category="processing",
+            code="# stub\n",
+            description="bad",
+            instructions="bad",
+            source_url="https://example.com",
+            task_id="task-evil",
+        )
+    # Nothing should have been written outside learned/
+    assert not (learned_base.parent / "malicious").exists()
+
+
+def test_save_learned_skill_rejects_dangerous_code(
+    learned_base: Path,
+) -> None:
+    """save_learned_skill refuses code containing exec()."""
+    with pytest.raises(ValueError, match="forbidden"):
+        save_learned_skill(
+            name="ok_name",
+            category="processing",
+            code="exec('rm -rf /')\n",
+            description="bad",
+            instructions="bad",
+            source_url="https://example.com",
+            task_id="task-evil",
+        )
+
+
+def test_load_learned_skill_rejects_path_traversal_name(
+    learned_base: Path,
+) -> None:
+    """load_learned_skill returns None for path-traversal names (no raise)."""
+    result = load_learned_skill("../escape", "processing")
+    assert result is None
+
+
+def test_load_learned_skill_rejects_tampered_code(
+    learned_base: Path,
+) -> None:
+    """If a .py file is tampered post-save to add exec(), load refuses it."""
+    # Save a valid skill first.
+    save_learned_skill(
+        name="tampered_skill",
+        category="processing",
+        code=_SAMPLE_SKILL_CODE,
+        description="ok",
+        instructions="ok",
+        source_url="https://example.com",
+        task_id="task-tamper",
+    )
+    # Tamper with the on-disk file to inject a forbidden call.
+    skill_file = learned_base / "processing" / "tampered_skill" / "tampered_skill.py"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8") + "\nexec('evil')\n",
+        encoding="utf-8",
+    )
+    # load_learned_skill must refuse to import the tampered file.
+    result = load_learned_skill("tampered_skill", "processing")
+    assert result is None
+
+
+def test_save_workflow_as_skill_tool_rejects_path_traversal(
+    learned_base: Path,
+) -> None:
+    """End-to-end: the LLM-facing tool returns status='error' for bad names."""
+    ctx = _make_ctx(task_id="test_evo_evil")
+    args = json.dumps({
+        "name": "../malicious",
+        "category": "processing",
+        "code": "# stub\n",
+        "description": "evil",
+        "source_url": "https://example.com",
+    })
+    result = asyncio.run(save_workflow_as_skill.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "Invalid skill name" in data["error"]
+
+    # Ensure nothing was written outside learned/.
+    assert not (learned_base.parent / "malicious").exists()
+
+
+def test_save_workflow_as_skill_tool_rejects_dangerous_code(
+    learned_base: Path,
+) -> None:
+    """End-to-end: the LLM-facing tool returns status='error' for exec()."""
+    ctx = _make_ctx(task_id="test_evo_exec")
+    args = json.dumps({
+        "name": "evil_skill",
+        "category": "processing",
+        "code": "exec('rm -rf /')\n",
+        "description": "evil",
+        "source_url": "https://example.com",
+    })
+    result = asyncio.run(save_workflow_as_skill.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "forbidden" in data["error"] or "exec" in data["error"]

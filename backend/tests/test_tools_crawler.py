@@ -1,22 +1,14 @@
-"""Tests for the unified crawler layer — crawler.py and crawl_signal.py.
+"""Tests for the unified crawler layer — crawler.py.
 
-Tests the three-tier fallback chain (api > httpx > crawl), rate limiter,
-and requires_crawl signal mechanism.
+Tests the three-tier fallback chain (api > httpx > crawl) and rate limiter.
 """
 from __future__ import annotations
 
-import json
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.tools.crawl_signal import (
-    check_requires_crawl,
-    extract_crawl_target,
-    requires_crawl,
-    requires_crawl_json,
-)
 from app.tools.crawler import (
     BROWSER_HEADERS,
     BROWSER_UA,
@@ -459,75 +451,6 @@ def test_fetch_with_fallback_no_api_url() -> None:
 
     mock_api.assert_not_called()
     assert result.method_used == "httpx"
-
-
-# ---------------------------------------------------------------------------
-# crawl_signal
-# ---------------------------------------------------------------------------
-
-
-def test_requires_crawl_signal_dict() -> None:
-    """requires_crawl() returns correct signal dict."""
-    signal = requires_crawl(
-        source="pubchem",
-        reason="API and httpx failed",
-        tried_methods=["api", "httpx"],
-        target_url="https://pubchem.ncbi.nlm.nih.gov",
-    )
-    assert signal["status"] == "requires_crawl"
-    assert signal["source"] == "pubchem"
-    assert signal["reason"] == "API and httpx failed"
-    assert signal["tried_methods"] == ["api", "httpx"]
-    assert signal["target_url"] == "https://pubchem.ncbi.nlm.nih.gov"
-
-
-def test_requires_crawl_json_string() -> None:
-    """requires_crawl_json() returns valid JSON string."""
-    json_str = requires_crawl_json(
-        source="tcmsp",
-        reason="blocked",
-        tried_methods=["api"],
-    )
-    data = json.loads(json_str)
-    assert data["status"] == "requires_crawl"
-    assert data["source"] == "tcmsp"
-
-
-def test_check_requires_crawl_detects_signal() -> None:
-    """check_requires_crawl() detects signal in dict and JSON string."""
-    # Dict input
-    signal_dict = requires_crawl("test", "reason")
-    assert check_requires_crawl(signal_dict) is True
-
-    # JSON string input
-    signal_json = requires_crawl_json("test", "reason")
-    assert check_requires_crawl(signal_json) is True
-
-    # Non-signal dict
-    assert check_requires_crawl({"status": "ok"}) is False
-
-    # Non-signal JSON
-    assert check_requires_crawl('{"status": "ok"}') is False
-
-    # Invalid JSON
-    assert check_requires_crawl("not json") is False
-
-
-def test_extract_crawl_target() -> None:
-    """extract_crawl_target() returns url and source from signal."""
-    signal = requires_crawl(
-        source="pubchem",
-        reason="failed",
-        target_url="https://example.com",
-    )
-    url, source = extract_crawl_target(signal)
-    assert url == "https://example.com"
-    assert source == "pubchem"
-
-    # Non-signal returns None, None
-    url, source = extract_crawl_target({"status": "ok"})
-    assert url is None
-    assert source is None
 
 
 def test_browser_headers_contain_required_fields() -> None:

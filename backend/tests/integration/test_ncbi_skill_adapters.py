@@ -89,7 +89,21 @@ async def test_pubmed_and_geo_discovery_adapters_use_typed_services(
     assert geo["records"][0]["pubmed_id"] == "34180400"
     assert described["accession"] == "GSE178352"
     assert described["sample_count"] == 12
-    assert described["platforms"] == [{"id": "GPL24676", "title": "", "organism": ""}]
+    # esummary exposes platform_ids (GPL*) but not per-platform title/organism.
+    # Regression guard for docs/REVIEW_2026-07-18.md §17.3 item 1 — the old
+    # describe_geo_adapter fabricated ``platforms=[{id, title:"", organism:""}]``
+    # with hardcoded empty strings. Now we surface real platform_ids and a
+    # derivable supplementary_file_listing_url instead.
+    assert described["platform_ids"] == ["GPL24676"]
+    assert described["platform_count"] == 1
+    assert described["supplementary_file_listing_url"] == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/"
+    )
+    assert "note" in described
+    # Forbidden fabricated placeholders — must never come back.
+    assert "platforms" not in described
+    assert "overall_design" not in described
+    assert "supplementary_file_urls" not in described
     assert client.geo_summary_ids.count("200178352") == 2
     assert all(value.isdigit() for value in client.geo_summary_ids)
     assert context.query_log[0]["status"] == "completed"

@@ -142,19 +142,38 @@ async def describe_geo_adapter(
     *,
     services: NcbiServices,
 ) -> str:
-    """Resolve and serialize one GSE record through NCBI E-utilities."""
+    """Resolve and serialize one GSE record through NCBI E-utilities.
+
+    NCBI E-utilities ``esummary`` against the ``gds`` database exposes only
+    series-level metadata (title, summary, organism, experiment_type, samples,
+    platform IDs, PubMed IDs, FTP root). It does **not** return per-platform
+    title/organism, overall_design, or supplementary file URLs — those require
+    fetching the GEO FTP ``suppl/`` listing separately. We surface the listing
+    URL rather than fabricating empty placeholders so callers can decide
+    whether to enumerate supplementary files via ``download_geo(file_type="suppl")``.
+    """
 
     try:
         record = await describe_geo_series(services.eutils, accession)
         payload = _geo_record_json(record)
+        suppl_listing_url = ""
+        if record.ftp_root:
+            suppl_listing_url = _https_ftp_root(
+                record.ftp_root, record.accession
+            ) + "suppl/"
         payload.update(
             {
-                "overall_design": "",
-                "platforms": [
-                    {"id": value, "title": "", "organism": ""}
-                    for value in record.platform_ids
-                ],
-                "supplementary_file_urls": [],
+                # Real, derivable URL — caller can fetch this for suppl file list.
+                "supplementary_file_listing_url": suppl_listing_url,
+                # Honest note: fields not exposed by NCBI esummary. Don't
+                # fabricate empty placeholders that imply the data is there.
+                "note": (
+                    "NCBI E-utilities esummary does not expose overall_design, "
+                    "per-platform title/organism, or supplementary file URLs. "
+                    "Use platform_ids for GPL lookups and "
+                    "supplementary_file_listing_url (or download_geo with "
+                    "file_type='suppl') to enumerate supplementary files."
+                ),
             }
         )
         return json.dumps(

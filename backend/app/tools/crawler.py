@@ -6,7 +6,6 @@ skills. The design follows the project_memory hard constraints:
 - All crawlers use real browser User-Agent, Referer headers, and 2s rate limiting
 - JS-heavy sites use Playwright Chromium with stealth scripts and networkidle
 - Non-JS sites use httpx + BeautifulSoup with retry mechanism
-- Sources without API functions trigger ``requires_crawl`` signal
 
 Three-tier fallback chain:
     1. API first (httpx calling REST endpoint, structured JSON)

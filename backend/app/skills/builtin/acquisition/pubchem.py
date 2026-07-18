@@ -131,7 +131,10 @@ def search_pubchem(
             source_name="pubchem",
             accept_result=_accept_pubchem_page,
         )
-        run_ctx.log_query(term, "pubchem", "ok", 1)
+        # Page fallback returns only a visible-text preview, not structured
+        # records — log honestly so query_log/metrics don't overstate success.
+        # See docs/REVIEW_2026-07-18.md §17.3 item 2.
+        run_ctx.log_query(term, "pubchem", "page_fallback", 0)
         return _page_fallback("pubchem", page_url, page_result)
     except CrawlError as exc:
         run_ctx.log_query(term, "pubchem", "error", 0)
@@ -212,7 +215,9 @@ def get_compound(
             source_name="pubchem",
             accept_result=_accept_pubchem_page,
         )
-        run_ctx.log_query(str(cid), "pubchem", "ok", 1)
+        # Page fallback returns only a visible-text preview, not structured
+        # compound records — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
+        run_ctx.log_query(str(cid), "pubchem", "page_fallback", 0)
         return _page_fallback("pubchem", page_url, page_result)
     except CrawlError as exc:
         run_ctx.log_query(str(cid), "pubchem", "error", 0)

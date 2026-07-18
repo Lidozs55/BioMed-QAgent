@@ -199,7 +199,10 @@ def search_reactome(
             source_name="reactome",
             accept_result=_accept_reactome_page,
         )
-        run_ctx.log_query(term, "reactome", "ok", 1)
+        # Page fallback returns only a visible-text preview, not structured
+        # pathway records — log honestly so query_log/metrics don't overstate
+        # success. See docs/REVIEW_2026-07-18.md §17.3 item 3.
+        run_ctx.log_query(term, "reactome", "page_fallback", 0)
         return _page_fallback("reactome", page_url, page_result)
     except CrawlError as exc:
         run_ctx.log_query(term, "reactome", "error", 0)
@@ -281,7 +284,9 @@ def get_pathway(
             source_name="reactome",
             accept_result=_accept_reactome_page,
         )
-        run_ctx.log_query(pathway_id, "reactome", "ok", 1)
+        # Page fallback returns only a visible-text preview, not structured
+        # pathway details — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
+        run_ctx.log_query(pathway_id, "reactome", "page_fallback", 0)
         return _page_fallback("reactome", page_url, page_result)
     except CrawlError as exc:
         run_ctx.log_query(pathway_id, "reactome", "error", 0)
