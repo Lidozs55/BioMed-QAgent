@@ -22,7 +22,7 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
 
@@ -177,7 +177,7 @@ def search_reactome(
                     "url": f"{_REACTOME_PAGE_BASE}/{e.get('stId', '')}",
                 }
                 records.append(record)
-            run_ctx.log_query(term, "reactome", "ok", len(records))
+            run_ctx.log_query(term, "reactome", QueryStatus.SUCCESS, len(records))
             return json.dumps({
                 "source": "reactome",
                 "term": term,
@@ -202,10 +202,10 @@ def search_reactome(
         # Page fallback returns only a visible-text preview, not structured
         # pathway records — log honestly so query_log/metrics don't overstate
         # success. See docs/REVIEW_2026-07-18.md §17.3 item 3.
-        run_ctx.log_query(term, "reactome", "page_fallback", 0)
+        run_ctx.log_query(term, "reactome", QueryStatus.PAGE_FALLBACK, 0)
         return _page_fallback("reactome", page_url, page_result)
     except CrawlError as exc:
-        run_ctx.log_query(term, "reactome", "error", 0)
+        run_ctx.log_query(term, "reactome", QueryStatus.FAILED, 0)
         return _fallback_error("reactome", page_url, exc)
 
 
@@ -254,7 +254,7 @@ def get_pathway(
                 "summation": _strip_html(data.get("summation", "")),
                 "release_date": data.get("releaseDate", ""),
             }
-            run_ctx.log_query(pathway_id, "reactome", "ok", 1)
+            run_ctx.log_query(pathway_id, "reactome", QueryStatus.SUCCESS, 1)
 
             source_record = SourceRecord(
                 source_id=make_source_id(Database.REACTOME, pathway_id, api_url),
@@ -286,10 +286,10 @@ def get_pathway(
         )
         # Page fallback returns only a visible-text preview, not structured
         # pathway details — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
-        run_ctx.log_query(pathway_id, "reactome", "page_fallback", 0)
+        run_ctx.log_query(pathway_id, "reactome", QueryStatus.PAGE_FALLBACK, 0)
         return _page_fallback("reactome", page_url, page_result)
     except CrawlError as exc:
-        run_ctx.log_query(pathway_id, "reactome", "error", 0)
+        run_ctx.log_query(pathway_id, "reactome", QueryStatus.FAILED, 0)
         return _fallback_error("reactome", page_url, exc)
 
 

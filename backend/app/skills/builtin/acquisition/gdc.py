@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         })
         data = _fetch_json(url)
     except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
-        run_ctx.log_query(term, "gdc", "error", 0)
+        run_ctx.log_query(term, "gdc", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "gdc",
             "term": term,
@@ -235,7 +235,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         if len(records) >= max_results:
             break
 
-    run_ctx.log_query(term, "gdc", "ok", len(records))
+    run_ctx.log_query(term, "gdc", QueryStatus.SUCCESS, len(records))
 
     return json.dumps({
         "source": "gdc",
@@ -287,7 +287,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     except Exception as exc:
         # /projects/{id} returns HTTP 404 with {"message": "... not found"}
         # for unknown projects — surfaced here as a network-level exception.
-        run_ctx.log_query(project_id, "gdc", "failed", 0)
+        run_ctx.log_query(project_id, "gdc", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "gdc",
             "project_id": project_id,
@@ -298,7 +298,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     # (NOT a hits[] array like the /projects collection endpoint).
     project_data: dict[str, Any] = data.get("data") or {}
     if not project_data or "project_id" not in project_data:
-        run_ctx.log_query(project_id, "gdc", "failed", 0)
+        run_ctx.log_query(project_id, "gdc", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "gdc",
             "project_id": project_id,
@@ -318,7 +318,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     for es in (summary.get("experimental_strategies", []) or []):
         exp_strategies.append(es.get("experimental_strategy", ""))
 
-    run_ctx.log_query(project_id, "gdc", "succeeded", 1)
+    run_ctx.log_query(project_id, "gdc", QueryStatus.SUCCESS, 1)
     return json.dumps({
         "source": "gdc",
         "project_id": project_data.get("project_id", project_id),

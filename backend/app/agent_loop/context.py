@@ -13,7 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from app.domain.contracts import EventEnvelope, StageName, UserInputResumedPayload
+from app.domain.contracts import (
+    EventEnvelope,
+    QueryStatus,
+    StageName,
+    UserInputResumedPayload,
+)
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
@@ -270,14 +275,26 @@ class RunContext:
         )
 
     def log_query(
-        self, query: str, source: str, status: str, records_count: int = 0
+        self,
+        query: str,
+        source: str,
+        status: QueryStatus | str,
+        records_count: int = 0,
     ) -> None:
-        """记录一次查询日志。"""
+        """记录一次查询日志。
+
+        ``status`` 接受 ``QueryStatus`` 枚举或字符串。枚举值会被序列化为
+        其字符串形式（``QueryStatus.SUCCESS`` → ``"success"``），保证
+        ``query_log`` JSON 可序列化且跨 skill 一致（TODO §1.8）。
+        """
+        # 支持 QueryStatus 枚举传入;StrEnum 的 __str__ 返回 value,
+        # 但显式转换避免任何边界情况。
+        status_value = status.value if isinstance(status, QueryStatus) else str(status)
         self.query_log.append(
             {
                 "query": query,
                 "source": source,
-                "status": status,
+                "status": status_value,
                 "records_count": records_count,
             }
         )

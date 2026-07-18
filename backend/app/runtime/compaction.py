@@ -15,6 +15,7 @@ from typing import Any
 from agents import Agent, Runner
 from agents.items import TResponseInputItem
 from agents.memory import Session
+from agents.stream_events import RawResponsesStreamEvent
 
 from app.domain.contracts import (
     ConversationCompactedPayload,
@@ -49,6 +50,34 @@ class HistoryAlignmentError(ValueError):
 
 class CompactionCancelledError(RuntimeError):
     """Raised when cancellation wins before a new Agent Run starts."""
+
+
+class ConversationSummarizerTruncatedError(RuntimeError):
+    """Raised when the summarizer LLM output was truncated (``finish_reason=length``).
+
+    Per TODO §8.4 and the project_memory L1 hard constraint ("LLM failures must
+    throw exceptions"), this MUST propagate rather than trigger the silent
+    fallback in ``ConversationCompactor._fallback`` — a truncated summary is
+    garbage data that would corrupt the conversation context instead of
+    compacting it faithfully.
+    """
+
+
+def _extract_finish_reason(data: object) -> str | None:
+    """Extract ``finish_reason`` from a ChatCompletions raw response event.
+
+    Mirrors ``app.agent_loop.runner._extract_finish_reason``; duplicated here
+    to avoid a circular import (``agent_loop/runner.py`` imports
+    ``ConversationCompactor``). DashScope/Qwen routes through the Chat
+    Completions path, so ``finish_reason`` lives on ``chunk.choices[0]``.
+    """
+    choices = getattr(data, "choices", None)
+    if not choices:
+        return None
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    if isinstance(finish_reason, str) and finish_reason:
+        return finish_reason
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,11 +262,38 @@ async def _summarize_with_model(
         "previous_summary": previous_summary,
         "history": history,
     }
-    result = await Runner.run(
+    # Use streaming instead of ``Runner.run`` so we can observe
+    # ``finish_reason`` from ``RawResponsesStreamEvent``. The non-streaming
+    # ``RunResult.raw_responses`` only exposes ``ModelResponse`` which does
+    # NOT carry ``finish_reason`` (see agents/items.py:658). Mirrors the
+    # pattern in ``app/agent_loop/runner.py:163-184``.
+    #
+    # NOTE: ``Runner.run_streamed`` returns a ``RunResultStreaming`` directly
+    # (it is NOT a coroutine) — the streaming happens via the async iterator
+    # ``result.stream_events()``.
+    result = Runner.run_streamed(
         summarizer,
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
         max_turns=1,
     )
+
+    finish_reason: str | None = None
+    async for event in result.stream_events():
+        if isinstance(event, RawResponsesStreamEvent):
+            fr = _extract_finish_reason(event.data)
+            if fr:
+                finish_reason = fr
+
+    # Per TODO §8.4: ``finish_reason="length"`` means the LLM hit the token
+    # limit and the summary is partial garbage. Propagate as a hard error
+    # instead of letting the outer ``_fallback`` silently degrade — a
+    # truncated summary would corrupt the conversation context.
+    if finish_reason == "length":
+        raise ConversationSummarizerTruncatedError(
+            "conversation summarizer LLM output was truncated "
+            "(finish_reason=length); refusing to use a partial summary"
+        )
+
     summary = result.final_output
     if not isinstance(summary, str) or not summary.strip():
         raise ValueError("conversation summarizer returned no text")
@@ -348,6 +404,10 @@ class ConversationCompactor:
                 )
         except CompactionCancelledError:
             raise
+        except ConversationSummarizerTruncatedError:
+            # Per TODO §8.4: length-truncated summaries are garbage data and
+            # MUST propagate — do NOT trigger the silent ``_fallback`` path.
+            raise
         except Exception as error:
             self._raise_if_cancelled(cancellation_requested)
             return await self._fallback(
@@ -447,4 +507,5 @@ __all__ = [
     "CompactionPreparation",
     "CompactionCancelledError",
     "ConversationCompactor",
+    "ConversationSummarizerTruncatedError",
 ]

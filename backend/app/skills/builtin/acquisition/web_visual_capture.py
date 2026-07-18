@@ -28,7 +28,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, StageName, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, StageName, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import playwright_screenshot
 from app.tools.workdir import TaskWorkDir
@@ -157,7 +157,7 @@ async def _do_capture(
     try:
         validated_label = _validate_label(label)
     except ValueError as exc:
-        run_ctx.log_query(url, "web_visual_capture", "failed", 0)
+        run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
         return json.dumps(
             {
                 "source": "web_visual_capture",
@@ -183,7 +183,7 @@ async def _do_capture(
         )
 
         if not result.ok:
-            run_ctx.log_query(url, "web_visual_capture", "failed", 0)
+            run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
             run_ctx.add_warning(
                 severity="warning",
                 message=f"capture failed for {url}: {result.error or result.status_code}",
@@ -204,7 +204,7 @@ async def _do_capture(
             )
 
         if not temp_path.exists() or temp_path.stat().st_size == 0:
-            run_ctx.log_query(url, "web_visual_capture", "failed", 0)
+            run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
             return json.dumps(
                 {
                     "source": "web_visual_capture",
@@ -261,7 +261,7 @@ async def _do_capture(
         )
         run_ctx.add_source(source_record)
         run_ctx.add_raw_asset(str(dest_path))
-        run_ctx.log_query(url, "web_visual_capture", "succeeded", 1)
+        run_ctx.log_query(url, "web_visual_capture", QueryStatus.SUCCESS, 1)
 
         # Surface acquisition progress (docs/REVIEW_2026-07-18.md §4)
         await run_ctx.emit_progress(
@@ -312,7 +312,7 @@ async def _do_capture(
         )
     except Exception as exc:
         logger.exception("web_visual_capture failed for url=%r", url)
-        run_ctx.log_query(url, "web_visual_capture", "failed", 0)
+        run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
         run_ctx.add_warning(
             severity="warning",
             message=f"capture raised for {url}: {exc}",

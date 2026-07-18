@@ -90,7 +90,7 @@ def test_search_xena_success() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "ok"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_search_xena_network_error_returns_error_json() -> None:
@@ -109,7 +109,7 @@ def test_search_xena_network_error_returns_error_json() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "error"
+    assert rc.query_log[0]["status"] == "failed"
 
 
 def test_search_xena_empty_term_returns_all() -> None:

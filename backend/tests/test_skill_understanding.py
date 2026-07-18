@@ -121,7 +121,7 @@ def test_query_log_recorded() -> None:
     assert len(ctx.context.query_log) == 1
     entry = ctx.context.query_log[0]
     assert entry["source"] == "literature_understanding"
-    assert entry["status"] == "completed"
+    assert entry["status"] == "success"
     assert entry["records_count"] == 1
 
 

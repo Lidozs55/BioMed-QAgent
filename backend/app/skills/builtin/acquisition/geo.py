@@ -14,7 +14,7 @@ import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, DataLevel, SourceRecord, StageName
+from app.domain.contracts import Database, DataLevel, QueryStatus, SourceRecord, StageName
 from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.discovery import (
     describe_geo_series,
@@ -100,7 +100,7 @@ async def search_geo_adapter(
     try:
         result = await search_geo_series(services.eutils, term, max_results)
         records = [_geo_record_json(record) for record in result.records]
-        run_ctx.log_query(term, "geo", "completed", len(records))
+        run_ctx.log_query(term, "geo", QueryStatus.SUCCESS, len(records))
         # Surface mid-stage progress: "GEO: found N datasets (of M total hits)".
         # See docs/REVIEW_2026-07-18.md §4.
         await run_ctx.emit_progress(
@@ -123,7 +123,7 @@ async def search_geo_adapter(
         )
     except Exception as exc:
         logger.exception("GEO search failed for term=%r", term)
-        run_ctx.log_query(term, "geo", "failed", 0)
+        run_ctx.log_query(term, "geo", QueryStatus.FAILED, 0)
         return json.dumps(
             {
                 "source": "geo",

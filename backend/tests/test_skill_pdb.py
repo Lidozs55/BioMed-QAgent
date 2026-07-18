@@ -122,7 +122,7 @@ def test_search_pdb_success() -> None:
     # log_query 应记录成功
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "ok"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_search_pdb_network_error_returns_error_json() -> None:
@@ -142,7 +142,7 @@ def test_search_pdb_network_error_returns_error_json() -> None:
     # log_query should record error
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "error"
+    assert rc.query_log[0]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------
