@@ -25,6 +25,7 @@ BUILTIN_SKILL_MODULES = (
     "app.skills.builtin.acquisition.web_visual_capture",
     "app.skills.builtin.processing.self_evolution",
     "app.skills.builtin.processing.extract_tables",
+    "app.skills.builtin.processing.extract_chart_data_vlm",
     "app.skills.builtin.analysis.stats",
 )
 

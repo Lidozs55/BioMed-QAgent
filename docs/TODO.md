@@ -503,43 +503,62 @@
 > **原始图片数据保留**：所有提取过的图表图片必须保存到 `source_assets/figures/`，
 > 作为复现/审计依据，并写入 `source_assets.csv`。
 
-- [ ] **P1** 新增 `extract_chart_data_vlm` 工具
+- [x] **P1** 新增 `extract_chart_data_vlm` 工具
 
       —— 输入：PDF 中的图片（pdfplumber.page.images 提取）或独立图片文件
       —— 调用 DashScope `qwen-vl-max`（OpenAI 兼容端点）
       —— 提示词要求严格 JSON 输出：`{chart_type, axes:{x:{label,unit,scale},y:{...}}, data_points:[{x,y,label}], legend:[...]}`
       —— 参考 `docs/legacy_skill_reference.md` §21 的 base64 编码方式
+      —— 实现：[backend/app/skills/builtin/processing/extract_chart_data_vlm.py](../backend/app/skills/builtin/processing/extract_chart_data_vlm.py)
+      —— VLM 客户端：[backend/app/agent_loop/vl_model.py](../backend/app/agent_loop/vl_model.py)
+      —— 多源输入：PNG/JPG/WEBP/GIF/PDF 统一分派；外部图片自动复制到 `source_assets/figures/`
+      —— 大图降采样：>10MB 图片 Pillow LANCZOS 重采样到 1920px 最长边
+      —— JSON 解析容错：剥离 markdown fence + 截断尾部 prose + 必需键校验
+      —— hint 参数：可选提示词增强（如 "scatter plot, log scale"）
+      —— 单元测试：[backend/tests/test_skill_extract_chart_data_vlm.py](../backend/tests/test_skill_extract_chart_data_vlm.py)（24 项）
+      —— live 测试：[backend/tests/live/test_extract_chart_data_vlm_live.py](../backend/tests/live/test_extract_chart_data_vlm_live.py)（PNG + PMC PDF 端到端）
 
-- [ ] **P1** 保留原始图片数据到 `source_assets/figures/`
+- [x] **P1** 保留原始图片数据到 `source_assets/figures/`
 
       —— 图片命名：`fig_<sha256[:12]>.<ext>`
       —— 走 `acquire_source()` 注册为 `SourceAsset`（mime_type=image/png 或 image/jpeg）
       —— 在 `source_assets.csv` 中标注 `asset_type=figure`
       —— 在 `download_log.csv` 记录提取来源（PDF 页码 / 源 URL）
+      —— 实现：`_ensure_image_in_figures()` 在 `extract_chart_data_vlm.py` 中，
+        外部图片通过 `shutil.copy2` 保留到 `figures/`；已在 figures/ 内的不复制。
+        `was_copied=True` 时调用 `run_ctx.add_raw_asset()` 注册 provenance。
 
-- [ ] **P1** 新增 `chart_data.csv` artifact
+- [x] **P1** 新增 `chart_data.csv` artifact
 
       —— 列：chart_id / source_asset_id / chart_type / x_label / x_unit / x_scale /
-      y_label / y_unit / y_scale / data_point_count / extracted_at / model_name
+        y_label / y_unit / y_scale / data_point_count / legend /
+        extracted_at / model_name / source_label
+      —— UTF-8 BOM 编码（`utf-8-sig`）兼容 Excel（TODO §1.7）
 
-- [ ] **P1** 新增 `chart_data_points.csv` artifact
+- [x] **P1** 新增 `chart_data_points.csv` artifact
 
       —— 列：point_id / chart_id / x_value / y_value / series_label / confidence
+      —— UTF-8 BOM 编码
 
-- [ ] **P2** 三级降级链实现
+- [x] **P2** 三级降级链实现
 
       —— L1: Qwen-VL（主路径，要求 DASHSCOPE_API_KEY 可用）
       —— L2: pdfplumber 表格 OCR（无 VL 模型时降级，仅提取表格非图表）
       —— L3: 仅保留 caption 文本（兜底，写入 warnings.csv 标记 `chart_unextracted`）
+      —— 实现：`_extract_from_pdf()` 按 L1→L2→L3 顺序，全部失败抛
+        `ChartExtractionError`（project_memory L1：禁止静默空数据降级）
 
-- [ ] **P2** 降级时在 `warnings.csv` 标记降级原因
+- [x] **P2** 降级时在 `warnings.csv` 标记降级原因
 
       —— 如 `model_unavailable` / `image_corrupted` / `unsupported_chart_type`
+      —— 实现：通过 `run_ctx.add_warning()` 记录每层失败的 source/severity/message，
+        响应 JSON 中 `degradation` 字段列出使用的 tier。
 
 - [ ] **P2** `validation.py` 新增 `chart_data` 完整性校验
 
       —— 每条 chart_data 必须有对应 source_asset_id
       —— 每条 chart_data_points 必须有对应 chart_id
+      —— 待办：`validation.py` 暂未纳入 chart_data 校验，下个迭代实现
 
 ### 5.3 OCR 能力
 

@@ -54,6 +54,7 @@ backend/app/skills/
 │   │   └── browser.py       # browser_fallback（兜底，委托 crawler 层）
 │   ├── processing/
 │   │   ├── extract_tables.py
+│   │   ├── extract_chart_data_vlm.py # 视觉模型图表提取（TODO §5.2）
 │   │   └── self_evolution.py # 元能力（强制加载）
 │   └── analysis/
 │       └── stats.py
@@ -375,6 +376,92 @@ def extract_my_format(ctx: RunContextWrapper[RunContext], file_path: str) -> str
 
 **必填字段**：`status`（`"ok"` | `"error"`）、`source_file`、`outputs[]`
 **失败时**：`status` 设为 `"error"`，追加 `"error": "..."`
+
+#### 6.3.1 extract_chart_data_vlm（视觉模型图表数据提取）
+
+**特殊点**：这是 TODO §5.2 视觉模型降级方案的实现，与其他 processing Tool 不同：
+
+- **多源输入**：`source_path` 既支持图片（PNG/JPG/WEBP/GIF）也支持 PDF，工具内部按 MIME 分派；
+- **异步 VLM 调用**：内部调用 `app/agent_loop/vl_model.py:call_vl_model`
+  （`qwen-vl-max` + `image_url` content part），需 `DASHSCOPE_API_KEY`；
+- **三级降级链**：L1 Qwen-VL → L2 pdfplumber 表格（仅 PDF）→ L3 caption 文本，
+  全部失败抛 `ChartExtractionError` 并返回 `status="error"`，禁止静默空数据降级
+  （project_memory L1）；
+- **双 CSV 产物**：`parsed/chart_data/chart_data.csv`（每图一行）+
+  `parsed/chart_data/chart_data_points.csv`（每数据点一行），UTF-8 BOM 编码；
+- **provenance**：每行 `source_asset_id=asset_<sha256>` 可追溯到原始图片/PDF。
+
+**入参约定**：
+
+```python
+@function_tool
+async def extract_chart_data_vlm(
+    ctx: RunContextWrapper[RunContext],
+    source_path: str,
+    hint: str = "",
+) -> str:
+    """从图片或 PDF 提取 chart 数据。
+
+    Args:
+        source_path: PNG/JPG/WEBP/GIF/PDF 文件路径（通常在
+            ``source_assets/figures/`` 或 ``source_assets/`` 下）。
+        hint: 可选提取提示（如 "scatter plot, log scale"），注入 VLM prompt。
+    """
+```
+
+**返回 JSON 结构（成功）**：
+
+```json
+{
+  "status": "ok",
+  "source_file": "fig_abc123def456.png",
+  "source_path": "/abs/path/to/fig_abc123def456.png",
+  "outputs": [
+    "/path/to/parsed/chart_data/chart_data.csv",
+    "/path/to/parsed/chart_data/chart_data_points.csv"
+  ],
+  "charts": [
+    {
+      "chart_id": "chart_asset_abc123def45678901234_1",
+      "chart_type": "bar",
+      "data_point_count": 4,
+      "source_asset_id": "asset_abc123...def456..."
+    }
+  ],
+  "total_charts": 1,
+  "total_data_points": 4,
+  "metas": [
+    {
+      "source_asset_id": "asset_abc123...",
+      "sha256": "abc123...def456...",
+      "tier": "L1_vlm",
+      "was_copied": false
+    }
+  ]
+}
+```
+
+**返回 JSON 结构（降级，含 L2/L3）**：在上述结构基础上追加
+`"degradation": ["L2_pdfplumber_tables"]` 或 `["L3_captions"]`。
+
+**返回 JSON 结构（全部失败）**：
+
+```json
+{
+  "status": "error",
+  "error": "All chart extraction tiers failed for /path/to/file.pdf ...",
+  "source_file": "file.pdf"
+}
+```
+
+**约束**：
+
+- 不支持的文件类型 → 立即返回 `status="error"`，不调用 VLM；
+- 文件不存在 → 立即返回 `status="error"`；
+- VLM 返回非 JSON 或缺少必需键（`chart_type`/`axes`/`data_points`）→
+  抛 `ChartExtractionError`，进入下一降级层；
+- PDF 嵌入图片超过 10 张 → 仅前 10 张送 VLM，剩余记 warning；
+- 大图（>10MB）由 Pillow LANCZOS 自动降采样到 1920px 最长边。
 
 ### 6.4 analysis 类 Tool
 
