@@ -758,36 +758,36 @@
 > 用户反馈："工具调用（目前有但是更新少）、工具调用结果（找到了多少篇论文、
 > 多少调数据、清洗剩余多少条数据），现在能看到的消息太少"。详见审查报告 §4。
 
-- [ ] **P0** 新增 `StageProgressPayload` 事件类型
+- [x] **P0** 新增 `StageProgressPayload` 事件类型
 
       —— 字段：`stage` / `kind` / `current` / `total` / `detail: dict`
       —— 挂到 `EventPayload` 联合（`backend/app/domain/contracts/events.py`）
 
-- [ ] **P0** Skills 在 `log_query` 后发射 progress 事件
+- [x] **P0** Skills 在 `log_query` 后发射 progress 事件
 
       —— `pubmed.py` / `geo.py` 的 `search_*_adapter` 发射
       `kind="discovered_records", current=len(records), total=result.total_count`
       —— 通过 `RunContext` 注入的 emit 回调（`backend/app/skills/builtin/`）
 
-- [ ] **P0** Acquisition / Processing 阶段发射 progress 事件
+- [x] **P0** Acquisition / Processing 阶段发射 progress 事件
 
       —— `acquisition.py:158-164` 在 `SourceAsset` 创建后发射
       `kind="downloaded_bytes"` / `kind="downloaded_records"`
       —— `processing.py` 在 `process_geo_tximport_counts` 返回后发射
       `kind="cleaned_rows", current=parsed.row_count`
 
-- [ ] **P0** Pipeline runner 新增 `_emit_progress_event`
+- [x] **P0** Pipeline runner 新增 `_emit_progress_event`
 
       —— 走 `_publish_event` 通道
       （`backend/app/pipeline/runner.py`）
 
-- [ ] **P0** 前端删除 stage 事件 Agent 模式丢弃守卫
+- [x] **P0** 前端删除 stage 事件 Agent 模式丢弃守卫
 
       —— `reducer.ts:915-957` 当前 `if (task.summary.mode !== "fixture") break;`
       —— Agent 模式任务调用 `run_research_pipeline` 时所有 stage 事件被丢弃
       —— 改为跨模式 stage 投影（类似 `fixtureStages`）
 
-- [ ] **P0** `AgentProgress.tsx` agent 模式增加 stage/进度区段
+- [x] **P0** `AgentProgress.tsx` agent 模式增加 stage/进度区段
 
       —— 目前 fixture 模式才有 stage 卡片，agent 模式仅显示单行"当前工具名"
       （`frontend/src/components/AgentProgress.tsx:40-86`）
