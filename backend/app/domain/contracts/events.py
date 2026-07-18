@@ -227,7 +227,8 @@ class UserInputRequiredPayload(ContractModel):
 
     The pipeline emits this payload when it needs a human decision before
     continuing. ``prompt_kind`` discriminates between plan confirmation
-    (``plan_confirmation``) and data correction (``data_correction``). When
+    (``plan_confirmation``), data correction (``data_correction``), and
+    Agent max_turns exhaustion (``max_turns_reached``). When
     ``fixture_exempt`` is true the run is in fixture mode and the request is
     informational only — the pipeline auto-approves and does not block.
     """
@@ -236,7 +237,11 @@ class UserInputRequiredPayload(ContractModel):
         PipelineEventType.USER_INPUT_REQUIRED
     )
     request_id: str = Field(min_length=1)
-    prompt_kind: Literal["plan_confirmation", "data_correction"]
+    prompt_kind: Literal[
+        "plan_confirmation",
+        "data_correction",
+        "max_turns_reached",
+    ]
     summary: str = Field(min_length=1)
     expires_at: datetime | None = None
     fixture_exempt: bool = False

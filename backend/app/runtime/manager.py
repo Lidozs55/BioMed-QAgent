@@ -161,6 +161,19 @@ class RunExecution:
         self._streaming_result = result
         self._stream_ready.set()
 
+    def reset_streaming_result(self) -> None:
+        """Clear the streaming result so a new one can be attached.
+
+        Used by ``AgentRunExecutor`` when resuming after ``max_turns``: the
+        previous ``RunResultStreaming`` is exhausted, and a new
+        ``Runner.run_streamed`` call needs to attach a fresh result for the
+        cancellation channel to target the active SDK run. See
+        docs/REVIEW_2026-07-18.md §11.
+        """
+
+        self._streaming_result = None
+        self._stream_ready.clear()
+
     def set_user_input_submitter(self, submitter: UserInputSubmitter) -> None:
         """Attach the executor-side resume channel (e.g. PipelineRunner)."""
 

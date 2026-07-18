@@ -878,22 +878,22 @@
 > 用户明确要求：达到 max_turns 后要提供按钮让用户可以选择继续工作。
 > 详见审查报告 §11。**不能简单设置一个较小值了事**。
 
-- [ ] **P1** `agent.py:112-117` 设置 `max_turns=15`
+- [x] **P1** `agent.py:112-117` 设置 `max_turns=15`
 
       —— 覆盖正常 4-8 轮 + followup 3 轮 + 余量
       —— summarizer 保持 `max_turns=1`
       —— 当前使用 SDK 默认值（约 10），无硬约束
 
-- [ ] **P1** `runner.py:271` 检测 max_turns 用尽后走 `_await_user_input`
+- [x] **P1** `runner.py:271` 检测 max_turns 用尽后走 `_await_user_input`
 
       —— **不直接转 FAILED**，而是发射
       `UserInputRequiredPayload(prompt_kind="max_turns_reached")`
       —— 暂停 Run，进入 `AWAITING_USER_INPUT` 状态
       —— **复用 §4.2.1 已完成的 pause-resume 底层架构**，不另建机制
 
-- [ ] **P1** `events.py` `PromptKind` 联合新增 `"max_turns_reached"`
+- [x] **P1** `events.py` `PromptKind` 联合新增 `"max_turns_reached"`
 
-- [ ] **P1** `UserInputDialog.tsx` 新增 `max_turns_reached` 渲染分支
+- [x] **P1** `UserInputDialog.tsx` 新增 `max_turns_reached` 渲染分支
 
       —— 展示"Agent 已达到最大轮次，是否继续？"
       —— [继续] 按钮 → `POST /api/v1/tasks/{task_id}/runs/{run_id}/resume`

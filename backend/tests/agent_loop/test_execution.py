@@ -266,7 +266,11 @@ async def test_executor_uses_durable_task_session_at_sdk_boundary(
     assert captured == {
         "databases": ["geo"],
         "args": (agent, "continue the analysis"),
-        "kwargs": {"context": context, "session": session},
+        "kwargs": {
+            "context": context,
+            "session": session,
+            "max_turns": runner_module.AGENT_MAX_TURNS,
+        },
     }
     assert session_requests == [(execution.task_id, execution.run_id)]
     assert await execution.wait_for_streaming_result() is result

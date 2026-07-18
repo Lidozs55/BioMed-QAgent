@@ -167,7 +167,10 @@ export interface WarningRecord {
   created_at: string;
 }
 
-export type UserInputPromptKind = "plan_confirmation" | "data_correction";
+export type UserInputPromptKind =
+  | "plan_confirmation"
+  | "data_correction"
+  | "max_turns_reached";
 
 export type UserInputDecision = "approve" | "reject";
 

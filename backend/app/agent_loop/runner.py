@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agents import Runner
+from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from app.agent_loop.agent import build_agent
+from app.agent_loop.agent import AGENT_MAX_TURNS, build_agent
 from app.agent_loop.context import ManagedPipelineBridge
 from app.domain.contracts import (
     ArtifactProducedPayload,
@@ -25,6 +26,8 @@ from app.domain.contracts import (
     TaskState,
     ToolCompletedPayload,
     ToolStartedPayload,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     WarningPayload,
     build_event,
 )
@@ -41,6 +44,8 @@ ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
     Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
 )
+#: 单次 Run 最多允许的 max_turns 暂停次数（防止无限续跑）。
+MAX_TURNS_RESUME_LIMIT: int = 3
 
 
 class _AssistantTextBuffer:
@@ -271,17 +276,50 @@ class AgentRunExecutor:
                 raise CompactionCancelledError(
                     "conversation compaction was cancelled before Agent Run"
                 )
-            result = Runner.run_streamed(
-                build.agent,
-                execution.input,
-                context=execution.context,
-                session=preparation.session,
-            )
-            execution.set_streaming_result(result)
-            try:
-                await self._consume_events(execution, result, text_buffer)
-            finally:
-                await text_buffer.flush()
+            # Agent 循环：每次 Runner.run_streamed 消耗 max_turns 个 turn；
+            # 若 SDK 抛 MaxTurnsExceeded，发射 UserInputRequiredPayload 走
+            # pause-resume，用户选"继续"则用 result.to_input_list() 续跑。
+            # See docs/REVIEW_2026-07-18.md §11.
+            agent_input: str | list = execution.input
+            result = None
+            resume_count = 0
+            while True:
+                # reset_streaming_result 让续跑的 Runner.run_streamed 能挂载新的
+                # RunResultStreaming (上一轮已 exhausted),保持 cancel 通道对准
+                # 当前活跃的 SDK run。首轮为 no-op (_streaming_result 本就为 None)。
+                execution.reset_streaming_result()
+                result = Runner.run_streamed(
+                    build.agent,
+                    agent_input,
+                    context=execution.context,
+                    session=preparation.session,
+                    max_turns=AGENT_MAX_TURNS,
+                )
+                execution.set_streaming_result(result)
+                try:
+                    await self._consume_events(execution, result, text_buffer)
+                except MaxTurnsExceeded:
+                    await text_buffer.flush()
+                    if resume_count >= MAX_TURNS_RESUME_LIMIT:
+                        raise RuntimeError(
+                            f"agent exceeded max_turns resume limit "
+                            f"({MAX_TURNS_RESUME_LIMIT} times)"
+                        ) from None
+                    decision = await self._await_max_turns_resume(
+                        execution,
+                        resume_count=resume_count,
+                    )
+                    if decision.decision == "reject":
+                        raise PipelineCancelledError(
+                            "agent run cancelled by user after max_turns reached"
+                        ) from None
+                    resume_count += 1
+                    # 用上一轮的 to_input_list() 续跑，保留完整上下文。
+                    agent_input = result.to_input_list()
+                    continue
+                finally:
+                    await text_buffer.flush()
+                break
             # final_output 校验:若 Agent 未产出有效输出则抛异常,
             # 避免 LLM 截断/不调 tool 时静默 completed。
             # 见 docs/REVIEW_2026-07-18.md §2。
@@ -313,6 +351,60 @@ class AgentRunExecutor:
                 await build.model.close()
             if terminal_error is not None:
                 raise terminal_error
+
+    @staticmethod
+    async def _await_max_turns_resume(
+        execution: RunExecution,
+        *,
+        resume_count: int,
+    ) -> UserInputResumedPayload:
+        """Pause the Agent Run after max_turns and wait for user decision.
+
+        Reuses the manager's pause-resume infrastructure: registers a
+        ``UserInputSubmitter`` that unblocks an ``asyncio.Event``, emits
+        ``UserInputRequiredPayload(prompt_kind="max_turns_reached")`` (which
+        transitions the Run to ``AWAITING_USER_INPUT``), and waits for
+        ``POST /runs/{run_id}/resume``. See docs/REVIEW_2026-07-18.md §11.
+        """
+
+        request_id = f"max_turns-{execution.run_id}-{resume_count}"
+        event: asyncio.Event = asyncio.Event()
+        decision_holder: list[UserInputResumedPayload] = []
+
+        def submitter(payload: UserInputResumedPayload) -> bool:
+            if payload.request_id != request_id:
+                return False
+            decision_holder.append(payload)
+            event.set()
+            return True
+
+        execution.set_user_input_submitter(submitter)
+        try:
+            await execution.emit(
+                UserInputRequiredPayload(
+                    request_id=request_id,
+                    prompt_kind="max_turns_reached",
+                    summary=(
+                        f"Agent 已达到最大轮次 ({AGENT_MAX_TURNS})，是否继续工作？"
+                    ),
+                    detail={
+                        "max_turns": AGENT_MAX_TURNS,
+                        "resume_count": resume_count,
+                        "resume_limit": MAX_TURNS_RESUME_LIMIT,
+                    },
+                )
+            )
+            await event.wait()
+        finally:
+            execution.clear_user_input_submitter(submitter)
+
+        if not decision_holder:
+            raise RuntimeError("max_turns resume event set without a decision")
+        # Mirror the pipeline: emit UserInputResumedPayload after waking so the
+        # reducer transitions AWAITING_USER_INPUT -> RUNNING before the manager
+        # emits RunFinalizingPayload (RUNNING -> FINALIZING).
+        await execution.emit(decision_holder[0])
+        return decision_holder[0]
 
     @staticmethod
     async def _transfer_pending_publication(execution: RunExecution) -> None:

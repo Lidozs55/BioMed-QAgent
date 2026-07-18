@@ -21,6 +21,15 @@ from app.skills.registry import (
 from app.tools._registry import _import_skill_modules
 from app.tools.io import list_files, read_file, write_file
 
+#: 主 Agent 的 max_turns 上限。
+#:
+#: 覆盖正常 4-8 轮（discovery + acquisition + processing + validation 各 1 轮）
+#: 加上 followup 3 轮 + 余量。达到此值后 AgentRunExecutor 捕获
+#: ``MaxTurnsExceeded`` 并发射 ``UserInputRequiredPayload(prompt_kind=
+#: "max_turns_reached")``，暂停 Run 等待用户选择继续或停止。
+#: See docs/REVIEW_2026-07-18.md §11.
+AGENT_MAX_TURNS: int = 15
+
 INSTRUCTIONS = """\
 你是一个生物医学数据检索与整理助手（BioMed-QAgent），服务于赛题 XH-202619。
 
