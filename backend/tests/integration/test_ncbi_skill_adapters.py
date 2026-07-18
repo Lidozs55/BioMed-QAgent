@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import app.skills.builtin.acquisition.geo as geo_module
 import httpx
 import pytest
-from app.agent_loop.context import RunContext
+from app.agent_loop.context import ProgressEmitter, RunContext
+from app.domain.contracts import StageName
 from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
@@ -241,3 +243,119 @@ async def test_geo_listing_retry_is_bounded() -> None:
             await geo_module._get_geo_listing(http, "https://ftp.ncbi.nlm.nih.gov/x")
 
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_discovery_skills_emit_progress_with_record_counts(
+    tmp_path: Path,
+) -> None:
+    """PubMed/GEO discovery Skills must emit_progress(discovered_records).
+
+    Regression guard for docs/REVIEW_2026-07-18.md §4 — without this, the
+    frontend's Agent-mode stage progress section stays empty.
+    """
+    captured: list[tuple[StageName, str, int, int | None, dict[str, object]]] = []
+
+    async def emitter(
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None,
+        detail: dict[str, object],
+    ) -> None:
+        captured.append((stage, kind, current, total, detail))
+
+    client = FixtureNcbiClient()
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        context.bind_progress_emitter(cast(ProgressEmitter, emitter))
+
+        await search_pubmed_adapter(context, "34180400[PMID]", 1, services=services)
+        await search_geo_adapter(
+            context, "GSE178352[Accession]", 20, services=services
+        )
+
+    assert len(captured) == 2
+    pubmed_stage, pubmed_kind, pubmed_current, pubmed_total, pubmed_detail = captured[0]
+    assert pubmed_stage is StageName.DISCOVERY
+    assert pubmed_kind == "discovered_records"
+    assert pubmed_current == 1
+    assert pubmed_total == 1
+    assert pubmed_detail["source"] == "pubmed"
+
+    geo_stage, geo_kind, geo_current, geo_total, geo_detail = captured[1]
+    assert geo_stage is StageName.DISCOVERY
+    assert geo_kind == "discovered_records"
+    assert geo_current == 1
+    assert geo_detail["source"] == "geo"
+
+
+@pytest.mark.asyncio
+async def test_download_geo_skill_emits_progress_with_bytes(tmp_path: Path) -> None:
+    """download_geo_adapter must emit_progress(downloaded_bytes)."""
+    captured: list[tuple[StageName, str, int, int | None, dict[str, object]]] = []
+
+    async def emitter(
+        stage: StageName,
+        kind: str,
+        current: int,
+        total: int | None,
+        detail: dict[str, object],
+    ) -> None:
+        captured.append((stage, kind, current, total, detail))
+
+    compressed = b"progress download bytes"
+    listing = (FIXTURE_DIR / "geo_suppl_listing.html").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/suppl/"):
+            return httpx.Response(200, content=listing)
+        return httpx.Response(
+            200,
+            content=compressed,
+            headers={"Content-Length": str(len(compressed))},
+        )
+
+    client = FixtureNcbiClient()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        context.bind_progress_emitter(cast(ProgressEmitter, emitter))
+        await download_geo_adapter(
+            context, "GSE178352", "suppl", services=services, max_size_mb=1
+        )
+
+    assert len(captured) == 1
+    stage, kind, current, _total, detail = captured[0]
+    assert stage is StageName.ACQUISITION
+    assert kind == "downloaded_bytes"
+    assert current == len(compressed)
+    assert detail["accession"] == "GSE178352"
+
+
+@pytest.mark.asyncio
+async def test_emit_progress_is_noop_without_bound_emitter(tmp_path: Path) -> None:
+    """Skills must remain callable when no emitter is bound (e.g. unit tests)."""
+    client = FixtureNcbiClient()
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        # No bind_progress_emitter call — emit_progress must be a no-op.
+        payload = json.loads(
+            await search_pubmed_adapter(context, "34180400[PMID]", 1, services=services)
+        )
+
+    assert payload["records"][0]["pmid"] == "34180400"

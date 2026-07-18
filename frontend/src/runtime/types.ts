@@ -77,7 +77,15 @@ export interface ArtifactProjection extends ArtifactRecord {
   generatedByStepId: string | null;
 }
 
-export interface FixtureStageProjection {
+export interface StageProgressProjection {
+  kind: string;
+  current: number;
+  total: number | null;
+  detail: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export interface StageProjection {
   stage: StageName;
   stageAttemptId: string;
   attempt: number;
@@ -88,6 +96,7 @@ export interface FixtureStageProjection {
   error: string | null;
   skipReason: string | null;
   reusedStageAttemptId: string | null;
+  progress: StageProgressProjection | null;
 }
 
 export interface PendingUserInput {
@@ -114,7 +123,7 @@ export interface TaskProjection {
   artifactOrder: string[];
   artifactEventSequences: Record<string, number>;
   artifactManifestSequence: number | null;
-  fixtureStages: Partial<Record<StageName, FixtureStageProjection>>;
+  stages: Partial<Record<StageName, StageProjection>>;
   pendingUserInput: PendingUserInput | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";

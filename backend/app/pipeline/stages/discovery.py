@@ -12,6 +12,7 @@ from app.domain.contracts import (
     QuerySpecification,
     RequestedOutput,
     SourceRecord,
+    StageName,
     TaskSpecification,
     make_dataset_id,
     make_source_id,
@@ -54,6 +55,20 @@ def run_discovery(ctx: StageContext) -> StageResult:
         literature, geo, retrieved_at = _run_discovery_fixture(
             ctx.fixture_dir, pmid, gse
         )
+
+    # Surface discovery progress: "Discovery: found 1 PubMed record + 1 GEO series".
+    # See docs/REVIEW_2026-07-18.md §4.
+    ctx.emit_progress_sync(
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=2,
+        total=2,
+        detail={
+            "source": "ncbi",
+            "pmid": literature.pmid,
+            "gse": geo.accession,
+        },
+    )
 
     return _build_output(ctx, literature, geo, specification, retrieved_at)
 

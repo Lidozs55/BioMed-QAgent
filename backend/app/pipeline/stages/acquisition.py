@@ -18,6 +18,7 @@ from app.domain.contracts import (
     DownloadStatus,
     SourceAsset,
     SourceRecord,
+    StageName,
     TaskSpecification,
     asset_id_from_sha256,
     make_source_id,
@@ -155,6 +156,21 @@ def _run_acquisition_fixture(
         finished_at=retrieved_at,
     )
 
+    # Surface acquisition progress: "Acquisition: downloaded N bytes (1 asset)".
+    # See docs/REVIEW_2026-07-18.md §4.
+    ctx.emit_progress_sync(
+        stage=StageName.ACQUISITION,
+        kind="downloaded_bytes",
+        current=len(compressed),
+        total=None,
+        detail={
+            "source": "geo",
+            "accession": gse,
+            "filename": source_path.name,
+            "records": 1,
+        },
+    )
+
     output = AcquisitionOutput(
         source_assets=[source_asset],
         download_attempts=[download_attempt],
@@ -195,6 +211,19 @@ def _run_acquisition_live(
             raise RuntimeError(
                 f"live download failed: {result.attempt.error_message}"
             )
+        # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
+        ctx.emit_progress_sync(
+            stage=StageName.ACQUISITION,
+            kind="downloaded_bytes",
+            current=result.asset.size_bytes,
+            total=None,
+            detail={
+                "source": "geo",
+                "accession": gse,
+                "filename": f"{gse}_tximportCounts.txt.gz",
+                "records": 1,
+            },
+        )
         output = AcquisitionOutput(
             source_assets=[result.asset],
             download_attempts=[result.attempt],

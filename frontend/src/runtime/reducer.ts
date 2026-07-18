@@ -13,9 +13,9 @@ import type {
   ActivityProjection,
   AgentRuntimeData,
   ArtifactProjection,
-  FixtureStageProjection,
   ProjectedMessage,
   RunProjection,
+  StageProjection,
   TaskProjection,
 } from "./types";
 
@@ -64,7 +64,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     artifactOrder: [],
     artifactEventSequences: {},
     artifactManifestSequence: null,
-    fixtureStages: {},
+    stages: {},
     pendingUserInput: null,
     lastSequence: summary.latest_sequence,
     hydration: "summary",
@@ -412,12 +412,12 @@ function terminalizeRunningFixtureStages(
   error: string | null,
 ): TaskProjection {
   if (task.summary.mode !== "fixture") return task;
-  const fixtureStages = { ...task.fixtureStages };
+  const stages = { ...task.stages };
   let changed = false;
-  for (const stage of Object.keys(fixtureStages) as StageName[]) {
-    const projection = fixtureStages[stage];
+  for (const stage of Object.keys(stages) as StageName[]) {
+    const projection = stages[stage];
     if (projection?.status !== "running") continue;
-    fixtureStages[stage] = {
+    stages[stage] = {
       ...projection,
       status,
       finishedAt: timestamp,
@@ -425,7 +425,7 @@ function terminalizeRunningFixtureStages(
     };
     changed = true;
   }
-  return changed ? { ...task, fixtureStages } : task;
+  return changed ? { ...task, stages } : task;
 }
 
 function upsertRun(
@@ -916,9 +916,8 @@ export function reduceRuntimeEvent(
     case "stage_completed":
     case "stage_failed":
     case "stage_skipped": {
-      if (task.summary.mode !== "fixture") break;
       if (envelope.stage_attempt_id === null) break;
-      const existing = task.fixtureStages[payload.stage];
+      const existing = task.stages[payload.stage];
       if (
         payload.type !== "stage_started" &&
         existing !== undefined &&
@@ -928,7 +927,7 @@ export function reduceRuntimeEvent(
       }
       const status =
         payload.type === "stage_started" ? "running" : payload.status;
-      const stage: FixtureStageProjection = {
+      const stage: StageProjection = {
         stage: payload.stage,
         stageAttemptId: envelope.stage_attempt_id,
         attempt:
@@ -948,10 +947,55 @@ export function reduceRuntimeEvent(
           payload.type === "stage_skipped"
             ? payload.reused_stage_attempt_id
             : null,
+        progress: existing?.progress ?? null,
       };
       task = {
         ...task,
-        fixtureStages: { ...task.fixtureStages, [payload.stage]: stage },
+        stages: { ...task.stages, [payload.stage]: stage },
+      };
+      break;
+    }
+    case "stage_progress": {
+      // Agent 模式下 Skills 发射 progress（无 stage_attempt_id），
+      // Pipeline 模式下 stages 发射 progress（有 stage_attempt_id）。
+      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论文"等中间数字。
+      // See docs/REVIEW_2026-07-18.md §4.
+      const existing = task.stages[payload.stage];
+      const stageAttemptId =
+        envelope.stage_attempt_id ?? existing?.stageAttemptId ?? `pending:${payload.stage}`;
+      if (
+        existing !== undefined &&
+        existing.stageAttemptId !== stageAttemptId &&
+        envelope.stage_attempt_id !== null
+      ) {
+        break;
+      }
+      const progress = {
+        kind: payload.kind,
+        current: payload.current,
+        total: payload.total,
+        detail: payload.detail as Record<string, unknown>,
+        updatedAt: envelope.timestamp,
+      };
+      const stage: StageProjection = existing ?? {
+        stage: payload.stage,
+        stageAttemptId,
+        attempt: existing?.attempt ?? 1,
+        status: existing?.status ?? "running",
+        startedAt: existing?.startedAt ?? envelope.timestamp,
+        finishedAt: existing?.finishedAt ?? null,
+        outputDigest: existing?.outputDigest ?? null,
+        error: existing?.error ?? null,
+        skipReason: existing?.skipReason ?? null,
+        reusedStageAttemptId: existing?.reusedStageAttemptId ?? null,
+        progress,
+      };
+      task = {
+        ...task,
+        stages: {
+          ...task.stages,
+          [payload.stage]: { ...stage, progress },
+        },
       };
       break;
     }

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 
-from app.domain.contracts import ParsedDataset, SourceAsset
+from app.domain.contracts import ParsedDataset, SourceAsset, StageName
 from app.pipeline.processing.geo_tximport import (
     parse_geo_soft_samples,
     process_geo_tximport_counts,
@@ -30,6 +30,19 @@ def run_processing(
     )
     samples = parse_geo_soft_samples(
         (ctx.fixture_dir / "gse178352_family.soft.gz").read_bytes()
+    )
+
+    # Surface processing progress: "Processing: cleaned N rows".
+    # See docs/REVIEW_2026-07-18.md §4.
+    ctx.emit_progress_sync(
+        stage=StageName.PROCESSING,
+        kind="cleaned_rows",
+        current=parsed.row_count,
+        total=None,
+        detail={
+            "dataset_id": parsed.dataset_id,
+            "file_asset": parsed.file_asset.relative_path,
+        },
     )
 
     output = ProcessingOutput(parsed_datasets=[parsed], samples=samples)

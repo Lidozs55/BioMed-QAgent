@@ -4,7 +4,41 @@ import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import ResearchPipeline from "@/components/ResearchPipeline";
-import type { TaskProjection } from "@/runtime/types";
+import type { StageName } from "@/runtime/contracts";
+import type { StageProjection, TaskProjection } from "@/runtime/types";
+
+const AGENT_STAGE_ORDER: readonly StageName[] = [
+  "discovery",
+  "acquisition",
+  "processing",
+  "artifact_build",
+  "validation",
+];
+
+const STAGE_LABELS: Record<StageName, string> = {
+  discovery: "文献/数据发现",
+  acquisition: "数据获取",
+  processing: "数据处理",
+  artifact_build: "产物构建",
+  validation: "结果验证",
+};
+
+const PROGRESS_KIND_LABELS: Record<string, string> = {
+  discovered_records: "已发现记录",
+  downloaded_bytes: "已下载字节",
+  cleaned_rows: "已清洗行数",
+};
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatProgressValue(kind: string, current: number): string {
+  if (kind === "downloaded_bytes") return formatBytes(current);
+  return String(current);
+}
 
 export interface AgentProgressProps {
   task?: TaskProjection;
@@ -24,6 +58,51 @@ function activeTool(task: TaskProjection): string | null {
     }
   }
   return null;
+}
+
+function AgentStageList({ task }: { task: TaskProjection }) {
+  const stages = AGENT_STAGE_ORDER.map(
+    (stage) => task.stages[stage],
+  ).filter((s): s is StageProjection => s !== undefined);
+  if (stages.length === 0) return null;
+  return (
+    <div
+      className="flex min-w-0 flex-wrap gap-1.5"
+      aria-label="Agent 阶段进度"
+    >
+      {stages.map((stage) => {
+        const progress = stage.progress;
+        const kindLabel = progress
+          ? PROGRESS_KIND_LABELS[progress.kind] ?? progress.kind
+          : null;
+        const valueText = progress
+          ? formatProgressValue(progress.kind, progress.current)
+          : null;
+        const totalText =
+          progress && progress.total !== null
+            ? ` / ${formatProgressValue(progress.kind, progress.total)}`
+            : "";
+        return (
+          <div
+            key={stage.stage}
+            data-stage={stage.stage}
+            className="flex min-w-0 items-center gap-1 rounded-md border bg-muted/30 px-2 py-1 text-xs"
+            title={STAGE_LABELS[stage.stage]}
+          >
+            <span className="shrink-0 font-medium">
+              {STAGE_LABELS[stage.stage]}
+            </span>
+            {progress && (
+              <span className="min-w-0 truncate text-muted-foreground">
+                {kindLabel}: {valueText}
+                {totalText}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function AgentProgress({ task }: AgentProgressProps) {
@@ -47,7 +126,7 @@ export function AgentProgress({ task }: AgentProgressProps) {
   const run = task.summary.active_run_id
     ? task.runsById[task.summary.active_run_id]
     : task.runOrder.length > 0
-      ? task.runsById[task.runOrder[task.runOrder.length - 1]]
+      ? task.runsById[task.runOrder.length - 1]
       : undefined;
   const statusDescription: Record<typeof status, string> = {
     queued: "等待可用执行槽",
@@ -79,6 +158,7 @@ export function AgentProgress({ task }: AgentProgressProps) {
           </span>
         </div>
       )}
+      <AgentStageList task={task} />
       {run?.error && (
         <p className="break-words text-sm text-muted-foreground">{run.error}</p>
       )}

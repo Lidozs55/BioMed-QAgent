@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import ResearchPipeline from "@/components/ResearchPipeline";
 import type { StageName } from "@/runtime/contracts";
 import { createTaskProjection } from "@/runtime/reducer";
-import type { FixtureStageProjection, TaskProjection } from "@/runtime/types";
+import type { StageProjection, TaskProjection } from "@/runtime/types";
 
 const STAGES: StageName[] = [
   "discovery",
@@ -15,7 +15,7 @@ const STAGES: StageName[] = [
 ];
 
 function fixtureTask(
-  statuses: Partial<Record<StageName, FixtureStageProjection["status"]>>,
+  statuses: Partial<Record<StageName, StageProjection["status"]>>,
   runStatus: TaskProjection["summary"]["status"] = "running",
 ): TaskProjection {
   const task = createTaskProjection({
@@ -29,7 +29,7 @@ function fixtureTask(
     updated_at: "2026-07-14T00:00:00Z",
     latest_sequence: 5,
   });
-  const fixtureStages = Object.fromEntries(
+  const stages = Object.fromEntries(
     Object.entries(statuses).map(([stage, status], index) => [
       stage,
       {
@@ -43,10 +43,11 @@ function fixtureTask(
         error: status === "failed" ? "stage error" : null,
         skipReason: status === "skipped" ? "reused" : null,
         reusedStageAttemptId: null,
+        progress: null,
       },
     ]),
   );
-  return { ...task, fixtureStages };
+  return { ...task, stages };
 }
 
 describe("ResearchPipeline", () => {

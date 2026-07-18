@@ -18,6 +18,8 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     CancelRequestedPayload,
     EventEnvelope,
+    StageName,
+    StageProgressPayload,
     TaskCompletedPayload,
     TaskMode,
     TaskState,
@@ -228,6 +230,34 @@ class AgentRunExecutor:
                     clear_user_input_submitter=execution.clear_user_input_submitter,
                 )
             )
+        # Bind a progress emitter so Skills (search_pubmed, search_geo, ...)
+        # can surface mid-stage numbers to the frontend via
+        # RunContext.emit_progress. See docs/REVIEW_2026-07-18.md §4.
+        bind_progress_emitter = getattr(
+            execution.context,
+            "bind_progress_emitter",
+            None,
+        )
+        if callable(bind_progress_emitter):
+
+            async def emit_progress(
+                stage: StageName,
+                kind: str,
+                current: int,
+                total: int | None,
+                detail: dict[str, object],
+            ) -> None:
+                await execution.emit(
+                    StageProgressPayload(
+                        stage=stage,
+                        kind=kind,
+                        current=current,
+                        total=total,
+                        detail=detail,
+                    )
+                )
+
+            bind_progress_emitter(emit_progress)
         try:
             preparation = await self._compactor.prepare(
                 execution.task_id,

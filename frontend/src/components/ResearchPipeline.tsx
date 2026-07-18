@@ -13,7 +13,7 @@ import {
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import type { AttemptStatus, StageName } from "@/runtime/contracts";
-import type { FixtureStageProjection, TaskProjection } from "@/runtime/types";
+import type { StageProjection, TaskProjection } from "@/runtime/types";
 
 const FIXTURE_STAGE_ORDER: readonly StageName[] = [
   "discovery",
@@ -55,9 +55,9 @@ const ATTEMPT_VARIANTS: Record<
 function stageProjection(
   task: TaskProjection,
   stage: StageName,
-): FixtureStageProjection {
+): StageProjection {
   return (
-    task.fixtureStages[stage] ?? {
+    task.stages[stage] ?? {
       stage,
       stageAttemptId: `pending:${stage}`,
       attempt: 0,
@@ -68,6 +68,7 @@ function stageProjection(
       error: null,
       skipReason: null,
       reusedStageAttemptId: null,
+      progress: null,
     }
   );
 }

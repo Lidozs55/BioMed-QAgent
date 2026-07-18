@@ -233,7 +233,7 @@ export function addAcceptedTask(
     artifactOrder: [],
     artifactEventSequences: {},
     artifactManifestSequence: null,
-    fixtureStages: {},
+    stages: {},
     pendingUserInput: null,
     lastSequence: 0,
     hydration: "accepted" as const,
