@@ -1,4 +1,4 @@
-"""FastAPI application and runtime lifespan ownership."""
+﻿"""FastAPI application and runtime lifespan ownership."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.routes import load_database_skills
 from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
+from app.api.settings_router import router as settings_router, shutdown_http_client
 from app.config import Settings, settings
 from app.runtime.hub import EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
@@ -94,9 +95,12 @@ def create_app(configured: Settings = settings) -> FastAPI:
                         await index_executor.close()
                     finally:
                         try:
-                            storage_executor.shutdown(wait=True)
+                            await shutdown_http_client()
                         finally:
-                            sync_executor.shutdown(wait=True)
+                            try:
+                                storage_executor.shutdown(wait=True)
+                            finally:
+                                sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",
@@ -112,6 +116,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
     )
     application.include_router(routes_router)
     application.include_router(ws_router)
+    application.include_router(settings_router)
     application.add_api_route("/api/v1/health", health, methods=["GET"])
     return application
 

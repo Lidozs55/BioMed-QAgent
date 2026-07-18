@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
@@ -8,7 +8,7 @@ import {
 } from "@/components/ArtifactWorkspace";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
-import { ThemeToggle } from "@/components/ThemeToggle";
+
 import { ToolTrace } from "@/components/ToolTrace";
 import {
   SidebarInset,
@@ -17,7 +17,10 @@ import {
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { useAgentStream } from "@/hooks/useAgentStream";
-import { useAPI } from "@/hooks/useAPI";
+import { SettingsPanel } from "@/components/SettingsPanel"
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { useAPI } from "@/hooks/useAPI"
+import { useSettings } from "@/hooks/useSettings"
 import { RuntimeController } from "@/runtime/controller";
 
 function errorDescription(reason: unknown): string {
@@ -27,6 +30,9 @@ function errorDescription(reason: unknown): string {
 export default function App() {
   const transport = useAgentStream();
   const api = useAPI();
+    const [showSettings, setShowSettings] = useState(false);
+  const settingsState = useSettings();
+
   const controller = useMemo(
     () => new RuntimeController(api, transport),
     [api, transport],
@@ -76,6 +82,7 @@ export default function App() {
         onLoadAll={() => controller.loadAllTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
+        onOpenSettings={() => setShowSettings(true)}
       />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
@@ -89,20 +96,36 @@ export default function App() {
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            <ArtifactWorkspace>
-              <ChatPanel
-                startTask={(input) => controller.startTask(input)}
-                continueTask={(taskId, input) =>
-                  controller.continueTask(taskId, input)
-                }
-                resumeRun={(taskId, runId, input) =>
-                  controller.resumeRun(taskId, runId, input)
-                }
-                loadOlderMessages={(taskId) =>
-                  controller.loadOlderMessages(taskId)
-                }
+            {showSettings ? (
+              <SettingsPanel
+                settings={settingsState.settings}
+                models={settingsState.models}
+                loading={settingsState.loading}
+                saving={settingsState.saving}
+                modelsLoading={settingsState.modelsLoading}
+                error={settingsState.error}
+                onSave={async (payload) => {
+                  await settingsState.updateSettings(payload);
+                }}
+                onClose={() => setShowSettings(false)}
+                onFetchModels={settingsState.fetchModels}
               />
-            </ArtifactWorkspace>
+            ) : (
+              <ArtifactWorkspace>
+                <ChatPanel
+                  startTask={(input) => controller.startTask(input)}
+                  continueTask={(taskId, input) =>
+                    controller.continueTask(taskId, input)
+                  }
+                  resumeRun={(taskId, runId, input) =>
+                    controller.resumeRun(taskId, runId, input)
+                  }
+                  loadOlderMessages={(taskId) =>
+                    controller.loadOlderMessages(taskId)
+                  }
+                />
+              </ArtifactWorkspace>
+            )}
           </div>
         </main>
       </SidebarInset>
