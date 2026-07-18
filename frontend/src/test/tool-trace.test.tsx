@@ -95,4 +95,75 @@ describe("ToolTrace", () => {
     expect(trigger).not.toHaveClass("right-4");
     expect(trigger).not.toHaveClass("bottom-4");
   });
+
+  it("clears an activity whose stable row was updated after a later row", () => {
+    useAgentStore.setState(createInitialRuntimeState());
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [
+          {
+            task_id: "task_progress",
+            mode: "agent",
+            databases: [],
+            title: "Progress",
+            status: "running",
+            active_run_id: "run_progress",
+            created_at: "2026-07-14T00:00:00Z",
+            updated_at: "2026-07-14T00:00:00Z",
+            latest_sequence: 0,
+          },
+        ],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId("task_progress");
+
+    const applyProgress = (sequence: number, current: number) => {
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: `event_progress_${sequence}`,
+        type: "stage_progress",
+        task_id: "task_progress",
+        run_id: "run_progress",
+        stage_attempt_id: null,
+        sequence,
+        timestamp: `2026-07-14T00:00:0${sequence}Z`,
+        payload: {
+          type: "stage_progress",
+          stage: "processing",
+          kind: "cleaned_rows",
+          current,
+          total: 10,
+          detail: {},
+        },
+      });
+    };
+    applyProgress(1, 2);
+    useAgentStore.getState().applyEvent({
+      schema_version: "2.0",
+      event_id: "event_warning_2",
+      type: "warning",
+      task_id: "task_progress",
+      run_id: "run_progress",
+      stage_attempt_id: null,
+      sequence: 2,
+      timestamp: "2026-07-14T00:00:02Z",
+      payload: {
+        type: "warning",
+        code: "partial_results",
+        message: "部分结果",
+      },
+    });
+    applyProgress(3, 8);
+
+    render(<ToolTrace />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool trace" }));
+    expect(screen.getByText("部分结果")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "清除当前显示" }));
+
+    expect(screen.getByText("尚无工具调用")).toBeVisible();
+    expect(screen.queryByText("部分结果")).not.toBeInTheDocument();
+  });
 });
