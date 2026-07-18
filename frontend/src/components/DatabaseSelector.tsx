@@ -1,156 +1,162 @@
-import { useMemo } from "react"
-import { useAgentStore } from "@/stores/agentStore"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Badge } from "@/components/ui/badge"
+import { useMemo, useRef, useState } from "react"
+import { CheckIcon, DatabaseIcon } from "@phosphor-icons/react"
+
 import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@/components/ui/tooltip"
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+  ComboboxSeparator,
+  ComboboxTrigger,
+} from "@/components/ui/combobox"
+import { useAgentStore } from "@/stores/agentStore"
 
 interface DatabaseSelectorProps {
-  /** Optional callback when a database is toggled. */
   onToggle?: (id: string, selected: boolean) => void
   disabled?: boolean
 }
 
-type CategoryKey = "discovery" | "acquisition" | "processing"
-
-const CATEGORY_CONFIG: Record<
-  CategoryKey,
-  { label: string; variant: "secondary" | "outline" | "ghost" }
-> = {
-  discovery: {
-    label: "发现",
-    variant: "secondary",
-  },
-  acquisition: {
-    label: "采集",
-    variant: "outline",
-  },
-  processing: {
-    label: "处理",
-    variant: "ghost",
-  },
+const CATEGORY_LABELS: Record<string, string> = {
+  discovery: "发现",
+  acquisition: "采集",
+  processing: "处理",
 }
 
-function resolveCategory(
-  category: string,
-): { label: string; variant: "secondary" | "outline" | "ghost" } {
-  return (
-    CATEGORY_CONFIG[category as CategoryKey] ?? {
-      label: category,
-      variant: "outline",
-    }
+export function DatabaseSelector({
+  onToggle,
+  disabled = false,
+}: DatabaseSelectorProps) {
+  const databases = useAgentStore((state) => state.databases)
+  const selectedIds = useAgentStore(
+    (state) => state.draft.selectedDatabaseIds,
   )
-}
+  const setSelectedIds = useAgentStore(
+    (state) => state.setDraftSelectedDatabaseIds,
+  )
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
 
-export function DatabaseSelector({ onToggle, disabled = false }: DatabaseSelectorProps) {
-  const databases = useAgentStore((s) => s.databases)
-  const selectedDatabases = useAgentStore((s) => s.draft.selectedDatabaseIds)
-  const setSelectedDatabases = useAgentStore((s) => s.setDraftSelectedDatabaseIds)
-
-  // Group databases by category, preserving insertion order.
   const grouped = useMemo(() => {
-    const map = new Map<string, typeof databases>()
-    for (const db of databases) {
-      const list = map.get(db.category) ?? []
-      list.push(db)
-      map.set(db.category, list)
+    const groups = new Map<string, typeof databases>()
+    for (const database of databases) {
+      groups.set(database.category, [
+        ...(groups.get(database.category) ?? []),
+        database,
+      ])
     }
-    return Array.from(map.entries())
+    return Array.from(groups, ([category, items]) => ({ category, items }))
   }, [databases])
 
+  const selected = databases.filter((database) =>
+    selectedIds.includes(database.id),
+  )
   const allSelected =
-    databases.length > 0 && selectedDatabases.length === databases.length
+    databases.length > 0 && selected.length === databases.length
 
-  const handleValueChange = (ids: string[]) => {
-    setSelectedDatabases(ids)
-    if (onToggle) {
-      const added = ids.filter((id) => !selectedDatabases.includes(id))
-      const removed = selectedDatabases.filter((id) => !ids.includes(id))
-      for (const id of added) onToggle(id, true)
-      for (const id of removed) onToggle(id, false)
+  const commit = (nextIds: string[]) => {
+    setSelectedIds(nextIds)
+    for (const id of nextIds.filter((id) => !selectedIds.includes(id))) {
+      onToggle?.(id, true)
+    }
+    for (const id of selectedIds.filter((id) => !nextIds.includes(id))) {
+      onToggle?.(id, false)
     }
   }
 
-  const handleToggleAll = () => {
-    handleValueChange(allSelected ? [] : databases.map((database) => database.id))
-  }
-
-  // ── Empty state ──────────────────────────────────────────────
-  if (databases.length === 0) {
-    return (
-      <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-        暂无可用数据源
-      </div>
-    )
-  }
-
-  // ── Populated state ──────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-3">
-      {/* Header row: toggle-all button + selection count */}
-      <div className="flex items-center justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleToggleAll}
-          disabled={disabled}
-        >
-          {allSelected ? "取消全选" : "全选"}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          已选择 {selectedDatabases.length}/{databases.length}
-        </span>
-      </div>
-
-      {/* Category-grouped toggle chips */}
-      <ToggleGroup
-        value={selectedDatabases}
-        onValueChange={handleValueChange}
-        multiple
-        disabled={disabled}
-        orientation="vertical"
-        spacing={0}
-        className="w-full"
+    <Combobox
+      items={grouped.map((group) => ({
+        value: group.category,
+        items: group.items,
+      }))}
+      multiple
+      value={selected}
+      onValueChange={(items) => commit(items.map((item) => item.id))}
+      itemToStringLabel={(item) => item.name}
+      itemToStringValue={(item) => item.id}
+      isItemEqualToValue={(item, value) => item.id === value.id}
+      open={open}
+      onOpenChange={setOpen}
+      disabled={disabled || databases.length === 0}
+    >
+      <ComboboxTrigger
+        ref={triggerRef}
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 px-2 text-muted-foreground"
+            aria-label={`选择数据源，已选择 ${selected.length} 个`}
+          />
+        }
       >
-        {grouped.map(([category, dbs], groupIdx) => {
-          const cfg = resolveCategory(category)
-
-          return (
-            <div key={category} className="flex flex-col gap-1 w-full">
-              {groupIdx > 0 && <Separator className="my-1" />}
-
-              {/* Category section header */}
-              <span className="px-2 pt-1 text-[0.625rem] font-semibold text-muted-foreground">
-                {cfg.label}
-              </span>
-
-              {dbs.map((db) => (
-                <Tooltip key={db.id}>
-                  <TooltipTrigger
-                    render={<ToggleGroupItem
-                      value={db.id}
-                      variant="outline"
-                      size="default"
-                      className="w-full justify-between gap-2"
-                    />}
-                  >
-                    <span className="truncate">{db.name}</span>
-                    <Badge variant={cfg.variant}>
-                      {cfg.label}
-                    </Badge>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">{db.description}</TooltipContent>
-                </Tooltip>
-              ))}
-            </div>
-          )
-        })}
-      </ToggleGroup>
-    </div>
+        <DatabaseIcon aria-hidden="true" />
+        <span>
+          {selected.length === 0 ? "数据源" : `${selected.length} 个数据源`}
+        </span>
+      </ComboboxTrigger>
+      <ComboboxContent
+        anchor={triggerRef}
+        side="top"
+        align="start"
+        className="w-80 max-w-[calc(100vw-2rem)]"
+      >
+        <ComboboxInput
+          aria-label="搜索数据源"
+          placeholder="搜索数据源..."
+          showClear
+        />
+        <div className="p-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() =>
+              commit(
+                allSelected ? [] : databases.map((database) => database.id),
+              )
+            }
+          >
+            <span className="flex size-4 items-center justify-center rounded border">
+              {allSelected && <CheckIcon aria-hidden="true" />}
+            </span>
+            {allSelected ? "清空全部" : "选择全部"}
+          </Button>
+        </div>
+        <ComboboxSeparator />
+        <ComboboxEmpty>未找到匹配的数据源</ComboboxEmpty>
+        <ComboboxList>
+          {grouped.map((group) => (
+            <ComboboxGroup key={group.category} items={group.items}>
+              <ComboboxLabel>
+                {CATEGORY_LABELS[group.category] ?? group.category}
+              </ComboboxLabel>
+              <ComboboxCollection>
+                {(database) => (
+                  <ComboboxItem key={database.id} value={database}>
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">
+                        {database.name}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {database.description}
+                      </div>
+                    </div>
+                  </ComboboxItem>
+                )}
+              </ComboboxCollection>
+            </ComboboxGroup>
+          ))}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   )
 }

@@ -1,44 +1,18 @@
 import { useMemo, useState } from "react";
-
 import {
   ArrowUpIcon,
-  DownloadIcon,
+  CheckCircleIcon,
   RobotIcon,
-  UserIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 
-import { AgentProgress } from "@/components/AgentProgress";
-import { DatabaseSelector } from "@/components/DatabaseSelector";
+import { AgentComposer } from "@/components/AgentComposer";
 import { MarkdownContent } from "@/components/MarkdownContent";
-import ResultsViewer from "@/components/ResultsViewer";
+import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupTextarea,
-} from "@/components/ui/input-group";
-import { Marker, MarkerContent } from "@/components/ui/marker";
-import { Message, MessageAvatar, MessageContent } from "@/components/ui/message";
+import { Button } from "@/components/ui/button";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -48,20 +22,17 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
-import type { ResumeRunInput, StartTaskInput, TaskRunAccepted } from "@/runtime/contracts";
+import type {
+  ResumeRunInput,
+  StartTaskInput,
+  TaskRunAccepted,
+} from "@/runtime/contracts";
 import {
-  selectActiveArtifacts,
   selectActiveMessages,
   selectActiveTask,
   selectConnectionIsConnected,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import { useAPI } from "@/hooks/useAPI";
-
-type TabMode = "setup" | "chat" | "results";
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
@@ -84,7 +55,21 @@ const TERMINAL_STATUSES = new Set([
   "interrupted",
 ]);
 
-function latestRunIsTerminal(task: NonNullable<ReturnType<typeof selectActiveTask>>) {
+const STATUS_LABELS = {
+  queued: "等待执行",
+  running: "Agent 正在运行",
+  finalizing: "正在整理回复与产物",
+  cancel_requested: "正在取消",
+  awaiting_user_input: "等待你的确认",
+  completed: "任务已完成",
+  failed: "任务执行失败",
+  cancelled: "任务已取消",
+  interrupted: "任务已中断",
+} as const;
+
+function latestRunIsTerminal(
+  task: NonNullable<ReturnType<typeof selectActiveTask>>,
+) {
   const latestRunId = task.runOrder[task.runOrder.length - 1];
   const latestRun = latestRunId === undefined ? undefined : task.runsById[latestRunId];
   return latestRun !== undefined && TERMINAL_STATUSES.has(latestRun.status);
@@ -103,7 +88,6 @@ export function ChatPanel({
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
   const messages = useAgentStore(selectActiveMessages);
-  const artifacts = useAgentStore(selectActiveArtifacts);
   const connected = useAgentStore(selectConnectionIsConnected);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
@@ -112,29 +96,13 @@ export function ChatPanel({
   const draftError = useAgentStore((state) => state.draft.error);
   const setDraftInput = useAgentStore((state) => state.setDraftInput);
   const setDraftError = useAgentStore((state) => state.setDraftError);
-  const { getArtifactUrl } = useAPI();
 
-  const [activeTab, setActiveTab] = useState<TabMode>(
-    activeTaskId === null ? "setup" : "chat",
-  );
-  const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(
-    null,
-  );
-  const [continuationDrafts, setContinuationDrafts] = useState<
-    Record<string, string>
-  >({});
-  const [continuationPendingByTask, setContinuationPendingByTask] = useState<
-    Record<string, boolean>
-  >({});
-  const [continuationErrors, setContinuationErrors] = useState<
-    Record<string, string>
-  >({});
-  const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<
-    Record<string, boolean>
-  >({});
-  const [olderMessagesErrors, setOlderMessagesErrors] = useState<
-    Record<string, string>
-  >({});
+  const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
+  const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
+  const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
+  const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
+  const [olderMessagesPendingByTask, setOlderMessagesPendingByTask] = useState<Record<string, boolean>>({});
+  const [olderMessagesErrors, setOlderMessagesErrors] = useState<Record<string, string>>({});
 
   const continuationInput =
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
@@ -153,12 +121,6 @@ export function ChatPanel({
     activeTask !== undefined &&
     activeTask.olderMessagesCursor !== null &&
     loadOlderMessages !== undefined;
-  const visibleTab: TabMode =
-    activeTaskId === null
-      ? "setup"
-      : activeTab === "setup"
-        ? "chat"
-        : activeTab;
 
   const continuationEditable =
     activeTask !== undefined &&
@@ -169,14 +131,11 @@ export function ChatPanel({
     activeTask.summary.active_run_id === null &&
     latestRunIsTerminal(activeTask) &&
     !continuationPending;
-  const continuationSendEnabled =
-    continuationCanSend && continuationInput.trim().length > 0;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
   const activeRunHasAssistantMessage =
     activeRunId !== null &&
     messages.some(
-      (message) =>
-        message.runId === activeRunId && message.role === "assistant",
+      (message) => message.runId === activeRunId && message.role === "assistant",
     );
   const showActiveRunStatus =
     activeTask?.summary.mode === "agent" &&
@@ -189,25 +148,12 @@ export function ChatPanel({
   const continuationDisabledReason = useMemo(() => {
     if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
     if (activeTask.summary.mode !== "agent") return "固定验收任务不支持继续提问";
-    if (activeTask.summary.active_run_id !== null) {
-      switch (activeTask.summary.status) {
-        case "queued":
-          return "可先输入下一条指令，任务完成后即可发送";
-        case "running":
-          return "可先输入下一条指令，当前回答完成后即可发送";
-        case "finalizing":
-          return "可先输入下一条指令，任务收尾后即可发送";
-        case "cancel_requested":
-          return "可先输入下一条指令，取消完成后即可发送";
-        case "awaiting_user_input":
-          return "可先输入下一条指令，请先在弹窗中确认计划";
-      }
-    }
+    if (activeTask.summary.active_run_id !== null) return "可先输入下一条指令，当前回答完成后即可发送";
     if (continuationPending) return "正在提交继续问题";
     return "选择已完成的 Agent 任务后继续提问";
   }, [activeTask, continuationPending]);
 
-  const submitTask = async (mode: StartTaskInput["mode"]) => {
+  const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
     const input = draftInput.trim();
     if (!input || isSubmitting) return;
     const submissionKey = draftKey(input, selectedDatabases);
@@ -216,52 +162,25 @@ export function ChatPanel({
     try {
       await startTask({ input, databases: selectedDatabases, mode });
       const currentDraft = useAgentStore.getState().draft;
-      if (
-        draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) ===
-        submissionKey
-      ) {
+      if (draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) === submissionKey) {
         setDraftInput("");
-        setActiveTab("chat");
       }
     } catch (error) {
       const currentDraft = useAgentStore.getState().draft;
-      if (
-        draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) ===
-        submissionKey
-      ) {
+      if (draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) === submissionKey) {
         setDraftError(error instanceof Error ? error.message : "任务提交失败");
       }
     } finally {
-      setSubmittingDraftKey((current) =>
-        current === submissionKey ? null : current,
-      );
+      setSubmittingDraftKey((current) => current === submissionKey ? null : current);
     }
-  };
-
-  const runFixture = () => {
-    if (!draftInput.trim() || isSubmitting) return;
-    if (
-      selectedDatabases.length !== 2 ||
-      !selectedDatabases.includes("pubmed") ||
-      !selectedDatabases.includes("geo")
-    ) {
-      setDraftError("固定验收案例只能选择 PubMed 和 GEO。");
-      return;
-    }
-    void submitTask("fixture");
   };
 
   const sendContinuation = async () => {
-    if (!continuationCanSend || activeTaskId === null || continueTask === undefined) {
-      return;
-    }
+    if (!continuationCanSend || activeTaskId === null || continueTask === undefined) return;
     const taskId = activeTaskId;
     const input = continuationInput.trim();
     if (!input) return;
-    setContinuationPendingByTask((current) => ({
-      ...current,
-      [taskId]: true,
-    }));
+    setContinuationPendingByTask((current) => ({ ...current, [taskId]: true }));
     setContinuationErrors((current) => {
       const next = { ...current };
       delete next[taskId];
@@ -278,27 +197,14 @@ export function ChatPanel({
         [taskId]: error instanceof Error ? error.message : "继续提问失败",
       }));
     } finally {
-      setContinuationPendingByTask((current) => ({
-        ...current,
-        [taskId]: false,
-      }));
+      setContinuationPendingByTask((current) => ({ ...current, [taskId]: false }));
     }
   };
 
   const loadEarlierMessages = async () => {
-    if (
-      !hasOlderMessages ||
-      activeTaskId === null ||
-      loadOlderMessages === undefined ||
-      olderMessagesPending
-    ) {
-      return;
-    }
+    if (!hasOlderMessages || activeTaskId === null || loadOlderMessages === undefined || olderMessagesPending) return;
     const taskId = activeTaskId;
-    setOlderMessagesPendingByTask((current) => ({
-      ...current,
-      [taskId]: true,
-    }));
+    setOlderMessagesPendingByTask((current) => ({ ...current, [taskId]: true }));
     setOlderMessagesErrors((current) => {
       const next = { ...current };
       delete next[taskId];
@@ -309,365 +215,177 @@ export function ChatPanel({
     } catch (error) {
       setOlderMessagesErrors((current) => ({
         ...current,
-        [taskId]:
-          error instanceof Error ? error.message : "更早消息加载失败",
+        [taskId]: error instanceof Error ? error.message : "更早消息加载失败",
       }));
     } finally {
-      setOlderMessagesPendingByTask((current) => ({
-        ...current,
-        [taskId]: false,
-      }));
+      setOlderMessagesPendingByTask((current) => ({ ...current, [taskId]: false }));
     }
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key !== "Enter" ||
-      event.shiftKey ||
-      event.nativeEvent.isComposing
-    ) {
-      return;
-    }
+  const handleDraftKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (visibleTab === "setup") {
-      void submitTask("agent");
-    } else {
-      void sendContinuation();
-    }
+    void submitTask();
   };
+
+  const handleContinuationKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    void sendContinuation();
+  };
+
+  if (activeTaskId === null) {
+    return (
+      <div className="flex h-full min-h-0 min-w-0 items-center justify-center overflow-y-auto px-4 py-10">
+        <div className="w-full max-w-2xl -translate-y-[8vh]">
+          <h2 className="mb-7 text-center text-3xl font-semibold tracking-tight">
+            今天想研究什么？
+          </h2>
+          <AgentComposer
+            value={draftInput}
+            onChange={setDraftInput}
+            onSubmit={() => void submitTask()}
+            onKeyDown={handleDraftKeyDown}
+            placeholder="输入研究目标..."
+            ariaLabel="研究目标"
+            sendAriaLabel="开始研究"
+            pending={isSubmitting}
+            sendDisabled={!draftInput.trim()}
+            showDataSources
+            onDataSourceChange={() => setDraftError(null)}
+          />
+          {draftError && (
+            <p role="alert" className="mt-2 px-2 text-sm text-destructive">{draftError}</p>
+          )}
+          {!connected && (
+            <p className="mt-3 text-center text-xs text-muted-foreground">未连接到后端</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <Tabs
-        value={visibleTab}
-        onValueChange={(value) => setActiveTab(value as TabMode)}
-        className="flex h-full min-h-0 min-w-0 flex-col"
-      >
-        <TabsList className="mx-4 mt-2 shrink-0">
-          <TabsTrigger value="setup">设置</TabsTrigger>
-          <TabsTrigger value="chat">对话</TabsTrigger>
-          <TabsTrigger value="results">结果</TabsTrigger>
-        </TabsList>
-
-        <TabsContent
-          value="setup"
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4"
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>研究设置</CardTitle>
-              <CardDescription>配置研究目标和数据源</CardDescription>
-            </CardHeader>
-            <FieldGroup className="px-6 pb-4">
-              <Field data-invalid={draftError !== null}>
-                <FieldLabel htmlFor="research-goal">研究目标</FieldLabel>
-                <Textarea
-                  id="research-goal"
-                  value={draftInput}
-                  onChange={(event) => setDraftInput(event.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="输入研究目标..."
-                  aria-invalid={draftError !== null}
-                  className="min-h-20 resize-none"
-                />
-                <FieldDescription>
-                  新建任务使用独立草稿，不会被后台任务切换覆盖。
-                </FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel>数据源</FieldLabel>
-                <DatabaseSelector
-                  onToggle={() => setDraftError(null)}
-                  disabled={isSubmitting}
-                />
-              </Field>
-              {draftError && (
-                <Alert variant="destructive">
-                  <WarningCircleIcon />
-                  <AlertDescription>{draftError}</AlertDescription>
-                </Alert>
-              )}
-            </FieldGroup>
-            <CardFooter className="flex flex-col gap-2">
-              <Button
-                onClick={() => void submitTask("agent")}
-                disabled={isSubmitting || !draftInput.trim()}
-                className="w-full"
-              >
-                {isSubmitting && <Spinner data-icon="inline-start" aria-hidden="true" />}
-                开始研究
-              </Button>
-              <Button
-                variant="outline"
-                onClick={runFixture}
-                disabled={isSubmitting || !draftInput.trim()}
-                className="w-full"
-              >
-                运行固定验收案例
-              </Button>
-              {!connected && (
-                <p className="text-xs text-muted-foreground">未连接到后端</p>
-              )}
-            </CardFooter>
-          </Card>
-        </TabsContent>
-
-        <TabsContent
-          value="chat"
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
-        >
-          {!connected && activeTask !== undefined && (
-            <Alert variant="destructive" className="mx-4 mt-2">
-              <WarningCircleIcon />
-              <AlertDescription>事件连接已断开，任务状态暂未更新</AlertDescription>
-            </Alert>
-          )}
-
-          <div className="min-w-0 shrink-0 px-4 pt-2">
-            <AgentProgress task={activeTask} />
-          </div>
-
-          <MessageScrollerProvider autoScroll>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <MessageScroller className="min-w-0 flex-1">
-                <MessageScrollerViewport>
-                  <MessageScrollerContent>
-                    {hasOlderMessages && activeTaskId !== null && (
-                      <MessageScrollerItem
-                        messageId={`older-messages:${activeTaskId}`}
-                      >
-                        <div className="flex flex-col items-center gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void loadEarlierMessages()}
-                            disabled={olderMessagesPending}
-                            aria-label={
-                              olderMessagesPending
-                                ? "正在加载更早消息"
-                                : "加载更早消息"
-                            }
-                          >
-                            {olderMessagesPending ? (
-                              <Spinner
-                                data-icon="inline-start"
-                                aria-hidden="true"
-                              />
-                            ) : (
-                              <ArrowUpIcon
-                                data-icon="inline-start"
-                                aria-hidden="true"
-                              />
-                            )}
-                            {olderMessagesPending ? "加载中" : "加载更早消息"}
-                          </Button>
-                          {olderMessagesError && (
-                            <p
-                              role="alert"
-                              className="break-words text-xs text-destructive"
-                            >
-                              {olderMessagesError}
-                            </p>
-                          )}
-                        </div>
-                      </MessageScrollerItem>
-                    )}
-
-                    {messages.length === 0 && (
-                      <MessageScrollerItem messageId="empty">
-                        <Marker variant="separator">
-                          <MarkerContent>
-                            {activeTask === undefined
-                              ? "输入研究目标开始对话，例如："
-                              : "该任务暂时没有消息"}
-                            {activeTask === undefined && (
-                              <>
-                                <br />
-                                分析健脾散结方对胰腺癌肝转移的影响
-                              </>
-                            )}
-                          </MarkerContent>
-                        </Marker>
-                      </MessageScrollerItem>
-                    )}
-
-                    {messages.map((message) => (
-                      <MessageScrollerItem
-                        key={message.messageId}
-                        messageId={message.messageId}
-                        scrollAnchor={message.role === "user"}
-                      >
-                        <Message align={message.role === "user" ? "end" : "start"}>
-                          <MessageAvatar>
-                            <Avatar>
-                              <AvatarFallback>
-                                {message.role === "user" ? (
-                                  <UserIcon />
-                                ) : (
-                                  <RobotIcon />
-                                )}
-                              </AvatarFallback>
-                            </Avatar>
-                          </MessageAvatar>
-                          <MessageContent>
-                            <Bubble>
-                              <BubbleContent>
-                                <MarkdownContent content={message.content} />
-                              </BubbleContent>
-                            </Bubble>
-                          </MessageContent>
-                        </Message>
-                      </MessageScrollerItem>
-                    ))}
-
-                    {showActiveRunStatus && activeRunId !== null && (
-                      <MessageScrollerItem
-                        messageId={`live:${activeRunId}:assistant:status`}
-                      >
-                        <Message align="start">
-                          <MessageAvatar>
-                            <Avatar>
-                              <AvatarFallback>
-                                <RobotIcon />
-                              </AvatarFallback>
-                            </Avatar>
-                          </MessageAvatar>
-                          <MessageContent>
-                            <Bubble variant="muted">
-                              <BubbleContent>
-                                <span
-                                  role="status"
-                                  className="flex items-center gap-2"
-                                >
-                                  <Spinner aria-hidden="true" />
-                                  正在处理请求…
-                                </span>
-                              </BubbleContent>
-                            </Bubble>
-                          </MessageContent>
-                        </Message>
-                      </MessageScrollerItem>
-                    )}
-
-                    {activeTaskId !== null && artifacts.length > 0 && (
-                      <MessageScrollerItem messageId="artifacts">
-                        <Accordion>
-                          {artifacts.map((artifact) => {
-                            const { Icon } = fileType(artifact.name);
-                            const extension = getExtension(artifact.name);
-                            return (
-                              <AccordionItem key={artifact.artifact_id} value={artifact.artifact_id}>
-                                <AccordionTrigger>
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    <Icon aria-hidden="true" className="shrink-0 text-muted-foreground" />
-                                    <span className="min-w-0 truncate text-sm" title={artifact.name}>
-                                      {artifact.name}
-                                    </span>
-                                    <Badge variant="outline" className="shrink-0">
-                                      {formatSize(artifact.size)}
-                                    </Badge>
-                                    {extension && (
-                                      <Badge variant="secondary" className="shrink-0">
-                                        {extension.toUpperCase()}
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </AccordionTrigger>
-                                <AccordionContent>
-                                  <Card size="sm">
-                                    <CardHeader>
-                                      <CardTitle className="truncate text-sm" title={artifact.name}>
-                                        {artifact.name}
-                                      </CardTitle>
-                                      <CardDescription>
-                                        产物文件 · {formatSize(artifact.size)}
-                                      </CardDescription>
-                                    </CardHeader>
-                                    <CardFooter>
-                                      <a
-                                        href={getArtifactUrl(activeTaskId, artifact.artifact_id)}
-                                        download={artifact.name}
-                                        className={buttonVariants({ variant: "outline", size: "sm" })}
-                                      >
-                                        <DownloadIcon data-icon="inline-start" />
-                                        下载文件
-                                      </a>
-                                    </CardFooter>
-                                  </Card>
-                                </AccordionContent>
-                              </AccordionItem>
-                            );
-                          })}
-                        </Accordion>
-                      </MessageScrollerItem>
-                    )}
-                  </MessageScrollerContent>
-                </MessageScrollerViewport>
-                <MessageScrollerButton />
-              </MessageScroller>
-
-              <div className="min-w-0 shrink-0 border-t p-4">
-                <InputGroup className="min-h-11" data-disabled={!continuationEditable}>
-                  <InputGroupAddon align="block-start">
-                    <span className="truncate text-xs text-muted-foreground">
-                      {continuationCanSend ? "继续提问" : continuationDisabledReason}
-                    </span>
-                  </InputGroupAddon>
-                  <InputGroupTextarea
-                    value={continuationInput}
-                    onChange={(event) => {
-                      if (activeTaskId === null) return;
-                      setContinuationDrafts((current) => ({
-                        ...current,
-                        [activeTaskId]: event.target.value,
-                      }));
-                    }}
-                    onKeyDown={handleKeyDown}
-                    placeholder={
-                      continuationEditable
-                        ? "输入对当前任务的继续问题..."
-                        : continuationDisabledReason
-                    }
-                    disabled={!continuationEditable}
-                    aria-label="继续提问"
-                    className="min-h-11"
-                  />
-                  <InputGroupAddon align="block-end">
-                    <InputGroupButton
-                      size="sm"
-                      variant="default"
-                      onClick={() => void sendContinuation()}
-                      disabled={!continuationSendEnabled}
-                      aria-label={continuationPending ? "提交中" : "发送继续问题"}
-                    >
-                      {continuationPending && (
-                        <Spinner data-icon="inline-start" aria-hidden="true" />
-                      )}
-                      {continuationPending ? "提交中" : "发送"}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-                {continuationError && (
-                  <p role="alert" className="mt-2 break-words text-xs text-destructive">
-                    {continuationError}
-                  </p>
-                )}
-              </div>
-            </div>
-          </MessageScrollerProvider>
-        </TabsContent>
-
-        <TabsContent
-          value="results"
-          className="min-h-0 min-w-0 flex-1 overflow-hidden p-4"
-        >
-          <ResultsViewer />
-        </TabsContent>
-      </Tabs>
-      {resumeRun !== undefined && (
-        <UserInputDialog task={activeTask} onResumeRun={resumeRun} />
+      {!connected && activeTask !== undefined && (
+        <Alert variant="destructive" className="mx-4 mt-3 shrink-0">
+          <WarningCircleIcon />
+          <AlertDescription>事件连接已断开，任务状态暂未更新</AlertDescription>
+        </Alert>
       )}
+
+      {activeTask !== undefined && (
+        <Marker variant="border" className="shrink-0 px-5 py-2" role="status">
+          <MarkerIcon>
+            <TaskStatusIcon status={activeTask.summary.status} />
+          </MarkerIcon>
+          <MarkerContent>{STATUS_LABELS[activeTask.summary.status]}</MarkerContent>
+        </Marker>
+      )}
+
+      <MessageScrollerProvider autoScroll>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <MessageScroller className="min-w-0 flex-1">
+            <MessageScrollerViewport>
+              <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-7 px-5 py-6">
+                {hasOlderMessages && (
+                  <MessageScrollerItem messageId={`older-messages:${activeTaskId}`}>
+                    <div className="flex flex-col items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void loadEarlierMessages()}
+                        disabled={olderMessagesPending}
+                        aria-label={olderMessagesPending ? "正在加载更早消息" : "加载更早消息"}
+                      >
+                        {olderMessagesPending ? <Spinner aria-hidden="true" /> : <ArrowUpIcon aria-hidden="true" />}
+                        {olderMessagesPending ? "加载中" : "加载更早消息"}
+                      </Button>
+                      {olderMessagesError && <p role="alert" className="text-xs text-destructive">{olderMessagesError}</p>}
+                    </div>
+                  </MessageScrollerItem>
+                )}
+
+                {messages.length === 0 && (
+                  <MessageScrollerItem messageId="empty">
+                    <Marker variant="separator">
+                      <MarkerContent>该任务暂时没有消息</MarkerContent>
+                    </Marker>
+                  </MessageScrollerItem>
+                )}
+
+                {messages.map((message) => (
+                  <MessageScrollerItem
+                    key={message.messageId}
+                    messageId={message.messageId}
+                    scrollAnchor={message.role === "user"}
+                  >
+                    {message.role === "user" ? (
+                      <div className="flex justify-end">
+                        <div className="max-w-[80%] rounded-2xl bg-card px-4 py-2.5 text-sm shadow-sm ring-1 ring-border">
+                          <MarkdownContent content={message.content} />
+                        </div>
+                      </div>
+                    ) : (
+                      <article className="flex min-w-0 gap-3" data-message-role="assistant">
+                        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background">
+                          <RobotIcon aria-hidden="true" />
+                        </div>
+                        <div className="min-w-0 flex-1 pt-0.5 text-sm leading-7">
+                          <MarkdownContent content={message.content} />
+                        </div>
+                      </article>
+                    )}
+                  </MessageScrollerItem>
+                ))}
+
+                {showActiveRunStatus && activeRunId !== null && (
+                  <MessageScrollerItem messageId={`live:${activeRunId}:assistant:status`}>
+                    <Marker role="status">
+                      <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
+                      <MarkerContent className="shimmer">正在处理请求…</MarkerContent>
+                    </Marker>
+                  </MessageScrollerItem>
+                )}
+
+                {activeTask?.summary.status === "completed" && (
+                  <MessageScrollerItem messageId={`complete:${activeTaskId}`}>
+                    <Marker variant="separator">
+                      <MarkerIcon><CheckCircleIcon aria-hidden="true" /></MarkerIcon>
+                      <MarkerContent>任务完成</MarkerContent>
+                    </Marker>
+                  </MessageScrollerItem>
+                )}
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton />
+          </MessageScroller>
+
+          <div className="shrink-0 bg-background px-4 pb-4 pt-2">
+            <div className="mx-auto max-w-3xl">
+              <AgentComposer
+                value={continuationInput}
+                onChange={(value) => {
+                  setContinuationDrafts((current) => ({ ...current, [activeTaskId]: value }));
+                }}
+                onSubmit={() => void sendContinuation()}
+                onKeyDown={handleContinuationKeyDown}
+                placeholder={continuationEditable ? "继续提问..." : continuationDisabledReason}
+                ariaLabel="继续提问"
+                sendAriaLabel="发送继续问题"
+                disabled={!continuationEditable}
+                pending={continuationPending}
+                sendDisabled={!continuationCanSend || !continuationInput.trim()}
+                compact
+                className="shadow-md"
+              />
+              {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
+            </div>
+          </div>
+        </div>
+      </MessageScrollerProvider>
+      {resumeRun !== undefined && <UserInputDialog task={activeTask} onResumeRun={resumeRun} />}
     </div>
   );
 }

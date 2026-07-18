@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
+import {
+  ArtifactPanelToggle,
+  ArtifactWorkspace,
+} from "@/components/ArtifactWorkspace";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -78,24 +82,27 @@ export default function App() {
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed Q-Agent</h1>
           <div className="flex shrink-0 items-center gap-2">
+            <ArtifactPanelToggle />
             <ToolTrace />
             <ThemeToggle />
           </div>
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            <ChatPanel
-              startTask={(input) => controller.startTask(input)}
-              continueTask={(taskId, input) =>
-                controller.continueTask(taskId, input)
-              }
-              resumeRun={(taskId, runId, input) =>
-                controller.resumeRun(taskId, runId, input)
-              }
-              loadOlderMessages={(taskId) =>
-                controller.loadOlderMessages(taskId)
-              }
-            />
+            <ArtifactWorkspace>
+              <ChatPanel
+                startTask={(input) => controller.startTask(input)}
+                continueTask={(taskId, input) =>
+                  controller.continueTask(taskId, input)
+                }
+                resumeRun={(taskId, runId, input) =>
+                  controller.resumeRun(taskId, runId, input)
+                }
+                loadOlderMessages={(taskId) =>
+                  controller.loadOlderMessages(taskId)
+                }
+              />
+            </ArtifactWorkspace>
           </div>
         </main>
       </SidebarInset>
