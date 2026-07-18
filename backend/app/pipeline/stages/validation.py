@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
+from app.config import settings
 from app.domain.contracts import (
     ArtifactManifestEntry,
     RunManifest,
@@ -37,13 +38,17 @@ _ARTIFACT_COLUMNS_QUALITY = [
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
+    # utf-8-sig strips the BOM that artifact_build._write_csv adds (TODO §1.7).
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
+    # Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
+    # row keys instead of silently dropping them (TODO §1.7).
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -657,7 +662,7 @@ def run_validation(
         artifacts=entries,
         validation=validation,
         pipeline_version="0.1.0",
-        model_name=None,
+        model_name=settings.model_name,
         mode=ctx.mode,
         live_accepted=ctx.mode == "live" and validation.status == "valid",
         started_at=ctx.started_at,

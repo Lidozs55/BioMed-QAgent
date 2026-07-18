@@ -140,7 +140,7 @@ async def test_artifact_api_uses_repository_root_and_preserves_success_wire(
     assert main_entry["artifact_id"].startswith("artifact_")
     assert download.status_code == 200
     assert download.headers["content-disposition"].endswith('filename="main_data.csv"')
-    assert download.content.startswith(b"record_id,dataset_id,source_id")
+    assert download.content.startswith(b"\xef\xbb\xbfrecord_id,dataset_id,source_id")
     assert filename_lookup.status_code == 404
     assert filename_lookup.json() == {"detail": "Artifact not found"}
 
