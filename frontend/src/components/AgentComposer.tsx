@@ -42,6 +42,7 @@ interface AgentComposerProps {
   pending?: boolean;
   showDataSources?: boolean;
   onDataSourceChange?: () => void;
+  compact?: boolean;
   className?: string;
 }
 
@@ -58,6 +59,7 @@ export function AgentComposer({
   pending = false,
   showDataSources = false,
   onDataSourceChange,
+  compact = false,
   className,
 }: AgentComposerProps) {
   const [model, setModel] = useState("default");
@@ -78,7 +80,10 @@ export function AgentComposer({
         placeholder={placeholder}
         aria-label={ariaLabel}
         disabled={disabled}
-        className="min-h-28 resize-none border-0 bg-transparent px-4 py-3 shadow-none focus-visible:ring-0 dark:bg-transparent"
+        className={cn(
+          "resize-none border-0 bg-transparent px-4 py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
+          compact ? "min-h-18" : "min-h-28",
+        )}
       />
       <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
         <DropdownMenu>

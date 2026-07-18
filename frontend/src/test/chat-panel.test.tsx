@@ -133,6 +133,7 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("button", { name: /切换主模型/ })).toBeVisible();
     expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
     expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
   });
 
   it("submits selected data sources through the semantic REST controller", async () => {
@@ -231,6 +232,8 @@ describe("ChatPanel", () => {
 
     const input = screen.getByRole("textbox", { name: "继续提问" });
     expect(input).toBeEnabled();
+    expect(input).toHaveClass("min-h-18");
+    expect(input).not.toHaveClass("min-h-28");
     fireEvent.change(input, { target: { value: "follow up" } });
     fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
 
