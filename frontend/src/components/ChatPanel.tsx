@@ -377,6 +377,7 @@ export function ChatPanel({
                 disabled={!continuationEditable}
                 pending={continuationPending}
                 sendDisabled={!continuationCanSend || !continuationInput.trim()}
+                compact
                 className="shadow-md"
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
