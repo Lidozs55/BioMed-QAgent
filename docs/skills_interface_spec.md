@@ -654,6 +654,22 @@ skill_registry.register(my_source_skill)
 - 工具：`navigate_page`（浏览页面）、`download_from_page`（流式下载）
 - 实现细节：已重构为委托 [app/tools/crawler.py](../backend/app/tools/crawler.py) 层的 `BROWSER_HEADERS`（真实浏览器 UA + Referer + Accept）、`_rate_limiter`（2s 限速）和 `BeautifulSoup`（HTML 解析）。版本 0.2.0
 
+### web_visual_capture
+
+- 位置：[builtin/acquisition/web_visual_capture.py](../backend/app/skills/builtin/acquisition/web_visual_capture.py)
+- 加载方式：与 browser_fallback 相同，在 `BUILTIN_SKILL_MODULES` 列表中
+- 职责：用 Playwright Chromium 截取网页 / DOM 元素 PNG，作为视觉证据或图表抽取输入
+- 工具：
+  - `capture_web_page(url, full_page, viewport_width, viewport_height, wait_until, label)` — 全页截图
+  - `capture_page_section(url, selector, viewport_width, viewport_height, wait_until, label)` — DOM 元素裁剪
+- Provenance 模式：复用 browser_fallback 的轻量模式（`SourceRecord(database=BROWSER)` + `add_raw_asset()`），**不** 走 `acquire_source()` HTTPS 白名单
+- 产物路径：`source_assets/figures/fig_<sha256[:12]>.png`（内容寻址，相同截图自动去重）+ `fig_<sha256[:12]>_meta.json` sidecar
+- HTTP 行为：委托 [app/tools/crawler.py](../backend/app/tools/crawler.py) 的 `playwright_screenshot()`，复用 `BROWSER_UA`/`BROWSER_HEADERS`/`STEALTH_JS`/`_rate_limiter`(2s)/`_guard_playwright_route`
+- 安全：`label` 必须匹配 `^[A-Za-z0-9_-]{1,64}$`；viewport 钳制到 1920×1080；文件路径经 `TaskWorkDir.source_asset_file()` 的 `_safe_child` 校验
+- 列表过滤：与 browser_fallback 一样不出现在 `GET /databases` 返回中（routes.py 过滤）
+- 集成规划：详见 [separateweb_capture_integration_plan.md](separateweb_capture_integration_plan.md)
+- 版本：0.1.0
+
 ### self_evolution
 
 - 位置：[builtin/processing/self_evolution.py](../backend/app/skills/builtin/processing/self_evolution.py)
@@ -714,9 +730,10 @@ json
 | `STEALTH_JS` | 隐藏 `navigator.webdriver`、`plugins`、`languages` 的 stealth 脚本,注入 Playwright context |
 | `RateLimiter` | 2s 限速器,`wait()` 方法保证请求间隔 ≥ 2s(测试中由 conftest.py 全局禁用) |
 | `FetchResult` | dataclass,字段:`url, content, status_code, elapsed_ms, method_used, error` |
+| `ScreenshotResult` | dataclass,字段:`url, path, status_code, elapsed_ms, viewport_width, viewport_height, full_page, selector, error`;属性 `ok` 判断成功 |
 | `CrawlError` | 所有三级均失败时抛出的异常 |
 
-### 12.3 四个获取函数
+### 12.3 四个获取函数 + 一个截图函数
 
 | 函数 | 层级 | 实现 | 适用场景 |
 |---|---|---|---|
@@ -724,6 +741,7 @@ json
 | `httpx_fetch(url, headers, timeout)` | Tier 2 | httpx + `BROWSER_HEADERS`(UA/Referer/Accept) | 非 JS 网页抓取,API 不可用时的降级 |
 | `playwright_fetch(url, wait_until, timeout)` | Tier 3 | Playwright Chromium + `STEALTH_JS` + `networkidle` | JS-heavy 网站(pubchem/uniprot/chembl),httpx 无法渲染时 |
 | `fetch_with_fallback(api_url, page_url, source_name, use_crawl_fallback, accept_result)` | 编排 | 依次尝试 api → httpx → crawl，并进行语义验收 | skill 工具内部调用,封装降级逻辑 |
+| `playwright_screenshot(url, dest_path, full_page, viewport_width, viewport_height, wait_until, timeout, selector, extra_headers)` | 截图 | Playwright Chromium + `STEALTH_JS` + `networkidle`,返回 `ScreenshotResult` | web_visual_capture skill 调用,产物为 PNG(非 HTML) |
 
 ### 12.4 project_memory 硬约束遵守
 

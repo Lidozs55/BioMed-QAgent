@@ -162,6 +162,25 @@ PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要�
 - 化合物结构与生物活性 → PubChem
 - 通路/反应网络 → Reactome
 - 大型癌症组学数据仓库 → Xena
+
+## 视觉证据采集策略（web_visual_capture）
+`capture_web_page` 与 `capture_page_section` 用于以下场景，**不得替代已有结构化 API**：
+1. **结构化 API 失败时的视觉兜底** — PubMed/GEO/PDB 等结构化接口失败或返回空，
+   且该页面确有可视数据时，截图保留视觉 provenance
+2. **页面元素定位裁剪** — 论文 HTML 中的 `<figure>` / `<table>`、数据库 accession 页
+   的图表区域，使用 `capture_page_section` 精准截取
+3. **visual provenance** — 用户明确要求保留网页证据时
+
+调用纪律：
+- 优先使用结构化 API（search_pubmed / search_geo / acquire_source 等）；
+  仅当 API 不可用或返回空且页面确有可视数据时才调用 web_visual_capture
+- 每张截图会产生内容寻址的 PNG（`source_assets/figures/fig_<sha256[:12]>.png`）
+  和一份 `_meta.json` sidecar，自动登记为 `SourceRecord(database=BROWSER)`
+- 不要对同一 URL 重复截图（内容相同会自然去重）；如需不同区域，使用
+  `capture_page_section` 指定不同 selector
+- label 参数只接受 `[A-Za-z0-9_-]{1,64}`，禁止路径分隔符与 `..`
+- 截图工具不复用 `acquire_source()` 的 HTTPS 白名单，但仍受
+  `validate_public_http_url` 与 Playwright route guard 约束，禁止访问内网地址
 """
 
 

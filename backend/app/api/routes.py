@@ -162,7 +162,7 @@ async def get_databases() -> dict:
         for skill in skill_registry.list_enabled()
         if skill.supported_sources
         and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
-        and skill.name != "browser_fallback"
+        and skill.name not in ("browser_fallback", "web_visual_capture")
     ]
     databases = []
     for skill in skills:

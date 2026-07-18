@@ -573,6 +573,54 @@
 
 - [ ] **P2** 在 `tests/fixtures/` 放置最小真实 PDF（1 页 1 表）
 
+### 5.6 网页视觉证据采集（SeparateWeb Capture 集成）
+
+> **背景**：上游 `separateweb-capture` skill（Node.js + Playwright + Sharp）
+> 已复制到仓库根目录，但其 `scripts/` 目录缺失无法运行，且违反 Python-only
+> 后端约定。改为新增 Python 原生 `web_visual_capture` skill，复用 `crawler.py`
+> 的 Playwright Python 绑定，作为 §5.2 视觉模型降级链的输入采集通道。
+>
+> **完整规划**：[docs/separateweb_capture_integration_plan.md](separateweb_capture_integration_plan.md)
+> **独立性核验**：上述规划文档 §14（移除上游 skill 后 Python 后端可独立运行）
+
+- [x] **P1** 阶段 1：新增 `web_visual_capture` skill MVP
+
+      —— 文件：`backend/app/skills/builtin/acquisition/web_visual_capture.py`
+      —— 工具：`capture_web_page(url, full_page, viewport, wait_until, label)` + `capture_page_section(url, selector, viewport, wait_until, label)`
+      —— 复用 `crawler.py` 的 `playwright_screenshot()`（Playwright + stealth + 2s 限速 + 真实 UA）
+      —— 轻量 provenance：`SourceRecord(database=BROWSER)` + `add_raw_asset()`（不走 `acquire_source()` 白名单）
+      —— 落地路径：`source_assets/figures/fig_<sha256[:12]>.png` + `_meta.json` sidecar
+      —— 在 `_registry.py` 的 `BUILTIN_SKILL_MODULES` 追加模块
+      —— 在 `agent.py` 的 `INSTRUCTIONS` 增补"视觉证据采集策略"段落
+      —— `routes.py:/databases` 过滤排除（与 `browser_fallback` 同等处理）
+
+- [x] **P1** 阶段 1：单元测试 + live 测试
+
+      —— `tests/test_skill_web_visual_capture.py`：22 项单元测试（mock `playwright_screenshot` 验证完整链路 + provenance + dedup + label 校验）
+      —— `tests/live/test_web_visual_capture_live.py`：3 项 live 测试（example.com 全页 + h1 元素 + dedup）
+      —— 质量门禁：`uv run pytest` + `uv run ruff check` + uvicorn 启动
+
+- [x] **P2** 阶段 2：DOM 选择器裁剪（`selector` 参数）
+
+      —— `capture_page_section` 工具用 `page.locator(selector).screenshot()` 精确截取论文图表区域
+      —— 单元测试覆盖 selector 转发与失败路径
+      —— （未引入 Pillow，因为截图直接由 Playwright 产出，无需后处理）
+
+- [ ] **P2** 阶段 3：与 `extract_chart_data_vlm` 联调（依赖 §5.2）
+
+      —— `extract_chart_data_vlm` 接受 `capture_web_page` 返回的 `image_path`
+      —— 集成测试：capture → VLM → CSV 完整链路
+
+- [ ] **P2** 阶段 4：BrowserPool 接入（依赖 §8.6）
+
+      —— 随 `crawler.py` 的 `BrowserPool` 落地，切换为 `pool.acquire_context()`
+
+- [x] **P2** 移除上游 `separateweb-capture/` 目录
+
+      —— 阶段 1 落地后执行：删除 `separateweb-capture/` 目录
+      —— 同步清理 `skills-lock.json` 中相关条目（如有）
+      —— 验证后端独立启动 + `web_visual_capture` skill 可用
+
 ---
 
 ## 6. 已批准架构决策（保留自原 TODO §2）
