@@ -99,6 +99,11 @@ from app.domain.contracts.source import (
     SourceRecord,
     SourceRelation,
 )
+from app.domain.contracts.stream import (
+    AssistantStreamDeltaFrame,
+    AssistantStreamEndFrame,
+    AssistantStreamFrame,
+)
 from app.domain.contracts.task import (
     DatasetSelection,
     QuerySpecification,
@@ -108,6 +113,9 @@ from app.domain.contracts.task import (
 
 __all__ = [
     "AssistantDeltaPayload",
+    "AssistantStreamDeltaFrame",
+    "AssistantStreamEndFrame",
+    "AssistantStreamFrame",
     "AttemptStatus",
     "AcquisitionResult",
     "ArtifactManifestEntry",

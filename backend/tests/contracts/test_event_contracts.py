@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import re
 from datetime import UTC, datetime
 
 import pytest
 from app.domain.contracts import (
+    AssistantDeltaPayload,
     AttemptStatus,
     ErrorCode,
     ErrorDetail,
@@ -20,7 +22,7 @@ from app.domain.contracts import (
     build_event,
 )
 from app.domain.contracts.events import _STAGE_EVENTS
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 NOW = datetime(2026, 7, 12, tzinfo=UTC)
 SHA256 = "aa" * 32
@@ -194,3 +196,170 @@ def test_stage_progress_payload_defaults_total_and_detail() -> None:
     )
     assert payload.total is None
     assert payload.detail == {}
+
+
+def test_assistant_delta_legacy_shape_keeps_optional_stream_metadata_null() -> None:
+    payload = AssistantDeltaPayload(delta="legacy")
+
+    assert payload.model_dump() == {
+        "schema_version": "1.0",
+        "type": "assistant_delta",
+        "delta": "legacy",
+        "stream_id": None,
+        "from_chunk_index": None,
+        "through_chunk_index": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"stream_id": "stream_1"}, "all be provided"),
+        (
+            {
+                "stream_id": "",
+                "from_chunk_index": 0,
+                "through_chunk_index": 0,
+            },
+            "at least 1 character",
+        ),
+        (
+            {
+                "stream_id": "stream_1",
+                "from_chunk_index": -1,
+                "through_chunk_index": 0,
+            },
+            "greater than or equal to 0",
+        ),
+        (
+            {
+                "stream_id": "stream_1",
+                "from_chunk_index": 2,
+                "through_chunk_index": 1,
+            },
+            "through_chunk_index",
+        ),
+    ],
+)
+def test_assistant_delta_stream_metadata_is_validated_all_or_none(
+    values: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AssistantDeltaPayload(delta="text", **values)
+
+
+def test_assistant_delta_accepts_a_complete_chunk_range() -> None:
+    payload = AssistantDeltaPayload(
+        delta="batched",
+        stream_id="stream_1",
+        from_chunk_index=2,
+        through_chunk_index=4,
+    )
+
+    assert payload.stream_id == "stream_1"
+    assert payload.from_chunk_index == 2
+    assert payload.through_chunk_index == 4
+
+
+@pytest.mark.parametrize(
+    "frame_name, values",
+    [
+        (
+            "AssistantStreamDeltaFrame",
+            {
+                "type": "assistant_stream_delta",
+                "task_id": "task_1",
+                "run_id": "run_1",
+                "stream_id": "stream_1",
+                "chunk_index": 0,
+                "delta": "chunk",
+            },
+        ),
+        (
+            "AssistantStreamEndFrame",
+            {
+                "type": "assistant_stream_end",
+                "task_id": "task_1",
+                "run_id": "run_1",
+                "stream_id": "stream_1",
+                "last_chunk_index": None,
+                "finish_reason": "stop",
+            },
+        ),
+    ],
+)
+def test_assistant_stream_frames_have_only_the_strict_server_frame_shape(
+    frame_name: str,
+    values: dict[str, object],
+) -> None:
+    contracts = importlib.import_module("app.domain.contracts")
+    frame_type = getattr(contracts, frame_name)
+
+    frame = frame_type.model_validate(values)
+
+    assert frame.model_dump(mode="json") == values
+    with pytest.raises(ValidationError):
+        frame_type.model_validate({**values, "unexpected": True})
+
+
+@pytest.mark.parametrize(
+    "frame_name, invalid_update",
+    [
+        ("AssistantStreamDeltaFrame", {"task_id": ""}),
+        ("AssistantStreamDeltaFrame", {"run_id": ""}),
+        ("AssistantStreamDeltaFrame", {"stream_id": ""}),
+        ("AssistantStreamDeltaFrame", {"chunk_index": -1}),
+        ("AssistantStreamDeltaFrame", {"chunk_index": "0"}),
+        ("AssistantStreamDeltaFrame", {"delta": ""}),
+        ("AssistantStreamEndFrame", {"last_chunk_index": -1}),
+        ("AssistantStreamEndFrame", {"last_chunk_index": "0"}),
+        ("AssistantStreamEndFrame", {"finish_reason": ""}),
+    ],
+)
+def test_assistant_stream_frames_reject_invalid_or_coerced_fields(
+    frame_name: str,
+    invalid_update: dict[str, object],
+) -> None:
+    contracts = importlib.import_module("app.domain.contracts")
+    frame_type = getattr(contracts, frame_name)
+    valid_values: dict[str, object]
+    if frame_name == "AssistantStreamDeltaFrame":
+        valid_values = {
+            "type": "assistant_stream_delta",
+            "task_id": "task_1",
+            "run_id": "run_1",
+            "stream_id": "stream_1",
+            "chunk_index": 0,
+            "delta": "chunk",
+        }
+    else:
+        valid_values = {
+            "type": "assistant_stream_end",
+            "task_id": "task_1",
+            "run_id": "run_1",
+            "stream_id": "stream_1",
+            "last_chunk_index": 0,
+            "finish_reason": "stop",
+        }
+
+    with pytest.raises(ValidationError):
+        frame_type.model_validate({**valid_values, **invalid_update})
+
+
+def test_assistant_stream_union_is_discriminated_and_not_an_event_payload() -> None:
+    contracts = importlib.import_module("app.domain.contracts")
+    frame = TypeAdapter(contracts.AssistantStreamFrame).validate_python(
+        {
+            "type": "assistant_stream_delta",
+            "task_id": "task_1",
+            "run_id": "run_1",
+            "stream_id": "stream_1",
+            "chunk_index": 0,
+            "delta": "chunk",
+        }
+    )
+
+    assert isinstance(frame, contracts.AssistantStreamDeltaFrame)
+    with pytest.raises(ValidationError):
+        build_event(task_id="task_1", run_id="run_1", sequence=1, payload=frame)

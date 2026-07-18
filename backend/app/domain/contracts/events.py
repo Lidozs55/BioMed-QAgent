@@ -264,6 +264,28 @@ class AssistantDeltaPayload(ContractModel):
         RuntimeEventType.ASSISTANT_DELTA
     )
     delta: str = Field(min_length=1)
+    stream_id: str | None = Field(default=None, min_length=1)
+    from_chunk_index: int | None = Field(default=None, ge=0, strict=True)
+    through_chunk_index: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_stream_metadata(self) -> Self:
+        metadata = (
+            self.stream_id,
+            self.from_chunk_index,
+            self.through_chunk_index,
+        )
+        if any(value is None for value in metadata) and any(
+            value is not None for value in metadata
+        ):
+            raise ValueError("stream metadata must all be provided or all be omitted")
+        if (
+            self.from_chunk_index is not None
+            and self.through_chunk_index is not None
+            and self.from_chunk_index > self.through_chunk_index
+        ):
+            raise ValueError("from_chunk_index must not exceed through_chunk_index")
+        return self
 
 
 class ToolStartedPayload(ContractModel):
