@@ -760,7 +760,8 @@ class PipelineRunner:
         warnings_csv = Path(staging_dir) / "warnings.csv"
         if not warnings_csv.is_file():
             return
-        with warnings_csv.open("r", encoding="utf-8", newline="") as handle:
+        # utf-8-sig strips the BOM that artifact_build._write_csv adds (TODO §1.7).
+        with warnings_csv.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
                 try:
                     warning = WarningRecord(

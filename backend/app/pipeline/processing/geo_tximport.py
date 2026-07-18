@@ -229,7 +229,8 @@ def process_geo_tximport_counts(
 
         output_path = workdir.parsed / f"{dataset_id}_tximport_long.csv"
         row_count = 0
-        with output_path.open("w", encoding="utf-8", newline="") as target:
+        # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
+        with output_path.open("w", encoding="utf-8-sig", newline="") as target:
             writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
             writer.writeheader()
             for source_line_number, values in enumerate(rows, start=2):

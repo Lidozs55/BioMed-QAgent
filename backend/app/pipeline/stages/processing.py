@@ -44,7 +44,8 @@ def _build_minimal_parsed_dataset(
 
     output_path = ctx.workdir.parsed / f"{dataset_id}_tximport_long.csv"
     row_count = 0
-    with output_path.open("w", encoding="utf-8", newline="") as handle:
+    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=_OUTPUT_COLUMNS)
         writer.writeheader()
         if samples:

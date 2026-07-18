@@ -534,30 +534,84 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 - 自动生成缺乏数据依据的科研或临床结论；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
-## 12. 当前实现证据（2026-07-17）
+## 12. 当前实现证据（2026-07-19）
 
-- 默认离线后端测试：收集 885 项，`867 passed, 18 deselected`；Ruff
-  `app/ tests/ launcher.py` 为 `All checks passed!`，默认不访问网络。
+- 默认离线后端测试：**`1025 passed, 1 skipped, 26 deselected`**（86 个测试文件）；
+  Ruff `app/ tests/ launcher.py` 为 `All checks passed!`，默认不访问网络。
+  `filterwarnings = ["error", ...]` 把所有告警升级为失败，仅显式忽略 Starlette
+  TestClient 弃用告警。
 - live 验收：PMID 34180400、GSE178352 元数据和官方
   `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
   `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
+  多课题 live 验收（阿尔茨海默病 / TP53 / Huntington's）均完整产出 14 个
+  artifact。
 - fixture 闭环：48 条 gene + sample 记录（4 genes × 12 samples），全部通过精确
   SourceLocator 回溯，生成 14 个正式文件。
-- API：完整 task/run/history/messages/events/cancel/resume/artifact 控制面已接入
-  lifespan-owned durable runtime；下载只接受 manifest 注册的 `artifact_id`。
+- API：完整 task/run/history/messages/events/cancel/resume/artifact 控制面（11 个
+  REST 端点 + 1 个 WebSocket 端点）已接入 lifespan-owned durable runtime；下载只
+  接受 manifest 注册的 `artifact_id`。
 - Agent：OpenAI Agents SDK 保留为 Runtime，正式产物通过单一
-  `run_research_pipeline` Function Tool 进入确定性 Pipeline。
+  `run_research_pipeline` Function Tool 进入确定性 Pipeline。`AGENT_MAX_TURNS=15`
+  常量覆盖正常 4-8 轮 + followup 3 轮 + 余量；达到上限走
+  `UserInputRequiredPayload(prompt_kind="max_turns_reached")` 暂停 Run 等待用户
+  选择继续或停止（不直接转 FAILED）。`AgentRunExecutor` 在
+  `finish_reason="length"` 时发射 `WarningPayload(code="llm_output_truncated")`，
+  `final_output` 为空时抛 `RuntimeError` 拒绝静默完成；`max_turns` 用尽或 LLM 不调
+  tool 时通过 `agent_executed` 标记 + 空事件转 `RunFailedPayload` 而非
+  `RunCompletedPayload`。`QWEN_FUNCTION_ARGS_RETRY_LIMIT=2` 自动重跑 LLM 返回的
+  非法 JSON function arguments。
 - Durable runtime：`events.jsonl`、snapshot 和 Session 历史均由后端持久化；
   `EventEnvelope` v2、按 Task sequence 续读、4-slot 跨 Task 并发、同 Task 串行、
-  queued/running/paused 取消和重启恢复均已实现。
+  queued/running/paused 取消和重启恢复均已实现。`TaskManager._execute` AGENT 模式
+  增加"成功证据校验"：`completion_events` 为空且无 cancellation 时转
+  `RunFailedPayload`，错误信息 `"agent 完成但未产出 artifact"`。
 - HIL：真实 Agent Tool 路径已接入权威 event/resume bridge，覆盖 exact one-shot
   request identity、拒绝/超时失败、paused cancellation 和 fixture 自动批准审计。
-- 前端：full Vitest 为 `14 files / 191 tests passed`；ESLint 0 warning、TypeScript
-  typecheck 和 production build 均通过。HIL prompt/Dialog 按 Run 与 submission
-  attempt 隔离，R5 workspace UX 修复已通过 review。
+  `UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
+  `max_turns_reached` / `data_correction`。前端 `UserInputDialog` 按 Run 与
+  submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
+- 前端 Agent 可见性：`StageProgressPayload`（`stage` / `kind` / `current` /
+  `total` / `detail`）跨 Agent / Pipeline 模式发射，Skills 在 `log_query` 后发射
+  `discovered_records` / `downloaded_bytes` / `cleaned_rows` 进度事件。前端
+  删除 stage 事件 Agent 模式丢弃守卫，`AgentProgress.tsx` 增加跨模式 stage/进度
+  chips。前端 Vitest 为 **15 文件 / 200+ tests passed**；ESLint 0 warning、
+  TypeScript typecheck 和 production build 均通过。
+- 视觉证据采集：`web_visual_capture` skill（`capture_web_page` +
+  `capture_page_section`）使用 Playwright Chromium 截图，产物为内容寻址 PNG
+  （`source_assets/figures/fig_<sha256[:12]>.png`）+ `_meta.json` sidecar；不进入
+  `GET /databases`，由 Agent 按需调用；22 项单元测试 + 6 项 live 测试。
+- 视觉模型图表数据提取：`extract_chart_data_vlm` skill 使用 Qwen-VL
+  （`qwen-vl-max`）从论文图表中提取 chart_type / axes / data_points / legend。
+  三级降级链 L1 Qwen-VL → L2 pdfplumber 表格 → L3 caption，全部失败抛
+  `ChartExtractionError`（project_memory 禁止静默空数据降级）。产物
+  `chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，Excel 兼容），通过
+  `source_asset_id` 追溯到原始图片/PDF；24 项单元测试 + 2 项 live 测试。
+- QueryStatus 枚举统一：`domain/contracts/enums.py:QueryStatus` 五态枚举
+  （`success` / `not_found` / `failed` / `skipped` / `page_fallback`），11 个 skill
+  文件 42 处 `log_query()` 调用全部迁移；`tests/test_query_log_status_consistency.py`
+  30 项 AST 静态扫描保证迁移完整性。PubChem / Reactome 的 page fallback 不再虚报
+  `ok`/1，改为 `page_fallback`/0（project_memory 硬约束）。
+- PDF 三级 fallback 链：`integrations/acquisition.py:acquire_publication_with_fallback()`
+  实现 `pdf_url` → Unpaywall（DOI，5s timeout）→ EuropePMC fullTextXML（PMCID，国内
+  可用）三级 fallback，所有 attempt（含失败）记录到 `download_log.csv`；
+  `_ALLOWED_HOSTS` 已新增 `api.unpaywall.org` / `www.ebi.ac.uk`；9 项回归测试。
+- Compaction truncation 显式校验：`runtime/compaction.py` 在
+  `finish_reason="length"` 时抛 `ConversationSummarizerTruncatedError` 短路
+  `_fallback` 静默降级（project_memory 硬约束 "LLM 失败必须抛异常"）；2 项回归测试。
+- 安全模型：`save_learned_skill` / `load_learned_skill` 实施路径白名单
+  （`^[a-z][a-z0-9_]*$`）+ AST 白名单双重安全校验，拒绝
+  `exec/eval/compile/open/__import__/globals/locals/vars/breakpoint` 与 dunder
+  访问；`tests/test_skill_self_evolution.py` 11 项安全测试覆盖路径穿越、RCE、
+  篡改检测。
 - 浏览器 QA 已在当前分支重新执行：启动时保留新研究草稿并加载后端历史，fixture
   完整运行并展示 14 个产物；1440×900 与 390×844 下结果列表可滚动至最后产物，
   390×520 压缩高度下设置提交控件仍可达，长标题截断且不遮挡状态/删除控件。
 
 未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.3 数据修正
-实例、§1 系列硬编码解除、第二个真实案例和 GDC/PDB/Xena live 验收。
+实例、§1 系列硬编码解除（processing live 模式 fixture SOFT / `len(samples) != 12`
+硬校验 / `staging_run("run_pinned_fixture")` 硬编码 / `field_descriptions`
+placeholder / `source_relations` / `processing_log` 硬编码）、§1.5 PubMed
+`download_supplementary` 合规化、§1.7 CSV UTF-8 BOM / `run_manifest.json`
+`model_name=None` / `warnings.csv` 恒空 / `MetricsTracker` 接入 / Pipeline 全链路
+结构化日志、§8.3 数据源硬门控解除、§8.4 Agent INSTRUCTIONS follow-up 策略与
+ReviewerAgent、§8.6 BrowserPool、§8.7 structlog 与错误吞掉点修复。

@@ -54,18 +54,33 @@
 > 例如 `gene_id_namespace` 的描述就是 `"gene id namespace"`。
 > 这是赛题"结构化输出样例：字段说明"的直接评分点。
 
-- [ ] **P0** 为所有字段编写真实语义说明
+- [x] **P0** 为所有字段编写真实语义说明
 
-      （`backend/app/pipeline/stages/artifact_build.py:168-179`）
-      —— 至少覆盖：record_id / dataset_id / source_id / asset_id / gene_id /
-      gene_id_namespace / sample_id / expression_value / source_line_number /
-      source_column_index / source_raw_value / source_logical_file
+      （`backend/app/pipeline/stages/artifact_build.py`，2026-07-19）
+      —— 已新增 `_FIELD_DESCRIPTIONS` 字典覆盖全部 22 个 `main_data.csv` 字段：
+      record_id / dataset_id / source_id / asset_id / gene_id / gene_id_raw /
+      gene_id_namespace / gene_id_version / sample_id / source_sample_alias /
+      measurement_type / value_semantics / value_scale / is_normalized /
+      is_integer_expected / expression_value / expression_unit /
+      source_logical_file / source_line_number / source_column_index /
+      source_column_name / source_raw_value。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_field_descriptions_have_real_semantics`
 
-- [ ] **P0** 提供字段 `example` 值（当前恒为空字符串）
+- [x] **P0** 提供字段 `example` 值（当前恒为空字符串）
 
-- [ ] **P0** 完善 `unit` 字段（除 expression_value 的 "estimated_count" 外）
+      （`_FIELD_DESCRIPTIONS` 元组第 5 位即 `example`，例如 `record_id` →
+      `rec_gse178352_ENSG00000000003_GSM8117703`）
 
-- [ ] **P0** 修复 `data_type` 全部硬编码为 `"string"`（artifact_build.py:171）
+- [x] **P0** 完善 `unit` 字段（除 expression_value 的 "estimated_count" 外）
+
+      （`_FIELD_DESCRIPTIONS` 元组第 3 位即 `unit`，按字段语义填充：
+      `expression_value` → `estimated_count`，`expression_unit` → `count_unit`，
+      `source_line_number` / `source_column_index` → 空串，其余字段语义无单位者留空）
+
+- [x] **P0** 修复 `data_type` 全部硬编码为 `"string"`（artifact_build.py:171）
+
+      （`_FIELD_DESCRIPTIONS` 元组第 1 位即 `data_type`，按字段实际类型填充：
+      `string` / `float` / `integer` / `boolean`）
 
 ### 1.3 修复 source_relations / processing_log 硬编码
 
@@ -132,21 +147,39 @@
 > `warnings.csv` 恒为空（cell-line 修正未记入），
 > Pipeline 全链路零结构化日志，`MetricsTracker` 已实现但未接入。
 
-- [ ] **P0** 所有 CSV 写入改用 `utf-8-sig`（带 BOM）
+- [x] **P0** 所有 CSV 写入改用 `utf-8-sig`（带 BOM）
 
-      （`artifact_build.py:77` / `validation.py:43` 等共 14 处）
+      （`artifact_build.py:_write_csv` / `validation.py:_write_csv` /
+      `processing.py:_build_minimal_parsed_dataset` /
+      `processing/geo_tximport.py:process_geo_tximport_counts`，2026-07-19）
+      —— 所有产物 CSV 均以 `b"\xef\xbb\xbf"` BOM 开头，Excel 可直接打开中文不乱码。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_all_artifact_csvs_have_utf8_bom`
+      —— 同步更新所有读取端用 `utf-8-sig` 解码以透明剥离 BOM：
+      `validation.py:_read_csv` / `runner.py` warnings.csv 读取 /
+      3 处测试 helper。
 
-- [ ] **P0** 修复 `run_manifest.json` 的 `model_name=None`
+- [x] **P0** 修复 `run_manifest.json` 的 `model_name=None`
 
-      （`validation.py:342`）—— 应从 ctx 或环境变量读取实际 Qwen 模型名
+      （`validation.py`，2026-07-19）—— 改为 `settings.model_name`，
+      从 `app.config.settings` 注入实际 Qwen 模型名。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_run_manifest_model_name_not_none`
 
-- [ ] **P0** 修复 `warnings.csv` 恒空，cell-line 修正未记入
+- [x] **P0** 修复 `warnings.csv` 恒空，cell-line 修正未记入
 
-      （`processing/geo_tximport.py:34-37,81-83`）—— 将 MD-MBA-231 → MDA-MB-231 修正写入 warnings
+      （`artifact_build.py:_build_cell_line_warnings`，2026-07-19）
+      —— 新增 `_build_cell_line_warnings()` 遍历 samples，
+      对 `cell_line_raw != cell_line_canonical` 的样本输出 warning 行
+      （`code=cell_line_normalized`，`severity=info`）。
+      —— 同步序列化到 `processing_log.csv` 的 `warnings` JSON 数组，
+      确保 `warnings_metrics_consistency` 校验通过。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_warnings_csv_records_cell_line_corrections`
+      —— 配套事件：`tests/pipeline/test_event_coverage.py::test_warning_events_emitted_for_cell_line_corrections`
 
-- [ ] **P0** 修复 `artifact_build.py:78` 的 `extrasaction="ignore"` 静默丢字段
+- [x] **P0** 修复 `artifact_build.py:78` 的 `extrasaction="ignore"` 静默丢字段
 
-      —— 应在写入前断言所有 row 字段都在 fieldnames 中
+      （`artifact_build.py:_write_csv` / `validation.py:_write_csv`，2026-07-19）
+      —— 改为 `extrasaction="raise"`，typo 的 row key 会立即抛 `ValueError`。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_write_csv_rejects_extra_fields`
 
 - [ ] **P0** Pipeline 全链路接入结构化日志
 
@@ -181,13 +214,15 @@
 > 与实际代码严重漂移；`backend/data/.gitignore` 排除所有 artifact 样例，
 > 评委克隆仓库后无法直接查看任何产物；Agent INSTRUCTIONS 缺"主题→数据库"决策表。
 
-- [ ] **P0** 同步 `backend/README.md`
+- [x] **P0** 同步 `backend/README.md`
 
-      —— 修正：测试文件数（12→50+）、API 端点数（5→11）、项目结构、Skill 数量
+      —— 修正：测试文件数（12→86）、API 端点数（5→11+WS）、项目结构（agent_loop/runtime/pipeline/integrations/domain/contracts）、Skill 数量（9→14）
+      —— 实现：2026-07-19 完成，含 NCBI 配置项、PDF 三级 fallback 链、QueryStatus 枚举、安全模型 AST 白名单、Qwen 400 重试说明
 
-- [ ] **P0** 同步 `frontend/README.md`
+- [x] **P0** 同步 `frontend/README.md`
 
-      —— 修正：shadcn 组件清单（26→31）、测试覆盖（1→13）、新增 `runtime/` 目录说明
+      —— 修正：shadcn 组件清单（28→36）、测试覆盖（1→15 文件 / 200+ 测试）、新增 `runtime/` 目录说明
+      —— 实现：2026-07-19 完成，含 AgentComposer / AgentProgress / ArtifactWorkspace / UserInputDialog / BackgroundTaskNotifications 等新组件说明，Zustand Store 结构改为 `tasksById/activitiesById/artifactsById` 投影
 
 - [x] **P0** 同步 `docs/ARCHITECTURE.md` §8、§9 与 §12
 
