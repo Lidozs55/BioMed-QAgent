@@ -1289,6 +1289,7 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cancellation_requested = asyncio.Event()
+    live_frames: list[object] = []
     model = SimpleNamespace(close=AsyncMock())
     build = SimpleNamespace(agent=object(), skill_names=(), model=model)
     execution = RunExecution(
@@ -1298,6 +1299,7 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
         input="do not start",
         context=SimpleNamespace(cancellation_requested=cancellation_requested),
         _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
         _compaction_committer=AsyncMock(return_value=False),
     )
 
@@ -1318,6 +1320,15 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
             compactor=Compactor(),
         )(execution)
 
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_cancelled_compaction",
+            last_chunk_index=None,
+            finish_reason="cancelled",
+        )
+    ]
     model.close.assert_awaited_once_with()
 
 

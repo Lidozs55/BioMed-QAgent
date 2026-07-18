@@ -449,7 +449,7 @@ class AgentRunExecutor:
                 # 让 manager 的成功证据校验生效。
                 if hasattr(result, "final_output"):
                     execution.mark_agent_executed()
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, CompactionCancelledError):
             await text_buffer.end("cancelled")
             raise
         except Exception:
