@@ -164,14 +164,37 @@ class _AssistantTextBuffer:
         through_chunk_index = self._through_chunk_index
         if from_chunk_index is None or through_chunk_index is None:
             raise RuntimeError("assistant text buffer lost its chunk range")
-        await self._execution.emit(
-            AssistantDeltaPayload(
-                delta=delta,
-                stream_id=self._stream_id,
-                from_chunk_index=from_chunk_index,
-                through_chunk_index=through_chunk_index,
+        emit_task = asyncio.create_task(
+            self._execution.emit(
+                AssistantDeltaPayload(
+                    delta=delta,
+                    stream_id=self._stream_id,
+                    from_chunk_index=from_chunk_index,
+                    through_chunk_index=through_chunk_index,
+                )
             )
         )
+        try:
+            await asyncio.shield(emit_task)
+        except asyncio.CancelledError:
+            while not emit_task.done():
+                try:
+                    await asyncio.shield(emit_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not emit_task.cancelled():
+                try:
+                    emit_task.result()
+                except BaseException:
+                    pass
+                else:
+                    self._clear_confirmed_batch()
+            raise
+        self._clear_confirmed_batch()
+
+    def _clear_confirmed_batch(self) -> None:
         self._parts.clear()
         self._byte_count = 0
         self._started_at = None

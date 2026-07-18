@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -31,9 +33,14 @@ from app.domain.contracts import (
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
+    RunQueuedPayload,
+    RunStartedPayload,
+    RunStatus,
     StartTaskRequest,
     TaskFailedPayload,
+    TaskMode,
     TaskSnapshot,
+    TaskSummary,
     ToolCompletedPayload,
     ToolStartedPayload,
     UserInputRequiredPayload,
@@ -409,7 +416,10 @@ async def test_text_buffer_end_retains_unconfirmed_batch_without_publishing_end(
     with pytest.raises(type(failure)) as raised:
         await buffer.end("error")
 
-    assert raised.value is failure
+    if isinstance(failure, asyncio.CancelledError):
+        assert isinstance(raised.value, asyncio.CancelledError)
+    else:
+        assert raised.value is failure
     assert not any(isinstance(frame, AssistantStreamEndFrame) for frame in live_frames)
 
     await buffer.end("error")
@@ -433,6 +443,123 @@ async def test_text_buffer_end_retains_unconfirmed_batch_without_publishing_end(
             finish_reason="error",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_cancelled_after_durable_commit_does_not_reappend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    task_id = "task_cancelled_flush_commit"
+    run_id = "run_cancelled_flush_commit"
+    now = datetime.now(UTC)
+    await repository.initialize()
+    await repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id=task_id,
+                mode=TaskMode.AGENT,
+                title="cancel a committing flush",
+                status=RunStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    )
+    await repository.append_event(
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=1,
+            payload=RunQueuedPayload(
+                request_id="request_cancelled_flush_commit",
+                input="cancel a committing flush",
+            ),
+        )
+    )
+    await repository.append_event(
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=2,
+            payload=RunStartedPayload(),
+        )
+    )
+    append_committed = threading.Event()
+    release_append = threading.Event()
+    real_append = repository._append_event_sync
+
+    def append_then_block(event: EventEnvelope) -> TaskSnapshot:
+        snapshot = real_append(event)
+        if isinstance(event.payload, AssistantDeltaPayload):
+            append_committed.set()
+            assert release_append.wait(timeout=5)
+        return snapshot
+
+    monkeypatch.setattr(repository, "_append_event_sync", append_then_block)
+    live_frames: list[object] = []
+
+    async def emit(payload: object) -> TaskSnapshot:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        return await repository.append_event(
+            build_event(
+                task_id=task_id,
+                run_id=run_id,
+                sequence=snapshot.task.latest_sequence + 1,
+                payload=payload,
+            )
+        )
+
+    execution = RunExecution(
+        task_id=task_id,
+        run_id=run_id,
+        request_id="request_cancelled_flush_commit",
+        input="cancel a committing flush",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+    await buffer.add("buffered 中🙂")
+    ending = asyncio.create_task(buffer.end("cancelled"))
+    try:
+        committed = await asyncio.to_thread(append_committed.wait, 2)
+        assert committed
+        ending.cancel()
+        release_append.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await ending
+
+        await buffer.end("cancelled")
+
+        events = await repository.list_events(task_id)
+        assistant_deltas = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, AssistantDeltaPayload)
+        ]
+        assert assistant_deltas == [
+            AssistantDeltaPayload(
+                delta="buffered 中🙂",
+                stream_id=f"assistant:{run_id}",
+                from_chunk_index=0,
+                through_chunk_index=0,
+            )
+        ]
+        assert (
+            sum(isinstance(frame, AssistantStreamEndFrame) for frame in live_frames)
+            == 1
+        )
+    finally:
+        release_append.set()
+        if not ending.done():
+            ending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await ending
+        await repository.close()
 
 
 async def _append_async(items: list[object], item: object) -> None:
