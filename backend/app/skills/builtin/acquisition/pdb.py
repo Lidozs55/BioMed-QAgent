@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 from agents import RunContextWrapper, function_tool
 
@@ -21,13 +23,30 @@ _SEARCH_API = "https://search.rcsb.org/rcsbsearch/v2/query"
 _DATA_API = "https://data.rcsb.org/rest/v1/core/entry/"
 _FILES_BASE = "https://files.rcsb.org/download/"
 
+#: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
+_RATE_LIMIT_SECONDS = 2.0
+
+#: search_pdb 内部对前 N 条结果补全详情，避免 N+1 查询阻塞 agent loop。
+_DESCRIBE_BATCH_LIMIT = 3
+
 
 def _post_json(url: str, body: dict) -> dict:
     """POST JSON body and return parsed response."""
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": _USER_AGENT,
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -35,8 +54,13 @@ def _post_json(url: str, body: dict) -> dict:
 
 
 def _get_json(url: str) -> dict:
-    """GET JSON from a URL."""
-    with urllib.request.urlopen(url, timeout=30) as resp:
+    """GET JSON from a URL with browser User-Agent."""
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -44,7 +68,10 @@ def _download(url: str, dest: Path) -> None:
     """Download a file to dest (atomic via .part rename)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:
+    req = urllib.request.Request(
+        url, headers={"User-Agent": _USER_AGENT}, method="GET"
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
         shutil.copyfileobj(resp, f)
     if dest.exists():
         dest.unlink()
@@ -74,12 +101,51 @@ def _build_search_body(term: str, max_results: int) -> dict:
     }
 
 
+def _fetch_entry_detail(pdb_id: str) -> dict[str, Any]:
+    """Fetch enriched metadata for a single PDB entry from the Data API.
+
+    Returns a dict with ``title``/``organism``/``method``/``resolution``/
+    ``deposit_date``. Empty fields stay as empty string / None on failure
+    so callers can merge them safely.
+    """
+    url = f"{_DATA_API}{pdb_id.lower()}"
+    try:
+        data = _get_json(url)
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        logger.warning("PDB describe fetch failed for %s: %s", pdb_id, exc)
+        return {}
+
+    struct = data.get("struct", {})
+    rcsb = data.get("rcsb_entry_info", {})
+    exptl = data.get("exptl", [])
+    accession = data.get("rcsb_accession_info", {})
+
+    # organism 字段从 polymer_entities 汇总科学名
+    organisms: list[str] = []
+    for entity in data.get("polymer_entities", []):
+        for src in entity.get("rcsb_entity_source_organism", []):
+            name = src.get("scientific_name")
+            if name and name not in organisms:
+                organisms.append(name)
+
+    return {
+        "title": struct.get("title", ""),
+        "organism": "; ".join(organisms) if organisms else "",
+        "method": exptl[0].get("method", "") if exptl else "",
+        "resolution": rcsb.get("resolution_combined", [None])[0],
+        "deposit_date": accession.get("deposit_date", ""),
+    }
+
+
 @function_tool
 def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
     """Search RCSB PDB by keyword (protein name, gene, organism, etc.).
 
     Uses RCSB Search API v2 with full_text search. Returns PDB IDs with
-    titles, organism, and experimental method metadata.
+    titles, organism, and experimental method metadata. The top
+    ``min(max_results, 3)`` entries are enriched with full metadata fetched
+    from the RCSB Data API (2s rate-limited); the remaining entries carry
+    only ``pdb_id`` and the caller can call ``describe_pdb`` for more.
     """
     run_ctx: RunContext = ctx.context
     try:
@@ -99,22 +165,29 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
     run_ctx.log_query(term, "pdb", "ok", len(result_set))
 
     records: list[dict[str, Any]] = []
-    for entry in result_set:
-        records.append({
-            "pdb_id": entry.get("identifier", ""),
-            "title": entry.get("title", ""),
-            "organism": entry.get("entity_poly", {}).get("rcsb_entity_polymer_type", ""),
-            "method": entry.get("exptl", [{}])[0].get("method", "") if entry.get("exptl") else "",
-            "resolution": entry.get("rcsb_entry_info", {}).get("resolution_combined", [None])[0]
-            if entry.get("rcsb_entry_info") else None,
-            "deposit_date": entry.get("rcsb_accession_info", {}).get("deposit_date", ""),
-        })
+    enrich_limit = min(len(result_set), _DESCRIBE_BATCH_LIMIT)
+    for index, entry in enumerate(result_set):
+        pdb_id = entry.get("identifier", "")
+        record: dict[str, Any] = {
+            "pdb_id": pdb_id,
+            "title": "",
+            "organism": "",
+            "method": "",
+            "resolution": None,
+            "deposit_date": "",
+        }
+        # 前 N 条调用 Data API 补全字段（RCSB Search API result_set 仅含 identifier）
+        if index < enrich_limit and pdb_id:
+            time.sleep(_RATE_LIMIT_SECONDS)
+            record.update(_fetch_entry_detail(pdb_id))
+        records.append(record)
 
     return json.dumps({
         "source": "pdb",
         "term": term,
         "pdb_ids": [r["pdb_id"] for r in records],
         "records": records,
+        "enriched_count": enrich_limit,
     }, ensure_ascii=False)
 
 

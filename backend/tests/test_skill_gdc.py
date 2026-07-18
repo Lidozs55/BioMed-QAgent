@@ -6,6 +6,7 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.skills.builtin.acquisition.gdc import (
@@ -13,6 +14,13 @@ from app.skills.builtin.acquisition.gdc import (
     download_gdc,
     search_gdc,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_gdc_rate_limit() -> Any:
+    """Skip GDC module-level 2s rate limiting during tests."""
+    with patch("app.skills.builtin.acquisition.gdc._rate_limit"):
+        yield
 
 
 def _make_ctx(task_id: str = "test_gdc") -> ToolContext:
@@ -118,6 +126,75 @@ def test_search_gdc_network_error_returns_error_json() -> None:
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
     assert rc.query_log[0]["status"] == "error"
+
+
+def test_search_gdc_multi_token_term_uses_or_matching() -> None:
+    """search_gdc 多 token 查询采用 OR 语义（任一 token 命中即返回）。
+
+    ISSUE-005 回归测试:旧版 substring 匹配会让 ``"breast cancer TP53"``
+    整体作为子串查找,无任何项目命中;新行为拆分为 tokens 后任一命中
+    即返回(本例中"breast"命中 TCGA-BRCA)。
+    """
+    api_response = {
+        "data": {
+            "hits": [
+                {
+                    "project_id": "TCGA-LUAD",
+                    "name": "Lung Adenocarcinoma",
+                    "disease_type": ["Adenomas and Adenocarcinomas"],
+                    "primary_site": ["Lung"],
+                    "summary": {"case_count": 500, "file_count": 3000},
+                },
+                {
+                    "project_id": "TCGA-BRCA",
+                    "name": "Breast Invasive Carcinoma",
+                    "disease_type": ["Ductal Neoplasms"],
+                    "primary_site": ["Breast"],
+                    "summary": {"case_count": 1000, "file_count": 5000},
+                },
+            ]
+        }
+    }
+    mock_resp = _mock_urlopen_json(api_response)
+
+    ctx = _make_ctx(task_id="test_gdc_or_match")
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        args = json.dumps({"term": "breast cancer TP53", "max_results": 20})
+        result = asyncio.run(search_gdc.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["term"] == "breast cancer TP53"
+    # TP53 不在 project 元数据里,但 "breast" 命中 TCGA-BRCA
+    assert "TCGA-BRCA" in data["project_ids"]
+    # TCGA-LUAD 不含任一 token,不应被返回
+    assert "TCGA-LUAD" not in data["project_ids"]
+    assert len(data["records"]) == 1
+
+
+def test_search_gdc_single_token_keeps_exact_substring() -> None:
+    """search_gdc 单 token 查询保留精确子串匹配行为。"""
+    api_response = {
+        "data": {
+            "hits": [
+                {
+                    "project_id": "TCGA-BRCA",
+                    "name": "Breast Invasive Carcinoma",
+                    "disease_type": ["Ductal Neoplasms"],
+                    "primary_site": ["Breast"],
+                    "summary": {"case_count": 1000, "file_count": 5000},
+                },
+            ]
+        }
+    }
+    mock_resp = _mock_urlopen_json(api_response)
+
+    ctx = _make_ctx(task_id="test_gdc_single_token")
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        args = json.dumps({"term": "TCGA-BRCA", "max_results": 5})
+        result = asyncio.run(search_gdc.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert "TCGA-BRCA" in data["project_ids"]
 
 
 # ---------------------------------------------------------------------------

@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 from agents import RunContextWrapper, function_tool
 
@@ -19,6 +21,32 @@ from app.skills.registry import SkillCategory, SkillDef, skill_registry
 logger = logging.getLogger(__name__)
 
 _GDC_API_BASE = "https://api.gdc.cancer.gov"
+
+#: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
+_RATE_LIMIT_SECONDS = 2.0
+
+#: Token 短于该字符数时不参与 OR 匹配（避免 "and"/"or" 等噪声词）。
+_MIN_TOKEN_LEN = 3
+
+_last_request_ts: float = 0.0
+
+
+def _rate_limit() -> None:
+    """Sleep so that two consecutive GDC API calls are at least 2s apart."""
+    global _last_request_ts
+    now = time.monotonic()
+    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_request_ts = time.monotonic()
+
 
 # ---------------------------------------------------------------------------
 # Mappings — user-friendly data type names → GDC API data_type values
@@ -54,16 +82,30 @@ def _build_url(path: str, params: dict[str, str] | None = None) -> str:
 
 
 def _fetch_json(url: str) -> dict[str, Any]:
-    """Fetch and parse JSON from a GDC REST API endpoint."""
-    with urllib.request.urlopen(url, timeout=30) as resp:
+    """Fetch and parse JSON from a GDC REST API endpoint.
+
+    Sends a real browser User-Agent and rate-limits calls to 2s apart
+    (AGENTS.md hard constraint).
+    """
+    _rate_limit()
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
 
 def _download_file(url: str, dest: Path) -> None:
     """Download a file to *dest*, atomically via a .part temp file."""
+    _rate_limit()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:
+    req = urllib.request.Request(
+        url, headers={"User-Agent": _USER_AGENT}, method="GET"
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
         shutil.copyfileobj(resp, f)
     if dest.exists():
         dest.unlink()
@@ -73,6 +115,30 @@ def _download_file(url: str, dest: Path) -> None:
 def _normalize_data_type(data_type: str) -> str:
     """Resolve a shorthand data type to its full GDC API name."""
     return _DATA_TYPE_MAP.get(data_type.strip().lower(), data_type.strip())
+
+
+def _match_term(term: str, search_text: str) -> bool:
+    """Token-OR matching for GDC project search.
+
+    The legacy substring match rejected multi-word queries like
+    ``"breast cancer TP53"`` because no project record contains that exact
+    phrase. We now split the term into tokens (≥3 chars) and accept the
+    record if any token appears in the search text. Single-token queries
+    (e.g. ``"TCGA-BRCA"``) preserve the original exact-substring behaviour.
+    """
+    if not term:
+        return False
+    term_lower = term.lower()
+    text_lower = search_text.lower()
+    # 单 token（无空格、无连字符拆分）：保留精确子串匹配
+    if " " not in term_lower:
+        return term_lower in text_lower
+    # 多 token：拆分后任一 token ≥3 字符命中即匹配（OR 语义）
+    tokens = [t for t in term_lower.split() if len(t) >= _MIN_TOKEN_LEN]
+    if not tokens:
+        return term_lower in text_lower
+    return any(tok in text_lower for tok in tokens)
+
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -85,8 +151,10 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
 
     Queries the /projects endpoint with summary expansion and then filters
     locally by matching *term* against project_id, name, disease_type, and
-    primary_site.  Returns project-level metadata including case and file
-    counts so the caller can decide which project to investigate further.
+    primary_site. Matching is token-OR for multi-word queries (any token
+    ≥3 chars appears in the project metadata → match); single-token
+    queries use exact substring match. Use a project_id like ``TCGA-BRCA``
+    for precise lookup.
 
     The /cases endpoint is used indirectly via the project summary
     expansion to obtain case counts without additional round-trips.
@@ -94,7 +162,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
     Args:
         ctx: Run context (injected by the OpenAI Agents SDK).
         term: Search keyword or phrase (e.g. "lung", "TCGA-LUAD",
-              "breast invasive carcinoma").
+              "breast cancer", "breast cancer TP53").
         max_results: Maximum number of project records to return
                      (default 20).
 
@@ -119,7 +187,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
             ),
         })
         data = _fetch_json(url)
-    except Exception as exc:
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
         run_ctx.log_query(term, "gdc", "error", 0)
         return json.dumps({
             "source": "gdc",
@@ -130,7 +198,6 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         }, ensure_ascii=False)
 
     hits: list[dict[str, Any]] = data.get("data", {}).get("hits", [])
-    term_lower = term.lower()
     records: list[dict[str, Any]] = []
 
     for hit in hits:
@@ -142,12 +209,12 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
 
         # Build searchable text from all human-readable fields
         search_text = " ".join([
-            pid.lower(),
-            name.lower(),
-            *(d.lower() for d in disease),
-            *(ps.lower() for ps in primary_site),
+            pid,
+            name,
+            *disease,
+            *primary_site,
         ])
-        if term_lower not in search_text:
+        if not _match_term(term, search_text):
             continue
 
         data_categories = [

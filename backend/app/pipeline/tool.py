@@ -39,15 +39,16 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
         "Run the deterministic validated research-data pipeline. Accepts an "
         "optional TaskSpecification (queries/datasets/requested_outputs). "
         "When no specification is supplied the runner derives one from the "
-        "topic and selected databases. Supports fixture mode (offline regression "
-        "case) and live mode (real external APIs)."
+        "topic and selected databases. Defaults to live mode (real external "
+        "APIs) for production agent runs; fixture mode is reserved for offline "
+        "regression tests and must be set explicitly."
     ),
 )
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
     databases: list[str],
-    mode: Literal["fixture", "live"] = "fixture",
+    mode: Literal["fixture", "live"] = "live",
     specification: TaskSpecification | None = None,
 ) -> str:
     normalized_databases = [value.lower() for value in databases]

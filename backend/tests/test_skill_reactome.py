@@ -98,6 +98,99 @@ def test_search_reactome_api_success() -> None:
     assert rc.query_log[0]["status"] == "ok"
 
 
+def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> None:
+    """search_reactome 补全缺失的 summary 字段。
+
+    真实 Reactome ContentService ``/search/query`` 的 entries 不一定包含
+    ``summation`` 字段;search_reactome 应对前 N 条调用
+    ``/data/pathways/{stId}/summation`` 端点补全。
+    """
+    # search/query 返回的 entries 没有 summation 字段
+    search_response = json.dumps({
+        "results": [
+            {
+                "typeName": "Pathway",
+                "entriesCount": 1,
+                "entries": [
+                    {
+                        "stId": "R-HSA-169893",
+                        "name": "Apoptosis",
+                        "species": ["Homo sapiens"],
+                        "exactType": "Pathway",
+                    }
+                ],
+            }
+        ],
+        "numberOfMatches": 1,
+    })
+    summation_response = json.dumps([
+        {"text": "Programmed cell death pathway.", "releaseDate": "2024-01-01"},
+        {"text": "Regulated by caspases and Bcl-2 family."},
+    ])
+
+    search_result = _api_result(search_response)
+    summation_result = _api_result(summation_response)
+
+    ctx = _make_ctx(task_id="test_reactome_enrich")
+    # search_reactome 先调 search/query,再调 /data/pathways/{id}/summation
+    with patch(
+        "app.skills.builtin.acquisition.reactome.api_fetch",
+        side_effect=[search_result, summation_result],
+    ):
+        args = json.dumps({"term": "apoptosis", "max_results": 10})
+        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["source"] == "reactome"
+    assert data["count"] == 1
+    assert data["enriched_count"] == 1
+    rec0 = data["records"][0]
+    assert rec0["pathway_id"] == "R-HSA-169893"
+    # summary 应包含两段拼接
+    assert "Programmed cell death pathway." in rec0["summary"]
+    assert "Regulated by caspases and Bcl-2 family." in rec0["summary"]
+
+    rc: RunContext = ctx.context
+    assert len(rc.query_log) == 1
+    assert rc.query_log[0]["status"] == "ok"
+
+
+def test_search_reactome_summation_fetch_failure_keeps_empty_summary() -> None:
+    """search_reactome 在 summation 端点失败时保留空 summary,不抛异常。"""
+    search_response = json.dumps({
+        "results": [
+            {
+                "typeName": "Pathway",
+                "entriesCount": 1,
+                "entries": [
+                    {
+                        "stId": "R-HSA-169893",
+                        "name": "Apoptosis",
+                        "species": ["Homo sapiens"],
+                        "exactType": "Pathway",
+                    }
+                ],
+            }
+        ],
+        "numberOfMatches": 1,
+    })
+    search_result = _api_result(search_response)
+    # summation 端点返回 500
+    summation_failed = _api_result("", status_code=500)
+
+    ctx = _make_ctx(task_id="test_reactome_summation_fail")
+    with patch(
+        "app.skills.builtin.acquisition.reactome.api_fetch",
+        side_effect=[search_result, summation_failed],
+    ):
+        args = json.dumps({"term": "apoptosis", "max_results": 10})
+        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["count"] == 1
+    assert data["records"][0]["summary"] == ""
+
+
 def test_search_reactome_parse_failure_accepts_useful_static_html() -> None:
     """Reactome can use useful visible static HTML without Playwright."""
     api_result = _api_result("[]")

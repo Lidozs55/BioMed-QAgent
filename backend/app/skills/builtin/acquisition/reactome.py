@@ -35,6 +35,10 @@ _REACTOME_PAGE_BASE = "https://reactome.org/content/detail"
 _HIGHLIGHT_RE = re.compile(r"<[^>]+>")
 _MAX_BODY_CHARS = 5000
 
+#: search_reactome 内部对前 N 条无 summary 的结果调用 /data/pathways/{id}/summation
+#: 补全,避免 N+1 查询阻塞 agent loop。
+_SUMMATION_BATCH_LIMIT = 3
+
 
 def _visible_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
@@ -79,6 +83,37 @@ def _strip_html(text: str) -> str:
     return _HIGHLIGHT_RE.sub("", text).strip()
 
 
+def _fetch_pathway_summation(pathway_id: str) -> str:
+    """Fetch the summation text for a single pathway.
+
+    Reactome ContentService ``/data/pathways/{stId}/summation`` 端点返回
+    形如 ``[{"text": "...", "releaseDate": "..."}]`` 的数组;多段按顺序拼接。
+
+    Returns:
+        空字符串表示获取失败或无 summation;非空字符串为清洗 HTML 后的
+        多段拼接结果。
+    """
+    if not pathway_id:
+        return ""
+    url = f"{_REACTOME_API_BASE}/data/pathways/{pathway_id}/summation"
+    result = api_fetch(url)
+    if not result.ok:
+        return ""
+    try:
+        data = json.loads(result.content)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(data, list):
+        return ""
+    texts: list[str] = []
+    for item in data:
+        if isinstance(item, dict):
+            text = item.get("text", "")
+            if text:
+                texts.append(_strip_html(text))
+    return "\n".join(texts)
+
+
 @function_tool
 def search_reactome(
     ctx: RunContextWrapper[Any],
@@ -119,8 +154,17 @@ def search_reactome(
             entries: list[dict] = []
             for group in groups:
                 entries.extend(group.get("entries", []))
-            records = [
-                {
+            # 截断到 max_results 后再补全 summary,避免对全量 entries 调用 N+1
+            truncated = entries[:max_results]
+            enrich_limit = min(len(truncated), _SUMMATION_BATCH_LIMIT)
+            records: list[dict[str, Any]] = []
+            for index, e in enumerate(truncated):
+                summary = _strip_html(e.get("summation", ""))
+                # 前 N 条:若 search API 未返回非空 summation,调用
+                # /data/pathways/{stId}/summation 端点补全
+                if not summary and index < enrich_limit:
+                    summary = _fetch_pathway_summation(e.get("stId", ""))
+                record = {
                     "pathway_id": e.get("stId", ""),
                     "name": _strip_html(e.get("name", "")),
                     "species": (
@@ -128,12 +172,11 @@ def search_reactome(
                         if isinstance(e.get("species"), list)
                         else str(e.get("species", ""))
                     ),
-                    "summary": _strip_html(e.get("summation", "")),
+                    "summary": summary,
                     "type": e.get("exactType", e.get("type", "")),
                     "url": f"{_REACTOME_PAGE_BASE}/{e.get('stId', '')}",
                 }
-                for e in entries[:max_results]
-            ]
+                records.append(record)
             run_ctx.log_query(term, "reactome", "ok", len(records))
             return json.dumps({
                 "source": "reactome",
@@ -141,6 +184,7 @@ def search_reactome(
                 "count": len(records),
                 "total_matches": data.get("numberOfMatches", len(records)),
                 "records": records,
+                "enriched_count": enrich_limit,
                 "method_used": "api",
             }, ensure_ascii=False)
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
