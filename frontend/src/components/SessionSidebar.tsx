@@ -121,7 +121,11 @@ function TaskRow({
         onClick={onSelect}
         tooltip={summary.title}
         aria-label={`${summary.title} ${status.label}`}
-        className="min-w-0"
+        className={
+          active
+            ? "min-w-0"
+            : "min-w-0 group-hover/menu-item:bg-sidebar-accent group-hover/menu-item:text-sidebar-accent-foreground"
+        }
       >
         <TaskStatusIcon
           status={summary.status}

@@ -324,8 +324,14 @@ describe("SessionSidebar", () => {
     expect(screen.queryByRole("button", { name: "删除 Running" })).toBeNull();
     expect(screen.queryByRole("button", { name: "取消 Finished" })).toBeNull();
 
+    const taskButton = screen.getByRole("button", { name: "Finished 已完成" });
+    expect(taskButton).toHaveClass(
+      "group-hover/menu-item:bg-sidebar-accent",
+      "group-hover/menu-item:text-sidebar-accent-foreground",
+    );
     const deleteAction = screen.getByRole("button", { name: "删除 Finished" });
     expect(deleteAction).toHaveClass(
+      "transition-[transform,opacity]",
       "md:opacity-0",
       "group-hover/menu-item:opacity-100",
       "group-focus-within/menu-item:opacity-100",
