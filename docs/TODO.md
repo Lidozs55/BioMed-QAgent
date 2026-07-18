@@ -181,13 +181,15 @@
 > 与实际代码严重漂移；`backend/data/.gitignore` 排除所有 artifact 样例，
 > 评委克隆仓库后无法直接查看任何产物；Agent INSTRUCTIONS 缺"主题→数据库"决策表。
 
-- [ ] **P0** 同步 `backend/README.md`
+- [x] **P0** 同步 `backend/README.md`
 
-      —— 修正：测试文件数（12→50+）、API 端点数（5→11）、项目结构、Skill 数量
+      —— 修正：测试文件数（12→86）、API 端点数（5→11+WS）、项目结构（agent_loop/runtime/pipeline/integrations/domain/contracts）、Skill 数量（9→14）
+      —— 实现：2026-07-19 完成，含 NCBI 配置项、PDF 三级 fallback 链、QueryStatus 枚举、安全模型 AST 白名单、Qwen 400 重试说明
 
-- [ ] **P0** 同步 `frontend/README.md`
+- [x] **P0** 同步 `frontend/README.md`
 
-      —— 修正：shadcn 组件清单（26→31）、测试覆盖（1→13）、新增 `runtime/` 目录说明
+      —— 修正：shadcn 组件清单（28→36）、测试覆盖（1→15 文件 / 200+ 测试）、新增 `runtime/` 目录说明
+      —— 实现：2026-07-19 完成，含 AgentComposer / AgentProgress / ArtifactWorkspace / UserInputDialog / BackgroundTaskNotifications 等新组件说明，Zustand Store 结构改为 `tasksById/activitiesById/artifactsById` 投影
 
 - [x] **P0** 同步 `docs/ARCHITECTURE.md` §8、§9 与 §12
 
