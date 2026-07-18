@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import type { ResumeRunInput, TaskSummary } from "@/runtime/contracts";
 import { createTaskProjection } from "@/runtime/reducer";
-import type { TaskProjection } from "@/runtime/types";
+import type { PendingUserInput, TaskProjection } from "@/runtime/types";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
@@ -13,6 +13,7 @@ function taskWithPrompt(
   activeRunId: string,
   pendingRunId: string,
   requestId: string,
+  overrides: { promptKind?: PendingUserInput["promptKind"]; detail?: PendingUserInput["detail"]; summary?: string } = {},
 ): TaskProjection {
   const summary: TaskSummary = {
     task_id: taskId,
@@ -30,11 +31,11 @@ function taskWithPrompt(
     pendingUserInput: {
       runId: pendingRunId,
       requestId,
-      promptKind: "plan_confirmation",
-      summary: `Confirm ${taskId}`,
+      promptKind: overrides.promptKind ?? "plan_confirmation",
+      summary: overrides.summary ?? `Confirm ${taskId}`,
       expiresAt: null,
       fixtureExempt: false,
-      detail: {},
+      detail: overrides.detail ?? {},
       sequence: 1,
       timestamp: CREATED_AT,
     },
@@ -161,5 +162,108 @@ describe("UserInputDialog", () => {
       expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
     });
     expect(onResumeRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders plan_confirmation detail as structured fields instead of raw JSON", () => {
+    const detail: PendingUserInput["detail"] = {
+      topic: "阿尔茨海默病与骨质疏松症共病机制",
+      queries: [
+        {
+          query_id: "q1_pubmed_search",
+          database: "pubmed",
+          query: "(Alzheimer's disease AND osteoporosis)",
+          generated_by: "agent",
+          purpose: "Initial literature discovery",
+          order: 1,
+          page_size: 20,
+          max_results: 20,
+        },
+      ],
+      datasets: [
+        {
+          dataset_id: "gse12345",
+          database: "geo",
+          accession: "GSE12345",
+          reason: "Differential expression analysis",
+        },
+      ],
+      requested_outputs: ["main_data", "literature"],
+    };
+    const task = taskWithPrompt(
+      "task_plan",
+      "run_plan",
+      "run_plan",
+      "request_plan",
+      { detail },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    // 研究主题分段显示
+    expect(screen.getByText("研究主题")).toBeVisible();
+    expect(
+      screen.getByText("阿尔茨海默病与骨质疏松症共病机制"),
+    ).toBeVisible();
+
+    // 检索查询分段显示，包含 query_id 和 database badge
+    expect(screen.getByText("检索查询 (1)")).toBeVisible();
+    expect(screen.getByText("#1")).toBeVisible();
+    expect(screen.getByText("pubmed")).toBeVisible();
+    expect(screen.getByText("(Alzheimer's disease AND osteoporosis)")).toBeVisible();
+    expect(screen.getByText("Initial literature discovery")).toBeVisible();
+
+    // 数据集分段显示
+    expect(screen.getByText("数据集 (1)")).toBeVisible();
+    expect(screen.getByText("GSE12345", { exact: false })).toBeVisible();
+
+    // 请求输出 badge
+    expect(screen.getByText("请求输出")).toBeVisible();
+    expect(screen.getByText("main_data")).toBeVisible();
+    expect(screen.getByText("literature")).toBeVisible();
+
+    // 不应出现原始 JSON
+    expect(
+      screen.queryByText(/"schema_version"/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/"query_id": "q1_pubmed_search"/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("falls back gracefully when plan_confirmation detail has no topic", () => {
+    // detail 缺少 topic 字段,parsePlanSpec 返回 null,不渲染结构化卡片
+    const task = taskWithPrompt(
+      "task_no_topic",
+      "run_no_topic",
+      "run_no_topic",
+      "request_no_topic",
+      { detail: { queries: [] } },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+    expect(screen.queryByText("检索查询")).not.toBeInTheDocument();
+  });
+
+  it("renders max_turns_reached prompt without structured plan card", () => {
+    const task = taskWithPrompt(
+      "task_max_turns",
+      "run_max_turns",
+      "run_max_turns",
+      "request_max_turns",
+      {
+        promptKind: "max_turns_reached",
+        summary: "Agent 已达到最大轮次 (15)，是否继续工作？",
+        detail: { max_turns: 15, resume_count: 0 },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    expect(screen.getByText("Agent 已达到最大轮次")).toBeVisible();
+    expect(
+      screen.getByText("Agent 已达到最大轮次 (15)，是否继续工作？"),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续工作" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
+    // max_turns_reached 不应渲染 plan card
+    expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
   });
 });
