@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 import type {
   ArtifactRecord,
   DatabaseRecord,
+  AssistantStreamFrame,
   EventEnvelope,
   MessagePage,
   TaskMode,
@@ -18,6 +19,8 @@ import {
   mergeOlderMessagePage as projectOlderMessagePage,
   mergeTaskPage as projectTaskPage,
   prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
+  deactivateAssistantStreams as projectDeactivateAssistantStreams,
+  reduceAssistantStreamFrames,
   reduceRuntimeEvent,
 } from "@/runtime/reducer";
 import type {
@@ -50,6 +53,8 @@ export interface AgentStore extends AgentRuntimeData {
     page: MessagePage,
   ) => void;
   applyEvent: (event: EventEnvelope) => void;
+  applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
+  deactivateAssistantStreams: (taskId?: string) => void;
   setActiveTaskId: (taskId: string | null) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setHistoryState: (status: HistoryStatus, error?: string | null) => void;
@@ -234,6 +239,7 @@ export function addAcceptedTask(
     artifactEventSequences: {},
     artifactManifestSequence: null,
     stages: {},
+    assistantStreamsByRunId: {},
     pendingUserInput: null,
     lastSequence: 0,
     hydration: "accepted" as const,
@@ -309,6 +315,12 @@ export const useAgentStore = create<AgentStore>()(
 
       applyEvent: (event) =>
         set((state) => reduceRuntimeEvent(state, event)),
+
+      applyAssistantStreamFrames: (frames) =>
+        set((state) => reduceAssistantStreamFrames(state, frames)),
+
+      deactivateAssistantStreams: (taskId) =>
+        set((state) => projectDeactivateAssistantStreams(state, taskId)),
 
       setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
 

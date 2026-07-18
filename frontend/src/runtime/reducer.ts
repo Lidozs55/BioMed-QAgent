@@ -1,4 +1,6 @@
 import type {
+  AssistantDeltaPayload,
+  AssistantStreamFrame,
   EventEnvelope,
   MessagePage,
   MessageRecord,
@@ -11,6 +13,7 @@ import type {
 } from "./contracts";
 import type {
   ActivityProjection,
+  AssistantStreamProjection,
   AgentRuntimeData,
   ArtifactProjection,
   ProjectedMessage,
@@ -65,6 +68,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     artifactEventSequences: {},
     artifactManifestSequence: null,
     stages: {},
+    assistantStreamsByRunId: {},
     pendingUserInput: null,
     lastSequence: summary.latest_sequence,
     hydration: "summary",
@@ -313,6 +317,21 @@ export function hydrateTaskSnapshot(
       ? undefined
       : runs.find((run) => run.runId === base.pendingUserInput?.runId);
   const snapshotMessages = snapshot.messages.map(projectMessage);
+  const durableAssistantRunIds = new Set(
+    snapshotMessages
+      .filter(
+        (message): message is ProjectedMessage & { runId: string } =>
+          message.role === "assistant" &&
+          message.ordinal !== null &&
+          message.runId !== null,
+      )
+      .map((message) => message.runId),
+  );
+  const assistantStreamsByRunId = Object.fromEntries(
+    Object.entries(base.assistantStreamsByRunId).filter(
+      ([runId]) => !durableAssistantRunIds.has(runId),
+    ),
+  );
   const snapshotRunIds = new Set(runs.map((run) => run.runId));
   const runOrder = [
     ...runs.map((run) => run.runId),
@@ -328,6 +347,7 @@ export function hydrateTaskSnapshot(
     runsById,
     runOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
+    assistantStreamsByRunId,
     pendingUserInput:
       base.pendingUserInput !== null &&
       snapshot.task.active_run_id === base.pendingUserInput.runId &&
@@ -459,6 +479,230 @@ function upsertMessage(
   const messages = [...task.messages];
   messages[index] = message;
   return { ...task, messages };
+}
+
+function assistantMessage(
+  task: TaskProjection,
+  runId: string,
+): ProjectedMessage | undefined {
+  return task.messages.find(
+    (message) => message.runId === runId && message.role === "assistant",
+  );
+}
+
+function renderAssistantStream(stream: AssistantStreamProjection): string {
+  const parts: string[] = [];
+  let index = stream.confirmedThroughChunkIndex + 1;
+  while (Object.hasOwn(stream.pendingChunks, index)) {
+    parts.push(stream.pendingChunks[index]);
+    index += 1;
+  }
+  const pendingText = parts.join("");
+  return `${stream.durableText}${pendingText}`;
+}
+
+function withAssistantStream(
+  task: TaskProjection,
+  runId: string,
+  stream: AssistantStreamProjection,
+  messageSequence: number | null,
+  createdAt: string,
+): TaskProjection {
+  const projected = upsertMessage(task, {
+    messageId: `live:${runId}:assistant`,
+    taskId: task.summary.task_id,
+    runId,
+    ordinal: null,
+    role: "assistant",
+    content: renderAssistantStream(stream),
+    createdAt,
+    sequence: messageSequence,
+  });
+  return {
+    ...projected,
+    assistantStreamsByRunId: {
+      ...projected.assistantStreamsByRunId,
+      [runId]: stream,
+    },
+  };
+}
+
+function applyAssistantStreamDelta(
+  task: TaskProjection,
+  frame: Extract<AssistantStreamFrame, { type: "assistant_stream_delta" }>,
+): TaskProjection {
+  const currentStream = task.assistantStreamsByRunId[frame.run_id];
+  if (
+    currentStream !== undefined &&
+    currentStream.streamId !== frame.stream_id
+  ) {
+    return task;
+  }
+  const currentMessage = assistantMessage(task, frame.run_id);
+  const stream = currentStream ?? {
+    streamId: frame.stream_id,
+    durableText: currentMessage?.content ?? "",
+    pendingChunks: {},
+    confirmedThroughChunkIndex: -1,
+    active: false,
+  };
+  if (
+    frame.chunk_index <= stream.confirmedThroughChunkIndex ||
+    Object.hasOwn(stream.pendingChunks, frame.chunk_index)
+  ) {
+    return task;
+  }
+  const nextStream: AssistantStreamProjection = {
+    ...stream,
+    pendingChunks: {
+      ...stream.pendingChunks,
+      [frame.chunk_index]: frame.delta,
+    },
+    active: true,
+  };
+  return withAssistantStream(
+    task,
+    frame.run_id,
+    nextStream,
+    currentMessage?.sequence ?? null,
+    currentMessage?.createdAt ?? task.summary.updated_at,
+  );
+}
+
+function applyAssistantStreamEnd(
+  task: TaskProjection,
+  frame: Extract<AssistantStreamFrame, { type: "assistant_stream_end" }>,
+): TaskProjection {
+  const stream = task.assistantStreamsByRunId[frame.run_id];
+  if (
+    stream === undefined ||
+    stream.streamId !== frame.stream_id ||
+    !stream.active
+  ) {
+    return task;
+  }
+  return {
+    ...task,
+    assistantStreamsByRunId: {
+      ...task.assistantStreamsByRunId,
+      [frame.run_id]: { ...stream, active: false },
+    },
+  };
+}
+
+export function reduceAssistantStreamFrames(
+  state: AgentRuntimeData,
+  frames: readonly AssistantStreamFrame[],
+): AgentRuntimeData {
+  let tasksById = state.tasksById;
+  for (const frame of frames) {
+    const task = tasksById[frame.task_id];
+    if (task === undefined) continue;
+    const nextTask =
+      frame.type === "assistant_stream_delta"
+        ? applyAssistantStreamDelta(task, frame)
+        : applyAssistantStreamEnd(task, frame);
+    if (nextTask === task) continue;
+    if (tasksById === state.tasksById) tasksById = { ...tasksById };
+    tasksById[frame.task_id] = nextTask;
+  }
+  return tasksById === state.tasksById ? state : { ...state, tasksById };
+}
+
+function deactivateRunAssistantStream(
+  task: TaskProjection,
+  runId: string,
+): TaskProjection {
+  const stream = task.assistantStreamsByRunId[runId];
+  if (stream === undefined || !stream.active) return task;
+  return {
+    ...task,
+    assistantStreamsByRunId: {
+      ...task.assistantStreamsByRunId,
+      [runId]: { ...stream, active: false },
+    },
+  };
+}
+
+export function deactivateAssistantStreams(
+  state: AgentRuntimeData,
+  taskId?: string,
+): AgentRuntimeData {
+  let tasksById = state.tasksById;
+  for (const [candidateTaskId, task] of Object.entries(state.tasksById)) {
+    if (taskId !== undefined && candidateTaskId !== taskId) continue;
+    let nextTask = task;
+    for (const runId of Object.keys(task.assistantStreamsByRunId)) {
+      nextTask = deactivateRunAssistantStream(nextTask, runId);
+    }
+    if (nextTask === task) continue;
+    if (tasksById === state.tasksById) tasksById = { ...tasksById };
+    tasksById[candidateTaskId] = nextTask;
+  }
+  return tasksById === state.tasksById ? state : { ...state, tasksById };
+}
+
+function hasAssistantChunkRange(
+  payload: AssistantDeltaPayload,
+): payload is Extract<AssistantDeltaPayload, { stream_id: string }> {
+  return payload.stream_id !== undefined;
+}
+
+function applyDurableAssistantDelta(
+  task: TaskProjection,
+  runId: string,
+  payload: AssistantDeltaPayload,
+  envelope: EventEnvelope,
+): TaskProjection {
+  const currentMessage = assistantMessage(task, runId);
+  if (!hasAssistantChunkRange(payload)) {
+    return upsertMessage(task, {
+      messageId: `live:${runId}:assistant`,
+      taskId: envelope.task_id,
+      runId,
+      ordinal: null,
+      role: "assistant",
+      content: `${currentMessage?.content ?? ""}${payload.delta}`,
+      createdAt: currentMessage?.createdAt ?? envelope.timestamp,
+      sequence: envelope.sequence,
+    });
+  }
+
+  const currentStream = task.assistantStreamsByRunId[runId];
+  if (
+    currentStream !== undefined &&
+    currentStream.streamId !== payload.stream_id
+  ) {
+    return task;
+  }
+  const stream = currentStream ?? {
+    streamId: payload.stream_id,
+    durableText: currentMessage?.content ?? "",
+    pendingChunks: {},
+    confirmedThroughChunkIndex: -1,
+    active: false,
+  };
+  if (payload.through_chunk_index <= stream.confirmedThroughChunkIndex) {
+    return task;
+  }
+  const pendingChunks = Object.fromEntries(
+    Object.entries(stream.pendingChunks).filter(
+      ([index]) => Number(index) > payload.through_chunk_index,
+    ),
+  );
+  const nextStream: AssistantStreamProjection = {
+    ...stream,
+    durableText: `${stream.durableText}${payload.delta}`,
+    pendingChunks,
+    confirmedThroughChunkIndex: payload.through_chunk_index,
+  };
+  return withAssistantStream(
+    task,
+    runId,
+    nextStream,
+    envelope.sequence,
+    currentMessage?.createdAt ?? envelope.timestamp,
+  );
 }
 
 function upsertActivity(
@@ -596,6 +840,9 @@ export function reduceRuntimeEvent(
         ...task,
         summary: { ...task.summary, status, active_run_id: runId },
       };
+      if (payload.type === "run_finalizing") {
+        task = deactivateRunAssistantStream(task, runId);
+      }
       break;
     }
     case "run_completed":
@@ -643,6 +890,7 @@ export function reduceRuntimeEvent(
           error,
         );
       }
+      task = deactivateRunAssistantStream(task, runId);
       break;
     }
     case "user_input_required": {
@@ -748,24 +996,12 @@ export function reduceRuntimeEvent(
     }
     case "assistant_delta": {
       if (runId === null) break;
-      const messageId = `live:${runId}:assistant`;
-      const existing = task.messages.find(
-        (message) => message.messageId === messageId,
-      );
-      task = upsertMessage(task, {
-        messageId,
-        taskId: envelope.task_id,
-        runId,
-        ordinal: null,
-        role: "assistant",
-        content: `${existing?.content ?? ""}${payload.delta}`,
-        createdAt: existing?.createdAt ?? envelope.timestamp,
-        sequence: envelope.sequence,
-      });
+      task = applyDurableAssistantDelta(task, runId, payload, envelope);
       break;
     }
     case "tool_started": {
       if (runId === null) break;
+      task = deactivateRunAssistantStream(task, runId);
       task = upsertActivity(task, {
         activityId: `tool:${runId}:${payload.tool_call_id}`,
         taskId: envelope.task_id,

@@ -111,6 +111,14 @@ export interface PendingUserInput {
   timestamp: string;
 }
 
+export interface AssistantStreamProjection {
+  streamId: string;
+  durableText: string;
+  pendingChunks: Record<number, string>;
+  confirmedThroughChunkIndex: number;
+  active: boolean;
+}
+
 export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
@@ -124,6 +132,7 @@ export interface TaskProjection {
   artifactEventSequences: Record<string, number>;
   artifactManifestSequence: number | null;
   stages: Partial<Record<StageName, StageProjection>>;
+  assistantStreamsByRunId: Record<string, AssistantStreamProjection>;
   pendingUserInput: PendingUserInput | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";
