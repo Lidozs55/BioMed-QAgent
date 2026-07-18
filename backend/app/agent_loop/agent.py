@@ -181,6 +181,44 @@ PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要�
 - label 参数只接受 `[A-Za-z0-9_-]{1,64}`，禁止路径分隔符与 `..`
 - 截图工具不复用 `acquire_source()` 的 HTTPS 白名单，但仍受
   `validate_public_http_url` 与 Playwright route guard 约束，禁止访问内网地址
+
+## 图表数据提取策略（extract_chart_data_vlm）
+`extract_chart_data_vlm` 工具用 Qwen-VL 视觉模型从论文图表中提取结构化数据
+（chart_type / axes / data_points / legend），适用于以下场景：
+
+### 输入来源（任意获取方法的论文都支持）
+1. **web_visual_capture 产出的 PNG** — `source_assets/figures/fig_<sha>.png`
+2. **PubMed PMC 下载的 PDF** — `source_assets/<supplementary>.pdf`
+3. **任意独立图片文件** — PNG/JPG/WEBP/GIF（来自未来 acquisition skill）
+4. **任意 PDF 文件** — 自动提取 PDF 中的嵌入图片并逐张送 VLM
+
+### 调用时机
+- 当论文图表（柱状图/折线图/散点图/箱线图/热图等）中包含需要量化的数值数据时
+- 当表格以图片形式呈现（无法用 extract_pdf_tables 提取）时
+- **不要**用于纯文本提取 — 使用 `extract_pdf_metadata` 或 `extract_pdf_tables`
+
+### 三级降级链（自动执行，无需 Agent 干预）
+- **L1 Qwen-VL**（主路径）：调用 DashScope `qwen-vl-max`，要求严格 JSON 输出
+- **L2 pdfplumber 表格**（仅 PDF 输入）：VLM 失败时提取 PDF 中的矢量表格
+- **L3 caption 文本**（兜底）：L2 也无结果时提取 "Figure N." / "Table N." 标题
+
+每一级降级会写入 `warnings.csv`，标记降级原因。**L1+L2+L3 全部失败时抛异常
+（不静默返回空结果）**，由 Agent 决定是否换源重试。
+
+### 产物
+- `parsed/chart_data/chart_data.csv` — 每张图表一行（chart_id/source_asset_id/
+  chart_type/x_label/y_label/data_point_count/model_name 等）
+- `parsed/chart_data/chart_data_points.csv` — 每个数据点一行
+  （point_id/chart_id/x_value/y_value/series_label/confidence）
+
+每条 chart_data 通过 `source_asset_id` 关联到原始图片/PDF 的 sha256，
+保证来源可追溯。原始图片若不在 `source_assets/figures/` 下会自动复制过去
+（满足 TODO §5.2 "原始图片数据保留"要求）。
+
+### 调用纪律
+- 单 PDF 最多提取 10 张图片（超出部分记 warning），避免成本爆炸
+- hint 参数可提供场景提示（如 "scatter plot, log scale"）提高识别率
+- 不要对同一图片重复调用（结果确定性，temperature=0.1）
 """
 
 

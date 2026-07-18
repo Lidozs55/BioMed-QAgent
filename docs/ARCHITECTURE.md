@@ -104,6 +104,38 @@ httpx 不支持截图），而是复用 `browser_fallback` 的轻量 provenance 
 skill 的反爬行为一致。该 skill 不出现在 `GET /databases` 列表中，由 Agent
 按需调用。详见 `docs/separateweb_capture_integration_plan.md`。
 
+**视觉模型图表数据提取（extract_chart_data_vlm）**：
+`processing/extract_chart_data_vlm.py` 是 TODO §5.2 视觉模型降级方案的实现。
+它接受**任意获取渠道**的论文产物（满足"视觉模型应设法处理任何获得方法的论文"
+约束）：
+
+- PNG/JPG/WEBP/GIF 图片 — 来自 `web_visual_capture` 截图、未来 skill 的独立
+  下载、或外部用户提供的图片；
+- PDF 文件 — 来自 `download_supplementary` 从 PubMed/PMC 下载的开放获取论文。
+
+单一工具入口 `extract_chart_data_vlm(source_path, hint="")` 内部按 MIME 分派：
+图片直接 base64 送 Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片（每文件上限 10
+张），再逐图送 VLM。VLM 客户端在 `app/agent_loop/vl_model.py` 中独立于
+`LazyDashScopeModel`（模型名 `qwen-vl-max` vs `qwen-plus`，调用模式为一次性
+`chat.completions.create` + `image_url` content part 而非 Agent 轮次）。
+
+**三级降级链**（L1→L2→L3，全部失败抛 `ChartExtractionError`，project_memory
+L1 禁止静默空数据降级）：
+
+- L1 — Qwen-VL：主路径，要求 `DASHSCOPE_API_KEY`；返回严格 JSON
+  `{chart_type, axes, data_points, legend}`，解析容错剥离 markdown fence 与
+  尾部 prose；
+- L2 — pdfplumber 表格：仅 PDF 触发，提取矢量 PDF 表格数据（非栅格图表替代）；
+- L3 — caption 文本：兜底，正则提取 `Figure N.` / `Table N.` captions，写入
+  `chart_type="caption_only"` 行并发出 `warning`。
+
+产物：`parsed/chart_data/chart_data.csv`（每图一行）+
+`parsed/chart_data/chart_data_points.csv`（每数据点一行），UTF-8 BOM 编码
+（`utf-8-sig`，Excel 兼容，TODO §1.7）。每行 `source_asset_id=asset_<sha256>`
+将 chart 追溯到原始图片/PDF。大图（>10MB）由 Pillow LANCZOS 自动降采样到
+1920px 最长边以适配 DashScope inline base64 限制。`hint` 参数（如
+`"scatter plot, log scale"`）注入 VLM prompt 增强歧义图表识别。
+
 ## 3. 核心数据契约
 
 契约使用 Pydantic v2，统一继承 `ContractModel`，显式设置
