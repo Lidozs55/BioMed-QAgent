@@ -70,7 +70,7 @@ def test_navigate_page_success() -> None:
     # log_query should record success
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "succeeded"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_navigate_page_network_error_returns_error_json() -> None:
@@ -204,7 +204,7 @@ def test_download_from_page_success(tmp_path: Path) -> None:
     assert rc.sources[0].accession == "test_data.pdf"
     # log_query should record success
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "succeeded"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_download_from_page_http_4xx_returns_error_json(tmp_path: Path) -> None:

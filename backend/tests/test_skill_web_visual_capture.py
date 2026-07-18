@@ -113,7 +113,7 @@ def test_capture_web_page_success(tmp_path: Path) -> None:
     assert len(rc.raw_assets) == 1
     assert rc.raw_assets[0] == data["local_files"][0]
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "succeeded"
+    assert rc.query_log[0]["status"] == "success"
     assert rc.query_log[0]["records_count"] == 1
 
     # Files exist on disk

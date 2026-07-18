@@ -21,7 +21,7 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
 
@@ -111,7 +111,7 @@ def search_pubchem(
                 }
                 for c in compounds
             ]
-            run_ctx.log_query(term, "pubchem", "ok", len(records))
+            run_ctx.log_query(term, "pubchem", QueryStatus.SUCCESS, len(records))
             return json.dumps({
                 "source": "pubchem",
                 "term": term,
@@ -134,10 +134,10 @@ def search_pubchem(
         # Page fallback returns only a visible-text preview, not structured
         # records — log honestly so query_log/metrics don't overstate success.
         # See docs/REVIEW_2026-07-18.md §17.3 item 2.
-        run_ctx.log_query(term, "pubchem", "page_fallback", 0)
+        run_ctx.log_query(term, "pubchem", QueryStatus.PAGE_FALLBACK, 0)
         return _page_fallback("pubchem", page_url, page_result)
     except CrawlError as exc:
-        run_ctx.log_query(term, "pubchem", "error", 0)
+        run_ctx.log_query(term, "pubchem", QueryStatus.FAILED, 0)
         return _fallback_error("pubchem", page_url, exc)
 
 
@@ -185,7 +185,7 @@ def get_compound(
                     "inchi": c.get("InChI", ""),
                     "url": f"{_PUBCHEM_PAGE_BASE}/{cid}",
                 }
-                run_ctx.log_query(str(cid), "pubchem", "ok", 1)
+                run_ctx.log_query(str(cid), "pubchem", QueryStatus.SUCCESS, 1)
 
                 source_record = SourceRecord(
                     source_id=make_source_id(Database.PUBCHEM, str(cid), api_url),
@@ -217,10 +217,10 @@ def get_compound(
         )
         # Page fallback returns only a visible-text preview, not structured
         # compound records — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
-        run_ctx.log_query(str(cid), "pubchem", "page_fallback", 0)
+        run_ctx.log_query(str(cid), "pubchem", QueryStatus.PAGE_FALLBACK, 0)
         return _page_fallback("pubchem", page_url, page_result)
     except CrawlError as exc:
-        run_ctx.log_query(str(cid), "pubchem", "error", 0)
+        run_ctx.log_query(str(cid), "pubchem", QueryStatus.FAILED, 0)
         return _fallback_error("pubchem", page_url, exc)
 
 

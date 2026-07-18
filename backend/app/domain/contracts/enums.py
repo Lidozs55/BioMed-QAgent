@@ -106,3 +106,28 @@ class ErrorCode(StrEnum):
     VALIDATION_ERROR = "validation_error"
     CANCELLED = "cancelled"
     INTERNAL_ERROR = "internal_error"
+
+
+class QueryStatus(StrEnum):
+    """Unified status for ``RunContext.log_query`` entries.
+
+    Replaces the pre-§1.8 mix of ``ok`` / ``succeeded`` / ``completed`` /
+    ``failed`` / ``error`` / ``page_fallback`` with a single enum so the
+    competition judges can aggregate query statistics deterministically.
+
+    Values:
+        SUCCESS: query succeeded with results (records_count > 0)
+        NOT_FOUND: query succeeded but returned 0 results (project_memory:
+            failed queries must be marked ``not_found`` and not retried)
+        FAILED: query failed (network error, API error, parse error)
+        SKIPPED: query skipped (database not selected, dependency unmet)
+        PAGE_FALLBACK: API failed, fell back to page scraping
+            (project_memory L1: crawler log status for page fallback must be
+            ``page_fallback`` with code 0, not ``ok`` with code 1)
+    """
+
+    SUCCESS = "success"
+    NOT_FOUND = "not_found"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    PAGE_FALLBACK = "page_fallback"

@@ -50,7 +50,7 @@ from app.agent_loop.vl_model import (
     ChartExtractionError,
     call_vl_model,
 )
-from app.domain.contracts import StageName
+from app.domain.contracts import QueryStatus, StageName
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.workdir import TaskWorkDir
 
@@ -796,7 +796,7 @@ async def extract_chart_data_vlm(
             }, ensure_ascii=False)
     except ChartExtractionError as exc:
         run_ctx.log_query(
-            str(path), "extract_chart_data_vlm", "failed", 0
+            str(path), "extract_chart_data_vlm", QueryStatus.FAILED, 0
         )
         run_ctx.add_warning(
             severity="error",
@@ -811,7 +811,7 @@ async def extract_chart_data_vlm(
     except Exception as exc:
         logger.exception("unexpected error extracting chart data from %s", path)
         run_ctx.log_query(
-            str(path), "extract_chart_data_vlm", "failed", 0
+            str(path), "extract_chart_data_vlm", QueryStatus.FAILED, 0
         )
         return json.dumps({
             "status": "error",
@@ -829,7 +829,7 @@ async def extract_chart_data_vlm(
     run_ctx.parsed_datasets.append(str(chart_csv))
     run_ctx.parsed_datasets.append(str(points_csv))
     run_ctx.log_query(
-        str(path), "extract_chart_data_vlm", "succeeded", len(chart_rows)
+        str(path), "extract_chart_data_vlm", QueryStatus.SUCCESS, len(chart_rows)
     )
 
     # Emit progress

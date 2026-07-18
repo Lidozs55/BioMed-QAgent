@@ -85,7 +85,7 @@ def test_search_pubchem_api_success() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "ok"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_search_pubchem_parse_failure_rejects_shell_and_uses_playwright() -> None:
@@ -144,7 +144,7 @@ def test_search_pubchem_all_fail_returns_structured_error() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "error"
+    assert rc.query_log[0]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------

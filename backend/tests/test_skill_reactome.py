@@ -95,7 +95,7 @@ def test_search_reactome_api_success() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "ok"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> None:
@@ -152,7 +152,7 @@ def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> N
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "ok"
+    assert rc.query_log[0]["status"] == "success"
 
 
 def test_search_reactome_summation_fetch_failure_keeps_empty_summary() -> None:
@@ -240,7 +240,7 @@ def test_search_reactome_all_fail_returns_structured_error() -> None:
 
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "error"
+    assert rc.query_log[0]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------

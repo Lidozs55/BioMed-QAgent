@@ -771,40 +771,44 @@
 
 > 详见审查报告 §1、§2、§0。
 
-- [ ] **P0** `manager.py:1209` AGENT 模式增加"成功证据校验"
+- [x] **P0** `manager.py:1209` AGENT 模式增加"成功证据校验"
 
       —— `completion_events` 为空且无 cancellation 时转 `RunFailedPayload`，
       错误信息"agent 完成但未产出 artifact"
       —— 同时解决"结果未显示"与"LLM 截断静默完成"两个症状
       （`backend/app/runtime/manager.py:1201-1212`）
+      —— 实现：`manager.py:1237-1252` `agent_executed` 标记 + 空事件转 RunFailed
 
-- [ ] **P0** `runner.py:284` 空 payloads 发 warning 事件
+- [x] **P0** `runner.py:284` 空 payloads 发 warning 事件
 
       —— `_load_artifact_payloads` 返回 `[]` 时发射
       `WarningPayload(code="artifact_manifest_missing" | "artifact_unchanged")`
       —— 前端 reducer 已支持 warning 展示分支
       （`backend/app/agent_loop/runner.py:104-133, 284-305`）
+      —— 实现：`runner.py:473-478` `artifact_manifest_missing` warning
 
-- [ ] **P0** `runner.py:440-459` `_extract_text_delta` 读取 `finish_reason`
+- [x] **P0** `runner.py:440-459` `_extract_text_delta` 读取 `finish_reason`
 
       —— 在 `finish_reason="length"` 时发射
       `WarningPayload(code="llm_output_truncated")`
       —— 当前完全忽略 `finish_reason` 字段
+      —— 实现：`runner.py:167-184` + `_extract_finish_reason` (line 741-755)
 
-- [ ] **P0** `runner.py:271` `_consume_events` 后校验 `result.final_output`
+- [x] **P0** `runner.py:271` `_consume_events` 后校验 `result.final_output`
 
       —— 若为 None 或空字符串则 `raise RuntimeError("agent returned empty final_output")`
       —— 参考 `summarizer.py:50-55` 的现有校验模式
+      —— 实现：`runner.py:370-385`
 
-- [ ] **P0** 新增回归测试 `tests/agent_loop/test_silent_completion.py`
+- [x] **P0** 新增回归测试 `tests/agent_loop/test_silent_completion.py`
 
       —— 验证：LLM 不调 tool / final_output 为空 / manifest 缺失时必须 RunFailed
 
-- [ ] **P0** 新增回归测试 `tests/agent_loop/test_llm_truncation.py`
+- [x] **P0** 新增回归测试 `tests/agent_loop/test_llm_truncation.py`
 
       —— 模拟 `finish_reason="length"`，验证 warning 事件 + 不静默 completed
 
-- [ ] **P0** 新增 Agent 模式 e2e 测试 `tests/agent_loop/test_agent_run_e2e.py`
+- [x] **P0** 新增 Agent 模式 e2e 测试 `tests/agent_loop/test_agent_run_e2e.py`
 
       —— 用 Mock LLM 走完 AgentRunExecutor 完整链路
       —— 验证 `artifact_produced` + `RunCompletedPayload` 配对
@@ -892,10 +896,13 @@
 
 > 详见审查报告 §5、§6、§7。这三项在代码库中完全缺失。
 
-- [ ] **P0** 定义 `QueryStatus` 枚举（`success` / `not_found` / `failed` / `skipped`）
+- [x] **P0** 定义 `QueryStatus` 枚举（`success` / `not_found` / `failed` / `skipped` / `page_fallback`）
 
       —— 所有 skill 统一使用，替代当前 "ok"/"failed"/"error"/"succeeded"/"completed" 不一致状态
       （`backend/app/domain/contracts/` + `backend/app/agent_loop/context.py:229-240`）
+      —— 实现：`backend/app/domain/contracts/enums.py:111-133` `QueryStatus(StrEnum)`
+      —— `context.py:277-300` `log_query()` 接受 `QueryStatus | str`
+      —— 11 个 skill 文件 42 处 `log_query()` 调用全部迁移到 `QueryStatus.X`
 
 - [ ] **P0** Agent INSTRUCTIONS 新增 follow-up 策略
 
@@ -903,38 +910,55 @@
       —— `IterationDecisionAgent` 已被 project_memory 硬约束要求"完全移除"
       （`backend/app/agent_loop/agent.py`）
 
-- [ ] **P0** 新增 `tests/test_query_log_status_consistency.py`
+- [x] **P0** 新增 `tests/test_query_log_status_consistency.py`
 
       —— 遍历所有 skill 的 query_log 输出，断言 status ∈ QueryStatus
+      —— 实现：`backend/tests/test_query_log_status_consistency.py`（AST 静态扫描 +
+        import 完整性 + 枚举值稳定性，30 个测试用例）
 
-- [ ] **P0** 新增 `integrations/unpaywall.py` DOI 查询客户端
+- [x] **P0** 新增 `integrations/unpaywall.py` DOI 查询客户端
 
       —— 5s timeout，返回 pdf_url
       —— 实现 project_memory 硬约束的"pdf_url → Unpaywall → EPMC"三级 fallback
+      —— 实现：`backend/app/integrations/unpaywall.py` `lookup_pdf_url(doi, *, email, timeout=5.0)`
 
-- [ ] **P0** 新增 `integrations/europepmc.py` PMCID → fullTextXML 客户端
+- [x] **P0** 新增 `integrations/europepmc.py` PMCID → fullTextXML 客户端
 
-- [ ] **P0** `acquisition.py` 实现 PDF 三级 fallback 链
+      —— 实现：`backend/app/integrations/europepmc.py` `fetch_full_text_xml(pmcid, *, timeout=30.0)`
+
+- [x] **P0** `acquisition.py` 实现 PDF 三级 fallback 链
 
       —— `pdf_url`（直接链接）→ Unpaywall（DOI，5s 快失败）→
       EPMC fullTextXML（PMCID，国内可用）
-      （`backend/app/pipeline/stages/acquisition.py`）
+      —— 实现：`backend/app/integrations/acquisition.py:400-568`
+      `acquire_publication_with_fallback(...)`（Tier 1 `acquire_source()` →
+      Tier 2 Unpaywall DOI 解析 + `acquire_source()` → Tier 3 EPMC XML 直存）
 
-- [ ] **P0** `integrations/acquisition.py:30-49` `_ALLOWED_HOSTS` 新增域名
+- [x] **P0** `integrations/acquisition.py:30-49` `_ALLOWED_HOSTS` 新增域名
 
       —— `api.unpaywall.org` / `www.ebi.ac.uk`
+      —— 实现：`backend/app/integrations/acquisition.py:48-52`
 
-- [ ] **P0** `compaction.py:216-244` summarizer 显式校验 `finish_reason`
+- [x] **P0** `compaction.py:216-244` summarizer 显式校验 `finish_reason`
 
       —— `length` 时抛异常而非降级
       —— 与 project_memory 硬约束"LLM 失败必须抛异常"一致
+      —— 实现：`backend/app/runtime/compaction.py:55-80` `ConversationSummarizerTruncatedError`
+        + `_extract_finish_reason()`；`_summarize_with_model()` 切换到 `Runner.run_streamed()`
+        在 `finish_reason="length"` 时抛异常；`prepare()` 新增
+        `except ConversationSummarizerTruncatedError: raise` 短路 `_fallback()`
 
 - [ ] **P0** 实现 ReviewerAgent
 
       —— project_memory 硬约束"压缩前完整传递 query log 给 ReviewerAgent"完全未实现
       —— 当前 `query_log_summary` 仅 task-local（`summarizer.py:254-260`）
 
-- [ ] **P1** 新增 `tests/test_pdf_fallback_chain.py` 验证三级 fallback 各分支
+- [x] **P1** 新增 `tests/test_pdf_fallback_chain.py` 验证三级 fallback 各分支
+
+      —— 实现：`backend/tests/test_pdf_fallback_chain.py`（9 个测试：Tier 1 直链成功 /
+        Tier 1 跳过（landing page）/ Tier 2 Unpaywall 成功 / Tier 2 跳过（无 DOI）/
+        Tier 3 EPMC 成功 / Tier 3 sha256 校验 / 全部失败 / 无 DOI 无 PMCID /
+        Tier 1 失败回退 Tier 2）
 
 - [ ] **P1** `runner.py` Agent loop 增加 turn counter
 

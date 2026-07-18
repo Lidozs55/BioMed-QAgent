@@ -20,7 +20,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -236,7 +236,7 @@ def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -
     try:
         all_datasets = _fetch_hub_index()
     except Exception as exc:
-        run_ctx.log_query(term, "xena", "error", 0)
+        run_ctx.log_query(term, "xena", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "xena",
             "term": term,
@@ -252,7 +252,7 @@ def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -
         matched = all_datasets
 
     count = len(matched)
-    run_ctx.log_query(term, "xena", "ok", count)
+    run_ctx.log_query(term, "xena", QueryStatus.SUCCESS, count)
 
     return json.dumps({
         "source": "xena",

@@ -13,6 +13,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
+from app.domain.contracts import QueryStatus
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -257,7 +258,7 @@ def analyze_papers(
     run_ctx.log_query(
         query="analyze_papers",
         source="literature_understanding",
-        status="completed",
+        status=QueryStatus.SUCCESS,
         records_count=len(records),
     )
 

@@ -45,6 +45,11 @@ _ALLOWED_HOSTS = frozenset(
         "reactome.org",
         # UCSC Xena (S3)
         "toil-xena-hub.s3.us-east-1.amazonaws.com",
+        # Unpaywall (DOI → OA PDF URL lookup, TODO §8.4)
+        "api.unpaywall.org",
+        # Europe PMC (PMCID → fullTextXML, domestic-reachable alternative
+        # to NCBI PMC; project_memory L1 hard constraint)
+        "www.ebi.ac.uk",
     }
 )
 _MAX_REDIRECTS = 5
@@ -389,4 +394,178 @@ async def acquire_source(
             started_at=started_at,
             finished_at=finished_at,
         )
+    )
+
+
+async def acquire_publication_with_fallback(
+    *,
+    source: SourceRecord,
+    filename: str,
+    workdir: TaskWorkDir,
+    cache: ContentCache,
+    http: httpx.AsyncClient,
+    max_bytes: int,
+    data_level: DataLevel,
+    doi: str | None = None,
+    pmcid: str | None = None,
+) -> AcquisitionResult:
+    """Acquire a publication PDF/XML via the 3-tier fallback chain.
+
+    Implements the project_memory L1 hard constraint:
+        pdf_url (direct) → Unpaywall (DOI, 5s quick failure) → EPMC fullTextXML
+
+    Tier order:
+        1. ``source.url`` — direct download via ``acquire_source()`` (skipped
+           if ``source.url`` is empty or not a PDF-like URL).
+        2. Unpaywall — resolve ``doi`` to an OA pdf_url, then download via
+           ``acquire_source()``. 5-second quick failure per project_memory.
+        3. Europe PMC — fetch ``fullTextXML`` by ``pmcid`` and save as an
+           ``.xml`` asset (domestically reachable alternative to NCBI PMC).
+
+    Args:
+        source: Base SourceRecord; ``source.url`` is the tier-1 candidate.
+        filename: Output filename (e.g., ``"PMC7450705.pdf"``).
+        doi: DOI for tier 2 (Unpaywall). If ``None``, tier 2 is skipped.
+        pmcid: PMCID for tier 3 (EPMC). If ``None``, tier 3 is skipped.
+        workdir, cache, http, max_bytes, data_level: Forwarded to
+            ``acquire_source()``.
+
+    Returns:
+        The first successful ``AcquisitionResult``. The ``asset.media_type``
+        field distinguishes PDF (``application/pdf``) from XML
+        (``application/xml`` or ``text/xml``).
+
+    Raises:
+        AcquisitionFailure: All available tiers failed. The error message
+            lists each tier's failure reason.
+    """
+    from app.integrations.europepmc import EuropePmcError, fetch_full_text_xml
+    from app.integrations.unpaywall import UnpaywallError, lookup_pdf_url
+
+    failures: list[str] = []
+
+    # --- Tier 1: direct pdf_url (source.url) ---
+    # Only attempt if source.url looks like a direct PDF link. If source.url
+    # is a landing page (e.g., a PubMed abstract page), skip to tier 2/3.
+    url_lower = source.url.lower()
+    looks_like_pdf = (
+        url_lower.endswith(".pdf") or "pdf" in url_lower.split("?")[0].split("/")[-1]
+    )
+    if looks_like_pdf:
+        try:
+            result = await acquire_source(
+                source=source,
+                filename=filename,
+                workdir=workdir,
+                cache=cache,
+                http=http,
+                data_level=data_level,
+                max_bytes=max_bytes,
+            )
+            if result.asset and result.attempt.status is DownloadStatus.SUCCEEDED:
+                return result
+            failures.append(
+                f"tier1_direct: attempt status={result.attempt.status.value}, "
+                f"error={result.attempt.error_message or 'none'}"
+            )
+        except AcquisitionFailure as exc:
+            failures.append(f"tier1_direct: {exc}")
+    else:
+        failures.append("tier1_direct: skipped (source.url not a direct PDF link)")
+
+    # --- Tier 2: Unpaywall (DOI → pdf_url) ---
+    if doi:
+        try:
+            resolved_pdf_url = await lookup_pdf_url(doi)
+        except UnpaywallError as exc:
+            failures.append(f"tier2_unpaywall_lookup: {exc}")
+        else:
+            # Build a new SourceRecord with the resolved URL
+            unpaywall_source = source.model_copy(
+                update={"url": resolved_pdf_url, "accession": doi}
+            )
+            try:
+                result = await acquire_source(
+                    source=unpaywall_source,
+                    filename=filename,
+                    workdir=workdir,
+                    cache=cache,
+                    http=http,
+                    data_level=data_level,
+                    max_bytes=max_bytes,
+                )
+                if (
+                    result.asset
+                    and result.attempt.status is DownloadStatus.SUCCEEDED
+                ):
+                    return result
+                failures.append(
+                    f"tier2_unpaywall_download: attempt status="
+                    f"{result.attempt.status.value}, "
+                    f"error={result.attempt.error_message or 'none'}"
+                )
+            except AcquisitionFailure as exc:
+                failures.append(f"tier2_unpaywall_download: {exc}")
+    else:
+        failures.append("tier2_unpaywall: skipped (no DOI provided)")
+
+    # --- Tier 3: Europe PMC (PMCID → fullTextXML) ---
+    if pmcid:
+        try:
+            xml_bytes = await fetch_full_text_xml(pmcid)
+        except EuropePmcError as exc:
+            failures.append(f"tier3_epmc: {exc}")
+        else:
+            # Save XML bytes directly (not via acquire_source streaming,
+            # because EPMC client already fetched the full body)
+            import hashlib as _hashlib
+
+            checksum = _hashlib.sha256(xml_bytes).hexdigest()
+            asset_id = asset_id_from_sha256(checksum)
+            # Replace .pdf extension with .xml for EPMC tier
+            if "." in filename:
+                xml_filename = filename.rsplit(".", 1)[0] + ".xml"
+            else:
+                xml_filename = f"{filename}.xml"
+            attempt_id = generate_prefixed_uuid("download_attempt")
+            started_at = datetime.now(UTC)
+
+            # Write to temp, then publish via the same atomic path
+            part_path = workdir.download_temp_file(f"{attempt_id}.xml")
+            try:
+                part_path.write_bytes(xml_bytes)
+                destination = _publish_task_asset(
+                    part_path, workdir, asset_id, xml_filename, checksum
+                )
+                finished_at = datetime.now(UTC)
+                return AcquisitionResult(
+                    attempt=DownloadAttempt(
+                        attempt_id=attempt_id,
+                        source_id=source.source_id,
+                        url=f"https://www.ebi.ac.uk/europepmc/webservices/rest/PMC{pmcid.lstrip('PMC')}/fullTextXML",
+                        status=DownloadStatus.SUCCEEDED,
+                        bytes_received=len(xml_bytes),
+                        started_at=started_at,
+                        finished_at=finished_at,
+                    ),
+                    asset=SourceAsset(
+                        asset_id=asset_id,
+                        kind="source",
+                        relative_path=destination.relative_to(workdir.root).as_posix(),
+                        sha256=checksum,
+                        size_bytes=len(xml_bytes),
+                        media_type="application/xml",
+                        source_id=source.source_id,
+                        successful_attempt_id=attempt_id,
+                        data_level=data_level,
+                    ),
+                )
+            finally:
+                part_path.unlink(missing_ok=True)
+    else:
+        failures.append("tier3_epmc: skipped (no PMCID provided)")
+
+    raise AcquisitionFailure(
+        ErrorCode.NETWORK_ERROR,
+        "all PDF acquisition tiers failed: " + " | ".join(failures),
     )
