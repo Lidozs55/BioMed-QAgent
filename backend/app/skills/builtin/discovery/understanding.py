@@ -147,6 +147,7 @@ _ACCESSION_PATTERNS_BY_DB: dict[str, re.Pattern] = {
     "GEO": re.compile(r"\b(GSE\d{4,}|GSM\d{4,}|GPL\d{4,})\b"),
     "GDC": re.compile(r"\bGDC_\w+\b"),
     "TCGA": re.compile(r"\b(TCGA-[A-Z0-9]{2,}-[A-Z0-9]+)\b"),
+    "Xena": re.compile(r"\bhttps?://\S*?xena\S*?\.(?:net|org)\b", re.IGNORECASE),
     "PDB": re.compile(r"\b[0-9][A-Za-z0-9]{3}\b"),  # PDB ID: digit + 3 alnum
     "ArrayExpress": re.compile(r"\bE-MTAB-\d+\b"),
     "SRA": re.compile(r"\bSR[APX]\d{6,}\b"),

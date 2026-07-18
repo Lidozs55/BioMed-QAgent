@@ -36,9 +36,22 @@ _RATE_LIMIT_SECONDS = 2.0
 #: search_pdb 内部对前 N 条结果补全详情，避免 N+1 查询阻塞 agent loop。
 _DESCRIBE_BATCH_LIMIT = 3
 
+_last_request_ts: float = 0.0
+
+
+def _rate_limit() -> None:
+    """Sleep so that two consecutive PDB API calls are at least 2s apart."""
+    global _last_request_ts
+    now = time.monotonic()
+    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_request_ts = time.monotonic()
+
 
 def _post_json(url: str, body: dict) -> dict:
     """POST JSON body and return parsed response."""
+    _rate_limit()
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -55,6 +68,7 @@ def _post_json(url: str, body: dict) -> dict:
 
 def _get_json(url: str) -> dict:
     """GET JSON from a URL with browser User-Agent."""
+    _rate_limit()
     req = urllib.request.Request(
         url,
         headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
@@ -66,6 +80,7 @@ def _get_json(url: str) -> dict:
 
 def _download(url: str, dest: Path) -> None:
     """Download a file to dest (atomic via .part rename)."""
+    _rate_limit()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     req = urllib.request.Request(
@@ -176,9 +191,9 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
             "resolution": None,
             "deposit_date": "",
         }
-        # 前 N 条调用 Data API 补全字段（RCSB Search API result_set 仅含 identifier）
+        # 前 N 条调用 Data API 补全字段（RCSB Search API result_set 仅含 identifier）。
+        # Rate limiting is handled inside _get_json via _rate_limit().
         if index < enrich_limit and pdb_id:
-            time.sleep(_RATE_LIMIT_SECONDS)
             record.update(_fetch_entry_detail(pdb_id))
         records.append(record)
 

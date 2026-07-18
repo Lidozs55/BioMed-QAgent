@@ -58,15 +58,20 @@ interface TransportOptions {
   setConnectionStatus: (status: ConnectionStatus) => void;
   onControlError?: (frame: Extract<WebSocketControlFrame, { type: "error" }>) => void;
   reconnectDelayMs?: number;
+  pingTimeoutMs?: number;
   url?: string | (() => string);
 }
 
 interface PendingPing {
   resolve: () => void;
   reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
-type ConnectionWaiter = PendingPing;
+interface ConnectionWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
 
 interface RecoveryAttempt {
   taskId: string;
@@ -283,7 +288,15 @@ export class AgentEventTransport {
       return Promise.reject(new Error("WebSocket transport is not connected"));
     }
     const promise = new Promise<void>((resolve, reject) => {
-      this.pendingPings.push({ resolve, reject });
+      const pending: PendingPing = { resolve, reject, timer: null };
+      const timeoutMs = this.options.pingTimeoutMs ?? 10_000;
+      pending.timer = setTimeout(() => {
+        const index = this.pendingPings.indexOf(pending);
+        if (index !== -1) this.pendingPings.splice(index, 1);
+        pending.timer = null;
+        reject(new Error("WebSocket ping timed out"));
+      }, timeoutMs);
+      this.pendingPings.push(pending);
     });
     this.send({ type: "ping" });
     return promise;
@@ -482,7 +495,11 @@ export class AgentEventTransport {
   private handleFrame(frame: unknown): void {
     if (isControlFrame(frame)) {
       if (frame.type === "pong") {
-        this.pendingPings.shift()?.resolve();
+        const pending = this.pendingPings.shift();
+        if (pending?.timer !== null && pending?.timer !== undefined) {
+          clearTimeout(pending.timer);
+        }
+        pending?.resolve();
       } else {
         if (
           frame.task_id !== undefined &&
@@ -516,7 +533,10 @@ export class AgentEventTransport {
   }
 
   private rejectPendingPings(error: Error): void {
-    for (const pending of this.pendingPings.splice(0)) pending.reject(error);
+    for (const pending of this.pendingPings.splice(0)) {
+      if (pending.timer !== null) clearTimeout(pending.timer);
+      pending.reject(error);
+    }
   }
 
   private resolveConnectionWaiters(): void {

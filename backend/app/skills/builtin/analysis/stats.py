@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import warnings
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +26,20 @@ from scipy import stats
 
 from app.agent_loop.context import RunContext
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+
+
+def _safe_float(value: Any, digits: int = 4) -> float | None:
+    """Convert to float and round; return None for NaN/Inf/None (RFC 7159 safety)."""
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(result) or math.isinf(result):
+        return None
+    return round(result, digits)
+
 
 logger = logging.getLogger(__name__)
 
@@ -532,13 +547,13 @@ def basic_statistics(
             col_stats = {
                 "column": col,
                 "count": int(desc.get("count", 0)),
-                "mean": round(float(desc.get("mean", np.nan)), 4),
-                "std": round(float(desc.get("std", np.nan)), 4),
-                "min": round(float(desc.get("min", np.nan)), 4),
-                "q25": round(float(desc.get("25%", np.nan)), 4),
-                "median": round(float(desc.get("50%", np.nan)), 4),
-                "q75": round(float(desc.get("75%", np.nan)), 4),
-                "max": round(float(desc.get("max", np.nan)), 4),
+                "mean": _safe_float(desc.get("mean")),
+                "std": _safe_float(desc.get("std")),
+                "min": _safe_float(desc.get("min")),
+                "q25": _safe_float(desc.get("25%")),
+                "median": _safe_float(desc.get("50%")),
+                "q75": _safe_float(desc.get("75%")),
+                "max": _safe_float(desc.get("max")),
                 "missing": missing_count,
                 "missing_pct": missing_pct,
             }
