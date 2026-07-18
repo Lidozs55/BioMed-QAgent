@@ -100,6 +100,23 @@ source_column_name, source_raw_value
 
 若需向用户解释字段含义，参考 `field_descriptions.csv` 中每列的 `description`。
 
+### `main_data.csv` 为 0 行时的处理（重要）
+
+当代测的 GEO series 是 snRNAseq / RNA-seq / 高通量测序类型时，GEO 官方的
+`series_matrix.txt.gz` 文件**只含样本元数据，不含表达矩阵**（matrix block 为空）。
+此时 Pipeline 会：
+
+- `main_data.csv`：只有表头（0 行数据），因为 GEO 该 series 没有提供表达值
+- `sample_metadata.csv`：**有数据**，从 series_matrix 的 `!Sample_geo_accession`/
+  `!Sample_title`/`!Sample_characteristics_ch1` 等元数据行恢复
+- `warnings.csv`：记录 `matrix_is_empty` 警告
+
+**在用户报告中遇到 main_data.csv 0 行时，必须如实说明**：
+1. 该 GEO series 未在 series_matrix 中提供表达矩阵数据（常见于 snRNAseq/RNA-seq）
+2. 已成功提取样本元数据（展示 `sample_metadata.csv` 的样本数和关键字段）
+3. **不要编造表达值、基因名或路径** — 没有数据就是没有数据
+4. 如需表达矩阵，建议用户从 GEO supplementary files 下载（如 Seurat/HDF5 对象）
+
 ## 上下文管理
 - 所有检索查询会记录到 RunContext.query_log
 - 当查询日志累计较长（约 8000 字符，通常对应 15-20 条查询）时，

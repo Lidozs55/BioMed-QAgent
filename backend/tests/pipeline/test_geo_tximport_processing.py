@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.domain.contracts import DataLevel, SourceAsset
 from app.pipeline.processing.geo_tximport import (
+    parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )
@@ -87,3 +88,111 @@ def test_counts_processor_writes_long_form_rows_with_exact_source_locators(
         "GSM5388274", "GSM5388275", "GSM5388276", "GSM5388277",
         "GSM5388278", "GSM5388279", "GSM5388280", "GSM5388281",
     }
+
+
+# --- series_matrix sample recovery (§15.4 / §17) ---------------------------
+#
+# Modern GEO series (snRNAseq, RNA-seq) frequently ship a series_matrix file
+# whose expression-matrix block is empty. The parser must still recover
+# per-sample metadata from the !Sample_* lines so sample_metadata.csv is
+# populated even when main_data.csv is schema-only.
+
+SERIES_MATRIX_EMPTY_BLOCK = """!Series_title\t"Test series"
+!Sample_geo_accession\t"GSM9000001"\t"GSM9000002"\t"GSM9000003"
+!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"\t"Control rep. 3"
+!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"\t"Homo sapiens"
+!Sample_characteristics_ch1\t"cell line: MDA-MB-231"\t"cell line: MCF7"\t"cell line: MDA-MB-231"
+!Sample_characteristics_ch1\t"treatment: DMSO"\t"treatment: DrugA"\t"treatment: DMSO"
+!series_matrix_table_begin
+"ID_REF"\t"GSM9000001"\t"GSM9000002"\t"GSM9000003"
+!series_matrix_table_end
+"""
+
+
+def test_series_matrix_parser_recovers_samples_from_empty_matrix_block() -> None:
+    """An empty matrix block (only header between begin/end) must still yield
+    per-sample metadata so sample_metadata.csv has rows."""
+    compressed = gzip.compress(
+        SERIES_MATRIX_EMPTY_BLOCK.encode("utf-8"), mtime=0
+    )
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    assert len(samples) == 3
+    by_gsm = {s.sample_id: s for s in samples}
+    assert set(by_gsm) == {"GSM9000001", "GSM9000002", "GSM9000003"}
+
+    # source_alias falls back to the GSM accession itself
+    assert samples[0].source_alias == "GSM9000001"
+
+    # organism populated from !Sample_organism_ch1
+    assert all(s.organism == "Homo sapiens" for s in samples)
+
+    # cell_line canonical correction still applies
+    assert by_gsm["GSM9000001"].cell_line_raw == "MDA-MB-231"
+    assert by_gsm["GSM9000001"].cell_line_canonical == "MDA-MB-231"
+    assert by_gsm["GSM9000001"].normalization_rule == "identity"
+    assert by_gsm["GSM9000002"].cell_line_raw == "MCF7"
+    assert by_gsm["GSM9000002"].cell_line_canonical == "MCF7"
+
+    # treatment falls back to sample title when no treatment characteristic
+    # is present; here we have treatment characteristics so that wins
+    assert by_gsm["GSM9000001"].treatment == "DMSO"
+    assert by_gsm["GSM9000002"].treatment == "DrugA"
+
+    # replicate parsed from "rep. N" in the title
+    assert by_gsm["GSM9000001"].replicate == 1
+    assert by_gsm["GSM9000002"].replicate == 2
+    assert by_gsm["GSM9000003"].replicate == 3
+
+
+def test_series_matrix_parser_treatment_falls_back_to_title() -> None:
+    """When the series_matrix has no `treatment` characteristic, the parser
+    should fall back to using the sample title as the treatment field."""
+    matrix = (
+        '!Sample_geo_accession\t"GSM9000010"\n'
+        '!Sample_title\t"HD A1 (25172XR-01-04)"\n'
+        '!Sample_organism_ch1\t"Homo sapiens"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM9000010"\n'
+        '!series_matrix_table_end\n'
+    )
+    compressed = gzip.compress(matrix.encode("utf-8"), mtime=0)
+    samples = parse_geo_series_matrix_samples(compressed)
+    assert len(samples) == 1
+    # No rep. token in the title -> replicate defaults to 1
+    assert samples[0].replicate == 1
+    # treatment falls back to the title
+    assert samples[0].treatment == "HD A1 (25172XR-01-04)"
+
+
+def test_series_matrix_parser_raises_on_missing_accession_row() -> None:
+    """A series_matrix without !Sample_geo_accession is malformed; the parser
+    must raise so the processing stage can log a warning and fall back."""
+    matrix = (
+        '!Series_title\t"Empty"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM1"\n'
+        '!series_matrix_table_end\n'
+    )
+    compressed = gzip.compress(matrix.encode("utf-8"), mtime=0)
+    import pytest
+
+    with pytest.raises(ValueError, match="no !Sample_geo_accession"):
+        parse_geo_series_matrix_samples(compressed)
+
+
+def test_geo_sample_metadata_accepts_gsm_accession_as_source_alias() -> None:
+    """The relaxed source_alias pattern must accept GSM accessions so the
+    series_matrix parser can construct GeoSampleMetadata instances."""
+    from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+
+    sample = GeoSampleMetadata(
+        sample_id="GSM9000001",
+        source_alias="GSM9000001",
+        cell_line_raw="",
+        cell_line_canonical="",
+        normalization_rule="identity",
+        treatment="Control",
+        replicate=1,
+    )
+    assert sample.source_alias == "GSM9000001"
