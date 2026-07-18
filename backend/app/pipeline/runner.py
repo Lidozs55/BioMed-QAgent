@@ -440,7 +440,11 @@ class PipelineRunner:
         self,
         *,
         request_id: str,
-        prompt_kind: Literal["plan_confirmation", "data_correction"],
+        prompt_kind: Literal[
+            "plan_confirmation",
+            "data_correction",
+            "max_turns_reached",
+        ],
         summary: str,
         detail: dict[str, object] | None = None,
         expires_at: datetime | None = None,
