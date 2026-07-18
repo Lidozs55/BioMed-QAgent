@@ -1187,6 +1187,104 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
 
 
 @pytest.mark.asyncio
+async def test_executor_ends_stream_when_compaction_preparation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("compaction preparation failed")
+    live_frames: list[object] = []
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    execution = RunExecution(
+        task_id="task_compaction_failure",
+        run_id="run_compaction_failure",
+        request_id="request_compaction_failure",
+        input="fail during preparation",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+        _compaction_committer=AsyncMock(return_value=False),
+    )
+
+    class FailingCompactor:
+        async def prepare(self, task_id, **kwargs):
+            raise failure
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail("SDK Run must not start"),
+    )
+
+    with pytest.raises(RuntimeError, match="compaction preparation failed") as raised:
+        await runner_module.AgentRunExecutor(
+            SimpleNamespace(task_session=run_scoped_session(object())),
+            compactor=FailingCompactor(),
+        )(execution)
+
+    assert raised.value is failure
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_compaction_failure",
+            last_chunk_index=None,
+            finish_reason="error",
+        )
+    ]
+    model.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_executor_ends_stream_when_compaction_preparation_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancellation = asyncio.CancelledError()
+    live_frames: list[object] = []
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    execution = RunExecution(
+        task_id="task_compaction_cancelled",
+        run_id="run_compaction_cancelled",
+        request_id="request_compaction_cancelled",
+        input="cancel during preparation",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+        _compaction_committer=AsyncMock(return_value=False),
+    )
+
+    class CancelledCompactor:
+        async def prepare(self, task_id, **kwargs):
+            raise cancellation
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail("SDK Run must not start"),
+    )
+
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await runner_module.AgentRunExecutor(
+            SimpleNamespace(task_session=run_scoped_session(object())),
+            compactor=CancelledCompactor(),
+        )(execution)
+
+    assert raised.value is cancellation
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_compaction_cancelled",
+            last_chunk_index=None,
+            finish_reason="cancelled",
+        )
+    ]
+    model.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
