@@ -172,7 +172,7 @@ describe("runtime REST client", () => {
     const api = createAPIClient({ fetcher });
 
     await expect(
-      api.fetchTasks({ limit: 30, cursor: "next cursor" }),
+      api.fetchTasks({ limit: 10, cursor: "next cursor" }),
     ).resolves.toEqual(taskPage);
     await expect(api.fetchTask("task/1")).resolves.toEqual(snapshot);
     await expect(
@@ -184,7 +184,7 @@ describe("runtime REST client", () => {
     await expect(api.cancelRun("task/1", "run/1")).resolves.toEqual(snapshot);
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      "/api/v1/tasks?limit=30&cursor=next+cursor",
+      "/api/v1/tasks?limit=10&cursor=next+cursor",
       "/api/v1/tasks/task%2F1",
       "/api/v1/tasks/task%2F1/messages?limit=10&cursor=older+cursor",
       "/api/v1/tasks/task%2F1/events?after_sequence=3&limit=20",

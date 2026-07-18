@@ -59,7 +59,7 @@ import { useAgentStore } from "@/stores/agentStore";
 interface SessionSidebarProps {
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
-  onLoadMore?: () => Promise<void>;
+  onLoadAll?: () => Promise<void>;
   onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
@@ -105,6 +105,13 @@ function TaskRow({
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
   const active = isActiveStatus(summary.status);
+  const statusIconClass = active
+    ? "text-primary"
+    : summary.status === "failed" ||
+        summary.status === "cancelled" ||
+        summary.status === "interrupted"
+      ? "text-destructive"
+      : undefined;
   const cancelling = summary.status === "cancel_requested" || pendingCancel;
 
   return (
@@ -116,13 +123,13 @@ function TaskRow({
         aria-label={`${summary.title} ${status.label}`}
         className="min-w-0"
       >
-        <TaskStatusIcon status={summary.status} />
+        <TaskStatusIcon
+          status={summary.status}
+          className={statusIconClass}
+        />
         <span className="min-w-0 flex-1 truncate" title={summary.title}>
           {summary.title}
         </span>
-        <Badge variant={status.badgeVariant} className="shrink-0">
-          {status.label}
-        </Badge>
       </SidebarMenuButton>
       {active && summary.active_run_id !== null && (
         <SidebarMenuAction
@@ -140,6 +147,7 @@ function TaskRow({
       )}
       {!active && (
         <SidebarMenuAction
+          showOnHover
           aria-label={`删除 ${summary.title}`}
           title="删除任务"
           onClick={onDelete}
@@ -154,7 +162,7 @@ function TaskRow({
 export function SessionSidebar({
   onNewDraft,
   onSelectTask,
-  onLoadMore,
+  onLoadAll,
   onRetryHistory,
   onCancelRun,
   onDeleteTask,
@@ -168,7 +176,7 @@ export function SessionSidebar({
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
     () => new Set(),
   );
@@ -206,17 +214,17 @@ export function SessionSidebar({
     closeMobile();
   };
 
-  const loadMore = async () => {
-    if (loadingMore || onLoadMore === undefined) return;
-    setLoadingMore(true);
+  const loadAll = async () => {
+    if (loadingAll || onLoadAll === undefined) return;
+    setLoadingAll(true);
     try {
-      await onLoadMore();
+      await onLoadAll();
     } catch (error) {
       toast.error("历史任务加载失败", {
         description: errorDescription(error),
       });
     } finally {
-      setLoadingMore(false);
+      setLoadingAll(false);
     }
   };
 
@@ -358,19 +366,25 @@ export function SessionSidebar({
                   </EmptyHeader>
                 </Empty>
               ) : null}
-              {nextCursor !== null && onLoadMore !== undefined && (
+              {nextCursor !== null && onLoadAll !== undefined && (
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="mt-2 w-full"
-                  disabled={loadingMore}
-                  aria-label={loadingMore ? "加载中" : "加载更多"}
-                  onClick={() => void loadMore()}
+                  className="mt-1 w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
+                  disabled={loadingAll}
+                  aria-label={loadingAll ? "正在加载全部会话" : "显示更多"}
+                  onClick={() => void loadAll()}
                 >
-                  {loadingMore && (
-                    <Spinner data-icon="inline-start" aria-hidden="true" />
+                  {loadingAll ? (
+                    <Spinner
+                      data-icon="inline-start"
+                      className="text-primary"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <PlusCircleIcon data-icon="inline-start" aria-hidden="true" />
                   )}
-                  {loadingMore ? "加载中" : "加载更多"}
+                  {loadingAll ? "正在加载" : "显示更多"}
                 </Button>
               )}
             </SidebarGroupContent>

@@ -69,7 +69,7 @@ export default function App() {
         onNewDraft={() => controller.showNewDraft()}
         onSelectTask={selectTask}
         onRetryHistory={() => controller.refreshTaskHistory()}
-        onLoadMore={() => controller.loadMoreTasks()}
+        onLoadAll={() => controller.loadAllTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
       />

@@ -298,7 +298,7 @@ describe("runtime orchestration", () => {
     const startup = startRuntime({ api: apiClient, transport: eventTransport });
 
     expect(apiClient.fetchDatabases).toHaveBeenCalledTimes(1);
-    expect(apiClient.fetchTasks).toHaveBeenCalledWith({ limit: 30 });
+    expect(apiClient.fetchTasks).toHaveBeenCalledWith({ limit: 10 });
     expect(eventTransport.connect).toHaveBeenCalledTimes(1);
     tasks.resolve(page([summary("task_active", "running", 7)]));
     await Promise.resolve();
@@ -2590,7 +2590,7 @@ describe("runtime orchestration", () => {
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    const loading = controller.loadMoreTasks();
+    const loading = controller.loadAllTasks();
     await vi.waitFor(() => expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1));
     await controller.deleteTask("task_delete_page_race");
     nextPage.resolve(
@@ -2629,7 +2629,7 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().taskOrder).toContain("task_delete");
   });
 
-  it("loads another page without duplicating active tasks or changing selection", async () => {
+  it("loads all remaining pages without duplicating active tasks or changing selection", async () => {
     useAgentStore.getState().mergeTaskPage(
       page(
         [summary("task_active")],
@@ -2640,36 +2640,160 @@ describe("runtime orchestration", () => {
     );
     useAgentStore.getState().setActiveTaskId("task_history");
     const apiClient = api({
-      fetchTasks: vi.fn().mockResolvedValue(
-        page(
-          [summary("task_active")],
-          [
-            summary(
-              "task_older",
-              "completed",
-              0,
-              "agent",
-              "2026-07-13T00:00:00Z",
-            ),
-          ],
-          null,
+      fetchTasks: vi
+        .fn()
+        .mockResolvedValueOnce(
+          page(
+            [summary("task_active")],
+            [
+              summary(
+                "task_older",
+                "completed",
+                0,
+                "agent",
+                "2026-07-13T00:00:00Z",
+              ),
+            ],
+            "cursor_2",
+          ),
+        )
+        .mockResolvedValueOnce(
+          page(
+            [],
+            [
+              summary(
+                "task_oldest",
+                "completed",
+                0,
+                "agent",
+                "2026-07-12T00:00:00Z",
+              ),
+            ],
+            null,
+          ),
         ),
-      ),
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    await controller.loadMoreTasks();
+    await controller.loadAllTasks();
 
-    expect(apiClient.fetchTasks).toHaveBeenCalledWith({
-      limit: 30,
+    expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(1, {
+      limit: 10,
       cursor: "cursor_1",
+    });
+    expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(2, {
+      limit: 10,
+      cursor: "cursor_2",
     });
     expect(useAgentStore.getState().activeItems).toEqual(["task_active"]);
     expect(useAgentStore.getState().taskOrder).toEqual([
       "task_history",
       "task_older",
+      "task_oldest",
     ]);
     expect(useAgentStore.getState().activeTaskId).toBe("task_history");
+    expect(useAgentStore.getState().nextCursor).toBeNull();
+  });
+
+  it("resumes loading all history from the failed cursor", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_history", "completed")], "cursor_1"),
+      false,
+    );
+    const apiClient = api({
+      fetchTasks: vi
+        .fn()
+        .mockResolvedValueOnce(
+          page(
+            [],
+            [
+              summary(
+                "task_older",
+                "completed",
+                0,
+                "agent",
+                "2026-07-13T00:00:00Z",
+              ),
+            ],
+            "cursor_2",
+          ),
+        )
+        .mockRejectedValueOnce(new Error("page unavailable"))
+        .mockResolvedValueOnce(
+          page(
+            [],
+            [
+              summary(
+                "task_oldest",
+                "completed",
+                0,
+                "agent",
+                "2026-07-12T00:00:00Z",
+              ),
+            ],
+            null,
+          ),
+        ),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await expect(controller.loadAllTasks()).rejects.toThrow("page unavailable");
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_history",
+      "task_older",
+    ]);
+    expect(useAgentStore.getState().nextCursor).toBe("cursor_2");
+
+    await controller.loadAllTasks();
+
+    expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(3, {
+      limit: 10,
+      cursor: "cursor_2",
+    });
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_history",
+      "task_older",
+      "task_oldest",
+    ]);
+  });
+
+  it("rejects cyclic history cursors instead of requesting forever", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_history", "completed")], "cursor_1"),
+      false,
+    );
+    const apiClient = api({
+      fetchTasks: vi
+        .fn()
+        .mockResolvedValueOnce(page([], [], "cursor_2"))
+        .mockResolvedValueOnce(page([], [], "cursor_1")),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await expect(controller.loadAllTasks()).rejects.toThrow(
+      "Task pagination cursor did not advance",
+    );
+    expect(apiClient.fetchTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent requests to load all history", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_history", "completed")], "cursor_1"),
+      false,
+    );
+    const nextPage = deferred<TaskPage>();
+    const apiClient = api({ fetchTasks: vi.fn(() => nextPage.promise) });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const first = controller.loadAllTasks();
+    const second = controller.loadAllTasks();
+    expect(first).toBe(second);
+    expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1);
+
+    nextPage.resolve(page([], [summary("task_older", "completed")], null));
+    await Promise.all([first, second]);
+
+    expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces concurrent older-message requests for the same task", async () => {
