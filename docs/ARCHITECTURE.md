@@ -91,6 +91,19 @@ backend/app/skills/
 - processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
 - learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
+**视觉证据采集（web_visual_capture）**：
+`acquisition/web_visual_capture.py` 提供 `capture_web_page` 与
+`capture_page_section` 两个 function_tool，使用 Playwright Chromium 截图，
+产物为内容寻址的 PNG（`source_assets/figures/fig_<sha256[:12]>.png`）并附
+`_meta.json` sidecar。该 skill **不** 走 `acquire_source()` 的 HTTPS 白名单
++ httpx 下载链路（因为白名单仅含 NCBI/GDC/PDB/PubChem/Reactome/Xena，且
+httpx 不支持截图），而是复用 `browser_fallback` 的轻量 provenance 模式
+（`SourceRecord(database=BROWSER)` + `add_raw_asset()`）。HTTP 行为（真实
+浏览器 UA、Referer、stealth、2s 限速、route guard）由统一的
+`app/tools/crawler.py:playwright_screenshot` 提供，确保与其它 acquisition
+skill 的反爬行为一致。该 skill 不出现在 `GET /databases` 列表中，由 Agent
+按需调用。详见 `docs/separateweb_capture_integration_plan.md`。
+
 ## 3. 核心数据契约
 
 契约使用 Pydantic v2，统一继承 `ContractModel`，显式设置

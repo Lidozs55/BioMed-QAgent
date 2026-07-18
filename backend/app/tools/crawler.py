@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -302,6 +303,170 @@ def api_fetch(
             status_code=0,
             elapsed_ms=elapsed_ms,
             method_used="api",
+            error=str(exc),
+        )
+
+
+@dataclass
+class ScreenshotResult:
+    """Result of a screenshot capture operation."""
+
+    url: str
+    path: Path
+    status_code: int
+    elapsed_ms: float
+    viewport_width: int
+    viewport_height: int
+    full_page: bool
+    selector: str | None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300 and self.error is None
+
+
+def playwright_screenshot(
+    url: str,
+    *,
+    dest_path: Path,
+    full_page: bool = True,
+    viewport_width: int = 1920,
+    viewport_height: int = 1080,
+    wait_until: str = "networkidle",
+    timeout: float = 60.0,
+    selector: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> ScreenshotResult:
+    """Capture a web page screenshot using Playwright Chromium with stealth.
+
+    Mirrors ``playwright_fetch`` stealth/UA/rate-limit behavior but captures a
+    PNG screenshot instead of returning HTML. Saves to ``dest_path`` (which
+    must be inside the task workdir for path safety).
+
+    Args:
+        url: Target URL.
+        dest_path: Destination PNG path (caller is responsible for path safety).
+        full_page: Whether to capture the full scrollable page.
+        viewport_width: Browser viewport width in pixels (max 1920).
+        viewport_height: Browser viewport height in pixels (max 1080).
+        wait_until: Playwright wait strategy.
+        timeout: Navigation timeout in seconds.
+        selector: Optional CSS selector; if given, captures only that element.
+        extra_headers: Optional extra headers.
+
+    Returns:
+        ScreenshotResult with capture metadata.
+
+    Raises:
+        CrawlError: If Playwright is not installed or browser launch fails.
+    """
+    _rate_limiter.wait()
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise CrawlError(
+            "Playwright is not installed. Run: uv add playwright && "
+            "uv run playwright install chromium"
+        ) from exc
+
+    # Clamp viewport to hard上限 (project_memory: 避免内存爆炸)
+    vw = min(viewport_width, 1920)
+    vh = min(viewport_height, 1080)
+
+    merged_headers = {**BROWSER_HEADERS, **(extra_headers or {})}
+    start = time.monotonic()
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=BROWSER_UA,
+                extra_http_headers=merged_headers,
+                viewport={"width": vw, "height": vh},
+                locale="en-US",
+            )
+            context.add_init_script(STEALTH_JS)
+            context.route("**/*", _guard_playwright_route)
+            page = context.new_page()
+            response = page.goto(
+                url, wait_until=wait_until, timeout=int(timeout * 1000)
+            )
+            status_code = response.status if response is not None else 0
+
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            if selector:
+                # Wait for the element to be visible before截图; otherwise
+                # bounding_box() may return None on pages with slow layout
+                # (images/fonts loading, ads shifting the viewport).
+                page.wait_for_selector(
+                    selector, state="visible", timeout=int(timeout * 1000)
+                )
+                locator = page.locator(selector).first
+                # Use JS scrollIntoView to bypass Playwright's "waiting for
+                # element to be stable" check, which hangs on pages with
+                # sticky elements (Wikipedia's sticky header) or continuous
+                # layout shifts (BMC's lazy-loaded figures). The built-in
+                # locator.scroll_into_view_if_needed() and locator.screenshot()
+                # both internally wait for stability and can time out.
+                locator.evaluate(
+                    "el => el.scrollIntoView({block: 'center', inline: 'center'})"
+                )
+                # Allow layout to settle briefly after the JS scroll
+                page.wait_for_timeout(300)
+                bbox = locator.bounding_box()
+                if bbox is None:
+                    raise CrawlError(
+                        f"Element '{selector}' has no bounding box on {url}"
+                    )
+                # Clip the page screenshot to the element's bounding box.
+                # page.screenshot(clip=...) does NOT do element stability
+                # checks, so it won't hang on continuous layout shifts.
+                page.screenshot(
+                    path=str(dest_path),
+                    clip={
+                        "x": max(0.0, bbox["x"]),
+                        "y": max(0.0, bbox["y"]),
+                        "width": bbox["width"],
+                        "height": bbox["height"],
+                    },
+                    timeout=int(timeout * 1000),
+                )
+            else:
+                page.screenshot(
+                    path=str(dest_path),
+                    full_page=full_page,
+                    timeout=int(timeout * 1000),
+                )
+            context.close()
+            browser.close()
+
+            elapsed_ms = (time.monotonic() - start) * 1000
+            return ScreenshotResult(
+                url=url,
+                path=dest_path,
+                status_code=status_code,
+                elapsed_ms=elapsed_ms,
+                viewport_width=vw,
+                viewport_height=vh,
+                full_page=full_page,
+                selector=selector,
+            )
+    except CrawlError:
+        raise
+    except Exception as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        logger.warning("playwright_screenshot failed for %s: %s", url, exc)
+        return ScreenshotResult(
+            url=url,
+            path=dest_path,
+            status_code=0,
+            elapsed_ms=elapsed_ms,
+            viewport_width=vw,
+            viewport_height=vh,
+            full_page=full_page,
+            selector=selector,
             error=str(exc),
         )
 
