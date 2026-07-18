@@ -898,11 +898,13 @@
       —— 目前 fixture 模式才有 stage 卡片，agent 模式仅显示单行"当前工具名"
       （`frontend/src/components/AgentProgress.tsx:40-86`）
 
-- [ ] **P1** `ChatPanel.tsx` 新增 `StageProgressList` 组件
+- [x] **P1** `ChatPanel.tsx` 新增 `ExecutionSummary` 执行摘要
 
-      —— 读取 `task.activitiesById` 中 `kind==="progress"` 的活动
-      —— 在 `assistant_delta` 之间穿插"工具卡片"
-      —— `ToolTrace.tsx` 默认折叠状态需暴露工具 output 摘要到 Chat 主流
+      —— 按 Run 读取 tool / stage / progress / warning 活动，同一阶段同一
+      progress kind 原位更新，运行中默认展开
+      —— Chat 主流只展示工具状态、阶段进度、验证结果和警告等安全结构化摘要
+      —— 原始工具 input/output 详情继续保留在 `ToolTrace.tsx`，不展示原始 CoT、
+      reasoning、隐藏提示词或模型内部状态
 
 ### 8.3 P0：数据源硬门控解除
 
