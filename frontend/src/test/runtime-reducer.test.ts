@@ -187,6 +187,63 @@ describe("runtime event projection", () => {
     ]);
   });
 
+  it("keeps streamed assistant text visible through plan approval events", () => {
+    const taskId = "task_plan_stream";
+    const runId = "run_task_plan_stream";
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary(taskId, "running", 0)),
+      false,
+    );
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope(taskId, runId, 1, { type: "run_started" }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(taskId, runId, 2, {
+        type: "assistant_delta",
+        delta: "I am preparing the plan.",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(taskId, runId, 3, {
+        type: "plan_ready",
+        specification: { topic: "test" },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(taskId, runId, 4, {
+        type: "user_input_required",
+        request_id: "request_plan",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+
+    const task = state.tasksById[taskId];
+    expect(task.messages).toHaveLength(1);
+    expect(task.messages[0]).toMatchObject({
+      role: "assistant",
+      runId,
+      content: "I am preparing the plan.",
+    });
+    expect(task.activityOrder).toHaveLength(1);
+    expect(task.activitiesById[task.activityOrder[0]]).toMatchObject({
+      name: "plan_ready",
+    });
+    expect(task.pendingUserInput).toMatchObject({
+      runId,
+      requestId: "request_plan",
+    });
+  });
+
   it("routes overlapping task-local sequences independently", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

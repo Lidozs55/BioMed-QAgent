@@ -258,7 +258,7 @@ describe("ChatPanel", () => {
     );
   });
 
-  it("leaves chat vertical scrolling owned by MessageScroller", () => {
+  it("keeps MessageScroller as scroll owner and gives the transcript readable gutters", () => {
     seedTerminalTask();
     const { container } = render(
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
@@ -273,11 +273,92 @@ describe("ChatPanel", () => {
     const messageViewport = container.querySelector<HTMLElement>(
       '[data-slot="message-scroller-viewport"]',
     );
+    const messageContent = container.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-content"]',
+    );
 
     expect(chatPanel).toHaveClass("min-h-0");
     expect(chatPanel).not.toHaveClass("overflow-y-auto");
     expect(chatPanel).toContainElement(messageScroller);
     expect(messageViewport).toHaveClass("overflow-y-auto");
+    expect(messageContent).toHaveClass("px-4", "py-4");
+  });
+
+  it("shows active Agent work until real streamed output arrives", () => {
+    seedBackgroundTask();
+    useAgentStore.getState().setActiveTaskId("task_background");
+    const { rerender } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在处理请求");
+
+    act(() => {
+      useAgentStore.getState().applyEvent({
+        schema_version: "2.0",
+        event_id: "event_background_delta",
+        type: "assistant_delta",
+        task_id: "task_background",
+        run_id: "run_background",
+        stage_attempt_id: null,
+        sequence: 3,
+        timestamp: "2026-07-14T00:00:03Z",
+        payload: { type: "assistant_delta", delta: "Streaming answer" },
+      });
+    });
+    rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByText("Streaming answer")).toBeInTheDocument();
+  });
+
+  it("does not show processing status while an Agent waits for user input", () => {
+    seedBackgroundTask();
+    useAgentStore.setState((state) => ({
+      tasksById: {
+        ...state.tasksById,
+        task_background: {
+          ...state.tasksById.task_background,
+          summary: {
+            ...state.tasksById.task_background.summary,
+            status: "awaiting_user_input",
+          },
+        },
+      },
+    }));
+    useAgentStore.getState().setActiveTaskId("task_background");
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+  });
+
+  it("does not show active Agent work for terminal or fixture tasks", () => {
+    seedTerminalTask();
+    const { rerender } = render(
+      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    act(() => {
+      useAgentStore.setState(createInitialRuntimeState());
+      seedBackgroundTask();
+      useAgentStore.setState((state) => ({
+        tasksById: {
+          ...state.tasksById,
+          task_background: {
+            ...state.tasksById.task_background,
+            summary: {
+              ...state.tasksById.task_background.summary,
+              mode: "fixture",
+            },
+          },
+        },
+      }));
+      useAgentStore.getState().setActiveTaskId("task_background");
+    });
+    rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("renders assistant messages as Markdown in BubbleContent", () => {
@@ -331,16 +412,30 @@ describe("ChatPanel", () => {
     expect(resultsPanel).toHaveClass("min-h-0", "overflow-hidden");
   });
 
-  it("disables continuation while a task is active or fixture-only", () => {
+  it("keeps active Agent drafting editable while disabling only Send", () => {
     seedBackgroundTask();
     useAgentStore.getState().setActiveTaskId("task_background");
+    const continueTask = vi.fn();
     const { rerender } = render(
-      <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
+      <ChatPanel startTask={vi.fn()} continueTask={continueTask} />,
     );
-    expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    const send = screen.getByRole("button", { name: "发送继续问题" });
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "send this when ready" } });
+    expect(input).toHaveValue("send this when ready");
+    expect(send).toBeDisabled();
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(continueTask).not.toHaveBeenCalled();
+
+    const inputGroup = input.closest('[data-slot="input-group"]');
+    const sendAddon = send.closest('[data-slot="input-group-addon"]');
+    expect(inputGroup).toContainElement(send);
+    expect(sendAddon).toHaveAttribute("data-align", "block-end");
 
     act(() => seedTerminalTask("fixture"));
-    rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+    rerender(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
     expect(screen.getByRole("textbox", { name: "继续提问" })).toBeDisabled();
   });
 
@@ -439,6 +534,30 @@ describe("ChatPanel", () => {
 
     expect(input).toHaveValue("newer draft");
     expect(screen.getByPlaceholderText("输入研究目标...")).toBeVisible();
+  });
+
+  it("preserves a newer same-task draft while continuation submission is pending", async () => {
+    seedTerminalTask("agent", "task_a");
+    const continuation = deferred<TaskRunAccepted>();
+    const continueTask = vi.fn().mockReturnValue(continuation.promise);
+    render(<ChatPanel startTask={vi.fn()} continueTask={continueTask} />);
+
+    const input = screen.getByRole("textbox", { name: "继续提问" });
+    fireEvent.change(input, { target: { value: "question A" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送继续问题" }));
+    fireEvent.change(input, { target: { value: "question B" } });
+
+    await act(async () => {
+      continuation.resolve({
+        request_id: "req_follow_a",
+        task_id: "task_a",
+        run_id: "run_follow_a",
+        status: "queued",
+      });
+      await continuation.promise;
+    });
+
+    expect(input).toHaveValue("question B");
   });
 
   it("keeps Task B continuation enabled while Task A is pending", async () => {

@@ -160,13 +160,31 @@ export function ChatPanel({
         ? "chat"
         : activeTab;
 
-  const continuationEnabled =
+  const continuationEditable =
     activeTask !== undefined &&
     activeTask.summary.mode === "agent" &&
+    continueTask !== undefined;
+  const continuationCanSend =
+    continuationEditable &&
     activeTask.summary.active_run_id === null &&
     latestRunIsTerminal(activeTask) &&
-    continueTask !== undefined &&
     !continuationPending;
+  const continuationSendEnabled =
+    continuationCanSend && continuationInput.trim().length > 0;
+  const activeRunId = activeTask?.summary.active_run_id ?? null;
+  const activeRunHasAssistantMessage =
+    activeRunId !== null &&
+    messages.some(
+      (message) =>
+        message.runId === activeRunId && message.role === "assistant",
+    );
+  const showActiveRunStatus =
+    activeTask?.summary.mode === "agent" &&
+    (activeTask.summary.status === "queued" ||
+      activeTask.summary.status === "running" ||
+      activeTask.summary.status === "finalizing") &&
+    activeRunId !== null &&
+    !activeRunHasAssistantMessage;
 
   const continuationDisabledReason = useMemo(() => {
     if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
@@ -174,19 +192,20 @@ export function ChatPanel({
     if (activeTask.summary.active_run_id !== null) {
       switch (activeTask.summary.status) {
         case "queued":
-          return "任务排队中，请等待执行槽";
+          return "可先输入下一条指令，任务完成后即可发送";
         case "running":
-          return "任务运行中，请等待当前回答";
+          return "可先输入下一条指令，当前回答完成后即可发送";
         case "finalizing":
-          return "任务收尾中，请稍候";
+          return "可先输入下一条指令，任务收尾后即可发送";
         case "cancel_requested":
-          return "任务正在取消，请稍候";
+          return "可先输入下一条指令，取消完成后即可发送";
         case "awaiting_user_input":
-          return "等待确认计划，请在弹窗中决策";
+          return "可先输入下一条指令，请先在弹窗中确认计划";
       }
     }
+    if (continuationPending) return "正在提交继续问题";
     return "选择已完成的 Agent 任务后继续提问";
-  }, [activeTask]);
+  }, [activeTask, continuationPending]);
 
   const submitTask = async (mode: StartTaskInput["mode"]) => {
     const input = draftInput.trim();
@@ -233,7 +252,7 @@ export function ChatPanel({
   };
 
   const sendContinuation = async () => {
-    if (!continuationEnabled || activeTaskId === null || continueTask === undefined) {
+    if (!continuationCanSend || activeTaskId === null || continueTask === undefined) {
       return;
     }
     const taskId = activeTaskId;
@@ -250,7 +269,9 @@ export function ChatPanel({
     });
     try {
       await continueTask(taskId, { input });
-      setContinuationDrafts((current) => ({ ...current, [taskId]: "" }));
+      setContinuationDrafts((current) =>
+        current[taskId] === input ? { ...current, [taskId]: "" } : current,
+      );
     } catch (error) {
       setContinuationErrors((current) => ({
         ...current,
@@ -500,6 +521,35 @@ export function ChatPanel({
                       </MessageScrollerItem>
                     ))}
 
+                    {showActiveRunStatus && activeRunId !== null && (
+                      <MessageScrollerItem
+                        messageId={`live:${activeRunId}:assistant:status`}
+                      >
+                        <Message align="start">
+                          <MessageAvatar>
+                            <Avatar>
+                              <AvatarFallback>
+                                <RobotIcon />
+                              </AvatarFallback>
+                            </Avatar>
+                          </MessageAvatar>
+                          <MessageContent>
+                            <Bubble variant="muted">
+                              <BubbleContent>
+                                <span
+                                  role="status"
+                                  className="flex items-center gap-2"
+                                >
+                                  <Spinner aria-hidden="true" />
+                                  正在处理请求…
+                                </span>
+                              </BubbleContent>
+                            </Bubble>
+                          </MessageContent>
+                        </Message>
+                      </MessageScrollerItem>
+                    )}
+
                     {activeTaskId !== null && artifacts.length > 0 && (
                       <MessageScrollerItem messageId="artifacts">
                         <Accordion>
@@ -558,10 +608,10 @@ export function ChatPanel({
               </MessageScroller>
 
               <div className="min-w-0 shrink-0 border-t p-4">
-                <InputGroup className="min-h-11" data-disabled={!continuationEnabled}>
+                <InputGroup className="min-h-11" data-disabled={!continuationEditable}>
                   <InputGroupAddon align="block-start">
                     <span className="truncate text-xs text-muted-foreground">
-                      {continuationEnabled ? "继续提问" : continuationDisabledReason}
+                      {continuationCanSend ? "继续提问" : continuationDisabledReason}
                     </span>
                   </InputGroupAddon>
                   <InputGroupTextarea
@@ -575,20 +625,20 @@ export function ChatPanel({
                     }}
                     onKeyDown={handleKeyDown}
                     placeholder={
-                      continuationEnabled
+                      continuationEditable
                         ? "输入对当前任务的继续问题..."
                         : continuationDisabledReason
                     }
-                    disabled={!continuationEnabled}
+                    disabled={!continuationEditable}
                     aria-label="继续提问"
                     className="min-h-11"
                   />
-                  <InputGroupAddon align="inline-end">
+                  <InputGroupAddon align="block-end">
                     <InputGroupButton
                       size="sm"
                       variant="default"
                       onClick={() => void sendContinuation()}
-                      disabled={!continuationEnabled || !continuationInput.trim()}
+                      disabled={!continuationSendEnabled}
                       aria-label={continuationPending ? "提交中" : "发送继续问题"}
                     >
                       {continuationPending && (
