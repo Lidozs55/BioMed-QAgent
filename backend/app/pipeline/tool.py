@@ -215,8 +215,21 @@ async def run_research_pipeline(
             "status": manifest.task_state.value,
             "validation_status": manifest.validation.status,
             "artifact_count": len(manifest.artifacts) + 1,
+            "artifacts": [
+                {
+                    "name": entry.name,
+                    "size_bytes": entry.size_bytes,
+                    "media_type": entry.media_type,
+                }
+                for entry in manifest.artifacts
+            ],
             "mode": mode,
             "topic": topic,
+            "note": (
+                "Artifacts are published to the task's artifacts/ directory "
+                "with the exact names listed above. Reference these filenames "
+                "verbatim in any user-facing report; do not invent filenames."
+            ),
         },
         ensure_ascii=False,
     )
