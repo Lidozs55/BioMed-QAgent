@@ -100,21 +100,27 @@ source_column_name, source_raw_value
 
 若需向用户解释字段含义，参考 `field_descriptions.csv` 中每列的 `description`。
 
-### `main_data.csv` 为 0 行时的处理（重要）
+### `main_data.csv` 数据完整性保证（重要）
 
-当代测的 GEO series 是 snRNAseq / RNA-seq / 高通量测序类型时，GEO 官方的
-`series_matrix.txt.gz` 文件**只含样本元数据，不含表达矩阵**（matrix block 为空）。
-此时 Pipeline 会：
+Pipeline **始终保证 `main_data.csv` 至少包含每个样本一行真实数据**，
+无论 GEO series 的数据类型如何：
 
-- `main_data.csv`：只有表头（0 行数据），因为 GEO 该 series 没有提供表达值
-- `sample_metadata.csv`：**有数据**，从 series_matrix 的 `!Sample_geo_accession`/
-  `!Sample_title`/`!Sample_characteristics_ch1` 等元数据行恢复
-- `warnings.csv`：记录 `matrix_is_empty` 警告
+- **有表达矩阵的 series**（microarray / 已处理 counts）：
+  每行一个 `gene × sample` 表达值，`measurement_type="tximport_estimated_count"`
+- **无表达矩阵的 series**（snRNAseq / RNA-seq / 高通量测序，series_matrix 的
+  matrix block 为空）：
+  每个样本一行 `measurement_type="sample_metadata"` 的元数据行，包含
+  `sample_id`/`source_sample_alias`/`dataset_id`/`source_id`/`asset_id` 等字段，
+  表达相关字段（`gene_id_raw`/`expression_value`/`source_line_number` 等）留空
 
-**在用户报告中遇到 main_data.csv 0 行时，必须如实说明**：
-1. 该 GEO series 未在 series_matrix 中提供表达矩阵数据（常见于 snRNAseq/RNA-seq）
-2. 已成功提取样本元数据（展示 `sample_metadata.csv` 的样本数和关键字段）
-3. **不要编造表达值、基因名或路径** — 没有数据就是没有数据
+`main_data.csv` **不会出现 0 行的情况**（除非 task 本身没有数据源）。
+在用户报告中：
+
+1. **展示 `main_data.csv` 的实际行数和 `measurement_type` 分布**（如
+   "48 行 tximport_estimated_count" 或 "12 行 sample_metadata"）
+2. 当 `measurement_type="sample_metadata"` 行存在时，说明该 GEO series 未在
+   series_matrix 中提供表达矩阵（常见于 snRNAseq/RNA-seq），已成功提取样本元数据
+3. **不要编造表达值、基因名或路径** — 表达相关字段为空就是为空
 4. 如需表达矩阵，建议用户从 GEO supplementary files 下载（如 Seurat/HDF5 对象）
 
 ## 上下文管理

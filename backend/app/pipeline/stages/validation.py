@@ -521,7 +521,15 @@ def _validate_package(
         source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
     sampled_rows = _deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
+    sampled_skipped = 0
     for row in sampled_rows:
+        # Skip sample-metadata rows: they have no expression value to verify
+        # against (the series_matrix expression block is empty for snRNAseq /
+        # RNA-seq series). ``measurement_type="sample_metadata"`` and
+        # ``source_line_number=0`` are the sentinels for these rows.
+        if row.get("measurement_type") == "sample_metadata":
+            sampled_skipped += 1
+            continue
         line_index = int(row["source_line_number"]) - 1
         column_index = int(row["source_column_index"])
         try:
@@ -539,10 +547,14 @@ def _validate_package(
             "scope": "main_data",
             "check_name": "sampled values match source locator",
             "status": "passed" if lineage_failures == 0 else "failed",
-            "checked_count": len(sampled_rows),
+            "checked_count": len(sampled_rows) - sampled_skipped,
             "failed_count": lineage_failures,
             "details": json.dumps(
-                {"total_rows": len(main_rows), "sampled": len(sampled_rows)}
+                {
+                    "total_rows": len(main_rows),
+                    "sampled": len(sampled_rows),
+                    "skipped_metadata_rows": sampled_skipped,
+                }
             ),
         }
     )

@@ -196,3 +196,287 @@ def test_geo_sample_metadata_accepts_gsm_accession_as_source_alias() -> None:
         replicate=1,
     )
     assert sample.source_alias == "GSM9000001"
+
+
+# --- main_data.csv 始终含样本元数据行 (§17.5) -------------------------------
+#
+# 当 GEO series_matrix 的表达矩阵为空（snRNAseq / RNA-seq 系列）时，
+# _build_minimal_parsed_dataset 必须为每个恢复出的样本生成一行
+# measurement_type="sample_metadata" 的元数据行写入 main_data.csv，
+# 保证 main_data.csv 始终有数据。表达相关字段留空，source_line_number=0
+# 标识"无源行号"，validation 的 source_value_lineage 检查会跳过这些行。
+
+
+def _make_geo_sample(sample_id: str, alias: str = "", treatment: str = "Control"):
+    from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+
+    return GeoSampleMetadata(
+        sample_id=sample_id,
+        source_alias=alias or sample_id,
+        cell_line_raw="MDA-MB-231",
+        cell_line_canonical="MDA-MB-231",
+        normalization_rule="identity",
+        treatment=treatment,
+        replicate=1,
+    )
+
+
+def _make_minimal_ctx(
+    tmp_path: Path, task_id: str
+) -> tuple[object, SourceAsset]:
+    """Build a StageContext + placeholder SourceAsset for processing tests."""
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+
+    workdir = create_task_workdir(task_id, base_dir=str(tmp_path / task_id))
+    placeholder = workdir.source_assets / "series_matrix.txt.gz"
+    placeholder.write_bytes(b"placeholder")
+    checksum = hashlib.sha256(b"placeholder").hexdigest()
+    source_asset = SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/series_matrix.txt.gz",
+        sha256=checksum,
+        size_bytes=len(b"placeholder"),
+        media_type="application/gzip",
+        source_id="src_geo_gse_test",
+        successful_attempt_id="download_attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    ctx = StageContext(
+        task_id=task_id,
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="test",
+        started_at=datetime.now(tz=UTC),
+    )
+    return ctx, source_asset
+
+
+def test_minimal_dataset_with_samples_writes_one_metadata_row_per_sample(
+    tmp_path: Path,
+) -> None:
+    """When samples are provided, _build_minimal_parsed_dataset must write
+    one sample_metadata row per sample into main_data.csv (not 0 rows)."""
+    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
+
+    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md1")
+
+    samples = [
+        _make_geo_sample("GSM9000001", treatment="DMSO"),
+        _make_geo_sample("GSM9000002", treatment="DrugA"),
+        _make_geo_sample("GSM9000003", treatment="DMSO"),
+    ]
+    parsed = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=samples
+    )
+
+    # row_count must equal the number of samples (not 0)
+    assert parsed.row_count == 3
+
+    output_path = ctx.workdir.root / parsed.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 3
+    # Every row is a sample_metadata row
+    assert all(r["measurement_type"] == "sample_metadata" for r in rows)
+    # Sample IDs are preserved
+    assert {r["sample_id"] for r in rows} == {
+        "GSM9000001", "GSM9000002", "GSM9000003",
+    }
+    # Expression-related fields are blank
+    for r in rows:
+        assert r["gene_id_raw"] == ""
+        assert r["gene_id"] == ""
+        assert r["expression_value"] == ""
+        assert r["source_raw_value"] == ""
+        # source_line_number=0 is the "no source locator" sentinel
+        assert r["source_line_number"] == "0"
+        assert r["source_column_index"] == "0"
+    # source_sample_alias is preserved
+    assert {r["source_sample_alias"] for r in rows} == {
+        "GSM9000001", "GSM9000002", "GSM9000003",
+    }
+    # record_id is deterministic per (dataset_id, "sample_metadata", sample_id)
+    assert all(r["record_id"].startswith("rec_") for r in rows)
+    assert len({r["record_id"] for r in rows}) == 3
+
+
+def test_minimal_dataset_without_samples_is_schema_only(tmp_path: Path) -> None:
+    """When samples is None or empty, _build_minimal_parsed_dataset writes a
+    schema-only CSV (0 rows) for backward compatibility."""
+    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
+
+    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md2")
+
+    parsed_none = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=None
+    )
+    assert parsed_none.row_count == 0
+
+    parsed_empty = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=[]
+    )
+    assert parsed_empty.row_count == 0
+
+
+def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
+    """The source_value_lineage check must skip measurement_type="sample_metadata"
+    rows (they have no expression value to verify against)."""
+    import gzip as _gzip
+    import json as _json
+
+    from app.pipeline.stages.validation import _validate_package
+
+    staging = tmp_path / "tasks" / "task_val" / "staging"
+    source_path = tmp_path / "tasks" / "task_val" / "source_assets" / "src.tsv.gz"
+    staging.mkdir(parents=True, exist_ok=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Source file is a minimal series_matrix-like file (won't be touched
+    # because all main_data rows are sample_metadata).
+    source_path.write_bytes(
+        _gzip.compress(b'"ID_REF"\t"GSM1"\n1.0\t2.0\n', mtime=0)
+    )
+
+    main_columns = [
+        "record_id", "dataset_id", "source_id", "asset_id", "gene_id_raw",
+        "gene_id", "gene_id_namespace", "gene_id_version", "sample_id",
+        "source_sample_alias", "measurement_type", "value_semantics",
+        "value_scale", "is_normalized", "is_integer_expected",
+        "expression_value", "expression_unit", "source_logical_file",
+        "source_line_number", "source_column_index", "source_column_name",
+        "source_raw_value",
+    ]
+    main_rows = [
+        {
+            "record_id": "rec_md_1", "dataset_id": "ds1", "source_id": "src1",
+            "asset_id": "asset1", "gene_id_raw": "", "gene_id": "",
+            "gene_id_namespace": "", "gene_id_version": "",
+            "sample_id": "GSM9000001", "source_sample_alias": "GSM9000001",
+            "measurement_type": "sample_metadata",
+            "value_semantics": "metadata_only", "value_scale": "na",
+            "is_normalized": "false", "is_integer_expected": "false",
+            "expression_value": "", "expression_unit": "na",
+            "source_logical_file": "series_matrix_metadata",
+            "source_line_number": "0", "source_column_index": "0",
+            "source_column_name": "sample_metadata", "source_raw_value": "",
+        },
+        {
+            "record_id": "rec_md_2", "dataset_id": "ds1", "source_id": "src1",
+            "asset_id": "asset1", "gene_id_raw": "", "gene_id": "",
+            "gene_id_namespace": "", "gene_id_version": "",
+            "sample_id": "GSM9000002", "source_sample_alias": "GSM9000002",
+            "measurement_type": "sample_metadata",
+            "value_semantics": "metadata_only", "value_scale": "na",
+            "is_normalized": "false", "is_integer_expected": "false",
+            "expression_value": "", "expression_unit": "na",
+            "source_logical_file": "series_matrix_metadata",
+            "source_line_number": "0", "source_column_index": "0",
+            "source_column_name": "sample_metadata", "source_raw_value": "",
+        },
+    ]
+    with (staging / "main_data.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=main_columns)
+        writer.writeheader()
+        writer.writerows(main_rows)
+
+    # Build minimal companion CSVs required by _validate_package
+    def _write(name: str, columns: list[str], rows: list[dict[str, object]]) -> None:
+        with (staging / name).open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+
+    _write("dataset_catalog.csv", [
+        "dataset_id", "source_id", "database", "accession", "title",
+        "organism", "experiment_type", "sample_count", "platform_ids",
+        "related_pmids", "source_url", "retrieved_at",
+    ], [{
+        "dataset_id": "ds1", "source_id": "src1", "database": "geo",
+        "accession": "GSE999999", "title": "Test", "organism": "Homo sapiens",
+        "experiment_type": "RNA-Seq", "sample_count": "2",
+        "platform_ids": "[]", "related_pmids": "[]",
+        "source_url": "https://example.test", "retrieved_at": "2026-01-01T00:00:00",
+    }])
+    _write("sample_metadata.csv", [
+        "sample_id", "dataset_id", "source_id", "source_sample_alias",
+        "cell_line_raw", "cell_line_canonical", "normalization_rule",
+        "treatment", "replicate", "organism", "source_url",
+    ], [
+        {"sample_id": "GSM9000001", "dataset_id": "ds1", "source_id": "src1",
+         "source_sample_alias": "GSM9000001", "cell_line_raw": "",
+         "cell_line_canonical": "", "normalization_rule": "",
+         "treatment": "", "replicate": "1", "organism": "Homo sapiens",
+         "source_url": "https://example.test"},
+        {"sample_id": "GSM9000002", "dataset_id": "ds1", "source_id": "src1",
+         "source_sample_alias": "GSM9000002", "cell_line_raw": "",
+         "cell_line_canonical": "", "normalization_rule": "",
+         "treatment": "", "replicate": "1", "organism": "Homo sapiens",
+         "source_url": "https://example.test"},
+    ])
+    _write("source_list.csv", [
+        "source_id", "database", "accession", "url", "title", "retrieved_at",
+    ], [{"source_id": "src1", "database": "geo", "accession": "GSE999999",
+         "url": "https://example.test", "title": "Test",
+         "retrieved_at": "2026-01-01T00:00:00"}])
+    # source_assets: size/sha must match source_path — use real values
+    source_bytes = source_path.read_bytes()
+    _write("source_assets.csv", [
+        "asset_id", "source_id", "successful_attempt_id", "data_level",
+        "relative_path", "size_bytes", "sha256", "media_type",
+        "schema_version",
+    ], [{
+        "asset_id": "asset1", "source_id": "src1",
+        "successful_attempt_id": "attempt_1",
+        "data_level": "repository_processed",
+        "relative_path": "source_assets/src.tsv.gz",
+        "size_bytes": str(len(source_bytes)),
+        "sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "media_type": "application/gzip",
+        "schema_version": "1.0",
+    }])
+    _write("download_log.csv", [
+        "attempt_id", "source_id", "url", "status", "bytes_received",
+        "error_code", "error_message", "started_at", "finished_at",
+    ], [{"attempt_id": "attempt_1", "source_id": "src1",
+         "url": "https://example.test/file.gz", "status": "succeeded",
+         "bytes_received": str(len(source_bytes)), "error_code": "",
+         "error_message": "", "started_at": "2026-01-01T00:00:00",
+         "finished_at": "2026-01-01T00:00:01"}])
+    _write("field_descriptions.csv", [
+        "field_name", "data_type", "description", "unit", "nullable",
+        "source", "example",
+    ], [{"field_name": col, "data_type": "string", "description": col,
+         "unit": "", "nullable": "true", "source": "test", "example": ""}
+        for col in main_columns])
+    _write("processing_log.csv", [
+        "step_id", "stage_attempt_id", "stage", "operation", "input_refs",
+        "output_refs", "tool_version", "rows_before", "rows_after",
+        "parameters", "status", "started_at", "finished_at", "warnings",
+    ], [{"step_id": "step_test_v1", "stage_attempt_id": "attempt_test",
+         "stage": "processing", "operation": "parse_counts",
+         "input_refs": "[]", "output_refs": "[]", "tool_version": "1.0.0",
+         "rows_before": 0, "rows_after": 2,
+         "parameters": "{}", "status": "succeeded",
+         "started_at": "2026-01-01T00:00:00",
+         "finished_at": "2026-01-01T00:00:01",
+         "warnings": _json.dumps([])}])
+    _write("warnings.csv", [
+        "warning_id", "severity", "stage", "code", "message",
+        "source_id", "asset_id", "record_id", "created_at",
+    ], [])
+
+    summary, checks = _validate_package(
+        staging, source_path, tmp_path / "tasks" / "task_val" / "logs" / "r.json"
+    )
+    svl = next(c for c in checks if c["check_id"] == "source_value_lineage")
+    # No lineage failures — sample_metadata rows were skipped
+    assert svl["status"] == "passed"
+    assert int(svl["failed_count"]) == 0
+    details = _json.loads(svl["details"])
+    assert details["skipped_metadata_rows"] == 2
+    assert details["total_rows"] == 2
+    assert details["sampled"] == 2
