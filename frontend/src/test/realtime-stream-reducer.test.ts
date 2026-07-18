@@ -156,6 +156,39 @@ describe("realtime assistant projection", () => {
     expect(state.tasksById.task_a.lastSequence).toBe(1);
   });
 
+  it("replaces a wrong live stream identity with the authoritative durable stream", () => {
+    let state = reduceAssistantStreamFrames(stateWithTask(), [
+      delta(0, "wrong", "run_a", "wrong-stream"),
+    ]);
+    expect(assistantText(state)).toBe("wrong");
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope(1, {
+        type: "assistant_delta",
+        delta: "correct🙂",
+        stream_id: "assistant:run_a",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+
+    expect(assistantText(state)).toBe("correct🙂");
+    expect(state.tasksById.task_a.lastSequence).toBe(1);
+    expect(state.tasksById.task_a.assistantStreamsByRunId.run_a).toEqual({
+      streamId: "assistant:run_a",
+      durableText: "correct🙂",
+      pendingChunks: {},
+      confirmedThroughChunkIndex: 0,
+      active: false,
+    });
+    expect(
+      state.tasksById.task_a.messages.find(
+        (message) => message.runId === "run_a" && message.role === "assistant",
+      )?.sequence,
+    ).toBe(1);
+  });
+
   it("only ends the matching run and stream", () => {
     let state = reduceAssistantStreamFrames(stateWithTask(), [
       delta(0, "A", "run_a"),

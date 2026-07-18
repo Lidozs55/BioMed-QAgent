@@ -669,19 +669,17 @@ function applyDurableAssistantDelta(
   }
 
   const currentStream = task.assistantStreamsByRunId[runId];
-  if (
-    currentStream !== undefined &&
-    currentStream.streamId !== payload.stream_id
-  ) {
-    return task;
-  }
-  const stream = currentStream ?? {
-    streamId: payload.stream_id,
-    durableText: currentMessage?.content ?? "",
-    pendingChunks: {},
-    confirmedThroughChunkIndex: -1,
-    active: false,
-  };
+  const stream =
+    currentStream === undefined || currentStream.streamId !== payload.stream_id
+      ? {
+          streamId: payload.stream_id,
+          durableText:
+            currentStream?.durableText ?? currentMessage?.content ?? "",
+          pendingChunks: {},
+          confirmedThroughChunkIndex: -1,
+          active: false,
+        }
+      : currentStream;
   if (payload.through_chunk_index <= stream.confirmedThroughChunkIndex) {
     return task;
   }
