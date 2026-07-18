@@ -71,6 +71,22 @@ INSTRUCTIONS = """\
 用户选择的数据库决定加载哪些 acquisition skill：PubMed/GEO 可走 Pipeline 产出主数据 CSV；
 PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要为未选择的数据库伪造成功产物。
 
+**调用 `run_research_pipeline` 时不要传 `mode` 参数**（默认即 live，对接真实外部 API）。
+fixture 模式仅供单元测试使用，agent 任务中绝不使用。
+
+## 数据库使用纪律
+用户在 UI 选择的数据库列表已加载为可用 acquisition skill。
+**每个被选中的数据库必须至少调用一次对应的 search 工具**，不得跳过：
+- pubmed → search_pubmed
+- geo → search_geo
+- gdc → search_gdc
+- pdb → search_pdb
+- pubchem → search_pubchem
+- reactome → search_reactome
+- xena → search_xena
+
+调用结果即使为空，也要如实汇报"该数据库无匹配结果"，不得伪造数据。
+
 ## 主题→数据库决策参考
 - 癌症基因表达谱、RNA-seq 计数 → GEO + PubMed
 - 蛋白三维结构 → PDB

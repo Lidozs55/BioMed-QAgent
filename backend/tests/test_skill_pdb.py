@@ -49,23 +49,52 @@ def _call(tool, task_id: str, **kwargs) -> dict[str, Any]:
 
 
 def test_search_pdb_success() -> None:
-    """search_pdb returns records and logs query on success."""
-    mock_api_response = {
+    """search_pdb returns records and logs query on success.
+
+    The RCSB Search API v2 ``result_set`` only contains ``identifier``;
+    ``search_pdb`` enriches the top ``_DESCRIBE_BATCH_LIMIT`` entries by
+    calling the Data API. We mock ``urlopen`` with ``side_effect`` to
+    serve the search response first, then describe responses.
+    """
+    search_api_response = {
         "result_set": [
-            {
-                "identifier": "1CBS",
-                "title": "Cellular retinoic acid binding protein",
-                "exptl": [{"method": "X-RAY DIFFRACTION"}],
-                "rcsb_entry_info": {"resolution_combined": [1.8]},
-                "rcsb_accession_info": {"deposit_date": "1992-01-01"},
-                "entity_poly": {"rcsb_entity_polymer_type": "polypeptide(L)"},
-            }
+            {"identifier": "1CBS"},
+            {"identifier": "2XYZ"},
         ]
     }
-    mock_resp = _mock_urlopen(json.dumps(mock_api_response).encode("utf-8"))
+    describe_1cbs = {
+        "struct": {"title": "Cellular retinoic acid binding protein"},
+        "rcsb_entry_info": {"resolution_combined": [1.8]},
+        "exptl": [{"method": "X-RAY DIFFRACTION"}],
+        "rcsb_accession_info": {"deposit_date": "1992-01-01"},
+        "polymer_entities": [
+            {"rcsb_entity_source_organism": [{"scientific_name": "Homo sapiens"}]}
+        ],
+    }
+    describe_2xyz = {
+        "struct": {"title": "Hypothetical protein XYZ"},
+        "rcsb_entry_info": {"resolution_combined": [2.5]},
+        "exptl": [{"method": "SOLUTION NMR"}],
+        "rcsb_accession_info": {"deposit_date": "2010-05-05"},
+        "polymer_entities": [],
+    }
+
+    search_resp = _mock_urlopen(
+        json.dumps(search_api_response).encode("utf-8")
+    )
+    describe_1cbs_resp = _mock_urlopen(
+        json.dumps(describe_1cbs).encode("utf-8")
+    )
+    describe_2xyz_resp = _mock_urlopen(
+        json.dumps(describe_2xyz).encode("utf-8")
+    )
 
     ctx = _make_ctx(task_id="test_pdb_search")
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    # search_pdb 内部按顺序: 1 次 POST search, 2 次 GET describe (rate-limit sleep 用 mock_time)
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[search_resp, describe_1cbs_resp, describe_2xyz_resp],
+    ), patch("app.skills.builtin.acquisition.pdb.time.sleep") as _sleep:
         args = json.dumps({"term": "retinoic acid", "max_results": 5})
         result = asyncio.run(search_pdb.on_invoke_tool(ctx, args))
 
@@ -73,10 +102,25 @@ def test_search_pdb_success() -> None:
     assert data["source"] == "pdb"
     assert data["term"] == "retinoic acid"
     assert "1CBS" in data["pdb_ids"]
-    assert len(data["records"]) == 1
-    assert data["records"][0]["title"] == "Cellular retinoic acid binding protein"
+    assert len(data["records"]) == 2
+    assert data["enriched_count"] == 2
+    # 第一条记录已补全字段
+    rec0 = data["records"][0]
+    assert rec0["pdb_id"] == "1CBS"
+    assert rec0["title"] == "Cellular retinoic acid binding protein"
+    assert rec0["method"] == "X-RAY DIFFRACTION"
+    assert rec0["resolution"] == 1.8
+    assert rec0["organism"] == "Homo sapiens"
+    assert rec0["deposit_date"] == "1992-01-01"
+    # 第二条记录也已补全
+    rec1 = data["records"][1]
+    assert rec1["pdb_id"] == "2XYZ"
+    assert rec1["title"] == "Hypothetical protein XYZ"
+    assert rec1["method"] == "SOLUTION NMR"
+    # rate-limit 应该被调用过 2 次（每次 describe 前）
+    assert _sleep.call_count == 2
 
-    # log_query should record success
+    # log_query 应记录成功
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
     assert rc.query_log[0]["status"] == "ok"
