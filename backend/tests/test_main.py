@@ -26,6 +26,7 @@ async def test_lifespan_owns_and_always_closes_assistant_stream_hub(
             assert isinstance(hub, AssistantStreamHub)
             assert hub.subscriber_queue_size == 7
             assert hub is not application.state.event_hub
+            assert application.state.task_manager.assistant_stream_hub is hub
             subscription = await hub.subscribe()
             manager_close = application.state.task_manager.close
 

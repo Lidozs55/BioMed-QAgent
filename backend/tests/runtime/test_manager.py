@@ -17,6 +17,7 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantStreamDeltaFrame,
     ConversationCompactedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -39,7 +40,7 @@ from app.domain.contracts import (
 )
 from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
-from app.runtime.hub import EventHub
+from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskRepository
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -3669,6 +3670,50 @@ async def test_execution_activity_is_sequenced_through_manager(tmp_path) -> None
         assert events[2].run_id == accepted.run_id
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_manager_publishes_live_frames_for_exact_execution_identity(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    assistant_stream_hub = AssistantStreamHub()
+    subscription = await assistant_stream_hub.subscribe(task_ids=["task_live"])
+
+    async def run(execution) -> None:
+        await execution.emit_assistant_stream(
+            AssistantStreamDeltaFrame(
+                task_id=execution.task_id,
+                run_id=execution.run_id,
+                stream_id=f"assistant:{execution.run_id}",
+                chunk_index=0,
+                delta="live",
+            )
+        )
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        assistant_stream_hub=assistant_stream_hub,
+    )
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_live"))
+        accepted = await manager.submit_run(
+            "task_live",
+            StartRunRequest(request_id="req_live", input="answer live"),
+        )
+
+        frame = await asyncio.wait_for(subscription.receive(), timeout=1)
+        assert frame.task_id == accepted.task_id
+        assert frame.run_id == accepted.run_id
+        assert frame.stream_id == f"assistant:{accepted.run_id}"
+        await manager.wait_until_idle()
+    finally:
+        await manager.close()
+        await subscription.close()
+        await assistant_stream_hub.close()
 
 
 @pytest.mark.asyncio

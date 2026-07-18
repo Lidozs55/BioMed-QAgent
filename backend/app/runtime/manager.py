@@ -14,6 +14,7 @@ from typing import Literal, Protocol, TypeVar
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     ArtifactProducedPayload,
+    AssistantStreamFrame,
     ConversationCompactedPayload,
     EventEnvelope,
     RunCancelledPayload,
@@ -39,7 +40,7 @@ from app.domain.contracts import (
     generate_task_id,
 )
 from app.domain.contracts.runtime import validate_task_databases
-from app.runtime.hub import EventHub
+from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,10 @@ class RunEventEmitter(Protocol):
     ) -> TaskSnapshot: ...
 
 
+class AssistantStreamEmitter(Protocol):
+    async def __call__(self, frame: AssistantStreamFrame) -> None: ...
+
+
 RunCompactionCommit = Callable[
     [Mapping[str, object], ConversationCompactedPayload],
     Awaitable[bool],
@@ -94,6 +99,10 @@ class RunExecution:
     mode: TaskMode = TaskMode.AGENT
     databases: list[str] = field(default_factory=list)
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
+    _assistant_stream_emitter: AssistantStreamEmitter | None = field(
+        default=None,
+        repr=False,
+    )
     _compaction_committer: RunCompactionCommit | None = field(
         default=None,
         repr=False,
@@ -238,6 +247,22 @@ class RunExecution:
             if self._pending_user_input_request_id == pending_request_id:
                 self._pending_user_input_request_id = None
             raise
+
+    async def emit_assistant_stream(self, frame: AssistantStreamFrame) -> None:
+        """Publish one best-effort, non-durable frame for this exact Run."""
+
+        if frame.task_id != self.task_id or frame.run_id != self.run_id:
+            raise ValueError("assistant stream frame identity does not match execution")
+        if self._assistant_stream_emitter is None:
+            return
+        try:
+            await self._assistant_stream_emitter(frame)
+        except Exception:
+            logger.exception(
+                "assistant stream publish failed for task_id=%s run_id=%s",
+                self.task_id,
+                self.run_id,
+            )
 
     async def commit_compaction(
         self,
@@ -540,6 +565,7 @@ class TaskManager:
         max_queued_runs: int = 100,
         context_factory: RunContextFactory | None = None,
         event_hub: EventHub | None = None,
+        assistant_stream_hub: AssistantStreamHub | None = None,
     ) -> None:
         if max_active_runs < 1:
             raise ValueError("max_active_runs must be positive")
@@ -550,6 +576,7 @@ class TaskManager:
         self.max_active_runs = max_active_runs
         self.max_queued_runs = max_queued_runs
         self.event_hub = event_hub or EventHub()
+        self.assistant_stream_hub = assistant_stream_hub
         if context_factory is None:
             self._context_factory = lambda task_id: RunContext(
                 task_id=task_id,
@@ -1137,6 +1164,11 @@ class TaskManager:
                                 timestamp=timestamp,
                             )
                         )
+                    ),
+                    _assistant_stream_emitter=(
+                        self.assistant_stream_hub.publish
+                        if self.assistant_stream_hub is not None
+                        else None
                     ),
                     _compaction_committer=lambda record, payload: (
                         self._commit_compaction(

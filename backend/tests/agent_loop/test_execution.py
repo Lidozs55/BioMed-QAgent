@@ -13,6 +13,7 @@ import app.pipeline.runner as pipeline_runner_module
 import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents import Agent
+from agents.exceptions import MaxTurnsExceeded
 from agents.items import ModelResponse
 from agents.models.interface import Model
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
@@ -22,6 +23,8 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantStreamDeltaFrame,
+    AssistantStreamEndFrame,
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
@@ -169,7 +172,329 @@ def run_scoped_session(session: object) -> Callable[..., object]:
     return task_session
 
 
+def assistant_stream_delta(
+    execution: RunExecution,
+    *,
+    chunk_index: int,
+    delta: str,
+) -> AssistantStreamDeltaFrame:
+    return AssistantStreamDeltaFrame(
+        task_id=execution.task_id,
+        run_id=execution.run_id,
+        stream_id=f"assistant:{execution.run_id}",
+        chunk_index=chunk_index,
+        delta=delta,
+    )
+
+
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_publishes_atomic_live_chunk_before_blocked_durable_flush(
+) -> None:
+    durable_started = asyncio.Event()
+    release_durable = asyncio.Event()
+    live_frames: list[object] = []
+    durable_payloads: list[object] = []
+
+    async def emit_durable(payload: object) -> None:
+        durable_started.set()
+        await release_durable.wait()
+        durable_payloads.append(payload)
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+
+    execution = RunExecution(
+        task_id="task_live_first",
+        run_id="run_live_first",
+        request_id="request_live_first",
+        input="stream now",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1)
+
+    adding = asyncio.create_task(buffer.add("你好🙂"))
+    await asyncio.wait_for(durable_started.wait(), timeout=1)
+    try:
+        assert live_frames == [
+            assistant_stream_delta(execution, chunk_index=0, delta="你好🙂")
+        ]
+        assert not adding.done()
+    finally:
+        release_durable.set()
+        await adding
+
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="你好🙂",
+            stream_id="assistant:run_live_first",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_batches_whole_unicode_chunks_with_exact_ranges() -> None:
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+
+    async def emit_durable(payload: object) -> None:
+        durable_payloads.append(payload)
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+
+    execution = RunExecution(
+        task_id="task_chunk_ranges",
+        run_id="run_chunk_ranges",
+        request_id="request_chunk_ranges",
+        input="preserve unicode",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=8)
+
+    await buffer.add("中")
+    await buffer.add("🙂")
+    await buffer.add("ab")
+    await buffer.end("stop")
+
+    assert live_frames == [
+        assistant_stream_delta(execution, chunk_index=0, delta="中"),
+        assistant_stream_delta(execution, chunk_index=1, delta="🙂"),
+        assistant_stream_delta(execution, chunk_index=2, delta="ab"),
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_chunk_ranges",
+            last_chunk_index=2,
+            finish_reason="stop",
+        ),
+    ]
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="中🙂",
+            stream_id="assistant:run_chunk_ranges",
+            from_chunk_index=0,
+            through_chunk_index=1,
+        ),
+        AssistantDeltaPayload(
+            delta="ab",
+            stream_id="assistant:run_chunk_ranges",
+            from_chunk_index=2,
+            through_chunk_index=2,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_never_splits_one_oversized_upstream_chunk() -> None:
+    durable_payloads: list[object] = []
+    execution = RunExecution(
+        task_id="task_oversized_chunk",
+        run_id="run_oversized_chunk",
+        request_id="request_oversized_chunk",
+        input="keep atomic",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=4)
+
+    await buffer.add("🙂🙂")
+
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="🙂🙂",
+            stream_id="assistant:run_oversized_chunk",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+
+
+async def _append_async(items: list[object], item: object) -> None:
+    items.append(item)
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_live_publish_failure_keeps_durable_text_complete(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    durable_payloads: list[object] = []
+
+    async def fail_live(frame: object) -> None:
+        raise RuntimeError("live hub unavailable")
+
+    execution = RunExecution(
+        task_id="task_live_failure",
+        run_id="run_live_failure",
+        request_id="request_live_failure",
+        input="keep durable",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=fail_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    with caplog.at_level("ERROR", logger="app.runtime.manager"):
+        await buffer.add("complete ")
+        await buffer.add("中文🙂")
+        await buffer.end("stop")
+
+    assert "assistant stream publish failed" in caplog.text
+    assert "".join(payload.delta for payload in durable_payloads) == "complete 中文🙂"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_does_not_swallow_live_publish_cancellation() -> None:
+    durable_payloads: list[object] = []
+
+    async def cancel_live(frame: object) -> None:
+        raise asyncio.CancelledError
+
+    execution = RunExecution(
+        task_id="task_live_cancel",
+        run_id="run_live_cancel",
+        request_id="request_live_cancel",
+        input="cancel",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=cancel_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    with pytest.raises(asyncio.CancelledError):
+        await buffer.add("not buffered")
+
+    assert durable_payloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "finish_reason", "expected_exception"),
+    [
+        ("finish", "stop", None),
+        ("tool", "tool_call", None),
+        ("exhaustion", "stop", None),
+        ("error", "error", RuntimeError),
+        ("cancel", "cancelled", asyncio.CancelledError),
+        ("max_turns", "max_turns", MaxTurnsExceeded),
+    ],
+)
+async def test_consume_events_ends_each_active_segment_once_at_boundaries(
+    boundary: str,
+    finish_reason: str,
+    expected_exception: type[BaseException] | None,
+) -> None:
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = RunExecution(
+        task_id=f"task_{boundary}",
+        run_id=f"run_{boundary}",
+        request_id=f"request_{boundary}",
+        input="boundary",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    class FakeResult:
+        async def stream_events(self):
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="text"))]
+                )
+            )
+            if boundary == "finish":
+                yield RawResponsesStreamEvent(
+                    data=SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content=None),
+                                finish_reason="stop",
+                            )
+                        ]
+                    )
+                )
+            elif boundary == "tool":
+                yield RunItemStreamEvent(
+                    name="tool_called",
+                    item=SimpleNamespace(
+                        raw_item=SimpleNamespace(call_id="call_boundary", name="search")
+                    ),
+                )
+            elif boundary == "error":
+                raise RuntimeError("stream failed")
+            elif boundary == "cancel":
+                raise asyncio.CancelledError
+            elif boundary == "max_turns":
+                raise MaxTurnsExceeded("maximum turns exceeded")
+
+    consume = runner_module.AgentRunExecutor._consume_events(
+        execution,
+        FakeResult(),
+        buffer,
+    )
+    if expected_exception is None:
+        await consume
+    else:
+        with pytest.raises(expected_exception):
+            await consume
+
+    ends = [frame for frame in live_frames if isinstance(frame, AssistantStreamEndFrame)]
+    assert ends == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id=f"assistant:{execution.run_id}",
+            last_chunk_index=0,
+            finish_reason=finish_reason,
+        )
+    ]
+    assert [
+        payload
+        for payload in durable_payloads
+        if isinstance(payload, AssistantDeltaPayload)
+    ] == [
+        AssistantDeltaPayload(
+            delta="text",
+            stream_id=f"assistant:{execution.run_id}",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_later_text_starts_new_segment_with_same_stream_and_next_index() -> None:
+    live_frames: list[object] = []
+    execution = RunExecution(
+        task_id="task_segments",
+        run_id="run_segments",
+        request_id="request_segments",
+        input="segments",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async([], payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    await buffer.add("before tool")
+    await buffer.end("tool_call")
+    await buffer.end("tool_call")
+    await buffer.add("after tool")
+    await buffer.end("stop")
+
+    assert [frame.chunk_index for frame in live_frames if isinstance(frame, AssistantStreamDeltaFrame)] == [0, 1]
+    assert [frame.last_chunk_index for frame in live_frames if isinstance(frame, AssistantStreamEndFrame)] == [0, 1]
+    assert {frame.stream_id for frame in live_frames} == {"assistant:run_segments"}
 
 
 @pytest.mark.asyncio
@@ -650,14 +975,24 @@ async def test_executor_flushes_text_after_100ms_while_stream_is_idle(
 
     assert runner_module.ASSISTANT_FLUSH_INTERVAL_SECONDS == 0.1
     assert flushed_before_second is True
-    assert (
-        "".join(
-            payload.delta
-            for payload in emitted
-            if isinstance(payload, AssistantDeltaPayload)
-        )
-        == "firstsecond"
-    )
+    assert [
+        payload
+        for payload in emitted
+        if isinstance(payload, AssistantDeltaPayload)
+    ] == [
+        AssistantDeltaPayload(
+            delta="first",
+            stream_id="assistant:run_timed_text",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        ),
+        AssistantDeltaPayload(
+            delta="second",
+            stream_id="assistant:run_timed_text",
+            from_chunk_index=1,
+            through_chunk_index=1,
+        ),
+    ]
 
 
 @pytest.mark.asyncio

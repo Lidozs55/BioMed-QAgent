@@ -73,6 +73,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,
+            assistant_stream_hub=assistant_stream_hub,
         )
         application.state.sync_executor = sync_executor
         application.state.storage_executor = storage_executor
