@@ -123,10 +123,11 @@ export function AgentProgress({ task }: AgentProgressProps) {
   const status = task.summary.status;
   const meta = TASK_STATUS_META[status];
   const tool = activeTool(task);
+  const lastRunId = task.runOrder[task.runOrder.length - 1];
   const run = task.summary.active_run_id
     ? task.runsById[task.summary.active_run_id]
-    : task.runOrder.length > 0
-      ? task.runsById[task.runOrder.length - 1]
+    : lastRunId !== undefined
+      ? task.runsById[lastRunId]
       : undefined;
   const statusDescription: Record<typeof status, string> = {
     queued: "等待可用执行槽",

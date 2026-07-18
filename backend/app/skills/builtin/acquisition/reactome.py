@@ -244,11 +244,11 @@ def get_pathway(
                 name = str(raw_name)
             record = {
                 "pathway_id": data.get("stId", pathway_id),
-                "name": name,
+                "name": _strip_html(name),
                 "species": data.get("speciesName", ""),
                 "has_diagram": data.get("hasDiagram", False),
                 "url": f"{_REACTOME_PAGE_BASE}/{data.get('stId', pathway_id)}",
-                "summation": data.get("summation", ""),
+                "summation": _strip_html(data.get("summation", "")),
                 "release_date": data.get("releaseDate", ""),
             }
             run_ctx.log_query(pathway_id, "reactome", "ok", 1)

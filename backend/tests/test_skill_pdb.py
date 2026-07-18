@@ -90,11 +90,12 @@ def test_search_pdb_success() -> None:
     )
 
     ctx = _make_ctx(task_id="test_pdb_search")
-    # search_pdb 内部按顺序: 1 次 POST search, 2 次 GET describe (rate-limit sleep 用 mock_time)
+    # search_pdb 内部按顺序: 1 次 POST search, 2 次 GET describe.
+    # Rate limiting is handled inside _get_json via _rate_limit() (mocked by conftest).
     with patch(
         "urllib.request.urlopen",
         side_effect=[search_resp, describe_1cbs_resp, describe_2xyz_resp],
-    ), patch("app.skills.builtin.acquisition.pdb.time.sleep") as _sleep:
+    ):
         args = json.dumps({"term": "retinoic acid", "max_results": 5})
         result = asyncio.run(search_pdb.on_invoke_tool(ctx, args))
 
@@ -117,8 +118,6 @@ def test_search_pdb_success() -> None:
     assert rec1["pdb_id"] == "2XYZ"
     assert rec1["title"] == "Hypothetical protein XYZ"
     assert rec1["method"] == "SOLUTION NMR"
-    # rate-limit 应该被调用过 2 次（每次 describe 前）
-    assert _sleep.call_count == 2
 
     # log_query 应记录成功
     rc: RunContext = ctx.context

@@ -8,6 +8,7 @@ from app.domain.contracts import ParsedDataset, SourceAsset, StageName
 from app.pipeline.processing.geo_tximport import (
     _OUTPUT_COLUMNS,
     GeoSampleMetadata,
+    parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )
@@ -58,6 +59,35 @@ def _build_minimal_parsed_dataset(
     )
 
 
+def _recover_samples_from_series_matrix(
+    source_asset: SourceAsset,
+    ctx: StageContext,
+) -> list[GeoSampleMetadata]:
+    """Try to parse the downloaded series_matrix file for sample metadata.
+
+    Returns an empty list when the downloaded file is not a series_matrix
+    (e.g. fixture mode) or when parsing fails. The caller (``run_processing``)
+    uses the result to populate ``sample_metadata.csv`` even when the
+    expression-matrix block is empty.
+    """
+    source_path = ctx.workdir.root / source_asset.relative_path
+    if not source_path.is_file():
+        logger.warning("processing: source asset not found at %s", source_path)
+        return []
+    try:
+        compressed = source_path.read_bytes()
+    except OSError as exc:
+        logger.warning("processing: cannot read source asset: %s", exc)
+        return []
+    try:
+        return parse_geo_series_matrix_samples(compressed)
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "processing: series_matrix sample recovery failed: %s", exc
+        )
+        return []
+
+
 def run_processing(
     ctx: StageContext,
     source_asset: SourceAsset,
@@ -67,9 +97,11 @@ def run_processing(
 
     In fixture mode, reads the fixture SOFT file for sample metadata. In live
     mode with arbitrary GEO series, the tximport counts format may not be
-    available — in that case we produce a minimal schema-only ParsedDataset
-    so the pipeline still emits a valid artifact package (literature, dataset
-    catalog, source list) without main_data rows.
+    available — in that case we attempt to recover per-sample metadata from
+    the downloaded ``series_matrix.txt.gz`` so ``sample_metadata.csv`` is
+    still populated. ``main_data.csv`` will be schema-only (0 rows) when the
+    series_matrix's expression-matrix block is empty, which is the norm for
+    modern snRNAseq/RNA-seq series.
     """
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset
@@ -91,13 +123,27 @@ def run_processing(
         )
     except (ValueError, FileNotFoundError, OSError) as exc:
         # Live mode with a non-tximport file (e.g. series_matrix.txt.gz):
-        # produce a minimal valid ParsedDataset so downstream stages can
-        # still emit literature/dataset_catalog/source_list artifacts.
+        # try to recover per-sample metadata so sample_metadata.csv still has
+        # real data, even though main_data.csv will be schema-only.
         logger.warning(
-            "processing: tximport parse failed (%s); producing minimal dataset",
+            "processing: tximport parse failed (%s); attempting series_matrix "
+            "sample recovery",
             exc,
         )
+        samples = _recover_samples_from_series_matrix(source_asset, ctx)
         parsed = _build_minimal_parsed_dataset(source_asset, dataset_id, ctx)
+        if samples:
+            logger.info(
+                "processing: recovered %d samples from series_matrix; "
+                "main_data.csv will be schema-only (0 rows) because the "
+                "series_matrix expression block is empty",
+                len(samples),
+            )
+        else:
+            logger.warning(
+                "processing: series_matrix recovery yielded no samples; "
+                "main_data.csv and sample_metadata.csv will both be schema-only"
+            )
 
     # Surface processing progress: "Processing: cleaned N rows".
     # See docs/REVIEW_2026-07-18.md §4.

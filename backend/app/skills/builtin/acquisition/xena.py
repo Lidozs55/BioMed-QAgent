@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import shutil
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -26,7 +27,25 @@ logger = logging.getLogger(__name__)
 
 _XENA_HUB_BASE = "https://toil-xena-hub.s3.us-east-1.amazonaws.com"
 _XENA_DOWNLOAD_BASE = f"{_XENA_HUB_BASE}/download"
-_USER_AGENT = "BioMed-QAgent/0.1 (biomed-qagent@example.com)"
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
+_RATE_LIMIT_SECONDS = 2.0
+
+_last_request_ts: float = 0.0
+
+
+def _rate_limit() -> None:
+    """Sleep so that two consecutive Xena API calls are at least 2s apart."""
+    global _last_request_ts
+    now = time.monotonic()
+    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_request_ts = time.monotonic()
 
 # Known dataset type patterns for categorization
 _DATASET_TYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -100,6 +119,7 @@ def _fetch_hub_index() -> list[dict[str, Any]]:
             params["continuation-token"] = continuation_token
         list_url = f"{_XENA_HUB_BASE}/?{urllib.parse.urlencode(params)}"
 
+        _rate_limit()
         request = urllib.request.Request(
             list_url,
             headers={"User-Agent": _USER_AGENT},
@@ -174,6 +194,7 @@ def _match_term(record: dict[str, Any], term: str) -> bool:
 
 def _download(url: str, dest: Path) -> None:
     """Download a file to dest via urllib, using a .part temp file."""
+    _rate_limit()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     request = urllib.request.Request(

@@ -491,8 +491,10 @@ def download_gdc(
     # ------------------------------------------------------------------
     format_hint = f"gdc_{safe_dt.lower()}"
 
-    if local_files:
-        run_ctx.add_raw_asset(local_files[0])
+    # Register only the downloaded TSV data files (local_files[1:]); the
+    # manifest JSON at local_files[0] is metadata, not raw data for processing.
+    for data_file in local_files[1:]:
+        run_ctx.add_raw_asset(data_file)
 
     retrieved_at = datetime.now(UTC)
     source_record = SourceRecord(
