@@ -65,8 +65,8 @@
 │   create_import_task:                                          │
 │     - sanitize filenames                                       │
 │     - enforce size/count limits                                │
-│     - TaskManager.create_task(mode=IMPORT)                     │
-│     - stream-upload files to task workdir/source_assets/        │
+│     - stage complete uploads under tasks/.uploads/              │
+│     - publish source_assets before TaskManager queues the Run   │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ durable task queue
                            ▼
@@ -444,14 +444,22 @@ inherited unchanged.
 
 **Behavior**:
 1. Sanitize and deduplicate filenames.
-2. Compose a task input string: `<user_note>\n\n[uploaded_files (N): a.csv, b.json]`
+2. Stream every upload into a request-scoped directory under
+   `tasks/.uploads/` in 64 KB chunks. Oversized or partial uploads are
+   cleaned before any durable task is created.
+3. Compose a task input string: `<user_note>\n\n[uploaded_files (N): a.csv, b.json]`
    (or `Import N file(s) into local cache: a.csv, b.json` if no user note).
-3. `TaskManager.create_task(StartTaskRequest(mode=TaskMode.IMPORT, ...))` —
-   the task enters the durable queue.
-4. Stream each upload to `task_workdir.source_asset_file(name)` in 64 KB
-   chunks. Files larger than the per-file limit mid-stream are unlinked
-   and the request returns 413.
+4. Resolve the available `TaskManager`, then call
+   `create_task(..., prepare_task=publish_source_assets)`. The manager saves
+   the initial snapshot, atomically moves the staged files into the accepted
+   task's `source_assets/`, and only then appends `run_queued` and inserts the
+   Run into the execution queue.
 5. Return `TaskRunAccepted` (202) with `task_id`, `run_id`, `request_id`.
+
+The shared `.uploads` parent lifecycle is synchronized only while creating or
+removing request directories; file streaming remains concurrent. Route cleanup
+closes all `UploadFile` objects and removes request staging on validation,
+queue-full, runtime-unavailable, publication, and I/O failures.
 
 **Why the IMPORT agent discovers files itself** (rather than receiving the
 file list in the task input): the `source_assets/` directory is the
@@ -475,14 +483,16 @@ via the main Agent's skill registry.
 | `runtime/contracts.ts`                     | `TaskMode = "agent" \| "fixture" \| "import"`         |
 | `hooks/useAPI.ts`                          | `startImportTask({ files, note })` — FormData POST    |
 | `runtime/controller.ts`                    | `startImportTask(files, note)` — reuses task handoff  |
-| `components/AgentComposer.tsx`             | File picker (hidden `<input type="file" multiple>`), chip display, `onSubmitFiles` prop |
+| `components/AgentComposer.tsx`             | File picker, shadcn `Attachment` display, limit validation, retry-safe async submission |
 | `components/ChatPanel.tsx`                 | `uploadFiles` prop + `submitFiles()` handler          |
 | `App.tsx`                                  | Wires `controller.startImportTask` to `ChatPanel`     |
 
-The upload UX is intentionally minimal in this phase: the user picks
-files via a dropdown menu trigger, the files appear as removable chips
-in the composer, and pressing Enter (or clicking Send) starts the IMPORT
-task. A dedicated import page is a future UX iteration.
+The upload UX is intentionally minimal in this phase: the user picks files via
+a dropdown menu trigger, the files appear as removable shadcn attachments in
+the composer, and pressing Enter (or clicking Send) starts the IMPORT task.
+Rejected uploads preserve the note and attachments for retry; selection is
+locked while an upload is pending. A dedicated import page is a future UX
+iteration.
 
 ---
 
@@ -495,7 +505,7 @@ Tests live in [backend/tests/](../backend/tests/):
 | `test_cache_store.py` (20 tests)           | commit/list/search/get/describe, namespace + dataset_id validation, column validation, empty-rows rejection, recommit overwrite, UTF-8 BOM read-back, uninitialized singleton, keywords persistence (D2), FTS5 keyword/partial/CJK matching, FTS5 index upsert on recommit |
 | `test_sandbox.py` (35 tests)              | AST whitelist (allow + deny), forbidden calls, dunder access, subprocess execution (read_input/write_output/read_csv/read_csv/read_json/write_csv/write_json), open() guard, import os guard, runtime error surfacing, empty output, SandboxResult dataclass |
 | `test_cache_tools.py` (6 tests)            | commit_to_cache writes + returns status, rejects extra columns, rejects empty CSV, rejects invalid dataset_id, returns error when store uninitialized, records source_files |
-| `api/test_import_api.py` (6 tests)         | 202 + file persistence, 422 no files, 422 too many, 413 oversized, 422 duplicate filenames, mode=import + composed input |
+| `api/test_import_api.py`                   | 202 + pre-execution file visibility, validation without task creation, per-file/total-size limits, staging cleanup, concurrent upload-root lifecycle, queue-full/runtime-unavailable cleanup, mode=import + composed input |
 | `test_pdf_tools.py` (7 tests)              | `extract_pdf` missing-file error, path traversal rejection, default full-document extraction, chunked first/middle pages, `end_page` clamp to total, `start_page<1` normalization |
 | `agent_loop/test_import_agent.py` (12 tests)| build_import_agent tool set (7 tools), instructions document 22-col schema, instructions list workflow steps, instructions document PDF chunked extraction (D3), instructions document schema semantic generalization (D10), max_turns bounds, ModeDispatch routes IMPORT, ImportRunExecutor subclasses AgentRunExecutor, e2e CSV→clean→commit→verify, e2e JSON→clean→commit→verify, e2e MD table→clean→commit→verify, e2e TSV→clean→commit→verify |
 

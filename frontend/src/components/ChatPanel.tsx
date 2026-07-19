@@ -204,6 +204,7 @@ export function ChatPanel({
       }
     } catch (error) {
       setDraftError(error instanceof Error ? error.message : "文件导入失败");
+      throw error;
     } finally {
       setImportPending(false);
     }
@@ -292,9 +293,10 @@ export function ChatPanel({
             onDataSourceChange={() => setDraftError(null)}
             onSubmitFiles={
               uploadFiles !== undefined
-                ? (files, note) => void submitFiles(files, note)
+                ? (files, note) => submitFiles(files, note)
                 : undefined
             }
+            onAttachmentError={setDraftError}
           />
           {(draftError || (draftInput.trim() && dataSourceSelectionMissing)) && (
             <Alert variant="destructive" className="mt-2">

@@ -85,6 +85,7 @@ RunCompactionCommit = Callable[
 RunCompletionCommit = Callable[[], Awaitable[list[EventEnvelope]]]
 RunCompletionAbort = Callable[[], Awaitable[None]]
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
+PrepareTask = Callable[[str], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -683,7 +684,12 @@ class TaskManager:
                     )
                 )
 
-    async def create_task(self, request: StartTaskRequest) -> TaskRunAccepted:
+    async def create_task(
+        self,
+        request: StartTaskRequest,
+        *,
+        prepare_task: PrepareTask | None = None,
+    ) -> TaskRunAccepted:
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
         async with self._admission_lock:
@@ -718,6 +724,7 @@ class TaskManager:
                     snapshot,
                     accepted,
                     request.input,
+                    prepare_task,
                 )
             )
 
@@ -769,10 +776,13 @@ class TaskManager:
         snapshot: TaskSnapshot,
         accepted: TaskRunAccepted,
         input_value: str,
+        prepare_task: PrepareTask | None,
     ) -> TaskRunAccepted:
         try:
             await self.repository.save_snapshot(snapshot)
-        except Exception as error:
+            if prepare_task is not None:
+                await prepare_task(snapshot.task.task_id)
+        except BaseException as error:
             try:
                 await self.repository.delete_task(snapshot.task.task_id)
             except TaskNotFoundError:

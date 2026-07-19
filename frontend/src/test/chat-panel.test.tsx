@@ -90,6 +90,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function chooseFiles(container: HTMLElement, files: File[]): void {
+  fireEvent.click(screen.getByRole("button", { name: "添加附件" }));
+  fireEvent.click(screen.getByText("上传文件到本地缓存"));
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  if (input === null) throw new Error("File picker was not rendered");
+  fireEvent.change(input, { target: { files } });
+}
+
 describe("ChatPanel", () => {
   beforeAll(() => {
     window.matchMedia = () => ({
@@ -134,6 +142,167 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
     expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
+  });
+
+  it("renders attachments, removes one, and submits the remaining file with its note", async () => {
+    const first = new File(["first"], "first.csv", { type: "text/csv" });
+    const second = new File(["second"], "second.csv", { type: "text/csv" });
+    const uploadFiles = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={uploadFiles} />,
+    );
+
+    chooseFiles(container, [first, second]);
+
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(2);
+    expect(screen.getByText("first.csv")).toBeVisible();
+    expect(screen.getByText("5 B")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "移除 first.csv" }));
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(1);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "研究目标" }), {
+      target: { value: "keep this sample" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    await waitFor(() =>
+      expect(uploadFiles).toHaveBeenCalledWith([second], "keep this sample"),
+    );
+  });
+
+  it("rejects selections over the ten-file limit without discarding valid attachments", () => {
+    const initial = new File(["initial"], "initial.csv");
+    const excessive = Array.from(
+      { length: 10 },
+      (_, index) => new File([String(index)], `extra-${index}.csv`),
+    );
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={vi.fn()} />,
+    );
+
+    chooseFiles(container, [initial]);
+    chooseFiles(container, excessive);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("最多上传 10 个文件");
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(1);
+    expect(screen.getByText("initial.csv")).toBeVisible();
+  });
+
+  it("rejects a file larger than five hundred MiB", () => {
+    const tooLarge = new File(["x"], "too-large.csv");
+    Object.defineProperty(tooLarge, "size", { value: 500 * 1024 * 1024 + 1 });
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={vi.fn()} />,
+    );
+
+    chooseFiles(container, [tooLarge]);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "单个文件不能超过 500 MiB",
+    );
+    expect(container.querySelector('[data-slot="attachment"]')).toBeNull();
+  });
+
+  it("rejects selections whose combined size exceeds two GiB", () => {
+    const files = Array.from({ length: 5 }, (_, index) => {
+      const file = new File(["x"], `large-${index}.csv`);
+      Object.defineProperty(file, "size", { value: 450 * 1024 * 1024 });
+      return file;
+    });
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={vi.fn()} />,
+    );
+
+    chooseFiles(container, files);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "单次上传总大小不能超过 2 GiB",
+    );
+    expect(container.querySelector('[data-slot="attachment"]')).toBeNull();
+  });
+
+  it("rejects duplicate sanitized filenames without adding the second file", () => {
+    const first = new File(["first"], "result?.csv");
+    const duplicate = new File(["second"], "result_.csv");
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={vi.fn()} />,
+    );
+
+    chooseFiles(container, [first]);
+    chooseFiles(container, [duplicate]);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("文件名重复");
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(1);
+    expect(screen.getByText("result?.csv")).toBeVisible();
+  });
+
+  it("retains selected files and note after a rejected import", async () => {
+    const file = new File(["rows"], "samples.csv");
+    const uploadFiles = vi.fn().mockRejectedValue(new Error("上传失败"));
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={uploadFiles} />,
+    );
+
+    chooseFiles(container, [file]);
+    const input = screen.getByRole("textbox", { name: "研究目标" });
+    fireEvent.change(input, { target: { value: "retry note" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("上传失败"),
+    );
+    expect(input).toHaveValue("retry note");
+    expect(container.querySelector('[data-slot="attachment"]')).toHaveTextContent(
+      "samples.csv",
+    );
+  });
+
+  it("clears selected files and note after a successful import", async () => {
+    const file = new File(["rows"], "samples.csv");
+    const uploadFiles = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={uploadFiles} />,
+    );
+
+    chooseFiles(container, [file]);
+    const input = screen.getByRole("textbox", { name: "研究目标" });
+    fireEvent.change(input, { target: { value: "successful note" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(container.querySelector('[data-slot="attachment"]')).toBeNull(),
+    );
+    expect(input).toHaveValue("");
+  });
+
+  it("blocks new attachment selections while an import upload is unresolved", async () => {
+    const uploaded = new File(["uploaded"], "uploaded.csv");
+    const blocked = new File(["blocked"], "blocked.csv");
+    const upload = deferred<void>();
+    const uploadFiles = vi.fn().mockReturnValue(upload.promise);
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={uploadFiles} />,
+    );
+
+    chooseFiles(container, [uploaded]);
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledWith([uploaded], ""));
+    expect(screen.getByRole("button", { name: "添加附件" })).toBeDisabled();
+
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("File picker was not rendered");
+    fireEvent.change(input, { target: { files: [blocked] } });
+
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(1);
+    expect(screen.queryByText("blocked.csv")).not.toBeInTheDocument();
+
+    await act(async () => upload.resolve());
+    await waitFor(() =>
+      expect(container.querySelector('[data-slot="attachment"]')).toBeNull(),
+    );
+    expect(uploadFiles).toHaveBeenCalledTimes(1);
   });
 
   it("blocks submission and explains that at least one data source is required", () => {

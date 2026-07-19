@@ -12,6 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import tempfile
+import threading
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -240,6 +244,7 @@ _IMPORT_MAX_FILES = 10
 _IMPORT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 #: 文件名安全字符集：字母数字、``-``、``_``、``.``。
 _IMPORT_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
+_IMPORT_UPLOADS_ROOT_LOCK = threading.Lock()
 
 
 def _sanitize_upload_filename(raw: str | None) -> str:
@@ -263,7 +268,8 @@ def _sanitize_upload_filename(raw: str | None) -> str:
     response_model=TaskRunAccepted,
 )
 async def create_import_task(
-    manager: TaskManagerDep,
+    http_request: Request,
+    repository: TaskRepositoryDep,
     request_id: Annotated[str, Form(min_length=1)],
     input: Annotated[str, Form()] = "",
     files: Annotated[list[UploadFile], File()] = (),
@@ -276,99 +282,108 @@ async def create_import_task(
     research tasks via ``search_local_cache`` / ``get_cache_dataset``.
     """
 
-    if not files:
-        raise HTTPException(status_code=422, detail="At least one file is required")
-    if len(files) > _IMPORT_MAX_FILES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Too many files (max {_IMPORT_MAX_FILES})",
-        )
-
-    sanitized_names: list[str] = []
-    seen_names: set[str] = set()
-    for upload in files:
-        name = _sanitize_upload_filename(upload.filename)
-        if name in seen_names:
+    uploads_root = repository.tasks_dir / ".uploads"
+    staging_dir: Path | None = None
+    try:
+        if not files:
+            raise HTTPException(status_code=422, detail="At least one file is required")
+        if len(files) > _IMPORT_MAX_FILES:
             raise HTTPException(
                 status_code=422,
-                detail=f"Duplicate uploaded filename: {name}",
+                detail=f"Too many files (max {_IMPORT_MAX_FILES})",
             )
-        seen_names.add(name)
-        sanitized_names.append(name)
 
-    # 构造 IMPORT 任务的输入文本。文件列表由 IMPORT agent 通过
-    # ``list_files('source_assets')`` 自行发现，输入文本仅用于任务标题
-    # 和给 LLM 的初始提示。
-    user_note = input.strip()
-    file_list_str = ", ".join(sanitized_names)
-    if user_note:
-        composed_input = (
-            f"{user_note}\n\n"
-            f"[uploaded_files ({len(sanitized_names)}): {file_list_str}]"
+        sanitized_names: list[str] = []
+        seen_names: set[str] = set()
+        for upload in files:
+            name = _sanitize_upload_filename(upload.filename)
+            if name in seen_names:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Duplicate uploaded filename: {name}",
+                )
+            seen_names.add(name)
+            sanitized_names.append(name)
+
+        with _IMPORT_UPLOADS_ROOT_LOCK:
+            uploads_root.mkdir(parents=True, exist_ok=True)
+            staging_dir = Path(tempfile.mkdtemp(prefix="import-", dir=uploads_root))
+        grand_total = 0
+        for upload, name in zip(files, sanitized_names, strict=True):
+            staged_file = staging_dir / name
+            with staged_file.open("wb") as output:
+                total = 0
+                while True:
+                    chunk = await upload.read(64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _IMPORT_MAX_FILE_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"File {name} exceeds max size "
+                                f"({_IMPORT_MAX_FILE_BYTES} bytes)"
+                            ),
+                        )
+                    grand_total += len(chunk)
+                    if grand_total > _IMPORT_MAX_TOTAL_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                "Total upload size exceeds limit "
+                                f"({_IMPORT_MAX_TOTAL_BYTES} bytes)"
+                            ),
+                        )
+                    output.write(chunk)
+
+        # 构造 IMPORT 任务的输入文本。文件列表由 IMPORT agent 通过
+        # ``list_files('source_assets')`` 自行发现，输入文本仅用于任务标题
+        # 和给 LLM 的初始提示。
+        user_note = input.strip()
+        file_list_str = ", ".join(sanitized_names)
+        if user_note:
+            composed_input = (
+                f"{user_note}\n\n"
+                f"[uploaded_files ({len(sanitized_names)}): {file_list_str}]"
+            )
+        else:
+            composed_input = (
+                f"Import {len(sanitized_names)} file(s) into local cache: "
+                f"{file_list_str}"
+            )
+
+        request = StartTaskRequest(
+            request_id=request_id.strip(),
+            input=composed_input,
+            mode=TaskMode.IMPORT,
         )
-    else:
-        composed_input = (
-            f"Import {len(sanitized_names)} file(s) into local cache: "
-            f"{file_list_str}"
-        )
+        manager = get_task_manager(http_request)
 
-    request = StartTaskRequest(
-        request_id=request_id.strip(),
-        input=composed_input,
-        mode=TaskMode.IMPORT,
-    )
+        async def prepare_task(task_id: str) -> None:
+            workdir = create_task_workdir(task_id, base_dir=str(repository.tasks_dir))
+            for name in sanitized_names:
+                (staging_dir / name).replace(workdir.source_asset_file(name))
 
-    try:
-        accepted = await manager.create_task(request)
-    except RunQueueFullError as error:
-        raise HTTPException(status_code=429, detail="Run queue is full") from error
-    except RuntimeError as error:
-        if str(error) == "task manager is not running":
-            raise HTTPException(
-                status_code=503,
-                detail="Task runtime is unavailable",
-            ) from error
-        raise
-
-    # 文件必须在 IMPORT agent 启动并调用 ``list_files('source_assets')``
-    # 之前写入。``manager.create_task`` 返回时任务已入队但 runner 尚未
-    # 真正启动 SDK Agent；写入是同步 I/O，发生在下一个事件循环让出之前。
-    workdir = create_task_workdir(accepted.task_id)
-    grand_total = 0
-    for upload, name in zip(files, sanitized_names, strict=True):
-        target = workdir.source_asset_file(name)
-        # 流式写入避免一次性把整个文件读入内存。
-        with target.open("wb") as out:
-            total = 0
-            while True:
-                chunk = await upload.read(64 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                grand_total += len(chunk)
-                if total > _IMPORT_MAX_FILE_BYTES:
-                    out.close()
-                    target.unlink(missing_ok=True)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=(
-                            f"File {name} exceeds max size "
-                            f"({_IMPORT_MAX_FILE_BYTES} bytes)"
-                        ),
-                    )
-                if grand_total > _IMPORT_MAX_TOTAL_BYTES:
-                    out.close()
-                    target.unlink(missing_ok=True)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=(
-                            f"Total upload size exceeds limit "
-                            f"({_IMPORT_MAX_TOTAL_BYTES} bytes)"
-                        ),
-                    )
-                out.write(chunk)
-
-    return accepted
+        try:
+            return await manager.create_task(request, prepare_task=prepare_task)
+        except RunQueueFullError as error:
+            raise HTTPException(status_code=429, detail="Run queue is full") from error
+        except RuntimeError as error:
+            if str(error) == "task manager is not running":
+                raise HTTPException(
+                    status_code=503,
+                    detail="Task runtime is unavailable",
+                ) from error
+            raise
+    finally:
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        with _IMPORT_UPLOADS_ROOT_LOCK, suppress(OSError):
+            uploads_root.rmdir()
+        for upload in files:
+            with suppress(Exception):
+                await upload.close()
 
 
 # ---------------------------------------------------------------------------
