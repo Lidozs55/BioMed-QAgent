@@ -52,6 +52,7 @@ export interface ProjectedMessage {
 
 export type ActivityKind =
   | "tool"
+  | "reasoning"
   | "stage"
   | "progress"
   | "warning"

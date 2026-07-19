@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
-  RobotIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 
@@ -113,6 +112,7 @@ export function ChatPanel({
     activeTaskId === null ? null : continuationErrors[activeTaskId] ?? null;
   const currentDraftKey = draftKey(draftInput, selectedDatabases);
   const isSubmitting = submittingDraftKey === currentDraftKey;
+  const dataSourceSelectionMissing = selectedDatabases.length === 0;
   const continuationPending =
     activeTaskId !== null && continuationPendingByTask[activeTaskId] === true;
   const olderMessagesPending =
@@ -147,6 +147,13 @@ export function ChatPanel({
       activeTask.summary.status === "finalizing") &&
     activeRunId !== null &&
     !activeRunHasAssistantMessage;
+  const activeRunError = useMemo(() => {
+    if (activeTask === undefined) return null;
+    const latestRunId = activeTask.runOrder[activeTask.runOrder.length - 1];
+    return latestRunId === undefined
+      ? null
+      : activeTask.runsById[latestRunId]?.error ?? null;
+  }, [activeTask]);
 
   const continuationDisabledReason = useMemo(() => {
     if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
@@ -159,6 +166,10 @@ export function ChatPanel({
   const submitTask = async (mode: StartTaskInput["mode"] = "agent") => {
     const input = draftInput.trim();
     if (!input || isSubmitting) return;
+    if (selectedDatabases.length === 0) {
+      setDraftError("请至少选择一个数据源");
+      return;
+    }
     const submissionKey = draftKey(input, selectedDatabases);
     setDraftError(null);
     setSubmittingDraftKey(submissionKey);
@@ -253,12 +264,17 @@ export function ChatPanel({
             ariaLabel="研究目标"
             sendAriaLabel="开始研究"
             pending={isSubmitting}
-            sendDisabled={!draftInput.trim()}
+            sendDisabled={!draftInput.trim() || dataSourceSelectionMissing}
             showDataSources
             onDataSourceChange={() => setDraftError(null)}
           />
-          {draftError && (
-            <p role="alert" className="mt-2 px-2 text-sm text-destructive">{draftError}</p>
+          {(draftError || (draftInput.trim() && dataSourceSelectionMissing)) && (
+            <Alert variant="destructive" className="mt-2">
+              <WarningCircleIcon />
+              <AlertDescription>
+                {draftError ?? "请至少选择一个数据源"}
+              </AlertDescription>
+            </Alert>
           )}
           {!connected && (
             <p className="mt-3 text-center text-xs text-muted-foreground">未连接到后端</p>
@@ -336,9 +352,6 @@ export function ChatPanel({
                       </Message>
                     ) : (
                       <Message data-message-role="assistant">
-                        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background">
-                          <RobotIcon aria-hidden="true" />
-                        </div>
                         <MessageContent className="pt-0.5 text-sm leading-7">
                           <Bubble variant="ghost" className="w-full">
                             <BubbleContent className="w-full">
@@ -376,7 +389,7 @@ export function ChatPanel({
                           <BubbleContent className="w-full">
                             <Marker role="status">
                               <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
-                              <MarkerContent className="shimmer">正在处理请求…</MarkerContent>
+                              <MarkerContent className="shimmer">正在思考…</MarkerContent>
                             </Marker>
                             {activeTask !== undefined && (
                               <ExecutionSummary
@@ -398,6 +411,15 @@ export function ChatPanel({
                       <MarkerIcon><CheckCircleIcon aria-hidden="true" /></MarkerIcon>
                       <MarkerContent>任务完成</MarkerContent>
                     </Marker>
+                  </MessageScrollerItem>
+                )}
+
+                {activeTask?.summary.status === "failed" && activeRunError !== null && (
+                  <MessageScrollerItem messageId={`failure:${activeTaskId}`}>
+                    <Alert variant="destructive" role="alert">
+                      <WarningCircleIcon />
+                      <AlertDescription>{activeRunError}</AlertDescription>
+                    </Alert>
                   </MessageScrollerItem>
                 )}
               </MessageScrollerContent>

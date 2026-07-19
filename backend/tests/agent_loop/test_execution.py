@@ -63,6 +63,12 @@ from openai.types.responses import (
 )
 
 
+def test_extract_text_delta_supports_responses_api_event() -> None:
+    data = SimpleNamespace(delta="Responses API answer")
+
+    assert runner_module._extract_text_delta(data) == "Responses API answer"
+
+
 class NoopCompactor:
     async def prepare(
         self,
@@ -410,7 +416,7 @@ async def test_text_buffer_end_retains_unconfirmed_batch_without_publishing_end(
         _event_emitter=emit_durable,
         _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
     )
-    buffer = runner_module._AssistantTextBuffer(execution)
+    buffer = runner_module._AssistantTextBuffer(execution.emit)
     await buffer.add("中🙂")
 
     with pytest.raises(type(failure)) as raised:
@@ -731,6 +737,58 @@ async def test_consume_events_ends_each_active_segment_once_at_boundaries(
     assert order.index("durable_delta") < order.index("stream_end")
     if boundary == "tool":
         assert order.index("stream_end") < order.index("tool_started")
+
+
+@pytest.mark.asyncio
+async def test_consume_events_separates_reasoning_from_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_reasoning",
+        run_id="run_reasoning",
+        request_id="request_reasoning",
+        input="reasoning",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution.emit)
+
+    class FakeResult:
+        async def stream_events(self):
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                reasoning_content="内部思考",
+                            )
+                        )
+                    ]
+                )
+            )
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="最终回答"))]
+                )
+            )
+
+    await runner_module.AgentRunExecutor._consume_events(
+        execution,
+        FakeResult(),
+        buffer,
+    )
+    await buffer.flush()
+
+    assert [type(payload) for payload in emitted] == [
+        runner_module.AssistantReasoningDeltaPayload,
+        runner_module.AssistantDeltaPayload,
+    ]
 
 
 @pytest.mark.asyncio

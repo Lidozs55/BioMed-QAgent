@@ -197,6 +197,11 @@ export type AssistantDeltaPayload =
       through_chunk_index: number;
     };
 
+  export type AssistantReasoningDeltaPayload = {
+    type: "assistant_reasoning_delta";
+    delta: string;
+  };
+
 export type EventPayload =
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
@@ -282,6 +287,7 @@ export type EventPayload =
   | { type: "run_cancelled"; reason: string | null }
   | { type: "run_interrupted"; reason: string }
   | AssistantDeltaPayload
+  | AssistantReasoningDeltaPayload
   | { type: "tool_started"; tool_call_id: string; tool_name: string }
   | {
       type: "conversation_compacted";

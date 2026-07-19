@@ -56,6 +56,33 @@ function envelope(
 }
 
 describe("execution summary activity projection", () => {
+  it("keeps reasoning out of assistant messages and appends it to one activity", () => {
+    let state = stateWithTask();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(1, "run_a", {
+        type: "assistant_reasoning_delta",
+        delta: "先检索文献。",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(2, "run_a", {
+        type: "assistant_reasoning_delta",
+        delta: "再分析数据。",
+      }),
+    );
+
+    const task = state.tasksById.task_summary;
+    expect(task.messages).toHaveLength(0);
+    expect(task.activityOrder).toEqual(["reasoning:run_a"]);
+    expect(task.activitiesById["reasoning:run_a"]).toMatchObject({
+      kind: "reasoning",
+      output: "先检索文献。再分析数据。",
+      sequence: 2,
+    });
+  });
+
   it("updates one progress activity in place without changing first-event order", () => {
     let state = stateWithTask();
     state = reduceRuntimeEvent(

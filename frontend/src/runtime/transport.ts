@@ -37,6 +37,7 @@ const EVENT_TYPES = new Set([
   "run_cancelled",
   "run_interrupted",
   "assistant_delta",
+  "assistant_reasoning_delta",
   "tool_started",
   "conversation_compacted",
 ]);
@@ -119,6 +120,8 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
   const runtimeScoped =
     value.type.startsWith("run_") ||
     value.type === "assistant_delta" ||
+    value.type === "assistant_reasoning_delta" ||
+    value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
     value.type === "conversation_compacted" ||
     (value.type === "tool_completed" &&
@@ -247,6 +250,8 @@ function payloadShapeMatches(
         payload.from_chunk_index <= payload.through_chunk_index
       );
     }
+    case "assistant_reasoning_delta":
+      return typeof payload.delta === "string" && payload.delta.length > 0;
     case "tool_started":
       return (
         typeof payload.tool_call_id === "string" &&

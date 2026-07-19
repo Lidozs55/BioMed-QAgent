@@ -28,6 +28,7 @@ from app.domain.contracts.enums import (
 from app.domain.contracts.events import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
     CancelRequestedPayload,
     ConversationCompactedPayload,
     EventEnvelope,
@@ -113,6 +114,7 @@ from app.domain.contracts.task import (
 
 __all__ = [
     "AssistantDeltaPayload",
+    "AssistantReasoningDeltaPayload",
     "AssistantStreamDeltaFrame",
     "AssistantStreamEndFrame",
     "AssistantStreamFrame",

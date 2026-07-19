@@ -129,7 +129,8 @@ describe("execution summary", () => {
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
     const trigger = screen.getByRole("button", { name: /执行摘要/ });
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
     const summary = trigger.closest('[data-execution-summary="true"]');
     expect(summary).not.toBeNull();
     const scoped = within(summary as HTMLElement);
@@ -159,6 +160,20 @@ describe("execution summary", () => {
     );
   });
 
+  it("shows reasoning only after the user expands the summary", () => {
+    apply({ type: "assistant_reasoning_delta", delta: "先判断用户意图。" });
+    apply({ type: "assistant_delta", delta: "你好！" });
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    const trigger = screen.getByRole("button", { name: /思考过程/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("先判断用户意图。")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("先判断用户意图。")).toBeVisible();
+    expect(screen.getByText("你好！")).toBeVisible();
+  });
+
   it("shows running and error tool states without exposing their output", () => {
     apply({
       type: "tool_started",
@@ -180,6 +195,8 @@ describe("execution summary", () => {
     apply({ type: "assistant_delta", delta: "处理中" });
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
 
     expect(screen.getByText("工具运行中")).toHaveAttribute(
       "data-variant",
@@ -217,6 +234,8 @@ describe("execution summary", () => {
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
+    fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
+
     const failed = screen.getByText("验证失败");
     expect(failed).toHaveAttribute("data-variant", "destructive");
     expect(screen.getByText("执行摘要", { exact: false }).closest('[data-execution-summary="true"]'))
@@ -228,7 +247,7 @@ describe("execution summary", () => {
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
     const trigger = screen.getByRole("button", { name: /执行摘要/ });
     fireEvent.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     act(() => {
       apply({
@@ -243,7 +262,7 @@ describe("execution summary", () => {
 
     expect(screen.getByRole("button", { name: /执行摘要/ })).toHaveAttribute(
       "aria-expanded",
-      "false",
+      "true",
     );
   });
 
@@ -252,12 +271,12 @@ describe("execution summary", () => {
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
     expect(screen.getAllByRole("button", { name: /执行摘要/ })).toHaveLength(1);
-    expect(screen.getByText("正在处理请求…")).toBeInTheDocument();
+    expect(screen.getByText("正在思考…")).toBeInTheDocument();
 
     act(() => apply({ type: "assistant_delta", delta: "现在有文本" }));
 
     expect(screen.getAllByRole("button", { name: /执行摘要/ })).toHaveLength(1);
-    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
     expect(screen.getByText("现在有文本")).toBeInTheDocument();
   });
 });

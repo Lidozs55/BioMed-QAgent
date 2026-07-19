@@ -82,6 +82,14 @@ function stageStatus(activity: ActivityProjection): {
 }
 
 function SummaryActivity({ activity }: { activity: ActivityProjection }) {
+  if (activity.kind === "reasoning") {
+    return (
+      <div className="rounded-md bg-muted/50 px-3 py-2 text-sm leading-6 whitespace-pre-wrap">
+        {activity.output}
+      </div>
+    );
+  }
+
   if (activity.kind === "tool") {
     const status = toolStatus(activity);
     return (
@@ -148,7 +156,7 @@ interface ExecutionSummaryProps {
   active: boolean;
 }
 
-export function ExecutionSummary({ task, runId, active }: ExecutionSummaryProps) {
+export function ExecutionSummary({ task, runId }: ExecutionSummaryProps) {
   const activities = task.activityOrder
     .map((activityId) => task.activitiesById[activityId])
     .filter(
@@ -156,6 +164,7 @@ export function ExecutionSummary({ task, runId, active }: ExecutionSummaryProps)
         activity !== undefined &&
         activity.runId === runId &&
         (activity.kind === "tool" ||
+          activity.kind === "reasoning" ||
           activity.kind === "stage" ||
           activity.kind === "progress" ||
           activity.kind === "warning"),
@@ -164,14 +173,14 @@ export function ExecutionSummary({ task, runId, active }: ExecutionSummaryProps)
 
   return (
     <Accordion
-      defaultValue={active ? ["execution"] : []}
+      defaultValue={[]}
       className="mt-2"
       data-execution-summary="true"
     >
       <AccordionItem value="execution">
         <AccordionTrigger>
           <span className="flex items-center gap-2">
-            执行摘要
+            思考过程 · 执行摘要
             <Badge variant="secondary">{activities.length}</Badge>
           </span>
         </AccordionTrigger>

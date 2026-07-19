@@ -51,6 +51,7 @@ class RuntimeEventType(StrEnum):
     RUN_CANCELLED = "run_cancelled"
     RUN_INTERRUPTED = "run_interrupted"
     ASSISTANT_DELTA = "assistant_delta"
+    ASSISTANT_REASONING_DELTA = "assistant_reasoning_delta"
     TOOL_STARTED = "tool_started"
     CONVERSATION_COMPACTED = "conversation_compacted"
 
@@ -288,6 +289,13 @@ class AssistantDeltaPayload(ContractModel):
         return self
 
 
+class AssistantReasoningDeltaPayload(ContractModel):
+    type: Literal[RuntimeEventType.ASSISTANT_REASONING_DELTA] = (
+        RuntimeEventType.ASSISTANT_REASONING_DELTA
+    )
+    delta: str = Field(min_length=1)
+
+
 class ToolStartedPayload(ContractModel):
     type: Literal[RuntimeEventType.TOOL_STARTED] = RuntimeEventType.TOOL_STARTED
     tool_call_id: str = Field(min_length=1)
@@ -330,6 +338,7 @@ EventPayload = Annotated[
     | UserInputRequiredPayload
     | UserInputResumedPayload
     | AssistantDeltaPayload
+    | AssistantReasoningDeltaPayload
     | ToolStartedPayload
     | ConversationCompactedPayload,
     Field(discriminator="type"),

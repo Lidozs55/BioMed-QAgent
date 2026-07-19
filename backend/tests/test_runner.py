@@ -9,7 +9,7 @@ Validates:
 
 from __future__ import annotations
 
-from app.agent_loop.runner import _extract_text_delta
+from app.agent_loop.runner import _extract_reasoning_delta, _extract_text_delta
 
 # ── Helper factories ────────────────────────────────────────────────
 
@@ -72,6 +72,22 @@ def _make_responses_api_chunk(direct_delta: str) -> object:
     return _Data()
 
 
+def _make_reasoning_chunk(reasoning: str) -> object:
+    """Build a ChatCompletionChunk-like reasoning delta."""
+
+    class _Delta:
+        content = None
+        reasoning_content = reasoning
+
+    class _Choice:
+        delta = _Delta()
+
+    class _Data:
+        choices = [_Choice()]
+
+    return _Data()
+
+
 # ── Tests ───────────────────────────────────────────────────────────
 
 
@@ -109,6 +125,12 @@ def test_extract_text_delta_responses_api_path() -> None:
     """Responses API fallback: when delta.content is None, check data.delta."""
     chunk = _make_responses_api_chunk("responses text")
     assert _extract_text_delta(chunk) == "responses text"
+
+
+def test_extract_reasoning_delta_choices_path() -> None:
+    chunk = _make_reasoning_chunk("hidden reasoning")
+
+    assert _extract_reasoning_delta(chunk) == "hidden reasoning"
 
 
 def test_extract_text_delta_unicode_content() -> None:

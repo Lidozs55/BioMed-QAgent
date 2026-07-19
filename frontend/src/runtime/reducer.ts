@@ -1163,6 +1163,27 @@ export function reduceRuntimeEvent(
       task = applyDurableAssistantDelta(task, runId, payload, envelope);
       break;
     }
+    case "assistant_reasoning_delta": {
+      if (runId === null) break;
+      const activityId = `reasoning:${runId}`;
+      const existing = task.activitiesById[activityId];
+      task = upsertActivity(task, {
+        activityId,
+        taskId: envelope.task_id,
+        runId,
+        sequence: envelope.sequence,
+        timestamp: envelope.timestamp,
+        kind: "reasoning",
+        status: "started",
+        name: null,
+        input: null,
+        output: `${existing?.output ?? ""}${payload.delta}`,
+        isError: false,
+        code: null,
+        message: null,
+      });
+      break;
+    }
     case "tool_started": {
       if (runId === null) break;
       task = deactivateRunAssistantStream(task, runId);

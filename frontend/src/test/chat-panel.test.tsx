@@ -136,6 +136,20 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
   });
 
+  it("blocks submission and explains that at least one data source is required", () => {
+    const startTask = vi.fn();
+    render(<ChatPanel startTask={startTask} />);
+    fireEvent.change(screen.getByPlaceholderText("输入研究目标..."), {
+      target: { value: "BRCA1 expression" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    expect(startTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "请至少选择一个数据源",
+    );
+  });
+
   it("submits selected data sources through the semantic REST controller", async () => {
     const startTask = vi.fn().mockResolvedValue({
       request_id: "req_agent",
@@ -161,6 +175,9 @@ describe("ChatPanel", () => {
   it("keeps a blank draft usable while another task is running", async () => {
     seedBackgroundTask();
     act(() => useAgentStore.getState().showNewDraft());
+    act(() =>
+      useAgentStore.getState().setDraftSelectedDatabaseIds(["pubmed", "geo"]),
+    );
     const before = useAgentStore.getState().tasksById;
     const startTask = vi.fn().mockResolvedValue({
       request_id: "req_new",
@@ -180,7 +197,7 @@ describe("ChatPanel", () => {
     await waitFor(() =>
       expect(startTask).toHaveBeenCalledWith({
         input: "New research",
-        databases: [],
+        databases: ["pubmed", "geo"],
         mode: "agent",
       }),
     );
@@ -275,7 +292,7 @@ describe("ChatPanel", () => {
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
 
-    expect(screen.getByText("正在处理请求…").closest('[data-slot="marker"]')).toHaveAttribute("role", "status");
+    expect(screen.getByText("正在思考…").closest('[data-slot="marker"]')).toHaveAttribute("role", "status");
 
     act(() => {
       useAgentStore.getState().applyEvent({
@@ -292,8 +309,35 @@ describe("ChatPanel", () => {
     });
     rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
-    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
+  });
+
+  it("shows the authoritative failure reason in the message stream", () => {
+    seedTerminalTask();
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      const runId = task.runOrder[task.runOrder.length - 1];
+      if (runId === undefined) return state;
+      return {
+        ...state,
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            summary: { ...task.summary, status: "failed" },
+            runsById: {
+              ...task.runsById,
+              [runId]: { ...task.runsById[runId], status: "failed", error: "模型未产出有效产物" },
+            },
+          },
+        },
+      };
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("模型未产出有效产物");
   });
 
   it("does not show processing status while an Agent waits for user input", () => {
@@ -314,7 +358,7 @@ describe("ChatPanel", () => {
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
-    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
   });
 
   it("does not show active Agent work for terminal or fixture tasks", () => {
@@ -322,7 +366,7 @@ describe("ChatPanel", () => {
     const { rerender } = render(
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
-    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
 
     act(() => {
       useAgentStore.setState(createInitialRuntimeState());
@@ -342,7 +386,7 @@ describe("ChatPanel", () => {
       useAgentStore.getState().setActiveTaskId("task_background");
     });
     rerender(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
-    expect(screen.queryByText("正在处理请求…")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
   });
 
   it("renders assistant Markdown through the ghost Bubble primitive", () => {
@@ -372,6 +416,7 @@ describe("ChatPanel", () => {
 
     const assistant = container.querySelector<HTMLElement>('[data-message-role="assistant"]');
     expect(assistant).not.toBeNull();
+    expect(assistant?.querySelector("svg")).not.toBeInTheDocument();
     expect(assistant?.textContent).toContain("Summary line");
     expect(assistant?.querySelector("ul")).toBeInTheDocument();
     expect(assistant?.querySelector('[data-slot="bubble"]')).toHaveAttribute(
@@ -438,6 +483,9 @@ describe("ChatPanel", () => {
     render(<ChatPanel startTask={startTask} continueTask={vi.fn()} />);
 
     act(() => useAgentStore.getState().showNewDraft());
+    act(() =>
+      useAgentStore.getState().setDraftSelectedDatabaseIds(["pubmed", "geo"]),
+    );
     const input = screen.getByPlaceholderText("输入研究目标...");
     fireEvent.change(input, { target: { value: "new draft" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
@@ -445,7 +493,7 @@ describe("ChatPanel", () => {
     await waitFor(() =>
       expect(startTask).toHaveBeenCalledWith({
         input: "new draft",
-        databases: [],
+        databases: ["pubmed", "geo"],
         mode: "agent",
       }),
     );
