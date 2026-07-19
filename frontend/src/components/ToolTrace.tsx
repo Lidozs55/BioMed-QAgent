@@ -49,7 +49,10 @@ export function ToolTrace() {
 
   const hideVisible = () => {
     if (taskId === null || activities.length === 0) return;
-    const latestSequence = activities[activities.length - 1]?.sequence ?? 0;
+    const latestSequence = activities.reduce(
+      (latest, activity) => Math.max(latest, activity.sequence),
+      0,
+    );
     setHiddenThroughSequence((current) => ({
       ...current,
       [taskId]: latestSequence,

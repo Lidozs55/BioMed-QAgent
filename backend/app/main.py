@@ -17,7 +17,7 @@ from app.api.routes import load_database_skills
 from app.api.routes import router as routes_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
-from app.runtime.hub import EventHub
+from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
@@ -64,18 +64,23 @@ def create_app(configured: Settings = settings) -> FastAPI:
         event_hub = EventHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
+        assistant_stream_hub = AssistantStreamHub(
+            subscriber_queue_size=configured.runtime_subscriber_queue_size
+        )
         manager = TaskManager(
             repository,
             run_executor=ModeDispatchRunExecutor(repository),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,
+            assistant_stream_hub=assistant_stream_hub,
         )
         application.state.sync_executor = sync_executor
         application.state.storage_executor = storage_executor
         application.state.index_executor = index_executor
         application.state.task_repository = repository
         application.state.event_hub = event_hub
+        application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
         # Register stable user-selectable database skills once at startup so
         # GET /api/v1/databases does not re-register them on every request.
@@ -88,15 +93,18 @@ def create_app(configured: Settings = settings) -> FastAPI:
                 await manager.close()
             finally:
                 try:
-                    await event_hub.close()
+                    await assistant_stream_hub.close()
                 finally:
                     try:
-                        await index_executor.close()
+                        await event_hub.close()
                     finally:
                         try:
-                            storage_executor.shutdown(wait=True)
+                            await index_executor.close()
                         finally:
-                            sync_executor.shutdown(wait=True)
+                            try:
+                                storage_executor.shutdown(wait=True)
+                            finally:
+                                sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",

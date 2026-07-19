@@ -12,6 +12,10 @@ export function useAgentStream(): AgentEventTransport {
         getLastSequence: (taskId) =>
           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
         applyEvent: (event) => useAgentStore.getState().applyEvent(event),
+        applyAssistantStreamFrames: (frames) =>
+          useAgentStore.getState().applyAssistantStreamFrames(frames),
+        deactivateAssistantStreams: (taskId) =>
+          useAgentStore.getState().deactivateAssistantStreams(taskId),
         setConnectionStatus: (status) =>
           useAgentStore.getState().setConnectionStatus(status),
         onControlError: (frame) => {

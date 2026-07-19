@@ -22,7 +22,7 @@ from Bio import Entrez
 
 from app.agent_loop.context import RunContext
 from app.config import settings
-from app.domain.contracts import Database, SourceRecord, StageName, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, StageName, make_source_id
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
@@ -129,7 +129,7 @@ async def search_pubmed_adapter(
         run_ctx.log_query(
             query=query,
             source="pubmed",
-            status="completed",
+            status=QueryStatus.SUCCESS,
             records_count=len(result.records),
         )
         # Surface mid-stage progress so the frontend can show
@@ -168,7 +168,7 @@ async def search_pubmed_adapter(
         )
     except Exception as exc:
         logger.exception("PubMed search failed for query=%r", query)
-        run_ctx.log_query(query, "pubmed", "failed", 0)
+        run_ctx.log_query(query, "pubmed", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "pubmed",
             "query": query,

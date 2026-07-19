@@ -17,6 +17,7 @@ from app.domain.contracts.enums import (
     DownloadStatus,
     ErrorCode,
     MessageRole,
+    QueryStatus,
     RequestedOutput,
     RunStatus,
     StageName,
@@ -98,6 +99,11 @@ from app.domain.contracts.source import (
     SourceRecord,
     SourceRelation,
 )
+from app.domain.contracts.stream import (
+    AssistantStreamDeltaFrame,
+    AssistantStreamEndFrame,
+    AssistantStreamFrame,
+)
 from app.domain.contracts.task import (
     DatasetSelection,
     QuerySpecification,
@@ -107,6 +113,9 @@ from app.domain.contracts.task import (
 
 __all__ = [
     "AssistantDeltaPayload",
+    "AssistantStreamDeltaFrame",
+    "AssistantStreamEndFrame",
+    "AssistantStreamFrame",
     "AttemptStatus",
     "AcquisitionResult",
     "ArtifactManifestEntry",
@@ -137,6 +146,7 @@ __all__ = [
     "PipelineEventType",
     "PlanReadyPayload",
     "QuerySpecification",
+    "QueryStatus",
     "RequestedOutput",
     "RunCancelRequestedPayload",
     "RunCancelledPayload",

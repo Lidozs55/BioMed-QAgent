@@ -65,7 +65,7 @@ def test_counts_processor_writes_long_form_rows_with_exact_source_locators(
     )
 
     output_path = workdir.root / result.file_asset.relative_path
-    with output_path.open("r", encoding="utf-8", newline="") as handle:
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
 
     assert result.row_count == 48
@@ -276,7 +276,7 @@ def test_minimal_dataset_with_samples_writes_one_metadata_row_per_sample(
     assert parsed.row_count == 3
 
     output_path = ctx.workdir.root / parsed.file_asset.relative_path
-    with output_path.open("r", encoding="utf-8", newline="") as handle:
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
 
     assert len(rows) == 3

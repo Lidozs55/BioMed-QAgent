@@ -475,13 +475,29 @@ async def test_default_summarizer_uses_same_model_without_tools(
     model = LazyDashScopeModel()
     captured: dict[str, object] = {}
 
-    async def run(agent, prompt, **kwargs):
+    # ``_summarize_with_model`` uses ``Runner.run_streamed`` (not ``run``) so
+    # it can observe ``finish_reason`` via ``RawResponsesStreamEvent``.
+    #
+    # NOTE: The real ``Runner.run_streamed`` is a SYNCHRONOUS function that
+    # returns a ``RunResultStreaming`` directly (it is NOT a coroutine). The
+    # streaming happens via the async iterator ``result.stream_events()``.
+    # The mock must match this contract — define it as a plain function.
+    def run_streamed(agent, prompt, **kwargs):
         captured["agent"] = agent
         captured["prompt"] = prompt
         captured["kwargs"] = kwargs
-        return SimpleNamespace(final_output="compact summary")
 
-    monkeypatch.setattr(compaction_module.Runner, "run", run)
+        async def stream_events():
+            # No RawResponsesStreamEvent → finish_reason stays None
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        return SimpleNamespace(
+            final_output="compact summary",
+            stream_events=stream_events,
+        )
+
+    monkeypatch.setattr(compaction_module.Runner, "run_streamed", run_streamed)
 
     summary = await compaction_module._summarize_with_model(
         model_handle=model,
@@ -493,6 +509,114 @@ async def test_default_summarizer_uses_same_model_without_tools(
     assert captured["agent"].model is model
     assert captured["agent"].tools == []
     assert captured["kwargs"] == {"max_turns": 1}
+
+
+@pytest.mark.asyncio
+async def test_default_summarizer_raises_on_finish_reason_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``finish_reason="length"`` MUST raise, not silently fall back.
+
+    Per TODO §8.4 and the project_memory L1 hard constraint, a truncated
+    summary is garbage data that would corrupt the conversation context.
+    The ``ConversationSummarizerTruncatedError`` must propagate through
+    ``ConversationCompactor.prepare`` (not be caught by ``_fallback``).
+    """
+    from types import SimpleNamespace as _SN
+
+    from agents.stream_events import RawResponsesStreamEvent
+    from app.runtime.compaction import ConversationSummarizerTruncatedError
+
+    class _FakeChoice:
+        finish_reason = "length"
+
+    class _FakeChunk:
+        choices = [_FakeChoice()]
+
+    # Must be a SYNC function (see note in the previous test): the real
+    # ``Runner.run_streamed`` returns ``RunResultStreaming`` directly.
+    def run_streamed(agent, prompt, **kwargs):
+        async def stream_events():
+            # Yield a real RawResponsesStreamEvent whose ``data`` exposes
+            # ``choices[0].finish_reason == "length"`` — mirroring what
+            # DashScope/Qwen sends when the LLM hits max_tokens.
+            yield RawResponsesStreamEvent(data=_FakeChunk())
+
+        return _SN(final_output="partial summary", stream_events=stream_events)
+
+    monkeypatch.setattr(compaction_module.Runner, "run_streamed", run_streamed)
+
+    with pytest.raises(ConversationSummarizerTruncatedError, match="finish_reason=length"):
+        await compaction_module._summarize_with_model(
+            model_handle=LazyDashScopeModel(),
+            history=[{"role": "user", "content": "question"}],
+            previous_summary=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_propagates_length_truncation_without_fallback() -> None:
+    """``ConversationCompactor.prepare`` must NOT silently fall back on length.
+
+    When ``_summarize_with_model`` raises ``ConversationSummarizerTruncatedError``,
+    ``prepare`` must propagate it instead of routing through ``_fallback``
+    (which would emit a warning and continue with truncated history).
+    """
+    from app.runtime.compaction import ConversationSummarizerTruncatedError
+
+    items = [
+        item
+        for index in range(7)
+        for item in (
+            {"role": "user", "content": f"question {index}"},
+            {"role": "assistant", "content": "x" * 10_000},
+        )
+    ]
+    emitted: list[object] = []
+
+    class Session:
+        async def get_items(self):
+            return list(items)
+
+    class Repository:
+        session = Session()
+
+        def task_session(self, task_id: str):
+            return self.session
+
+        async def get_snapshot(self, task_id: str):
+            return completed_snapshot(task_id, 7)
+
+        async def load_conversation_summary(self, task_id: str):
+            return {}
+
+        async def save_conversation_summary(self, task_id: str, summary: dict):
+            pass
+
+    async def summarize(**kwargs):
+        raise ConversationSummarizerTruncatedError(
+            "conversation summarizer LLM output was truncated "
+            "(finish_reason=length); refusing to use a partial summary"
+        )
+
+    async def emit(payload):
+        emitted.append(payload)
+
+    with pytest.raises(ConversationSummarizerTruncatedError):
+        await ConversationCompactor(
+            Repository(),
+            summarize=summarize,
+        ).prepare(
+            "task_length_truncated",
+            model_handle=object(),
+            emit=emit,
+        )
+
+    # Critical invariant: NO warning emitted, NO silent fallback.
+    # The error must propagate loudly so the run fails.
+    assert emitted == [], (
+        "length-truncation must propagate, not emit a warning and fall back"
+    )
 
 
 @pytest.mark.asyncio

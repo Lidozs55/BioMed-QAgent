@@ -1,4 +1,5 @@
 import type {
+  AssistantStreamFrame,
   EventEnvelope,
   WebSocketCommand,
   WebSocketControlFrame,
@@ -7,6 +8,7 @@ import type { ConnectionStatus } from "./types";
 
 const CONNECTING = 0;
 const OPEN = 1;
+const MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048;
 const EVENT_TYPES = new Set([
   "task_created",
   "plan_ready",
@@ -55,10 +57,14 @@ interface TransportOptions {
   socketFactory: SocketFactory;
   getLastSequence: (taskId: string) => number;
   applyEvent: (event: EventEnvelope) => void;
+  applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
+  deactivateAssistantStreams: (taskId?: string) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   onControlError?: (frame: Extract<WebSocketControlFrame, { type: "error" }>) => void;
   reconnectDelayMs?: number;
   pingTimeoutMs?: number;
+  scheduleAnimationFrame?: (callback: () => void) => number;
+  cancelAnimationFrame?: (handle: number) => void;
   url?: string | (() => string);
 }
 
@@ -134,6 +140,78 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
   );
 }
 
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  expected: ReadonlySet<string>,
+): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.size && keys.every((key) => expected.has(key));
+}
+
+const ASSISTANT_STREAM_DELTA_KEYS = new Set([
+  "type",
+  "task_id",
+  "run_id",
+  "stream_id",
+  "chunk_index",
+  "delta",
+]);
+const ASSISTANT_STREAM_END_KEYS = new Set([
+  "type",
+  "task_id",
+  "run_id",
+  "stream_id",
+  "last_chunk_index",
+  "finish_reason",
+]);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function isAssistantStreamFrame(value: unknown): value is AssistantStreamFrame {
+  if (!isRecord(value)) return false;
+  if (
+    !isNonEmptyString(value.task_id) ||
+    !isNonEmptyString(value.run_id) ||
+    !isNonEmptyString(value.stream_id)
+  ) {
+    return false;
+  }
+  if (value.type === "assistant_stream_delta") {
+    return (
+      hasOnlyKeys(value, ASSISTANT_STREAM_DELTA_KEYS) &&
+      isNonNegativeInteger(value.chunk_index) &&
+      isNonEmptyString(value.delta)
+    );
+  }
+  if (value.type === "assistant_stream_end") {
+    return (
+      hasOnlyKeys(value, ASSISTANT_STREAM_END_KEYS) &&
+      (value.last_chunk_index === null ||
+        isNonNegativeInteger(value.last_chunk_index)) &&
+      isNonEmptyString(value.finish_reason)
+    );
+  }
+  return false;
+}
+
+function isAssistantStreamBoundary(envelope: EventEnvelope): boolean {
+  return (
+    envelope.type === "tool_started" ||
+    envelope.type === "run_finalizing" ||
+    envelope.type === "run_completed" ||
+    envelope.type === "run_failed" ||
+    envelope.type === "run_cancel_requested" ||
+    envelope.type === "run_cancelled" ||
+    envelope.type === "run_interrupted"
+  );
+}
+
 function payloadShapeMatches(
   type: string,
   payload: Record<string, unknown>,
@@ -145,8 +223,30 @@ function payloadShapeMatches(
         typeof payload.request_id === "string" &&
         typeof payload.input === "string"
       );
-    case "assistant_delta":
-      return typeof payload.delta === "string" && payload.delta.length > 0;
+    case "assistant_delta": {
+      if (typeof payload.delta !== "string" || payload.delta.length === 0) {
+        return false;
+      }
+      const hasStreamId = payload.stream_id !== undefined;
+      const hasFromIndex = payload.from_chunk_index !== undefined;
+      const hasThroughIndex = payload.through_chunk_index !== undefined;
+      if (!hasStreamId && !hasFromIndex && !hasThroughIndex) return true;
+      if (
+        payload.stream_id === null &&
+        payload.from_chunk_index === null &&
+        payload.through_chunk_index === null
+      ) {
+        return true;
+      }
+      return (
+        hasStreamId === hasFromIndex &&
+        hasFromIndex === hasThroughIndex &&
+        isNonEmptyString(payload.stream_id) &&
+        isNonNegativeInteger(payload.from_chunk_index) &&
+        isNonNegativeInteger(payload.through_chunk_index) &&
+        payload.from_chunk_index <= payload.through_chunk_index
+      );
+    }
     case "tool_started":
       return (
         typeof payload.tool_call_id === "string" &&
@@ -205,6 +305,9 @@ export class AgentEventTransport {
   private disconnectGeneration = 0;
   private manuallyDisconnected = false;
   private hasConnected = false;
+  private pendingAssistantStreamFrames: AssistantStreamFrame[] = [];
+  private animationFrameHandle: number | null = null;
+  private animationFrameGeneration = 0;
 
   constructor(private readonly options: TransportOptions) {}
 
@@ -249,6 +352,8 @@ export class AgentEventTransport {
     this.socket = null;
     this.active.clear();
     this.desired.clear();
+    this.discardAssistantStreamFrames();
+    this.options.deactivateAssistantStreams();
     if (socket !== null) {
       socket.onopen = null;
       socket.onclose = null;
@@ -277,6 +382,8 @@ export class AgentEventTransport {
 
   unsubscribe(taskId: string): void {
     this.desired.delete(taskId);
+    this.discardAssistantStreamFrames(taskId);
+    this.options.deactivateAssistantStreams(taskId);
     if (this.isConnected && this.active.has(taskId)) {
       this.send({ type: "unsubscribe", task_id: taskId });
       this.awaitingUnsubscribe.add(taskId);
@@ -306,6 +413,8 @@ export class AgentEventTransport {
     return this.enqueueControlBarrier(async () => {
       this.unsubscribe(taskId);
       await this.ping();
+      this.discardAssistantStreamFrames(taskId);
+      this.options.deactivateAssistantStreams(taskId);
       this.active.delete(taskId);
       this.awaitingUnsubscribe.delete(taskId);
     });
@@ -421,6 +530,8 @@ export class AgentEventTransport {
     this.socket = null;
     this.active.clear();
     this.awaitingUnsubscribe.clear();
+    this.discardAssistantStreamFrames();
+    this.options.deactivateAssistantStreams();
     if (socket !== null) {
       socket.onopen = null;
       socket.onclose = null;
@@ -465,6 +576,8 @@ export class AgentEventTransport {
       this.socket = null;
       this.active.clear();
       this.awaitingUnsubscribe.clear();
+      this.discardAssistantStreamFrames();
+      this.options.deactivateAssistantStreams();
       const error = new Error("WebSocket transport closed");
       this.rejectPendingPings(error);
       this.rejectConnect?.(error);
@@ -513,9 +626,98 @@ export class AgentEventTransport {
       }
       return;
     }
+    if (isAssistantStreamFrame(frame)) {
+      if (!this.active.has(frame.task_id)) return;
+      this.queueAssistantStreamFrame(frame);
+      return;
+    }
     if (!isEventEnvelope(frame)) return;
     if (!this.active.has(frame.task_id)) return;
+    this.confirmQueuedAssistantStreamFrames(frame);
+    if (isAssistantStreamBoundary(frame) && frame.run_id !== null) {
+      this.discardAssistantStreamFrames(frame.task_id, frame.run_id);
+    }
     this.options.applyEvent(frame);
+  }
+
+  private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {
+    if (
+      this.pendingAssistantStreamFrames.length >=
+      MAX_PENDING_ASSISTANT_STREAM_FRAMES
+    ) {
+      if (frame.type === "assistant_stream_delta") return;
+      let disposableIndex = -1;
+      for (
+        let index = this.pendingAssistantStreamFrames.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        if (this.pendingAssistantStreamFrames[index].type === "assistant_stream_delta") {
+          disposableIndex = index;
+          break;
+        }
+      }
+      if (disposableIndex >= 0) {
+        this.pendingAssistantStreamFrames.splice(disposableIndex, 1);
+      } else {
+        return;
+      }
+    }
+    this.pendingAssistantStreamFrames.push(frame);
+    if (this.animationFrameHandle !== null) return;
+    const generation = ++this.animationFrameGeneration;
+    const schedule =
+      this.options.scheduleAnimationFrame ??
+      ((callback: () => void) => window.requestAnimationFrame(callback));
+    this.animationFrameHandle = schedule(() => {
+      if (generation !== this.animationFrameGeneration) return;
+      this.animationFrameHandle = null;
+      const frames = this.pendingAssistantStreamFrames.splice(0);
+      if (frames.length > 0) this.options.applyAssistantStreamFrames(frames);
+    });
+  }
+
+  private confirmQueuedAssistantStreamFrames(envelope: EventEnvelope): void {
+    const payload = envelope.payload;
+    if (payload.type !== "assistant_delta") return;
+    if (typeof payload.stream_id !== "string" || envelope.run_id === null) {
+      return;
+    }
+    const streamId = payload.stream_id;
+    const throughChunkIndex = payload.through_chunk_index;
+    this.pendingAssistantStreamFrames = this.pendingAssistantStreamFrames.filter(
+      (frame) =>
+        frame.task_id !== envelope.task_id ||
+        frame.run_id !== envelope.run_id ||
+        frame.stream_id !== streamId ||
+        frame.type !== "assistant_stream_delta" ||
+        frame.chunk_index > throughChunkIndex,
+    );
+    this.cancelEmptyAssistantStreamFrameBatch();
+  }
+
+  private discardAssistantStreamFrames(taskId?: string, runId?: string): void {
+    if (taskId === undefined) {
+      this.pendingAssistantStreamFrames = [];
+    } else {
+      this.pendingAssistantStreamFrames = this.pendingAssistantStreamFrames.filter(
+        (frame) =>
+          frame.task_id !== taskId ||
+          (runId !== undefined && frame.run_id !== runId),
+      );
+    }
+    this.cancelEmptyAssistantStreamFrameBatch();
+  }
+
+  private cancelEmptyAssistantStreamFrameBatch(): void {
+    if (this.pendingAssistantStreamFrames.length > 0) return;
+    if (this.animationFrameHandle === null) return;
+    const cancel =
+      this.options.cancelAnimationFrame ??
+      ((handle: number) => window.cancelAnimationFrame(handle));
+    cancel(this.animationFrameHandle);
+    this.animationFrameHandle = null;
+    this.animationFrameGeneration += 1;
   }
 
   private send(command: WebSocketCommand): void {

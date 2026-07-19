@@ -7,12 +7,15 @@
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) 包管理器
 - DashScope API Key（[申请地址](https://dashscope.console.aliyun.com/)）
+- 可选：Playwright Chromium（用于 `web_visual_capture` 截图与 JS 重页面降级）
 
 ## 安装
 
 ```bash
 cd backend
 uv sync
+# 如需视觉证据采集 / JS 重页面爬取：
+uv run playwright install chromium
 ```
 
 ## 配置
@@ -29,10 +32,19 @@ cp .env.example .env
 |------|--------|------|
 | `DASHSCOPE_API_KEY` | (空) | DashScope API Key（**必填**） |
 | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI 兼容端点 |
-| `MODEL_NAME` | `qwen-plus` | Qwen 模型名（也支持 `qwen3.6-flash` 等） |
+| `MODEL_NAME` | `qwen-plus` | Qwen 主模型名（Agent loop 使用） |
+| `NCBI_EMAIL` | `biomed-qagent@example.com` | NCBI E-utilities 身份标识 |
+| `NCBI_TOOL` | `BioMedQAgent` | NCBI E-utilities tool name |
+| `NCBI_API_KEY` | (空) | NCBI E-utilities API Key（可获更高配额） |
+| `NCBI_USER_AGENT` | `BioMed-QAgent/0.1 (...)` | NCBI HTTP User-Agent |
 | `HOST` | `127.0.0.1` | 后端监听地址 |
 | `PORT` | `8000` | 后端监听端口 |
 | `OUTPUT_DIR` | `data/output` | 数据产物输出目录 |
+| `RUNTIME_MAX_ACTIVE_RUNS` | `4` | 并发 Run slot 上限 |
+| `RUNTIME_SUBSCRIBER_QUEUE_SIZE` | `1000` | WebSocket 订阅者背压队列上限 |
+| `TASK_PAGE_SIZE` | `30` | 任务历史默认分页 |
+
+> 完整 Settings 定义见 [`app/config.py`](app/config.py)。
 
 ## 启动
 
@@ -44,6 +56,243 @@ uv run uvicorn app.main:app --reload
 - API 文档 (Swagger)：http://127.0.0.1:8000/docs
 - API 文档 (ReDoc)：http://127.0.0.1:8000/redoc
 - 健康检查：http://127.0.0.1:8000/api/v1/health
+
+CORS 允许 Vite dev server 来源 `http://localhost:5173` 与 `http://127.0.0.1:5173`。
+
+## 项目结构
+
+```
+backend/
+├── app/
+│   ├── main.py                       # FastAPI lifespan 入口（TaskManager / Repository / EventHub / TaskIndex）
+│   ├── config.py                     # Settings dataclass（含 NCBI + Runtime 配置）
+│   ├── agent_loop/                   # Agent 运行核心
+│   │   ├── agent.py                  # build_agent / AGENT_MAX_TURNS=15 / INSTRUCTIONS
+│   │   ├── runner.py                 # AgentRunExecutor：durable Run + typed 事件转换 + finish_reason 校验
+│   │   ├── context.py                # RunContext：query_log / progress emitter / artifact provenance
+│   │   ├── model.py                  # LazyDashScopeModel（OpenAI 兼容）+ max_turns 桥接
+│   │   ├── summarizer.py             # ConversationSummarizer（truncation 显式抛异常，禁止静默降级）
+│   │   └── vl_model.py               # Qwen-VL (qwen-vl-max) AsyncOpenAI 客户端
+│   ├── api/                          # HTTP + WebSocket 接口
+│   │   ├── routes.py                 # REST 端点（11 个，详见下方表）
+│   │   ├── ws.py                     # WebSocket 入口（/api/v1/ws）
+│   │   └── ws_events.py              # durable event session（subscribe/replay/ping）
+│   ├── core/
+│   │   └── metrics.py                # MetricsTracker：阶段级指标追踪 + 消融报告导出
+│   ├── domain/                       # 领域模型（Pydantic v2）
+│   │   ├── contracts/                # 正式契约（base/ids/enums/events/runtime/task/source/pipeline/discovery）
+│   │   ├── events.py / task.py / output.py / processing.py
+│   ├── integrations/                 # 外部服务集成
+│   │   ├── ncbi/                     # NcbiEutilsClient + parsers + discovery 工厂
+│   │   ├── europepmc.py              # EPMC fullTextXML 客户端（PDF fallback Tier 3）
+│   │   ├── unpaywall.py              # Unpaywall DOI→pdf_url 客户端（PDF fallback Tier 2）
+│   │   └── acquisition.py            # acquire_source() + acquire_publication_with_fallback()（PDF 三级 fallback）
+│   ├── pipeline/                     # 确定性 Pipeline Runner
+│   │   ├── runner.py / state.py / tool.py
+│   │   ├── stages/                   # discovery / acquisition / processing / artifact_build / validation
+│   │   └── processing/geo_tximport.py
+│   ├── runtime/                      # Durable runtime（事件溯源）
+│   │   ├── manager.py                # TaskManager：Run lifecycle + 成功证据校验
+│   │   ├── repository.py             # TaskRepository：先持久化再发布
+│   │   ├── event_store.py            # append-only events.jsonl（sequence 单调递增）
+│   │   ├── hub.py / index.py / session.py / state.py / compaction.py
+│   ├── skills/                       # Skill 仓库
+│   │   ├── registry.py / evolution.py
+│   │   ├── builtin/                  # 14 个内置 Skill（详见下方表）
+│   │   │   ├── discovery/            #   pubmed / understanding
+│   │   │   ├── acquisition/          #   geo / gdc / pdb / pubchem / reactome / xena / browser / web_visual_capture
+│   │   │   ├── processing/           #   extract_tables / extract_chart_data_vlm / self_evolution
+│   │   │   └── analysis/             #   stats
+│   │   └── learned/                  # 后天 Skill（默认禁用；AST + 路径白名单安全校验）
+│   └── tools/                        # Function Tools
+│       ├── _registry.py / io.py / workdir.py / crawler.py
+│       ├── cleaning.py / alignment.py / processing.py / export.py
+│       ├── parse_geo.py / parse_pdb.py / parse_excel.py
+│       ├── content_cache.py / network_safety.py
+├── tests/                            # pytest（86 文件 / 1025+ 测试，详见下方）
+│   ├── agent_loop/ api/ contracts/ integration/ integrations/ live/
+│   ├── pipeline/ runtime/ fixtures/ncbi/gse178352/
+│   └── conftest.py + 24 个 root-level test_*.py
+├── scripts/
+│   ├── build_gse178352_fixture.py    # 重新生成 pinned fixture
+│   └── demo_workflow.py              # 端到端冒烟演示
+├── data/                             # 任务数据目录（gitignored）
+│   └── output/tasks/<task_id>/       # source_assets/ download_tmp/ parsed/ normalized/
+│                                     # staging/ artifacts/ state/ logs/
+├── pyproject.toml                    # 依赖 + pytest + ruff 配置
+├── uv.lock                           # uv 锁文件（权威依赖来源）
+├── requirements.txt                  # pip 兼容子集（仅核心 6 项，**以 pyproject.toml 为准**）
+├── .python-version                   # Python 3.12
+├── launcher.py                       # PyInstaller 桌面应用入口
+└── REPRODUCIBILITY.md                # 可复现性指南
+```
+
+## 架构与数据流
+
+### 双层架构：Agent + 确定性 Pipeline
+
+```text
+用户主题 + 数据库限制
+        │
+        ▼
+  REST POST /api/v1/tasks（durable admission）
+        │
+        ▼
+  TaskManager → durable Run queue（4 并发 slot）
+        │
+        ▼
+  AgentRunExecutor + TaskSession
+        │
+        └── Runner.run_streamed(Main Agent, input, context, session)
+        │            │
+        │            └── run_research_pipeline Function Tool
+        │                    │
+        │                    ▼
+        │              确定性 Pipeline Runner
+        │              (Discovery → Acquisition → Processing → ArtifactBuild → Validation)
+        │                    │
+        │                    └── 失败/截断/空产出 → warning 或 RunFailed
+        │
+        ▼
+  TaskRepository 持久化 v2 EventEnvelope
+  (run_queued / run_started / stage_started / stage_progress /
+   tool_started / tool_completed / assistant_delta / artifact_produced /
+   user_input_required / user_input_resumed / run_completed / run_failed)
+        │
+        ▼
+  WebSocket subscribe + sequence replay/live fan-out
+        │
+        ▼
+  前端按 task_id / run_id / sequence 更新 Task 投影
+```
+
+**Agent 职责**：理解主题 → 调 search_* 工具发现 accession → 生成 `TaskSpecification` → 调用 `run_research_pipeline` → 解释返回的 artifact 清单与 warning。Agent **不**直接拼装最终 CSV，**不**能绕过 Validation Gate。`AGENT_MAX_TURNS=15`，达到上限走 `UserInputRequiredPayload(prompt_kind="max_turns_reached")` 暂停等待用户选择继续或停止。
+
+**Pipeline 职责**：强制执行 Discovery→Acquisition→Processing→ArtifactBuild→Validation 五阶段；每阶段记录 StageAttempt；只发布通过 Validation Gate 的 artifact；失败保证终态事件，不静默伪装成功。
+
+### Skill 体系
+
+14 个内置 Skill 按管线组织（`builtin/`）：
+
+| 类别 | 内置 Skill |
+|------|------------|
+| **Discovery** | `pubmed`、`understanding` |
+| **Acquisition** | `geo`、`gdc`、`pdb`、`pubchem`、`reactome`、`xena`、`browser_fallback`、`web_visual_capture` |
+| **Processing** | `extract_tables`、`extract_chart_data_vlm`、`self_evolution` |
+| **Analysis** | `stats` |
+
+关键设计原则：
+- Skill 是按需加载的能力包，Tool 是实际执行单元
+- 一个网站对应多个 Tool（检索、查看元数据、下载是不同操作）
+- 每个 Skill 建议不超过 20 个 Tool，超过 30 个必须拆分
+- 后天 Skill（`learned/`）默认不覆盖同名内置 Skill；`save_learned_skill` / `load_learned_skill` 实施路径白名单 + AST 白名单双重安全校验（拒绝 `exec/eval/compile/open/__import__` 等）
+- `web_visual_capture` 不出现在 `GET /databases`，由 Agent 按需调用
+- `extract_chart_data_vlm` 使用 Qwen-VL（`qwen-vl-max`），三级降级链 L1→L2→L3 全部失败抛 `ChartExtractionError`（禁止静默空数据降级）
+
+### PDF 三级 Fallback 链
+
+`integrations/acquisition.py:acquire_publication_with_fallback()` 实现 project_memory 硬约束的"pdf_url → Unpaywall → EPMC"三级 fallback：
+
+| Tier | 来源 | 触发条件 | 失败行为 |
+|------|------|----------|----------|
+| 1 | `pdf_url` 直接链接 | 元数据已含 pdf_url 且非 landing page | 转 Tier 2 |
+| 2 | Unpaywall DOI 查询（5s timeout） | Tier 1 失败且 DOI 可用 | 转 Tier 3 |
+| 3 | EuropePMC fullTextXML（PMCID，国内可用） | Tier 2 失败且 PMCID 可用 | 抛异常 |
+
+所有 attempt（含失败）记录到 `download_log.csv`，保证来源可追溯。
+
+### QueryStatus 枚举统一
+
+`domain/contracts/enums.py:QueryStatus` 五态枚举：`success` / `not_found` / `failed` / `skipped` / `page_fallback`。所有 skill 的 `log_query()` 调用统一使用，`tests/test_query_log_status_consistency.py` AST 静态扫描保证迁移完整性。
+
+## API 接口
+
+### REST 端点（统一前缀 `/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `GET` | `/databases` | 列出用户可选数据库（排除 `browser_fallback` / `web_visual_capture`） |
+| `GET` | `/tasks` | 全部 active Task + cursor 分页历史 |
+| `POST` | `/tasks` | 创建 durable Task 并排队首个 Run |
+| `GET` | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` |
+| `DELETE` | `/tasks/{task_id}` | 删除 terminal Task 及其历史 |
+| `POST` | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
+| `POST` | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued/running/paused/finalizing/cancel-requested Run |
+| `POST` | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策（计划确认 / max_turns / 数据修正） |
+| `GET` | `/tasks/{task_id}/messages` | cursor 分页读取 durable messages |
+| `GET` | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events |
+| `GET` | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
+| `GET` | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
+
+### WebSocket
+
+**连接**：`ws://host:8000/api/v1/ws`
+
+任务创建与续跑分别通过 `POST /api/v1/tasks` 和 `POST /api/v1/tasks/{task_id}/runs` 完成。WebSocket 仅接收三类控制命令：
+
+- `{"type":"subscribe","task_id":"...","after_sequence":N}` — 先重放 sequence > N 的 durable events，再进入 live fan-out
+- `{"type":"unsubscribe","task_id":"..."}` — 取消该 Task 的订阅
+- `{"type":"ping"}` — 返回 `{"type":"pong"}`
+
+服务端按 Task watermark 去重；慢消费者以可重连状态关闭。前端 `runtime/transport.ts` 自动重连并按 `lastSequence` 重新 subscribe。
+
+### Durable Runtime 状态
+
+每个 Task 的 durable 数据保存在后端：
+
+- `<task_id>/events.jsonl` — append-only 事件日志（sequence 从 1 单调递增）
+- `<task_id>/state/task_snapshot.json` — 原子写入的权威状态投影
+- `<task_id>/state/session_items.jsonl` — OpenAI Agents SDK 原始 Session 历史
+- `<task_id>/state/conversation_summary.json` — compaction 摘要
+- `task_index.sqlite3` — 分页 + request-id 幂等查询（可重建）
+
+`EventEnvelope` v2 为 managed Run 增加 `run_id`；sequence 是 **Task 级单调递增**，不是每个 Run 重新计数。HIL（人在回路）使用 `user_input_required` / `user_input_resumed` 事件，`POST /resume` 必须匹配 exact `request_id` 且只消费一次。
+
+## 技术栈
+
+| 组件 | 技术 | 说明 |
+|------|------|------|
+| Web 框架 | FastAPI + uvicorn | 异步 HTTP + WebSocket |
+| Agent SDK | openai-agents-python | Agent、Runner、Function Tool、HITL、MaxTurnsExceeded |
+| LLM | Qwen（DashScope） | OpenAI 兼容接口（`qwen-plus` 主模型 / `qwen-vl-max` 视觉模型） |
+| 数据模型 | Pydantic v2 + dataclass | 类型安全契约（`extra="forbid"`） |
+| 生物信息 | Biopython + geoparse | NCBI E-utilities + GEO Series Matrix 解析 |
+| PDF 处理 | pdfplumber | 表格提取 + 嵌入图片提取（VLM 降级链 L2） |
+| 浏览器自动化 | Playwright Chromium | `web_visual_capture` + `browser_fallback` |
+| 数据分析 | matplotlib, scipy, seaborn | 统计计算与可视化（可选） |
+| HTTP 客户端 | httpx | 异步数据下载 |
+| 测试 | pytest + pytest-asyncio + ruff | 单元 + 异步测试 + 静态检查（warnings as errors） |
+
+### 依赖管理
+
+权威依赖来源是 [`pyproject.toml`](pyproject.toml) 与 [`uv.lock`](uv.lock)。`requirements.txt` 仅为 pip 兼容子集（核心 6 项），**不**包含 `pdfplumber` / `playwright` / `beautifulsoup4` / `geoparse` / `biopython` 等运行时依赖，**不要**用它替代 `uv sync`。
+
+## 测试
+
+```bash
+uv run pytest                    # 全部测试（默认排除 @pytest.mark.live）
+uv run pytest -m live            # 仅 live 网络测试
+uv run pytest tests/test_agent.py  # 单文件
+uv run pytest -k "skill"         # 按关键字筛选
+uv run ruff check app/ tests/ launcher.py   # CI 质量门禁（0 warnings）
+```
+
+测试配置：`asyncio_mode = "strict"`、`filterwarnings = ["error", ...]`（warnings as errors，仅显式忽略 Starlette TestClient 弃用警告）。
+
+### 测试目录与覆盖（86 文件 / 1025+ 测试，2026-07-19）
+
+| 目录 | 覆盖内容 |
+|------|----------|
+| `tests/test_*.py`（root, 24 文件） | Agent / Runner / Config / Domain contracts / Tool registry / Skill registry / IO / Workdir / Processing / Output / Summarizer / Network safety / Content cache / Demo workflow / Model credentials / Query log status / PDF fallback chain / Skill stats / Skill extract tables / Skill extract chart data VLM / Skill self evolution / Skill browser / Skill pdb / Skill gdc / Skill pubchem / Skill reactome / Skill understanding / Skill xena / Skill web visual capture / Tools crawler |
+| `tests/agent_loop/`（8 文件） | Agent build / Agent run e2e / Context / Execution / LLM truncation / Max turns continue / Qwen function args retry / Silent completion |
+| `tests/api/`（5 文件） | Artifact API / REST control / Resume API / Task API / WebSocket replay |
+| `tests/contracts/`（6 文件） | Base & IDs / Event contracts / Pipeline contracts / Runtime contracts / Source contracts / Task contracts |
+| `tests/pipeline/`（13 文件） | Event coverage / Event envelope unified / GEO tximport processing / Mode marking / Pinned pipeline / Pipeline e2e / Pipeline runner recovery / Pipeline runner resilience / Pipeline runner state machine / Pipeline tool / Publish lock / Task cancellation / Validation rules |
+| `tests/runtime/`（10 文件） | Compaction / Control executor / Event store / Fixture executor / Hub / Index / Manager / Repository / Session / State reducer (+ user input) |
+| `tests/integration/`（2 文件） | GSE178352 fixture / NCBI skill adapters |
+| `tests/integrations/`（4 文件） | Acquisition / NCBI client / NCBI discovery / NCBI parsers |
+| `tests/live/`（7 文件，`-m live`） | All data sources / Extract chart data VLM / GSE178352 / Pipeline / Qwen task spec / Reactome+PubChem / Web visual capture |
 
 ## 打包
 
@@ -95,274 +344,13 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 3. 上传构建产物为 Artifact
 4. 创建 GitHub Release 并附加可执行文件
 
-通过此流程，每次版本发布均可自动生成可直接运行的桌面应用安装包。
-
-## 项目结构
-
-```
-backend/
-├── app/
-│   ├── main.py                # FastAPI 入口（CORS、路由注册）
-│   ├── config.py              # 配置 dataclass（从 .env 加载）
-│   ├── agent_loop/            # Agent 运行核心
-│   │   ├── agent.py           # create_agent()：构建 Main Agent
-│   │   ├── runner.py          # durable Agent/fixture Run 执行 + typed 事件转换
-│   │   ├── context.py         # RunContext：任务状态、来源记录、工作目录
-│   │   ├── model.py           # 模型适配器（DashScope Qwen / OpenAI 兼容）
-│   │   └── summarizer.py      # ContextManager：查询日志压缩（超过 8000 字符时触发）
-│   ├── api/                   # HTTP + WebSocket 接口
-│   │   ├── routes.py          # REST 端点（databases、tasks、artifacts）
-│   │   └── ws.py              # WebSocket 端点（/api/v1/ws）
-│   ├── core/
-│   │   └── metrics.py         # MetricsTracker：阶段级指标追踪 + 消融报告导出
-│   ├── domain/                # 领域模型
-│   │   ├── __init__.py        # 公共 API 导出
-│   │   ├── task.py            # TaskRequest、TaskRecord、TaskStateMachine
-│   │   ├── events.py          # TaskEvent、EventFactory
-│   │   ├── output.py          # SourceRecord、DataRecord、OutputBundle
-│   │   └── processing.py      # ParsedDataset、CleaningReport
-│   ├── skills/                # Skill 仓库
-│   │   ├── registry.py        # SkillRegistry + SkillDef + build_agent_config()
-│   │   ├── evolution.py       # 自迭代引擎（save_learned_skill、create_evolution_md）
-│   │   ├── builtin/           # 内置 Skill（9 个，团队维护）
-│   │   │   ├── discovery/     #   pubmed.py、understanding.py（文献检索与理解）
-│   │   │   ├── acquisition/   #   geo.py、gdc.py、xena.py、pdb.py、browser.py
-│   │   │   ├── processing/    #   extract_tables.py、self_evolution.py
-│   │   │   └── analysis/      #   stats.py
-│   │   └── learned/           # 后天 Skill（自迭代生成，4 个类别子目录）
-│   └── tools/                 # Function Tools
-│       ├── _registry.py       # get_all_tools()：从 Skill 收集启用的 Tool
-│       ├── io.py              # read_file、write_file、list_files（路径安全检查）
-│       ├── workdir.py         # TaskWorkDir、create_task_workdir()
-│       ├── search.py          # 文献检索（已迁移至 pubmed Skill，保留占位）
-│       ├── parse.py           # PDF 解析（占位 stub）
-│       ├── processing.py      # parse_csv/json/html、identify_format、parse_file
-│       ├── cleaning.py        # count_missing、detect_duplicates、clean_dataset
-│       ├── alignment.py       # normalize_field_names、align_fields、merge_datasets
-│       ├── export.py          # 导出 CSV：records、来源清单、字段说明、处理记录
-│       ├── parse_excel.py     # Excel 解析器（openpyxl）
-│       ├── parse_geo.py       # GEO 格式解析（Series Matrix、SOFT）
-│       ├── parse_pdb.py       # PDB/mmCIF 解析器
-│       └── analyze.py         # 数据分析（占位 stub）
-├── tests/                     # pytest 测试（12 个文件）
-│   ├── test_agent.py          # Agent 创建与 Skill 加载
-│   ├── test_runner.py         # Runner 流事件
-│   ├── test_config.py         # 配置加载
-│   ├── test_domain_contracts.py # 领域模型契约
-│   ├── test_tool_registry.py  # 工具注册表
-│   ├── test_skill_registry.py # Skill 注册表
-│   ├── test_tools_io.py       # I/O 工具路径安全
-│   ├── test_workdir.py        # 工作目录创建
-│   ├── test_processing.py     # 文件解析（CSV/JSON/HTML）
-│   ├── test_output.py         # CSV 导出
-│   └── test_summarizer.py     # 查询日志压缩
-├── scripts/
-│   └── demo_workflow.py       # 端到端演示管道（PubMed → GEO → 解析 → 分析）
-├── data/                      # 任务数据目录
-│   ├── tasks/<task_id>/       # 单任务工作目录
-│   │   ├── raw/               # 原始下载文件（只读）
-│   │   ├── parsed/            # 解析结果
-│   │   ├── normalized/        # 清洗对齐后数据
-│   │   ├── artifacts/         # 最终产物（CSV、来源清单）
-│   │   └── logs/              # Tool 调用和下载记录
-│   └── output/                # 全局输出目录
-├── pyproject.toml             # Python 项目配置（依赖、pytest 设定）
-├── uv.lock                    # uv 依赖锁文件
-├── requirements.txt           # pip 兼容依赖列表
-├── .python-version            # Python 3.12 版本锁定
-└── REPRODUCIBILITY.md         # 可复现性指南
-```
-
-## 架构与数据流
-
-### Agent 运行循环
-
-```text
-用户主题 + 数据库限制
-        │
-        ▼
-  REST POST admission
-  (/api/v1/tasks 或 /api/v1/tasks/{task_id}/runs)
-        │
-        ▼
-  TaskManager → durable Run queue
-        │
-        ▼
-  AgentRunExecutor + TaskSession
-        │
-        └── Runner.run_streamed(Main Agent, input, context, session)
-        │
-        ▼
-  TaskRepository 持久化 v2 EventEnvelope
-  (Run lifecycle / assistant_delta / tool_started /
-   tool_completed / artifact_produced)
-        │
-        ▼
-  WebSocket subscribe + sequence replay/live fan-out
-        │
-        ▼
-  前端按 task_id / run_id / sequence 更新 Task 投影
-```
-
-### Skill 体系
-
-4 类 Skill 按管线组织：
-
-| 类别 | 职责 | 内置 Skill |
-|------|------|------------|
-| **Discovery** | 文献检索、摘要理解、数据来源发现 | `pubmed`、`literature_understanding` |
-| **Acquisition** | 数据库检索、元数据获取、原始文件下载 | `geo`、`gdc`、`xena`、`pdb`、`browser_fallback` |
-| **Processing** | 文件解析、数据清洗、字段对齐、多源合并 | `pdf_extraction`、`self_evolution` |
-| **Analysis** | 统计分析、可视化（可选） | `analysis` |
-
-关键设计原则：
-- Skill 是按需加载的能力包，Tool 是实际执行单元
-- 一个网站对应多个 Tool（检索、查看元数据、下载是不同操作）
-- 同类网站共享一个 Skill（如 `omics_databases` 组织 GEO、GDC、Xena）
-- 每个 Skill 建议不超过 20 个 Tool，超过 30 个必须拆分
-- 后天 Skill（`learned/`）默认不覆盖同名内置 Skill
-
-### 数据管道
-
-```text
-Discovery：论文检索与理解
-        │
-        ▼
-  数据库、查询式、accession 候选
-        │
-        ▼
-Acquisition：API/脚本检索与下载
-        │  失败 → Browser Fallback Tool
-        ▼
-  raw/ 原始文件 + 下载记录
-        │
-        ▼
-Processing：解析 → 清洗 → 对齐 → 合并
-        │
-        ▼
-  artifacts/ CSV + 来源清单 + 字段说明 + 处理记录
-        │
-        ▼
-Analysis：统计与可视化（可选）
-```
-
-## API 接口
-
-### REST 端点
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/v1/health` | 健康检查 |
-| `GET` | `/api/v1/databases` | 获取可用数据库列表及其分类 |
-| `GET` | `/api/v1/tasks/{task_id}` | 查询任务状态与详情 |
-| `GET` | `/api/v1/tasks/{task_id}/artifacts` | 列出任务产物文件 |
-| `GET` | `/api/v1/tasks/{task_id}/artifacts/{filename:path}` | 下载产物文件 |
-
-### WebSocket
-
-**连接**：`ws://host:8000/api/v1/ws`
-
-任务创建与续跑分别通过 `POST /api/v1/tasks` 和
-`POST /api/v1/tasks/{task_id}/runs` 完成。WebSocket 仅接收
-`subscribe`、`unsubscribe` 和 `ping` 控制命令。
-
-**订阅任务事件**：
-```json
-{
-  "type": "subscribe",
-  "task_id": "task_123",
-  "after_sequence": 0
-}
-```
-
-订阅成功后，服务端按 sequence 推送 durable `EventEnvelope`；`ping` 返回
-`pong`，无效或不支持的命令返回稳定的 `error` 控制帧。
-
-## 技术栈
-
-| 组件 | 技术 | 说明 |
-|------|------|------|
-| Web 框架 | FastAPI + uvicorn | 异步 HTTP + WebSocket |
-| Agent SDK | openai-agents-python | Agent、Runner、Function Tool、HITL |
-| LLM | Qwen（DashScope） | OpenAI 兼容接口接入 |
-| 数据模型 | Pydantic v2 + dataclass | 类型安全的数据结构 |
-| 生物信息 | Biopython | Entrez/PubMed API 封装 |
-| 数据分析 | matplotlib, scipy, seaborn | 统计计算与可视化 |
-| HTTP 客户端 | httpx | 异步数据下载 |
-| 测试 | pytest + pytest-asyncio | 单元测试 + 异步测试 |
-
-### 依赖列表
-
-```
-fastapi, uvicorn[standard], websockets    # Web 框架
-openai-agents                             # Agent SDK
-pydantic, python-dotenv                   # 数据模型与配置
-httpx                                     # HTTP 客户端
-biopython                                 # PubMed/Entrez API
-matplotlib, scipy, seaborn                # 科学计算与可视化
-geoparse                                  # 地理信息解析
-```
-
-## 测试
-
-```bash
-uv run pytest                    # 运行全部测试
-uv run pytest -v                 # 详细输出
-uv run pytest tests/test_agent.py  # 运行特定测试文件
-uv run pytest -k "skill"         # 按关键字筛选
-```
-
-测试覆盖：
-
-| 测试文件 | 覆盖内容 |
-|----------|----------|
-| `test_agent.py` | Agent 创建、Skill 加载与去重 |
-| `test_runner.py` | Runner 流事件转换 |
-| `test_config.py` | 配置加载与环境变量 |
-| `test_domain_contracts.py` | 领域模型数据契约 |
-| `test_tool_registry.py` | 工具注册与发现 |
-| `test_skill_registry.py` | Skill 注册、筛选、启用/禁用 |
-| `test_tools_io.py` | 文件读写路径安全检查 |
-| `test_workdir.py` | 任务工作目录创建 |
-| `test_processing.py` | CSV/JSON/HTML 解析 |
-| `test_output.py` | CSV 导出完整性 |
-| `test_summarizer.py` | 查询日志压缩 |
-
-## 演示工作流
-
-```bash
-uv run python scripts/demo_workflow.py
-```
-
-演示流程：
-1. PubMed 文献检索 → 提取数据库名称与 accession
-2. GEO 数据集检索与下载
-3. 文件格式检测与解析（CSV/Excel/GEO Matrix）
-4. 数据清洗（缺失值、重复、类型检查）
-5. 字段对齐与多源合并
-6. 导出结构化 CSV + 来源清单 + 字段说明
-7. 可选：描述性统计与可视化
-
-预期产出：`data/demo_output/` 下的 6 个产物文件。
-
-## 浏览器降级
-
-当 API 或预置 Tool 失效、用户访问未适配的数据库时，系统使用 `browser_fallback` Skill 降级：
-
-1. 记录原始失败原因
-2. 调用通用浏览器自动化 Tool
-3. 成功后可选生成后天 Skill 代码，保存到 `skills/learned/`
-4. 至少一次重放验证后，人工启用
-
-浏览器 Tool 不绕过登录、付费、验证码或网站明确的访问控制。
-
 ## 安全模型
 
 - **文件隔离**：I/O Tool 只能访问当前任务工作目录，拒绝绝对路径、`..` 穿越和符号链接
 - **密钥保护**：后天代码不得读取环境变量中的密钥
-- **命令沙箱**：后天代码不得执行系统命令
-- **下载限制**：限制协议（仅 HTTP/HTTPS）、文件大小和超时
-- **用户确认**：敏感操作前通过 HITL 暂停，等待用户批准
+- **命令沙箱**：后天代码不得执行系统命令；`save_learned_skill` / `load_learned_skill` 实施路径白名单（`^[a-z][a-z0-9_]*$`）+ AST 白名单（拒绝 `exec/eval/compile/open/__import__/globals/locals/vars/breakpoint` 与 dunder 访问）
+- **下载限制**：限制协议（仅 HTTP/HTTPS）、域名白名单（`_ALLOWED_HOSTS`）、文件大小和超时
+- **用户确认**：敏感操作前通过 HITL 暂停，等待用户批准（计划确认 / max_turns / 数据修正）
 
 ## 扩展指南
 
@@ -372,7 +360,9 @@ uv run python scripts/demo_workflow.py
 2. 实现 `search_*`、`describe_*`、`download_*` 三个 Tool 函数
 3. 使用 `@function_tool` 装饰器注册到 SDK
 4. 模块底部调用 `skill_registry.register(SkillDef(...))`
-5. 编写对应测试（检索、元数据、下载分离测试）
+5. 在 `app/tools/_registry.py:BUILTIN_SKILL_MODULES` 追加模块
+6. 若需走 Pipeline 产出 `SourceAsset`，在 `integrations/acquisition.py:_ALLOWED_HOSTS` 添加域名
+7. 编写对应测试（检索、元数据、下载分离测试）
 
 ### 添加新解析器
 
@@ -384,15 +374,20 @@ uv run python scripts/demo_workflow.py
 
 | 问题 | 可能原因 | 解决方案 |
 |------|----------|----------|
-| 后端启动失败 `ModuleNotFoundError` | 依赖未安装 | 运行 `uv sync` |
+| 后端启动失败 `ModuleNotFoundError` | 依赖未安装 | 运行 `uv sync`（**勿用** `pip install -r requirements.txt`，子集不全） |
 | DashScope API 返回 401 | API Key 无效 | 检查 `.env` 中的 `DASHSCOPE_API_KEY` |
-| PubMed 检索超时 | Biopython Entrez 限速 | 已内置限速（0.34s/请求），若仍超时可增加延迟 |
-| GEO 下载失败 | 网络问题或格式不支持 | 系统会自动降级到浏览器方案 |
-| WebSocket 连接断开 | 模型输出超长或异常 | 检查后端日志，`summarizer.py` 会自动压缩超长上下文 |
-| 产物文件为空 | 解析步骤失败 | 查看 `data/tasks/<id>/logs/` 中的错误记录 |
+| PubMed 检索超时 | NCBI 限速 | 已内置 0.34s/请求限速 + 429/5xx 重试；可设置 `NCBI_API_KEY` 提高配额 |
+| GEO 下载失败 | 网络问题或格式不支持 | 自动降级到浏览器方案 |
+| WebSocket 连接断开 | 模型输出超长或异常 | `summarizer.py` 自动压缩；`finish_reason="length"` 时抛异常而非静默 |
+| 产物文件为空 | 解析步骤失败 | 查看 `data/output/tasks/<id>/logs/` |
+| Qwen 偶发 400（function.arguments 非 JSON） | LLM 返回非法 JSON | `AgentRunExecutor` 自动用原始 input 重跑（`QWEN_FUNCTION_ARGS_RETRY_LIMIT=2`） |
+| GitHub push 443 间歇失败 | 网络抖动 | 本地 `main` 已就绪，稍后 `git push origin main` 重试 |
 
 ## 相关文档
 
-- [项目架构设计](../docs/ARCHITECTURE.md)
+- [项目架构设计（权威）](../docs/ARCHITECTURE.md)
 - [可复现性指南](REPRODUCIBILITY.md)
+- [开发 TODO](../docs/TODO.md)
+- [2026-07-18 流程审查报告](../docs/REVIEW_2026-07-18.md)
 - [前端 README](../frontend/README.md)
+- [Skill 接口规范](../docs/skills_interface_spec.md)

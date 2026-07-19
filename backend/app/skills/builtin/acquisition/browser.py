@@ -21,7 +21,7 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import BROWSER_HEADERS, _rate_limiter, playwright_fetch
 from app.tools.network_safety import async_validate_public_http_request
@@ -75,7 +75,7 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     try:
         result = await asyncio.to_thread(playwright_fetch, url)
         if not result.ok:
-            run_ctx.log_query(url, "browser_fallback", "failed", 0)
+            run_ctx.log_query(url, "browser_fallback", QueryStatus.FAILED, 0)
             return json.dumps({
                 "url": url,
                 "status_code": result.status_code,
@@ -95,7 +95,7 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
         title = _extract_title(html)
         body_text = _extract_body_text(html)
 
-        run_ctx.log_query(url, "browser_fallback", "succeeded", 1)
+        run_ctx.log_query(url, "browser_fallback", QueryStatus.SUCCESS, 1)
         return json.dumps({
             "url": url,
             "status_code": status_code,
@@ -105,7 +105,7 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
             "content_type": content_type,
         }, ensure_ascii=False)
     except Exception as exc:
-        run_ctx.log_query(url, "browser_fallback", "failed", 0)
+        run_ctx.log_query(url, "browser_fallback", QueryStatus.FAILED, 0)
         return json.dumps({
             "url": url,
             "error": str(exc),
@@ -147,7 +147,7 @@ async def download_from_page(
             mime_type = content_type.split(";")[0].strip() if content_type else None
 
             if status_code >= 400:
-                run_ctx.log_query(filename, "browser_fallback", "failed", 0)
+                run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
                 return json.dumps({
                     "source": "browser_fallback",
                     "accession": filename,
@@ -184,7 +184,7 @@ async def download_from_page(
             retrieved_at=retrieved_at,
         )
         run_ctx.add_source(source_record)
-        run_ctx.log_query(filename, "browser_fallback", "succeeded", 1)
+        run_ctx.log_query(filename, "browser_fallback", QueryStatus.SUCCESS, 1)
 
         return json.dumps({
             "source": "browser_fallback",
@@ -195,7 +195,7 @@ async def download_from_page(
             "retrieved_at": retrieved_at.isoformat(),
         }, ensure_ascii=False)
     except Exception as exc:
-        run_ctx.log_query(filename, "browser_fallback", "failed", 0)
+        run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "browser_fallback",
             "accession": filename,

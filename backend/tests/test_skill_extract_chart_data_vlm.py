@@ -182,7 +182,7 @@ def test_extract_from_image_l1_success(tmp_path: Path) -> None:
 
     # query_log records the successful extraction
     assert len(run_ctx.query_log) == 1
-    assert run_ctx.query_log[0]["status"] == "succeeded"
+    assert run_ctx.query_log[0]["status"] == "success"
     assert run_ctx.query_log[0]["records_count"] == 1
 
 

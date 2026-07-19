@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, SourceRecord, make_source_id
+from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         body = _build_search_body(term, max_results)
         data = _post_json(_SEARCH_API, body)
     except Exception as exc:
-        run_ctx.log_query(term, "pdb", "error", 0)
+        run_ctx.log_query(term, "pdb", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "pdb",
             "term": term,
@@ -177,7 +177,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         }, ensure_ascii=False)
 
     result_set = data.get("result_set", [])
-    run_ctx.log_query(term, "pdb", "ok", len(result_set))
+    run_ctx.log_query(term, "pdb", QueryStatus.SUCCESS, len(result_set))
 
     records: list[dict[str, Any]] = []
     enrich_limit = min(len(result_set), _DESCRIBE_BATCH_LIMIT)
@@ -220,7 +220,7 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     try:
         data = _get_json(url)
     except Exception as exc:
-        run_ctx.log_query(pdb_id, "pdb", "failed", 0)
+        run_ctx.log_query(pdb_id, "pdb", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "pdb",
             "pdb_id": pdb_id,
@@ -235,7 +235,7 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     polymers = data.get("polymer_entities", [])
     non_polymers = data.get("nonpolymer_entities", [])
 
-    run_ctx.log_query(pdb_id, "pdb", "succeeded", 1)
+    run_ctx.log_query(pdb_id, "pdb", QueryStatus.SUCCESS, 1)
     return json.dumps({
         "source": "pdb",
         "pdb_id": pdb_id.upper(),

@@ -106,7 +106,7 @@ async def test_pubmed_and_geo_discovery_adapters_use_typed_services(
     assert "supplementary_file_urls" not in described
     assert client.geo_summary_ids.count("200178352") == 2
     assert all(value.isdigit() for value in client.geo_summary_ids)
-    assert context.query_log[0]["status"] == "completed"
+    assert context.query_log[0]["status"] == "success"
 
 
 @pytest.mark.asyncio

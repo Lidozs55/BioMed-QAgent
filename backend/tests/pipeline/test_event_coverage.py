@@ -148,17 +148,30 @@ def test_no_tool_events_for_skipped_stages(tmp_path: Path) -> None:
     assert completed == called
 
 
-def test_no_warning_events_when_warnings_csv_is_empty(tmp_path: Path) -> None:
-    """Fixture mode produces zero warnings — no WarningPayload events."""
+def test_warning_events_emitted_for_cell_line_corrections(tmp_path: Path) -> None:
+    """Fixture mode emits WarningPayload events for cell-line corrections.
+
+    The GSE178352 fixture ships samples with ``cell_line_raw="MD-MBA-231"``
+    that are canonicalized to ``"MDA-MB-231"``. Each correction produces one
+    ``warnings.csv`` row (TODO §1.7) and one ``WarningPayload`` event so the
+    frontend can surface the normalization to the user.
+    """
     runner = PipelineRunner(
-        task_id="task_no_warnings",
+        task_id="task_cell_line_warnings",
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
     )
     asyncio.run(runner.run())
 
     types = _event_types(runner)
-    assert PipelineEventType.WARNING.value not in types
+    assert PipelineEventType.WARNING.value in types
+    warning_events = [
+        event for event in runner.events
+        if event.type is PipelineEventType.WARNING
+    ]
+    # GSE178352 fixture has samples with MD-MBA-231 and MD-MBA-453 cell lines
+    # that are both canonicalized (see geo_tximport._CELL_LINE_CANONICAL).
+    assert len(warning_events) >= 2
 
 
 def test_pipeline_emits_stage_progress_for_discovery_acquisition_processing(

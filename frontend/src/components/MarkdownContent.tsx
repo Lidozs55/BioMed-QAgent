@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 interface MarkdownContentProps {
   content: string;
   className?: string;
+  streaming?: boolean;
 }
 
 const components: Components = {
@@ -99,9 +100,17 @@ const components: Components = {
   ),
 };
 
-export function MarkdownContent({ content, className }: MarkdownContentProps) {
+export function MarkdownContent({
+  content,
+  className,
+  streaming = false,
+}: MarkdownContentProps) {
   return (
-    <div className={cn("markdown-content", className)}>
+    <div
+      className={cn("markdown-content", className)}
+      data-streaming={streaming}
+      aria-busy={streaming}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

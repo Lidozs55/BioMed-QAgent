@@ -174,6 +174,29 @@ export type UserInputPromptKind =
 
 export type UserInputDecision = "approve" | "reject";
 
+export type AssistantDeltaPayload =
+  | {
+      type: "assistant_delta";
+      delta: string;
+      stream_id?: undefined;
+      from_chunk_index?: undefined;
+      through_chunk_index?: undefined;
+    }
+  | {
+      type: "assistant_delta";
+      delta: string;
+      stream_id: null;
+      from_chunk_index: null;
+      through_chunk_index: null;
+    }
+  | {
+      type: "assistant_delta";
+      delta: string;
+      stream_id: string;
+      from_chunk_index: number;
+      through_chunk_index: number;
+    };
+
 export type EventPayload =
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
@@ -258,7 +281,7 @@ export type EventPayload =
   | { type: "run_cancel_requested"; reason: string | null }
   | { type: "run_cancelled"; reason: string | null }
   | { type: "run_interrupted"; reason: string }
-  | { type: "assistant_delta"; delta: string }
+  | AssistantDeltaPayload
   | { type: "tool_started"; tool_call_id: string; tool_name: string }
   | {
       type: "conversation_compacted";
@@ -290,3 +313,25 @@ export type WebSocketCommand =
 export type WebSocketControlFrame =
   | { type: "pong" }
   | { type: "error"; code: string; message: string; task_id?: string };
+
+export interface AssistantStreamDeltaFrame {
+  type: "assistant_stream_delta";
+  task_id: string;
+  run_id: string;
+  stream_id: string;
+  chunk_index: number;
+  delta: string;
+}
+
+export interface AssistantStreamEndFrame {
+  type: "assistant_stream_end";
+  task_id: string;
+  run_id: string;
+  stream_id: string;
+  last_chunk_index: number | null;
+  finish_reason: string;
+}
+
+export type AssistantStreamFrame =
+  | AssistantStreamDeltaFrame
+  | AssistantStreamEndFrame;

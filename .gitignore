@@ -90,6 +90,7 @@ coverage.xml
 .cache
 *.bak
 .sisyphus/
+.worktree/
 opencode.json
 .codex/config.toml
 fix_ruff.py

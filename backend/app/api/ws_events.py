@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.domain.contracts import EventEnvelope
 from app.runtime.hub import (
+    AssistantStreamHub,
+    AssistantStreamSubscription,
     EventHub,
     EventSubscription,
     SubscriberOverflowError,
@@ -80,15 +82,18 @@ _EventCommand = _SubscribeCommand | _UnsubscribeCommand | _PingCommand
 
 class _SessionEnd(Enum):
     CLIENT_DISCONNECT = auto()
-    SUBSCRIBER_OVERFLOW = auto()
-    HUB_SHUTDOWN = auto()
+    DURABLE_SUBSCRIBER_OVERFLOW = auto()
+    DURABLE_HUB_SHUTDOWN = auto()
+    ASSISTANT_STREAM_OVERFLOW = auto()
+    ASSISTANT_STREAM_HUB_SHUTDOWN = auto()
 
 
 @dataclass
 class _EventConnection:
     websocket: WebSocket
     repository: TaskRepository
-    subscription: EventSubscription
+    event_subscription: EventSubscription
+    assistant_stream_subscription: AssistantStreamSubscription
     send_lock: asyncio.Lock
     active_task_ids: set[str] = field(default_factory=set)
     last_sent: dict[str, int] = field(default_factory=dict)
@@ -102,25 +107,42 @@ async def _run_event_session(
     application = websocket.scope["app"]
     repository: TaskRepository = application.state.task_repository
     hub: EventHub = application.state.event_hub
-    subscription = await hub.subscribe()
-    connection = _EventConnection(
-        websocket=websocket,
-        repository=repository,
-        subscription=subscription,
-        send_lock=send_lock,
+    assistant_stream_hub: AssistantStreamHub = (
+        application.state.assistant_stream_hub
     )
-    receiver = asyncio.create_task(
-        _receive_event_commands(connection, first_message),
-        name="task-event-ws-receiver",
-    )
-    sender = asyncio.create_task(
-        _send_live_events(connection),
-        name="task-event-ws-sender",
-    )
-    tasks = (receiver, sender)
+    event_subscription: EventSubscription | None = None
+    assistant_stream_subscription: AssistantStreamSubscription | None = None
+    tasks: list[asyncio.Task[_SessionEnd]] = []
     outcomes: list[_SessionEnd] = []
     failure: Exception | None = None
     try:
+        event_subscription = await hub.subscribe()
+        assistant_stream_subscription = await assistant_stream_hub.subscribe()
+        connection = _EventConnection(
+            websocket=websocket,
+            repository=repository,
+            event_subscription=event_subscription,
+            assistant_stream_subscription=assistant_stream_subscription,
+            send_lock=send_lock,
+        )
+        tasks.append(
+            asyncio.create_task(
+                _receive_event_commands(connection, first_message),
+                name="task-event-ws-receiver",
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                _send_durable_events(connection),
+                name="task-event-ws-sender",
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                _send_assistant_stream_frames(connection),
+                name="assistant-stream-ws-sender",
+            )
+        )
         done, pending = await asyncio.wait(
             tasks,
             return_when=asyncio.FIRST_COMPLETED,
@@ -140,11 +162,34 @@ async def _run_event_session(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await subscription.close()
+        if event_subscription is not None:
+            try:
+                await event_subscription.close()
+            finally:
+                if assistant_stream_subscription is not None:
+                    await assistant_stream_subscription.close()
 
     if _SessionEnd.CLIENT_DISCONNECT in outcomes:
         return
-    if _SessionEnd.SUBSCRIBER_OVERFLOW in outcomes:
+    if _SessionEnd.ASSISTANT_STREAM_OVERFLOW in outcomes:
+        await _close_websocket(
+            websocket,
+            send_lock,
+            code=1013,
+            reason=(
+                "assistant stream overflow; reconnect and replay durable events"
+            ),
+        )
+        return
+    if _SessionEnd.ASSISTANT_STREAM_HUB_SHUTDOWN in outcomes:
+        await _close_websocket(
+            websocket,
+            send_lock,
+            code=1012,
+            reason="assistant stream hub shutdown",
+        )
+        return
+    if _SessionEnd.DURABLE_SUBSCRIBER_OVERFLOW in outcomes:
         await _close_websocket(
             websocket,
             send_lock,
@@ -152,7 +197,7 @@ async def _run_event_session(
             reason="subscriber overflow; reconnect and replay",
         )
         return
-    if _SessionEnd.HUB_SHUTDOWN in outcomes:
+    if _SessionEnd.DURABLE_HUB_SHUTDOWN in outcomes:
         await _close_websocket(
             websocket,
             send_lock,
@@ -244,9 +289,17 @@ async def _subscribe(
 
     async with connection.send_lock:
         try:
-            await connection.subscription.subscribe_task(command.task_id)
+            await connection.event_subscription.subscribe_task(command.task_id)
         except SubscriptionClosedError:
-            return _closed_subscription_end(connection.subscription)
+            return _closed_event_subscription_end(connection.event_subscription)
+        try:
+            await connection.assistant_stream_subscription.subscribe_task(
+                command.task_id
+            )
+        except SubscriptionClosedError:
+            return _closed_assistant_stream_subscription_end(
+                connection.assistant_stream_subscription
+            )
         connection.active_task_ids.add(command.task_id)
         watermark = max(
             connection.last_sent.get(command.task_id, 0),
@@ -270,27 +323,41 @@ async def _unsubscribe(
 ) -> _SessionEnd | None:
     async with connection.send_lock:
         try:
-            await connection.subscription.unsubscribe_task(task_id)
+            await connection.event_subscription.unsubscribe_task(task_id)
         except SubscriptionClosedError:
-            return _closed_subscription_end(connection.subscription)
+            return _closed_event_subscription_end(connection.event_subscription)
+        try:
+            await connection.assistant_stream_subscription.unsubscribe_task(task_id)
+        except SubscriptionClosedError:
+            return _closed_assistant_stream_subscription_end(
+                connection.assistant_stream_subscription
+            )
         connection.active_task_ids.discard(task_id)
     return None
 
 
-def _closed_subscription_end(subscription: EventSubscription) -> _SessionEnd:
+def _closed_event_subscription_end(subscription: EventSubscription) -> _SessionEnd:
     if subscription.overflowed:
-        return _SessionEnd.SUBSCRIBER_OVERFLOW
-    return _SessionEnd.HUB_SHUTDOWN
+        return _SessionEnd.DURABLE_SUBSCRIBER_OVERFLOW
+    return _SessionEnd.DURABLE_HUB_SHUTDOWN
 
 
-async def _send_live_events(connection: _EventConnection) -> _SessionEnd:
+def _closed_assistant_stream_subscription_end(
+    subscription: AssistantStreamSubscription,
+) -> _SessionEnd:
+    if subscription.overflowed:
+        return _SessionEnd.ASSISTANT_STREAM_OVERFLOW
+    return _SessionEnd.ASSISTANT_STREAM_HUB_SHUTDOWN
+
+
+async def _send_durable_events(connection: _EventConnection) -> _SessionEnd:
     while True:
         try:
-            event = await connection.subscription.receive()
+            event = await connection.event_subscription.receive()
         except SubscriberOverflowError:
-            return _SessionEnd.SUBSCRIBER_OVERFLOW
+            return _SessionEnd.DURABLE_SUBSCRIBER_OVERFLOW
         except SubscriptionClosedError:
-            return _SessionEnd.HUB_SHUTDOWN
+            return _SessionEnd.DURABLE_HUB_SHUTDOWN
 
         try:
             async with connection.send_lock:
@@ -299,6 +366,26 @@ async def _send_live_events(connection: _EventConnection) -> _SessionEnd:
                 if event.sequence <= connection.last_sent.get(event.task_id, 0):
                     continue
                 await _send_live_event_locked(connection, event)
+        except WebSocketDisconnect:
+            return _SessionEnd.CLIENT_DISCONNECT
+
+
+async def _send_assistant_stream_frames(
+    connection: _EventConnection,
+) -> _SessionEnd:
+    while True:
+        try:
+            frame = await connection.assistant_stream_subscription.receive()
+        except SubscriberOverflowError:
+            return _SessionEnd.ASSISTANT_STREAM_OVERFLOW
+        except SubscriptionClosedError:
+            return _SessionEnd.ASSISTANT_STREAM_HUB_SHUTDOWN
+
+        try:
+            async with connection.send_lock:
+                if frame.task_id not in connection.active_task_ids:
+                    continue
+                await connection.websocket.send_json(frame.model_dump(mode="json"))
         except WebSocketDisconnect:
             return _SessionEnd.CLIENT_DISCONNECT
 

@@ -4,7 +4,23 @@ import asyncio
 import importlib
 
 import pytest
-from app.domain.contracts import AssistantDeltaPayload, build_event
+from app.domain.contracts import (
+    AssistantDeltaPayload,
+    AssistantStreamDeltaFrame,
+    build_event,
+)
+
+
+def assistant_delta_frame(
+    *, task_id: str, chunk_index: int
+) -> AssistantStreamDeltaFrame:
+    return AssistantStreamDeltaFrame(
+        task_id=task_id,
+        run_id="run_123",
+        stream_id="stream_123",
+        chunk_index=chunk_index,
+        delta=f"chunk {chunk_index}",
+    )
 
 
 @pytest.mark.asyncio
@@ -122,3 +138,63 @@ async def test_connection_can_change_task_filters_without_replacing_queue() -> N
     await hub.publish(first_task_event)
     assert await subscription.receive() == first_task_event
     assert subscription.task_ids == frozenset({"task_first"})
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_subscription_filters_and_updates_task_ids() -> None:
+    hub_module = importlib.import_module("app.runtime.hub")
+    hub = hub_module.AssistantStreamHub()
+    subscription = await hub.subscribe(task_ids={"task_first"})
+
+    await subscription.subscribe_task("task_second")
+    second = assistant_delta_frame(task_id="task_second", chunk_index=0)
+    await hub.publish(second)
+    assert await subscription.receive() == second
+
+    await subscription.unsubscribe_task("task_second")
+    await hub.publish(second)
+    first = assistant_delta_frame(task_id="task_first", chunk_index=1)
+    await hub.publish(first)
+
+    assert await subscription.receive() == first
+    assert subscription.task_ids == frozenset({"task_first"})
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_slow_subscriber_drains_then_overflows() -> None:
+    hub_module = importlib.import_module("app.runtime.hub")
+    hub = hub_module.AssistantStreamHub(subscriber_queue_size=1)
+    subscription = await hub.subscribe(task_ids={"task_123"})
+    first = assistant_delta_frame(task_id="task_123", chunk_index=0)
+
+    await hub.publish(first)
+    await hub.publish(assistant_delta_frame(task_id="task_123", chunk_index=1))
+
+    assert await subscription.receive() == first
+    with pytest.raises(hub_module.SubscriberOverflowError):
+        await subscription.receive()
+    assert hub.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_hub_close_wakes_blocked_receiver() -> None:
+    hub_module = importlib.import_module("app.runtime.hub")
+    hub = hub_module.AssistantStreamHub()
+    subscription = await hub.subscribe(task_ids={"task_123"})
+    receiver = asyncio.create_task(subscription.receive())
+    await asyncio.sleep(0)
+
+    await hub.close()
+
+    with pytest.raises(hub_module.SubscriptionClosedError):
+        await asyncio.wait_for(receiver, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_publish_with_no_subscribers_is_a_no_op() -> None:
+    hub_module = importlib.import_module("app.runtime.hub")
+    hub = hub_module.AssistantStreamHub()
+
+    await hub.publish(assistant_delta_frame(task_id="task_123", chunk_index=0))
+
+    assert hub.subscriber_count == 0

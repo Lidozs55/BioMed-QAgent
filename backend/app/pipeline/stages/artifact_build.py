@@ -73,9 +73,159 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
 }
 
 
+# Real semantic descriptions for every field in main_data.csv (TODO §1.2).
+# Replaces the placeholder ``field.replace("_", " ")`` that produced strings
+# like ``"gene id namespace"``. Each entry is
+# ``(data_type, description, unit, nullable, example)``.
+_FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str, str, str]] = {
+    "record_id": (
+        "string",
+        "Stable unique row identifier derived from dataset_id, gene_id and sample_id",
+        "", "false", "rec_gse178352_ENSG00000000003_GSM8117703",
+    ),
+    "dataset_id": (
+        "string",
+        "Foreign key to dataset_catalog.csv identifying the dataset this row belongs to",
+        "", "false", "ds_gse178352",
+    ),
+    "source_id": (
+        "string",
+        "Foreign key to source_list.csv identifying the originating database",
+        "", "false", "src_geo_gse178352",
+    ),
+    "asset_id": (
+        "string",
+        "Foreign key to source_assets.csv identifying the downloaded source file",
+        "", "false", "asset_a1b2c3d4e5f6",
+    ),
+    "gene_id_raw": (
+        "string",
+        "Raw gene identifier as it appears in the source file before normalization",
+        "", "false", "ENSG00000000003",
+    ),
+    "gene_id": (
+        "string",
+        "Canonical gene identifier after namespace normalization",
+        "", "false", "ENSG00000000003",
+    ),
+    "gene_id_namespace": (
+        "string",
+        "Namespace/authority for the gene identifier (e.g., ensembl_gene, hgnc_symbol)",
+        "", "false", "ensembl_gene",
+    ),
+    "gene_id_version": (
+        "string",
+        "Version suffix of the gene identifier when available (e.g., ENSG00000139618.14)",
+        "", "true", "ENSG00000139618.14",
+    ),
+    "sample_id": (
+        "string",
+        "Foreign key to sample_metadata.csv identifying the sample (GEO GSM accession)",
+        "", "false", "GSM8117703",
+    ),
+    "source_sample_alias": (
+        "string",
+        "Original sample alias used in the source file's column header",
+        "", "false", "A",
+    ),
+    "measurement_type": (
+        "string",
+        "Type of measurement (e.g., tximport_estimated_count, sample_metadata)",
+        "", "false", "tximport_estimated_count",
+    ),
+    "value_semantics": (
+        "string",
+        "Semantic interpretation of the value (e.g., estimated_count, metadata_only)",
+        "", "false", "estimated_count",
+    ),
+    "value_scale": (
+        "string",
+        "Scale of the value (e.g., linear, log2, na for not-applicable)",
+        "", "false", "linear",
+    ),
+    "is_normalized": (
+        "string",
+        "Whether the value has been normalized (true/false)",
+        "", "false", "false",
+    ),
+    "is_integer_expected": (
+        "string",
+        "Whether the value is expected to be an integer (true/false)",
+        "", "false", "false",
+    ),
+    "expression_value": (
+        "float",
+        "Numeric expression measurement value parsed from the source file",
+        "estimated_count", "false", "1.0",
+    ),
+    "expression_unit": (
+        "string",
+        "Unit of the expression value (e.g., estimated_count, tpm, fpkm)",
+        "", "false", "estimated_count",
+    ),
+    "source_logical_file": (
+        "string",
+        "Logical name of the source file within the asset (e.g., GSE178352_tximportCounts.txt)",
+        "", "false", "GSE178352_tximportCounts.txt",
+    ),
+    "source_line_number": (
+        "integer",
+        "1-based line number in the source file where this value appears",
+        "", "false", "2",
+    ),
+    "source_column_index": (
+        "integer",
+        "0-based column index in the source file where this value appears",
+        "", "false", "1",
+    ),
+    "source_column_name": (
+        "string",
+        "Column header name in the source file",
+        "", "false", "counts.A",
+    ),
+    "source_raw_value": (
+        "string",
+        "Original string value as it appears in the source file before parsing",
+        "", "false", "1.0",
+    ),
+}
+
+
+def _build_cell_line_warnings(
+    samples: list[GeoSampleMetadata],
+    geo_source_id: str,
+    asset_id: str,
+    retrieved_at: datetime,
+) -> list[dict[str, object]]:
+    """Build warnings.csv rows for cell-line canonicalization corrections.
+
+    Each sample whose ``cell_line_raw != cell_line_canonical`` produces one
+    warning row with ``code="cell_line_normalized"`` so judges can audit the
+    normalization applied during processing (TODO §1.7).
+    """
+    warnings: list[dict[str, object]] = []
+    for sample in samples:
+        if sample.cell_line_raw and sample.cell_line_raw != sample.cell_line_canonical:
+            warnings.append({
+                "warning_id": f"warn_cell_line_{sample.sample_id.lower()}",
+                "severity": "info",
+                "stage": "processing",
+                "code": "cell_line_normalized",
+                "message": f"{sample.cell_line_raw} → {sample.cell_line_canonical}",
+                "source_id": geo_source_id,
+                "asset_id": asset_id,
+                "record_id": sample.sample_id,
+                "created_at": retrieved_at.isoformat(),
+            })
+    return warnings
+
+
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
+    # Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
+    # row keys instead of silently dropping them (TODO §1.7).
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -115,6 +265,28 @@ def run_artifact_build(
     geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo.accession}"
     source_asset = source_assets[0]
     download_attempt = download_attempts[0]
+
+    # Build cell-line normalization warnings (TODO §1.7). Each sample whose
+    # cell_line_raw was canonicalized produces one warning row; the same
+    # list is serialized into processing_log.csv's ``warnings`` JSON array
+    # so the warnings_metrics_consistency validation check stays satisfied.
+    cell_line_warnings = _build_cell_line_warnings(
+        samples=samples,
+        geo_source_id=geo_source_id,
+        asset_id=source_asset.asset_id,
+        retrieved_at=retrieved_at,
+    )
+    processing_log_warnings = json.dumps(
+        [
+            {
+                "warning_id": row["warning_id"],
+                "code": row["code"],
+                "message": row["message"],
+            }
+            for row in cell_line_warnings
+        ],
+        sort_keys=True,
+    )
 
     rows_by_file: dict[str, list[dict[str, object]]] = {
         "literature.csv": [
@@ -168,12 +340,12 @@ def run_artifact_build(
         "field_descriptions.csv": [
             {
                 "field_name": field,
-                "data_type": "string",
-                "description": field.replace("_", " "),
-                "unit": "estimated_count" if field == "expression_value" else "",
-                "nullable": "true" if field == "gene_id_version" else "false",
+                "data_type": _FIELD_DESCRIPTIONS[field][0],
+                "description": _FIELD_DESCRIPTIONS[field][1],
+                "unit": _FIELD_DESCRIPTIONS[field][2],
+                "nullable": _FIELD_DESCRIPTIONS[field][3],
                 "source": "GSE178352_tximportCounts.txt",
-                "example": "",
+                "example": _FIELD_DESCRIPTIONS[field][4],
             }
             for field in _OUTPUT_COLUMNS
         ],
@@ -244,10 +416,10 @@ def run_artifact_build(
                 "status": "succeeded",
                 "started_at": ctx.started_at.isoformat(),
                 "finished_at": datetime.now(UTC).isoformat(),
-                "warnings": "[]",
+                "warnings": processing_log_warnings,
             }
         ],
-        "warnings.csv": [],
+        "warnings.csv": cell_line_warnings,
     }
 
     for name, columns in _ARTIFACT_COLUMNS.items():
