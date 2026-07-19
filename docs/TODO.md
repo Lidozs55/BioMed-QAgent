@@ -1077,3 +1077,11 @@
 - [ ] **P2** `config.py` `OUTPUT_DIR` 改为绝对路径默认值
 
       —— 当前默认 `data/output`（相对路径）cwd 依赖，生产环境风险
+
+## 9. 前端 UI 改进
+
+- [ ] 引入 <https://ui.shadcn.com/docs/components/base/command>
+            <https://ui.shadcn.com/docs/components/base/context-menu>
+            <https://ui.shadcn.com/docs/components/base/menubar>
+- [ ] 修改当前对话界面，优化思维链呈现/产物呈现
+- [ ] 引入对话路由，便于调试 & 厘清页面关系
