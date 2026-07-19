@@ -308,7 +308,9 @@ class AgentRunExecutor:
                     finish_reason = _extract_finish_reason(event.data)
                     if finish_reason:
                         logger.debug("[RAW_DONE] finish_reason=%s", finish_reason)
-                        await text_buffer.end(finish_reason)
+                        await text_buffer.end(
+                            _normalize_assistant_finish_reason(finish_reason)
+                        )
                     if (
                         finish_reason == "length"
                         and not truncation_warned
@@ -998,3 +1000,9 @@ def _extract_finish_reason(data) -> str | None:
     if isinstance(finish_reason, str) and finish_reason:
         return finish_reason
     return None
+
+
+def _normalize_assistant_finish_reason(finish_reason: str) -> str:
+    if finish_reason in {"tool_calls", "function_call"}:
+        return "tool_call"
+    return finish_reason
