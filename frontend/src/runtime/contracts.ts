@@ -185,6 +185,13 @@ export type AssistantDeltaPayload =
   | {
       type: "assistant_delta";
       delta: string;
+      stream_id: null;
+      from_chunk_index: null;
+      through_chunk_index: null;
+    }
+  | {
+      type: "assistant_delta";
+      delta: string;
       stream_id: string;
       from_chunk_index: number;
       through_chunk_index: number;

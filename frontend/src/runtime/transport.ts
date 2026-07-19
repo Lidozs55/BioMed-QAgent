@@ -8,6 +8,7 @@ import type { ConnectionStatus } from "./types";
 
 const CONNECTING = 0;
 const OPEN = 1;
+const MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048;
 const EVENT_TYPES = new Set([
   "task_created",
   "plan_ready",
@@ -205,6 +206,7 @@ function isAssistantStreamBoundary(envelope: EventEnvelope): boolean {
     envelope.type === "run_finalizing" ||
     envelope.type === "run_completed" ||
     envelope.type === "run_failed" ||
+    envelope.type === "run_cancel_requested" ||
     envelope.type === "run_cancelled" ||
     envelope.type === "run_interrupted"
   );
@@ -229,6 +231,13 @@ function payloadShapeMatches(
       const hasFromIndex = payload.from_chunk_index !== undefined;
       const hasThroughIndex = payload.through_chunk_index !== undefined;
       if (!hasStreamId && !hasFromIndex && !hasThroughIndex) return true;
+      if (
+        payload.stream_id === null &&
+        payload.from_chunk_index === null &&
+        payload.through_chunk_index === null
+      ) {
+        return true;
+      }
       return (
         hasStreamId === hasFromIndex &&
         hasFromIndex === hasThroughIndex &&
@@ -624,6 +633,7 @@ export class AgentEventTransport {
     }
     if (!isEventEnvelope(frame)) return;
     if (!this.active.has(frame.task_id)) return;
+    this.confirmQueuedAssistantStreamFrames(frame);
     if (isAssistantStreamBoundary(frame) && frame.run_id !== null) {
       this.discardAssistantStreamFrames(frame.task_id, frame.run_id);
     }
@@ -631,6 +641,28 @@ export class AgentEventTransport {
   }
 
   private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {
+    if (
+      this.pendingAssistantStreamFrames.length >=
+      MAX_PENDING_ASSISTANT_STREAM_FRAMES
+    ) {
+      if (frame.type === "assistant_stream_delta") return;
+      let disposableIndex = -1;
+      for (
+        let index = this.pendingAssistantStreamFrames.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        if (this.pendingAssistantStreamFrames[index].type === "assistant_stream_delta") {
+          disposableIndex = index;
+          break;
+        }
+      }
+      if (disposableIndex >= 0) {
+        this.pendingAssistantStreamFrames.splice(disposableIndex, 1);
+      } else {
+        return;
+      }
+    }
     this.pendingAssistantStreamFrames.push(frame);
     if (this.animationFrameHandle !== null) return;
     const generation = ++this.animationFrameGeneration;
@@ -645,6 +677,25 @@ export class AgentEventTransport {
     });
   }
 
+  private confirmQueuedAssistantStreamFrames(envelope: EventEnvelope): void {
+    const payload = envelope.payload;
+    if (payload.type !== "assistant_delta") return;
+    if (typeof payload.stream_id !== "string" || envelope.run_id === null) {
+      return;
+    }
+    const streamId = payload.stream_id;
+    const throughChunkIndex = payload.through_chunk_index;
+    this.pendingAssistantStreamFrames = this.pendingAssistantStreamFrames.filter(
+      (frame) =>
+        frame.task_id !== envelope.task_id ||
+        frame.run_id !== envelope.run_id ||
+        frame.stream_id !== streamId ||
+        frame.type !== "assistant_stream_delta" ||
+        frame.chunk_index > throughChunkIndex,
+    );
+    this.cancelEmptyAssistantStreamFrameBatch();
+  }
+
   private discardAssistantStreamFrames(taskId?: string, runId?: string): void {
     if (taskId === undefined) {
       this.pendingAssistantStreamFrames = [];
@@ -655,12 +706,12 @@ export class AgentEventTransport {
           (runId !== undefined && frame.run_id !== runId),
       );
     }
-    if (
-      this.pendingAssistantStreamFrames.length > 0 ||
-      this.animationFrameHandle === null
-    ) {
-      return;
-    }
+    this.cancelEmptyAssistantStreamFrameBatch();
+  }
+
+  private cancelEmptyAssistantStreamFrameBatch(): void {
+    if (this.pendingAssistantStreamFrames.length > 0) return;
+    if (this.animationFrameHandle === null) return;
     const cancel =
       this.options.cancelAnimationFrame ??
       ((handle: number) => window.cancelAnimationFrame(handle));

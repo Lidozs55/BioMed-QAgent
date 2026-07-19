@@ -126,12 +126,27 @@ export interface PendingUserInput {
   timestamp: string;
 }
 
-export interface AssistantStreamProjection {
+export interface AssistantStreamSegmentProjection {
   streamId: string;
-  durableText: string;
   pendingChunks: Record<number, string>;
   confirmedThroughChunkIndex: number;
   active: boolean;
+  durableSeen: boolean;
+}
+
+export interface AssistantStreamConflictDiagnostic {
+  taskId: string;
+  runId: string;
+  streamId: string;
+  chunkIndex: number;
+  count: number;
+}
+
+export interface AssistantStreamProjection {
+  durableText: string;
+  liveStreamOrder: string[];
+  streamsById: Record<string, AssistantStreamSegmentProjection>;
+  conflicts: AssistantStreamConflictDiagnostic[];
 }
 
 export interface TaskProjection {

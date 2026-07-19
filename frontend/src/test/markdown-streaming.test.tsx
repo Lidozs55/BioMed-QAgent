@@ -143,6 +143,7 @@ describe("streaming Markdown cursor", () => {
     { type: "run_finalizing" },
     { type: "run_completed" },
     { type: "run_failed", error: "boom" },
+    { type: "run_cancel_requested", reason: "stop" },
     { type: "run_cancelled", reason: "stop" },
     { type: "run_interrupted", reason: "restart" },
   ])("hides the cursor after $type", (payload) => {
@@ -157,7 +158,7 @@ describe("streaming Markdown cursor", () => {
     );
   });
 
-  it("hides the cursor after realtime end and disconnect deactivation", () => {
+  it("hides the cursor after realtime end", () => {
     seedStreamingTask();
     act(() => {
       useAgentStore.getState().applyAssistantStreamFrames([
@@ -170,7 +171,6 @@ describe("streaming Markdown cursor", () => {
           finish_reason: "stop",
         },
       ]);
-      useAgentStore.getState().deactivateAssistantStreams("task_stream");
     });
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
@@ -179,6 +179,17 @@ describe("streaming Markdown cursor", () => {
       "data-streaming",
       "false",
     );
+  });
+
+  it("removes unconfirmed text after disconnect deactivation", () => {
+    seedStreamingTask();
+    act(() => {
+      useAgentStore.getState().deactivateAssistantStreams("task_stream");
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.queryByText("实时文本")).not.toBeInTheDocument();
   });
 
   it("defines a pseudo cursor and disables blinking for reduced motion", () => {

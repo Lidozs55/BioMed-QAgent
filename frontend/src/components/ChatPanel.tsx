@@ -346,7 +346,11 @@ export function ChatPanel({
                                 content={message.content}
                                 streaming={
                                   message.runId !== null &&
-                                  activeTask?.assistantStreamsByRunId[message.runId]?.active === true
+                                  Object.values(
+                                    activeTask?.assistantStreamsByRunId[
+                                      message.runId
+                                    ]?.streamsById ?? {},
+                                  ).some((stream) => stream.active)
                                 }
                               />
                               {activeTask !== undefined && message.runId !== null && (

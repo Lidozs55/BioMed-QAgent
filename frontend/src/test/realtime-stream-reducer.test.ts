@@ -105,11 +105,24 @@ describe("realtime assistant projection", () => {
     expect(assistantText(state)).toBe("你好🙂");
     expect(state.tasksById.task_a.lastSequence).toBe(0);
     expect(state.tasksById.task_a.assistantStreamsByRunId.run_a).toMatchObject({
-      streamId: "assistant:run_a",
       durableText: "",
-      confirmedThroughChunkIndex: -1,
-      active: true,
-      pendingChunks: { 0: "你好", 1: "🙂" },
+      liveStreamOrder: ["assistant:run_a"],
+      streamsById: {
+        "assistant:run_a": {
+          confirmedThroughChunkIndex: -1,
+          active: true,
+          pendingChunks: { 0: "你好", 1: "🙂" },
+        },
+      },
+      conflicts: [
+        {
+          taskId: "task_a",
+          runId: "run_a",
+          streamId: "assistant:run_a",
+          chunkIndex: 0,
+          count: 1,
+        },
+      ],
     });
 
     state = reduceRuntimeEvent(
@@ -126,8 +139,12 @@ describe("realtime assistant projection", () => {
     expect(assistantText(state)).toBe("你好🙂");
     expect(state.tasksById.task_a.assistantStreamsByRunId.run_a).toMatchObject({
       durableText: "你好🙂",
-      confirmedThroughChunkIndex: 1,
-      pendingChunks: {},
+      streamsById: {
+        "assistant:run_a": {
+          confirmedThroughChunkIndex: 1,
+          pendingChunks: {},
+        },
+      },
     });
   });
 
@@ -151,12 +168,14 @@ describe("realtime assistant projection", () => {
 
     expect(assistantText(state)).toBe("先到🙂");
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_a.pendingChunks,
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById[
+        "assistant:run_a"
+      ].pendingChunks,
     ).toEqual({ 2: "🙂" });
     expect(state.tasksById.task_a.lastSequence).toBe(1);
   });
 
-  it("replaces a wrong live stream identity with the authoritative durable stream", () => {
+  it("drops unknown live-only segments when the first durable identity is authoritative", () => {
     let state = reduceAssistantStreamFrames(stateWithTask(), [
       delta(0, "wrong", "run_a", "wrong-stream"),
     ]);
@@ -175,12 +194,17 @@ describe("realtime assistant projection", () => {
 
     expect(assistantText(state)).toBe("correct🙂");
     expect(state.tasksById.task_a.lastSequence).toBe(1);
-    expect(state.tasksById.task_a.assistantStreamsByRunId.run_a).toEqual({
-      streamId: "assistant:run_a",
+    expect(state.tasksById.task_a.assistantStreamsByRunId.run_a).toMatchObject({
       durableText: "correct🙂",
-      pendingChunks: {},
-      confirmedThroughChunkIndex: 0,
-      active: false,
+      liveStreamOrder: ["assistant:run_a"],
+      streamsById: {
+        "assistant:run_a": {
+          pendingChunks: {},
+          confirmedThroughChunkIndex: 0,
+          active: false,
+          durableSeen: true,
+        },
+      },
     });
     expect(
       state.tasksById.task_a.messages.find(
@@ -189,37 +213,67 @@ describe("realtime assistant projection", () => {
     ).toBe(1);
   });
 
-  it("only ends the matching run and stream", () => {
+  it("keeps multiple ended and active segments per run without cross-ending them", () => {
     let state = reduceAssistantStreamFrames(stateWithTask(), [
-      delta(0, "A", "run_a"),
-      delta(0, "B", "run_b"),
+      delta(0, "A", "run_a", "opaque-a"),
+      {
+        type: "assistant_stream_end",
+        task_id: "task_a",
+        run_id: "run_a",
+        stream_id: "opaque-a",
+        last_chunk_index: 0,
+        finish_reason: "tool",
+      },
+      delta(0, "B", "run_a", "opaque-b"),
     ]);
+
+    expect(assistantText(state)).toBe("AB");
 
     state = reduceAssistantStreamFrames(state, [
       {
         type: "assistant_stream_end",
         task_id: "task_a",
         run_id: "run_a",
-        stream_id: "wrong",
+        stream_id: "opaque-a",
         last_chunk_index: 0,
-        finish_reason: "stop",
-      },
-      {
-        type: "assistant_stream_end",
-        task_id: "task_a",
-        run_id: "run_a",
-        stream_id: "assistant:run_a",
-        last_chunk_index: 0,
-        finish_reason: "stop",
+        finish_reason: "late",
       },
     ]);
 
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_a.active,
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById[
+        "opaque-a"
+      ].active,
     ).toBe(false);
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_b.active,
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById[
+        "opaque-b"
+      ].active,
     ).toBe(true);
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope(1, {
+        type: "assistant_delta",
+        delta: "A",
+        stream_id: "opaque-a",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    expect(assistantText(state)).toBe("AB");
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope(2, {
+        type: "assistant_delta",
+        delta: "B",
+        stream_id: "opaque-b",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    expect(assistantText(state)).toBe("AB");
   });
 
   it.each<EventPayload>([
@@ -227,6 +281,7 @@ describe("realtime assistant projection", () => {
     { type: "run_finalizing" },
     { type: "run_completed" },
     { type: "run_failed", error: "boom" },
+    { type: "run_cancel_requested", reason: "stop" },
     { type: "run_cancelled", reason: "stop" },
     { type: "run_interrupted", reason: "restart" },
   ])("deactivates an active stream on $type", (payload) => {
@@ -237,25 +292,101 @@ describe("realtime assistant projection", () => {
     const state = reduceRuntimeEvent(streaming, envelope(1, payload));
 
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_a.active,
+      Object.values(
+        state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById,
+      ).some((stream) => stream.active),
     ).toBe(false);
     expect(assistantText(state)).toBe("visible");
   });
 
-  it("deactivates all streams without deleting visible pending text", () => {
+  it("rolls unconfirmed text back on disconnect and removes an empty ephemeral message", () => {
     const streaming = reduceAssistantStreamFrames(stateWithTask(), [
       delta(0, "保留🙂"),
     ]);
 
     const state = deactivateAssistantStreams(streaming);
 
-    expect(assistantText(state)).toBe("保留🙂");
+    expect(assistantText(state)).toBe("");
+    expect(state.tasksById.task_a.messages).toHaveLength(0);
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_a.pendingChunks,
-    ).toEqual({ 0: "保留🙂" });
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById[
+        "assistant:run_a"
+      ].pendingChunks,
+    ).toEqual({});
+  });
+
+  it("rolls back to durable text while retaining watermarks for late dedupe", () => {
+    let state = reduceRuntimeEvent(
+      stateWithTask(),
+      envelope(1, {
+        type: "assistant_delta",
+        delta: "durable",
+        stream_id: "opaque-a",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceAssistantStreamFrames(state, [
+      delta(1, "+pending", "run_a", "opaque-a"),
+    ]);
+    expect(assistantText(state)).toBe("durable+pending");
+
+    state = deactivateAssistantStreams(state, "task_a");
+
+    expect(assistantText(state)).toBe("durable");
     expect(
-      state.tasksById.task_a.assistantStreamsByRunId.run_a.active,
-    ).toBe(false);
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.streamsById[
+        "opaque-a"
+      ],
+    ).toMatchObject({
+      pendingChunks: {},
+      confirmedThroughChunkIndex: 0,
+      active: false,
+    });
+  });
+
+  it("replaces pending realtime text when a legacy durable delta arrives", () => {
+    let state = reduceAssistantStreamFrames(stateWithTask(), [
+      delta(0, "legacy"),
+    ]);
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope(1, {
+        type: "assistant_delta",
+        delta: "legacy",
+        stream_id: null,
+        from_chunk_index: null,
+        through_chunk_index: null,
+      }),
+    );
+
+    expect(assistantText(state)).toBe("legacy");
+    expect(
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.durableText,
+    ).toBe("legacy");
+  });
+
+  it("bounds conflicting duplicate diagnostics without storing chunk text", () => {
+    const frames: AssistantStreamFrame[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      frames.push(delta(index, `first-${index}`));
+      frames.push(delta(index, `second-${index}`));
+    }
+    const state = reduceAssistantStreamFrames(stateWithTask(), frames);
+    const diagnostics =
+      state.tasksById.task_a.assistantStreamsByRunId.run_a.conflicts;
+
+    expect(diagnostics).toHaveLength(32);
+    expect(diagnostics[0]).toEqual({
+      taskId: "task_a",
+      runId: "run_a",
+      streamId: "assistant:run_a",
+      chunkIndex: 0,
+      count: 1,
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("first-");
+    expect(JSON.stringify(diagnostics)).not.toContain("second-");
   });
 
   it("lets an authoritative snapshot replace a pending realtime message", () => {
