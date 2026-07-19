@@ -15,7 +15,10 @@ from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import AGENT_MAX_TURNS, AgentBuild, build_agent
 from app.agent_loop.context import ManagedPipelineBridge
-from app.agent_loop.import_agent import IMPORT_AGENT_MAX_TURNS, build_import_agent
+from app.agent_loop.import_agent import (
+    ATTACHMENT_PARSING_MAX_TURNS,
+    build_attachment_parsing_agent,
+)
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
@@ -142,8 +145,12 @@ class AgentRunExecutor:
         """Build the Agent for this executor (overridable by subclasses)."""
         return build_agent(execution.databases)
 
-    def _max_turns(self) -> int:
-        """Return the max_turns for this executor's Agent loop."""
+    def _max_turns(self, execution=None) -> int:
+        """Return the max_turns for this executor's Agent loop.
+
+        ``execution`` is optional for backward compatibility; subclasses that
+        need run-specific max_turns (e.g. ``ImportRunExecutor``) can read it.
+        """
         return AGENT_MAX_TURNS
 
     @staticmethod
@@ -335,7 +342,7 @@ class AgentRunExecutor:
                     agent_input,
                     context=execution.context,
                     session=preparation.session,
-                    max_turns=self._max_turns(),
+                    max_turns=self._max_turns(execution),
                 )
                 execution.set_streaming_result(result)
                 try:
@@ -435,7 +442,7 @@ class AgentRunExecutor:
         ``POST /runs/{run_id}/resume``. See docs/REVIEW_2026-07-18.md §11.
         """
 
-        max_turns = self._max_turns()
+        max_turns = self._max_turns(execution)
         request_id = f"max_turns-{execution.run_id}-{resume_count}"
         event: asyncio.Event = asyncio.Event()
         decision_holder: list[UserInputResumedPayload] = []
@@ -743,20 +750,58 @@ class ModeDispatchRunExecutor:
 
 
 class ImportRunExecutor(AgentRunExecutor):
-    """IMPORT 任务执行器 — 复用 AgentRunExecutor 的 Agent loop 基础设施。
+    """IMPORT 任务执行器 — 双阶段串联（附件解析 → 主研究）。
 
-    与主 Agent 的差异（D5 决策）：
-      - ``_build`` 返回 ``build_import_agent()``（不加载外部数据库 skill）
-      - ``_max_turns`` 返回 ``IMPORT_AGENT_MAX_TURNS``（12，比主 Agent 15 少）
-      - 其余生命周期（compaction / pause-resume / cancellation / streaming）
-        全部复用父类
+    生命周期（D1 决策）：
+      - Run #1：``source_assets/`` 非空 → 附件解析 Agent
+        （``build_attachment_parsing_agent``），max_turns=40
+      - Run #2+：``source_assets/`` 为空（Run #1 完成后已归档）→ 标准
+        研究 Agent（``build_agent``），max_turns=AGENT_MAX_TURNS
+
+    Run #1 完成后，``__call__`` 把 ``source_assets/`` 中的文件移动到
+    ``source_assets/archived/``，使 Run #2 检测为空从而路由到标准 Agent。
+    前端通过监听 Run #1 完成事件，调 ``POST /tasks/{task_id}/runs``
+    入队 Run #2（主研究）。
+
+    两个 Run 的 ``RunContext`` 完全独立（D9 决策），不共享对话历史。
     """
 
     def _build(self, execution) -> AgentBuild:
-        return build_import_agent()
+        if self._has_pending_attachments(execution):
+            return build_attachment_parsing_agent()
+        return build_agent(execution.databases)
 
-    def _max_turns(self) -> int:
-        return IMPORT_AGENT_MAX_TURNS
+    def _max_turns(self, execution=None) -> int:
+        if execution is not None and self._has_pending_attachments(execution):
+            return ATTACHMENT_PARSING_MAX_TURNS
+        return AGENT_MAX_TURNS
+
+    @staticmethod
+    def _has_pending_attachments(execution) -> bool:
+        """检测 ``source_assets/`` 顶层是否有待处理文件（非 archived 子目录）。"""
+        source_assets = execution.context.work_dir.source_assets
+        if not source_assets.is_dir():
+            return False
+        return any(entry.is_file() for entry in source_assets.iterdir())
+
+    async def __call__(self, execution) -> None:  # type: ignore[override]
+        await super().__call__(execution)
+        # Run #1（附件解析）成功完成后，归档 source_assets/ 中的文件，
+        # 使后续 Run 检测为空 → 路由到标准研究 Agent。
+        if self._has_pending_attachments(execution):
+            ImportRunExecutor._archive_source_assets(execution)
+
+    @staticmethod
+    def _archive_source_assets(execution) -> None:
+        """把 ``source_assets/`` 顶层文件移动到 ``source_assets/archived/``。"""
+        import shutil
+
+        source_assets = execution.context.work_dir.source_assets
+        archived = source_assets / "archived"
+        archived.mkdir(parents=True, exist_ok=True)
+        for entry in source_assets.iterdir():
+            if entry.is_file():
+                shutil.move(str(entry), str(archived / entry.name))
 
 
 def _extract_text_delta(data) -> str | None:

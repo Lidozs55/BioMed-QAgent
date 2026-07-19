@@ -214,6 +214,15 @@ describe("runtime REST client", () => {
     );
   });
 
+  it("builds the cache export URL without making a request", () => {
+    const fetcher = vi.fn<FetchLike>();
+    const api = createAPIClient({ fetcher });
+
+    expect(api.getCacheExportUrl()).toBe("/api/v1/cache/export");
+    // URL builder must not trigger a network call.
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("deletes a task only through the authoritative encoded DELETE endpoint", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(
       new Response(null, { status: 204 }),

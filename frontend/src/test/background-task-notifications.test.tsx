@@ -226,6 +226,7 @@ describe("BackgroundTaskNotifications", () => {
       deleteTask: vi.fn(),
       fetchArtifacts: vi.fn().mockResolvedValue([]),
       getArtifactUrl: vi.fn(),
+      getCacheExportUrl: vi.fn(),
     };
     const eventTransport: EventTransport = {
       connect: vi.fn().mockResolvedValue(undefined),

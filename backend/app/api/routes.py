@@ -232,10 +232,12 @@ async def create_task(
 # Import (multipart upload → IMPORT AgentLoop)
 # ---------------------------------------------------------------------------
 
-#: 单个上传文件大小上限（10 MB）— 临床数据/CSV/JSON 等规范化数据通常远小于此。
-_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
+#: 单个上传文件大小上限（500 MB）— 支持大型数据库 dump 和长论文 PDF。
+_IMPORT_MAX_FILE_BYTES = 500 * 1024 * 1024
 #: 单次导入请求最多文件数（防止滥用）。
 _IMPORT_MAX_FILES = 10
+#: 单次导入请求总大小上限（2 GB）。
+_IMPORT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 #: 文件名安全字符集：字母数字、``-``、``_``、``.``。
 _IMPORT_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -332,6 +334,7 @@ async def create_import_task(
     # 之前写入。``manager.create_task`` 返回时任务已入队但 runner 尚未
     # 真正启动 SDK Agent；写入是同步 I/O，发生在下一个事件循环让出之前。
     workdir = create_task_workdir(accepted.task_id)
+    grand_total = 0
     for upload, name in zip(files, sanitized_names, strict=True):
         target = workdir.source_asset_file(name)
         # 流式写入避免一次性把整个文件读入内存。
@@ -342,6 +345,7 @@ async def create_import_task(
                 if not chunk:
                     break
                 total += len(chunk)
+                grand_total += len(chunk)
                 if total > _IMPORT_MAX_FILE_BYTES:
                     out.close()
                     target.unlink(missing_ok=True)
@@ -352,9 +356,43 @@ async def create_import_task(
                             f"({_IMPORT_MAX_FILE_BYTES} bytes)"
                         ),
                     )
+                if grand_total > _IMPORT_MAX_TOTAL_BYTES:
+                    out.close()
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Total upload size exceeds limit "
+                            f"({_IMPORT_MAX_TOTAL_BYTES} bytes)"
+                        ),
+                    )
                 out.write(chunk)
 
     return accepted
+
+
+# ---------------------------------------------------------------------------
+# Cache export (D6 decision)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/cache/export")
+async def export_cache():
+    """Export the entire local cache as a single ZIP file.
+
+    Returns a ZIP with structure::
+
+        cache_export/
+        ├── index.json
+        └── <namespace>/<dataset_id>/
+            ├── main_data.csv
+            └── manifest.json
+
+    The ZIP can be re-imported via the ``parse_cache_export_zip`` tool.
+    """
+    from app.tools.cache_export import stream_cache_export
+
+    return await stream_cache_export()
 
 
 @router.get("/tasks/{task_id}", response_model=TaskSnapshot)

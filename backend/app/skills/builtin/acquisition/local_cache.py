@@ -12,7 +12,7 @@
 
 IMPORT Agent 通过 ``commit_to_cache`` 工具将清洗后的数据写入缓存。
 ``commit_to_cache`` 不在本 skill 的 tools 列表中（只供 IMPORT agent 使用），
-而是作为独立 function_tool 由 ``build_import_agent`` 直接装载。
+而是作为独立 function_tool 由 ``build_attachment_parsing_agent`` 直接装载。
 """
 
 from __future__ import annotations
@@ -35,10 +35,12 @@ logger = logging.getLogger(__name__)
     name_override="search_local_cache",
     description_override=(
         "Search the local cache for previously imported or cached datasets. "
-        "Returns dataset manifests matching the query (topic or description). "
-        "Use this BEFORE searching external databases (PubMed/GEO/...) to "
-        "reuse already-cleaned data. The cache is populated by IMPORT tasks "
-        "or by previous research runs."
+        "Returns dataset manifests matching the query via FTS5 full-text "
+        "search (matches topic, description, and keywords). Use this BEFORE "
+        "searching external databases (PubMed/GEO/...) to reuse already-"
+        "cleaned data. The cache is populated by IMPORT tasks or by previous "
+        "research runs. Query by any entity: gene names, drug names, "
+        "diseases, pathways, sample types, etc."
     ),
 )
 async def search_local_cache(
@@ -49,7 +51,8 @@ async def search_local_cache(
     """搜索本地缓存中已导入/已缓存的数据集。
 
     Args:
-        query: 搜索关键词（匹配 topic 或 description）。
+        query: 搜索关键词（FTS5 全文匹配 topic/description/keywords）。
+            支持任意实体：基因名、药物名、疾病、通路、样本类型等。
         max_results: 最多返回的结果数。
     """
     run_ctx: RunContext = ctx.context
@@ -90,6 +93,7 @@ async def search_local_cache(
             "source_namespace": m.source_namespace,
             "topic": m.topic,
             "description": m.description,
+            "keywords": m.keywords or [],
             "row_count": m.row_count,
             "created_at": m.created_at,
             "created_by_task_id": m.created_by_task_id,
@@ -143,6 +147,7 @@ async def describe_local_cache(
             "source_namespace": manifest.source_namespace,
             "topic": manifest.topic,
             "description": manifest.description,
+            "keywords": manifest.keywords or [],
             "row_count": manifest.row_count,
             "column_count": manifest.column_count,
             "created_at": manifest.created_at,

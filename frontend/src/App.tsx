@@ -64,6 +64,19 @@ export default function App() {
     };
   }, [controller, transport]);
 
+  const exportCache = useCallback(() => {
+    const url = api.getCacheExportUrl();
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "cache_export.zip";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("正在导出本地缓存", {
+      description: "下载将在浏览器中开始（ZIP 文件）",
+    });
+  }, [api]);
+
   return (
     <SidebarProvider
       defaultOpen={true}
@@ -76,6 +89,7 @@ export default function App() {
         onLoadAll={() => controller.loadAllTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
+        onExportCache={exportCache}
       />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">

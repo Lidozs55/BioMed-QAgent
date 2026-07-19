@@ -385,4 +385,22 @@ describe("SessionSidebar", () => {
       screen.getByText("运行中 4 / 4").parentElement,
     );
   });
+
+  it("renders the export cache button only when onExportCache is provided", () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [], next_cursor: null },
+      false,
+    );
+
+    // Without onExportCache: button is absent.
+    renderSidebar();
+    expect(screen.queryByRole("button", { name: "导出本地缓存为 ZIP" })).toBeNull();
+
+    // With onExportCache: button is present and invokes the callback.
+    const onExportCache = vi.fn();
+    renderSidebar({ onExportCache });
+    const btn = screen.getByRole("button", { name: "导出本地缓存为 ZIP" });
+    fireEvent.click(btn);
+    expect(onExportCache).toHaveBeenCalledTimes(1);
+  });
 });

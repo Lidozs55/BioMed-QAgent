@@ -83,6 +83,7 @@ class CacheDatasetManifest:
     created_by_task_id: str
     source_files: list[str]  # 原始上传文件名列表
     extra: dict[str, Any]  # 任意附加元数据
+    keywords: list[str] | None = None  # LLM 自由提取的关键实体标签（D2 决策）
 
 
 class CacheStore:
@@ -119,6 +120,7 @@ class CacheStore:
         created_by_task_id: str,
         source_files: list[str] | None = None,
         extra: dict[str, Any] | None = None,
+        keywords: list[str] | None = None,
     ) -> CacheDatasetManifest:
         """原子地写入一个数据集到缓存并更新索引。
 
@@ -132,6 +134,9 @@ class CacheStore:
             created_by_task_id: 创建此数据集的任务 ID（provenance）。
             source_files: 原始上传文件名列表。
             extra: 任意附加元数据。
+            keywords: LLM 自由提取的关键实体标签（D2 决策）。支持任意实体
+                （基因、药物、通路、疾病、样本类型等），由 FTS5 索引供
+                后续 search_local_cache 检索。None 等同于空列表。
 
         Returns:
             写入的 ``CacheDatasetManifest``。
@@ -149,6 +154,7 @@ class CacheStore:
         main_data_path = dataset_dir / "main_data.csv"
         manifest_path = dataset_dir / "manifest.json"
 
+        kw_list = [k.strip() for k in (keywords or []) if k and k.strip()]
         # 1. 写 main_data.csv 到 .tmp
         main_data_tmp = main_data_path.with_suffix(".csv.tmp")
         try:
@@ -165,6 +171,7 @@ class CacheStore:
                 created_by_task_id=created_by_task_id,
                 source_files=list(source_files or []),
                 extra=dict(extra or {}),
+                keywords=kw_list,
             )
             manifest_tmp = manifest_path.with_suffix(".json.tmp")
             manifest_tmp.write_text(
@@ -185,10 +192,11 @@ class CacheStore:
             raise
 
         logger.info(
-            "CacheStore.commit_dataset: namespace=%s dataset=%s rows=%d",
+            "CacheStore.commit_dataset: namespace=%s dataset=%s rows=%d keywords=%d",
             source_namespace,
             dataset_id,
             len(csv_rows),
+            len(kw_list),
         )
         return manifest
 
@@ -225,20 +233,53 @@ class CacheStore:
         *,
         limit: int = 20,
     ) -> list[CacheDatasetManifest]:
-        """按主题/描述关键词搜索数据集。"""
+        """按 FTS5 全文检索搜索数据集（匹配 topic/description/keywords）。
+
+        D2 决策：使用 SQLite FTS5 替代 LIKE，支持任意关键实体检索。
+        查询串会被转义为 FTS5 phrase 查询；若 FTS5 不可用或查询语法
+        无效，自动回退到 LIKE 搜索。
+        """
+        q = query.strip()
+        if not q:
+            return []
         conn = self._open_index()
         try:
-            # 简单 LIKE 搜索；FTS 留作后续优化
-            pattern = f"%{query.strip()}%"
-            cur = conn.execute(
-                "SELECT manifest_path FROM datasets "
-                "WHERE topic LIKE ? OR description LIKE ? "
-                "ORDER BY created_at DESC LIMIT ?",
-                (pattern, pattern, limit),
-            )
-            return [self._load_manifest(Path(row[0])) for row in cur.fetchall()]
+            # FTS5 phrase query: wrap in double quotes to treat as phrase.
+            # This avoids special chars (*, ^, :, etc.) being interpreted.
+            fts_query = '"' + q.replace('"', '""') + '"'
+            try:
+                cur = conn.execute(
+                    "SELECT manifest_path FROM datasets_fts "
+                    "WHERE datasets_fts MATCH ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (fts_query, limit),
+                )
+                rows = cur.fetchall()
+            except sqlite3.OperationalError:
+                # FTS5 表不存在或查询语法错误 → 回退到 LIKE
+                rows = self._search_like_fallback(conn, q, limit)
+            if not rows:
+                # FTS5 无匹配时也尝试 LIKE（FTS5 对子串匹配较弱）
+                rows = self._search_like_fallback(conn, q, limit)
+            return [self._load_manifest(Path(row[0])) for row in rows]
         finally:
             conn.close()
+
+    @staticmethod
+    def _search_like_fallback(
+        conn: sqlite3.Connection,
+        query: str,
+        limit: int,
+    ) -> list[tuple]:
+        """LIKE 回退搜索（子串匹配 topic/description/keywords）。"""
+        pattern = f"%{query}%"
+        cur = conn.execute(
+            "SELECT manifest_path FROM datasets "
+            "WHERE topic LIKE ? OR description LIKE ? OR keywords LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (pattern, pattern, pattern, limit),
+        )
+        return cur.fetchall()
 
     def get_dataset(
         self,
@@ -333,6 +374,7 @@ class CacheStore:
                     source_namespace TEXT NOT NULL,
                     topic TEXT NOT NULL,
                     description TEXT NOT NULL,
+                    keywords TEXT NOT NULL DEFAULT '',
                     row_count INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     created_by_task_id TEXT NOT NULL,
@@ -341,6 +383,12 @@ class CacheStore:
                 )
                 """,
             )
+            # Migration: add keywords column to pre-existing databases
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(
+                    "ALTER TABLE datasets "
+                    "ADD COLUMN keywords TEXT NOT NULL DEFAULT ''"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_datasets_namespace "
                 "ON datasets(source_namespace)"
@@ -348,6 +396,21 @@ class CacheStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_datasets_topic "
                 "ON datasets(topic)"
+            )
+            # FTS5 全文索引（D2 决策）— 索引 topic/description/keywords
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS datasets_fts USING fts5(
+                    source_namespace UNINDEXED,
+                    dataset_id UNINDEXED,
+                    topic,
+                    description,
+                    keywords,
+                    manifest_path UNINDEXED,
+                    created_at UNINDEXED,
+                    tokenize = 'unicode61'
+                )
+                """,
             )
             conn.commit()
         finally:
@@ -363,17 +426,20 @@ class CacheStore:
             / manifest.dataset_id
             / "manifest.json"
         )
+        keywords_str = " ".join(manifest.keywords or [])
         conn = self._open_index()
         try:
             conn.execute(
                 """
                 INSERT INTO datasets
                     (dataset_id, source_namespace, topic, description,
-                     row_count, created_at, created_by_task_id, manifest_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     keywords, row_count, created_at, created_by_task_id,
+                     manifest_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_namespace, dataset_id) DO UPDATE SET
                     topic = excluded.topic,
                     description = excluded.description,
+                    keywords = excluded.keywords,
                     row_count = excluded.row_count,
                     created_at = excluded.created_at,
                     created_by_task_id = excluded.created_by_task_id,
@@ -384,10 +450,34 @@ class CacheStore:
                     manifest.source_namespace,
                     manifest.topic,
                     manifest.description,
+                    keywords_str,
                     manifest.row_count,
                     manifest.created_at,
                     manifest.created_by_task_id,
                     str(manifest_path),
+                ),
+            )
+            # FTS5: 先删旧条目再插入（FTS5 不支持 ON CONFLICT）
+            conn.execute(
+                "DELETE FROM datasets_fts "
+                "WHERE source_namespace = ? AND dataset_id = ?",
+                (manifest.source_namespace, manifest.dataset_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO datasets_fts
+                    (source_namespace, dataset_id, topic, description,
+                     keywords, manifest_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.source_namespace,
+                    manifest.dataset_id,
+                    manifest.topic,
+                    manifest.description,
+                    keywords_str,
+                    str(manifest_path),
+                    manifest.created_at,
                 ),
             )
             conn.commit()
