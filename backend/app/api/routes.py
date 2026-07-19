@@ -361,12 +361,13 @@ async def create_import_task(
                 ) from error
             raise
     finally:
-        for upload in files:
-            await upload.close()
         if staging_dir is not None:
             shutil.rmtree(staging_dir, ignore_errors=True)
         with suppress(OSError):
             uploads_root.rmdir()
+        for upload in files:
+            with suppress(Exception):
+                await upload.close()
 
 
 @router.get("/tasks/{task_id}", response_model=TaskSnapshot)

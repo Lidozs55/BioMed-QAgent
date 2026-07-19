@@ -13,14 +13,18 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import pytest
 from app.config import Settings
 from app.main import create_app
+from app.runtime.manager import TaskManager
+from app.runtime.repository import TaskRepository
 from app.tools._registry import BUILTIN_SKILL_MODULES  # noqa: F401 — ensure import
 from app.tools.workdir import create_task_workdir
+from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 
@@ -206,6 +210,39 @@ async def test_import_tasks_cleans_staged_partial_upload_after_io_failure(
     assert response.status_code == 500
     assert _task_directories(tmp_path) == []
     assert not (tmp_path / "output" / "tasks" / ".uploads").exists()
+
+
+@pytest.mark.asyncio
+async def test_import_tasks_cleanup_survives_upload_close_failure(
+    tmp_path: Path,
+) -> None:
+    from app.api.routes import _IMPORT_MAX_FILE_BYTES, create_import_task
+
+    class CloseFailingUploadFile(UploadFile):
+        async def close(self) -> None:
+            raise OSError("upload close failed")
+
+    async def run_executor(_execution) -> None:
+        return None
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = TaskManager(repository, run_executor=run_executor)
+    upload = CloseFailingUploadFile(
+        filename="oversized.csv",
+        file=BytesIO(b"x" * (_IMPORT_MAX_FILE_BYTES + 1)),
+    )
+
+    with pytest.raises(HTTPException) as captured:
+        await create_import_task(
+            manager=manager,
+            repository=repository,
+            request_id="req-close-failure",
+            input="oversized upload",
+            files=[upload],
+        )
+
+    assert captured.value.status_code == 413
+    assert not (repository.tasks_dir / ".uploads").exists()
 
 
 @pytest.mark.asyncio
