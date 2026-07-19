@@ -118,6 +118,8 @@ def main() -> None:
     """
     import os
 
+    from app.config import settings
+
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
 
@@ -134,7 +136,7 @@ def main() -> None:
             daemon=True,
         ).start()
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level=settings.log_level.lower())
 
 
 if __name__ == "__main__":

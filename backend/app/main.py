@@ -23,7 +23,7 @@ from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 

@@ -40,6 +40,7 @@ cp .env.example .env
 | `HOST` | `127.0.0.1` | 后端监听地址 |
 | `PORT` | `8000` | 后端监听端口 |
 | `OUTPUT_DIR` | `data/output` | 数据产物输出目录 |
+| `LOG_LEVEL` | `INFO` | 日志等级（`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`） |
 | `RUNTIME_MAX_ACTIVE_RUNS` | `4` | 并发 Run slot 上限 |
 | `RUNTIME_SUBSCRIBER_QUEUE_SIZE` | `1000` | WebSocket 订阅者背压队列上限 |
 | `TASK_PAGE_SIZE` | `30` | 任务历史默认分页 |

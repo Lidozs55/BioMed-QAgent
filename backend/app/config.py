@@ -37,6 +37,8 @@ class Settings:
     task_page_size: int = int(os.getenv("TASK_PAGE_SIZE", "30"))
     task_page_max_size: int = int(os.getenv("TASK_PAGE_MAX_SIZE", "100"))
     task_message_page_size: int = int(os.getenv("TASK_MESSAGE_PAGE_SIZE", "100"))
+    # 日志等级 (DEBUG / INFO / WARNING / ERROR / CRITICAL)
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
     # Runtime concurrency and live-event backpressure
     runtime_max_active_runs: int = int(os.getenv("RUNTIME_MAX_ACTIVE_RUNS", "4"))
     runtime_sync_worker_threads: int = int(
