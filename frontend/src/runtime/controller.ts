@@ -77,7 +77,13 @@ export class RuntimeController {
   start(signal?: AbortSignal) {
     const databasePromise = this.api.fetchDatabases().then((databases) => {
       if (signal?.aborted) return;
-      useAgentStore.getState().setDatabases(databases);
+      const state = useAgentStore.getState();
+      state.setDatabases(databases);
+      if (state.draft.selectedDatabaseIds.length === 0) {
+        state.setDraftSelectedDatabaseIds(
+          databases.map((database) => database.id),
+        );
+      }
     });
     const historyPromise = this.loadTaskHistory(signal);
     const socketPromise = this.transport.connect();

@@ -314,6 +314,34 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().databases).toHaveLength(1);
   });
 
+  it("selects all available databases when loading the catalog without a saved selection", async () => {
+    const databases = [
+      {
+        id: "pubmed",
+        name: "PubMed",
+        category: "discovery",
+        description: "Literature",
+      },
+      {
+        id: "geo",
+        name: "GEO",
+        category: "acquisition",
+        description: "Expression",
+      },
+    ];
+    const apiClient = api({
+      fetchDatabases: vi.fn().mockResolvedValue(databases),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.start();
+
+    expect(useAgentStore.getState().draft.selectedDatabaseIds).toEqual([
+      "pubmed",
+      "geo",
+    ]);
+  });
+
   it("preserves a task created and completed after the first history request began", async () => {
     const firstPage = deferred<TaskPage>();
     const apiClient = api({
