@@ -740,6 +740,51 @@ async def test_consume_events_ends_each_active_segment_once_at_boundaries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_finish_reason", ["tool_calls", "function_call"])
+async def test_consume_events_normalizes_provider_tool_finish_reasons(
+    provider_finish_reason: str,
+) -> None:
+    live_frames: list[object] = []
+    execution = RunExecution(
+        task_id=f"task_{provider_finish_reason}",
+        run_id=f"run_{provider_finish_reason}",
+        request_id=f"request_{provider_finish_reason}",
+        input="normalize tool finish reason",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async([], payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    class FakeResult:
+        async def stream_events(self):
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="text"))]
+                )
+            )
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content=None),
+                            finish_reason=provider_finish_reason,
+                        )
+                    ]
+                )
+            )
+
+    await runner_module.AgentRunExecutor._consume_events(
+        execution,
+        FakeResult(),
+        buffer,
+    )
+
+    ends = [frame for frame in live_frames if isinstance(frame, AssistantStreamEndFrame)]
+    assert [frame.finish_reason for frame in ends] == ["tool_call"]
+
+
+@pytest.mark.asyncio
 async def test_consume_events_separates_reasoning_from_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

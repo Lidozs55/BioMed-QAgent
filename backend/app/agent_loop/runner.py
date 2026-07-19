@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +23,8 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     AssistantReasoningDeltaPayload,
+    AssistantStreamDeltaFrame,
+    AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
     StageName,
@@ -61,29 +63,103 @@ QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
 class _AssistantTextBuffer:
     def __init__(
         self,
-        emit: Callable[[object], Awaitable[object]],
+        execution: RunExecution,
         *,
         max_bytes: int = ASSISTANT_FLUSH_MAX_BYTES,
         flush_interval: float = ASSISTANT_FLUSH_INTERVAL_SECONDS,
     ) -> None:
-        self._emit = emit
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        bound_execution = getattr(execution, "__self__", None)
+        if bound_execution is not None:
+            execution = bound_execution
+        self._execution = execution
         self._max_bytes = max_bytes
         self._flush_interval = flush_interval
         self._parts: list[str] = []
         self._byte_count = 0
         self._started_at: float | None = None
+        self._base_stream_id = f"assistant:{execution.run_id}"
+        self._segment_index = 0
+        self._stream_id = self._base_stream_id
+        self._next_chunk_index = 0
+        self._from_chunk_index: int | None = None
+        self._through_chunk_index: int | None = None
+        self._segment_active = False
+        self._has_ended = False
 
     async def add(self, delta: str) -> None:
-        for character in delta:
-            character_bytes = len(character.encode("utf-8"))
-            if self._parts and self._byte_count + character_bytes > self._max_bytes:
+        if not delta:
+            return
+        chunks = self._split_delta(delta)
+        if self._has_ended:
+            self._segment_index += 1
+            self._stream_id = f"{self._base_stream_id}:{self._segment_index}"
+            self._next_chunk_index = 0
+            self._has_ended = False
+        for chunk in chunks:
+            chunk_bytes = len(chunk.encode("utf-8"))
+            if self._parts and self._byte_count + chunk_bytes > self._max_bytes:
                 await self.flush()
+            chunk_index = self._next_chunk_index
+            await self._execution.emit_assistant_stream(
+                AssistantStreamDeltaFrame(
+                    task_id=self._execution.task_id,
+                    run_id=self._execution.run_id,
+                    stream_id=self._stream_id,
+                    chunk_index=chunk_index,
+                    delta=chunk,
+                )
+            )
+            self._next_chunk_index += 1
             if not self._parts:
                 self._started_at = asyncio.get_running_loop().time()
-            self._parts.append(character)
-            self._byte_count += character_bytes
-            if self._byte_count == self._max_bytes:
+                self._from_chunk_index = chunk_index
+            self._parts.append(chunk)
+            self._through_chunk_index = chunk_index
+            self._byte_count += chunk_bytes
+            self._segment_active = True
+            if self._byte_count >= self._max_bytes:
                 await self.flush()
+
+    def _split_delta(self, delta: str) -> list[str]:
+        chunks: list[str] = []
+        characters: list[str] = []
+        byte_count = 0
+        for character in delta:
+            character_bytes = len(character.encode("utf-8"))
+            if character_bytes > self._max_bytes:
+                raise ValueError(
+                    "UTF-8 code point exceeds assistant buffer max_bytes"
+                )
+            if characters and byte_count + character_bytes > self._max_bytes:
+                chunks.append("".join(characters))
+                characters = []
+                byte_count = 0
+            characters.append(character)
+            byte_count += character_bytes
+        if characters:
+            chunks.append("".join(characters))
+        return chunks
+
+    async def end(self, finish_reason: str) -> None:
+        if not self._segment_active and self._has_ended:
+            return
+        await self.flush()
+        last_chunk_index = (
+            self._next_chunk_index - 1 if self._next_chunk_index else None
+        )
+        await self._execution.emit_assistant_stream(
+            AssistantStreamEndFrame(
+                task_id=self._execution.task_id,
+                run_id=self._execution.run_id,
+                stream_id=self._stream_id,
+                last_chunk_index=last_chunk_index,
+                finish_reason=finish_reason,
+            )
+        )
+        self._segment_active = False
+        self._has_ended = True
 
     def seconds_until_flush(self) -> float | None:
         if self._started_at is None:
@@ -95,10 +171,46 @@ class _AssistantTextBuffer:
         if not self._parts:
             return
         delta = "".join(self._parts)
+        from_chunk_index = self._from_chunk_index
+        through_chunk_index = self._through_chunk_index
+        if from_chunk_index is None or through_chunk_index is None:
+            raise RuntimeError("assistant text buffer lost its chunk range")
+        emit_task = asyncio.create_task(
+            self._execution.emit(
+                AssistantDeltaPayload(
+                    delta=delta,
+                    stream_id=self._stream_id,
+                    from_chunk_index=from_chunk_index,
+                    through_chunk_index=through_chunk_index,
+                )
+            )
+        )
+        try:
+            await asyncio.shield(emit_task)
+        except asyncio.CancelledError:
+            while not emit_task.done():
+                try:
+                    await asyncio.shield(emit_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not emit_task.cancelled():
+                try:
+                    emit_task.result()
+                except BaseException:
+                    pass
+                else:
+                    self._clear_confirmed_batch()
+            raise
+        self._clear_confirmed_batch()
+
+    def _clear_confirmed_batch(self) -> None:
         self._parts.clear()
         self._byte_count = 0
         self._started_at = None
-        await self._emit(AssistantDeltaPayload(delta=delta))
+        self._from_chunk_index = None
+        self._through_chunk_index = None
 
 
 def _value(item: object, name: str, default: object = None) -> object:
@@ -179,6 +291,7 @@ class AgentRunExecutor:
                 try:
                     event = completed.result()
                 except StopAsyncIteration:
+                    await text_buffer.end("stop")
                     return
                 if isinstance(event, RawResponsesStreamEvent):
                     reasoning_delta = _extract_reasoning_delta(event.data)
@@ -195,12 +308,14 @@ class AgentRunExecutor:
                     finish_reason = _extract_finish_reason(event.data)
                     if finish_reason:
                         logger.debug("[RAW_DONE] finish_reason=%s", finish_reason)
+                        await text_buffer.end(
+                            _normalize_assistant_finish_reason(finish_reason)
+                        )
                     if (
                         finish_reason == "length"
                         and not truncation_warned
                     ):
                         truncation_warned = True
-                        await text_buffer.flush()
                         await execution.emit(
                             WarningPayload(
                                 code="llm_output_truncated",
@@ -214,7 +329,7 @@ class AgentRunExecutor:
                 if not isinstance(event, RunItemStreamEvent):
                     continue
                 if event.name == "tool_called":
-                    await text_buffer.flush()
+                    await text_buffer.end("tool_call")
                     call_id, tool_name = _tool_identity(event.item)
                     resolved_name = tool_name or "unknown"
                     tool_names[call_id] = resolved_name
@@ -225,7 +340,7 @@ class AgentRunExecutor:
                         )
                     )
                 elif event.name == "tool_output":
-                    await text_buffer.flush()
+                    await text_buffer.end("tool_call")
                     call_id, tool_name = _tool_identity(event.item)
                     raw_item = _value(event.item, "raw_item", event.item)
                     status = _value(raw_item, "status")
@@ -242,6 +357,15 @@ class AgentRunExecutor:
                             is_error=is_error,
                         )
                     )
+        except MaxTurnsExceeded:
+            await text_buffer.end("max_turns")
+            raise
+        except asyncio.CancelledError:
+            await text_buffer.end("cancelled")
+            raise
+        except Exception:
+            await text_buffer.end("error")
+            raise
         finally:
             if pending_event is not None and not pending_event.done():
                 pending_event.cancel()
@@ -253,7 +377,7 @@ class AgentRunExecutor:
             run_id=execution.run_id,
         )
         build = self._build(execution)
-        text_buffer = _AssistantTextBuffer(execution.emit)
+        text_buffer = _AssistantTextBuffer(execution)
         bind_pipeline_bridge = getattr(
             execution.context,
             "bind_managed_pipeline_bridge",
@@ -411,6 +535,14 @@ class AgentRunExecutor:
                 # 让 manager 的成功证据校验生效。
                 if hasattr(result, "final_output"):
                     execution.mark_agent_executed()
+        except (asyncio.CancelledError, CompactionCancelledError):
+            await text_buffer.end("cancelled")
+            raise
+        except Exception:
+            await text_buffer.end("error")
+            raise
+        else:
+            await text_buffer.end("stop")
         finally:
             terminal_error: BaseException | None = None
             try:
@@ -868,3 +1000,9 @@ def _extract_finish_reason(data) -> str | None:
     if isinstance(finish_reason, str) and finish_reason:
         return finish_reason
     return None
+
+
+def _normalize_assistant_finish_reason(finish_reason: str) -> str:
+    if finish_reason in {"tool_calls", "function_call"}:
+        return "tool_call"
+    return finish_reason
