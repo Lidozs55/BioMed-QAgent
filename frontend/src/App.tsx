@@ -100,6 +100,7 @@ export default function App() {
               <SettingsPanel
                 settings={settingsState.settings}
                 models={settingsState.models}
+                vendors={settingsState.vendors}
                 loading={settingsState.loading}
                 saving={settingsState.saving}
                 modelsLoading={settingsState.modelsLoading}
