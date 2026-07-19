@@ -104,14 +104,17 @@ export function AgentComposer({
   const modelLabel = MODELS.find((item) => item.id === model)?.label ?? "默认模型";
 
   const hasFiles = pendingFiles.length > 0;
+  const attachmentBusy = disabled || pending || submittingFiles;
   const canSubmitFiles =
     hasFiles &&
     onSubmitFiles !== undefined &&
-    !disabled &&
-    !pending &&
-    !submittingFiles;
+    !attachmentBusy;
 
   const handleFilePick = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (attachmentBusy) {
+      event.target.value = "";
+      return;
+    }
     const picked = event.target.files;
     if (picked === null) return;
     const incoming = Array.from(picked);
@@ -236,7 +239,7 @@ export function AgentComposer({
                 variant="ghost"
                 size="icon-sm"
                 aria-label="添加附件"
-                disabled={disabled}
+                disabled={attachmentBusy}
               />
             }
           >
@@ -250,7 +253,7 @@ export function AgentComposer({
                 上传图片（即将支持）
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={onSubmitFiles === undefined || disabled}
+                disabled={onSubmitFiles === undefined || attachmentBusy}
                 onSelect={() => fileInputRef.current?.click()}
               >
                 <FileIcon aria-hidden="true" />

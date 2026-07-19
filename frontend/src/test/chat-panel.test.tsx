@@ -260,6 +260,35 @@ describe("ChatPanel", () => {
     expect(input).toHaveValue("");
   });
 
+  it("blocks new attachment selections while an import upload is unresolved", async () => {
+    const uploaded = new File(["uploaded"], "uploaded.csv");
+    const blocked = new File(["blocked"], "blocked.csv");
+    const upload = deferred<void>();
+    const uploadFiles = vi.fn().mockReturnValue(upload.promise);
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} uploadFiles={uploadFiles} />,
+    );
+
+    chooseFiles(container, [uploaded]);
+    fireEvent.click(screen.getByRole("button", { name: "开始研究" }));
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledWith([uploaded], ""));
+    expect(screen.getByRole("button", { name: "添加附件" })).toBeDisabled();
+
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("File picker was not rendered");
+    fireEvent.change(input, { target: { files: [blocked] } });
+
+    expect(container.querySelectorAll('[data-slot="attachment"]')).toHaveLength(1);
+    expect(screen.queryByText("blocked.csv")).not.toBeInTheDocument();
+
+    await act(async () => upload.resolve());
+    await waitFor(() =>
+      expect(container.querySelector('[data-slot="attachment"]')).toBeNull(),
+    );
+    expect(uploadFiles).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks submission and explains that at least one data source is required", () => {
     const startTask = vi.fn();
     render(<ChatPanel startTask={startTask} />);
