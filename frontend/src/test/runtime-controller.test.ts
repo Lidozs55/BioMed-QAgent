@@ -214,6 +214,7 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     deleteTask: vi.fn(),
     fetchArtifacts: vi.fn(),
     getArtifactUrl: vi.fn(),
+    getCacheExportUrl: vi.fn(),
     ...overrides,
   };
 }

@@ -1,12 +1,14 @@
-"""Tests for ``app.agent_loop.import_agent.build_import_agent`` and the
-``ImportRunExecutor`` wiring in ``app.agent_loop.runner``.
+"""Tests for ``app.agent_loop.import_agent.build_attachment_parsing_agent``
+and the ``ImportRunExecutor`` wiring in ``app.agent_loop.runner``.
 
 Covers:
-  - ``build_import_agent`` returns an ``AgentBuild`` with the expected tools
-    (read_file, write_file, list_files, run_python_script, commit_to_cache)
-    and an instructions string that documents the 22-column schema.
+  - ``build_attachment_parsing_agent`` returns an ``AgentBuild`` with the
+    expected tools (read_file, write_file, list_files, run_python_script,
+    commit_to_cache, extract_pdf, parse_cache_export_zip) and an instructions
+    string that documents the 22-column schema.
   - ``ImportRunExecutor`` subclasses ``AgentRunExecutor`` and overrides
-    ``_max_turns`` to ``IMPORT_AGENT_MAX_TURNS``.
+    ``_max_turns`` to ``ATTACHMENT_PARSING_MAX_TURNS`` when attachments are
+    pending.
   - ``ModeDispatchRunExecutor`` routes ``TaskMode.IMPORT`` to the
     ``ImportRunExecutor`` (not the agent or fixture executor).
   - End-to-end IMPORT agent run with a scripted LLM that calls ``list_files``,
@@ -26,9 +28,9 @@ from agents.tool_context import ToolContext
 from app.agent_loop.agent import AgentBuild
 from app.agent_loop.context import RunContext
 from app.agent_loop.import_agent import (
-    IMPORT_AGENT_MAX_TURNS,
+    ATTACHMENT_PARSING_MAX_TURNS,
     IMPORT_INSTRUCTIONS,
-    build_import_agent,
+    build_attachment_parsing_agent,
 )
 from app.agent_loop.runner import ImportRunExecutor, ModeDispatchRunExecutor
 from app.tools import cache_store as cache_store_module
@@ -37,11 +39,11 @@ from app.tools.cache_tools import commit_to_cache
 from app.tools.io import list_files, read_file
 from app.tools.sandbox import run_python_script
 
-# ── build_import_agent ──────────────────────────────────────────────
+# ── build_attachment_parsing_agent ─────────────────────────────────
 
 
 def test_build_import_agent_returns_agent_build_with_expected_tools() -> None:
-    build = build_import_agent()
+    build = build_attachment_parsing_agent()
 
     assert isinstance(build, AgentBuild)
     tool_names = {tool.name for tool in build.agent.tools}
@@ -51,6 +53,8 @@ def test_build_import_agent_returns_agent_build_with_expected_tools() -> None:
         "list_files",
         "run_python_script",
         "commit_to_cache",
+        "extract_pdf",
+        "parse_cache_export_zip",
     }
     # No external-database acquisition skills are loaded.
     assert "search_pubmed" not in tool_names
@@ -82,9 +86,39 @@ def test_import_instructions_lists_workflow_steps() -> None:
     assert "source_assets" in IMPORT_INSTRUCTIONS
 
 
+def test_import_instructions_documents_pdf_chunked_extraction() -> None:
+    """The instructions must teach LLM to extract PDF in chunks with progress."""
+    assert "extract_pdf" in IMPORT_INSTRUCTIONS
+    assert "start_page" in IMPORT_INSTRUCTIONS
+    assert "end_page" in IMPORT_INSTRUCTIONS
+    # Must mention progress messages between chunks.
+    assert "进度" in IMPORT_INSTRUCTIONS or "正在解析" in IMPORT_INSTRUCTIONS
+
+
+def test_import_instructions_documents_schema_semantic_generalization() -> None:
+    """D10 decision: instructions must document the semantic generalization.
+
+    The 22-column schema was originally gene-expression-oriented, but the
+    cache must support arbitrary biomedical data. The instructions must
+    explain that gene_id/sample_id are generalized to "primary/secondary
+    entity ID" and that keywords (dataset-level) don't conflict with
+    entity IDs (row-level structured data).
+    """
+    # Must mention the generalization concept.
+    assert "语义泛化" in IMPORT_INSTRUCTIONS or "泛化" in IMPORT_INSTRUCTIONS
+    # Must mention keywords and clarify its relationship with entity IDs.
+    assert "keywords" in IMPORT_INSTRUCTIONS
+    assert "主实体" in IMPORT_INSTRUCTIONS or "次实体" in IMPORT_INSTRUCTIONS
+    # Must include at least one non-gene example (drug/compound/pathway/clinical).
+    assert any(
+        term in IMPORT_INSTRUCTIONS
+        for term in ("药物", "compound", "drug", "通路", "pathway", "clinical")
+    )
+
+
 def test_import_agent_max_turns_is_reasonable() -> None:
-    """IMPORT_AGENT_MAX_TURNS must accommodate the workflow (>=6, <=20)."""
-    assert 6 <= IMPORT_AGENT_MAX_TURNS <= 20
+    """ATTACHMENT_PARSING_MAX_TURNS must accommodate the workflow (>=20, <=80)."""
+    assert 20 <= ATTACHMENT_PARSING_MAX_TURNS <= 80
 
 
 # ── ImportRunExecutor / ModeDispatchRunExecutor wiring ──────────────

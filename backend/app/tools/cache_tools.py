@@ -1,7 +1,7 @@
 """commit_to_cache function tool — 供 IMPORT Agent 将清洗后的数据写入缓存。
 
-此工具不属于任何 skill（只供 IMPORT agent 使用），由 ``build_import_agent``
-直接装载。设计要点（D3 决策）：
+此工具不属于任何 skill（只供 IMPORT agent 使用），由
+``build_attachment_parsing_agent`` 直接装载。设计要点（D3 决策）：
   - 原子写入：内部调用 ``CacheStore.commit_dataset``，先写 .tmp 再 os.replace
   - 列名校验：CSV 必须使用 22 列 schema 的子集，缺失列自动填空
   - 失败抛异常：写入失败时 IMPORT agent 会收到错误信息，可重试或换策略
@@ -58,7 +58,9 @@ def _parse_csv_to_rows(csv_content: str) -> list[dict[str, str]]:
         "Once committed, the dataset is immediately queryable by "
         "search_local_cache/describe_local_cache/get_cache_dataset in "
         "subsequent Agent tasks. Use this after parsing/cleaning a "
-        "user-uploaded file."
+        "user-uploaded file. Always provide keywords extracted from the "
+        "data (gene names, drug names, diseases, pathways, sample types, "
+        "etc.) to enable FTS5-based retrieval by arbitrary entities."
     ),
 )
 def commit_to_cache(
@@ -68,6 +70,7 @@ def commit_to_cache(
     topic: str,
     description: str,
     source_files: str = "",
+    keywords: str = "",
 ) -> str:
     """将清洗后的 CSV 数据写入本地缓存。
 
@@ -79,6 +82,9 @@ def commit_to_cache(
         topic: 数据集主题/标题（供搜索）。
         description: 人类可读描述（供搜索和展示）。
         source_files: 原始上传文件名列表，用逗号分隔（如 ``patients.csv,meta.json``）。
+        keywords: 关键实体标签，用逗号分隔（如 ``BRCA1,TP53,breast cancer,
+            paclitaxel``）。支持任意实体（基因、药物、疾病、通路、样本类型等），
+            由 FTS5 索引供后续 search_local_cache 检索。强烈建议提供。
     """
     run_ctx: RunContext = ctx.context
     try:
@@ -92,6 +98,7 @@ def commit_to_cache(
         return f"CSV 解析失败: {exc}"
 
     files = [s.strip() for s in source_files.split(",") if s.strip()] if source_files else []
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if keywords else []
 
     try:
         manifest = store.commit_dataset(
@@ -102,6 +109,7 @@ def commit_to_cache(
             csv_rows=rows,
             created_by_task_id=run_ctx.task_id,
             source_files=files,
+            keywords=kw_list,
         )
     except ValueError as exc:
         return f"缓存写入失败（参数校验）: {exc}"
@@ -116,13 +124,16 @@ def commit_to_cache(
             "source_namespace": manifest.source_namespace,
             "row_count": manifest.row_count,
             "column_count": manifest.column_count,
+            "keywords": manifest.keywords,
             "created_at": manifest.created_at,
             "created_by_task_id": manifest.created_by_task_id,
             "message": (
-                f"已成功写入缓存。其他 Agent 任务可通过 "
-                f"search_local_cache('{topic}') 或 "
-                f"get_cache_dataset('{manifest.source_namespace}', "
-                f"'{manifest.dataset_id}') 查询。"
+                f"已成功写入缓存（{len(manifest.keywords or [])} 个 keywords）。"
+                f"其他 Agent 任务可通过 "
+                f"search_local_cache('{topic}') 或按关键词 "
+                f"search_local_cache('{(manifest.keywords or [''])[0]}') "
+                f"查询，也可 get_cache_dataset('{manifest.source_namespace}', "
+                f"'{manifest.dataset_id}')。"
             ),
         },
         ensure_ascii=False,

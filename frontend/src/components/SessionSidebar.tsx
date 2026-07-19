@@ -1,5 +1,6 @@
 import {
   ArrowsClockwiseIcon,
+  DownloadSimpleIcon,
   FlaskIcon,
   PlusCircleIcon,
   TrashIcon,
@@ -63,6 +64,7 @@ interface SessionSidebarProps {
   onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
+  onExportCache?: () => void | Promise<void>;
 }
 
 const OCCUPYING_STATUSES = new Set<RunStatus>([
@@ -170,6 +172,7 @@ export function SessionSidebar({
   onRetryHistory,
   onCancelRun,
   onDeleteTask,
+  onExportCache,
 }: SessionSidebarProps) {
   const tasksById = useAgentStore((state) => state.tasksById);
   const activeItems = useAgentStore((state) => state.activeItems);
@@ -420,6 +423,27 @@ export function SessionSidebar({
             <span className="text-xs text-sidebar-foreground/70">并发槽位</span>
             <Badge variant="secondary">运行中 {runningCount} / 4</Badge>
           </div>
+          {onExportCache !== undefined && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
+              onClick={() => {
+                try {
+                  void onExportCache();
+                } catch (error) {
+                  toast.error("导出缓存失败", {
+                    description: errorDescription(error),
+                  });
+                }
+              }}
+              aria-label="导出本地缓存为 ZIP"
+              title="导出本地缓存为 ZIP"
+            >
+              <DownloadSimpleIcon data-icon="inline-start" aria-hidden="true" />
+              导出缓存
+            </Button>
+          )}
           <div className="px-1">
             <ThemeToggle />
           </div>

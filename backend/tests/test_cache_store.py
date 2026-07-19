@@ -287,3 +287,163 @@ def test_get_cache_store_uninitialized_raises() -> None:
             cache_store.get_cache_store()
     finally:
         cache_store._global_store = original
+
+
+# ── D2: FTS5 + keywords tests ───────────────────────────────────────
+
+
+def test_commit_dataset_with_keywords_persists_in_manifest(store: CacheStore) -> None:
+    """keywords passed to commit_dataset are stored in manifest.json."""
+    rows = [_row(record_id="r1", dataset_id="ds_kw")]
+    manifest = store.commit_dataset(
+        dataset_id="ds_kw",
+        source_namespace="user_import",
+        topic="Pharmacogenomics cohort",
+        description="Drug response data",
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["BRCA1", "paclitaxel", "breast cancer", "TP53"],
+    )
+    assert manifest.keywords == ["BRCA1", "paclitaxel", "breast cancer", "TP53"]
+
+    # Persisted to manifest.json
+    dataset_dir = store.root / "records" / "user_import" / "ds_kw"
+    data = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert data["keywords"] == ["BRCA1", "paclitaxel", "breast cancer", "TP53"]
+
+    # Readable via describe_dataset
+    desc = store.describe_dataset("user_import", "ds_kw")
+    assert desc is not None
+    assert desc.keywords == ["BRCA1", "paclitaxel", "breast cancer", "TP53"]
+
+
+def test_commit_dataset_keywords_none_defaults_to_empty(store: CacheStore) -> None:
+    """When keywords=None, manifest.keywords is an empty list (not None)."""
+    rows = [_row(record_id="r1", dataset_id="ds_nokw")]
+    manifest = store.commit_dataset(
+        dataset_id="ds_nokw",
+        source_namespace="user_import",
+        topic="t",
+        description="d",
+        csv_rows=rows,
+        created_by_task_id="t1",
+    )
+    assert manifest.keywords == []
+
+
+def test_search_datasets_matches_by_keyword(store: CacheStore) -> None:
+    """FTS5 search matches keywords field, not just topic/description."""
+    rows = [_row(record_id="r1", dataset_id="ds1")]
+    store.commit_dataset(
+        dataset_id="ds_drug",
+        source_namespace="user_import",
+        topic="Clinical responses",  # topic has no "imatinib"
+        description="Patient outcomes",  # description has no "imatinib"
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["imatinib", "CML", "BCR-ABL"],
+    )
+    store.commit_dataset(
+        dataset_id="ds_other",
+        source_namespace="user_import",
+        topic="Other study",
+        description="Unrelated",
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["BRCA1", "breast cancer"],
+    )
+
+    # Search by keyword "imatinib" — should only match ds_drug
+    results = store.search_datasets("imatinib")
+    assert len(results) == 1
+    assert results[0].dataset_id == "ds_drug"
+
+    # Search by keyword "CML"
+    results = store.search_datasets("CML")
+    assert len(results) == 1
+    assert results[0].dataset_id == "ds_drug"
+
+
+def test_search_datasets_fts5_matches_partial_word(store: CacheStore) -> None:
+    """FTS5 tokenizes on unicode61; substring fallback via LIKE covers partial."""
+    rows = [_row(record_id="r1", dataset_id="ds1")]
+    store.commit_dataset(
+        dataset_id="ds_partial",
+        source_namespace="user_import",
+        topic="Oncology repository",
+        description="Cancer data",
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["pharmacogenomics"],
+    )
+    # "pharmacogenomics" contains "pharma" — LIKE fallback should catch this
+    # even if FTS5 tokenizes "pharmacogenomics" as a single token.
+    results = store.search_datasets("pharma")
+    # Either FTS5 matches the prefix or LIKE fallback finds the substring
+    assert any(r.dataset_id == "ds_partial" for r in results)
+
+
+def test_search_datasets_empty_query_returns_empty(store: CacheStore) -> None:
+    """Empty or whitespace query returns empty list."""
+    rows = [_row(record_id="r1", dataset_id="ds1")]
+    store.commit_dataset(
+        dataset_id="ds1",
+        source_namespace="user_import",
+        topic="t",
+        description="d",
+        csv_rows=rows,
+        created_by_task_id="t1",
+    )
+    assert store.search_datasets("") == []
+    assert store.search_datasets("   ") == []
+
+
+def test_recommit_updates_fts5_index(store: CacheStore) -> None:
+    """Re-committing the same dataset_id updates the FTS5 index (no stale dup)."""
+    rows = [_row(record_id="r1", dataset_id="ds1")]
+    store.commit_dataset(
+        dataset_id="ds1",
+        source_namespace="user_import",
+        topic="original topic",
+        description="first desc",
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["original_kw"],
+    )
+    store.commit_dataset(
+        dataset_id="ds1",
+        source_namespace="user_import",
+        topic="updated topic",
+        description="second desc",
+        csv_rows=rows,
+        created_by_task_id="t2",
+        keywords=["updated_kw"],
+    )
+    # Search for original keyword should NOT match (FTS5 updated)
+    orig_results = store.search_datasets("original_kw")
+    assert orig_results == []
+    # Search for updated keyword should match exactly once
+    upd_results = store.search_datasets("updated_kw")
+    assert len(upd_results) == 1
+    assert upd_results[0].dataset_id == "ds1"
+    # Search for updated topic should match
+    topic_results = store.search_datasets("updated topic")
+    assert len(topic_results) == 1
+
+
+def test_fts5_supports_chinese_query(store: CacheStore) -> None:
+    """FTS5 with unicode61 tokenizer handles CJK characters in keywords."""
+    rows = [_row(record_id="r1", dataset_id="ds_cn")]
+    store.commit_dataset(
+        dataset_id="ds_cn",
+        source_namespace="user_import",
+        topic="乳腺癌队列",
+        description="临床数据",
+        csv_rows=rows,
+        created_by_task_id="t1",
+        keywords=["BRCA1", "乳腺癌", "紫杉醇"],
+    )
+    # Search by Chinese keyword
+    results = store.search_datasets("乳腺癌")
+    assert len(results) == 1
+    assert results[0].dataset_id == "ds_cn"

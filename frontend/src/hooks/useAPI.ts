@@ -73,6 +73,7 @@ export interface APIClient {
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
+  getCacheExportUrl: () => string;
 }
 
 interface APIClientOptions {
@@ -254,6 +255,8 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
 
     getArtifactUrl: (taskId, artifactId) =>
       `${baseUrl}/tasks/${encodeId(taskId)}/artifacts/${encodeId(artifactId)}`,
+
+    getCacheExportUrl: () => `${baseUrl}/cache/export`,
   };
 }
 

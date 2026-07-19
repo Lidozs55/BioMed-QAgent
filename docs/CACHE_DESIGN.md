@@ -1,14 +1,17 @@
 # Cache & File Import — Design
 
-> **Status**: Implemented (Phase 1–9 + e2e tests)
-> **Scope**: local queryable cache + LLM-driven file import pipeline
+> **Status**: Implemented (Phase 1–10 + e2e tests)
+> **Scope**: local queryable cache + LLM-driven file import pipeline +
+> PDF extraction + cache ZIP export + FTS5 search + schema generalization
 > **Authoritative code**: `backend/app/tools/cache_store.py`,
 > `backend/app/tools/cache_tools.py`, `backend/app/tools/sandbox.py`,
+> `backend/app/tools/cache_export.py`, `backend/app/tools/pdf_tools.py`,
 > `backend/app/skills/builtin/acquisition/local_cache.py`,
 > `backend/app/agent_loop/import_agent.py`,
 > `backend/app/agent_loop/runner.py` (`ModeDispatchRunExecutor`,
-> `ImportRunExecutor`), `backend/app/api/routes.py` (`POST /import/tasks`),
-> frontend upload wiring in `frontend/src/`.
+> `ImportRunExecutor`), `backend/app/api/routes.py` (`POST /import/tasks`,
+> `GET /cache/export`), frontend upload wiring + cache export button in
+> `frontend/src/`.
 
 ---
 
@@ -84,11 +87,14 @@
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              IMPORT AgentLoop (OpenAI Agents SDK)               │
-│  build_import_agent() with 5 tools:                             │
+│  build_import_agent() with 7 tools:                             │
 │    read_file, write_file, list_files,                           │
-│    run_python_script (sandbox), commit_to_cache                 │
+│    run_python_script (sandbox), commit_to_cache,                │
+│    extract_pdf (chunked, D3), parse_cache_export_zip (D7)       │
 │                                                                 │
-│  Instructions document the 22-column schema and workflow.       │
+│  Instructions document the 22-column schema, workflow,          │
+│  PDF chunked extraction (Strategy C), and semantic              │
+│  generalization (D10).                                          │
 └──────────┬──────────────────────────────────────┬───────────────┘
            │                                      │
            ▼                                      ▼
@@ -165,6 +171,44 @@ vocabulary.
 Missing columns are stored as empty strings — the IMPORT agent is told to
 populate only the columns that make sense for the source data.
 
+#### 3.2.1 Schema semantic generalization (D10)
+
+The 22-column schema was originally designed for gene-expression data,
+but the cache must support arbitrary biomedical data (drugs, compounds,
+pathways, clinical records, PDF papers, etc.). Rather than introduce a
+second schema, the IMPORT instructions apply **semantic generalization**
+to certain columns (column names are unchanged):
+
+| Column                  | Generalized semantics (D10)                              |
+| ----------------------- | -------------------------------------------------------- |
+| `gene_id_raw`           | **Primary entity raw ID** — gene / protein / compound /  |
+|                         | drug / pathway / microbe / any "measured object"         |
+| `gene_id`               | **Primary entity canonical ID** (NCBI Gene / UniProt /   |
+|                         | PubChem CID / DrugBank ID / ...)                         |
+| `gene_id_namespace`     | `hgnc` / `uniprot` / `pubchem` / `drugbank` / `reactome` |
+|                         | / `taxonomy` / ...                                       |
+| `sample_id`             | **Secondary entity ID** — sample / patient / cell line / |
+|                         | time point / cohort / any "measurement context"          |
+| `measurement_type`      | Free-form string with controlled prefixes:               |
+|                         | `expression` / `mutation` / `binding` / `clinical` /     |
+|                         | `paper_section` / `sample_metadata` / ...                |
+| `expression_value`      | **Measurement value** (any numeric or categorical)       |
+
+**When no clear "primary entity" exists** (e.g. plain PDF text, clinical
+records), the entity ID columns are left empty. The IMPORT instructions
+explicitly warn against force-filling entity IDs for non-structured data.
+
+**Keywords vs entity IDs** (no semantic conflict):
+- Entity IDs (`gene_id`, `sample_id`, ...) are **row-level structured
+  data** stored in CSV cells, used for row-level queries.
+- `keywords` (dataset-level, in `manifest.json`) are **LLM-extracted
+  search tags** used for dataset-level FTS5 retrieval.
+
+For example, a drug-target binding dataset might have:
+- CSV rows: `gene_id_raw=imatinib, gene_id_namespace=drugbank, sample_id=ABL1, ...`
+- Dataset keywords: `"imatinib,ABL1,drug-target,binding,IC50"`
+- User search for either `"imatinib"` or `"ABL1"` hits this dataset.
+
 ### 3.3 `CacheDatasetManifest`
 
 ```json
@@ -178,11 +222,16 @@ populate only the columns that make sense for the source data.
   "created_at": "2026-07-19T12:34:56.789012+00:00",
   "created_by_task_id": "task_abc123",
   "source_files": ["patients.csv"],
-  "extra": {}
+  "extra": {},
+  "keywords": ["BRCA", "LUAD", "clinical", "patient", "oncology"]
 }
 ```
 
-### 3.4 SQLite index schema
+`keywords` is an LLM-extracted list of dataset-level search tags (D2
+decision). It is stored in the manifest and in the FTS5 index for
+full-text search.
+
+### 3.4 SQLite index schema (FTS5 + structured fields, D2)
 
 ```sql
 CREATE TABLE datasets (
@@ -190,6 +239,7 @@ CREATE TABLE datasets (
     source_namespace    TEXT NOT NULL,
     topic               TEXT NOT NULL,
     description         TEXT NOT NULL,
+    keywords            TEXT NOT NULL DEFAULT '',  -- space-joined tags
     row_count           INTEGER NOT NULL,
     created_at          TEXT NOT NULL,
     created_by_task_id  TEXT NOT NULL,
@@ -198,7 +248,33 @@ CREATE TABLE datasets (
 );
 CREATE INDEX idx_datasets_namespace ON datasets(source_namespace);
 CREATE INDEX idx_datasets_topic     ON datasets(topic);
+
+-- FTS5 full-text index (D2) — supports unicode61 tokenizer for CJK
+CREATE VIRTUAL TABLE datasets_fts USING fts5(
+    source_namespace UNINDEXED,
+    dataset_id       UNINDEXED,
+    topic,
+    description,
+    keywords,
+    manifest_path    UNINDEXED,
+    created_at       UNINDEXED,
+    tokenize = 'unicode61'
+);
 ```
+
+`search_datasets(query, limit)` first attempts FTS5 MATCH; on failure
+(or empty result) it falls back to LIKE on `topic` / `description` /
+`keywords` for substring matching. The combination provides both
+tokenized full-text search and substring fallback.
+
+**FTS5 upsert**: FTS5 doesn't support `ON CONFLICT`, so re-committing a
+dataset `DELETE`s the old FTS5 row before `INSERT`ing the new one
+(see `_upsert_index`). This avoids stale index entries.
+
+**Migration**: Existing databases created before the `keywords` column
+are migrated via `ALTER TABLE datasets ADD COLUMN keywords TEXT NOT NULL
+DEFAULT ''` wrapped in `contextlib.suppress(sqlite3.OperationalError)`
+(no-op if the column already exists).
 
 The index is a **search accelerator only** — the `records/` files are
 authoritative. `CacheStore._load_manifest` always re-reads `manifest.json`
@@ -214,7 +290,7 @@ Defined in [backend/app/tools/cache_store.py](../backend/app/tools/cache_store.p
 | ------------------------------------------------------------ | -------------------------------------------------- |
 | `commit_dataset(...)`                                        | Atomic write of `main_data.csv` + `manifest.json` + upsert index row. Validates namespace and dataset_id regexes; rejects rows with columns outside the 22-col schema. |
 | `list_datasets(source_namespace=None, limit=50)`             | List manifests, newest first, optionally filtered by namespace. |
-| `search_datasets(query, limit=20)`                           | LIKE search on `topic` and `description`.          |
+| `search_datasets(query, limit=20)`                           | FTS5 MATCH on `topic` / `description` / `keywords` with LIKE substring fallback (D2). |
 | `describe_dataset(ns, id) -> manifest \| None`               | Read manifest only (no data rows).                 |
 | `get_dataset(ns, id) -> (manifest, rows) \| None`            | Read manifest + all `main_data.csv` rows.          |
 
@@ -280,19 +356,23 @@ is the LLM-facing tool. It:
 
 ## 6. IMPORT AgentLoop
 
-### 6.1 Tools (5 total)
+### 6.1 Tools (7 total)
 
-| Tool                | Purpose                                                      |
-| ------------------- | ------------------------------------------------------------ |
-| `list_files`        | Discover uploaded files in `source_assets/`                  |
-| `read_file`         | Inspect file content (text only — fails on binary)           |
-| `write_file`        | Persist intermediate notes if needed                         |
-| `run_python_script` | Sandbox-execute a cleaning script for non-standard formats   |
-| `commit_to_cache`   | Write the cleaned 22-col CSV into the local cache            |
+| Tool                   | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| `list_files`           | Discover uploaded files in `source_assets/`                  |
+| `read_file`            | Inspect file content (text only — fails on binary)           |
+| `write_file`           | Persist intermediate notes if needed                         |
+| `run_python_script`    | Sandbox-execute a cleaning script for non-standard formats   |
+| `commit_to_cache`      | Write the cleaned 22-col CSV into the local cache            |
+| `extract_pdf`          | Chunked PDF text/table extraction with `start_page`/`end_page` (D3) |
+| `parse_cache_export_zip` | Round-trip parser for cache ZIP exports (D7) — the only prebuilt parser |
 
 Notably **not** included: `run_research_pipeline`, any external-database
 acquisition skill, `compress_query_log`, `self_evolution`. The IMPORT
-agent's scope is intentionally narrow.
+agent's scope is intentionally narrow. **No other format-specific
+parsers are prebuilt** — the LLM explores the file format and writes a
+one-off cleaning script via `run_python_script` (D7 decision).
 
 ### 6.2 Instructions
 
@@ -301,26 +381,42 @@ The `IMPORT_INSTRUCTIONS` constant in
 
 - The 5-step workflow (discover → inspect → clean → commit → report)
 - The 22-column schema with per-column fill rules
-- Two cleaning strategies:
+- **Schema semantic generalization (D10)** — `gene_id_raw` / `gene_id` /
+  `sample_id` are generalized to "primary entity ID" / "secondary entity
+  ID" so the same schema accommodates drugs, compounds, pathways,
+  clinical records, PDF sections, etc. without column renames.
+- **`keywords` field usage (D2)** — dataset-level LLM-extracted search
+  tags (5–15 items) stored in `manifest.json` and the FTS5 index for
+  dataset-level retrieval; distinct from row-level entity IDs.
+- Three cleaning strategies:
   - **Strategy A** — Direct `commit_to_cache` when the file is already a
     22-column subset CSV
   - **Strategy B** — `run_python_script` to clean arbitrary formats
     (CSV with custom columns, JSON, MD tables, TSV, ...) into 22-col rows
+  - **Strategy C** — `extract_pdf` for PDFs: chunked extraction (10
+    pages/chunk) with progress messages between chunks via
+    `assistant_delta`, then clean the extracted text/tables into 22-col
+    rows (or `paper_section` rows for prose)
 - `dataset_id` regex constraint (`^[a-z0-9][a-z0-9_-]*$`)
 - Sandbox constraints (no `os`/`subprocess`/`shutil`/`pathlib`/`open`)
 - "Do not fabricate data" — empty columns are preferred over invented values
+- "PDF must be chunked" — never extract a large PDF in a single call
+- "Do not force-fill entity IDs" for non-structured data (PDF prose,
+  clinical narratives)
 
 ### 6.3 Max turns
 
-`IMPORT_AGENT_MAX_TURNS = 12` — covers `list_files` (1) + `read_file` (1)
-+ `run_python_script` (1) + `read_file` cleaned output (1) +
-`commit_to_cache` (1) + report (1) = 6 turns minimum, plus retry margin.
+`ATTACHMENT_PARSING_MAX_TURNS = 40` (D5 decision) — file formats are
+unknown ahead of time, so the LLM needs ample turns to explore the
+format, write a cleaning script, retry on failure, extract `keywords`,
+and call `commit_to_cache`. PDFs may need multiple chunked extraction
+calls. 40 turns covers most multi-file + retry + PDF-chunking scenarios.
 
 ### 6.4 Executor wiring
 
 `ImportRunExecutor` subclasses `AgentRunExecutor` (Template Method pattern)
 and overrides only `_build` (returns `build_import_agent()`) and
-`_max_turns` (returns `IMPORT_AGENT_MAX_TURNS`). All other lifecycle —
+`_max_turns` (returns `ATTACHMENT_PARSING_MAX_TURNS`). All other lifecycle —
 compaction, pause-resume, cancellation, streaming, event emission — is
 inherited unchanged.
 
@@ -340,7 +436,8 @@ inherited unchanged.
 
 **Validation**:
 - At least 1 file, at most `_IMPORT_MAX_FILES` (10)
-- Each file ≤ `_IMPORT_MAX_FILE_BYTES` (10 MB)
+- Each file ≤ `_IMPORT_MAX_FILE_BYTES` (500 MB)
+- Total upload ≤ `_IMPORT_MAX_TOTAL_BYTES` (2 GB)
 - Filenames sanitized via `_IMPORT_SAFE_FILENAME` regex
   (`[^A-Za-z0-9._-]` → `_`); path prefixes stripped
 - Duplicate filenames rejected
@@ -395,11 +492,12 @@ Tests live in [backend/tests/](../backend/tests/):
 
 | File                                       | Coverage                                             |
 | ------------------------------------------ | ---------------------------------------------------- |
-| `test_cache_store.py` (13 tests)           | commit/list/search/get/describe, namespace + dataset_id validation, column validation, empty-rows rejection, recommit overwrite, UTF-8 BOM read-back, uninitialized singleton |
-| `test_sandbox.py` (27 tests)              | AST whitelist (allow + deny), forbidden calls, dunder access, subprocess execution (read_input/write_output/read_csv/read_csv/read_json/write_csv/write_json), open() guard, import os guard, runtime error surfacing, empty output, SandboxResult dataclass |
+| `test_cache_store.py` (20 tests)           | commit/list/search/get/describe, namespace + dataset_id validation, column validation, empty-rows rejection, recommit overwrite, UTF-8 BOM read-back, uninitialized singleton, keywords persistence (D2), FTS5 keyword/partial/CJK matching, FTS5 index upsert on recommit |
+| `test_sandbox.py` (35 tests)              | AST whitelist (allow + deny), forbidden calls, dunder access, subprocess execution (read_input/write_output/read_csv/read_csv/read_json/write_csv/write_json), open() guard, import os guard, runtime error surfacing, empty output, SandboxResult dataclass |
 | `test_cache_tools.py` (6 tests)            | commit_to_cache writes + returns status, rejects extra columns, rejects empty CSV, rejects invalid dataset_id, returns error when store uninitialized, records source_files |
 | `api/test_import_api.py` (6 tests)         | 202 + file persistence, 422 no files, 422 too many, 413 oversized, 422 duplicate filenames, mode=import + composed input |
-| `agent_loop/test_import_agent.py` (11 tests)| build_import_agent tool set, instructions document 22-col schema, instructions list workflow steps, max_turns bounds, ModeDispatch routes IMPORT, ImportRunExecutor subclasses AgentRunExecutor, e2e CSV→clean→commit→verify, e2e JSON→clean→commit→verify, e2e MD table→clean→commit→verify, e2e TSV→clean→commit→verify |
+| `test_pdf_tools.py` (7 tests)              | `extract_pdf` missing-file error, path traversal rejection, default full-document extraction, chunked first/middle pages, `end_page` clamp to total, `start_page<1` normalization |
+| `agent_loop/test_import_agent.py` (12 tests)| build_import_agent tool set (7 tools), instructions document 22-col schema, instructions list workflow steps, instructions document PDF chunked extraction (D3), instructions document schema semantic generalization (D10), max_turns bounds, ModeDispatch routes IMPORT, ImportRunExecutor subclasses AgentRunExecutor, e2e CSV→clean→commit→verify, e2e JSON→clean→commit→verify, e2e MD table→clean→commit→verify, e2e TSV→clean→commit→verify |
 
 **E2E test fixtures** in [backend/tests/fixtures/import/](../backend/tests/fixtures/import/):
 `patients.csv` (clinical custom columns), `expression_subset.csv` (22-col
@@ -523,6 +621,72 @@ validation? what if the user cancelled?) that need separate design.
 `local_cache` skill mentions it, but no code writes to it yet. This is
 flagged as a future TODO.
 
+### D8 — IMPORT agent emits user-visible progress via `assistant_delta`
+
+**Forces**: PDF extraction and multi-file cleaning can take many turns.
+The user sees nothing until `tool_completed` events fire, which makes
+long IMPORT runs feel frozen.
+
+**Decision**: The IMPORT instructions tell the LLM to emit a short
+natural-language progress message via the standard `assistant_delta`
+streaming channel between chunks (e.g. "正在提取 PDF 第 11–20 页…").
+The frontend already renders `assistant_delta` as streaming markdown,
+so no new event type or frontend wiring is needed. This reuses the
+existing agent-streaming infrastructure rather than introducing a
+dedicated `import_progress` event.
+
+**Cost to change course**: Low. If we later want structured progress
+(file-level granularity, percent-complete), add a dedicated
+`import_progress` event; the current text messages remain a useful
+human-readable layer.
+
+### D9 — IMPORT agent and main agent run in fully isolated RunContexts
+
+**Forces**: The IMPORT agent must not contaminate the main research
+agent's context (different tools, different instructions, different
+max_turns). Sharing a RunContext would also leak file paths and
+intermediate state across the two phases.
+
+**Decision**: IMPORT runs as a separate `Run` with its own
+`RunContextWrapper`. The two-phase flow (Run #1 IMPORT → Run #2 main
+research) is coordinated by `_archive_source_assets` archiving
+`source_assets/` after IMPORT completes, so the main agent sees a clean
+workdir. Neither run's context is reachable from the other.
+
+**Cost to change course**: Low. If we later want the main agent to
+inspect IMPORT's intermediate artifacts, expose them via a read-only
+tool rather than sharing the context.
+
+### D10 — Schema semantic generalization (no column renames)
+
+**Forces**: The 22-column schema was designed for gene-expression data,
+but the cache must support arbitrary biomedical data (drugs, compounds,
+pathways, clinical records, PDF papers). Renaming columns (e.g.
+`gene_id` → `primary_entity_id`) would break compatibility with the
+Pipeline-produced `main_data.csv` and require touching every consumer.
+
+**Decision**: Keep the 22 column names unchanged. Apply **semantic
+generalization** in the IMPORT instructions: `gene_id_raw` / `gene_id`
+are interpreted as "primary entity ID" (gene / protein / compound /
+drug / pathway / microbe / ...), `sample_id` as "secondary entity ID"
+(sample / patient / cell line / time point / cohort / ...). For
+non-structured data (PDF prose, clinical narratives), entity ID columns
+are left empty rather than force-filled. Dataset-level retrieval is
+handled by `keywords` (D2), not entity IDs.
+
+**Alternatives considered**:
+- A1: Rename columns to entity-neutral names — rejected because it
+  breaks the Pipeline schema contract and forces a migration of every
+  consumer.
+- A2: Introduce a parallel "cache row" schema with entity-neutral names
+  — rejected because the agent would need to learn two schemas.
+- A3: Add a `entity_type` column — rejected because it can be encoded
+  in `gene_id_namespace` (`drugbank` / `uniprot` / `pubchem` / ...).
+
+**Cost to change course**: Low-to-moderate. The generalization is
+documentation-only; flipping back to a strict gene-only interpretation
+would just require tightening the IMPORT instructions.
+
 ---
 
 ## 11. Operational notes
@@ -572,20 +736,19 @@ python -c "import csv; print(list(csv.DictReader(open('data/cache/records/user_i
    copy the validated `main_data.csv` to
    `records/pipeline_artifact/<task_id>/`. Add a `search_pipeline_artifacts`
    tool or extend `search_local_cache` to filter by namespace.
-2. **FTS5 search** — Replace `LIKE` queries with SQLite FTS5 for better
-   matching on `topic` / `description`.
-3. **Dataset deletion API** — `DELETE /api/v1/cache/{namespace}/{dataset_id}`
+2. **Dataset deletion API** — `DELETE /api/v1/cache/{namespace}/{dataset_id}`
    for GDPR / data-retention compliance.
-4. **Larger file support** — Raise `_IMPORT_MAX_FILE_BYTES` and add
-   chunked upload (`Content-Range`) for >10 MB files.
-5. **Pandas / numpy in sandbox** — `SANDBOX_ALLOWED_MODULES` already
+3. **Larger file support** — `_IMPORT_MAX_FILE_BYTES` is currently 500 MB
+   and `_IMPORT_MAX_TOTAL_BYTES` is 2 GB. If larger datasets are needed,
+   add chunked upload (`Content-Range`) or resumable upload.
+4. **Pandas / numpy in sandbox** — `SANDBOX_ALLOWED_MODULES` already
    whitelists them, but the backend's `pyproject.toml` doesn't declare
    them as dependencies. Add them when a real IMPORT use case requires
    vectorized cleaning.
-6. **Progress streaming for IMPORT** — Currently the IMPORT agent emits
-   standard `tool_started` / `tool_completed` events. A dedicated
-   `import_progress` event with file-level granularity would improve UX
-   for multi-file imports.
-7. **Cross-task cache isolation** — If multi-tenancy is added, scope
+5. **Structured import progress** — The IMPORT agent currently emits
+   human-readable progress via `assistant_delta` (D8). A structured
+   `import_progress` event with file-level / chunk-level granularity
+   would enable a dedicated progress UI.
+6. **Cross-task cache isolation** — If multi-tenancy is added, scope
    `source_namespace` by tenant ID and enforce isolation in
    `CacheStore.search_datasets`.
