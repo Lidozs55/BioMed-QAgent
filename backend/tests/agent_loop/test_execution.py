@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,6 +15,7 @@ import app.pipeline.runner as pipeline_runner_module
 import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents import Agent
+from agents.exceptions import MaxTurnsExceeded
 from agents.items import ModelResponse
 from agents.models.interface import Model
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
@@ -22,11 +25,22 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantStreamDeltaFrame,
+    AssistantStreamEndFrame,
+    AssistantStreamFrame,
+    EventEnvelope,
+    RunCancelledPayload,
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
+    RunQueuedPayload,
+    RunStartedPayload,
+    RunStatus,
     StartTaskRequest,
     TaskFailedPayload,
+    TaskMode,
+    TaskSnapshot,
+    TaskSummary,
     ToolCompletedPayload,
     ToolStartedPayload,
     UserInputRequiredPayload,
@@ -36,6 +50,7 @@ from app.domain.contracts import (
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.tool import run_research_pipeline
 from app.runtime.compaction import CompactionCancelledError
+from app.runtime.hub import AssistantStreamHub
 from app.runtime.manager import RunExecution, TaskManager
 from app.runtime.repository import TaskRepository
 from openai.types.responses import (
@@ -169,7 +184,710 @@ def run_scoped_session(session: object) -> Callable[..., object]:
     return task_session
 
 
+def assistant_stream_delta(
+    execution: RunExecution,
+    *,
+    chunk_index: int,
+    delta: str,
+    stream_id: str | None = None,
+) -> AssistantStreamDeltaFrame:
+    return AssistantStreamDeltaFrame(
+        task_id=execution.task_id,
+        run_id=execution.run_id,
+        stream_id=stream_id or f"assistant:{execution.run_id}",
+        chunk_index=chunk_index,
+        delta=delta,
+    )
+
+
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_publishes_atomic_live_chunk_before_blocked_durable_flush(
+) -> None:
+    durable_started = asyncio.Event()
+    release_durable = asyncio.Event()
+    live_frames: list[object] = []
+    durable_payloads: list[object] = []
+
+    async def emit_durable(payload: object) -> None:
+        durable_started.set()
+        await release_durable.wait()
+        durable_payloads.append(payload)
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+
+    execution = RunExecution(
+        task_id="task_live_first",
+        run_id="run_live_first",
+        request_id="request_live_first",
+        input="stream now",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1)
+
+    adding = asyncio.create_task(buffer.add("a"))
+    await asyncio.wait_for(durable_started.wait(), timeout=1)
+    try:
+        assert live_frames == [
+            assistant_stream_delta(execution, chunk_index=0, delta="a")
+        ]
+        assert not adding.done()
+    finally:
+        release_durable.set()
+        await adding
+
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="a",
+            stream_id="assistant:run_live_first",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_batches_whole_unicode_chunks_with_exact_ranges() -> None:
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+
+    async def emit_durable(payload: object) -> None:
+        durable_payloads.append(payload)
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+
+    execution = RunExecution(
+        task_id="task_chunk_ranges",
+        run_id="run_chunk_ranges",
+        request_id="request_chunk_ranges",
+        input="preserve unicode",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=8)
+
+    await buffer.add("中")
+    await buffer.add("🙂")
+    await buffer.add("ab")
+    await buffer.end("stop")
+
+    assert live_frames == [
+        assistant_stream_delta(execution, chunk_index=0, delta="中"),
+        assistant_stream_delta(execution, chunk_index=1, delta="🙂"),
+        assistant_stream_delta(execution, chunk_index=2, delta="ab"),
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_chunk_ranges",
+            last_chunk_index=2,
+            finish_reason="stop",
+        ),
+    ]
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="中🙂",
+            stream_id="assistant:run_chunk_ranges",
+            from_chunk_index=0,
+            through_chunk_index=1,
+        ),
+        AssistantDeltaPayload(
+            delta="ab",
+            stream_id="assistant:run_chunk_ranges",
+            from_chunk_index=2,
+            through_chunk_index=2,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_splits_oversized_unicode_delta_at_codepoint_boundaries(
+) -> None:
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+
+    execution = RunExecution(
+        task_id="task_oversized_chunk",
+        run_id="run_oversized_chunk",
+        request_id="request_oversized_chunk",
+        input="keep atomic",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=4)
+
+    await buffer.add("🙂🙂")
+
+    assert live_frames == [
+        assistant_stream_delta(execution, chunk_index=0, delta="🙂"),
+        assistant_stream_delta(execution, chunk_index=1, delta="🙂"),
+    ]
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="🙂",
+            stream_id="assistant:run_oversized_chunk",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        ),
+        AssistantDeltaPayload(
+            delta="🙂",
+            stream_id="assistant:run_oversized_chunk",
+            from_chunk_index=1,
+            through_chunk_index=1,
+        ),
+    ]
+    assert all(len(payload.delta.encode("utf-8")) <= 4 for payload in durable_payloads)
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_rejects_codepoint_wider_than_configured_max_bytes(
+) -> None:
+    live_frames: list[object] = []
+    durable_payloads: list[object] = []
+    execution = RunExecution(
+        task_id="task_impossible_max",
+        run_id="run_impossible_max",
+        request_id="request_impossible_max",
+        input="reject impossible split",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=3)
+
+    with pytest.raises(ValueError, match="UTF-8 code point"):
+        await buffer.add("🙂")
+
+    assert live_frames == []
+    assert durable_payloads == []
+
+
+def test_text_buffer_rejects_nonpositive_max_bytes() -> None:
+    execution = RunExecution(
+        task_id="task_nonpositive_max",
+        run_id="run_nonpositive_max",
+        request_id="request_nonpositive_max",
+        input="reject invalid max",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+    )
+
+    with pytest.raises(ValueError, match="max_bytes must be positive"):
+        runner_module._AssistantTextBuffer(execution, max_bytes=0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("durable failed"), asyncio.CancelledError()],
+)
+async def test_text_buffer_end_retains_unconfirmed_batch_without_publishing_end(
+    failure: BaseException,
+) -> None:
+    attempts = 0
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+
+    async def emit_durable(payload: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise failure
+        durable_payloads.append(payload)
+
+    execution = RunExecution(
+        task_id="task_retained_batch",
+        run_id="run_retained_batch",
+        request_id="request_retained_batch",
+        input="retain failed flush",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+    await buffer.add("中🙂")
+
+    with pytest.raises(type(failure)) as raised:
+        await buffer.end("error")
+
+    if isinstance(failure, asyncio.CancelledError):
+        assert isinstance(raised.value, asyncio.CancelledError)
+    else:
+        assert raised.value is failure
+    assert not any(isinstance(frame, AssistantStreamEndFrame) for frame in live_frames)
+
+    await buffer.end("error")
+
+    assert durable_payloads == [
+        AssistantDeltaPayload(
+            delta="中🙂",
+            stream_id="assistant:run_retained_batch",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+    assert [
+        frame for frame in live_frames if isinstance(frame, AssistantStreamEndFrame)
+    ] == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_retained_batch",
+            last_chunk_index=0,
+            finish_reason="error",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_cancelled_after_durable_commit_does_not_reappend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    task_id = "task_cancelled_flush_commit"
+    run_id = "run_cancelled_flush_commit"
+    now = datetime.now(UTC)
+    await repository.initialize()
+    await repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id=task_id,
+                mode=TaskMode.AGENT,
+                title="cancel a committing flush",
+                status=RunStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    )
+    await repository.append_event(
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=1,
+            payload=RunQueuedPayload(
+                request_id="request_cancelled_flush_commit",
+                input="cancel a committing flush",
+            ),
+        )
+    )
+    await repository.append_event(
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=2,
+            payload=RunStartedPayload(),
+        )
+    )
+    append_committed = threading.Event()
+    release_append = threading.Event()
+    real_append = repository._append_event_sync
+
+    def append_then_block(event: EventEnvelope) -> TaskSnapshot:
+        snapshot = real_append(event)
+        if isinstance(event.payload, AssistantDeltaPayload):
+            append_committed.set()
+            assert release_append.wait(timeout=5)
+        return snapshot
+
+    monkeypatch.setattr(repository, "_append_event_sync", append_then_block)
+    live_frames: list[object] = []
+
+    async def emit(payload: object) -> TaskSnapshot:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        return await repository.append_event(
+            build_event(
+                task_id=task_id,
+                run_id=run_id,
+                sequence=snapshot.task.latest_sequence + 1,
+                payload=payload,
+            )
+        )
+
+    execution = RunExecution(
+        task_id=task_id,
+        run_id=run_id,
+        request_id="request_cancelled_flush_commit",
+        input="cancel a committing flush",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+    await buffer.add("buffered 中🙂")
+    ending = asyncio.create_task(buffer.end("cancelled"))
+    try:
+        committed = await asyncio.to_thread(append_committed.wait, 2)
+        assert committed
+        ending.cancel()
+        release_append.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await ending
+
+        await buffer.end("cancelled")
+
+        events = await repository.list_events(task_id)
+        assistant_deltas = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, AssistantDeltaPayload)
+        ]
+        assert assistant_deltas == [
+            AssistantDeltaPayload(
+                delta="buffered 中🙂",
+                stream_id=f"assistant:{run_id}",
+                from_chunk_index=0,
+                through_chunk_index=0,
+            )
+        ]
+        assert (
+            sum(isinstance(frame, AssistantStreamEndFrame) for frame in live_frames)
+            == 1
+        )
+    finally:
+        release_append.set()
+        if not ending.done():
+            ending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await ending
+        await repository.close()
+
+
+async def _append_async(items: list[object], item: object) -> None:
+    items.append(item)
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_live_publish_failure_keeps_durable_text_complete(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    durable_payloads: list[object] = []
+
+    async def fail_live(frame: object) -> None:
+        raise RuntimeError("live hub unavailable")
+
+    execution = RunExecution(
+        task_id="task_live_failure",
+        run_id="run_live_failure",
+        request_id="request_live_failure",
+        input="keep durable",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=fail_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    with caplog.at_level("ERROR", logger="app.runtime.manager"):
+        await buffer.add("complete ")
+        await buffer.add("中文🙂")
+        await buffer.end("stop")
+
+    assert "assistant stream publish failed" in caplog.text
+    assert "".join(payload.delta for payload in durable_payloads) == "complete 中文🙂"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_does_not_swallow_live_publish_cancellation() -> None:
+    durable_payloads: list[object] = []
+
+    async def cancel_live(frame: object) -> None:
+        raise asyncio.CancelledError
+
+    execution = RunExecution(
+        task_id="task_live_cancel",
+        run_id="run_live_cancel",
+        request_id="request_live_cancel",
+        input="cancel",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async(durable_payloads, payload),
+        _assistant_stream_emitter=cancel_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    with pytest.raises(asyncio.CancelledError):
+        await buffer.add("not buffered")
+
+    assert durable_payloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "finish_reason", "expected_exception"),
+    [
+        ("finish", "stop", None),
+        ("tool", "tool_call", None),
+        ("exhaustion", "stop", None),
+        ("error", "error", RuntimeError),
+        ("cancel", "cancelled", asyncio.CancelledError),
+        ("max_turns", "max_turns", MaxTurnsExceeded),
+    ],
+)
+async def test_consume_events_ends_each_active_segment_once_at_boundaries(
+    boundary: str,
+    finish_reason: str,
+    expected_exception: type[BaseException] | None,
+) -> None:
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    order: list[str] = []
+
+    async def emit_durable(payload: object) -> None:
+        durable_payloads.append(payload)
+        if isinstance(payload, AssistantDeltaPayload):
+            order.append("durable_delta")
+        elif isinstance(payload, ToolStartedPayload):
+            order.append("tool_started")
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+        if isinstance(frame, AssistantStreamEndFrame):
+            order.append("stream_end")
+
+    execution = RunExecution(
+        task_id=f"task_{boundary}",
+        run_id=f"run_{boundary}",
+        request_id=f"request_{boundary}",
+        input="boundary",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    class FakeResult:
+        async def stream_events(self):
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="text"))]
+                )
+            )
+            if boundary == "finish":
+                yield RawResponsesStreamEvent(
+                    data=SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(content=None),
+                                finish_reason="stop",
+                            )
+                        ]
+                    )
+                )
+            elif boundary == "tool":
+                yield RunItemStreamEvent(
+                    name="tool_called",
+                    item=SimpleNamespace(
+                        raw_item=SimpleNamespace(call_id="call_boundary", name="search")
+                    ),
+                )
+            elif boundary == "error":
+                raise RuntimeError("stream failed")
+            elif boundary == "cancel":
+                raise asyncio.CancelledError
+            elif boundary == "max_turns":
+                raise MaxTurnsExceeded("maximum turns exceeded")
+
+    consume = runner_module.AgentRunExecutor._consume_events(
+        execution,
+        FakeResult(),
+        buffer,
+    )
+    if expected_exception is None:
+        await consume
+    else:
+        with pytest.raises(expected_exception):
+            await consume
+
+    ends = [frame for frame in live_frames if isinstance(frame, AssistantStreamEndFrame)]
+    assert ends == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id=f"assistant:{execution.run_id}",
+            last_chunk_index=0,
+            finish_reason=finish_reason,
+        )
+    ]
+    assert [
+        payload
+        for payload in durable_payloads
+        if isinstance(payload, AssistantDeltaPayload)
+    ] == [
+        AssistantDeltaPayload(
+            delta="text",
+            stream_id=f"assistant:{execution.run_id}",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        )
+    ]
+    assert order.index("durable_delta") < order.index("stream_end")
+    if boundary == "tool":
+        assert order.index("stream_end") < order.index("tool_started")
+
+
+@pytest.mark.asyncio
+async def test_later_text_rotates_stream_and_restarts_chunk_index() -> None:
+    live_frames: list[object] = []
+    execution = RunExecution(
+        task_id="task_segments",
+        run_id="run_segments",
+        request_id="request_segments",
+        input="segments",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=lambda payload: _append_async([], payload),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+    )
+    buffer = runner_module._AssistantTextBuffer(execution)
+
+    await buffer.add("before tool")
+    await buffer.end("tool_call")
+    await buffer.end("tool_call")
+    await buffer.add("after tool")
+    await buffer.end("stop")
+
+    assert [
+        (frame.stream_id, frame.chunk_index)
+        for frame in live_frames
+        if isinstance(frame, AssistantStreamDeltaFrame)
+    ] == [
+        ("assistant:run_segments", 0),
+        ("assistant:run_segments:1", 0),
+    ]
+    assert [
+        (frame.stream_id, frame.last_chunk_index)
+        for frame in live_frames
+        if isinstance(frame, AssistantStreamEndFrame)
+    ] == [
+        ("assistant:run_segments", 0),
+        ("assistant:run_segments:1", 0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_manager_cooperative_cancel_flushes_text_before_end_and_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    assistant_stream_hub = AssistantStreamHub()
+    order: list[str] = []
+    real_append_event = repository.append_event
+    real_publish = assistant_stream_hub.publish
+
+    async def record_event(event: EventEnvelope) -> TaskSnapshot:
+        snapshot = await real_append_event(event)
+        if isinstance(event.payload, AssistantDeltaPayload):
+            order.append("durable_delta")
+        elif isinstance(event.payload, RunCancelledPayload):
+            order.append("run_cancelled")
+        return snapshot
+
+    async def record_frame(frame: AssistantStreamFrame) -> None:
+        await real_publish(frame)
+        if isinstance(frame, AssistantStreamEndFrame):
+            order.append("stream_end")
+
+    monkeypatch.setattr(repository, "append_event", record_event)
+    monkeypatch.setattr(assistant_stream_hub, "publish", record_frame)
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    allow_text = asyncio.Event()
+
+    class CooperativeResult:
+        def __init__(self) -> None:
+            self.cancelled = asyncio.Event()
+            self.cancel_calls: list[str] = []
+
+        def cancel(self, mode: str) -> None:
+            self.cancel_calls.append(mode)
+            self.cancelled.set()
+
+        async def stream_events(self) -> AsyncIterator[object]:
+            await allow_text.wait()
+            yield RawResponsesStreamEvent(
+                data=SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(delta=SimpleNamespace(content="buffered 中🙂"))
+                    ]
+                )
+            )
+            await self.cancelled.wait()
+            raise asyncio.CancelledError
+
+    result = CooperativeResult()
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: result,
+    )
+    manager = TaskManager(
+        repository,
+        run_executor=make_executor(repository),
+        assistant_stream_hub=assistant_stream_hub,
+    )
+    subscription = await assistant_stream_hub.subscribe()
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_buffered_cooperative_cancel",
+                input="cancel buffered response",
+            )
+        )
+        await subscription.subscribe_task(accepted.task_id)
+        allow_text.set()
+        delta_frame = await asyncio.wait_for(subscription.receive(), timeout=2)
+        assert isinstance(delta_frame, AssistantStreamDeltaFrame)
+
+        cancelled = await asyncio.wait_for(
+            manager.cancel_run(accepted.task_id, accepted.run_id),
+            timeout=3,
+        )
+        end_frame = await asyncio.wait_for(subscription.receive(), timeout=2)
+
+        assert cancelled.runs[-1].status.value == "cancelled"
+        assert result.cancel_calls == ["after_turn"]
+        assert isinstance(end_frame, AssistantStreamEndFrame)
+        assert end_frame.finish_reason == "cancelled"
+        assert end_frame.last_chunk_index == 0
+        assert order.index("durable_delta") < order.index("stream_end")
+        assert order.index("stream_end") < order.index("run_cancelled")
+        events = await repository.list_events(accepted.task_id)
+        assistant_deltas = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, AssistantDeltaPayload)
+        ]
+        assert assistant_deltas == [
+            AssistantDeltaPayload(
+                delta="buffered 中🙂",
+                stream_id=f"assistant:{accepted.run_id}",
+                from_chunk_index=0,
+                through_chunk_index=0,
+            )
+        ]
+        assert (
+            sum(
+                isinstance(frame, AssistantStreamEndFrame)
+                for frame in (delta_frame, end_frame)
+            )
+            == 1
+        )
+        model.close.assert_awaited_once_with()
+    finally:
+        allow_text.set()
+        await subscription.close()
+        await manager.close()
+        await assistant_stream_hub.close()
 
 
 @pytest.mark.asyncio
@@ -650,14 +1368,24 @@ async def test_executor_flushes_text_after_100ms_while_stream_is_idle(
 
     assert runner_module.ASSISTANT_FLUSH_INTERVAL_SECONDS == 0.1
     assert flushed_before_second is True
-    assert (
-        "".join(
-            payload.delta
-            for payload in emitted
-            if isinstance(payload, AssistantDeltaPayload)
-        )
-        == "firstsecond"
-    )
+    assert [
+        payload
+        for payload in emitted
+        if isinstance(payload, AssistantDeltaPayload)
+    ] == [
+        AssistantDeltaPayload(
+            delta="first",
+            stream_id="assistant:run_timed_text",
+            from_chunk_index=0,
+            through_chunk_index=0,
+        ),
+        AssistantDeltaPayload(
+            delta="second",
+            stream_id="assistant:run_timed_text",
+            from_chunk_index=1,
+            through_chunk_index=1,
+        ),
+    ]
 
 
 @pytest.mark.asyncio
@@ -852,10 +1580,109 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
 
 
 @pytest.mark.asyncio
+async def test_executor_ends_stream_when_compaction_preparation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("compaction preparation failed")
+    live_frames: list[object] = []
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    execution = RunExecution(
+        task_id="task_compaction_failure",
+        run_id="run_compaction_failure",
+        request_id="request_compaction_failure",
+        input="fail during preparation",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+        _compaction_committer=AsyncMock(return_value=False),
+    )
+
+    class FailingCompactor:
+        async def prepare(self, task_id, **kwargs):
+            raise failure
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail("SDK Run must not start"),
+    )
+
+    with pytest.raises(RuntimeError, match="compaction preparation failed") as raised:
+        await runner_module.AgentRunExecutor(
+            SimpleNamespace(task_session=run_scoped_session(object())),
+            compactor=FailingCompactor(),
+        )(execution)
+
+    assert raised.value is failure
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_compaction_failure",
+            last_chunk_index=None,
+            finish_reason="error",
+        )
+    ]
+    model.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_executor_ends_stream_when_compaction_preparation_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancellation = asyncio.CancelledError()
+    live_frames: list[object] = []
+    model = SimpleNamespace(close=AsyncMock())
+    build = SimpleNamespace(agent=object(), skill_names=(), model=model)
+    execution = RunExecution(
+        task_id="task_compaction_cancelled",
+        run_id="run_compaction_cancelled",
+        request_id="request_compaction_cancelled",
+        input="cancel during preparation",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
+        _compaction_committer=AsyncMock(return_value=False),
+    )
+
+    class CancelledCompactor:
+        async def prepare(self, task_id, **kwargs):
+            raise cancellation
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: pytest.fail("SDK Run must not start"),
+    )
+
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await runner_module.AgentRunExecutor(
+            SimpleNamespace(task_session=run_scoped_session(object())),
+            compactor=CancelledCompactor(),
+        )(execution)
+
+    assert raised.value is cancellation
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_compaction_cancelled",
+            last_chunk_index=None,
+            finish_reason="cancelled",
+        )
+    ]
+    model.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cancellation_requested = asyncio.Event()
+    live_frames: list[object] = []
     model = SimpleNamespace(close=AsyncMock())
     build = SimpleNamespace(agent=object(), skill_names=(), model=model)
     execution = RunExecution(
@@ -865,6 +1692,7 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
         input="do not start",
         context=SimpleNamespace(cancellation_requested=cancellation_requested),
         _event_emitter=AsyncMock(),
+        _assistant_stream_emitter=lambda frame: _append_async(live_frames, frame),
         _compaction_committer=AsyncMock(return_value=False),
     )
 
@@ -885,6 +1713,15 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
             compactor=Compactor(),
         )(execution)
 
+    assert live_frames == [
+        AssistantStreamEndFrame(
+            task_id=execution.task_id,
+            run_id=execution.run_id,
+            stream_id="assistant:run_cancelled_compaction",
+            last_chunk_index=None,
+            finish_reason="cancelled",
+        )
+    ]
     model.close.assert_awaited_once_with()
 
 

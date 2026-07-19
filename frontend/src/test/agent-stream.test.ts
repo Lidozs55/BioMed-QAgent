@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EventEnvelope, TaskSummary } from "@/runtime/contracts";
+import type {
+  AssistantStreamFrame,
+  EventEnvelope,
+  TaskSummary,
+} from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import {
   AgentEventTransport,
@@ -79,7 +83,14 @@ function event(taskId: string, sequence: number, delta: string): EventEnvelope {
   };
 }
 
-function setupTransport() {
+interface TransportTestOptions {
+  applyAssistantStreamFrames?: (frames: readonly AssistantStreamFrame[]) => void;
+  deactivateAssistantStreams?: (taskId?: string) => void;
+  scheduleAnimationFrame?: (callback: () => void) => number;
+  cancelAnimationFrame?: (handle: number) => void;
+}
+
+function setupTransport(options: TransportTestOptions = {}) {
   const sockets: FakeSocket[] = [];
   const socketFactory: SocketFactory = () => {
     const socket = new FakeSocket();
@@ -92,9 +103,15 @@ function setupTransport() {
     getLastSequence: (taskId) =>
       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
     applyEvent: (incoming) => useAgentStore.getState().applyEvent(incoming),
+    applyAssistantStreamFrames:
+      options.applyAssistantStreamFrames ?? (() => undefined),
+    deactivateAssistantStreams:
+      options.deactivateAssistantStreams ?? (() => undefined),
     setConnectionStatus: (status) =>
       useAgentStore.getState().setConnectionStatus(status),
     onControlError: (frame) => controlErrors.push(frame),
+    scheduleAnimationFrame: options.scheduleAnimationFrame,
+    cancelAnimationFrame: options.cancelAnimationFrame,
     reconnectDelayMs: 10,
   });
   return { transport, sockets, controlErrors };
@@ -206,6 +223,437 @@ describe("durable event transport", () => {
     expect(controlErrors).toHaveLength(1);
   });
 
+  it("applies valid realtime frames once on the next animation frame without advancing sequence", async () => {
+    const scheduled: Array<() => void> = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelAnimationFrame: () => undefined,
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 0,
+      delta: "你",
+    });
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 1,
+      delta: "好🙂",
+    });
+    sockets[0].message({
+      type: "assistant_stream_end",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      last_chunk_index: 1,
+      finish_reason: "stop",
+    });
+
+    expect(batches).toEqual([]);
+    expect(scheduled).toHaveLength(1);
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(0);
+
+    scheduled[0]();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].map((frame) => frame.type)).toEqual([
+      "assistant_stream_delta",
+      "assistant_stream_delta",
+      "assistant_stream_end",
+    ]);
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(0);
+  });
+
+  it("strictly rejects malformed realtime frames and partial durable ranges", async () => {
+    const scheduled: Array<() => void> = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelAnimationFrame: () => undefined,
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const malformed = [
+      {
+        type: "assistant_stream_delta",
+        task_id: "",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: 0,
+        delta: "bad",
+      },
+      {
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: -1,
+        delta: "bad",
+      },
+      {
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: 0,
+        delta: "",
+      },
+      {
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: 0,
+        delta: "bad",
+        unexpected: true,
+      },
+      {
+        type: "assistant_stream_end",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        last_chunk_index: 0.5,
+        finish_reason: "stop",
+      },
+      {
+        type: "assistant_stream_end",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        last_chunk_index: null,
+        finish_reason: "",
+      },
+    ];
+    for (const frame of malformed) sockets[0].message(frame);
+    sockets[0].message({
+      ...event("task_a", 1, "durable"),
+      payload: {
+        type: "assistant_delta",
+        delta: "durable",
+        stream_id: "assistant:run_task_a",
+      },
+    });
+
+    expect(scheduled).toEqual([]);
+    expect(batches).toEqual([]);
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(0);
+  });
+
+  it("accepts an all-null historical durable range but rejects mixed null metadata", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    sockets[0].message({
+      ...event("task_a", 1, "legacy-null"),
+      payload: {
+        type: "assistant_delta",
+        delta: "legacy-null",
+        stream_id: null,
+        from_chunk_index: null,
+        through_chunk_index: null,
+      },
+    });
+    sockets[0].message({
+      ...event("task_a", 2, "invalid"),
+      payload: {
+        type: "assistant_delta",
+        delta: "invalid",
+        stream_id: null,
+        from_chunk_index: 0,
+        through_chunk_index: null,
+      },
+    });
+
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
+    expect(
+      useAgentStore.getState().tasksById.task_a.messages.find(
+        (message) => message.runId === "run_task_a",
+      )?.content,
+    ).toBe("legacy-null");
+  });
+
+  it("cancels a queued visual batch and deactivates streams on disconnect", async () => {
+    const scheduled: Array<() => void> = [];
+    const cancelled: number[] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    let deactivateCount = 0;
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      deactivateAssistantStreams: () => {
+        deactivateCount += 1;
+      },
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return 41;
+      },
+      cancelAnimationFrame: (handle) => cancelled.push(handle),
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 0,
+      delta: "pending",
+    });
+
+    transport.disconnect();
+    scheduled[0]();
+
+    expect(cancelled).toEqual([41]);
+    expect(batches).toEqual([]);
+    expect(deactivateCount).toBe(1);
+  });
+
+  it("commits a realtime batch to the store in one notification", () => {
+    let notifications = 0;
+    const unsubscribe = useAgentStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    useAgentStore.getState().applyAssistantStreamFrames([
+      {
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: 0,
+        delta: "A",
+      },
+      {
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: 1,
+        delta: "B",
+      },
+    ]);
+
+    unsubscribe();
+    expect(notifications).toBe(1);
+    expect(
+      useAgentStore.getState().tasksById.task_a.messages.find(
+        (message) => message.runId === "run_task_a",
+      )?.content,
+    ).toBe("AB");
+  });
+
+  it("bounds a suspended visual queue and lets durable coverage cancel it", async () => {
+    const scheduled: Array<() => void> = [];
+    const cancelled: number[] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return 73;
+      },
+      cancelAnimationFrame: (handle) => cancelled.push(handle),
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    for (let chunkIndex = 0; chunkIndex < 3_000; chunkIndex += 1) {
+      sockets[0].message({
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: chunkIndex,
+        delta: "x",
+      });
+    }
+    sockets[0].message({
+      ...event("task_a", 1, "x".repeat(3_000)),
+      payload: {
+        type: "assistant_delta",
+        delta: "x".repeat(3_000),
+        stream_id: "assistant:run_task_a",
+        from_chunk_index: 0,
+        through_chunk_index: 2_999,
+      },
+    });
+    scheduled[0]();
+
+    expect(cancelled).toEqual([73]);
+    expect(batches).toEqual([]);
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
+    expect(
+      useAgentStore.getState().tasksById.task_a.messages.find(
+        (message) => message.runId === "run_task_a",
+      )?.content,
+    ).toBe("x".repeat(3_000));
+  });
+
+  it("keeps a stream end and the contiguous prefix when the visual queue is full", async () => {
+    const scheduled: Array<() => void> = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return 74;
+      },
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    for (let chunkIndex = 0; chunkIndex < 2_048; chunkIndex += 1) {
+      sockets[0].message({
+        type: "assistant_stream_delta",
+        task_id: "task_a",
+        run_id: "run_task_a",
+        stream_id: "assistant:run_task_a",
+        chunk_index: chunkIndex,
+        delta: "x",
+      });
+    }
+    sockets[0].message({
+      type: "assistant_stream_end",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      last_chunk_index: 2_047,
+      finish_reason: "stop",
+    });
+    scheduled[0]();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(2_048);
+    expect(batches[0][0]).toMatchObject({
+      type: "assistant_stream_delta",
+      chunk_index: 0,
+    });
+    expect(batches[0][batches[0].length - 1]).toMatchObject({
+      type: "assistant_stream_end",
+    });
+  });
+
+  it("drops a queued realtime delta when a durable tool boundary arrives first", async () => {
+    const scheduled: Array<() => void> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) =>
+        useAgentStore.getState().applyAssistantStreamFrames(frames),
+      deactivateAssistantStreams: (taskId) =>
+        useAgentStore.getState().deactivateAssistantStreams(taskId),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelAnimationFrame: () => undefined,
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 0,
+      delta: "stale",
+    });
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_tool_boundary",
+      type: "tool_started",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: CREATED_AT,
+      payload: {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search",
+      },
+    });
+
+    scheduled[0]();
+
+    expect(
+      useAgentStore.getState().tasksById.task_a.assistantStreamsByRunId
+        .run_task_a,
+    ).toBeUndefined();
+  });
+
+  it("cancels queued realtime frames when replay recovery replaces the socket", async () => {
+    const scheduled: Array<() => void> = [];
+    const cancelled: number[] = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    let deactivateCount = 0;
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      deactivateAssistantStreams: () => {
+        deactivateCount += 1;
+      },
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return 73;
+      },
+      cancelAnimationFrame: (handle) => cancelled.push(handle),
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 0,
+      delta: "pending",
+    });
+
+    const recovery = transport.recoverSubscription("task_a", 0);
+    scheduled[0]();
+
+    expect(cancelled).toEqual([73]);
+    expect(batches).toEqual([]);
+    expect(deactivateCount).toBe(1);
+
+    sockets[1].open();
+    await Promise.resolve();
+    sockets[1].message({ type: "pong" });
+    await recovery;
+  });
+
   it("reconnects after 1013 and resumes each task from its own current watermark", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 0);
@@ -280,6 +728,38 @@ describe("durable event transport", () => {
     });
     sockets[0].message(event("task_a", 3, "replayed"));
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(3);
+  });
+
+  it("discards realtime frames drained before the unsubscribe pong barrier", async () => {
+    const scheduled: Array<() => void> = [];
+    const batches: Array<readonly AssistantStreamFrame[]> = [];
+    const { transport, sockets } = setupTransport({
+      applyAssistantStreamFrames: (frames) => batches.push(frames),
+      scheduleAnimationFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelAnimationFrame: () => undefined,
+    });
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const barrier = transport.unsubscribeAndWait("task_a");
+    sockets[0].message({
+      type: "assistant_stream_delta",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stream_id: "assistant:run_task_a",
+      chunk_index: 0,
+      delta: "drained",
+    });
+    sockets[0].message({ type: "pong" });
+    await barrier;
+    scheduled[0]();
+
+    expect(batches).toEqual([]);
   });
 
   it("waits for an unsubscribe pong before replacing the socket for recovery", async () => {

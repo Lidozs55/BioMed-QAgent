@@ -7,12 +7,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import app.api.ws as ws_module
 import app.api.ws_events as ws_events_module
 import pytest
 from app.domain.contracts import (
     AssistantDeltaPayload,
+    AssistantStreamDeltaFrame,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -26,7 +28,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
-from app.runtime.hub import EventHub
+from app.runtime.hub import AssistantStreamHub, EventHub, EventSubscription
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
 from fastapi import FastAPI, WebSocketDisconnect
@@ -137,12 +139,17 @@ async def websocket_runtime(
     repository = TaskRepository(tmp_path / "output")
     await repository.initialize()
     hub = EventHub(subscriber_queue_size=subscriber_queue_size)
+    assistant_stream_hub = AssistantStreamHub(
+        subscriber_queue_size=subscriber_queue_size
+    )
     application = FastAPI()
     application.state.task_repository = repository
     application.state.event_hub = hub
+    application.state.assistant_stream_hub = assistant_stream_hub
     try:
         yield application, repository, hub
     finally:
+        await assistant_stream_hub.close()
         await hub.close()
         await repository.close()
 
@@ -203,6 +210,19 @@ async def append_delta(
     return event
 
 
+def assistant_stream_delta(
+    task_id: str,
+    chunk_index: int,
+) -> AssistantStreamDeltaFrame:
+    return AssistantStreamDeltaFrame(
+        task_id=task_id,
+        run_id=f"run_{task_id}",
+        stream_id=f"stream_{task_id}",
+        chunk_index=chunk_index,
+        delta=f"live:{task_id}:{chunk_index}",
+    )
+
+
 async def start_socket(
     application: FastAPI,
     *,
@@ -244,6 +264,41 @@ async def stop_socket(
     except TimeoutError:
         endpoint.cancel()
         await asyncio.gather(endpoint, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_partial_startup_closes_durable_subscription_when_live_subscribe_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, _, hub):
+        captured: list[EventSubscription] = []
+        real_subscribe = hub.subscribe
+
+        async def capture_durable_subscription() -> EventSubscription:
+            subscription = await real_subscribe()
+            captured.append(subscription)
+            return subscription
+
+        async def fail_live_subscription() -> NoReturn:
+            raise RuntimeError("live subscription failed")
+
+        monkeypatch.setattr(hub, "subscribe", capture_durable_subscription)
+        monkeypatch.setattr(
+            application.state.assistant_stream_hub,
+            "subscribe",
+            fail_live_subscription,
+        )
+
+        with pytest.raises(RuntimeError, match="live subscription failed"):
+            await ws_events_module._run_event_session(
+                FakeWebSocket(application),
+                asyncio.Lock(),
+            )
+
+        assert len(captured) == 1
+        assert captured[0].closed
+        assert hub.subscriber_count == 0
 
 
 @pytest.mark.asyncio
@@ -653,6 +708,230 @@ async def test_live_delivery_backfills_a_missed_durable_sequence(
 
 
 @pytest.mark.asyncio
+async def test_assistant_stream_frame_is_live_only_and_does_not_advance_watermark(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_assistant_live_only"
+        await repository.save_snapshot(running_snapshot(task_id))
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {"type": "subscribe", "task_id": task_id, "after_sequence": 0}
+            )
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            frame = assistant_stream_delta(task_id, 0)
+            await application.state.assistant_stream_hub.publish(frame)
+            assert await websocket.receive_frame() == frame.model_dump(mode="json")
+            assert await repository.list_events(task_id) == []
+
+            first_durable = await append_delta(repository, task_id, 1)
+            await hub.publish(first_durable)
+            assert await websocket.receive_frame() == first_durable.model_dump(
+                mode="json"
+            )
+        finally:
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_ping_barrier_drops_queued_assistant_stream_frames(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_assistant_unsubscribe"
+        await repository.save_snapshot(running_snapshot(task_id))
+        send_lock = ObservedLock()
+        websocket, endpoint = await start_event_socket(
+            application,
+            send_lock,
+            {"type": "subscribe", "task_id": task_id, "after_sequence": 0},
+        )
+        try:
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+            live_subscription = next(
+                iter(application.state.assistant_stream_hub._subscribers)
+            )
+            assert live_subscription.task_ids == frozenset({task_id})
+
+            websocket.block_next_event = True
+            first_durable = await append_delta(repository, task_id, 1)
+            await hub.publish(first_durable)
+            await asyncio.wait_for(websocket.event_send_entered.wait(), timeout=1)
+
+            unsubscribe_received = await websocket.send_command(
+                {"type": "unsubscribe", "task_id": task_id}
+            )
+            await asyncio.wait_for(unsubscribe_received.wait(), timeout=1)
+            await asyncio.wait_for(send_lock.blocked_acquire_entered.wait(), timeout=1)
+            live_frame = assistant_stream_delta(task_id, 0)
+            await application.state.assistant_stream_hub.publish(live_frame)
+            await websocket.send_command({"type": "ping"})
+            websocket.release_event_send.set()
+
+            assert await websocket.receive_frame() == first_durable.model_dump(
+                mode="json"
+            )
+            assert await websocket.receive_frame() == {"type": "pong"}
+            assert live_subscription.task_ids == frozenset()
+            assert websocket.outbound.empty()
+        finally:
+            websocket.release_event_send.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_durable_replay_precedes_live_frame_queued_during_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_assistant_handoff"
+        await repository.save_snapshot(running_snapshot(task_id))
+        durable = await append_delta(repository, task_id, 1)
+        replay_entered = asyncio.Event()
+        release_replay = asyncio.Event()
+        real_list_events = repository.list_events
+
+        async def gated_list_events(*args, **kwargs):
+            replay_entered.set()
+            await release_replay.wait()
+            return await real_list_events(*args, **kwargs)
+
+        monkeypatch.setattr(repository, "list_events", gated_list_events)
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {"type": "subscribe", "task_id": task_id, "after_sequence": 0}
+            )
+            await asyncio.wait_for(replay_entered.wait(), timeout=1)
+            durable_subscription = next(iter(hub._subscribers))
+            live_subscription = next(
+                iter(application.state.assistant_stream_hub._subscribers)
+            )
+            assert durable_subscription.task_ids == frozenset({task_id})
+            assert live_subscription.task_ids == frozenset({task_id})
+
+            live_frame = assistant_stream_delta(task_id, 0)
+            await application.state.assistant_stream_hub.publish(live_frame)
+            release_replay.set()
+
+            assert await websocket.receive_frame() == durable.model_dump(mode="json")
+            assert await websocket.receive_frame() == live_frame.model_dump(mode="json")
+        finally:
+            release_replay.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_overflow_closes_with_exact_1013_reason(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(
+        tmp_path,
+        subscriber_queue_size=1,
+    ) as (application, repository, hub):
+        task_id = "task_assistant_overflow"
+        await repository.save_snapshot(running_snapshot(task_id))
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {"type": "subscribe", "task_id": task_id, "after_sequence": 0}
+            )
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            websocket.block_next_event = True
+            blocking = await append_delta(repository, task_id, 1)
+            await hub.publish(blocking)
+            await asyncio.wait_for(websocket.event_send_entered.wait(), timeout=1)
+
+            for chunk_index in range(3):
+                await application.state.assistant_stream_hub.publish(
+                    assistant_stream_delta(task_id, chunk_index)
+                )
+            websocket.release_event_send.set()
+            await websocket.wait_until_closed()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+            assert websocket.close_code == 1013
+            assert websocket.close_reason == (
+                "assistant stream overflow; reconnect and replay durable events"
+            )
+            assert websocket.maximum_active_sends == 1
+        finally:
+            websocket.release_event_send.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_assistant_stream_hub_shutdown_closes_with_exact_1012_reason(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, _, _):
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            await application.state.assistant_stream_hub.close()
+            await websocket.wait_until_closed()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+            assert websocket.close_code == 1012
+            assert websocket.close_reason == "assistant stream hub shutdown"
+            assert websocket.maximum_active_sends == 1
+        finally:
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
+async def test_durable_live_control_and_close_share_one_send_lock(
+    tmp_path: Path,
+) -> None:
+    async with websocket_runtime(tmp_path) as (application, repository, hub):
+        task_id = "task_all_serialized"
+        await repository.save_snapshot(running_snapshot(task_id))
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {"type": "subscribe", "task_id": task_id, "after_sequence": 0}
+            )
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+
+            websocket.block_next_event = True
+            durable = await append_delta(repository, task_id, 1)
+            await hub.publish(durable)
+            await asyncio.wait_for(websocket.event_send_entered.wait(), timeout=1)
+
+            live_frame = assistant_stream_delta(task_id, 0)
+            await application.state.assistant_stream_hub.publish(live_frame)
+            await websocket.send_command({"type": "ping"})
+            await application.state.assistant_stream_hub.close()
+            assert websocket.maximum_active_sends == 1
+
+            websocket.release_event_send.set()
+            await websocket.wait_until_closed()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+            frames = []
+            while not websocket.outbound.empty():
+                frames.append(websocket.outbound.get_nowait())
+            assert durable.model_dump(mode="json") in frames
+            assert live_frame.model_dump(mode="json") in frames
+            assert {"type": "pong"} in frames
+            assert websocket.close_code == 1012
+            assert websocket.maximum_active_sends == 1
+        finally:
+            websocket.release_event_send.set()
+            await stop_socket(websocket, endpoint)
+
+
+@pytest.mark.asyncio
 async def test_cancel_publish_interruption_drains_and_retry_keeps_ws_sequences(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -944,10 +1223,12 @@ async def test_disconnect_does_not_cancel_an_active_manager_run(tmp_path: Path) 
         await release_executor.wait()
 
     manager = TaskManager(repository, run_executor=run, event_hub=hub)
+    assistant_stream_hub = AssistantStreamHub()
     await manager.start()
     application = FastAPI()
     application.state.task_repository = repository
     application.state.event_hub = hub
+    application.state.assistant_stream_hub = assistant_stream_hub
     application.state.task_manager = manager
     websocket = None
     endpoint = None
@@ -986,6 +1267,7 @@ async def test_disconnect_does_not_cancel_an_active_manager_run(tmp_path: Path) 
         if websocket is not None and endpoint is not None:
             await stop_socket(websocket, endpoint)
         await manager.close()
+        await assistant_stream_hub.close()
         await hub.close()
 
 

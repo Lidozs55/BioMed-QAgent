@@ -52,6 +52,8 @@ export interface ProjectedMessage {
 
 export type ActivityKind =
   | "tool"
+  | "stage"
+  | "progress"
   | "warning"
   | "conversation_compacted"
   | "fixture_event";
@@ -63,13 +65,26 @@ export interface ActivityProjection {
   sequence: number;
   timestamp: string;
   kind: ActivityKind;
-  status: "started" | "completed" | "warning" | "recorded";
+  status:
+    | "started"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "warning"
+    | "recorded";
   name: string | null;
   input: string | null;
   output: string | null;
   isError: boolean;
   code: string | null;
   message: string | null;
+  stage?: StageName;
+  progress?: {
+    stage: StageName;
+    kind: string;
+    current: number;
+    total: number | null;
+  };
 }
 
 export interface ArtifactProjection extends ArtifactRecord {
@@ -111,6 +126,29 @@ export interface PendingUserInput {
   timestamp: string;
 }
 
+export interface AssistantStreamSegmentProjection {
+  streamId: string;
+  pendingChunks: Record<number, string>;
+  confirmedThroughChunkIndex: number;
+  active: boolean;
+  durableSeen: boolean;
+}
+
+export interface AssistantStreamConflictDiagnostic {
+  taskId: string;
+  runId: string;
+  streamId: string;
+  chunkIndex: number;
+  count: number;
+}
+
+export interface AssistantStreamProjection {
+  durableText: string;
+  liveStreamOrder: string[];
+  streamsById: Record<string, AssistantStreamSegmentProjection>;
+  conflicts: AssistantStreamConflictDiagnostic[];
+}
+
 export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
@@ -124,6 +162,7 @@ export interface TaskProjection {
   artifactEventSequences: Record<string, number>;
   artifactManifestSequence: number | null;
   stages: Partial<Record<StageName, StageProjection>>;
+  assistantStreamsByRunId: Record<string, AssistantStreamProjection>;
   pendingUserInput: PendingUserInput | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";

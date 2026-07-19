@@ -405,8 +405,9 @@ Mock Demo 仅作为开发烟雾测试，不能满足正式验收，也不能在�
 
 ## 8. Durable API、控制面与事件面
 
-FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、`EventHub` 和
-`TaskIndex`。当前 REST surface 如下（统一前缀 `/api/v1`）：
+FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、durable `EventHub`、
+内存 `AssistantStreamHub` 和 `TaskIndex`。当前 REST surface 如下（统一前缀
+`/api/v1`）：
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -451,11 +452,26 @@ WebSocket 端点为 `/api/v1/ws`，只接受三类命令：
 - `{"type":"unsubscribe","task_id":"..."}`：取消该 Task 的订阅；
 - `{"type":"ping"}`：返回 `{"type":"pong"}`。
 
-服务端按 Task watermark 去重；若 live sequence 出现间隙，会先从 repository
-补齐。慢消费者以可重连状态关闭；`runtime/transport.ts` 自动重连并携带每个 Task
-的 watermark 重新 subscribe，由服务端重放缺失事件。`runtime/controller.ts` 在
-snapshot/accepted-Task handoff 时使用 REST `/events` 重放。WebSocket 不再接受创建
-Run 的命令。
+服务端输出分为两条通道：
+
+- durable 通道发送带 Task sequence 的 `EventEnvelope`，并继续发送 `pong` / `error`
+  控制帧；服务端按 Task watermark 去重，若 live sequence 出现间隙，会先从
+  repository 补齐；
+- realtime 通道发送无 sequence 的 `assistant_stream_delta` 和
+  `assistant_stream_end`。它由 lifespan 管理的 `AssistantStreamHub` 提供，仅驻留
+  内存、best-effort fan-out，不写入 event log；每个订阅队列有界，慢消费者会以
+  可重连状态关闭，Run 的 durable 写入与执行不受影响。
+
+Agent 收到模型文本 chunk 后，先发布 `assistant_stream_delta`，再放入 durable
+buffer。buffer 按 100 ms / 1 KB 批量写为 `assistant_delta`，并在工具调用、正常或
+截断结束、异常与取消路径上强制结束并 flush。durable payload 可携带
+`stream_id + from_chunk_index + through_chunk_index`；三个字段必须同时出现或同时
+省略，省略时兼容旧事件。实时帧丢失或断线时，完整文本仍由 durable event log
+恢复。
+
+`runtime/transport.ts` 自动重连并携带每个 Task 的 durable watermark 重新
+subscribe；`runtime/controller.ts` 在 snapshot/accepted-Task handoff 时使用 REST
+`/events` 重放。WebSocket 不接受创建 Run 的命令，也不提供 SSE。
 
 ### 8.3 人在回路与并发
 
@@ -499,6 +515,22 @@ stage 和 `lastSequence` 投影。HIL prompt 同时绑定 `task_id + run_id + re
 A → B → A 切换中的旧 Promise settlement。resume 事件只清理匹配 Run 与 request
 的 prompt，terminal 事件按所属 Run 清理，新 Run admission 则清理上一轮 prompt。
 侧栏把 `awaiting_user_input` 计入“运行中 N / 4”，与后端 slot 占用一致。
+
+Assistant 文本采用 realtime/durable 双投影：实时 chunk 按 `(run_id, stream_id,
+chunk_index)` 进入 pending，durable `assistant_delta` 的 chunk 范围推进 confirmed
+watermark 并移除已确认 pending。durable 先到、实时帧迟到或重放重复时都会按该
+watermark 去重，因此在线文本与断线重放后的最终文本收敛一致；无 sequence 的实时
+帧不会推进 `lastSequence`。Transport 在 WebSocket 收帧后立即排队，并在下一次
+`requestAnimationFrame` 合并更新；消息区继续复用 `MessageScroller` 自动跟随。
+仅当对应 stream 实际生成文本且仍为 active 时，Markdown 末尾显示装饰性闪烁光标，
+stream end、工具开始、Run finalizing/终态、断连或取消订阅后关闭，并遵循
+`prefers-reduced-motion`。
+
+Chat 主流中的 `ExecutionSummary` 只展示安全的结构化执行摘要：工具状态、阶段与
+progress 数量（检索、下载、清洗等）、验证状态和警告；同一 Run/阶段/progress kind
+原位更新，运行中默认展开。工具事件中已有的 output、digest 和诊断详情保留在
+`ToolTrace` 中；`ExecutionSummary` 不渲染任意 `detail`、reasoning-like keys 或
+隐藏提示词。系统不主动传输模型 CoT。
 
 R5 前端修复还补齐了非聊天区域的有界滚动、刷新竞态下的稳定 Task 排序、后台
 通知“查看”失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。
