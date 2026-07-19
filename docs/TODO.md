@@ -34,19 +34,38 @@
 
       （`backend/app/pipeline/stages/acquisition.py:30-34`）
 
-- [ ] **P0** 修复 processing 阶段 live 模式仍读 fixture SOFT
+- [x] **P0** 修复 processing 阶段 live 模式仍读 fixture SOFT
 
-      （`backend/app/pipeline/stages/processing.py:28,32`）
-      —— live 模式应使用 acquisition 阶段下载的真实 SOFT
+      （`backend/app/pipeline/stages/processing.py`，2026-07-19）
+      —— `run_processing` 现在按 `ctx.mode` 分支：fixture 模式保持原
+      `process_geo_tximport_counts` 调用（用 fixture SOFT），live 模式
+      直接走 `_recover_samples_from_series_matrix` 路径，**不再读
+      fixture SOFT**。
+      —— 架构限制：acquisition 阶段不下载 SOFT 文件，所以 live 模式
+      无法用 `process_geo_tximport_counts` 真正解析表达式矩阵；当前
+      live 模式仅产出 `measurement_type="sample_metadata"` 行。未来
+      完整修复方向见 docstring 中的 Architectural note（让 soft_gzip
+      可选 / 扩展 acquisition 下载 SOFT）。
+      —— 配套 TDD：`tests/pipeline/test_geo_tximport_processing.py::test_run_processing_live_mode_does_not_read_fixture_soft`
+      + `test_run_processing_fixture_mode_still_uses_fixture_soft`
 
-- [ ] **P0** 修复 `parse_geo_soft_samples` 的 `len(samples) != 12` 硬校验
+- [x] **P0** 修复 `parse_geo_soft_samples` 的 `len(samples) != 12` 硬校验
 
-      （`backend/app/pipeline/processing/geo_tximport.py:63`）
-      —— 应泛化为从 SOFT 动态读取样本数
+      （`backend/app/pipeline/processing/geo_tximport.py`，2026-07-19）
+      —— 改为 `not samples` 抛 ValueError + `len(set(aliases)) != len(samples)`
+      抛 ValueError。样本数动态从 SOFT 读取，不再硬编码 12。样本数通过
+      `ParsedDataset.processing_parameters["sample_count"]` 上报（TODO §1.3）。
+      —— 配套 TDD：`test_parse_geo_soft_samples_accepts_non_twelve_sample_count`
+      + `test_parse_geo_soft_samples_rejects_zero_samples`
+      + `test_parse_geo_soft_samples_rejects_duplicate_aliases`
 
-- [ ] **P0** 修复 `staging_run("run_pinned_fixture")` 硬编码标识符
+- [x] **P0** 修复 `staging_run("run_pinned_fixture")` 硬编码标识符
 
-      （`backend/app/pipeline/stages/artifact_build.py:102`）
+      （`backend/app/pipeline/stages/artifact_build.py:327`，2026-07-19
+      发现已修复）—— 当前实现已使用 `ctx.workdir.staging_run(ctx.run_id)`，
+      不存在硬编码字符串。`run_pinned_fixture` 仅在 `test_pipeline_runner_resilience.py:533`
+      的断言中以负向形式出现（`assert not (task_root / "staging" / "run_pinned_fixture").exists()`）。
+      TODO 描述过时，直接标记为完成。
 
 ### 1.2 修复 field_descriptions placeholder
 

@@ -153,59 +153,86 @@ def run_processing(
     """Parse the GEO tximport counts file into a long-form ParsedDataset.
 
     In fixture mode, reads the fixture SOFT file for sample metadata. In live
-    mode with arbitrary GEO series, the tximport counts format may not be
-    available — in that case we attempt to recover per-sample metadata from
-    the downloaded ``series_matrix.txt.gz`` so both ``sample_metadata.csv``
-    and ``main_data.csv`` are populated. ``main_data.csv`` will contain one
-    ``measurement_type="sample_metadata"`` row per sample when the
-    series_matrix's expression-matrix block is empty (the norm for modern
-    snRNAseq/RNA-seq series), so users always see real data in main_data.csv
-    regardless of the GEO series type.
+    mode, ``process_geo_tximport_counts`` is skipped because acquisition does
+    not download a SOFT file (it downloads ``tximportCounts.txt.gz`` or
+    ``series_matrix.txt.gz``); the live path goes straight to
+    ``_recover_samples_from_series_matrix`` so per-sample metadata is
+    recovered from the downloaded series_matrix and ``main_data.csv``
+    contains one ``measurement_type="sample_metadata"`` row per sample.
+
+    Architectural note (TODO §1.1): live mode cannot currently produce a
+    real expression matrix because ``process_geo_tximport_counts`` requires
+    a SOFT file for sample metadata that acquisition does not fetch. A
+    future iteration could either (a) make ``soft_gzip`` optional and
+    derive minimal samples from the counts header, or (b) extend
+    acquisition to also download ``family.soft.gz``. For now, live mode
+    intentionally skips the tximport parser to avoid contaminating live
+    data with fixture SOFT bytes.
     """
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset
-    try:
-        parsed = process_geo_tximport_counts(
-            source_asset=source_asset,
-            dataset_id=dataset_id,
-            workdir=ctx.workdir,
-            soft_gzip=(ctx.fixture_dir / "gse178352_family.soft.gz").read_bytes(),
-            logical_file="GSE178352_tximportCounts.txt",
-        )
-        samples = parse_geo_soft_samples(
-            (ctx.fixture_dir / "gse178352_family.soft.gz").read_bytes()
-        )
-        logger.info(
-            "processing: parsed tximport counts (%d rows, %d samples)",
-            parsed.row_count,
-            len(samples),
-        )
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        # Live mode with a non-tximport file (e.g. series_matrix.txt.gz):
-        # recover per-sample metadata and write one sample_metadata row per
-        # sample into main_data.csv so it always carries real data even when
-        # the series_matrix expression block is empty.
-        logger.warning(
-            "processing: tximport parse failed (%s); attempting series_matrix "
-            "sample recovery",
-            exc,
-        )
+    if ctx.mode == "fixture":
+        try:
+            parsed = process_geo_tximport_counts(
+                source_asset=source_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                soft_gzip=(ctx.fixture_dir / "gse178352_family.soft.gz").read_bytes(),
+                logical_file="GSE178352_tximportCounts.txt",
+            )
+            samples = parse_geo_soft_samples(
+                (ctx.fixture_dir / "gse178352_family.soft.gz").read_bytes()
+            )
+            logger.info(
+                "processing: parsed tximport counts (%d rows, %d samples)",
+                parsed.row_count,
+                len(samples),
+            )
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            # Fixture-mode fallback: series_matrix recovery for fixture
+            # series whose expression block is empty.
+            logger.warning(
+                "processing: tximport parse failed (%s); attempting "
+                "series_matrix sample recovery",
+                exc,
+            )
+            samples = _recover_samples_from_series_matrix(source_asset, ctx)
+            parsed = _build_minimal_parsed_dataset(
+                source_asset, dataset_id, ctx, samples=samples
+            )
+            if samples:
+                logger.info(
+                    "processing: recovered %d samples from series_matrix; "
+                    "main_data.csv will contain %d sample_metadata rows "
+                    "(expression block is empty)",
+                    len(samples),
+                    parsed.row_count,
+                )
+            else:
+                logger.warning(
+                    "processing: series_matrix recovery yielded no samples; "
+                    "main_data.csv will be schema-only (0 rows)"
+                )
+    else:
+        # Live mode: acquisition does not download a SOFT file, so skip the
+        # tximport parser entirely and recover sample metadata from the
+        # downloaded series_matrix (TODO §1.1).
         samples = _recover_samples_from_series_matrix(source_asset, ctx)
         parsed = _build_minimal_parsed_dataset(
             source_asset, dataset_id, ctx, samples=samples
         )
         if samples:
             logger.info(
-                "processing: recovered %d samples from series_matrix; "
-                "main_data.csv will contain %d sample_metadata rows "
-                "(expression block is empty)",
+                "processing: live mode recovered %d samples from "
+                "series_matrix; main_data.csv will contain %d "
+                "sample_metadata rows",
                 len(samples),
                 parsed.row_count,
             )
         else:
             logger.warning(
-                "processing: series_matrix recovery yielded no samples; "
-                "main_data.csv will be schema-only (0 rows)"
+                "processing: live mode series_matrix recovery yielded no "
+                "samples; main_data.csv will be schema-only (0 rows)"
             )
 
     # Surface processing progress: "Processing: cleaned N rows".

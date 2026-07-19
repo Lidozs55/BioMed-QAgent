@@ -63,8 +63,20 @@ def parse_geo_soft_samples(compressed: bytes) -> list[GeoSampleMetadata]:
     if current is not None:
         samples.append(_build_sample(current))
     aliases = [sample.source_alias for sample in samples]
-    if len(samples) != 12 or len(set(aliases)) != 12:
-        raise ValueError("GSE178352 SOFT must contain twelve unique source aliases")
+    # Generalized validation (TODO §1.1): the previous ``len(samples) != 12``
+    # check hardcoded GSE178352's twelve-sample shape and rejected every
+    # other GEO series. The real invariants are:
+    #   * at least one sample (a SOFT with zero samples is malformed),
+    #   * source_alias uniqueness (downstream code keys samples by alias).
+    # Sample count is now surfaced dynamically via ``processing_parameters``
+    # in ParsedDataset (TODO §1.3) rather than enforced here.
+    if not samples:
+        raise ValueError("SOFT file contains no samples")
+    if len(set(aliases)) != len(samples):
+        raise ValueError(
+            f"SOFT source aliases must be unique; got {len(samples)} samples "
+            f"with {len(set(aliases))} unique aliases"
+        )
     return samples
 
 

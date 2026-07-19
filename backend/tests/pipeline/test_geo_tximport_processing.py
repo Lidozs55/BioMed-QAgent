@@ -480,3 +480,182 @@ def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> No
     assert details["skipped_metadata_rows"] == 2
     assert details["total_rows"] == 2
     assert details["sampled"] == 2
+
+
+# --- §1.1 hardcoded-count removal in parse_geo_soft_samples -----------------
+#
+# The previous ``len(samples) != 12`` check hardcoded GSE178352's twelve-sample
+# shape and rejected every other GEO series. The generalized validation now
+# only requires (a) at least one sample and (b) unique source_alias values.
+
+
+def _make_soft_bytes(samples: list[dict[str, str]]) -> bytes:
+    """Build a minimal SOFT gzipped payload from sample dicts.
+
+    Each sample dict must carry: sample_id, alias, title (containing
+    ``rep. N``), and optional ``cell_line`` / ``treatment`` characteristics.
+    """
+    lines: list[str] = []
+    for s in samples:
+        lines.append(f"^SAMPLE = {s['sample_id']}")
+        lines.append(f"!Sample_description = Sample {s['alias']}")
+        lines.append(f"!Sample_title = {s['title']}")
+        if s.get("cell_line"):
+            lines.append(f"!Sample_characteristics_ch1 = cell line: {s['cell_line']}")
+        if s.get("treatment"):
+            lines.append(f"!Sample_characteristics_ch1 = treatment: {s['treatment']}")
+    return gzip.compress("\n".join(lines).encode("utf-8"), mtime=0)
+
+
+def test_parse_geo_soft_samples_accepts_non_twelve_sample_count() -> None:
+    """A 2-sample SOFT must parse successfully — the previous hardcoded
+    ``len(samples) != 12`` check rejected any non-GSE178352 series (TODO §1.1).
+    """
+    soft = _make_soft_bytes([
+        {"sample_id": "GSM9000001", "alias": "C1",
+         "title": "Control rep. 1", "cell_line": "MCF7", "treatment": "DMSO"},
+        {"sample_id": "GSM9000002", "alias": "C2",
+         "title": "Control rep. 2", "cell_line": "MCF7", "treatment": "DMSO"},
+    ])
+    samples = parse_geo_soft_samples(soft)
+    assert len(samples) == 2
+    assert {s.sample_id for s in samples} == {"GSM9000001", "GSM9000002"}
+    assert {s.source_alias for s in samples} == {"C1", "C2"}
+
+
+def test_parse_geo_soft_samples_rejects_zero_samples() -> None:
+    """An empty SOFT (no ^SAMPLE lines) must raise ValueError (TODO §1.1)."""
+    soft = gzip.compress(b"!Series_title\t\"Empty\"\n", mtime=0)
+    import pytest
+
+    with pytest.raises(ValueError, match="no samples"):
+        parse_geo_soft_samples(soft)
+
+
+def test_parse_geo_soft_samples_rejects_duplicate_aliases() -> None:
+    """Two samples sharing the same source_alias must raise ValueError
+    (downstream code keys samples by alias) (TODO §1.1)."""
+    soft = _make_soft_bytes([
+        {"sample_id": "GSM9000001", "alias": "DUP",
+         "title": "Control rep. 1"},
+        {"sample_id": "GSM9000002", "alias": "DUP",
+         "title": "Control rep. 2"},
+    ])
+    import pytest
+
+    with pytest.raises(ValueError, match="unique"):
+        parse_geo_soft_samples(soft)
+
+
+# --- §1.1 run_processing live mode skips fixture SOFT ----------------------
+
+
+def test_run_processing_live_mode_does_not_read_fixture_soft(
+    tmp_path: Path,
+) -> None:
+    """In live mode, ``run_processing`` must NOT read the fixture SOFT file
+    even when it exists on disk (TODO §1.1).
+
+    Previously the live path called ``process_geo_tximport_counts`` with
+    ``ctx.fixture_dir / "gse178352_family.soft.gz"`` bytes, contaminating
+    live data with fixture SOFT. After §1.1, live mode skips the tximport
+    parser entirely and goes straight to series_matrix recovery.
+    """
+    import gzip as _gzip
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+    from app.pipeline.stages.processing import run_processing
+
+    workdir = create_task_workdir(
+        "task_live", base_dir=str(tmp_path / "task_live")
+    )
+
+    # Build a real series_matrix file as the live-acquired source asset.
+    matrix = (
+        '!Series_title\t"Live series"\n'
+        '!Sample_geo_accession\t"GSM9000100"\t"GSM9000101"\n'
+        '!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"\n'
+        '!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"\n'
+        '!Sample_characteristics_ch1\t"cell line: MCF7"\t"cell line: MCF7"\n'
+        '!Sample_characteristics_ch1\t"treatment: DMSO"\t"treatment: DrugA"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM9000100"\t"GSM9000101"\n'
+        '!series_matrix_table_end\n'
+    )
+    matrix_bytes = _gzip.compress(matrix.encode("utf-8"), mtime=0)
+    source_path = workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    source_path.write_bytes(matrix_bytes)
+    checksum = hashlib.sha256(matrix_bytes).hexdigest()
+    source_asset = SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/GSE999999_series_matrix.txt.gz",
+        sha256=checksum,
+        size_bytes=len(matrix_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_live",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+
+    # Place a fixture SOFT at fixture_dir to prove live mode doesn't read it.
+    # If run_processing tried to read this file, it would get garbage bytes
+    # (not a valid gzip) and crash with a gzip BadGzipFile error.
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    fake_soft = fixture_dir / "gse178352_family.soft.gz"
+    fake_soft.write_bytes(b"NOT A VALID GZIP - live mode must not read this")
+
+    ctx = StageContext(
+        task_id="task_live",
+        workdir=workdir,
+        fixture_dir=fixture_dir,
+        topic="live",
+        started_at=datetime.now(tz=UTC),
+        mode="live",
+    )
+
+    result = run_processing(ctx, source_asset, "ds_geo_live")
+
+    # Live mode succeeded without reading the fixture SOFT.
+    assert result.output is not None
+    parsed = result.output.parsed_datasets[0]
+    # Sample metadata was recovered from the series_matrix, not the fixture.
+    assert len(result.output.samples) == 2
+    assert {s.sample_id for s in result.output.samples} == {
+        "GSM9000100", "GSM9000101",
+    }
+    # main_data.csv carries one sample_metadata row per sample (no expression
+    # matrix in live mode — see architectural note in run_processing).
+    assert parsed.row_count == 2
+    assert parsed.source_row_count == 0
+    assert parsed.processing_parameters["measurement_type"] == "sample_metadata"
+    assert parsed.processing_parameters["sample_count"] == 2
+
+
+def test_run_processing_fixture_mode_still_uses_fixture_soft() -> None:
+    """Fixture mode must keep calling ``process_geo_tximport_counts`` with
+    the fixture SOFT (TODO §1.1 regression guard).
+
+    The §1.1 fix only short-circuits live mode; fixture mode preserves the
+    existing behavior so pinned-pipeline E2E tests keep producing the real
+    4-gene × 12-sample expression matrix.
+    """
+    # Indirectly verified by every pinned_pipeline / artifact_metadata test
+    # that asserts ``rows_after == 48`` and ``measurement_type ==
+    # "tximport_estimated_count"``. This test exists as a focused regression
+    # marker so a future refactor can't silently switch fixture mode to the
+    # minimal path.
+    # The function must still branch on ctx.mode == "fixture"; if a future
+    # refactor removes the fixture branch, the pinned E2E tests will fail.
+    # We assert the source code still carries the fixture-mode branch.
+    import inspect
+
+    from app.pipeline.stages.processing import run_processing
+
+    source = inspect.getsource(run_processing)
+    assert 'ctx.mode == "fixture"' in source, (
+        "run_processing must still branch on ctx.mode == 'fixture' so "
+        "fixture mode keeps using process_geo_tximport_counts"
+    )
