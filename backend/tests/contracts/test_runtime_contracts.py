@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from app.domain.contracts import (
     AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
     ConversationCompactedPayload,
     EventEnvelope,
     MessagePage,
@@ -51,6 +52,7 @@ RUNTIME_PAYLOADS = [
     RunCancelledPayload(reason="user requested"),
     RunInterruptedPayload(reason="process restarted"),
     AssistantDeltaPayload(delta="partial answer"),
+    AssistantReasoningDeltaPayload(delta="internal reasoning"),
     ToolStartedPayload(tool_call_id="call_123", tool_name="search_literature"),
     ToolCompletedPayload(
         tool_call_id="call_123",
