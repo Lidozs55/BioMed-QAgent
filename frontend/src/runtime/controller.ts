@@ -460,6 +460,42 @@ export class RuntimeController {
     return accepted;
   }
 
+  async startImportTask(
+    files: File[],
+    note?: string,
+  ): Promise<TaskRunAccepted> {
+    const foregroundIntentGeneration = ++this.foregroundIntentGeneration;
+    const accepted = await this.api.startImportTask({ files, note });
+    const importInput: StartTaskInput = {
+      input:
+        note && note.trim().length > 0
+          ? note.trim()
+          : `Import ${files.length} file(s) into local cache`,
+      databases: [],
+      mode: "import",
+    };
+    const { generation, hydrateArtifacts } = await this.enqueueTaskHandoff(
+      accepted.task_id,
+      async () => {
+        const generation = this.advanceTaskHandoffGeneration(accepted.task_id);
+        const hydrateArtifacts = await this.performAcceptedTaskHandoff(
+          accepted,
+          importInput,
+          foregroundIntentGeneration,
+        );
+        return { generation, hydrateArtifacts };
+      },
+    );
+    if (hydrateArtifacts) {
+      try {
+        await this.getArtifactHydration(accepted.task_id, generation);
+      } catch {
+        return accepted;
+      }
+    }
+    return accepted;
+  }
+
   async continueTask(
     taskId: string,
     input: ContinueTaskInput,

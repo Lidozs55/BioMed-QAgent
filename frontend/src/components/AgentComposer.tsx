@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowUpIcon,
   CaretDownIcon,
   FileIcon,
   ImageIcon,
   PlusIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 
 import { DatabaseSelector } from "@/components/DatabaseSelector";
@@ -42,6 +43,11 @@ interface AgentComposerProps {
   pending?: boolean;
   showDataSources?: boolean;
   onDataSourceChange?: () => void;
+  /**
+   * 文件上传回调。若提供，则启用"上传文件"菜单项；用户附加文件后，
+   * 发送按钮触发此回调而非 `onSubmit`，进入 IMPORT 任务流程。
+   */
+  onSubmitFiles?: (files: File[], note: string) => void;
   compact?: boolean;
   className?: string;
 }
@@ -59,11 +65,70 @@ export function AgentComposer({
   pending = false,
   showDataSources = false,
   onDataSourceChange,
+  onSubmitFiles,
   compact = false,
   className,
 }: AgentComposerProps) {
   const [model, setModel] = useState("default");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const modelLabel = MODELS.find((item) => item.id === model)?.label ?? "默认模型";
+
+  const hasFiles = pendingFiles.length > 0;
+  const canSubmitFiles = hasFiles && onSubmitFiles !== undefined && !disabled && !pending;
+
+  const handleFilePick = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = event.target.files;
+    if (picked === null) return;
+    const incoming = Array.from(picked);
+    if (incoming.length === 0) return;
+    setPendingFiles((current) => {
+      const seen = new Set(current.map((file) => file.name));
+      const merged = [...current];
+      for (const file of incoming) {
+        if (!seen.has(file.name)) {
+          merged.push(file);
+          seen.add(file.name);
+        }
+      }
+      return merged;
+    });
+    // 清空 input.value 让同一文件可再次选择
+    event.target.value = "";
+  };
+
+  const handleRemoveFile = (name: string) => {
+    setPendingFiles((current) => current.filter((file) => file.name !== name));
+  };
+
+  const handleSubmit = () => {
+    if (hasFiles && onSubmitFiles !== undefined) {
+      onSubmitFiles(pendingFiles, value);
+      setPendingFiles([]);
+      return;
+    }
+    onSubmit();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 当已附加文件时，Enter 直接触发 IMPORT 提交；否则交给父组件处理。
+    if (
+      hasFiles &&
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      handleSubmit();
+      return;
+    }
+    onKeyDown(event);
+  };
+
+  const sendDisabledFinal =
+    sendDisabled ||
+    pending ||
+    (hasFiles ? !canSubmitFiles : false);
 
   return (
     <div
@@ -76,8 +141,8 @@ export function AgentComposer({
       <Textarea
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
+        onKeyDown={handleKeyDown}
+        placeholder={hasFiles ? "可选：为导入文件补充说明..." : placeholder}
         aria-label={ariaLabel}
         disabled={disabled}
         className={cn(
@@ -85,6 +150,27 @@ export function AgentComposer({
           compact ? "min-h-18" : "min-h-28",
         )}
       />
+      {hasFiles && (
+        <div className="flex flex-wrap gap-1.5 px-3 pb-1.5">
+          {pendingFiles.map((file) => (
+            <span
+              key={file.name}
+              className="inline-flex items-center gap-1 rounded-md border bg-muted/40 px-2 py-0.5 text-xs"
+            >
+              <FileIcon aria-hidden="true" weight="regular" />
+              <span className="max-w-48 truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => handleRemoveFile(file.name)}
+                aria-label={`移除 ${file.name}`}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <XIcon aria-hidden="true" weight="bold" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
         <DropdownMenu>
           <DropdownMenuTrigger
@@ -106,14 +192,26 @@ export function AgentComposer({
               <ImageIcon aria-hidden="true" />
               上传图片（即将支持）
             </DropdownMenuItem>
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem
+              disabled={onSubmitFiles === undefined || disabled}
+              onSelect={() => fileInputRef.current?.click()}
+            >
               <FileIcon aria-hidden="true" />
-              上传文件（即将支持）
+              上传文件到本地缓存
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleFilePick}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
 
-        {showDataSources && (
+        {showDataSources && !hasFiles && (
           <DatabaseSelector
             onToggle={() => onDataSourceChange?.()}
             disabled={disabled || pending}
@@ -153,8 +251,8 @@ export function AgentComposer({
             type="button"
             size="icon-sm"
             className="rounded-full"
-            onClick={onSubmit}
-            disabled={disabled || sendDisabled || pending}
+            onClick={handleSubmit}
+            disabled={sendDisabledFinal}
             aria-label={pending ? "提交中" : sendAriaLabel}
           >
             {pending ? (

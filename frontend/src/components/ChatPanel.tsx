@@ -38,6 +38,7 @@ import { useAgentStore } from "@/stores/agentStore";
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
+  uploadFiles?: (files: File[], note: string) => Promise<unknown>;
   continueTask?: (
     taskId: string,
     input: { input: string },
@@ -83,6 +84,7 @@ function draftKey(input: string, databases: readonly string[]): string {
 
 export function ChatPanel({
   startTask,
+  uploadFiles,
   continueTask,
   resumeRun,
   loadOlderMessages,
@@ -100,6 +102,7 @@ export function ChatPanel({
   const setDraftError = useAgentStore((state) => state.setDraftError);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
+  const [importPending, setImportPending] = useState(false);
   const [continuationDrafts, setContinuationDrafts] = useState<Record<string, string>>({});
   const [continuationPendingByTask, setContinuationPendingByTask] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
@@ -189,6 +192,23 @@ export function ChatPanel({
     }
   };
 
+  const submitFiles = async (files: File[], note: string) => {
+    if (uploadFiles === undefined || importPending || files.length === 0) return;
+    setDraftError(null);
+    setImportPending(true);
+    try {
+      await uploadFiles(files, note);
+      const currentDraft = useAgentStore.getState().draft;
+      if (currentDraft.input === note) {
+        setDraftInput("");
+      }
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : "文件导入失败");
+    } finally {
+      setImportPending(false);
+    }
+  };
+
   const sendContinuation = async () => {
     if (!continuationCanSend || activeTaskId === null || continueTask === undefined) return;
     const taskId = activeTaskId;
@@ -263,10 +283,18 @@ export function ChatPanel({
             placeholder="输入研究目标..."
             ariaLabel="研究目标"
             sendAriaLabel="开始研究"
-            pending={isSubmitting}
-            sendDisabled={!draftInput.trim() || dataSourceSelectionMissing}
+            pending={isSubmitting || importPending}
+            sendDisabled={
+              (!draftInput.trim() || dataSourceSelectionMissing) &&
+              !importPending
+            }
             showDataSources
             onDataSourceChange={() => setDraftError(null)}
+            onSubmitFiles={
+              uploadFiles !== undefined
+                ? (files, note) => void submitFiles(files, note)
+                : undefined
+            }
           />
           {(draftError || (draftInput.trim() && dataSourceSelectionMissing)) && (
             <Alert variant="destructive" className="mt-2">

@@ -92,6 +92,9 @@ export default function App() {
             <ArtifactWorkspace>
               <ChatPanel
                 startTask={(input) => controller.startTask(input)}
+                uploadFiles={(files, note) =>
+                  controller.startImportTask(files, note)
+                }
                 continueTask={(taskId, input) =>
                   controller.continueTask(taskId, input)
                 }

@@ -1,0 +1,21 @@
+{
+  "study": "Hospital Oncology Cohort 2024",
+  "samples": [
+    {
+      "sample_id": "S001",
+      "patient": {"age": 54, "sex": "F", "diagnosis": "BRCA"},
+      "assays": [
+        {"gene": "BRCA1", "type": "expression", "value": 12.4, "unit": "log2"},
+        {"gene": "TP53", "type": "expression", "value": 15.1, "unit": "log2"}
+      ]
+    },
+    {
+      "sample_id": "S002",
+      "patient": {"age": 67, "sex": "M", "diagnosis": "LUAD"},
+      "assays": [
+        {"gene": "EGFR", "type": "mutation", "value": "L858R", "unit": "NA"},
+        {"gene": "KRAS", "type": "mutation", "value": "G12C", "unit": "NA"}
+      ]
+    }
+  ]
+}

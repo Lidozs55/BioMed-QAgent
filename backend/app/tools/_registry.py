@@ -23,6 +23,7 @@ BUILTIN_SKILL_MODULES = (
     "app.skills.builtin.acquisition.reactome",
     "app.skills.builtin.acquisition.pubchem",
     "app.skills.builtin.acquisition.web_visual_capture",
+    "app.skills.builtin.acquisition.local_cache",
     "app.skills.builtin.processing.self_evolution",
     "app.skills.builtin.processing.extract_tables",
     "app.skills.builtin.processing.extract_chart_data_vlm",

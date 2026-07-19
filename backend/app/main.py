@@ -21,6 +21,7 @@ from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
+from app.tools.cache_store import init_cache_store
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -82,6 +83,11 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.event_hub = event_hub
         application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
+        # Initialize the local queryable cache (D1/D3) — stores user-imported
+        # and previously-cleaned datasets under data/cache/records/.
+        application.state.cache_store = init_cache_store(
+            Path(configured.output_dir).parent / "cache"
+        )
         # Register stable user-selectable database skills once at startup so
         # GET /api/v1/databases does not re-register them on every request.
         load_database_skills()

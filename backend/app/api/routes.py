@@ -15,7 +15,16 @@ import re
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -42,6 +51,7 @@ from app.runtime.manager import (
 )
 from app.runtime.repository import TaskRepository
 from app.skills.registry import SkillCategory, skill_registry
+from app.tools.workdir import create_task_workdir
 
 router = APIRouter(prefix="/api/v1")
 _SAFE_RUNTIME_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -162,7 +172,7 @@ async def get_databases() -> dict:
         for skill in skill_registry.list_enabled()
         if skill.supported_sources
         and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
-        and skill.name not in ("browser_fallback", "web_visual_capture")
+        and skill.name not in ("browser_fallback", "web_visual_capture", "local_cache")
     ]
     databases = []
     for skill in skills:
@@ -216,6 +226,135 @@ async def create_task(
                 detail="Task runtime is unavailable",
             ) from error
         raise
+
+
+# ---------------------------------------------------------------------------
+# Import (multipart upload → IMPORT AgentLoop)
+# ---------------------------------------------------------------------------
+
+#: 单个上传文件大小上限（10 MB）— 临床数据/CSV/JSON 等规范化数据通常远小于此。
+_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
+#: 单次导入请求最多文件数（防止滥用）。
+_IMPORT_MAX_FILES = 10
+#: 文件名安全字符集：字母数字、``-``、``_``、``.``。
+_IMPORT_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_upload_filename(raw: str | None) -> str:
+    """规整上传文件名，去除路径前缀和危险字符。"""
+
+    if not raw:
+        raise HTTPException(status_code=422, detail="Uploaded file has no filename")
+    # 去除任何路径前缀（客户端可能发送相对/绝对路径）。
+    base = Path(raw).name
+    if not base or base in {".", ".."}:
+        raise HTTPException(status_code=422, detail="Uploaded file has invalid filename")
+    sanitized = _IMPORT_SAFE_FILENAME.sub("_", base)
+    if not sanitized:
+        raise HTTPException(status_code=422, detail="Uploaded file has invalid filename")
+    return sanitized
+
+
+@router.post(
+    "/import/tasks",
+    status_code=202,
+    response_model=TaskRunAccepted,
+)
+async def create_import_task(
+    manager: TaskManagerDep,
+    request_id: Annotated[str, Form(min_length=1)],
+    input: Annotated[str, Form()] = "",
+    files: Annotated[list[UploadFile], File()] = (),
+) -> TaskRunAccepted:
+    """Create an IMPORT task with uploaded files.
+
+    The IMPORT AgentLoop parses uploaded files (any format), cleans them to
+    the 22-column cache schema, and commits to the local cache via
+    ``commit_to_cache``. Imported datasets become queryable by subsequent
+    research tasks via ``search_local_cache`` / ``get_cache_dataset``.
+    """
+
+    if not files:
+        raise HTTPException(status_code=422, detail="At least one file is required")
+    if len(files) > _IMPORT_MAX_FILES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many files (max {_IMPORT_MAX_FILES})",
+        )
+
+    sanitized_names: list[str] = []
+    seen_names: set[str] = set()
+    for upload in files:
+        name = _sanitize_upload_filename(upload.filename)
+        if name in seen_names:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate uploaded filename: {name}",
+            )
+        seen_names.add(name)
+        sanitized_names.append(name)
+
+    # 构造 IMPORT 任务的输入文本。文件列表由 IMPORT agent 通过
+    # ``list_files('source_assets')`` 自行发现，输入文本仅用于任务标题
+    # 和给 LLM 的初始提示。
+    user_note = input.strip()
+    file_list_str = ", ".join(sanitized_names)
+    if user_note:
+        composed_input = (
+            f"{user_note}\n\n"
+            f"[uploaded_files ({len(sanitized_names)}): {file_list_str}]"
+        )
+    else:
+        composed_input = (
+            f"Import {len(sanitized_names)} file(s) into local cache: "
+            f"{file_list_str}"
+        )
+
+    request = StartTaskRequest(
+        request_id=request_id.strip(),
+        input=composed_input,
+        mode=TaskMode.IMPORT,
+    )
+
+    try:
+        accepted = await manager.create_task(request)
+    except RunQueueFullError as error:
+        raise HTTPException(status_code=429, detail="Run queue is full") from error
+    except RuntimeError as error:
+        if str(error) == "task manager is not running":
+            raise HTTPException(
+                status_code=503,
+                detail="Task runtime is unavailable",
+            ) from error
+        raise
+
+    # 文件必须在 IMPORT agent 启动并调用 ``list_files('source_assets')``
+    # 之前写入。``manager.create_task`` 返回时任务已入队但 runner 尚未
+    # 真正启动 SDK Agent；写入是同步 I/O，发生在下一个事件循环让出之前。
+    workdir = create_task_workdir(accepted.task_id)
+    for upload, name in zip(files, sanitized_names, strict=True):
+        target = workdir.source_asset_file(name)
+        # 流式写入避免一次性把整个文件读入内存。
+        with target.open("wb") as out:
+            total = 0
+            while True:
+                chunk = await upload.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _IMPORT_MAX_FILE_BYTES:
+                    out.close()
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File {name} exceeds max size "
+                            f"({_IMPORT_MAX_FILE_BYTES} bytes)"
+                        ),
+                    )
+                out.write(chunk)
+
+    return accepted
 
 
 @router.get("/tasks/{task_id}", response_model=TaskSnapshot)

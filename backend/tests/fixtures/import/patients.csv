@@ -1,0 +1,6 @@
+patient_id,age,sex,diagnosis,stage,treatment,response,survival_days
+P001,54,F,BRCA,II,Paclitaxel,CR,1240
+P002,67,M,LUAD,IV,Cisplatin,PR,540
+P003,45,F,BRCA,I,Tamoxifen,CR,2100
+P004,72,M,PRAD,IV,Docetaxel,SD,310
+P005,38,F,OVCA,III,Carboplatin,CR,980

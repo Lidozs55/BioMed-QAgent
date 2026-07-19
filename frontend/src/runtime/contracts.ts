@@ -1,4 +1,4 @@
-export type TaskMode = "agent" | "fixture";
+export type TaskMode = "agent" | "fixture" | "import";
 
 export type RunStatus =
   | "queued"

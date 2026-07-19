@@ -219,6 +219,7 @@ describe("BackgroundTaskNotifications", () => {
       fetchMessages: vi.fn(),
       fetchEvents: vi.fn(),
       createTask: vi.fn(),
+      startImportTask: vi.fn(),
       continueTask: vi.fn(),
       cancelRun: vi.fn(),
       resumeRun: vi.fn(),
