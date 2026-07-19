@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -38,6 +39,8 @@ from app.runtime.compaction import CompactionCancelledError, ConversationCompact
 
 if TYPE_CHECKING:
     from app.runtime.manager import RunExecution
+
+logger = logging.getLogger(__name__)
 
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
@@ -163,10 +166,13 @@ class AgentRunExecutor:
                 if isinstance(event, RawResponsesStreamEvent):
                     text_delta = _extract_text_delta(event.data)
                     if text_delta:
+                        logger.debug("[RAW] %s", text_delta)
                         await text_buffer.add(text_delta)
                     # 检测 LLM 截断:finish_reason="length" 时发射 warning
                     # (见 docs/REVIEW_2026-07-18.md §2)。
                     finish_reason = _extract_finish_reason(event.data)
+                    if finish_reason:
+                        logger.debug("[RAW_DONE] finish_reason=%s", finish_reason)
                     if (
                         finish_reason == "length"
                         and not truncation_warned
