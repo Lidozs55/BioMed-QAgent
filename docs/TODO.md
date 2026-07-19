@@ -238,17 +238,25 @@
 > （`completed` / `succeeded` / `ok` / `failed` / `error` / `not_found`），
 > 评委审计 query_log 时难以聚合统计。
 
-- [ ] **P0** 定义 `QueryStatus` 枚举（`app/domain/contracts.py`）
+- [x] **P0** 定义 `QueryStatus` 枚举（`app/domain/contracts.py`）
 
       —— `success` / `not_found` / `failed` / `skipped` 四态
+      —— 实现：`backend/app/domain/contracts/enums.py:112-134` `QueryStatus(StrEnum)`
+      含 5 态：SUCCESS / NOT_FOUND / FAILED / SKIPPED / PAGE_FALLBACK（page_fallback
+      对应 project_memory 硬约束"page fallback 必须 status=page_fallback code=0"）
 
-- [ ] **P0** 8 个 skill 统一使用 `QueryStatus` 枚举
+- [x] **P0** 8 个 skill 统一使用 `QueryStatus` 枚举
 
       （discovery/pubmed, acquisition/{geo,gdc,pdb,pubchem,reactome,xena}）
+      —— 实现：`backend/app/agent_loop/context.py:277-300` `log_query()` 接受
+      `QueryStatus | str`；11 个 skill 文件 42 处 `log_query()` 调用全部迁移
+      到 `QueryStatus.X`
 
-- [ ] **P0** 新增 `tests/test_query_log_status_consistency.py`
+- [x] **P0** 新增 `tests/test_query_log_status_consistency.py`
 
       —— 遍历所有 skill 的 query_log 输出，断言 status ∈ QueryStatus
+      —— 实现：`backend/tests/test_query_log_status_consistency.py`
+      （AST 静态扫描 + import 完整性 + 枚举值稳定性，30 个测试用例）
 
 ### 1.9 P0：工程基础修复（文档/源码一致性）
 
