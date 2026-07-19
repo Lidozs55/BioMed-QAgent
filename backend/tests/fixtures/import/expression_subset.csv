@@ -1,0 +1,5 @@
+record_id,dataset_id,source_id,gene_id_raw,gene_id,gene_id_namespace,sample_id,measurement_type,value_semantics,expression_value,source_logical_file,source_column_name,source_raw_value
+r1,user_import_expr,gse12345,BRCA1,672,ncbi_gene,S001,expression,continuous,12.4,expression_subset.csv,S001,12.4
+r2,user_import_expr,gse12345,BRCA1,672,ncbi_gene,S002,expression,continuous,8.7,expression_subset.csv,S002,8.7
+r3,user_import_expr,gse12345,TP53,7157,ncbi_gene,S001,expression,continuous,15.1,expression_subset.csv,S001,15.1
+r4,user_import_expr,gse12345,TP53,7157,ncbi_gene,S002,expression,continuous,10.3,expression_subset.csv,S002,10.3

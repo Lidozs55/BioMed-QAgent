@@ -117,6 +117,8 @@ def validate_task_databases(mode: TaskMode | str, databases: list[str]) -> None:
         len(databases) != 2 or set(databases) != {"pubmed", "geo"}
     ):
         raise ValueError("fixture tasks require exactly pubmed and geo")
+    # IMPORT 任务不绑定外部数据库：用户文件本身就是数据源，
+    # 缓存查询通过 local_cache acquisition skill 完成（D2）。
 
 
 class StartTaskRequest(_StartRequest):

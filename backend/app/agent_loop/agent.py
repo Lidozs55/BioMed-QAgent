@@ -247,6 +247,11 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
             s for s in all_enabled if s.category != SkillCategory.ACQUISITION
         ]
         skills: list = acq_skills + non_acq_skills
+        # local_cache 不在用户可选数据库列表中，但 Agent 应始终可查询缓存
+        # （D2 决策：与 GEO/PubMed 同级的可选数据来源）。
+        local_cache = skill_registry.get("local_cache")
+        if local_cache is not None and local_cache not in skills:
+            skills.append(local_cache)
     else:
         skills = skill_registry.list_enabled()
 

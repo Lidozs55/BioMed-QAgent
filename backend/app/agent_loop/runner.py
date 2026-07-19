@@ -13,8 +13,9 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from app.agent_loop.agent import AGENT_MAX_TURNS, build_agent
+from app.agent_loop.agent import AGENT_MAX_TURNS, AgentBuild, build_agent
 from app.agent_loop.context import ManagedPipelineBridge
+from app.agent_loop.import_agent import IMPORT_AGENT_MAX_TURNS, build_import_agent
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
@@ -137,6 +138,14 @@ class AgentRunExecutor:
         self._repository = repository
         self._compactor = compactor or ConversationCompactor(repository)
 
+    def _build(self, execution) -> AgentBuild:
+        """Build the Agent for this executor (overridable by subclasses)."""
+        return build_agent(execution.databases)
+
+    def _max_turns(self) -> int:
+        """Return the max_turns for this executor's Agent loop."""
+        return AGENT_MAX_TURNS
+
     @staticmethod
     async def _consume_events(
         execution,
@@ -236,7 +245,7 @@ class AgentRunExecutor:
             execution.task_id,
             run_id=execution.run_id,
         )
-        build = build_agent(execution.databases)
+        build = self._build(execution)
         text_buffer = _AssistantTextBuffer(execution.emit)
         bind_pipeline_bridge = getattr(
             execution.context,
@@ -326,7 +335,7 @@ class AgentRunExecutor:
                     agent_input,
                     context=execution.context,
                     session=preparation.session,
-                    max_turns=AGENT_MAX_TURNS,
+                    max_turns=self._max_turns(),
                 )
                 execution.set_streaming_result(result)
                 try:
@@ -411,8 +420,8 @@ class AgentRunExecutor:
             if terminal_error is not None:
                 raise terminal_error
 
-    @staticmethod
     async def _await_max_turns_resume(
+        self,
         execution: RunExecution,
         *,
         resume_count: int,
@@ -426,6 +435,7 @@ class AgentRunExecutor:
         ``POST /runs/{run_id}/resume``. See docs/REVIEW_2026-07-18.md §11.
         """
 
+        max_turns = self._max_turns()
         request_id = f"max_turns-{execution.run_id}-{resume_count}"
         event: asyncio.Event = asyncio.Event()
         decision_holder: list[UserInputResumedPayload] = []
@@ -444,10 +454,10 @@ class AgentRunExecutor:
                     request_id=request_id,
                     prompt_kind="max_turns_reached",
                     summary=(
-                        f"Agent 已达到最大轮次 ({AGENT_MAX_TURNS})，是否继续工作？"
+                        f"Agent 已达到最大轮次 ({max_turns})，是否继续工作？"
                     ),
                     detail={
-                        "max_turns": AGENT_MAX_TURNS,
+                        "max_turns": max_turns,
                         "resume_count": resume_count,
                         "resume_limit": MAX_TURNS_RESUME_LIMIT,
                     },
@@ -717,6 +727,7 @@ class ModeDispatchRunExecutor:
     def __init__(self, repository) -> None:
         self.agent_executor = AgentRunExecutor(repository)
         self.fixture_executor = FixtureRunExecutor(repository)
+        self.import_executor = ImportRunExecutor(repository)
 
     async def __call__(self, execution) -> None:
         if execution.mode is TaskMode.AGENT:
@@ -725,7 +736,27 @@ class ModeDispatchRunExecutor:
         if execution.mode is TaskMode.FIXTURE:
             await self.fixture_executor(execution)
             return
+        if execution.mode is TaskMode.IMPORT:
+            await self.import_executor(execution)
+            return
         raise ValueError(f"unsupported task mode: {execution.mode}")
+
+
+class ImportRunExecutor(AgentRunExecutor):
+    """IMPORT 任务执行器 — 复用 AgentRunExecutor 的 Agent loop 基础设施。
+
+    与主 Agent 的差异（D5 决策）：
+      - ``_build`` 返回 ``build_import_agent()``（不加载外部数据库 skill）
+      - ``_max_turns`` 返回 ``IMPORT_AGENT_MAX_TURNS``（12，比主 Agent 15 少）
+      - 其余生命周期（compaction / pause-resume / cancellation / streaming）
+        全部复用父类
+    """
+
+    def _build(self, execution) -> AgentBuild:
+        return build_import_agent()
+
+    def _max_turns(self) -> int:
+        return IMPORT_AGENT_MAX_TURNS
 
 
 def _extract_text_delta(data) -> str | None:

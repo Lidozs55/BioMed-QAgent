@@ -46,6 +46,7 @@ class TaskState(StrEnum):
 class TaskMode(StrEnum):
     AGENT = "agent"
     FIXTURE = "fixture"
+    IMPORT = "import"
 
 
 class RunStatus(StrEnum):

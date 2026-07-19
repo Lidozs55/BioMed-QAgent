@@ -55,6 +55,10 @@ export interface APIClient {
     input: StartTaskInput,
     options?: AdmissionOptions,
   ) => Promise<TaskRunAccepted>;
+  startImportTask: (
+    input: { files: File[]; note?: string },
+    options?: AdmissionOptions,
+  ) => Promise<TaskRunAccepted>;
   continueTask: (
     taskId: string,
     input: ContinueTaskInput,
@@ -190,6 +194,21 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
         mode: input.mode,
       });
       return postAdmission<TaskRunAccepted>(`${baseUrl}/tasks`, body);
+    },
+
+    startImportTask: ({ files, note }, admission = {}) => {
+      const form = new FormData();
+      form.set("request_id", requestId(admission.requestId));
+      if (note !== undefined && note.trim().length > 0) {
+        form.set("input", note.trim());
+      }
+      for (const file of files) {
+        form.append("files", file, file.name);
+      }
+      return fetcher(`${baseUrl}/import/tasks`, {
+        method: "POST",
+        body: form,
+      }).then((response) => parseResponse<TaskRunAccepted>(response));
     },
 
     continueTask: (taskId, input, admission = {}) => {

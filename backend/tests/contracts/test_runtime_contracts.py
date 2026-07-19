@@ -129,7 +129,7 @@ def test_runtime_enums_are_stable_wire_values() -> None:
         "cancelled",
         "interrupted",
     }
-    assert {mode.value for mode in TaskMode} == {"agent", "fixture"}
+    assert {mode.value for mode in TaskMode} == {"agent", "fixture", "import"}
     assert {role.value for role in MessageRole} == {
         "system",
         "user",

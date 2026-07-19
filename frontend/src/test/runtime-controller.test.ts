@@ -207,6 +207,7 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
       );
     }),
     createTask: vi.fn(),
+    startImportTask: vi.fn(),
     continueTask: vi.fn(),
     cancelRun: vi.fn(),
     resumeRun: vi.fn(),
