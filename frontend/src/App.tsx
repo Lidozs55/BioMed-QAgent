@@ -37,6 +37,9 @@ export default function App() {
     () => new RuntimeController(api, transport),
     [api, transport],
   );
+  const handleModelChange = useCallback((modelId: string) => {
+    void settingsState.updateSettings({ model_name: modelId });
+  }, [settingsState]);
   const selectTask = useCallback(
     (taskId: string) => controller.selectTask(taskId),
     [controller],
@@ -113,7 +116,7 @@ export default function App() {
               />
             ) : (
               <ArtifactWorkspace>
-                <ChatPanel
+              <ChatPanel
                   startTask={(input) => controller.startTask(input)}
                   continueTask={(taskId, input) =>
                     controller.continueTask(taskId, input)
@@ -124,6 +127,11 @@ export default function App() {
                   loadOlderMessages={(taskId) =>
                     controller.loadOlderMessages(taskId)
                   }
+                  models={settingsState.models}
+                  hasApiKey={!!settingsState.settings?.api_key}
+                  onOpenSettings={() => setShowSettings(true)}
+                  onModelChange={handleModelChange}
+                  selectedModelId={settingsState.settings?.model_name}
                 />
               </ArtifactWorkspace>
             )}

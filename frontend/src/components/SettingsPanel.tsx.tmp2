@@ -141,7 +141,6 @@ export function SettingsPanel({
     m.id.toLowerCase().includes(modelSearch.toLowerCase()),
   )
 
-  
 
   const handleSave = useCallback(async () => {
     if (selectedVendor === "custom" && !modelName.trim()) {
@@ -225,7 +224,6 @@ export function SettingsPanel({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto max-w-2xl space-y-8 p-6">
-          
           <section>
             <h3 className="text-sm font-semibold text-foreground">API 连接</h3>
             <p className="mt-1 text-xs text-muted-foreground">配置模型服务的访问地址和认证密钥。</p>
@@ -275,8 +273,8 @@ export function SettingsPanel({
                       {modelsLoading ? (
                         <span className="flex items-center gap-2 text-muted-foreground"><Spinner className="size-3.5" />加载模型列表中...</span>
                       ) : (
-                         <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
-                       )}
+                        <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
+                      )}
                       <span className="text-xs text-muted-foreground">{models.length > 0 ? models.length + " 个可用" : "请输入 API Key"}</span>
                     </button>
                     {showModelDropdown && (
@@ -406,3 +404,6 @@ export function SettingsPanel({
     </div>
   )
 }
+  const [apiKeyTouched, setApiKeyTouched] = useState(false)
+                    onChange={(e) => { setApiKeyInput(e.target.value); setApiKeyTouched(true); markDirty() }}
+    if (apiKeyTouched && apiKeyInput) payload.api_key = apiKeyInput

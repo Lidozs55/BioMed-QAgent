@@ -157,6 +157,15 @@ export function useSettings() {
     finally { if (mountedRef.current) setModelsLoading(false) }
   }, [])
 
+  const refreshModels = useCallback(async () => {
+    try {
+      setModelsLoading(true)
+      const data = await apiGet<ModelListResponse>("/models?use_current_settings=true")
+      if (mountedRef.current) setModels(data.models)
+    } catch (err) { console.warn("Failed to refresh models:", err) }
+    finally { if (mountedRef.current) setModelsLoading(false) }
+  }, [])
+
   const updateSettings = useCallback(
     async (payload: UpdateSettingsPayload): Promise<UserSettings> => {
       setSaving(true)
@@ -165,7 +174,7 @@ export function useSettings() {
         const data = await apiPost<SettingsResponse>("/settings", payload)
         const mapped = mapResponse(data)
         if (mountedRef.current) setSettings(mapped)
-        await fetchModels()
+        await refreshModels()
         return mapped
       } catch (err) {
         const msg = err instanceof Error ? err.message : "更新设置失败"
@@ -176,6 +185,7 @@ export function useSettings() {
       }
     },
     [fetchModels],
+    [fetchModels, refreshModels],
   )
 
   useEffect(() => {
@@ -195,6 +205,7 @@ export function useSettings() {
     error,
     fetchSettings,
     fetchModels,
+    refreshModels,
     fetchVendors,
     updateSettings,
   }

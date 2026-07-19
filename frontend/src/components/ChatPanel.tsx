@@ -46,6 +46,16 @@ interface ChatPanelProps {
     input: ResumeRunInput,
   ) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
+  /** Available models from settings */
+  models?: ModelInfo[];
+  /** Whether the user has configured an API key */
+  hasApiKey?: boolean;
+  /** Opens the settings panel */
+  onOpenSettings?: () => void;
+  /** Called when the user selects a different model */
+  onModelChange?: (modelId: string) => void;
+  /** Currently selected model ID */
+  selectedModelId?: string;
 }
 
 const TERMINAL_STATUSES = new Set([
@@ -84,6 +94,11 @@ export function ChatPanel({
   continueTask,
   resumeRun,
   loadOlderMessages,
+  models,
+  hasApiKey,
+  onOpenSettings,
+  onModelChange,
+  selectedModelId,
 }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
@@ -253,6 +268,11 @@ export function ChatPanel({
             sendDisabled={!draftInput.trim()}
             showDataSources
             onDataSourceChange={() => setDraftError(null)}
+            models={models}
+            hasApiKey={hasApiKey}
+            onOpenSettings={onOpenSettings}
+            onModelChange={onModelChange}
+            selectedModelId={selectedModelId}
           />
           {draftError && (
             <p role="alert" className="mt-2 px-2 text-sm text-destructive">{draftError}</p>
@@ -379,6 +399,11 @@ export function ChatPanel({
                 sendDisabled={!continuationCanSend || !continuationInput.trim()}
                 compact
                 className="shadow-md"
+                models={models}
+                hasApiKey={hasApiKey}
+                onOpenSettings={onOpenSettings}
+                onModelChange={onModelChange}
+                selectedModelId={selectedModelId}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
             </div>
@@ -389,3 +414,4 @@ export function ChatPanel({
     </div>
   );
 }
+ import type { ModelInfo } from "@/hooks/useSettings";

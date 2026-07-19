@@ -1,0 +1,410 @@
+*** Begin Patch\n*** Add File: E:\\software code\\Visual Stdio Code\\BioMed-QAgent\\frontend\\src\\components\\SettingsPanel.tsx\n+ ﻿import {
+\n+   ArrowLeftIcon,
+\n+   CheckCircleIcon,
+\n+   EyeClosedIcon,
+\n+   EyeIcon,
+\n+   SlidersIcon,
+\n+   XCircleIcon,
+\n+ } from "@phosphor-icons/react"
+\n+ import { useCallback, useEffect, useState } from "react"
+\n+ import { toast } from "sonner"
+\n+ 
+\n+ import { Button } from "@/components/ui/button"
+\n+ import { Input } from "@/components/ui/input"
+\n+ import { Label } from "@/components/ui/label"
+\n+ import { ScrollArea } from "@/components/ui/scroll-area"
+\n+ import { Separator } from "@/components/ui/separator"
+\n+ import { Spinner } from "@/components/ui/spinner"
+\n+ import { Switch } from "@/components/ui/switch"
+\n+ import {
+\n+   Tooltip,
+\n+   TooltipContent,
+\n+   TooltipProvider,
+\n+   TooltipTrigger,
+\n+ } from "@/components/ui/tooltip"
+\n+ import { cn } from "@/lib/utils"
+\n+ import type {
+\n+   ModelInfo,
+\n+   UserSettings,
+\n+   VendorInfo,
+\n+ } from "@/hooks/useSettings"
+\n+ 
+\n+ interface SettingsPanelProps {
+\n+   settings: UserSettings | null
+\n+   models: ModelInfo[]
+\n+   vendors: VendorInfo[]
+\n+   loading: boolean
+\n+   saving: boolean
+\n+   modelsLoading: boolean
+\n+   error: string | null
+\n+   onSave: (payload: Record<string, unknown>) => Promise<void>
+\n+   onClose: () => void
+\n+   onFetchModels: (query?: string) => Promise<void>
+\n+ }
+\n+ 
+\n+ function CapabilityBadge({ label, supported }: { label: string; supported: boolean }) {
+\n+   return (
+\n+     <span className={cn(
+\n+       "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+\n+       supported
+\n+         ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+\n+         : "bg-muted text-muted-foreground line-through",
+\n+     )}>
+\n+       {supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />}
+\n+       {label}
+\n+     </span>
+\n+   )
+\n+ }
+\n+ 
+\n+ function ModelInfoCard({ model }: { model: ModelInfo }) {
+\n+   const fn = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n)
+\n+   return (
+\n+     <div className="mt-4 rounded-xl border bg-card p-4 shadow-sm">
+\n+       <div className="flex items-start justify-between gap-3">
+\n+         <div className="min-w-0">
+\n+           <div className="flex items-center gap-2">
+\n+             <h4 className="text-base font-semibold">{model.name}</h4>
+\n+             {model.recommended && <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">推荐</span>}
+\n+             {model.api_available && <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">可用</span>}
+\n+             <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+\n+               {model.capability_source === "api" ? "接口验证" : model.capability_source === "inferred" ? "名称推断" : "内置数据"}
+\n+             </span>
+\n+           </div>
+\n+           <p className="mt-1 text-sm text-muted-foreground">{model.description}</p>
+\n+         </div>
+\n+         <span className="shrink-0 rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{model.id}</span>
+\n+       </div>
+\n+       <Separator className="my-3" />
+\n+       <div className="grid grid-cols-2 gap-3 text-sm">
+\n+         <div><span className="text-xs text-muted-foreground">上下文窗口</span><p className="mt-0.5 font-medium">{fn(model.context_window)} tokens</p></div>
+\n+         <div><span className="text-xs text-muted-foreground">建议输出上限</span><p className="mt-0.5 font-medium">{fn(model.suggested_max_tokens)} tokens</p></div>
+\n+       </div>
+\n+       <div className="mt-3">
+\n+         <span className="text-xs text-muted-foreground">多模态能力</span>
+\n+         <div className="mt-1.5 flex flex-wrap gap-1.5">
+\n+           <CapabilityBadge label="文本" supported={model.capabilities.text} />
+\n+           <CapabilityBadge label="图像" supported={model.capabilities.image} />
+\n+           <CapabilityBadge label="视频" supported={model.capabilities.video} />
+\n+           <CapabilityBadge label="音频" supported={model.capabilities.audio} />
+\n+         </div>
+\n+       </div>
+\n+     </div>
+\n+   )
+\n+ }
+\n+ 
+\n+ export function SettingsPanel({
+\n+   settings: initialSettings, models, vendors, loading, saving,
+\n+   modelsLoading, error, onSave, onClose, onFetchModels,
+\n+ }: SettingsPanelProps) {
+\n+   const [baseUrl, setBaseUrl] = useState("")
+\n+   const [apiKey, setApiKey] = useState("")
+\n+   const [apiKeyInput, setApiKeyInput] = useState("")
+\n+   const [apiKeyTouched, setApiKeyTouched] = useState(false)
+\n+   const [modelName, setModelName] = useState("")
+\n+   const [maxTokens, setMaxTokens] = useState(8192)
+\n+   const [showApiKey, setShowApiKey] = useState(false)
+\n+   const [modelSearch, setModelSearch] = useState("")
+\n+   const [showModelDropdown, setShowModelDropdown] = useState(false)
+\n+   const [enableSearch, setEnableSearch] = useState(false)
+\n+   const [thinkingMode, setThinkingMode] = useState(false)
+\n+   const [temperature, setTemperature] = useState(0.7)
+\n+   const [topP, setTopP] = useState(1.0)
+\n+   const [repPenalty, setRepPenalty] = useState(1.0)
+\n+   const [showAdvanced, setShowAdvanced] = useState(false)
+\n+   const [dirty, setDirty] = useState(false)
+\n+   const [modelError, setModelError] = useState<string | null>(null)
+\n+   const [selectedVendor, setSelectedVendor] = useState<string | null>(null)
+\n+ 
+\n+   useEffect(() => {
+\n+     if (initialSettings) {
+\n+       setBaseUrl(initialSettings.base_url)
+\n+       setApiKey(initialSettings.api_key)
+\n+       setModelName(initialSettings.model_name)
+\n+       setMaxTokens(initialSettings.max_tokens)
+\n+       setTemperature(initialSettings.advanced?.temperature ?? 0.7)
+\n+       setTopP(initialSettings.advanced?.top_p ?? 1.0)
+\n+       setRepPenalty(initialSettings.advanced?.repetition_penalty ?? 1.0)
+\n+       setEnableSearch(initialSettings.advanced?.enable_search ?? false)
+\n+       setThinkingMode(initialSettings.advanced?.thinking_mode ?? false)
+\n+     }
+\n+   }, [initialSettings])
+\n+ 
+\n+   useEffect(() => {
+\n+     const matched = vendors.find((v) => v.base_url.replace(/\/$/, "") === baseUrl.replace(/\/$/, ""))
+\n+     setSelectedVendor(matched?.id ?? "custom")
+\n+     // Fetch models with current input values (empty = no models shown)
+\n+     void onFetchModels(undefined, baseUrl || "", apiKeyInput || "")
+\n+   }, [baseUrl, vendors, apiKeyInput])
+\n+ 
+\n+   const selectedModel = models.find((m) => m.id === modelName)
+\n+   const filteredModels = models.filter((m) =>
+\n+     m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+\n+     m.id.toLowerCase().includes(modelSearch.toLowerCase()),
+\n+   )
+\n+ 
+\n+   
+\n+ 
+\n+   const handleSave = useCallback(async () => {
+\n+     if (selectedVendor === "custom" && !modelName.trim()) {
+\n+       setModelError("请填写模型名称，例如 qwen-plus")
+\n+       return
+\n+     }
+\n+     setModelError(null)
+\n+     const payload: Record<string, unknown> = {}
+\n+     if (baseUrl !== initialSettings?.base_url) payload.base_url = baseUrl
+\n+     if (apiKeyTouched && apiKeyInput) payload.api_key = apiKeyInput
+\n+     if (modelName !== initialSettings?.model_name) payload.model_name = modelName
+\n+     if (maxTokens !== initialSettings?.max_tokens) payload.max_tokens = maxTokens
+\n+     if (temperature !== (initialSettings?.advanced?.temperature ?? 0.7)) payload.temperature = temperature
+\n+     if (topP !== (initialSettings?.advanced?.top_p ?? 1.0)) payload.top_p = topP
+\n+     if (repPenalty !== (initialSettings?.advanced?.repetition_penalty ?? 1.0)) payload.repetition_penalty = repPenalty
+\n+     if (enableSearch !== (initialSettings?.advanced?.enable_search ?? false)) payload.enable_search = enableSearch
+\n+     if (thinkingMode !== (initialSettings?.advanced?.thinking_mode ?? false)) payload.thinking_mode = thinkingMode
+\n+     try {
+\n+       await onSave(payload)
+\n+       // Validate API connection by fetching models with the saved credentials
+\n+       const verifyParams = new URLSearchParams()
+\n+       if (baseUrl) verifyParams.set("preview_base_url", baseUrl)
+\n+       if (apiKeyInput) verifyParams.set("preview_api_key", apiKeyInput)
+\n+       const verifyQs = verifyParams.toString()
+\n+       if (verifyQs) {
+\n+         const verifyResp = await fetch(`/api/v1/models?${verifyQs}`)
+\n+         if (!verifyResp.ok) {
+\n+           const detail = await verifyResp.json().catch(() => ({ detail: `API 请求失败 (${verifyResp.status})` }))
+\n+           throw new Error(typeof detail.detail === "string" ? detail.detail : "API 验证失败")
+\n+         }
+\n+       }
+\n+       setDirty(false)
+\n+       onClose()
+\n+     } catch (err) {
+\n+       const msg = err instanceof Error ? err.message : "\u4fdd\u5b58\u5931\u8d25"
+\n+       setModelError(msg)
+\n+       toast(msg, {
+\n+         position: "bottom-center",
+\n+         style: {
+\n+           borderRadius: "16px",
+\n+           padding: "16px 20px",
+\n+           fontSize: "14px",
+\n+         },
+\n+       })
+\n+     }
+\n+   }, [baseUrl, apiKeyInput, modelName, maxTokens, temperature, topP, repPenalty, enableSearch, thinkingMode, initialSettings, onSave, onClose])
+\n+ 
+\n+   const markDirty = useCallback(() => setDirty(true), [])
+\n+   const handleModelSelect = useCallback((id: string) => {
+\n+     setModelName(id); setShowModelDropdown(false); setDirty(true)
+\n+   }, [])
+\n+ 
+\n+   if (loading) return (
+\n+     <div className="flex h-full min-h-0 items-center justify-center">
+\n+       <Spinner className="size-6" />
+\n+       <span className="ml-3 text-sm text-muted-foreground">加载设置中…</span>
+\n+     </div>
+\n+   )
+\n+ 
+\n+   return (
+\n+     <div className="flex h-full min-h-0 flex-col">
+\n+       <div className="flex shrink-0 items-center justify-between border-b px-6 py-3">
+\n+         <div className="flex items-center gap-3">
+\n+           <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} aria-label="返回对话">
+\n+             <ArrowLeftIcon aria-hidden="true" />
+\n+           </Button>
+\n+           <div>
+\n+             <h2 className="text-base font-semibold">模型设置</h2>
+\n+             <p className="text-xs text-muted-foreground">配置后端模型接口与参数</p>
+\n+           </div>
+\n+         </div>
+\n+         <div className="flex items-center gap-2">
+\n+           {error && <span className="text-xs text-destructive">{error}</span>}
+\n+           <Button type="button" variant="outline" size="sm" onClick={onClose}>取消</Button>
+\n+           <Button type="button" size="sm" disabled={!dirty || saving} onClick={() => void handleSave()}>
+\n+             {saving && <Spinner data-icon="inline-start" className="size-3.5" />}
+\n+             {saving ? "保存中…" : "保存"}
+\n+           </Button>
+\n+         </div>
+\n+       </div>
+\n+ 
+\n+       <ScrollArea className="min-h-0 flex-1">
+\n+         <div className="mx-auto max-w-2xl space-y-8 p-6">
+\n+           
+\n+           <section>
+\n+             <h3 className="text-sm font-semibold text-foreground">API 连接</h3>
+\n+             <p className="mt-1 text-xs text-muted-foreground">配置模型服务的访问地址和认证密钥。</p>
+\n+             <div className="mt-4 space-y-4">
+\n+               <div className="space-y-1.5">
+\n+                 <Label htmlFor="settings-baseurl">Base URL</Label>
+\n+                 <Input id="settings-baseurl" value={baseUrl}
+\n+                   onChange={(e) => { setBaseUrl(e.target.value); setSelectedVendor("custom"); markDirty() }}
+\n+                   placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+\n+               </div>
+\n+               <div className="space-y-1.5">
+\n+                 <Label htmlFor="settings-apikey">API Key</Label>
+\n+                 <div className="relative">
+\n+                   <Input id="settings-apikey" type={showApiKey ? "text" : "password"}
+\n+                     value={apiKeyInput}
+\n+                     onChange={(e) => { setApiKeyInput(e.target.value); setApiKeyTouched(true); markDirty() }}
+\n+                     placeholder={apiKey ? "输入新值覆盖已配置密钥" : "sk-..."} />
+\n+                   <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+\n+                     onClick={() => setShowApiKey((v) => !v)}>
+\n+                     {showApiKey ? <EyeClosedIcon className="size-4" /> : <EyeIcon className="size-4" />}
+\n+                   </button>
+\n+                 </div>
+\n+               </div>
+\n+             </div>
+\n+           </section>
+\n+           <Separator />
+\n+ 
+\n+           <section>
+\n+             <h3 className="text-sm font-semibold text-foreground">模型选择</h3>
+\n+             <p className="mt-1 text-xs text-muted-foreground">选择要使用的模型。</p>
+\n+             <div className="mt-4 space-y-1.5">
+\n+               <Label htmlFor="settings-model">模型</Label>
+\n+               <div className="relative">
+\n+                 {selectedVendor === "custom" ? (
+\n+                   <Input
+\n+                     id="settings-model"
+\n+                     value={modelName}
+\n+                     onChange={(e) => { setModelName(e.target.value); markDirty() }}
+\n+                     placeholder="输入模型名称（如 qwen-plus）"
+\n+                     className="h-10 w-full rounded-lg border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+\n+                   />
+\n+                 ) : (
+\n+                   <>
+\n+                     <button type="button" id="settings-model"
+\n+                       className="flex h-10 w-full items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+\n+                       onClick={() => setShowModelDropdown((v) => !v)}>
+\n+                       {modelsLoading ? (
+\n+                         <span className="flex items-center gap-2 text-muted-foreground"><Spinner className="size-3.5" />加载模型列表中...</span>
+\n+                       ) : (
+\n+                         <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
+\n+                         )}
+\n+                       <span className="text-xs text-muted-foreground">{models.length > 0 ? models.length + " 个可用" : "请输入 API Key"}</span>
+\n+                     </button>
+\n+                     {showModelDropdown && (
+\n+                       <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border bg-popover shadow-md">
+\n+                         <div className="p-2"><Input placeholder="搜索模型..." value={modelSearch} onChange={(e) => setModelSearch(e.target.value)} className="h-9 text-sm" autoFocus /></div>
+\n+                         <ScrollArea className="max-h-72">
+\n+                           {filteredModels.length === 0 ? (
+\n+                             <div className="p-4 text-center text-sm text-muted-foreground">{apiKeyInput || apiKey ? "没有匹配的模型" : "请先填写 API Key 以加载模型列表"}</div>
+\n+                           ) : filteredModels.map((model) => (
+\n+                             <button key={model.id} type="button"
+\n+                               className={cn("flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-accent", model.id === modelName && "bg-accent font-medium")}
+\n+                               onClick={() => handleModelSelect(model.id)}>
+\n+                               <div className="min-w-0">
+\n+                                 <div className="flex items-center gap-2">
+\n+                                   <span className="truncate">{model.name}</span>
+\n+                                   {model.recommended && <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>}
+\n+                                 </div>
+\n+                                 <p className="truncate text-xs text-muted-foreground">{model.description}</p>
+\n+                               </div>
+\n+                               <div className="ml-3 flex shrink-0 gap-1.5">
+\n+                                 {model.capabilities.image && (
+\n+                                   <TooltipProvider><Tooltip><TooltipTrigger asChild>
+\n+                                     <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
+\n+                                   </TooltipTrigger><TooltipContent>支持图像</TooltipContent></Tooltip></TooltipProvider>
+\n+                                 )}
+\n+                                 {model.capabilities.video && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">视</span>}
+\n+                                 {model.capabilities.audio && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">音</span>}
+\n+                               </div>
+\n+                             </button>
+\n+                           ))}
+\n+                         </ScrollArea>
+\n+                       </div>
+\n+                     )}
+\n+                   </>
+\n+                 )}
+\n+               </div>
+\n+             </div>
+\n+             {selectedModel && <ModelInfoCard model={selectedModel} />}
+\n+             {modelError && (
+\n+               <p className="mt-2 text-xs text-destructive">{modelError}</p>
+\n+             )}
+\n+           </section>
+\n+           <Separator />
+\n+ 
+\n+           <section>
+\n+             <div className="flex items-center justify-between">
+\n+               <div>
+\n+                 <h3 className="text-sm font-semibold text-foreground">生成参数</h3>
+\n+                 <p className="mt-1 text-xs text-muted-foreground">控制模型生成行为与输出限制。</p>
+\n+               </div>
+\n+               <Button type="button" variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => setShowAdvanced((v) => !v)}>
+\n+                 <SlidersIcon className="size-3.5" />
+\n+                 {showAdvanced ? "收起" : "高级"}
+\n+               </Button>
+\n+             </div>
+\n+             <div className="mt-4 space-y-4">
+\n+               <div className="space-y-1.5">
+\n+                 <Label htmlFor="settings-maxtokens">最大输出 Tokens</Label>
+\n+                 <div className="flex items-center gap-3">
+\n+                   <input id="settings-maxtokens" type="range" min={512} max={131072} step={512} value={maxTokens}
+\n+                     onChange={(e) => { setMaxTokens(Number(e.target.value)); markDirty() }}
+\n+                     className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary" />
+\n+                   <span className="w-24 text-right font-mono text-sm tabular-nums text-muted-foreground">{maxTokens.toLocaleString()}</span>
+\n+                 </div>
+\n+                 <div className="flex justify-between text-[11px] text-muted-foreground"><span>512</span><span>131K</span></div>
+\n+               </div>
+\n+ 
+\n+               {showAdvanced && (
+\n+                 <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+\n+                   <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">高级参数</h4>
+\n+                   <div className="space-y-1.5">
+\n+                     <div className="flex items-center justify-between">
+\n+                       <Label htmlFor="settings-temperature">Temperature</Label>
+\n+                       <span className="font-mono text-xs tabular-nums text-muted-foreground">{temperature.toFixed(1)}</span>
+\n+                     </div>
+\n+                     <input id="settings-temperature" type="range" min={0} max={2} step={0.1} value={temperature}
+\n+                       onChange={(e) => { setTemperature(Number(e.target.value)); markDirty() }}
+\n+                       className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary" />
+\n+                     <div className="flex justify-between text-[10px] text-muted-foreground"><span>精确 (0)</span><span>平衡 (1)</span><span>创意 (2)</span></div>
+\n+                   </div>
+\n+                   <div className="space-y-1.5">
+\n+                     <div className="flex items-center justify-between">
+\n+                       <Label htmlFor="settings-topp">Top P</Label>
+\n+                       <span className="font-mono text-xs tabular-nums text-muted-foreground">{topP.toFixed(2)}</span>
+\n+                     </div>
+\n+                     <input id="settings-topp" type="range" min={0} max={1} step={0.05} value={topP}
+\n+                       onChange={(e) => { setTopP(Number(e.target.value)); markDirty() }}
+\n+                       className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary" />
+\n+                     <div className="flex justify-between text-[10px] text-muted-foreground"><span>严格 (0)</span><span>默认 (1)</span></div>
+\n+                   </div>
+\n+                   <div className="space-y-1.5">
+\n+                     <div className="flex items-center justify-between">
+\n+                       <Label htmlFor="settings-reppenalty">重复惩罚</Label>
+\n+                       <span className="font-mono text-xs tabular-nums text-muted-foreground">{repPenalty.toFixed(1)}</span>
+\n+                     </div>
+\n+                     <input id="settings-reppenalty" type="range" min={1} max={2} step={0.1} value={repPenalty}
+\n+                       onChange={(e) => { setRepPenalty(Number(e.target.value)); markDirty() }}
+\n+                       className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary" />
+\n+                     <div className="flex justify-between text-[10px] text-muted-foreground"><span>无 (1.0)</span><span>强 (2.0)</span></div>
+\n+                   </div>
+\n+                   <Separator className="my-2" />
+\n+                   <div className="space-y-3">
+\n+                     {selectedModel?.id?.startsWith("qwq") && (
+\n+                       <div className="flex items-center justify-between">
+\n+                         <div>
+\n+                           <Label htmlFor="settings-thinking" className="text-sm">思维链模式</Label>
+\n+                           <p className="text-xs text-muted-foreground">为推理模型启用/禁用长思考过程</p>
+\n+                         </div>
+\n+                         <Switch id="settings-thinking" checked={thinkingMode} onCheckedChange={(v) => { setThinkingMode(v); markDirty() }} />
+\n+                       </div>
+\n+                     )}
+\n+                     <div className="flex items-center justify-between">
+\n+                       <div>
+\n+                         <Label htmlFor="settings-search" className="text-sm">联网搜索</Label>
+\n+                         <p className="text-xs text-muted-foreground">让模型在需要时自动检索互联网</p>
+\n+                       </div>
+\n+                       <Switch id="settings-search" checked={enableSearch} onCheckedChange={(v) => { setEnableSearch(v); markDirty() }} />
+\n+                     </div>
+\n+                   </div>
+\n+                 </div>
+\n+               )}
+\n+             </div>
+\n+           </section>
+\n+           <div className="h-8" />
+\n+         </div>
+\n+       </ScrollArea>
+\n+     </div>
+\n+   )
+\n+ }
+\n*** End Patch

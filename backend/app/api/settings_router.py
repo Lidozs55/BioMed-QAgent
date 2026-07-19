@@ -169,10 +169,15 @@ async def list_models(
     query: Annotated[str | None, Query(description="Search filter")] = None,
     preview_base_url: Annotated[str | None, Query(description="Preview base URL")] = None,
     preview_api_key: Annotated[str | None, Query(description="Preview API key")] = None,
+    use_current_settings: Annotated[bool, Query(description="Ignore preview params and use saved settings")] = False,
 ) -> ModelListResponse:
     settings = get_settings()
-    use_base = preview_base_url if preview_base_url is not None else ""
-    use_key = preview_api_key if preview_api_key is not None else ""
+    if use_current_settings:
+        use_base = settings.base_url
+        use_key = settings.api_key
+    else:
+        use_base = preview_base_url if preview_base_url is not None else ""
+        use_key = preview_api_key if preview_api_key is not None else ""
     api_source: str | None = None
     api_model_ids: set[str] = set()
 
@@ -180,7 +185,7 @@ async def list_models(
         try:
             remote_ids = await _fetch_remote_model_ids(use_base, use_key)
             api_model_ids.update(remote_ids)
-            api_source = settings.base_url
+            api_source = use_base
         except Exception as exc:
             logger.warning("Failed to fetch remote model list: %s", exc)
 

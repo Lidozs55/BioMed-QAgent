@@ -99,6 +99,7 @@ export function SettingsPanel({
   const [baseUrl, setBaseUrl] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [apiKeyInput, setApiKeyInput] = useState("")
+  const [apiKeyTouched, setApiKeyTouched] = useState(false)
   const [modelName, setModelName] = useState("")
   const [maxTokens, setMaxTokens] = useState(8192)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -151,7 +152,7 @@ export function SettingsPanel({
     setModelError(null)
     const payload: Record<string, unknown> = {}
     if (baseUrl !== initialSettings?.base_url) payload.base_url = baseUrl
-    if (apiKeyInput) payload.api_key = apiKeyInput
+    if (apiKeyTouched && apiKeyInput) payload.api_key = apiKeyInput
     if (modelName !== initialSettings?.model_name) payload.model_name = modelName
     if (maxTokens !== initialSettings?.max_tokens) payload.max_tokens = maxTokens
     if (temperature !== (initialSettings?.advanced?.temperature ?? 0.7)) payload.temperature = temperature
@@ -241,7 +242,7 @@ export function SettingsPanel({
                 <div className="relative">
                   <Input id="settings-apikey" type={showApiKey ? "text" : "password"}
                     value={apiKeyInput}
-                    onChange={(e) => { setApiKeyInput(e.target.value); markDirty() }}
+                    onChange={(e) => { setApiKeyInput(e.target.value); setApiKeyTouched(true); markDirty() }}
                     placeholder={apiKey ? "输入新值覆盖已配置密钥" : "sk-..."} />
                   <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowApiKey((v) => !v)}>
@@ -275,8 +276,8 @@ export function SettingsPanel({
                       {modelsLoading ? (
                         <span className="flex items-center gap-2 text-muted-foreground"><Spinner className="size-3.5" />加载模型列表中...</span>
                       ) : (
-                         <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
-                       )}
+                        <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
+                        )}
                       <span className="text-xs text-muted-foreground">{models.length > 0 ? models.length + " 个可用" : "请输入 API Key"}</span>
                     </button>
                     {showModelDropdown && (
