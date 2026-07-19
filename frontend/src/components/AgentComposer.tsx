@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -20,6 +21,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -29,6 +40,21 @@ const MODELS = [
   { id: "reasoning", label: "推理模型" },
   { id: "fast", label: "快速模型" },
 ] as const;
+
+export const MAX_IMPORT_FILES = 10;
+export const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+
+function sanitizeUploadFilename(name: string): string {
+  const parts = name.split(/[\\/]/);
+  const baseName = parts[parts.length - 1] ?? "";
+  return baseName.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
 
 interface AgentComposerProps {
   value: string;
@@ -47,7 +73,8 @@ interface AgentComposerProps {
    * 文件上传回调。若提供，则启用"上传文件"菜单项；用户附加文件后，
    * 发送按钮触发此回调而非 `onSubmit`，进入 IMPORT 任务流程。
    */
-  onSubmitFiles?: (files: File[], note: string) => void;
+  onSubmitFiles?: (files: File[], note: string) => Promise<void>;
+  onAttachmentError?: (message: string) => void;
   compact?: boolean;
   className?: string;
 }
@@ -66,16 +93,23 @@ export function AgentComposer({
   showDataSources = false,
   onDataSourceChange,
   onSubmitFiles,
+  onAttachmentError,
   compact = false,
   className,
 }: AgentComposerProps) {
   const [model, setModel] = useState("default");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [submittingFiles, setSubmittingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelLabel = MODELS.find((item) => item.id === model)?.label ?? "默认模型";
 
   const hasFiles = pendingFiles.length > 0;
-  const canSubmitFiles = hasFiles && onSubmitFiles !== undefined && !disabled && !pending;
+  const canSubmitFiles =
+    hasFiles &&
+    onSubmitFiles !== undefined &&
+    !disabled &&
+    !pending &&
+    !submittingFiles;
 
   const handleFilePick = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = event.target.files;
@@ -83,15 +117,24 @@ export function AgentComposer({
     const incoming = Array.from(picked);
     if (incoming.length === 0) return;
     setPendingFiles((current) => {
-      const seen = new Set(current.map((file) => file.name));
-      const merged = [...current];
-      for (const file of incoming) {
-        if (!seen.has(file.name)) {
-          merged.push(file);
-          seen.add(file.name);
-        }
+      if (current.length + incoming.length > MAX_IMPORT_FILES) {
+        onAttachmentError?.(`最多上传 ${MAX_IMPORT_FILES} 个文件`);
+        return current;
       }
-      return merged;
+      const seen = new Set(current.map((file) => sanitizeUploadFilename(file.name)));
+      for (const file of incoming) {
+        if (file.size > MAX_IMPORT_FILE_BYTES) {
+          onAttachmentError?.("单个文件不能超过 10 MiB");
+          return current;
+        }
+        const sanitizedName = sanitizeUploadFilename(file.name);
+        if (!sanitizedName || seen.has(sanitizedName)) {
+          onAttachmentError?.("文件名重复");
+          return current;
+        }
+        seen.add(sanitizedName);
+      }
+      return [...current, ...incoming];
     });
     // 清空 input.value 让同一文件可再次选择
     event.target.value = "";
@@ -101,10 +144,18 @@ export function AgentComposer({
     setPendingFiles((current) => current.filter((file) => file.name !== name));
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async (): Promise<void> => {
     if (hasFiles && onSubmitFiles !== undefined) {
-      onSubmitFiles(pendingFiles, value);
-      setPendingFiles([]);
+      if (!canSubmitFiles) return;
+      setSubmittingFiles(true);
+      try {
+        await onSubmitFiles(pendingFiles, value);
+        setPendingFiles([]);
+      } catch {
+        // The parent owns the user-visible import error and leaves the draft intact.
+      } finally {
+        setSubmittingFiles(false);
+      }
       return;
     }
     onSubmit();
@@ -119,16 +170,13 @@ export function AgentComposer({
       !event.nativeEvent.isComposing
     ) {
       event.preventDefault();
-      handleSubmit();
+      void handleSubmit();
       return;
     }
     onKeyDown(event);
   };
 
-  const sendDisabledFinal =
-    sendDisabled ||
-    pending ||
-    (hasFiles ? !canSubmitFiles : false);
+  const sendDisabledFinal = pending || (hasFiles ? !canSubmitFiles : sendDisabled);
 
   return (
     <div
@@ -151,25 +199,33 @@ export function AgentComposer({
         )}
       />
       {hasFiles && (
-        <div className="flex flex-wrap gap-1.5 px-3 pb-1.5">
+        <AttachmentGroup className="px-3 pb-1.5">
           {pendingFiles.map((file) => (
-            <span
+            <Attachment
               key={file.name}
-              className="inline-flex items-center gap-1 rounded-md border bg-muted/40 px-2 py-0.5 text-xs"
+              size="xs"
+              state={submittingFiles || pending ? "uploading" : "idle"}
             >
-              <FileIcon aria-hidden="true" weight="regular" />
-              <span className="max-w-48 truncate">{file.name}</span>
-              <button
-                type="button"
-                onClick={() => handleRemoveFile(file.name)}
-                aria-label={`移除 ${file.name}`}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <XIcon aria-hidden="true" weight="bold" />
-              </button>
-            </span>
+              <AttachmentMedia variant="icon">
+                <FileIcon aria-hidden="true" weight="regular" />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>{file.name}</AttachmentTitle>
+                <AttachmentDescription>{formatFileSize(file.size)}</AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentActions>
+                <AttachmentAction
+                  type="button"
+                  onClick={() => handleRemoveFile(file.name)}
+                  aria-label={`移除 ${file.name}`}
+                  disabled={submittingFiles || pending}
+                >
+                  <XIcon data-icon="inline-end" aria-hidden="true" weight="bold" />
+                </AttachmentAction>
+              </AttachmentActions>
+            </Attachment>
           ))}
-        </div>
+        </AttachmentGroup>
       )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
         <DropdownMenu>
@@ -187,18 +243,20 @@ export function AgentComposer({
             <PlusIcon aria-hidden="true" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top">
-            <DropdownMenuLabel>添加附件</DropdownMenuLabel>
-            <DropdownMenuItem disabled>
-              <ImageIcon aria-hidden="true" />
-              上传图片（即将支持）
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={onSubmitFiles === undefined || disabled}
-              onSelect={() => fileInputRef.current?.click()}
-            >
-              <FileIcon aria-hidden="true" />
-              上传文件到本地缓存
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>添加附件</DropdownMenuLabel>
+              <DropdownMenuItem disabled>
+                <ImageIcon aria-hidden="true" />
+                上传图片（即将支持）
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={onSubmitFiles === undefined || disabled}
+                onSelect={() => fileInputRef.current?.click()}
+              >
+                <FileIcon aria-hidden="true" />
+                上传文件到本地缓存
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
         <input
@@ -236,22 +294,24 @@ export function AgentComposer({
               <CaretDownIcon aria-hidden="true" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" side="top">
-              <DropdownMenuLabel>主模型</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuRadioGroup value={model} onValueChange={setModel}>
-                {MODELS.map((item) => (
-                  <DropdownMenuRadioItem key={item.id} value={item.id}>
-                    {item.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>主模型</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={model} onValueChange={setModel}>
+                  {MODELS.map((item) => (
+                    <DropdownMenuRadioItem key={item.id} value={item.id}>
+                      {item.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
           <Button
             type="button"
             size="icon-sm"
             className="rounded-full"
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit()}
             disabled={sendDisabledFinal}
             aria-label={pending ? "提交中" : sendAriaLabel}
           >

@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -20,27 +21,50 @@ from app.config import Settings
 from app.main import create_app
 from app.tools._registry import BUILTIN_SKILL_MODULES  # noqa: F401 — ensure import
 from app.tools.workdir import create_task_workdir
+from starlette.datastructures import UploadFile
 
 
 def _settings(tmp_path: Path) -> Settings:
     return Settings(output_dir=str(tmp_path / "output"))
 
 
+def _task_directories(tmp_path: Path) -> list[Path]:
+    tasks_dir = tmp_path / "output" / "tasks"
+    return [
+        path
+        for path in tasks_dir.iterdir()
+        if path.is_dir() and path.name != ".uploads"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_import_tasks_creates_task_and_persists_files(tmp_path: Path) -> None:
     application = create_app(_settings(tmp_path))
+    executor_observed = asyncio.Event()
+    observed_files: dict[str, bytes] | None = None
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
         base_url="http://test",
     ) as client:
+        async def probe_executor(execution) -> None:
+            nonlocal observed_files
+            observed_files = {
+                path.name: path.read_bytes()
+                for path in execution.context.work_dir.source_assets.iterdir()
+            }
+            executor_observed.set()
+
+        application.state.task_manager.run_executor = probe_executor
         files = [
             ("files", ("patients.csv", b"patient_id,age\nP001,54\n", "text/csv")),
+            ("files", ("metadata.json", b'{"cohort": "A"}', "application/json")),
         ]
         response = await client.post(
             "/api/v1/import/tasks",
             data={"request_id": "req-001", "input": "Import patients data"},
             files=files,
         )
+        await asyncio.wait_for(executor_observed.wait(), timeout=1)
 
     assert response.status_code == 202, response.text
     payload = response.json()
@@ -49,11 +73,19 @@ async def test_import_tasks_creates_task_and_persists_files(tmp_path: Path) -> N
     task_id = payload["task_id"]
     assert task_id
 
-    # The uploaded file was persisted to the task's source_assets/ directory.
-    workdir = create_task_workdir(task_id)
+    # Assets are published to the accepted task before its executor can observe it.
+    assert observed_files == {
+        "patients.csv": b"patient_id,age\nP001,54\n",
+        "metadata.json": b'{"cohort": "A"}',
+    }
+    workdir = create_task_workdir(
+        task_id,
+        base_dir=str(tmp_path / "output" / "tasks"),
+    )
     saved = workdir.source_asset_file("patients.csv")
     assert saved.is_file()
     assert saved.read_text(encoding="utf-8") == "patient_id,age\nP001,54\n"
+    assert workdir.source_asset_file("metadata.json").read_bytes() == b'{"cohort": "A"}'
 
 
 @pytest.mark.asyncio
@@ -95,6 +127,7 @@ async def test_import_tasks_rejects_too_many_files(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert "Too many files" in response.text
+    assert _task_directories(tmp_path) == []
 
 
 @pytest.mark.asyncio
@@ -118,6 +151,8 @@ async def test_import_tasks_rejects_oversized_file(tmp_path: Path) -> None:
 
     assert response.status_code == 413
     assert "exceeds max size" in response.text
+    assert _task_directories(tmp_path) == []
+    assert not (tmp_path / "output" / "tasks" / ".uploads").exists()
 
 
 @pytest.mark.asyncio
@@ -139,6 +174,38 @@ async def test_import_tasks_rejects_duplicate_filenames(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert "Duplicate" in response.text
+    assert _task_directories(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_import_tasks_cleans_staged_partial_upload_after_io_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads = 0
+
+    async def fail_after_first_chunk(self: UploadFile, size: int = -1) -> bytes:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return b"partial"
+        raise OSError("upload read failed")
+
+    monkeypatch.setattr(UploadFile, "read", fail_after_first_chunk)
+    application = create_app(_settings(tmp_path))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/import/tasks",
+            data={"request_id": "req-partial", "input": "partial upload"},
+            files=[("files", ("partial.csv", b"a,b\n1,2\n", "text/csv"))],
+        )
+
+    assert response.status_code == 500
+    assert _task_directories(tmp_path) == []
+    assert not (tmp_path / "output" / "tasks" / ".uploads").exists()
 
 
 @pytest.mark.asyncio

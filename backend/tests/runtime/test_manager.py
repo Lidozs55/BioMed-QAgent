@@ -598,6 +598,117 @@ async def test_concurrent_duplicate_create_admits_one_authoritative_task(
 
 
 @pytest.mark.asyncio
+async def test_create_task_runs_prepare_callback_before_queueing_or_execution(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    prepare_entered = asyncio.Event()
+    release_prepare = asyncio.Event()
+    executor_started = asyncio.Event()
+
+    async def run(_execution) -> None:
+        executor_started.set()
+
+    async def prepare_task(task_id: str) -> None:
+        assert await repository.get_snapshot(task_id) is not None
+        prepare_entered.set()
+        await release_prepare.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        admission = asyncio.create_task(
+            manager.create_task(
+                StartTaskRequest(request_id="req_prepare_order", input="prepare"),
+                prepare_task=prepare_task,
+            )
+        )
+        await asyncio.wait_for(prepare_entered.wait(), timeout=1)
+
+        assert not executor_started.is_set()
+        assert manager._queue.qsize() == 0
+        task_id = next(path.name for path in repository.tasks_dir.iterdir())
+        assert await repository.list_events(task_id) == []
+        assert await repository.find_request("req_prepare_order") is None
+
+        release_prepare.set()
+        accepted = await asyncio.wait_for(admission, timeout=1)
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+        assert accepted.task_id == task_id
+    finally:
+        release_prepare.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_prepare_callback_failure_rolls_back_new_task(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    executor_started = asyncio.Event()
+    task_id = "task_prepare_failure"
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: task_id)
+
+    async def run(_execution) -> None:
+        executor_started.set()
+
+    async def prepare_task(_task_id: str) -> None:
+        raise OSError("source asset publication failed")
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        with pytest.raises(OSError, match="source asset publication failed"):
+            await manager.create_task(
+                StartTaskRequest(request_id="req_prepare_failure", input="prepare"),
+                prepare_task=prepare_task,
+            )
+
+        assert await repository.get_snapshot(task_id) is None
+        assert await repository.find_request("req_prepare_failure") is None
+        assert not (repository.tasks_dir / task_id).exists()
+        assert manager._queue.qsize() == 0
+        assert not executor_started.is_set()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_create_task_prepare_cancellation_rolls_back_new_task(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    task_id = "task_prepare_cancelled"
+    monkeypatch.setattr(manager_module, "generate_task_id", lambda: task_id)
+
+    async def run(_execution) -> None:
+        return None
+
+    async def prepare_task(_task_id: str) -> None:
+        raise asyncio.CancelledError
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await manager.create_task(
+                StartTaskRequest(request_id="req_prepare_cancelled", input="prepare"),
+                prepare_task=prepare_task,
+            )
+
+        assert await repository.get_snapshot(task_id) is None
+        assert await repository.find_request("req_prepare_cancelled") is None
+        assert not (repository.tasks_dir / task_id).exists()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
     tmp_path,
 ) -> None:
