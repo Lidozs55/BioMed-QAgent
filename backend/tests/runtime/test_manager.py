@@ -709,6 +709,35 @@ async def test_create_task_prepare_cancellation_rolls_back_new_task(
 
 
 @pytest.mark.asyncio
+async def test_duplicate_create_runs_prepare_once_and_returns_same_acceptance(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    release_executor = asyncio.Event()
+    prepared_task_ids: list[str] = []
+
+    async def run(_execution) -> None:
+        await release_executor.wait()
+
+    async def prepare_task(task_id: str) -> None:
+        prepared_task_ids.append(task_id)
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    request = StartTaskRequest(request_id="req_prepare_once", input="prepare once")
+    try:
+        first = await manager.create_task(request, prepare_task=prepare_task)
+        duplicate = await manager.create_task(request, prepare_task=prepare_task)
+
+        assert duplicate == first
+        assert prepared_task_ids == [first.task_id]
+    finally:
+        release_executor.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_create_task_queue_full_leaves_no_orphan_task_or_request(
     tmp_path,
 ) -> None:

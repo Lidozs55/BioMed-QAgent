@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Literal
@@ -241,6 +242,7 @@ _IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024
 _IMPORT_MAX_FILES = 10
 #: 文件名安全字符集：字母数字、``-``、``_``、``.``。
 _IMPORT_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
+_IMPORT_UPLOADS_ROOT_LOCK = threading.Lock()
 
 
 def _sanitize_upload_filename(raw: str | None) -> str:
@@ -264,7 +266,7 @@ def _sanitize_upload_filename(raw: str | None) -> str:
     response_model=TaskRunAccepted,
 )
 async def create_import_task(
-    manager: TaskManagerDep,
+    http_request: Request,
     repository: TaskRepositoryDep,
     request_id: Annotated[str, Form(min_length=1)],
     input: Annotated[str, Form()] = "",
@@ -301,8 +303,9 @@ async def create_import_task(
             seen_names.add(name)
             sanitized_names.append(name)
 
-        uploads_root.mkdir(parents=True, exist_ok=True)
-        staging_dir = Path(tempfile.mkdtemp(prefix="import-", dir=uploads_root))
+        with _IMPORT_UPLOADS_ROOT_LOCK:
+            uploads_root.mkdir(parents=True, exist_ok=True)
+            staging_dir = Path(tempfile.mkdtemp(prefix="import-", dir=uploads_root))
         for upload, name in zip(files, sanitized_names, strict=True):
             staged_file = staging_dir / name
             with staged_file.open("wb") as output:
@@ -343,6 +346,7 @@ async def create_import_task(
             input=composed_input,
             mode=TaskMode.IMPORT,
         )
+        manager = get_task_manager(http_request)
 
         async def prepare_task(task_id: str) -> None:
             workdir = create_task_workdir(task_id, base_dir=str(repository.tasks_dir))
@@ -363,7 +367,7 @@ async def create_import_task(
     finally:
         if staging_dir is not None:
             shutil.rmtree(staging_dir, ignore_errors=True)
-        with suppress(OSError):
+        with _IMPORT_UPLOADS_ROOT_LOCK, suppress(OSError):
             uploads_root.rmdir()
         for upload in files:
             with suppress(Exception):
