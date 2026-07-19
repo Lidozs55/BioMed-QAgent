@@ -229,6 +229,7 @@ def process_geo_tximport_counts(
 
         output_path = workdir.parsed / f"{dataset_id}_tximport_long.csv"
         row_count = 0
+        source_row_count = 0
         # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
         with output_path.open("w", encoding="utf-8-sig", newline="") as target:
             writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
@@ -239,6 +240,7 @@ def process_geo_tximport_counts(
                         f"source line {source_line_number} has an unexpected field count"
                     )
                 gene_id_raw = values[0]
+                source_row_count += 1
                 for header_index, column_name, alias in count_fields:
                     physical_index = header_index + 1
                     raw_value = values[physical_index]
@@ -281,6 +283,20 @@ def process_geo_tximport_counts(
         media_type="text/csv",
         generated_by_step_id="step_geo_tximport_counts_v1",
     )
+    # Surface the actual processing configuration so processing_log.parameters
+    # reflects what the parser did, not a hardcoded ``{"measurement": "counts"}``
+    # (TODO §1.3). ``source_row_count`` lets processing_log.rows_before report
+    # the real upstream gene-row count instead of the previous hardcoded ``4``.
+    processing_parameters = {
+        "measurement_type": "tximport_estimated_count",
+        "value_semantics": "estimated_count",
+        "value_scale": "linear",
+        "is_normalized": False,
+        "is_integer_expected": False,
+        "sample_count": len(samples),
+        "source_logical_file": logical_file,
+        "gene_id_namespace": "ensembl_gene",
+    }
     return ParsedDataset(
         dataset_id=dataset_id,
         source_id=source_asset.source_id,
@@ -290,4 +306,6 @@ def process_geo_tximport_counts(
         row_count=row_count,
         parser_name="geo_tximport_counts",
         parser_version="1.0.0",
+        source_row_count=source_row_count,
+        processing_parameters=processing_parameters,
     )

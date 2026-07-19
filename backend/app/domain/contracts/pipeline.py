@@ -59,6 +59,14 @@ class ParsedDataset(ContractModel):
     row_count: int = Field(ge=0)
     parser_name: str = Field(min_length=1)
     parser_version: str = Field(min_length=1)
+    # Number of data rows in the source file before parsing (excluding header).
+    # Populated by parsers so processing_log.rows_before can reflect the real
+    # upstream row count instead of a hardcoded value (TODO §1.3).
+    source_row_count: int = Field(ge=0, default=0)
+    # Parser-specific parameters surfaced to processing_log.parameters so
+    # judges can audit the actual processing configuration (measurement type,
+    # value semantics, normalization flags, etc.) — TODO §1.3.
+    processing_parameters: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_file_asset(self) -> ParsedDataset:

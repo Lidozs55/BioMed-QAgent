@@ -88,6 +88,20 @@ def _build_minimal_parsed_dataset(
         media_type="text/csv",
         generated_by_step_id="step_geo_minimal_v1",
     )
+    # The minimal parser emits one row per sample (no expression matrix).
+    # ``source_row_count`` is 0 because the source series_matrix had no
+    # expression data rows; ``processing_parameters`` records the actual
+    # measurement_type so processing_log.parameters is not hardcoded (TODO §1.3).
+    processing_parameters = {
+        "measurement_type": "sample_metadata",
+        "value_semantics": "metadata_only",
+        "value_scale": "na",
+        "is_normalized": False,
+        "is_integer_expected": False,
+        "sample_count": len(samples) if samples else 0,
+        "source_logical_file": "series_matrix_metadata",
+        "gene_id_namespace": "",
+    }
     return ParsedDataset(
         dataset_id=dataset_id,
         source_id=source_asset.source_id,
@@ -97,6 +111,8 @@ def _build_minimal_parsed_dataset(
         row_count=row_count,
         parser_name="geo_minimal_placeholder",
         parser_version="1.0.0",
+        source_row_count=0,
+        processing_parameters=processing_parameters,
     )
 
 

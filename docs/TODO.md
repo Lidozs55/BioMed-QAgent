@@ -84,25 +84,48 @@
 
 ### 1.3 修复 source_relations / processing_log 硬编码
 
-- [ ] **P0** 让 `relation_id` 从 discovery 阶段动态派生
+- [x] **P0** 让 `relation_id` 从 discovery 阶段动态派生
 
-      （当前硬编码 `"rel_pmid34180400_gse178352"`，`artifact_build.py`）
+      （`artifact_build.py:_build_source_relations`，2026-07-19）
+      —— 改为 `f"rel_pmid{literature.pmid}_{geo.accession.lower()}"`，
+      从 discovery 实际产出派生而非硬编码 `"rel_pmid34180400_gse178352"`。
+      —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_source_relations_relation_id_derived_from_pmid_and_gse`
 
-- [ ] **P0** 让 `source_relations.csv` 包含多条关系
+- [x] **P0** 让 `source_relations.csv` 包含多条关系
 
-      （当前仅单条硬编码关系，无法体现多源数据整合）
+      （`artifact_build.py:_build_source_relations`，2026-07-19）
+      —— 新增 `_build_source_relations()` 函数：主关系（PubMed→GEO,
+      `article_describes_dataset`）+ `geo.pubmed_ids` 中其他 PMID 各生成
+      一条 `geo_references_pubmed` 关系（`to_source_id="ext:pubmed:<pmid>"`）。
+      —— 配套 TDD：`test_source_relations_supports_multiple_pubmed_ids`
+      + `test_source_relations_returns_empty_when_sources_missing`
 
-- [ ] **P0** 让 `processing_log.rows_before` 从真实解析结果统计
+- [x] **P0** 让 `processing_log.rows_before` 从真实解析结果统计
 
-      （当前硬编码 `4`）
+      （`artifact_build.py` + `processing/geo_tximport.py` + `domain/contracts/pipeline.py`，2026-07-19）
+      —— 在 `ParsedDataset` 新增 `source_row_count: int` 字段，
+      `process_geo_tximport_counts` 在解析时统计源文件 gene-row 数并填充。
+      `artifact_build.py` 读取 `parsed_dataset.source_row_count` 写入
+      `processing_log.rows_before`，替代硬编码 `4`。
+      —— 配套 TDD：`test_processing_log_rows_before_reflects_real_source_row_count`
+      + `test_parsed_dataset_carries_source_row_count_and_parameters`
 
-- [ ] **P0** 修复 `processing_log` 的 `output_refs` 与 `input_refs` 相同错误
+- [x] **P0** 修复 `processing_log` 的 `output_refs` 与 `input_refs` 相同错误
 
-      （`artifact_build.py:238-239`）—— output_refs 应指向产出 artifact，input_refs 指向源数据
+      （`artifact_build.py`，2026-07-19）—— `input_refs` 指向
+      `source_asset.asset_id`（源数据），`output_refs` 指向
+      `parsed_dataset.file_asset.asset_id`（产出 artifact）。
+      —— 配套 TDD：`test_processing_log_output_refs_differs_from_input_refs`
 
-- [ ] **P0** 修复 `processing_log.parameters` 硬编码 `{"measurement": "counts"}`
+- [x] **P0** 修复 `processing_log.parameters` 硬编码 `{"measurement": "counts"}`
 
-      （`artifact_build.py:243`）—— 应从解析结果动态填充
+      （`artifact_build.py` + `processing/geo_tximport.py` + `domain/contracts/pipeline.py`，2026-07-19）
+      —— 在 `ParsedDataset` 新增 `processing_parameters: dict[str, JsonValue]`
+      字段，parser 填充 `measurement_type` / `value_semantics` / `value_scale`
+      / `is_normalized` / `sample_count` / `source_logical_file` /
+      `gene_id_namespace`。`artifact_build.py` 直接序列化该字段写入
+      `processing_log.parameters`。
+      —— 配套 TDD：`test_processing_log_parameters_reflects_real_processing_config`
 
 ### 1.4 解除数据库选择硬编码
 

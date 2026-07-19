@@ -1,4 +1,4 @@
-"""Per-artifact metadata correctness tests for TODO §1.7 + §1.2.
+"""Per-artifact metadata correctness tests for TODO §1.7 + §1.2 + §1.3.
 
 Locks in the post-fix invariants for the artifact package:
 
@@ -12,10 +12,16 @@ Locks in the post-fix invariants for the artifact package:
   units, and example values — not placeholders like ``field.replace("_", " ")``.
 * ``_write_csv`` rejects rows with fields not in the column list instead of
   silently dropping them (``extrasaction="ignore"`` is forbidden).
+* ``source_relations.csv`` carries a dynamic ``relation_id`` derived from the
+  actual PMID/GSE pairing and supports multiple relations when the GEO series
+  references multiple PMIDs (TODO §1.3).
+* ``processing_log.csv`` records the real ``rows_before``/``output_refs``/
+  ``parameters`` from the parsed dataset instead of hardcoded values
+  (TODO §1.3).
 
 These tests complement ``test_pinned_pipeline.py`` (which only asserts the
 happy-path artifact set) by pinning the metadata correctness invariants
-identified in the second-round review (TODO §1.7 + §1.2).
+identified in the second-round review (TODO §1.7 + §1.2 + §1.3).
 """
 from __future__ import annotations
 
@@ -23,12 +29,27 @@ import asyncio
 import contextlib
 import csv
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from app.config import settings
+from app.domain.contracts import (
+    Database,
+    FileAsset,
+    GeoSeriesRecord,
+    LiteratureRecord,
+    ParsedDataset,
+    SourceRecord,
+    asset_id_from_sha256,
+)
 from app.pipeline.runner import PipelineRunner
-from app.pipeline.stages.artifact_build import _write_csv as _write_csv_artifact
+from app.pipeline.stages.artifact_build import (
+    _build_source_relations as _build_source_relations_artifact,
+)
+from app.pipeline.stages.artifact_build import (
+    _write_csv as _write_csv_artifact,
+)
 from app.pipeline.stages.validation import _write_csv as _write_csv_validation
 
 FIXTURE_DIR = (
@@ -244,3 +265,339 @@ def test_write_csv_rejects_extra_fields(tmp_path: Path) -> None:
         _write_csv_artifact(path, columns, rows)
     with pytest.raises(ValueError, match="typo_field|extra"):
         _write_csv_validation(path, columns, rows)
+
+
+# ---------------------------------------------------------------------------
+# §1.3 source_relations dynamic relation_id + multi-relation support
+# ---------------------------------------------------------------------------
+
+
+def test_source_relations_relation_id_derived_from_pmid_and_gse(
+    tmp_path: Path,
+) -> None:
+    """``source_relations.csv`` ``relation_id`` must be derived from actual
+    PMID/GSE pairing, not hardcoded (TODO §1.3).
+
+    Before §1.3, ``relation_id`` was always ``"rel_pmid34180400_gse178352"``
+    regardless of which PMID/GSE the pipeline actually processed. After §1.3,
+    the ID is derived from ``literature.pmid`` and ``geo.accession`` so a
+    different pairing produces a different ID.
+    """
+    artifacts = _run_pinned_pipeline(tmp_path)
+    relation_rows = _read_csv_sig(artifacts / "source_relations.csv")
+    assert len(relation_rows) >= 1, "source_relations.csv must have ≥1 row"
+
+    literature = _read_csv_sig(artifacts / "literature.csv")
+    catalog = _read_csv_sig(artifacts / "dataset_catalog.csv")
+    pmid = literature[0]["pmid"]
+    accession = catalog[0]["accession"]
+    expected_relation_id = f"rel_pmid{pmid}_{accession.lower()}"
+
+    primary = relation_rows[0]
+    assert primary["relation_id"] == expected_relation_id, (
+        f"relation_id must be derived from PMID/GSE; "
+        f"expected {expected_relation_id!r}, got {primary['relation_id']!r}"
+    )
+    assert primary["evidence_value"] == pmid, (
+        f"evidence_value must be the actual PMID ({pmid!r}); "
+        f"got {primary['evidence_value']!r}"
+    )
+
+
+def test_source_relations_supports_multiple_pubmed_ids() -> None:
+    """``_build_source_relations`` must emit one row per referenced PMID.
+
+    When ``geo.pubmed_ids`` carries additional PMIDs beyond the primary
+    ``literature.pmid``, each extra PMID yields a ``geo_references_pubmed``
+    row whose ``to_source_id`` is ``ext:pubmed:<pmid>`` so the citation
+    graph is preserved without polluting ``source_list.csv`` with sources
+    the pipeline never acquired (TODO §1.3).
+    """
+    pubmed_source_id = "src_pubmed_34180400"
+    geo_source_id = "src_geo_gse178352"
+    geo_url = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352"
+    sources = [
+        SourceRecord(
+            source_id=pubmed_source_id,
+            database=Database.PUBMED,
+            accession="34180400",
+            url="https://pubmed.ncbi.nlm.nih.gov/34180400/",
+            title="Primary article",
+            retrieved_at=datetime.now(UTC),
+        ),
+        SourceRecord(
+            source_id=geo_source_id,
+            database=Database.GEO,
+            accession="GSE178352",
+            url=geo_url,
+            title="GSE178352 series",
+            retrieved_at=datetime.now(UTC),
+        ),
+    ]
+    literature = LiteratureRecord(
+        pmid="34180400",
+        pmcid=None,
+        doi=None,
+        title="Primary article",
+        authors=[],
+        journal="",
+        published_at=None,
+        abstract="",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/34180400/",
+    )
+    geo = GeoSeriesRecord(
+        uid="200178352",
+        accession="GSE178352",
+        title="GSE178352 series",
+        summary="",
+        organism="Homo sapiens",
+        experiment_type="Expression profiling by high throughput sequencing",
+        sample_count=0,
+        samples=[],
+        platform_ids=["GPL24676"],
+        pubmed_ids=["34180400", "12345678", "87654321"],
+        bioproject=None,
+        ftp_root="",
+    )
+
+    relations = _build_source_relations_artifact(
+        sources=sources,
+        literature=literature,
+        geo=geo,
+        geo_url=geo_url,
+    )
+
+    # Primary relation + 2 extra PMIDs = 3 rows total.
+    assert len(relations) == 3, (
+        f"expected 3 relations (1 primary + 2 extra PMIDs); got {len(relations)}"
+    )
+
+    # Primary relation: PubMed → GEO with article_describes_dataset.
+    primary = relations[0]
+    assert primary["relation_id"] == "rel_pmid34180400_gse178352"
+    assert primary["from_source_id"] == pubmed_source_id
+    assert primary["to_source_id"] == geo_source_id
+    assert primary["relation_type"] == "article_describes_dataset"
+    assert primary["evidence_value"] == "34180400"
+
+    # Extra PMIDs: GEO → ext:pubmed:<pmid> with geo_references_pubmed.
+    extras = relations[1:]
+    assert {row["to_source_id"] for row in extras} == {
+        "ext:pubmed:12345678",
+        "ext:pubmed:87654321",
+    }
+    for row in extras:
+        assert row["from_source_id"] == geo_source_id
+        assert row["relation_type"] == "geo_references_pubmed"
+        assert row["evidence_type"] == "geo_pubmed_id"
+
+
+def test_source_relations_returns_empty_when_sources_missing() -> None:
+    """``_build_source_relations`` must return [] when no PubMed or GEO source."""
+    geo_url = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352"
+    literature = LiteratureRecord(
+        pmid="34180400",
+        pmcid=None,
+        doi=None,
+        title="Primary article",
+        authors=[],
+        journal="",
+        published_at=None,
+        abstract="",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/34180400/",
+    )
+    geo = GeoSeriesRecord(
+        uid="200178352",
+        accession="GSE178352",
+        title="",
+        summary="",
+        organism="",
+        experiment_type="",
+        sample_count=0,
+        samples=[],
+        pubmed_ids=["34180400"],
+    )
+    # Only PubMed source — no GEO source.
+    sources = [
+        SourceRecord(
+            source_id="src_pubmed_34180400",
+            database=Database.PUBMED,
+            accession="34180400",
+            url="https://pubmed.ncbi.nlm.nih.gov/34180400/",
+            title="Primary article",
+            retrieved_at=datetime.now(UTC),
+        ),
+    ]
+    relations = _build_source_relations_artifact(
+        sources=sources,
+        literature=literature,
+        geo=geo,
+        geo_url=geo_url,
+    )
+    assert relations == [], (
+        "expected no relations when GEO source is missing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# §1.3 processing_log rows_before / output_refs / parameters
+# ---------------------------------------------------------------------------
+
+
+def test_processing_log_rows_before_reflects_real_source_row_count(
+    tmp_path: Path,
+) -> None:
+    """``processing_log.csv`` ``rows_before`` must reflect the real source
+    file's data-row count, not a hardcoded ``4`` (TODO §1.3).
+
+    The GSE178352 fixture ships a 4-gene × 12-sample matrix, so
+    ``rows_before == 4`` and ``rows_after == 48``. The relationship
+    ``rows_after == rows_before * sample_count`` must hold for any
+    tximport matrix.
+    """
+    artifacts = _run_pinned_pipeline(tmp_path)
+    proc_rows = _read_csv_sig(artifacts / "processing_log.csv")
+    assert len(proc_rows) == 1
+    proc = proc_rows[0]
+
+    rows_before = int(proc["rows_before"])
+    rows_after = int(proc["rows_after"])
+    sample_rows = _read_csv_sig(artifacts / "sample_metadata.csv")
+    sample_count = len(sample_rows)
+
+    # rows_before must be the source file's gene-row count, NOT a hardcoded 4
+    # that happens to match the fixture. The tximport invariant is:
+    # rows_after = rows_before * sample_count.
+    assert rows_before > 0, "rows_before must be > 0 for a real expression matrix"
+    assert rows_after == rows_before * sample_count, (
+        f"tximport invariant violated: rows_after ({rows_after}) must equal "
+        f"rows_before ({rows_before}) * sample_count ({sample_count})"
+    )
+
+
+def test_processing_log_output_refs_differs_from_input_refs(
+    tmp_path: Path,
+) -> None:
+    """``processing_log.csv`` ``output_refs`` must point at the parsed
+    artifact, not the source asset (TODO §1.3).
+
+    Before §1.3, both ``input_refs`` and ``output_refs`` were
+    ``[source_asset.asset_id]``, falsely implying the parser produced no
+    new artifact. After §1.3, ``input_refs`` points at the source asset
+    and ``output_refs`` points at the parsed dataset's ``file_asset``.
+    """
+    artifacts = _run_pinned_pipeline(tmp_path)
+    proc_rows = _read_csv_sig(artifacts / "processing_log.csv")
+    assert len(proc_rows) == 1
+    proc = proc_rows[0]
+
+    input_refs = json.loads(proc["input_refs"])
+    output_refs = json.loads(proc["output_refs"])
+
+    assert len(input_refs) == 1 and len(output_refs) == 1, (
+        "input_refs/output_refs must each carry exactly one asset id"
+    )
+    assert input_refs != output_refs, (
+        "output_refs must differ from input_refs — the parser must produce "
+        "a new artifact; before §1.3 both were [source_asset.asset_id]"
+    )
+
+    # input_refs must equal the source asset's asset_id (the raw download).
+    asset_rows = _read_csv_sig(artifacts / "source_assets.csv")
+    source_asset_ids = {row["asset_id"] for row in asset_rows}
+    assert input_refs[0] in source_asset_ids, (
+        f"input_refs ({input_refs[0]!r}) must reference a source_assets.csv row"
+    )
+
+    # output_refs must NOT be in source_assets.csv — it's the parsed
+    # dataset's file_asset, which is copied into main_data.csv at the
+    # staging step but never registered as a SourceAsset.
+    assert output_refs[0] not in source_asset_ids, (
+        "output_refs must NOT be a source asset id — it must be the parsed "
+        "dataset's file_asset id"
+    )
+
+
+def test_processing_log_parameters_reflects_real_processing_config(
+    tmp_path: Path,
+) -> None:
+    """``processing_log.csv`` ``parameters`` must carry the real parser
+    configuration, not a hardcoded ``{"measurement": "counts"}`` (TODO §1.3).
+
+    After §1.3, the parser surfaces ``measurement_type`` / ``value_semantics``
+    / ``sample_count`` / ``source_logical_file`` / ``gene_id_namespace`` so
+    judges can audit the actual processing configuration.
+    """
+    artifacts = _run_pinned_pipeline(tmp_path)
+    proc_rows = _read_csv_sig(artifacts / "processing_log.csv")
+    assert len(proc_rows) == 1
+    proc = proc_rows[0]
+
+    parameters = json.loads(proc["parameters"])
+
+    # The hardcoded placeholder must be gone.
+    assert parameters != {"measurement": "counts"}, (
+        "parameters must not be the hardcoded {'measurement': 'counts'} placeholder"
+    )
+
+    # Real semantic fields must be present.
+    required_keys = {
+        "measurement_type",
+        "value_semantics",
+        "value_scale",
+        "is_normalized",
+        "sample_count",
+        "source_logical_file",
+        "gene_id_namespace",
+    }
+    missing = required_keys - set(parameters)
+    assert not missing, f"parameters missing required keys: {missing}"
+
+    assert parameters["measurement_type"] == "tximport_estimated_count"
+    assert parameters["value_semantics"] == "estimated_count"
+    assert parameters["value_scale"] == "linear"
+    assert parameters["is_normalized"] is False
+    assert parameters["sample_count"] == 12
+    assert parameters["source_logical_file"] == "GSE178352_tximportCounts.txt"
+    assert parameters["gene_id_namespace"] == "ensembl_gene"
+
+
+def test_parsed_dataset_carries_source_row_count_and_parameters(
+    tmp_path: Path,
+) -> None:
+    """``ParsedDataset`` must carry ``source_row_count`` and
+    ``processing_parameters`` populated by the parser (TODO §1.3).
+
+    Verifies the contract-level extension independently of the E2E pipeline
+    so a regression in either field surfaces as a focused unit-test failure
+    rather than a downstream processing_log mismatch.
+    """
+    sha256 = "a" * 64
+    parsed = ParsedDataset(
+        dataset_id="ds_gse_test",
+        source_id="src_geo_gse_test",
+        source_asset_id="asset_source_test",
+        file_asset=FileAsset(
+            asset_id=asset_id_from_sha256(sha256),
+            kind="parsed",
+            relative_path="parsed/ds_gse_test_tximport_long.csv",
+            sha256=sha256,
+            size_bytes=1024,
+            media_type="text/csv",
+            generated_by_step_id="step_test",
+        ),
+        columns=["record_id", "expression_value"],
+        row_count=48,
+        parser_name="geo_tximport_counts",
+        parser_version="1.0.0",
+        source_row_count=4,
+        processing_parameters={
+            "measurement_type": "tximport_estimated_count",
+            "sample_count": 12,
+        },
+    )
+    assert parsed.source_row_count == 4
+    assert parsed.processing_parameters["measurement_type"] == (
+        "tximport_estimated_count"
+    )
+    assert parsed.processing_parameters["sample_count"] == 12

@@ -11,6 +11,7 @@ from pathlib import Path
 from app.domain.contracts import (
     DownloadAttempt,
     LiteratureRecord,
+    ParsedDataset,
     SourceAsset,
     SourceRecord,
     TaskSpecification,
@@ -220,6 +221,81 @@ def _build_cell_line_warnings(
     return warnings
 
 
+def _build_source_relations(
+    sources: list[SourceRecord],
+    literature: LiteratureRecord,
+    geo: GeoSeriesRecord,
+    geo_url: str,
+) -> list[dict[str, object]]:
+    """Build source_relations.csv rows derived from discovery outputs (TODO §1.3).
+
+    Replaces the single hardcoded ``rel_pmid34180400_gse178352`` row with a
+    dynamic derivation that:
+
+    * Generates ``relation_id`` from the actual PubMed PMID and GEO
+      accession (e.g. ``rel_pmid34180400_gse178352``), so a different
+      PMID/GSE pairing produces a different ID.
+    * Emits one row per PubMed→GEO relation discovered. When ``geo.pubmed_ids``
+      carries additional PMIDs beyond the primary ``literature.pmid``, each
+      extra PMID yields a ``geo_references_pubmed`` row whose
+      ``from_source_id`` is the GEO source and ``to_source_id`` is a stable
+      external identifier (``ext:pubmed:<pmid>``). This lets judges see the
+      full citation graph without inflating ``source_list.csv`` with sources
+      the pipeline never acquired.
+
+    The primary relation (literature.pmid ↔ geo.accession) is always emitted
+    first with ``relation_type="article_describes_dataset"`` and
+    ``evidence_type="geo_pubmed_id"`` so existing validation gates keep
+    passing.
+    """
+    pubmed_source_id = next(
+        (s.source_id for s in sources if s.database.value == "pubmed"), None
+    )
+    geo_source_id = next(
+        (s.source_id for s in sources if s.database.value == "geo"), None
+    )
+    if not pubmed_source_id or not geo_source_id:
+        return []
+
+    primary_pmid = literature.pmid
+    primary_relation_id = (
+        f"rel_pmid{primary_pmid}_{geo.accession.lower()}"
+    )
+    relations: list[dict[str, object]] = [
+        {
+            "relation_id": primary_relation_id,
+            "from_source_id": pubmed_source_id,
+            "to_source_id": geo_source_id,
+            "relation_type": "article_describes_dataset",
+            "evidence_type": "geo_pubmed_id",
+            "evidence_value": primary_pmid,
+            "evidence_url": geo_url,
+        }
+    ]
+
+    # Surface additional PMIDs referenced by the GEO series but not acquired
+    # as a SourceRecord. These are external citations — they don't have a
+    # local ``source_id`` so we use a stable ``ext:pubmed:<pmid>`` identifier
+    # to keep the citation graph visible without polluting source_list.csv.
+    seen = {primary_pmid}
+    for pmid in geo.pubmed_ids:
+        if pmid in seen:
+            continue
+        seen.add(pmid)
+        relations.append(
+            {
+                "relation_id": f"rel_geo_{geo.accession.lower()}_pmid{pmid}",
+                "from_source_id": geo_source_id,
+                "to_source_id": f"ext:pubmed:{pmid}",
+                "relation_type": "geo_references_pubmed",
+                "evidence_type": "geo_pubmed_id",
+                "evidence_value": pmid,
+                "evidence_url": geo_url,
+            }
+        )
+    return relations
+
+
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
     # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
     # Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
@@ -235,8 +311,7 @@ def run_artifact_build(
     sources: list[SourceRecord],
     source_assets: list[SourceAsset],
     download_attempts: list[DownloadAttempt],
-    parsed_dataset_relative_path: str,
-    parsed_row_count: int,
+    parsed_dataset: ParsedDataset,
     samples: list[GeoSampleMetadata],
     literature: LiteratureRecord,
     geo: GeoSeriesRecord,
@@ -254,7 +329,7 @@ def run_artifact_build(
         shutil.rmtree(staging)
         staging.mkdir(parents=True)
 
-    parsed_path = ctx.workdir.root / parsed_dataset_relative_path
+    parsed_path = ctx.workdir.root / parsed_dataset.file_asset.relative_path
     shutil.copy2(parsed_path, staging / "main_data.csv")
 
     pubmed_source_id = next(
@@ -364,17 +439,12 @@ def run_artifact_build(
             record.model_dump(mode="json", exclude={"schema_version"})
             for record in sources
         ],
-        "source_relations.csv": [
-            {
-                "relation_id": "rel_pmid34180400_gse178352",
-                "from_source_id": pubmed_source_id,
-                "to_source_id": geo_source_id,
-                "relation_type": "article_describes_dataset",
-                "evidence_type": "geo_pubmed_id",
-                "evidence_value": "34180400",
-                "evidence_url": geo_url,
-            }
-        ],
+        "source_relations.csv": _build_source_relations(
+            sources=sources,
+            literature=literature,
+            geo=geo,
+            geo_url=geo_url,
+        ),
         "source_assets.csv": [
             {
                 "asset_id": source_asset.asset_id,
@@ -403,16 +473,33 @@ def run_artifact_build(
         ],
         "processing_log.csv": [
             {
-                "step_id": "step_geo_tximport_counts_v1",
+                "step_id": parsed_dataset.file_asset.generated_by_step_id,
                 "stage_attempt_id": stage_attempt_id,
                 "stage": "processing",
-                "operation": "parse_tximport_counts",
+                "operation": parsed_dataset.parser_name,
+                # input_refs points at the source asset (the raw file the
+                # parser read from); output_refs points at the parsed
+                # dataset's file_asset (the long-form CSV the parser wrote).
+                # Previously both referenced source_asset.asset_id, which
+                # made the processing_log falsely claim the parser produced
+                # no new artifact (TODO §1.3).
                 "input_refs": json.dumps([source_asset.asset_id]),
-                "output_refs": json.dumps([source_asset.asset_id]),
-                "tool_version": "1.0.0",
-                "rows_before": 4,
-                "rows_after": parsed_row_count,
-                "parameters": json.dumps({"measurement": "counts"}, sort_keys=True),
+                "output_refs": json.dumps([parsed_dataset.file_asset.asset_id]),
+                "tool_version": parsed_dataset.parser_version,
+                # rows_before is the upstream source file's data-row count
+                # (e.g. gene-row count in a tximport matrix); rows_after is
+                # the long-form parsed row count (gene × sample). The
+                # previous hardcoded ``4`` was a placeholder that didn't
+                # reflect reality (TODO §1.3).
+                "rows_before": parsed_dataset.source_row_count,
+                "rows_after": parsed_dataset.row_count,
+                # parameters comes from the parser itself so judges audit
+                # the actual measurement_type / value_semantics / sample_count
+                # instead of a hardcoded ``{"measurement": "counts"}``
+                # (TODO §1.3).
+                "parameters": json.dumps(
+                    parsed_dataset.processing_parameters, sort_keys=True
+                ),
                 "status": "succeeded",
                 "started_at": ctx.started_at.isoformat(),
                 "finished_at": datetime.now(UTC).isoformat(),
