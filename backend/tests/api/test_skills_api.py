@@ -61,7 +61,7 @@ def _zip() -> bytes:
 async def test_skills_crud_versions_and_database_projection(tmp_path: Path) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         created = await client.put("/api/v1/skills/demo_db/manifest", json=_manifest())
         listed = await client.get("/api/v1/skills")
@@ -97,7 +97,7 @@ async def test_validate_and_upload_python_package_warn_about_local_code(
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     package = _zip()
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         validated = await client.post(
             "/api/v1/skills/validate",
@@ -118,7 +118,7 @@ async def test_validate_and_upload_python_package_warn_about_local_code(
 async def test_declarative_database_convenience_crud(tmp_path: Path) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         created = await client.post("/api/v1/databases", json=_manifest())
         updated = await client.put(
@@ -145,7 +145,7 @@ async def test_database_detail_round_trips_declarative_operation(tmp_path: Path)
     )
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         await client.post("/api/v1/databases", json=manifest)
         detail = await client.get("/api/v1/skills/demo_db")
@@ -187,7 +187,7 @@ async def test_database_patch_preserves_secrets_and_unedited_operations(
     ]
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         await client.post("/api/v1/databases", json=manifest)
         detail_before = await client.get("/api/v1/skills/demo_db")
@@ -237,7 +237,7 @@ async def test_skill_list_includes_unavailable_persistent_package(tmp_path: Path
     configured = Settings(output_dir=str(tmp_path / "output"))
     first = create_app(configured)
     async with first.router.lifespan_context(first), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=first), base_url="http://test"
+        transport=httpx.ASGITransport(app=first), base_url="http://localhost"
     ) as client:
         await client.post("/api/v1/databases", json=_manifest())
 
@@ -248,7 +248,7 @@ async def test_skill_list_includes_unavailable_persistent_package(tmp_path: Path
 
     second = create_app(configured)
     async with second.router.lifespan_context(second), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=second), base_url="http://test"
+        transport=httpx.ASGITransport(app=second), base_url="http://localhost"
     ) as client:
         listed = await client.get("/api/v1/skills")
         detail = await client.get("/api/v1/skills/demo_db")
@@ -266,7 +266,7 @@ async def test_multipart_upload_is_rejected_at_compressed_byte_limit(
     monkeypatch.setattr("app.api.skills.MAX_SKILL_UPLOAD_BYTES", 8)
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         response = await client.post(
             "/api/v1/skills/validate",
