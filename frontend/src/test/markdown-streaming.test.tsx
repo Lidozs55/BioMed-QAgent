@@ -50,6 +50,26 @@ function seedStreamingTask(): void {
   ]);
 }
 
+function applyDurableDelta(delta: string, sequence = 1): void {
+  useAgentStore.getState().applyEvent({
+    schema_version: "2.0",
+    event_id: `event_durable_${sequence}`,
+    type: "assistant_delta",
+    task_id: "task_stream",
+    run_id: "run_stream",
+    stage_attempt_id: null,
+    sequence,
+    timestamp: TIMESTAMP,
+    payload: {
+      type: "assistant_delta",
+      delta,
+      stream_id: "assistant:run_stream",
+      from_chunk_index: 0,
+      through_chunk_index: 0,
+    },
+  });
+}
+
 function applyBoundary(payload: EventPayload): void {
   useAgentStore.getState().applyEvent({
     schema_version: "2.0",
@@ -58,7 +78,7 @@ function applyBoundary(payload: EventPayload): void {
     task_id: "task_stream",
     run_id: "run_stream",
     stage_attempt_id: null,
-    sequence: 1,
+    sequence: 2,
     timestamp: TIMESTAMP,
     payload,
   });
@@ -101,23 +121,25 @@ describe("streaming Markdown cursor", () => {
 
   it("passes active state only to the matching assistant run", () => {
     seedStreamingTask();
+    applyDurableDelta("实时文本");
     useAgentStore.setState((state) => ({
       tasksById: {
         ...state.tasksById,
         task_stream: {
           ...state.tasksById.task_stream,
-          messages: [
+          items: [
+            ...state.tasksById.task_stream.items,
             {
-              messageId: "historical",
-              taskId: "task_stream",
+              kind: "assistant_segment",
+              itemId: "msg:historical",
               runId: "run_old",
-              ordinal: 1,
-              role: "assistant",
-              content: "历史文本",
+              sequence: 1,
               createdAt: TIMESTAMP,
-              sequence: null,
+              streamId: "hydrate:historical",
+              content: "历史文本",
+              isStreaming: false,
+              finishReason: null,
             },
-            ...state.tasksById.task_stream.messages,
           ],
         },
       },
@@ -148,6 +170,7 @@ describe("streaming Markdown cursor", () => {
     { type: "run_interrupted", reason: "restart" },
   ])("hides the cursor after $type", (payload) => {
     seedStreamingTask();
+    applyDurableDelta("实时文本");
     applyBoundary(payload);
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
@@ -172,6 +195,7 @@ describe("streaming Markdown cursor", () => {
         },
       ]);
     });
+    applyDurableDelta("实时文本");
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 

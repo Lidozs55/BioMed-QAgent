@@ -288,7 +288,12 @@ export type EventPayload =
   | { type: "run_interrupted"; reason: string }
   | AssistantDeltaPayload
   | AssistantReasoningDeltaPayload
-  | { type: "tool_started"; tool_call_id: string; tool_name: string }
+  | {
+      type: "tool_started";
+      tool_call_id: string;
+      tool_name: string;
+      arguments?: Record<string, JsonValue> | null;
+    }
   | {
       type: "conversation_compacted";
       covered_through_run_id: string;

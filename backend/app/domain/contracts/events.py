@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from app.domain.contracts.base import ContractModel
 from app.domain.contracts.enums import AttemptStatus, StageName
@@ -300,6 +300,7 @@ class ToolStartedPayload(ContractModel):
     type: Literal[RuntimeEventType.TOOL_STARTED] = RuntimeEventType.TOOL_STARTED
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
+    arguments: dict[str, JsonValue] | None = Field(default=None)
 
 
 class ConversationCompactedPayload(ContractModel):

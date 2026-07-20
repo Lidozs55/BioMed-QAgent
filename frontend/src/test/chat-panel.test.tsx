@@ -563,18 +563,24 @@ describe("ChatPanel", () => {
     const content = "Summary line\n\n- first item\n  indented detail";
     useAgentStore.setState((state) => {
       const task = state.tasksById.task_terminal;
+      const userItem = task.items.find((item) => item.kind === "user_message");
+      const assistantItem = {
+        kind: "assistant_segment",
+        itemId: "msg:assistant_ghost",
+        runId: "run_task_terminal",
+        sequence: 2,
+        createdAt: CREATED_AT,
+        streamId: "hydrate:assistant_ghost",
+        content,
+        isStreaming: false,
+        finishReason: null,
+      } as const;
       return {
         tasksById: {
           ...state.tasksById,
           task_terminal: {
             ...task,
-            messages: [
-              {
-                ...task.messages[0],
-                role: "assistant",
-                content,
-              },
-            ],
+            items: userItem === undefined ? [assistantItem] : [userItem, assistantItem],
           },
         },
       };
@@ -583,15 +589,13 @@ describe("ChatPanel", () => {
       <ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />,
     );
 
-    const assistant = container.querySelector<HTMLElement>('[data-message-role="assistant"]');
-    expect(assistant).not.toBeNull();
-    expect(assistant?.querySelector("svg")).not.toBeInTheDocument();
-    expect(assistant?.textContent).toContain("Summary line");
-    expect(assistant?.querySelector("ul")).toBeInTheDocument();
-    expect(assistant?.querySelector('[data-slot="bubble"]')).toHaveAttribute(
-      "data-variant",
-      "ghost",
+    const assistantBubble = container.querySelector<HTMLElement>(
+      '[data-slot="bubble"][data-variant="ghost"]',
     );
+    expect(assistantBubble).not.toBeNull();
+    expect(assistantBubble?.querySelector("svg")).not.toBeInTheDocument();
+    expect(assistantBubble?.textContent).toContain("Summary line");
+    expect(assistantBubble?.querySelector("ul")).toBeInTheDocument();
   });
 
   it("does not render a separate results tab", () => {

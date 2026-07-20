@@ -224,23 +224,14 @@ export function addAcceptedTask(
     updated_at: timestamp,
     latest_sequence: 0,
   };
-  const projection = {
+  const projection: TaskProjection = {
+    ...createTaskProjection(summary),
     summary,
     runsById: {
       [accepted.runId]: acceptedRun,
     },
     runOrder: [accepted.runId],
     messages: [acceptedMessage],
-    olderMessagesCursor: null,
-    activitiesById: {},
-    activityOrder: [],
-    artifactsById: {},
-    artifactOrder: [],
-    artifactEventSequences: {},
-    artifactManifestSequence: null,
-    stages: {},
-    assistantStreamsByRunId: {},
-    pendingUserInput: null,
     lastSequence: 0,
     hydration: "accepted" as const,
   };

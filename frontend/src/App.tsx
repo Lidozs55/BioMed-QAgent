@@ -9,7 +9,6 @@ import {
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ToolTrace } from "@/components/ToolTrace";
 import {
   SidebarInset,
   SidebarProvider,
@@ -97,7 +96,6 @@ export default function App() {
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed QAgent</h1>
           <div className="flex shrink-0 items-center gap-2">
             <ArtifactPanelToggle />
-            <ToolTrace />
             <ThemeToggle />
           </div>
         </header>
