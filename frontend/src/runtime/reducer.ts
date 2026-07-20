@@ -496,10 +496,9 @@ function upsertItem(
 ): TaskProjection {
   const existingIdx = task.items.findIndex((i) => i.itemId === item.itemId);
   let items: ConversationItem[];
-  let createdAt = item.createdAt;
   if (existingIdx >= 0) {
     const existing = task.items[existingIdx];
-    createdAt = existing.createdAt;
+    const createdAt = existing.createdAt;
     items = [...task.items];
     items[existingIdx] = { ...existing, ...item, createdAt } as ConversationItem;
   } else {
@@ -1661,9 +1660,9 @@ export function reduceRuntimeEvent(
       break;
     }
     case "stage_progress": {
-      // Agent 模式�?Skills 发射 progress（无 stage_attempt_id），
-      // Pipeline 模式�?stages 发射 progress（有 stage_attempt_id）�?
-      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论�?等中间数字�?
+      // Agent 模式�?Skills 发射 progress（无 stage_attempt_id），
+      // Pipeline 模式�?stages 发射 progress（有 stage_attempt_id）�?
+      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论�?等中间数字�?
       // See docs/REVIEW_2026-07-18.md §4.
       const existing = task.stages[payload.stage];
       const stageAttemptId =
@@ -1682,8 +1681,8 @@ export function reduceRuntimeEvent(
         detail: payload.detail as Record<string, unknown>,
         updatedAt: envelope.timestamp,
       };
-      // `existing ?? {...}` 的右分支�?existing �?TS 收窄�?never,
-      // 导致 existing?.attempt 等访问报 TS2339。改为显�?if/else�?
+      // `existing ?? {...}` 的右分支�?existing �?TS 收窄�?never,
+      // 导致 existing?.attempt 等访问报 TS2339。改为显�?if/else�?
       const stage: StageProjection = existing !== undefined
         ? existing
         : {

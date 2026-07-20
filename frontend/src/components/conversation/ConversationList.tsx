@@ -1,22 +1,27 @@
-import { MessageScrollerContent } from "@/components/ui/message-scroller";
+import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import type { ConversationItem } from "@/runtime/types";
 import { ConversationStep } from "./ConversationStep";
 
 interface ConversationListProps {
-  items: ConversationItem[];
+  items: readonly ConversationItem[];
   activeRunId: string | null;
 }
 
 export function ConversationList({ items, activeRunId }: ConversationListProps) {
   return (
-    <MessageScrollerContent>
+    <>
       {items.map((item) => (
-        <ConversationStep
+        <MessageScrollerItem
           key={item.itemId}
-          item={item}
-          isActive={item.runId === activeRunId}
-        />
+          messageId={item.itemId}
+          scrollAnchor={item.kind === "user_message"}
+        >
+          <ConversationStep
+            item={item}
+            isActive={item.runId === activeRunId}
+          />
+        </MessageScrollerItem>
       ))}
-    </MessageScrollerContent>
+    </>
   );
 }

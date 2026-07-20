@@ -3,12 +3,10 @@ import type {
   ActivityProjection,
   ArtifactProjection,
   ConversationItem,
-  ProjectedMessage,
   RunProjection,
   TaskProjection,
 } from "@/runtime/types";
 
-const EMPTY_MESSAGES: readonly ProjectedMessage[] = [];
 const EMPTY_RUNS: readonly RunProjection[] = [];
 const EMPTY_ACTIVITIES: readonly ActivityProjection[] = [];
 const EMPTY_ARTIFACTS: readonly ArtifactProjection[] = [];
@@ -16,10 +14,6 @@ const EMPTY_ITEMS: readonly ConversationItem[] = [];
 
 export const selectActiveTask = (state: AgentStore): TaskProjection | undefined =>
   state.activeTaskId === null ? undefined : state.tasksById[state.activeTaskId];
-
-export const selectActiveMessages = (
-  state: AgentStore,
-): readonly ProjectedMessage[] => selectActiveTask(state)?.messages ?? EMPTY_MESSAGES;
 
 export const selectActiveRuns = (state: AgentStore): readonly RunProjection[] => {
   const task = selectActiveTask(state);

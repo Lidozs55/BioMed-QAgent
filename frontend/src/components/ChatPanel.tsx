@@ -6,15 +6,12 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentComposer } from "@/components/AgentComposer";
-import { ExecutionSummary } from "@/components/ExecutionSummary";
-import { MarkdownContent } from "@/components/MarkdownContent";
+import { ConversationList } from "@/components/conversation/ConversationList";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
-import { Message, MessageContent } from "@/components/ui/message";
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -30,7 +27,7 @@ import type {
   TaskRunAccepted,
 } from "@/runtime/contracts";
 import {
-  selectActiveMessages,
+  selectActiveItems,
   selectActiveTask,
   selectConnectionIsConnected,
 } from "@/stores/agentSelectors";
@@ -91,7 +88,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
-  const messages = useAgentStore(selectActiveMessages);
+  const items = useAgentStore(selectActiveItems);
   const connected = useAgentStore(selectConnectionIsConnected);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
@@ -140,8 +137,9 @@ export function ChatPanel({
   const activeRunId = activeTask?.summary.active_run_id ?? null;
   const activeRunHasAssistantMessage =
     activeRunId !== null &&
-    messages.some(
-      (message) => message.runId === activeRunId && message.role === "assistant",
+    items.some(
+      (item) =>
+        item.runId === activeRunId && item.kind === "assistant_segment",
     );
   const showActiveRunStatus =
     activeTask?.summary.mode === "agent" &&
@@ -356,7 +354,7 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
-                {messages.length === 0 && (
+                {items.length === 0 && (
                   <MessageScrollerItem messageId="empty">
                     <Marker variant="separator">
                       <MarkerContent>该任务暂时没有消息</MarkerContent>
@@ -364,74 +362,14 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
-                {messages.map((message) => (
-                  <MessageScrollerItem
-                    key={message.messageId}
-                    messageId={message.messageId}
-                    scrollAnchor={message.role === "user"}
-                  >
-                    {message.role === "user" ? (
-                      <Message align="end">
-                        <MessageContent>
-                          <Bubble variant="outline" align="end">
-                            <BubbleContent>
-                              <MarkdownContent content={message.content} />
-                            </BubbleContent>
-                          </Bubble>
-                        </MessageContent>
-                      </Message>
-                    ) : (
-                      <Message data-message-role="assistant">
-                        <MessageContent className="pt-0.5 text-sm leading-7">
-                          <Bubble variant="ghost" className="w-full">
-                            <BubbleContent className="w-full">
-                              <MarkdownContent
-                                content={message.content}
-                                streaming={
-                                  message.runId !== null &&
-                                  Object.values(
-                                    activeTask?.assistantStreamsByRunId[
-                                      message.runId
-                                    ]?.streamsById ?? {},
-                                  ).some((stream) => stream.active)
-                                }
-                              />
-                              {activeTask !== undefined && message.runId !== null && (
-                                <ExecutionSummary
-                                  task={activeTask}
-                                  runId={message.runId}
-                                  active={activeTask.summary.active_run_id === message.runId}
-                                />
-                              )}
-                            </BubbleContent>
-                          </Bubble>
-                        </MessageContent>
-                      </Message>
-                    )}
-                  </MessageScrollerItem>
-                ))}
+                <ConversationList items={items} activeRunId={activeRunId} />
 
                 {showActiveRunStatus && activeRunId !== null && (
                   <MessageScrollerItem messageId={`live:${activeRunId}:assistant:status`}>
-                    <Message data-message-role="assistant-status">
-                      <MessageContent>
-                        <Bubble variant="ghost" className="w-full">
-                          <BubbleContent className="w-full">
-                            <Marker role="status">
-                              <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
-                              <MarkerContent className="shimmer">正在思考…</MarkerContent>
-                            </Marker>
-                            {activeTask !== undefined && (
-                              <ExecutionSummary
-                                task={activeTask}
-                                runId={activeRunId}
-                                active
-                              />
-                            )}
-                          </BubbleContent>
-                        </Bubble>
-                      </MessageContent>
-                    </Message>
+                    <Marker role="status">
+                      <MarkerIcon><Spinner aria-hidden="true" /></MarkerIcon>
+                      <MarkerContent className="shimmer">正在思考…</MarkerContent>
+                    </Marker>
                   </MessageScrollerItem>
                 )}
 
