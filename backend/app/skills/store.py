@@ -51,6 +51,8 @@ class SkillDetail(BaseModel):
     versions: tuple[str, ...]
     package_kind: Literal["manifest", "zip"]
     warning: str | None = None
+    available: bool = True
+    load_error: str | None = None
 
 
 class StoreMutation(BaseModel):
@@ -82,6 +84,7 @@ class UserSkillStore:
             raise ValueError("builtin skill names must be unique")
         self._loader = SkillPackageLoader(secrets=secrets)
         self._loaded: dict[tuple[str, str], SkillDescriptor] = {}
+        self._load_errors: dict[str, str] = {}
         self._state = self._read_state()
         descriptors = self._load_all(self._state)
         self._publish(descriptors)
@@ -100,10 +103,11 @@ class UserSkillStore:
 
     def detail(self, name: str) -> SkillDetail:
         descriptor = self._catalog.snapshot().skills.get(name)
-        if descriptor is None:
-            raise KeyError(name)
         package = self._state.packages.get(name)
+        if descriptor is None and package is None:
+            raise KeyError(name)
         if package is None:
+            assert descriptor is not None
             return SkillDetail(
                 manifest=descriptor.manifest,
                 current_version=descriptor.version,
@@ -111,6 +115,8 @@ class UserSkillStore:
                 package_kind="manifest",
             )
         current = self._version(package, package.current)
+        if descriptor is None:
+            descriptor = self._placeholder_descriptor(package, current)
         return SkillDetail(
             manifest=descriptor.manifest,
             current_version=current.version,
@@ -122,6 +128,8 @@ class UserSkillStore:
                 if current.kind == "zip"
                 else None
             ),
+            available=name not in self._load_errors,
+            load_error=self._load_errors.get(name),
         )
 
     def put_manifest(self, raw: Mapping[str, object]) -> StoreMutation:
@@ -177,14 +185,29 @@ class UserSkillStore:
             if name in self._builtin_names:
                 raise PermissionError("builtin skills are immutable")
             self._require_user(name)
+            package_dir = self.root / "packages" / name
+            tombstone = self.root / "packages" / f".{name}.deleting"
+            if package_dir.exists():
+                shutil.copytree(package_dir, tombstone)
+            try:
+                self._remove_tree(package_dir)
+            except Exception:
+                self._remove_tree(tombstone)
+                raise
             packages = dict(self._state.packages)
             del packages[name]
             state = self._state.model_copy(update={"packages": packages})
             descriptors = self._load_all(state)
-            snapshot = self._commit_and_publish(state, descriptors)
-            shutil.rmtree(self.root / "packages" / name, ignore_errors=True)
+            try:
+                snapshot = self._commit_and_publish(state, descriptors)
+            except Exception:
+                if tombstone.exists():
+                    tombstone.replace(package_dir)
+                raise
+            self._remove_tree(tombstone)
             for key in [key for key in self._loaded if key[0] == name]:
                 del self._loaded[key]
+            self._load_errors.pop(name, None)
             return StoreMutation(generation=snapshot.generation)
 
     def _put(
@@ -266,6 +289,7 @@ class UserSkillStore:
                 descriptors.append(descriptor)
                 names.add(name)
             except Exception:
+                self._load_errors[name] = "current package could not be loaded"
                 continue
         return tuple(descriptors)
 
@@ -304,6 +328,27 @@ class UserSkillStore:
 
     def _publish(self, descriptors: tuple[SkillDescriptor, ...]):
         return self._catalog.replace_all(descriptors)
+
+    @staticmethod
+    def _remove_tree(path: Path) -> None:
+        if path.exists():
+            shutil.rmtree(path)
+
+    @staticmethod
+    def _placeholder_descriptor(
+        package: StoredPackage, version: StoredVersion
+    ) -> SkillDescriptor:
+        return SkillDescriptor(
+            name=package.name,
+            display_name=package.name.replace("_", " ").title(),
+            version=version.version,
+            category="acquisition",
+            description="Unavailable user skill package.",
+            origin="package",
+            enabled=False,
+            user_selectable=False,
+            pipeline_supported=False,
+        )
 
     def _require_user(self, name: str) -> StoredPackage:
         if name in self._builtin_names:

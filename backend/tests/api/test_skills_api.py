@@ -82,6 +82,7 @@ async def test_skills_crud_versions_and_database_projection(tmp_path: Path) -> N
     assert projected["origin"] == "package"
     assert projected["version"] == "1.0.0"
     assert projected["pipeline_supported"] is False
+    assert projected["available"] is False
     assert disabled.json()["skill"]["enabled"] is False
     assert updated.json()["skill"]["version"] == "2.0.0"
     assert rolled_back.json()["skill"]["version"] == "1.0.0"

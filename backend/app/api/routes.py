@@ -189,7 +189,9 @@ async def get_databases(request: Request) -> dict:
                 "name": skill.display_name or _display_name(skill.name),
                 "category": skill.category.value,
                 "description": skill.description,
-                "available": skill.enabled,
+                # Package descriptors are not Agent-callable until the Agent build
+                # consumes the dynamic catalog in the next migration task.
+                "available": skill.enabled and skill.origin == "builtin",
                 "origin": skill.origin,
                 "version": skill.version,
                 "pipeline_supported": skill.pipeline_supported,

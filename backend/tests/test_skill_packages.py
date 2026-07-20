@@ -361,3 +361,40 @@ def test_static_zip_validation_does_not_execute_python(tmp_path: Path) -> None:
     result = loader.validate_zip(_zip_package(manifest, source))
     assert result.descriptor.manifest.name == "demo_db"
     assert not marker.exists()
+
+
+def test_startup_exposes_broken_package_with_load_error(tmp_path: Path) -> None:
+    catalog = SkillCatalog()
+    store = UserSkillStore(tmp_path / "skills", catalog=catalog, builtins=(_builtin(),))
+    store.put_manifest(_manifest())
+    state = json.loads((tmp_path / "skills" / "state.json").read_text("utf-8"))
+    current = state["packages"]["demo_db"]["current"]
+    package_file = next((tmp_path / "skills" / "packages" / "demo_db").glob(f"{current}.*"))
+    package_file.write_text("not json", encoding="utf-8")
+
+    reloaded = UserSkillStore(tmp_path / "skills", catalog=SkillCatalog(), builtins=(_builtin(),))
+    detail = reloaded.detail("demo_db")
+
+    assert detail.available is False
+    assert detail.load_error
+    assert detail.manifest.name == "demo_db"
+
+
+def test_delete_cleanup_failure_retains_state_catalog_and_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = SkillCatalog()
+    store = UserSkillStore(tmp_path / "skills", catalog=catalog, builtins=(_builtin(),))
+    store.put_manifest(_manifest())
+    before = catalog.snapshot()
+
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(store, "_remove_tree", fail_cleanup)
+    with pytest.raises(OSError, match="cleanup failed"):
+        store.delete("demo_db")
+
+    assert catalog.snapshot() is before
+    assert store.detail("demo_db").available is True
+    assert (tmp_path / "skills" / "packages" / "demo_db").is_dir()
