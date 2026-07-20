@@ -31,8 +31,7 @@ from app.settings_manager import (
 )
 from app.tools.network_safety import (
     UnsafeUrlError,
-    validate_credentialed_public_url,
-    validate_public_http_url,
+    resolve_public_http_target,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -296,14 +295,17 @@ def _mask_key(key: str) -> str:
 
 async def _fetch_remote_model_ids(base_url: str, api_key: str) -> set[str]:
     url = base_url.rstrip("/") + "/models"
-    if api_key:
-        validate_credentialed_public_url(url)
-    else:
-        validate_public_http_url(url)
+    target = resolve_public_http_target(url, require_https=bool(api_key))
     client = _get_http_client()
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers = {"Host": target.host_header}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = await client.get(url, headers=headers)
+        resp = await client.get(
+            target.connect_url,
+            headers=headers,
+            extensions={"sni_hostname": target.sni_hostname},
+        )
         resp.raise_for_status()
         data = resp.json()
     except (HTTPError, TimeoutException, ValueError, KeyError) as exc:

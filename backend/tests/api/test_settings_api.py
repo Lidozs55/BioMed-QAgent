@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import app.api.settings_router as settings_router
 import httpx
 import pytest
 from app.model_config import UserSettings
-from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
+from app.tools.network_safety import (
+    PublicHttpTarget,
+    UnsafeUrlError,
+    validate_public_http_url,
+)
 from fastapi import FastAPI
 
 
@@ -29,6 +35,18 @@ def _set_current_settings(
     monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
 
 
+def _passthrough_target(url: str, *, require_https: bool) -> PublicHttpTarget:
+    parsed = urlsplit(url)
+    if require_https:
+        assert parsed.scheme == "https"
+    assert parsed.hostname is not None
+    return PublicHttpTarget(
+        connect_url=url,
+        host_header=parsed.netloc,
+        sni_hostname=parsed.hostname,
+    )
+
+
 @pytest.mark.asyncio
 async def test_models_ignores_preview_api_key_and_uses_public_preview_without_credentials(
     application: FastAPI,
@@ -44,7 +62,7 @@ async def test_models_ignores_preview_api_key_and_uses_public_preview_without_cr
         monkeypatch,
         UserSettings(base_url="https://saved.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "resolve_public_http_target", _passthrough_target)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
@@ -133,7 +151,7 @@ async def test_models_discovers_saved_provider_models_over_https(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "resolve_public_http_target", _passthrough_target)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
@@ -148,6 +166,46 @@ async def test_models_discovers_saved_provider_models_over_https(
     assert response.json()["models"][0]["id"] == "qwen-plus"
     assert requests[0].url == "https://provider.example/v1/models"
     assert requests[0].headers["authorization"] == "Bearer saved-secret"
+
+
+@pytest.mark.asyncio
+async def test_models_connects_to_validated_ip_with_original_tls_identity(
+    application: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": []}, request=request)
+
+    _set_current_settings(
+        monkeypatch,
+        UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
+    )
+    monkeypatch.setattr(
+        settings_router,
+        "resolve_public_http_target",
+        lambda url, *, require_https: PublicHttpTarget(
+            connect_url="https://93.184.216.34/v1/models",
+            host_header="provider.example",
+            sni_hostname="provider.example",
+        ),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False
+    ) as remote_client:
+        monkeypatch.setattr(settings_router, "_get_http_client", lambda: remote_client)
+        async with _api_client(application) as api_client:
+            response = await api_client.get(
+                "/api/v1/models", params={"use_current_settings": "true"}
+            )
+
+    assert response.status_code == 200
+    assert requests[0].url == "https://93.184.216.34/v1/models"
+    assert requests[0].headers["host"] == "provider.example"
+    assert requests[0].extensions["sni_hostname"] == "provider.example"
 
 
 @pytest.mark.asyncio
@@ -169,7 +227,7 @@ async def test_models_refuses_redirect_without_forwarding_saved_credentials(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "resolve_public_http_target", _passthrough_target)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
@@ -215,7 +273,7 @@ async def test_models_returns_sanitized_gateway_error_for_provider_failures(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "resolve_public_http_target", _passthrough_target)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
