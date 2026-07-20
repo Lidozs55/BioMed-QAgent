@@ -11,12 +11,13 @@ from jsonschema.validators import validator_for
 
 from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
-from app.skills.registry import SkillCategory
 
 
 def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:
     allowlist = context.preferred_sources
-    if not allowlist or not descriptor.user_selectable:
+    if not allowlist or not descriptor.supported_sources:
+        return True
+    if descriptor.origin != "package" and not descriptor.user_selectable:
         return True
     return bool(set(allowlist).intersection(descriptor.supported_sources))
 

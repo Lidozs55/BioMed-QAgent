@@ -58,7 +58,20 @@ class LazyDashScopeModel(Model):
         advanced = self.configuration.advanced
         extra_body: dict[str, Any] | None = None
         hostname = urlsplit(str(self.configuration.base_url)).hostname or ""
-        if hostname == "dashscope.aliyuncs.com" or hostname.endswith(".dashscope.aliyuncs.com"):
+        model_name = self.configuration.model_name.casefold()
+        explicit_standard_hosts = {
+            "api.openai.com",
+            "api.deepseek.com",
+            "api.moonshot.cn",
+        }
+        if (
+            hostname == "dashscope.aliyuncs.com"
+            or hostname.endswith(".dashscope.aliyuncs.com")
+            or (
+                model_name.startswith(("qwen", "qwq"))
+                and hostname not in explicit_standard_hosts
+            )
+        ):
             extra_body = {
                 "repetition_penalty": advanced.repetition_penalty,
                 "enable_search": advanced.enable_search,
