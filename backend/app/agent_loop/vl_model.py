@@ -26,7 +26,7 @@ from openai import APIError, AsyncOpenAI
 
 from app.agent_loop.model import require_model_credentials
 from app.model_config import RunModelSettings
-from app.tools.network_safety import validate_public_http_url
+from app.tools.network_safety import validate_credentialed_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ async def call_vl_model(
             or the VLM API call fails after retry budget is exhausted.
     """
     require_model_credentials(model_settings)
-    base_url = validate_public_http_url(model_settings.base_url)
+    base_url = validate_credentialed_public_url(model_settings.base_url)
     mime = _infer_mime(image_path)
     b64 = _encode_image_b64(image_path)
     data_url = f"data:{mime};base64,{b64}"

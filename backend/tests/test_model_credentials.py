@@ -33,7 +33,7 @@ def configure_model(
     )
     runtime_getter = Mock(return_value=runtime_settings)
     monkeypatch.setattr(settings_manager, "get_settings", runtime_getter)
-    monkeypatch.setattr(model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
     return runtime_getter
 
 
@@ -168,6 +168,25 @@ def test_build_delegate_rejects_non_public_base_url_before_client_construction(
 
     # When / Then
     with pytest.raises(UnsafeUrlError):
+        model_module._build_delegate(model_settings)
+    client_factory.assert_not_called()
+
+
+def test_build_delegate_requires_https_for_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    model_settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="runtime-api-key",
+            base_url="http://8.8.8.8/v1",
+        )
+    )
+    client_factory = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
+
+    # When / Then
+    with pytest.raises(UnsafeUrlError, match="HTTPS"):
         model_module._build_delegate(model_settings)
     client_factory.assert_not_called()
 

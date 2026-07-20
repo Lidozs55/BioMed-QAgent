@@ -108,9 +108,8 @@ async def test_models_rejects_http_when_saved_key_would_be_attached(
 ) -> None:
     _set_current_settings(
         monkeypatch,
-        UserSettings(base_url="http://provider.example/v1", api_key="saved-secret"),
+        UserSettings(base_url="http://8.8.8.8/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_public_http_url", lambda url: url)
 
     async with _api_client(application) as api_client:
         response = await api_client.get("/api/v1/models", params={"use_current_settings": "true"})
@@ -134,7 +133,7 @@ async def test_models_discovers_saved_provider_models_over_https(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
@@ -170,7 +169,7 @@ async def test_models_refuses_redirect_without_forwarding_saved_credentials(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False
@@ -216,7 +215,7 @@ async def test_models_returns_sanitized_gateway_error_for_provider_failures(
         monkeypatch,
         UserSettings(base_url="https://provider.example/v1", api_key="saved-secret"),
     )
-    monkeypatch.setattr(settings_router, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(settings_router, "validate_credentialed_public_url", lambda url: url)
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), follow_redirects=False

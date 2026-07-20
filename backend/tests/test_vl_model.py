@@ -38,7 +38,7 @@ async def test_call_vl_model_uses_run_credentials_fixed_model_and_closes_client(
     )
     validated_url = "https://validated.example/v1"
     url_validator = Mock(return_value=validated_url)
-    monkeypatch.setattr(vl_model_module, "validate_public_http_url", url_validator)
+    monkeypatch.setattr(vl_model_module, "validate_credentialed_public_url", url_validator)
     completion = AsyncMock(
         return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="chart response"))]
@@ -85,7 +85,7 @@ async def test_vl_calls_construct_distinct_clients_for_distinct_run_snapshots(
     second_settings = RunModelSettings.from_user_settings(
         UserSettings(api_key="second-api-key", base_url="https://second.example/v1")
     )
-    monkeypatch.setattr(vl_model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(vl_model_module, "validate_credentialed_public_url", lambda url: url)
     completion = AsyncMock(
         return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="chart response"))]
@@ -128,7 +128,7 @@ async def test_vl_validates_base_url_before_client_construction(
     )
     monkeypatch.setattr(
         vl_model_module,
-        "validate_public_http_url",
+        "validate_credentialed_public_url",
         Mock(side_effect=UnsafeUrlError("unsafe URL")),
     )
     client_factory = Mock()
@@ -143,6 +143,42 @@ async def test_vl_validates_base_url_before_client_construction(
 
 
 @pytest.mark.asyncio
+async def test_vl_requires_https_for_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Given
+    run_settings = RunModelSettings.from_user_settings(
+        UserSettings(api_key="runtime-api-key", base_url="http://8.8.8.8/v1")
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(
+                    return_value=SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                message=SimpleNamespace(content="unexpected")
+                            )
+                        ]
+                    )
+                )
+            )
+        ),
+        close=AsyncMock(),
+    )
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(vl_model_module, "AsyncOpenAI", client_factory)
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"chart-bytes")
+
+    # When / Then
+    with pytest.raises(UnsafeUrlError, match="HTTPS"):
+        await call_vl_model(image_path, "extract", model_settings=run_settings)
+    client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_vl_call_closes_client_when_completion_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -151,7 +187,7 @@ async def test_vl_call_closes_client_when_completion_fails(
     run_settings = RunModelSettings.from_user_settings(
         UserSettings(api_key="runtime-api-key", base_url="https://runtime.example/v1")
     )
-    monkeypatch.setattr(vl_model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(vl_model_module, "validate_credentialed_public_url", lambda url: url)
     completion = AsyncMock(
         side_effect=APIConnectionError(
             message="provider failed",
@@ -183,7 +219,7 @@ async def test_vl_does_not_construct_client_when_image_encoding_fails(
     )
     client_factory = Mock()
     monkeypatch.setattr(vl_model_module, "AsyncOpenAI", client_factory)
-    monkeypatch.setattr(vl_model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(vl_model_module, "validate_credentialed_public_url", lambda url: url)
     monkeypatch.setattr(
         vl_model_module,
         "_encode_image_b64",

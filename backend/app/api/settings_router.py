@@ -29,7 +29,11 @@ from app.settings_manager import (
     get_settings,
     update_settings,
 )
-from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
+from app.tools.network_safety import (
+    UnsafeUrlError,
+    validate_credentialed_public_url,
+    validate_public_http_url,
+)
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -292,9 +296,10 @@ def _mask_key(key: str) -> str:
 
 async def _fetch_remote_model_ids(base_url: str, api_key: str) -> set[str]:
     url = base_url.rstrip("/") + "/models"
-    validate_public_http_url(url)
-    if api_key and not url.startswith("https://"):
-        raise UnsafeUrlError("credentialed discovery requires HTTPS")
+    if api_key:
+        validate_credentialed_public_url(url)
+    else:
+        validate_public_http_url(url)
     client = _get_http_client()
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:

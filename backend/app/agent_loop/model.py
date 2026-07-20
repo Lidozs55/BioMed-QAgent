@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 
 from app import settings_manager
 from app.model_config import RunModelSettings, UserSettings
-from app.tools.network_safety import validate_public_http_url
+from app.tools.network_safety import validate_credentialed_public_url
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
     "run_model_settings",
@@ -98,7 +98,7 @@ def _build_delegate(
 ) -> OpenAIChatCompletionsModel:
     runtime_settings = _resolve_model_settings(model_settings)
     require_model_credentials(runtime_settings)
-    base_url = validate_public_http_url(runtime_settings.base_url)
+    base_url = validate_credentialed_public_url(runtime_settings.base_url)
     client = AsyncOpenAI(
         api_key=runtime_settings.api_key,
         base_url=base_url,

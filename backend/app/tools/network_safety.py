@@ -50,6 +50,15 @@ def validate_public_http_url(url: str) -> str:
     return url
 
 
+def validate_credentialed_public_url(url: str) -> str:
+    """Return a public HTTPS URL suitable for sending credentials."""
+
+    validated_url = validate_public_http_url(url)
+    if urlsplit(validated_url).scheme != "https":
+        raise UnsafeUrlError("credentialed requests require HTTPS")
+    return validated_url
+
+
 def validate_public_http_request(request: httpx.Request) -> None:
     """HTTPX sync request hook that validates every redirect destination."""
     validate_public_http_url(str(request.url))
