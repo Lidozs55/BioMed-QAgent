@@ -1313,6 +1313,154 @@ describe("conversation items projection", () => {
     });
   });
 
+  it("removes assistant_segment whose content is purely leaked tool-args JSON on tool_started", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: '{"query": "Alzheimer disease osteoporosis ',
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "assistant_delta",
+        delta: 'comorbidity mechanism", "max_results": 20}',
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 1,
+        through_chunk_index: 1,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        arguments: {
+          query: "Alzheimer disease osteoporosis comorbidity mechanism",
+          max_results: 20,
+        },
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    const assistantSegments = items.filter(
+      (i) => i.kind === "assistant_segment",
+    );
+    expect(assistantSegments).toHaveLength(0);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "tool_call",
+      toolName: "search_pubmed",
+      status: "running",
+    });
+  });
+
+  it("strips only trailing tool-args JSON from assistant_segment, keeping preceding reasoning text", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: "Now searching for relevant literature.\n",
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "assistant_delta",
+        delta: '{"query": "Alzheimer AND osteoporosis", "max_results": 20}',
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 1,
+        through_chunk_index: 1,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        arguments: { query: "Alzheimer AND osteoporosis", max_results: 20 },
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    const segment = items.find((i) => i.kind === "assistant_segment");
+    expect(segment).toBeDefined();
+    expect(segment?.kind).toBe("assistant_segment");
+    if (segment?.kind === "assistant_segment") {
+      expect(segment.content).toBe("Now searching for relevant literature.");
+    }
+  });
+
+  it("does not strip trailing JSON when keys do not match tool arguments", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: '{"unrelated": "value", "count": 5}',
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        arguments: { query: "different", max_results: 10 },
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    const segment = items.find((i) => i.kind === "assistant_segment");
+    expect(segment).toBeDefined();
+    expect(segment?.kind).toBe("assistant_segment");
+    if (segment?.kind === "assistant_segment") {
+      expect(segment.content).toBe('{"unrelated": "value", "count": 5}');
+    }
+  });
+
+  it("strips trailing JSON heuristically when tool_started has no arguments", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: '{"query": "cancer", "limit": 10}',
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    const assistantSegments = items.filter(
+      (i) => i.kind === "assistant_segment",
+    );
+    expect(assistantSegments).toHaveLength(0);
+  });
+
   it("creates a StageItem with status=running from stage_started", () => {
     let state = setup();
     state = reduceRuntimeEvent(

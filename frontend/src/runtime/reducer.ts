@@ -545,6 +545,117 @@ function deactivateRunStreamingItems(
   return { ...task, items };
 }
 
+/**
+ * Detect and strip a trailing tool-arguments JSON object from assistant text.
+ *
+ * Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，导致 JSON
+ * 被渲染为 assistant_segment 内容。此函数检测并剥离尾部的 JSON 对象。
+ *
+ * Returns:
+ * - 剥离后的内容（可能为空字符串）若尾部检测到匹配的工具参数 JSON。
+ * - null 表示无需剥离（未检测到尾部 JSON 或键不匹配）。
+ */
+function stripTrailingToolArgsJson(
+  content: string,
+  toolArguments: Record<string, unknown> | null,
+): string | null {
+  const trimmed = content.trimEnd();
+  if (!trimmed.endsWith("}")) return null;
+
+  // 从末尾向前扫描，找到匹配 '{' 的位置（处理嵌套大括号）。
+  let depth = 0;
+  let jsonStart = -1;
+  for (let i = trimmed.length - 1; i >= 0; i--) {
+    const ch = trimmed[i];
+    if (ch === "}") depth++;
+    else if (ch === "{") {
+      depth--;
+      if (depth === 0) {
+        jsonStart = i;
+        break;
+      }
+    }
+  }
+  if (jsonStart < 0) return null;
+
+  const jsonText = trimmed.slice(jsonStart);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const parsedObj = parsed as Record<string, unknown>;
+  const parsedKeys = Object.keys(parsedObj);
+  if (parsedKeys.length === 0) return null;
+
+  // 若有工具参数，按键集合校验：parsed 的键必须是 toolArguments 键的子集，
+  // 且至少有一个键匹配（防止空交集的误判）。
+  if (toolArguments !== null) {
+    const toolKeys = Object.keys(toolArguments);
+    if (toolKeys.length === 0) return null;
+    const toolKeySet = new Set(toolKeys);
+    let hasMatch = false;
+    for (const key of parsedKeys) {
+      if (!toolKeySet.has(key)) return null;
+      hasMatch = true;
+    }
+    if (!hasMatch) return null;
+  } else {
+    // 无工具参数时，仅当所有值都是原始类型时才剥离（保守启发式）。
+    for (const key of parsedKeys) {
+      const value = parsedObj[key];
+      if (typeof value === "object" && value !== null) return null;
+    }
+  }
+
+  // 剥离尾部 JSON 及其前面的空白/换行。
+  return trimmed.slice(0, jsonStart).trimEnd();
+}
+
+/**
+ * 在 tool_started 时检查同一 runId 的最后一个 assistant_segment，
+ * 剥离其尾部被 LLM 泄露的工具参数 JSON。若剥离后内容为空则移除该 item。
+ */
+function stripLastAssistantSegmentToolArgs(
+  task: TaskProjection,
+  runId: string,
+  toolArguments: Record<string, unknown> | null,
+): TaskProjection {
+  // 从末尾向前查找最后一个属于该 runId 的 assistant_segment。
+  let lastIndex = -1;
+  for (let i = task.items.length - 1; i >= 0; i--) {
+    const item = task.items[i];
+    if (item.runId !== runId) continue;
+    if (item.kind === "assistant_segment") {
+      lastIndex = i;
+      break;
+    }
+    // 遇到 tool_call 等非 assistant 项就停止向前查找，
+    // 避免误剥离去往工具调用之后的 segment。
+    if (item.kind === "tool_call" || item.kind === "user_message") break;
+  }
+  if (lastIndex < 0) return task;
+
+  const segment = task.items[lastIndex];
+  if (segment.kind !== "assistant_segment") return task;
+
+  const stripped = stripTrailingToolArgsJson(segment.content, toolArguments);
+  if (stripped === null) return task;
+
+  const items = [...task.items];
+  if (stripped.length === 0) {
+    items.splice(lastIndex, 1);
+  } else {
+    items[lastIndex] = { ...segment, content: stripped };
+  }
+  return { ...task, items };
+}
+
 function projectMessageToItem(
   message: ProjectedMessage,
 ): ConversationItem | null {
@@ -1383,6 +1494,14 @@ export function reduceRuntimeEvent(
       if (runId === null) break;
       task = deactivateRunAssistantStream(task, runId);
       task = deactivateRunStreamingItems(task, runId);
+      // Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，
+      // 导致前一个 assistant_segment 尾部出现工具参数 JSON。此处剥离该 JSON，
+      // 避免前端对话流展示原始 JSON。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+      const toolArgs = (payload.arguments ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      task = stripLastAssistantSegmentToolArgs(task, runId, toolArgs);
       task = upsertActivity(task, {
         activityId: `tool:${runId}:${payload.tool_call_id}`,
         taskId: envelope.task_id,
@@ -1408,7 +1527,7 @@ export function reduceRuntimeEvent(
         createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
         toolCallId: payload.tool_call_id,
         toolName: payload.tool_name,
-        arguments: (payload.arguments ?? null) as Record<string, unknown> | null,
+        arguments: toolArgs,
         status: "running",
         output: null,
         completedSequence: null,
