@@ -77,7 +77,10 @@ describe("App startup ownership", () => {
           );
         }
         if (url === "/api/v1/vendors") {
-          return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+          return Promise.resolve(new Response(JSON.stringify({ vendors: [] }), { status: 200 }));
+        }
+        if (url === "/api/v1/skills") {
+          return Promise.resolve(new Response(JSON.stringify({ skills: [] }), { status: 200 }));
         }
         if (url === "/api/v1/tasks?limit=10") {
           if (historyFailure) {
@@ -176,123 +179,14 @@ describe("App startup ownership", () => {
     );
   });
 
-  it("catches model change rejection with toast.error and no unhandled promise", async () => {
-    // Override fetch so POST /api/v1/settings fails (simulates a rejected model change)
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url === "/api/v1/databases") {
-          return Promise.resolve(
-            new Response(JSON.stringify({ databases: [] }), { status: 200 }),
-          );
-        }
-        if (url === "/api/v1/settings" && (!init || init.method !== "POST")) {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                base_url: "https://test.url",
-                api_key: "sk-real",
-                model_name: "qwen-plus",
-                max_tokens: 8192,
-                temperature: 0.7, top_p: 1.0,
-                repetition_penalty: 1.0,
-                enable_search: false,
-                thinking_mode: false,
-              }),
-              { status: 200 },
-            ),
-          );
-        }
-        if (url === "/api/v1/settings" && init?.method === "POST") {
-          return Promise.reject(new Error("模型不可用"));
-        }
-        if (url === "/api/v1/vendors") {
-          return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
-        }
-        if (url === "/api/v1/tasks?limit=10") {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                active_items: [{ task_id: "task_active", mode: "agent", databases: [], title: "Active task", status: "running", active_run_id: "run_active", created_at: "2026-07-14T00:00:00Z", updated_at: "2026-07-14T00:00:00Z", latest_sequence: 6 }],
-                items: [],
-                next_cursor: null,
-              }),
-              { status: 200 },
-            ),
-          );
-        }
-        if (url.includes("/api/v1/models")) {
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                models: [{ id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192, capabilities: { text: true, image: false, video: false, audio: false }, recommended: true, api_available: true, capability_source: "api" }],
-                total_count: 1,
-                api_source: null,
-              }),
-              { status: 200 },
-            ),
-          );
-        }
-        return Promise.reject(new Error(`Unexpected URL: ${url}`));
-      }),
-    );
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("opens and closes settings without replacing the task workspace", async () => {
     render(<App />);
-
-    // Wait for the model selector button to appear (settings + models loaded)
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /当前模型|点击选择模型/ })).toBeVisible();
-    });
-
-    // Open the model dropdown
-    fireEvent.click(screen.getByRole("button", { name: /当前模型|点击选择模型/ }));
-
-    // Click the "Qwen Plus 推荐" model option inside the dropdown
-    const optionBtns = await screen.findAllByRole("button", { name: /Qwen Plus/ });
-    // The dropdown option has text "Qwen Plus 推荐"; the toggle has aria-label "当前模型 Qwen Plus，点击切换"
-    const dropdownOption = optionBtns.find(
-      (btn) => btn.textContent?.includes("推荐"),
-    );
-    expect(dropdownOption).toBeDefined();
-    fireEvent.click(dropdownOption!);
-
-    // The model change should trigger POST /api/v1/settings which fails.
-    // handleModelChange catches the rejection and shows toast.error.
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        "模型选择失败",
-        expect.objectContaining({ description: "模型不可用" }),
-      );
-    });
-
-    // Verify no unhandled promise rejection leaked to console.error
-    const unhandledCalls = errorSpy.mock.calls.filter(
-      (args) => String(args[0]).includes("Unhandled") || String(args[0]).toLowerCase().includes("rejection"),
-    );
-    expect(unhandledCalls).toHaveLength(0);
-
-    errorSpy.mockRestore();
-  });
-
-  it("coexists with settings integration without breaking startup or history", async () => {
-    const view = render(<App />);
-    await waitFor(() =>
-      expect(useAgentStore.getState().activeItems).toEqual(["task_active"]),
-    );
+    await waitFor(() => expect(useAgentStore.getState().activeItems).toEqual(["task_active"]));
+    fireEvent.click(screen.getAllByRole("button", { name: "打开设置" })[0]);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(useAgentStore.getState().activeTaskId).toBeNull();
-    expect(useAgentStore.getState().draft.input).toBe("");
-
-    // Sidebar renders both settings and export buttons
-    expect(screen.getByRole("button", { name: "打开设置" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "导出本地缓存为 ZIP" })).toBeVisible();
-
-    // Header has unique ThemeToggle and ArtifactPanelToggle
-    expect(screen.getByRole("button", { name: "Toggle theme" })).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "Toggle theme" })).toHaveLength(1);
-
-    view.unmount();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
   });
 });

@@ -26,16 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 
-def test_instructions_describe_followup_max_3_rounds() -> None:
-    """INSTRUCTIONS must tell the LLM: max 3 follow-up rounds per source."""
-    assert "follow-up" in INSTRUCTIONS.lower() or "followup" in INSTRUCTIONS.lower(), (
-        "INSTRUCTIONS must mention follow-up strategy"
-    )
-    assert "3" in INSTRUCTIONS, (
-        "INSTRUCTIONS must mention the 3-round follow-up limit"
-    )
-
-
 def test_instructions_tell_llm_not_to_retry_not_found() -> None:
     """INSTRUCTIONS must tell the LLM: failed queries marked not_found are
     not retried (project_memory hard constraint)."""
@@ -54,11 +44,26 @@ def test_instructions_tell_llm_not_to_retry_not_found() -> None:
     )
 
 
-def test_instructions_mention_followup_search_count() -> None:
-    """INSTRUCTIONS must mention ``followup_search_count`` so the LLM knows
-    it can self-check the follow-up round count via RunContext."""
-    assert "followup_search_count" in INSTRUCTIONS, (
-        "INSTRUCTIONS must mention followup_search_count for LLM self-check"
+def test_instructions_mention_followup_round_limit() -> None:
+    """INSTRUCTIONS must mention the 3-round follow-up limit so the LLM
+    self-enforces the per-source retry budget.
+
+    Note: ``RunContext.followup_search_count`` exists as a programmatic
+    counter (see test_run_context_has_followup_search_count_field below),
+    but the LLM cannot access RunContext attributes directly — it is not a
+    tool and not exposed via any tool result. The follow-up limit is
+    therefore enforced through INSTRUCTIONS guidance (the LLM follows the
+    "max 3 rounds" rule) plus the AGENT_MAX_TURNS hard cap. Mentioning
+    ``followup_search_count`` in INSTRUCTIONS would be a category error
+    (exposing a code object name the LLM cannot read); we verify the
+    behavioral guidance instead.
+    """
+    instructions_lower = INSTRUCTIONS.lower()
+    assert "follow-up" in instructions_lower or "followup" in instructions_lower, (
+        "INSTRUCTIONS must mention follow-up strategy"
+    )
+    assert "3" in INSTRUCTIONS, (
+        "INSTRUCTIONS must mention the 3-round follow-up limit"
     )
 
 

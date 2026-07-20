@@ -1,4 +1,5 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { GearIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -16,9 +17,9 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI } from "@/hooks/useAPI";
-import { useSettings } from "@/hooks/useSettings";
 import { RuntimeController } from "@/runtime/controller";
 
 function errorDescription(reason: unknown): string {
@@ -26,24 +27,14 @@ function errorDescription(reason: unknown): string {
 }
 
 export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const transport = useAgentStream();
   const api = useAPI();
-  const [showSettings, setShowSettings] = useState(false);
-  const settingsState = useSettings();
 
   const controller = useMemo(
     () => new RuntimeController(api, transport),
     [api, transport],
   );
-  const handleModelChange = useCallback((modelId: string) => {
-    settingsState.updateSettings({ model_name: modelId }).catch(
-      (err: unknown) => {
-        toast.error("模型选择失败", {
-          description: err instanceof Error ? err.message : "未知错误",
-        });
-      },
-    );
-  }, [settingsState]);
   const selectTask = useCallback(
     (taskId: string) => controller.selectTask(taskId),
     [controller],
@@ -103,62 +94,45 @@ export default function App() {
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
         onExportCache={exportCache}
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed QAgent</h1>
           <div className="flex shrink-0 items-center gap-2">
+            <Button variant="ghost" size="icon-sm" aria-label="打开设置" onClick={() => setSettingsOpen(true)}>
+              <GearIcon />
+            </Button>
             <ArtifactPanelToggle />
             <ThemeToggle />
           </div>
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            {showSettings ? (
-              <SettingsPanel
-                settings={settingsState.settings}
-                models={settingsState.models}
-                vendors={settingsState.vendors}
-                loading={settingsState.loading}
-                saving={settingsState.saving}
-                modelsLoading={settingsState.modelsLoading}
-                error={settingsState.error}
-                onSave={async (payload) => {
-                  await settingsState.updateSettings(payload);
-                }}
-                onClose={() => setShowSettings(false)}
-                onFetchModels={settingsState.fetchModels}
+            <ArtifactWorkspace>
+              <ChatPanel
+                startTask={(input) => controller.startTask(input)}
+                uploadFiles={(files, note) =>
+                  controller.startImportTask(files, note)
+                }
+                continueTask={(taskId, input) =>
+                  controller.continueTask(taskId, input)
+                }
+                resumeRun={(taskId, runId, input) =>
+                  controller.resumeRun(taskId, runId, input)
+                }
+                loadOlderMessages={(taskId) =>
+                  controller.loadOlderMessages(taskId)
+                }
+                onOpenSettings={() => setSettingsOpen(true)}
               />
-            ) : (
-              <ArtifactWorkspace>
-                <ChatPanel
-                  startTask={(input) => controller.startTask(input)}
-                  uploadFiles={(files, note) =>
-                    controller.startImportTask(files, note)
-                  }
-                  continueTask={(taskId, input) =>
-                    controller.continueTask(taskId, input)
-                  }
-                  resumeRun={(taskId, runId, input) =>
-                    controller.resumeRun(taskId, runId, input)
-                  }
-                  loadOlderMessages={(taskId) =>
-                    controller.loadOlderMessages(taskId)
-                  }
-                  models={settingsState.models}
-                  hasApiKey={!!settingsState.settings?.api_key}
-                  onOpenSettings={() => setShowSettings(true)}
-                  onModelChange={handleModelChange}
-                  selectedModelId={settingsState.settings?.model_name}
-                />
-              </ArtifactWorkspace>
-            )}
+            </ArtifactWorkspace>
           </div>
         </main>
       </SidebarInset>
       <BackgroundTaskNotifications onViewTask={selectTask} />
+      <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} api={api} />
       <Toaster />
     </SidebarProvider>
   );

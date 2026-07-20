@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { ModelInfo } from "@/hooks/useSettings";
+import type { ModelInfo } from "@/hooks/useAPI";
 
 export const MAX_IMPORT_FILES = 10;
 export const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;

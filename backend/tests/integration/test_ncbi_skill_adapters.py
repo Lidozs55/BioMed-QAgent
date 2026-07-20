@@ -87,6 +87,14 @@ async def test_pubmed_and_geo_discovery_adapters_use_typed_services(
     assert isinstance(pubmed["records"][0]["authors"], str)
     assert pubmed["records"][0]["is_open_access"] is True
     assert "pub_date" in pubmed["records"][0]
+    # LLM output hygiene: top-level summary + usage_hint must be present so the
+    # LLM can brief the user without restating the full records array.
+    # See docs/REVIEW_2026-07-20-llm-output-hygiene.md.
+    assert "summary" in pubmed
+    assert "usage_hint" in pubmed
+    assert "records_count" in pubmed
+    assert pubmed["records_count"] == len(pubmed["records"])
+    assert "analyze_papers" in pubmed["usage_hint"]
     assert geo["accessions"] == ["GSE178352"]
     assert "200178352" not in geo["accessions"]
     assert geo["records"][0]["platform_count"] == 1
@@ -111,6 +119,45 @@ async def test_pubmed_and_geo_discovery_adapters_use_typed_services(
     assert client.geo_summary_ids.count("200178352") == 2
     assert all(value.isdigit() for value in client.geo_summary_ids)
     assert context.query_log[0]["status"] == "success"
+
+
+class _FailingEutils:
+    """Eutils client that raises on esearch to simulate NCBI network failure."""
+
+    async def esearch(self, *, db: str, term: str, retmax: int) -> bytes:
+        raise RuntimeError("NCBI request failed: connection reset")
+
+    async def esummary(self, *, db: str, ids: list[str]) -> bytes:
+        raise RuntimeError("NCBI request failed")
+
+    async def efetch(self, *, db: str, ids: list[str], retmode: str) -> bytes:
+        raise RuntimeError("NCBI request failed")
+
+
+@pytest.mark.asyncio
+async def test_search_pubmed_adapter_propagates_failure_so_sdk_marks_error(
+    tmp_path: Path,
+) -> None:
+    """Regression: adapter must raise on NCBI failure so the Agents SDK marks
+    the tool_output as ``is_error=True``. Previously the adapter swallowed the
+    exception and returned ``{"error": ..., "total_count": 0}`` with
+    ``is_error=False``, causing the frontend to render a successful tool call
+    while the LLM saw an empty result and self-reported 'search failed'."""
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=_FailingEutils(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+
+    with pytest.raises(RuntimeError, match="NCBI request failed"):
+        await search_pubmed_adapter(
+            context, "Alzheimer AND osteoporosis", 20, services=services
+        )
+
+    assert context.query_log[0]["status"] == "failed"
+    assert context.query_log[0]["records_count"] == 0
 
 
 @pytest.mark.asyncio

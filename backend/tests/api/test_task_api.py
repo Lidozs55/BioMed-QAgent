@@ -31,3 +31,8 @@ async def test_database_api_lists_only_user_selectable_data_sources(
             "pdf_extraction",
         }
     )
+    projected = {item["id"]: item for item in response.json()["databases"]}
+    assert all(item["available"] is True for item in projected.values())
+    assert projected["pubmed"]["pipeline_supported"] is True
+    assert projected["geo"]["pipeline_supported"] is True
+    assert projected["gdc"]["pipeline_supported"] is False

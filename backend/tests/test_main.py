@@ -74,10 +74,13 @@ async def test_application_accepts_local_host_for_settings_api(
     transport = httpx.ASGITransport(app=application)
 
     # When
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url=f"http://{host}:8000",
-    ) as client:
+    async with (
+        application.router.lifespan_context(application),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url=f"http://{host}:8000",
+        ) as client,
+    ):
         response = await client.get("/api/v1/settings")
 
     # Then

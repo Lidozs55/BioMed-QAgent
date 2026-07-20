@@ -257,6 +257,7 @@ async def _summarize_with_model(
         ),
         tools=[],
         model=model_handle,
+        model_settings=getattr(model_handle, "model_settings", None),
     )
     payload = {
         "previous_summary": previous_summary,

@@ -14,6 +14,7 @@ from app.agent_loop.model import (
     require_model_credentials,
 )
 from app.model_config import AdvancedParams, RunModelSettings, UserSettings
+from app.model_settings import AdvancedModelSettings, ModelConfiguration
 from app.tools.network_safety import UnsafeUrlError
 
 
@@ -33,6 +34,17 @@ def configure_model(
     )
     runtime_getter = Mock(return_value=runtime_settings)
     monkeypatch.setattr(settings_manager, "get_settings", runtime_getter)
+    def current_configuration() -> ModelConfiguration:
+        current = runtime_getter()
+        return ModelConfiguration(
+            base_url=current.base_url,
+            api_key=current.api_key,
+            model_name=current.model_name,
+            max_tokens=current.max_tokens,
+            advanced=AdvancedModelSettings(**current.advanced.model_dump()),
+        )
+
+    monkeypatch.setattr(model_module, "get_current_model_configuration", current_configuration)
     monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
     return runtime_getter
 

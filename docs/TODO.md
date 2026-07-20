@@ -1214,6 +1214,14 @@
 
 ## 9. 前端 UI 改进
 
+- [x] **P1** 动态 Skill Catalog 与自定义数据库管理
+
+      —— 统一 builtin/用户 Skill Catalog，Agent 使用 `find_skill` / `invoke_skill`
+      —— 支持声明式 JSON/YAML 数据库包、Python ZIP Skill、热加载、启停和回滚
+      —— 新增 `/api/v1/skills` 管理面与数据库 CRUD，区分 Agent-only / Pipeline-supported
+      —— 设置页增加 Model / Databases / Skills，模型配置仅影响新建模型实例
+      —— 用户包使用外部可写目录；坏包隔离且保持 `load_error` 可管理
+
 - [ ] 引入 <https://ui.shadcn.com/docs/components/base/command>
             <https://ui.shadcn.com/docs/components/base/context-menu>
             <https://ui.shadcn.com/docs/components/base/menubar>
@@ -1221,3 +1229,43 @@
 - [ ] 引入对话路由，便于调试 & 厘清页面关系
 - [ ] 缓存导出放到设置页面
 - [ ] 优化边栏底部，现在那里太杂了
+
+### 9.1 P1：对话流任务节点自动折叠（参考 TRAE SOLO 模式）
+
+> 调研 TRAE / Claude Code 等主流 coding agent 后形成的设计。
+> 详见 `docs/REVIEW_2026-07-20-llm-output-hygiene.md` §3。
+
+**动机**：当前所有 `assistant_segment` 不折叠，LLM 的研究思路叙述、
+工具调用意图、工具结果复述三类文本全部完整展示，淹没重要信息。
+INSTRUCTIONS 约束 + adapter summary 只是治标，治本方案是前端按节点折叠。
+
+**设计**（参考 TRAE SOLO "对话流节点自动折叠"）：
+
+- [ ] **节点边界定义**：以 `tool_call` 完成 / `assistant_segment` stream_id 切换
+      为节点边界，把 `[assistant_segment, tool_call, assistant_segment]`
+      三元组识别为一个"任务节点"
+- [ ] **自动折叠策略**：
+      - 节点完成后（`tool_completed` 到达）自动折叠为单行摘要
+      - 摘要格式：`✓ <工具标签> · <一句话结论>`（如"✓ 检索 PubMed · 找到 20 篇文献"）
+      - 当前活跃节点（最新 stream_id）保持展开
+      - 用户可点击展开查看折叠的细节
+- [ ] **前端实现路径**：
+      - `frontend/src/runtime/types.ts`：新增 `TaskNode` 投影类型
+        （`itemId` / `summary` / `collapsedItems: ConversationItem[]` / `status`）
+      - `frontend/src/runtime/reducer.ts`：在 `tool_completed` 后把
+        `[assistant_segment, tool_call]` 归组为 TaskNode，生成单行摘要
+      - `frontend/src/components/conversation/TaskNodeItem.tsx`：新组件，
+        默认折叠显示摘要，点击展开显示内部 items
+      - `selectActiveItems` 返回 `ConversationItem | TaskNode` 联合
+- [ ] **摘要生成**：
+      - 工具标签来自 `formatToolCall(toolName, args).verb + target`
+      - 一句话结论来自 `tool_completed` 后最近一段 `assistant_segment` 的首句
+      - 无后续 assistant_segment 时用工具 output 的 `summary` 字段（已由
+        `search_pubmed_adapter` 等提供）
+- [ ] **降级**：若归组失败（如 tool_call 无后续 segment），保持当前逐项展示
+
+**对比备选方案**（见 REVIEW 文档 §3.2/3.3/3.4）：
+- 方案 A（LLM 主动分类）—— 依赖 LLM 配合，不稳定，不推荐
+- 方案 B（后端启发式分类）—— 不彻底，仍逐项展示
+- 方案 C（records 不进 LLM 上下文）—— 改造范围大，损失 LLM 决策能力
+- **本方案（任务节点折叠）** —— 不依赖 LLM，行为稳定，是 TRAE 已验证的设计

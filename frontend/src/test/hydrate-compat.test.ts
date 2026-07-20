@@ -322,4 +322,54 @@ describe("hydrate compatibility", () => {
       content: "q4 refreshed",
     });
   });
+
+  it("replaces run_queued live user item with hydrated real user message (no duplicate)", () => {
+    // 1. hydrate an empty snapshot to create the task (latest_sequence=0)
+    let state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      snapshot("task_hydrate", [], { latestSequence: 0, status: "running" }),
+    );
+
+    // 2. run_queued creates a live user_message item (itemId=user:run_live)
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_hydrate", "run_live", 1, {
+        type: "run_queued",
+        request_id: "req_1",
+        input: "live question",
+      }),
+    );
+    expect(state.tasksById.task_hydrate.items).toHaveLength(1);
+    expect(state.tasksById.task_hydrate.items[0]).toMatchObject({
+      kind: "user_message",
+      itemId: "user:run_live",
+      content: "live question",
+    });
+
+    // 3. hydrate with real user message (same runId) replaces live item
+    state = hydrateTaskSnapshot(
+      state,
+      snapshot(
+        "task_hydrate",
+        [
+          message("task_hydrate", 1, {
+            messageId: "msg_real_user",
+            runId: "run_live",
+            role: "user",
+            content: "real question",
+          }),
+        ],
+        { latestSequence: 1, status: "running" },
+      ),
+    );
+
+    const items = state.tasksById.task_hydrate.items;
+    // Live item (user:run_live) removed, real item (msg:msg_real_user) added
+    expect(items.filter((i) => i.kind === "user_message")).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "user_message",
+      itemId: "msg:msg_real_user",
+      content: "real question",
+    });
+  });
 });

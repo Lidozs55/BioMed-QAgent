@@ -41,69 +41,97 @@ async def search_pubmed_adapter(
     *,
     services: NcbiServices,
 ) -> str:
-    """Adapt typed PubMed discovery output to the existing Skill JSON wire shape."""
+    """Adapt typed PubMed discovery output to the existing Skill JSON wire shape.
+
+    Raises the underlying exception on failure so the Agents SDK marks the
+    tool_output as ``is_error=True`` and the frontend ToolCallStep renders the
+    error state. Previously the adapter swallowed the exception and returned a
+    JSON body with ``error``/``total_count=0``, which caused the SDK to report
+    success while the LLM (and user) saw an empty result with no visible error.
+    """
 
     try:
         result = await discover_pubmed(services.eutils, query, max_results)
-        run_ctx.log_query(
-            query=query,
-            source="pubmed",
-            status=QueryStatus.SUCCESS,
-            records_count=len(result.records),
-        )
-        # Surface mid-stage progress so the frontend can show
-        # "PubMed: found N papers (of M total hits)" without waiting for
-        # stage_completed. See docs/REVIEW_2026-07-18.md §4.
-        await run_ctx.emit_progress(
-            stage=StageName.DISCOVERY,
-            kind="discovered_records",
-            current=len(result.records),
-            total=result.total_count,
-            detail={"source": "pubmed", "query": query},
-        )
-        records = [{
-            "title": record.title,
-            "abstract": record.abstract,
-            "authors": "; ".join(record.authors),
-            "journal": record.journal,
-            "pub_date": (
-                record.published_at.isoformat() if record.published_at else ""
-            ),
-            "doi": record.doi or "",
-            "pmid": record.pmid,
-            "pmcid": record.pmcid or "",
-            "is_open_access": bool(record.pmcid),
-            "source_url": record.source_url,
-        } for record in result.records]
-        return json.dumps(
-            {
-                "source": "pubmed",
-                "query": result.query,
-                "query_translation": result.query_translation,
-                "total_count": result.total_count,
-                "records": records,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as exc:
+    except Exception:
         logger.exception("PubMed search failed for query=%r", query)
         run_ctx.log_query(query, "pubmed", QueryStatus.FAILED, 0)
-        return json.dumps({
+        raise
+    run_ctx.log_query(
+        query=query,
+        source="pubmed",
+        status=QueryStatus.SUCCESS,
+        records_count=len(result.records),
+    )
+    # Surface mid-stage progress so the frontend can show
+    # "PubMed: found N papers (of M total hits)" without waiting for
+    # stage_completed. See docs/REVIEW_2026-07-18.md §4.
+    await run_ctx.emit_progress(
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=len(result.records),
+        total=result.total_count,
+        detail={"source": "pubmed", "query": query},
+    )
+    records = [{
+        "title": record.title,
+        "abstract": record.abstract,
+        "authors": "; ".join(record.authors),
+        "journal": record.journal,
+        "pub_date": (
+            record.published_at.isoformat() if record.published_at else ""
+        ),
+        "doi": record.doi or "",
+        "pmid": record.pmid,
+        "pmcid": record.pmcid or "",
+        "is_open_access": bool(record.pmcid),
+        "source_url": record.source_url,
+    } for record in result.records]
+
+    # Build a brief summary at the top of the payload so the LLM can quickly
+    # understand the result without restating the full records array. The
+    # ``usage_hint`` field tells the LLM how to consume the records (pass to
+    # ``analyze_papers``) without restating them as assistant text. See
+    # docs/REVIEW_2026-07-20-llm-output-hygiene.md for the design rationale.
+    summary_lines = [
+        f"找到 {len(records)} 篇相关文献（共 {result.total_count} 篇匹配）"
+    ]
+    top_titles = [
+        record["title"] for record in records[:3] if record.get("title")
+    ]
+    if top_titles:
+        summary_lines.append(f"前 {len(top_titles)} 篇标题：")
+        for index, title in enumerate(top_titles, 1):
+            summary_lines.append(f"{index}. {title}")
+    summary_text = "\n".join(summary_lines)
+
+    return json.dumps(
+        {
+            "summary": summary_text,
             "source": "pubmed",
-            "query": query,
-            "query_translation": "",
-            "total_count": 0,
-            "records": [],
-            "error": str(exc),
-        }, ensure_ascii=False)
+            "query": result.query,
+            "query_translation": result.query_translation,
+            "total_count": result.total_count,
+            "records_count": len(records),
+            "records": records,
+            "usage_hint": (
+                "完整记录在 records 字段，可传给 analyze_papers 工具进行结构化分析。"
+                "不要在 assistant 文本中复述 records 内容——工具卡片已自动展示。"
+            ),
+        },
+        ensure_ascii=False,
+    )
 
 
 @function_tool(
     name_override="search_pubmed",
     description_override=(
-        "Search PubMed for biomedical literature. Accepts a free-text query "
-        "and returns structured JSON records with title, abstract, authors, "
-        "journal, publication date, DOI, PMID, PMCID, and open access status."
+        "Search PubMed for biomedical literature. Returns JSON with a top-level "
+        "`summary` field (brief overview + top 3 titles) and a `records` field "
+        "(full structured records: title, abstract, authors, journal, pub_date, "
+        "doi, pmid, pmcid, is_open_access, source_url). Use the summary to brief "
+        "the user; pass `records` to `analyze_papers` for structured clue "
+        "extraction. Do NOT restate records in assistant text — the frontend "
+        "tool card already displays them."
     ),
 )
 async def search_pubmed(
@@ -112,6 +140,22 @@ async def search_pubmed(
     max_results: int = 20,
 ) -> str:
     """Search PubMed via NCBI Entrez and return structured records as JSON.
+
+    The returned JSON has the following shape::
+
+        {
+          "summary": "找到 N 篇相关文献（共 M 篇匹配）。前 3 篇标题：...",
+          "source": "pubmed",
+          "query": "...",
+          "query_translation": "...",
+          "total_count": 234,
+          "records_count": 20,
+          "records": [{"title":..., "abstract":..., "authors":...,
+                       "journal":..., "pub_date":..., "doi":...,
+                       "pmid":..., "pmcid":..., "is_open_access":...,
+                       "source_url":...}],
+          "usage_hint": "完整记录在 records 字段，可传给 analyze_papers ..."
+        }
 
     Args:
         ctx: Run context (injected by the SDK, not exposed to the LLM).

@@ -35,7 +35,7 @@ import {
   selectConnectionIsConnected,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import type { ModelInfo } from "@/hooks/useSettings";
+import type { ModelInfo } from "@/hooks/useAPI";
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;

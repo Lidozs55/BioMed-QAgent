@@ -4,7 +4,12 @@ import asyncio
 from dataclasses import FrozenInstanceError
 
 import pytest
+from agents import RunContextWrapper, function_tool
+from agents.tool_context import ToolContext
 from app.agent_loop.agent import AgentBuild, build_agent
+from app.agent_loop.context import RunContext
+from app.skills.catalog import SkillCatalog, SkillDescriptor
+from app.skills.registry import SkillCategory, SkillDef
 
 
 def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
@@ -21,16 +26,79 @@ def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
 async def test_concurrent_agent_builds_keep_skill_and_model_ownership_isolated() -> (
     None
 ):
+    catalog = SkillCatalog()
     geo_build, pdb_build = await asyncio.gather(
-        asyncio.to_thread(build_agent, ["geo"]),
-        asyncio.to_thread(build_agent, ["pdb"]),
+        asyncio.to_thread(build_agent, catalog, ["geo"]),
+        asyncio.to_thread(build_agent, catalog, ["pdb"]),
     )
 
-    assert "geo" in geo_build.skill_names
-    assert "pdb" not in geo_build.skill_names
-    assert "pdb" in pdb_build.skill_names
-    assert "geo" not in pdb_build.skill_names
+    assert geo_build.catalog is catalog
+    assert pdb_build.catalog is catalog
     assert geo_build.model is not pdb_build.model
+
+
+def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
+    build = build_agent(SkillCatalog(), databases=["pubmed", "geo"])
+
+    assert [tool.name for tool in build.agent.tools] == [
+        "find_skill",
+        "invoke_skill",
+        "run_research_pipeline",
+        "read_file",
+        "write_file",
+        "list_files",
+        "compress_query_log",
+        "review_query_strategy",
+    ]
+
+
+def test_agent_instructions_require_dynamic_skill_discovery_protocol() -> None:
+    instructions = build_agent(SkillCatalog()).agent.instructions
+
+    assert "find_skill" in instructions
+    assert "invoke_skill" in instructions
+    assert "技能目录更新后" in instructions
+    assert "每个被选中的数据库必须至少调用一次" not in instructions
+
+
+@pytest.mark.asyncio
+async def test_existing_agent_gateway_observes_catalog_hot_add() -> None:
+    @function_tool
+    async def fetch_demo(ctx: RunContextWrapper[RunContext]) -> str:
+        return "demo"
+
+    catalog = SkillCatalog()
+    build = build_agent(catalog, databases=["demo_db"])
+    find_skill = next(tool for tool in build.agent.tools if tool.name == "find_skill")
+    context = ToolContext(
+        context=RunContext(preferred_sources=["demo_db"]),
+        tool_name="find_skill",
+        tool_call_id="call-find",
+        tool_arguments='{"text":"demo_db"}',
+    )
+
+    before = await find_skill.on_invoke_tool(
+        context,
+        '{"text":"demo_db","category":null,"source":null}',
+    )
+    catalog.register(
+        SkillDescriptor.from_skill_def(
+            SkillDef(
+                name="demo_db",
+                category=SkillCategory.ACQUISITION,
+                description="Demo DB.",
+                tools=[fetch_demo],
+                supported_sources=["demo_db"],
+            )
+        )
+    )
+    after = await find_skill.on_invoke_tool(
+        context,
+        '{"text":"demo_db","category":null,"source":null}',
+    )
+
+    assert '"skills": []' in before
+    assert '"name": "demo_db"' in after
 
 
 @pytest.mark.asyncio

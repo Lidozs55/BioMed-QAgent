@@ -1,0 +1,495 @@
+"""Atomic persistent state for user-managed skill package versions."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+from collections.abc import Iterable, Mapping
+from contextlib import suppress
+from pathlib import Path
+from threading import RLock
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.skills.catalog import SkillCatalog, SkillDescriptor, SkillManifest
+from app.skills.packages import PackageValidationError, SkillPackageLoader
+
+_SENSITIVE_MANIFEST_KEYS = {
+    "authorization", "api-key", "api_key", "x-api-key", "x-auth-token",
+    "token", "secret", "password", "credential", "credentials",
+}
+_REDACTED = "[redacted]"
+
+
+def _redact_manifest(value: object, *, key: str = "") -> object:
+    if key.lower() in _SENSITIVE_MANIFEST_KEYS:
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_manifest(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_manifest(item) for item in value]
+    return value
+
+
+def _merge_redacted_patch(original: object, patch: object) -> object:
+    if patch == _REDACTED:
+        return original
+    if isinstance(original, dict) and isinstance(patch, Mapping):
+        merged = dict(original)
+        for key, value in patch.items():
+            if key == "name":
+                continue
+            merged[str(key)] = _merge_redacted_patch(merged.get(str(key)), value)
+        return merged
+    return patch
+
+
+class StoredVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version_id: str
+    version: str
+    kind: Literal["manifest", "zip"]
+    relative_path: str
+
+
+class StoredPackage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    current: str
+    enabled: bool = True
+    versions: tuple[StoredVersion, ...]
+
+
+class StoreState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    packages: dict[str, StoredPackage] = Field(default_factory=dict)
+
+
+class SkillDetail(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    manifest: SkillManifest
+    current_version: str
+    versions: tuple[str, ...]
+    package_kind: Literal["manifest", "zip"]
+    warning: str | None = None
+    available: bool = True
+    load_error: str | None = None
+    declarative_manifest: dict[str, object] | None = None
+
+
+class StoreMutation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    generation: int
+    skill: SkillManifest | None = None
+
+
+class UserSkillStore:
+    """Persist user package history and atomically publish catalog snapshots."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        catalog: SkillCatalog,
+        builtins: Iterable[SkillDescriptor] = (),
+        secrets: Mapping[str, str] | None = None,
+    ) -> None:
+        self.root = root.resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._state_path = self.root / "state.json"
+        self._lock = RLock()
+        self._catalog = catalog
+        self._builtins = tuple(builtins)
+        self._builtin_names = {item.name for item in self._builtins}
+        if len(self._builtin_names) != len(self._builtins):
+            raise ValueError("builtin skill names must be unique")
+        self._loader = SkillPackageLoader(secrets=secrets)
+        self._loaded: dict[tuple[str, str], SkillDescriptor] = {}
+        self._load_errors: dict[str, str] = {}
+        self._state = self._read_state()
+        descriptors = self._load_all(self._state)
+        self._publish(descriptors)
+
+    @property
+    def generation(self) -> int:
+        return self._catalog.snapshot().generation
+
+    def list_manifests(self) -> tuple[SkillManifest, ...]:
+        return tuple(
+            descriptor.manifest
+            for descriptor in sorted(
+                self._catalog.snapshot().skills.values(), key=lambda item: item.name
+            )
+        )
+
+    def list_details(self) -> tuple[SkillDetail, ...]:
+        names = set(self._catalog.snapshot().skills) | set(self._state.packages)
+        return tuple(self.detail(name) for name in sorted(names))
+
+    def detail(self, name: str) -> SkillDetail:
+        descriptor = self._catalog.snapshot().skills.get(name)
+        package = self._state.packages.get(name)
+        if descriptor is None and package is None:
+            raise KeyError(name)
+        if package is None:
+            assert descriptor is not None
+            return SkillDetail(
+                manifest=descriptor.manifest,
+                current_version=descriptor.version,
+                versions=(descriptor.version,),
+                package_kind="manifest",
+            )
+        current = self._version(package, package.current)
+        if descriptor is None:
+            descriptor = self._placeholder_descriptor(package, current)
+        return SkillDetail(
+            manifest=descriptor.manifest,
+            current_version=current.version,
+            versions=tuple(item.version for item in package.versions),
+            package_kind=current.kind,
+            warning=(
+                "This package executes local Python code with the backend process permissions; "
+                "install only code you trust."
+                if current.kind == "zip"
+                else None
+            ),
+            available=name not in self._load_errors,
+            load_error=self._load_errors.get(name),
+            declarative_manifest=self._declarative_manifest(current),
+        )
+
+    def _declarative_manifest(self, version: StoredVersion) -> dict[str, object] | None:
+        if version.kind != "manifest":
+            return None
+        try:
+            raw = json.loads((self.root / version.relative_path).read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return _redact_manifest(raw)
+
+    def put_manifest(self, raw: Mapping[str, object]) -> StoreMutation:
+        descriptor = self._loader.load_manifest(raw)
+        content = json.dumps(dict(raw), sort_keys=True, separators=(",", ":")).encode()
+        return self._put(descriptor, content, kind="manifest")
+
+    def patch_manifest(
+        self,
+        name: str,
+        patch: Mapping[str, object],
+    ) -> StoreMutation:
+        """Merge an editable patch into the unredacted persisted manifest."""
+        with self._lock:
+            package = self._require_user(name)
+            current = self._version(package, package.current)
+            if current.kind != "manifest":
+                raise PermissionError("Python skill packages are not editable as databases")
+            raw = json.loads((self.root / current.relative_path).read_text("utf-8"))
+            if not isinstance(raw, dict):
+                raise PackageValidationError("stored declarative manifest is invalid")
+            merged = dict(raw)
+            for field in ("display_name", "description"):
+                if field in patch and patch[field] != _REDACTED:
+                    merged[field] = patch[field]
+            operation_patch = patch.get("operation")
+            if operation_patch is not None:
+                if not isinstance(operation_patch, Mapping):
+                    raise PackageValidationError("operation patch must be an object")
+                operation_name = operation_patch.get("name")
+                operations = merged.get("operations")
+                if not isinstance(operation_name, str) or not isinstance(operations, list):
+                    raise PackageValidationError("operation patch is invalid")
+                index = next(
+                    (
+                        index
+                        for index, operation in enumerate(operations)
+                        if isinstance(operation, dict)
+                        and operation.get("name") == operation_name
+                    ),
+                    None,
+                )
+                if index is None:
+                    raise KeyError(operation_name)
+                operation = operations[index]
+                assert isinstance(operation, dict)
+                next_operations = list(operations)
+                next_operations[index] = _merge_redacted_patch(
+                    operation,
+                    operation_patch,
+                )
+                merged["operations"] = next_operations
+            return self.put_manifest(merged)
+
+    def put_zip(self, content: bytes) -> StoreMutation:
+        loaded = self._loader.load_zip(content, extraction_root=self.root / ".load")
+        return self._put(loaded.descriptor, content, kind="zip")
+
+    def validate_manifest(self, raw: Mapping[str, object]) -> SkillDescriptor:
+        return self._loader.load_manifest(raw)
+
+    def validate_zip(self, content: bytes) -> SkillDescriptor:
+        return self._loader.validate_zip(content).descriptor
+
+    def set_enabled(self, name: str, *, enabled: bool) -> StoreMutation:
+        with self._lock:
+            package = self._require_user(name)
+            if enabled and name in self._load_errors:
+                self._load_current(package, force=True)
+            state = self._replace_package(
+                package.model_copy(update={"enabled": enabled})
+            )
+            descriptors = self._load_all(state)
+            snapshot = self._commit_and_publish(state, descriptors)
+            skill = snapshot.skills.get(name)
+            if skill is None:
+                current = self._version(package, package.current)
+                skill = self._placeholder_descriptor(package, current)
+            return StoreMutation(
+                generation=snapshot.generation,
+                skill=skill.manifest,
+            )
+
+    def rollback(self, name: str) -> StoreMutation:
+        with self._lock:
+            package = self._require_user(name)
+            index = next(
+                idx for idx, item in enumerate(package.versions)
+                if item.version_id == package.current
+            )
+            if index == 0:
+                raise ValueError("no previous version is available")
+            updated = package.model_copy(
+                update={"current": package.versions[index - 1].version_id}
+            )
+            state = self._replace_package(updated)
+            descriptors = self._load_all(state)
+            snapshot = self._commit_and_publish(state, descriptors)
+            return StoreMutation(
+                generation=snapshot.generation,
+                skill=snapshot.skills[name].manifest,
+            )
+
+    def delete(self, name: str) -> StoreMutation:
+        with self._lock:
+            if name in self._builtin_names:
+                raise PermissionError("builtin skills are immutable")
+            self._require_user(name)
+            package_dir = self.root / "packages" / name
+            tombstone = self.root / "packages" / f".{name}.deleting"
+            if package_dir.exists():
+                shutil.copytree(package_dir, tombstone)
+            try:
+                self._remove_tree(package_dir)
+            except Exception:
+                self._remove_tree(tombstone)
+                raise
+            packages = dict(self._state.packages)
+            del packages[name]
+            state = self._state.model_copy(update={"packages": packages})
+            descriptors = self._load_all(state)
+            try:
+                snapshot = self._commit_and_publish(state, descriptors)
+            except Exception:
+                if tombstone.exists():
+                    tombstone.replace(package_dir)
+                raise
+            with suppress(OSError):
+                self._remove_tree(tombstone)
+            for key in [key for key in self._loaded if key[0] == name]:
+                del self._loaded[key]
+            self._load_errors.pop(name, None)
+            return StoreMutation(generation=snapshot.generation)
+
+    def _put(
+        self,
+        descriptor: SkillDescriptor,
+        content: bytes,
+        *,
+        kind: Literal["manifest", "zip"],
+    ) -> StoreMutation:
+        with self._lock:
+            if descriptor.name in self._builtin_names:
+                raise PackageValidationError(
+                    f"skill name conflicts with builtin: {descriptor.name}"
+                )
+            version_id = hashlib.sha256(content).hexdigest()
+            existing = self._state.packages.get(descriptor.name)
+            if existing is not None and any(
+                item.version_id == version_id for item in existing.versions
+            ):
+                raise FileExistsError("identical package version is already stored")
+            relative = f"packages/{descriptor.name}/{version_id}.{kind}"
+            version = StoredVersion(
+                version_id=version_id,
+                version=descriptor.version,
+                kind=kind,
+                relative_path=relative,
+            )
+            enabled = descriptor.enabled if existing is None else existing.enabled
+            versions = (version,) if existing is None else (*existing.versions, version)
+            package = StoredPackage(
+                name=descriptor.name,
+                current=version_id,
+                enabled=enabled,
+                versions=versions,
+            )
+            state = self._replace_package(package)
+            candidate = descriptor.model_copy(update={"enabled": enabled})
+            self._loaded[(descriptor.name, version_id)] = candidate
+            try:
+                descriptors = self._load_all(state)
+                self._atomic_write(self.root / relative, content)
+                snapshot = self._commit_and_publish(state, descriptors)
+            except Exception:
+                self._loaded.pop((descriptor.name, version_id), None)
+                (self.root / relative).unlink(missing_ok=True)
+                raise
+            return StoreMutation(
+                generation=snapshot.generation,
+                skill=snapshot.skills[descriptor.name].manifest,
+            )
+
+    def _replace_package(self, package: StoredPackage) -> StoreState:
+        packages = dict(self._state.packages)
+        packages[package.name] = package
+        return self._state.model_copy(update={"packages": packages})
+
+    def _load_all(self, state: StoreState) -> tuple[SkillDescriptor, ...]:
+        descriptors = list(self._builtins)
+        names = set(self._builtin_names)
+        for name in sorted(state.packages):
+            if name in names:
+                raise PackageValidationError(f"skill name conflicts with builtin: {name}")
+            try:
+                package = state.packages[name]
+                version = self._version(package, package.current)
+                descriptor = self._loaded.get((name, version.version_id))
+                if descriptor is None:
+                    descriptor = self._load_current(package)
+                descriptor = descriptor.model_copy(update={"enabled": package.enabled})
+                descriptors.append(descriptor)
+                names.add(name)
+                self._load_errors.pop(name, None)
+            except Exception:
+                self._load_errors[name] = "current package could not be loaded"
+                continue
+        return tuple(descriptors)
+
+    def _load_current(
+        self, package: StoredPackage, *, force: bool = False
+    ) -> SkillDescriptor:
+        version = self._version(package, package.current)
+        key = (package.name, version.version_id)
+        if not force and key in self._loaded:
+            return self._loaded[key]
+        path = self.root / version.relative_path
+        content = path.read_bytes()
+        try:
+            if version.kind == "manifest":
+                descriptor = self._loader.load_manifest(json.loads(content.decode("utf-8")))
+            else:
+                descriptor = self._loader.load_zip(
+                    content, extraction_root=self.root / ".load"
+                ).descriptor
+        except Exception as error:
+            raise PackageValidationError("current package could not be loaded") from error
+        self._loaded[key] = descriptor
+        self._load_errors.pop(package.name, None)
+        return descriptor
+
+    def _read_state(self) -> StoreState:
+        if not self._state_path.exists():
+            return StoreState()
+        try:
+            return StoreState.model_validate_json(self._state_path.read_text("utf-8"))
+        except ValueError as error:
+            raise PackageValidationError("stored skill state is invalid") from error
+
+    def _commit_state(self, state: StoreState) -> None:
+        self._atomic_write(
+            self._state_path,
+            state.model_dump_json(indent=2).encode("utf-8"),
+        )
+        self._state = state
+
+    def _commit_and_publish(
+        self,
+        state: StoreState,
+        descriptors: tuple[SkillDescriptor, ...],
+    ):
+        previous = self._state
+        previous_bytes = self._state_path.read_bytes() if self._state_path.exists() else None
+        self._commit_state(state)
+        try:
+            return self._publish(descriptors)
+        except Exception:
+            if previous_bytes is None:
+                self._state_path.unlink(missing_ok=True)
+            else:
+                self._atomic_write(self._state_path, previous_bytes)
+            self._state = previous
+            raise
+
+    def _publish(self, descriptors: tuple[SkillDescriptor, ...]):
+        return self._catalog.replace_all(descriptors)
+
+    @staticmethod
+    def _remove_tree(path: Path) -> None:
+        if path.exists():
+            shutil.rmtree(path)
+
+    @staticmethod
+    def _placeholder_descriptor(
+        package: StoredPackage, version: StoredVersion
+    ) -> SkillDescriptor:
+        return SkillDescriptor(
+            name=package.name,
+            display_name=package.name.replace("_", " ").title(),
+            version=version.version,
+            category="acquisition",
+            description="Unavailable user skill package.",
+            origin="package",
+            enabled=False,
+            user_selectable=False,
+            pipeline_supported=False,
+        )
+
+    def _require_user(self, name: str) -> StoredPackage:
+        if name in self._builtin_names:
+            raise PermissionError("builtin skills are immutable")
+        package = self._state.packages.get(name)
+        if package is None:
+            raise KeyError(name)
+        return package
+
+    @staticmethod
+    def _version(package: StoredPackage, version_id: str) -> StoredVersion:
+        return next(item for item in package.versions if item.version_id == version_id)
+
+    @staticmethod
+    def _atomic_write(path: Path, content: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_name, path)
+        except Exception:
+            Path(temp_name).unlink(missing_ok=True)
+            raise

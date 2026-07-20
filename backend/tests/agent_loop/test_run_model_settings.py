@@ -13,6 +13,7 @@ from app.agent_loop.context import RunContext
 from app.agent_loop.import_agent import build_attachment_parsing_agent
 from app.agent_loop.model import run_model_settings_scope
 from app.model_config import AdvancedParams, RunModelSettings, UserSettings
+from app.model_settings import AdvancedModelSettings, ModelConfiguration
 from app.runtime.manager import RunExecution
 
 
@@ -75,6 +76,23 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     )
     settings_getter = Mock(return_value=initial_settings)
     monkeypatch.setattr(settings_manager, "get_settings", settings_getter)
+    monkeypatch.setattr(
+        runner_module,
+        "get_current_model_configuration",
+        lambda: ModelConfiguration(
+            base_url=initial_settings.base_url,
+            api_key=initial_settings.api_key,
+            model_name=initial_settings.model_name,
+            max_tokens=initial_settings.max_tokens,
+            advanced=AdvancedModelSettings(
+                temperature=initial_settings.advanced.temperature,
+                top_p=initial_settings.advanced.top_p,
+                repetition_penalty=initial_settings.advanced.repetition_penalty,
+                enable_search=initial_settings.advanced.enable_search,
+                thinking_mode=initial_settings.advanced.thinking_mode,
+            ),
+        ),
+    )
     client = SimpleNamespace(close=AsyncMock())
     delegate = SimpleNamespace(
         stream_response=Mock(return_value="stream"),
@@ -131,7 +149,7 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     await executor(execution)
 
     # Then
-    settings_getter.assert_called_once_with()
+    settings_getter.assert_not_called()
     client_factory.assert_called_once_with(
         api_key="run-api-key",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",

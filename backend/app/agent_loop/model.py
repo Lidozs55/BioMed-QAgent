@@ -1,4 +1,4 @@
-"""Lazy DashScope model adapter for the OpenAI Agents SDK."""
+"""Run-scoped OpenAI-compatible model adapter for the Agents SDK."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
+from urllib.parse import urlsplit
 
 from agents import ModelSettings, OpenAIChatCompletionsModel, set_tracing_disabled
 from agents.models.interface import Model
 from openai import AsyncOpenAI
 
-from app import settings_manager
-from app.model_config import RunModelSettings, UserSettings
+from app.model_config import RunModelSettings
+from app.model_settings import ModelConfiguration, get_current_model_configuration
 from app.tools.network_safety import validate_credentialed_public_url
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
@@ -27,18 +28,34 @@ class ModelConfigurationError(RuntimeError):
     code = "configuration_error"
 
 
+def to_run_model_settings(configuration: ModelConfiguration) -> RunModelSettings:
+    """Convert the mutable-store snapshot into one immutable Run snapshot."""
+
+    return RunModelSettings(
+        base_url=str(configuration.base_url),
+        api_key=configuration.api_key,
+        model_name=configuration.model_name,
+        max_tokens=configuration.max_tokens,
+        temperature=configuration.advanced.temperature,
+        top_p=configuration.advanced.top_p,
+        repetition_penalty=configuration.advanced.repetition_penalty,
+        enable_search=configuration.advanced.enable_search,
+        thinking_mode=configuration.advanced.thinking_mode,
+    )
+
+
 def _resolve_model_settings(
-    model_settings: RunModelSettings | UserSettings | None,
+    model_settings: RunModelSettings | ModelConfiguration | None,
 ) -> RunModelSettings:
-    """Return an explicit snapshot or resolve standalone runtime settings."""
+    """Return an explicit Run snapshot or capture the current store once."""
 
     match model_settings:
         case RunModelSettings():
             return model_settings
-        case UserSettings():
-            return RunModelSettings.from_user_settings(model_settings)
+        case ModelConfiguration():
+            return to_run_model_settings(model_settings)
         case None:
-            return RunModelSettings.from_user_settings(settings_manager.get_settings())
+            return to_run_model_settings(get_current_model_configuration())
 
 
 def get_active_model_settings() -> RunModelSettings:
@@ -70,37 +87,30 @@ def build_sdk_model_settings(model_settings: RunModelSettings) -> ModelSettings:
 def _uses_dashscope_compatible_qwen(model_settings: RunModelSettings) -> bool:
     """Return whether DashScope-only request fields are valid for this Run."""
 
-    from urllib.parse import urlsplit
-
-    model_name = model_settings.model_name.lower()
     parsed_url = urlsplit(model_settings.base_url)
     return (
-        model_name.startswith(("qwen", "qwq"))
+        model_settings.model_name.casefold().startswith(("qwen", "qwq"))
         and parsed_url.hostname == "dashscope.aliyuncs.com"
         and parsed_url.path.rstrip("/") == "/compatible-mode/v1"
     )
 
 
 def require_model_credentials(
-    model_settings: RunModelSettings | UserSettings | None = None,
+    model_settings: RunModelSettings | ModelConfiguration | None = None,
 ) -> None:
     """Validate credentials only when execution is about to call the model."""
 
-    active_settings = _resolve_model_settings(model_settings)
-    if not active_settings.api_key:
-        raise ModelConfigurationError(
-            "DASHSCOPE_API_KEY is required to run the model"
-        )
+    if not _resolve_model_settings(model_settings).api_key:
+        raise ModelConfigurationError("DASHSCOPE_API_KEY is required to run the model")
 
 
 def _build_client(model_settings: RunModelSettings) -> AsyncOpenAI:
     """Create one credentialed client for an already-resolved Run snapshot."""
 
     require_model_credentials(model_settings)
-    base_url = validate_credentialed_public_url(model_settings.base_url)
     return AsyncOpenAI(
         api_key=model_settings.api_key,
-        base_url=base_url,
+        base_url=validate_credentialed_public_url(model_settings.base_url),
     )
 
 
@@ -117,10 +127,12 @@ def _build_delegate(
 
 
 class LazyDashScopeModel(Model):
-    """Agents SDK model that creates its HTTP client on first model call."""
+    """Agents SDK model with an explicitly owned, lazily created client."""
 
     def __init__(self, model_settings: RunModelSettings | None = None) -> None:
-        self._model_settings = model_settings
+        resolved_settings = _resolve_model_settings(model_settings)
+        self._model_settings = resolved_settings
+        self.model_settings = build_sdk_model_settings(resolved_settings)
         self._delegate: OpenAIChatCompletionsModel | None = None
         self._client_resources: tuple[RunModelSettings, AsyncOpenAI] | None = None
 
@@ -142,6 +154,8 @@ class LazyDashScopeModel(Model):
         return self._get_delegate().stream_response(*args, **kwargs)
 
     async def close(self) -> None:
+        """Release every owned resource exactly once."""
+
         delegate = self._delegate
         client_resources = self._client_resources
         self._delegate = None
@@ -167,12 +181,10 @@ def run_model_settings_scope(model_settings: RunModelSettings) -> Iterator[None]
 
 
 def get_model(
-    model_settings: RunModelSettings | None = None,
+    model_settings: RunModelSettings | ModelConfiguration | None = None,
 ) -> LazyDashScopeModel:
     """Return a model adapter without constructing a credentialed client."""
 
     set_tracing_disabled(True)
-    active_settings = (
-        model_settings if model_settings is not None else _run_model_settings.get()
-    )
-    return LazyDashScopeModel(active_settings)
+    active_settings = model_settings or _run_model_settings.get()
+    return LazyDashScopeModel(_resolve_model_settings(active_settings))
