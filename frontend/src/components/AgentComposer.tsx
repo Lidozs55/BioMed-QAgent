@@ -413,7 +413,7 @@ export function AgentComposer({
                                   {m.recommended && (
                                     <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
                                   )}
-                                  {m.capabilities.image && (
+                                  {m.capabilities?.image && (
                                     <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
                                   )}
                                 </button>
