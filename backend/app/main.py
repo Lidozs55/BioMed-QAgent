@@ -28,6 +28,18 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
+# TODO §1.7: structured JSON logging for pipeline audit events.
+# Each EventEnvelope published by PipelineRunner._publish_event is logged as
+# a single JSON line via logging.getLogger("app.pipeline"). The JSONL file
+# is the audit artifact for metrics analysis and ablation studies.
+_pipeline_log_dir = Path("logs")
+_pipeline_log_dir.mkdir(parents=True, exist_ok=True)
+_pipeline_log_handler = logging.FileHandler(
+    _pipeline_log_dir / "pipeline.jsonl", encoding="utf-8"
+)
+_pipeline_log_handler.setFormatter(logging.Formatter("%(message)s"))
+logging.getLogger("app.pipeline").addHandler(_pipeline_log_handler)
+
 _STORAGE_WORKER_THREADS = 2
 
 

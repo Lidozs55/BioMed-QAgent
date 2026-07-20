@@ -10,6 +10,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import logging
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
@@ -18,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from app.core.metrics import MetricsTracker
 from app.domain.contracts import (
     ArtifactManifestEntry,
     AttemptStatus,
@@ -78,6 +80,8 @@ from app.pipeline.state import (
 )
 from app.runtime.event_store import append_jsonl_records, read_jsonl
 from app.tools.workdir import create_task_workdir
+
+logger = logging.getLogger("app.pipeline")
 
 DEFAULT_STAGE_TIMEOUTS: dict[StageName, float] = {
     StageName.DISCOVERY: 30.0,
@@ -211,6 +215,8 @@ class PipelineRunner:
         )
         self.events: list[EventEnvelope] = []
         self._persisted_attempt_count = self._load_persisted_attempt_count()
+        # TODO §1.7: MetricsTracker for per-stage timing and ablation export.
+        self.metrics = MetricsTracker(task_id=task_id)
         # Sequence is task-local and monotonically increasing within a single
         # PipelineRunner instance. Cross-run continuity is handled by the
         # runtime EventStore, not by the pipeline.
@@ -348,6 +354,10 @@ class PipelineRunner:
         except Exception as exc:
             return await self._finalize_failed(exc, ErrorCode.INTERNAL_ERROR)
         finally:
+            # TODO §1.7: save MetricsTracker regardless of run outcome
+            # (success, failure, cancellation) so ablation data is never lost.
+            with suppress(Exception):
+                self.metrics.save(self.workdir.logs / "metrics.json")
             lock.release()
 
     async def run_streamed(self) -> AsyncIterator[EventEnvelope]:
@@ -670,27 +680,28 @@ class PipelineRunner:
                 stage_attempt_id=stage_attempt_id,
             )
 
-            try:
-                result = await self._run_stage(
-                    stage,
-                    stage_outputs,
-                    stage_attempt_id,
-                    self.stage_timeouts[stage],
-                )
-            except TimeoutError:
-                return await self._finalize_stage_failed(
-                    stage,
-                    TimeoutError(f"stage {stage.value} timeout exceeded"),
-                    ErrorCode.TIMEOUT,
-                )
-            except PipelineCancelledError:
-                return await self._finalize_cancelled()
-            except Exception as exc:
-                return await self._finalize_stage_failed(
-                    stage,
-                    exc,
-                    ErrorCode.INTERNAL_ERROR,
-                )
+            with self.metrics.stage(stage.value):
+                try:
+                    result = await self._run_stage(
+                        stage,
+                        stage_outputs,
+                        stage_attempt_id,
+                        self.stage_timeouts[stage],
+                    )
+                except TimeoutError:
+                    return await self._finalize_stage_failed(
+                        stage,
+                        TimeoutError(f"stage {stage.value} timeout exceeded"),
+                        ErrorCode.TIMEOUT,
+                    )
+                except PipelineCancelledError:
+                    return await self._finalize_cancelled()
+                except Exception as exc:
+                    return await self._finalize_stage_failed(
+                        stage,
+                        exc,
+                        ErrorCode.INTERNAL_ERROR,
+                    )
 
             await self._emit_stage_event(
                 ToolCompletedPayload(
@@ -1141,6 +1152,11 @@ class PipelineRunner:
         self.events.append(event)
         if self._event_queue is not None:
             self._event_queue.put_nowait(event)
+        # TODO §1.7: structured JSON log for audit/metrics analysis.
+        # Covers stage_started / stage_completed / artifact_produced /
+        # validation_failed (and all other event types) because they all
+        # flow through this single chokepoint.
+        logger.info(json.dumps(event.model_dump(mode="json"), default=str))
 
     async def _emit_event(self, payload: Any) -> None:
         await self._publish_event(self._build_event(payload))
