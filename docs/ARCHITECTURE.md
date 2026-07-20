@@ -505,8 +505,11 @@ POST 合并语义：
 
 - 字段为 `None` 时跳过（保留现有值）。
 - `api_key`：省略或等于掩码 → 保留；空串 → 清除；非空 → 替换。
-- 原子持久化到 `data/user_settings.json`，启动时从环境变量回退
-  （`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_NAME`）。
+- 原子持久化到 `data/user_settings.json`。持久化文件中的 `api_key` 字段（包括
+  空串）是权威值；只有文件或字段缺失时才从 `DASHSCOPE_API_KEY` 回退，确保显式
+  清除在重启后不会被环境变量恢复。其他空字段仍按现有环境变量契约回退。
+- 应用入口使用 `TrustedHostMiddleware`，仅接受 `127.0.0.1` 与 `localhost`，阻断
+  DNS rebinding 页面通过恶意 Host 访问本地设置控制面。
 
 **GET /api/v1/vendors**
 
@@ -522,6 +525,9 @@ POST 合并语义：
   供应商 OpenAI 兼容端点发送 `GET /models` 以发现可用模型。
 - 带凭据发现要求 HTTPS（`http://` + 非空 key 视为不安全）。
 - HTTP 客户端**不**跟随重定向（`follow_redirects=False`，10s 超时）。
+- 服务端仅解析供应商域名一次，校验所有解析结果均为公网地址后，直接连接已校验
+  的 IP；原域名仅通过 `Host` 与 HTTPX `sni_hostname` 传递，以同时保持 TLS
+  证书校验并消除 DNS 校验与连接之间的重绑定窗口。
 - 不安全供应商 URL 返回 422；供应商网络故障返回 502。
 - API 发现的模型优先使用内置目录补充元数据；未知模型按名称模式推断能力，
   并按模型族赋予不同上下文窗口。
@@ -555,6 +561,11 @@ DashScope 专有字段仅在 `model_name` 以 `qwen`/`qwq` 开头且 `base_url` 
 与 path 匹配 `dashscope.aliyuncs.com/compatible-mode/v1` 时发送，否则 `extra_body`
 为 `None`。标准字段（max_tokens、temperature、top_p）始终发送。
 `false` 值被显式保留发送。
+
+Agent 文本模型发送凭据前同样要求公网 HTTPS URL。`LazyDashScopeModel` 显式持有
+其创建的 `AsyncOpenAI` 客户端，不依赖 Agents SDK delegate 的默认 `close()`；
+Run 清理时先解除内部引用，再关闭 delegate 和底层客户端，因此构造失败与重复
+`close()` 都不会泄漏或重复关闭连接池。
 
 **VLM 调用语义**
 
@@ -702,8 +713,8 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 
 ## 12. 当前实现证据（2026-07-19）
 
-- 默认离线后端测试：**`1025 passed, 1 skipped, 26 deselected`**（86 个测试文件）；
-  Ruff `app/ tests/ launcher.py` 为 `All checks passed!`，默认不访问网络。
+- 默认离线后端测试以 `uv run pytest` 的当前结果为准；Ruff
+  `app/ tests/ launcher.py` 为零告警门禁，默认测试不访问网络。
   `filterwarnings = ["error", ...]` 把所有告警升级为失败，仅显式忽略 Starlette
   TestClient 弃用告警。
 - live 验收：PMID 34180400、GSE178352 元数据和官方
@@ -740,8 +751,8 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
   `total` / `detail`）跨 Agent / Pipeline 模式发射，Skills 在 `log_query` 后发射
   `discovered_records` / `downloaded_bytes` / `cleaned_rows` 进度事件。前端
   删除 stage 事件 Agent 模式丢弃守卫，`AgentProgress.tsx` 增加跨模式 stage/进度
-  chips。前端 Vitest 为 **15 文件 / 200+ tests passed**；ESLint 0 warning、
-  TypeScript typecheck 和 production build 均通过。
+  chips。前端 Vitest、ESLint 零告警、TypeScript typecheck 和 production build
+  均为合并门禁；当前模型设置回归同时覆盖读取、保存、取消与乱序 settlement。
 - 视觉证据采集：`web_visual_capture` skill（`capture_web_page` +
   `capture_page_section`）使用 Playwright Chromium 截图，产物为内容寻址 PNG
   （`source_assets/figures/fig_<sha256[:12]>.png`）+ `_meta.json` sidecar；不进入
@@ -773,11 +784,5 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
   完整运行并展示 14 个产物；1440×900 与 390×844 下结果列表可滚动至最后产物，
   390×520 压缩高度下设置提交控件仍可达，长标题截断且不遮挡状态/删除控件。
 
-未完成能力继续以 [TODO.md](TODO.md) 中未勾选条目为准，尤其是 §4.2.3 数据修正
-实例、§1 系列硬编码解除（processing live 模式 fixture SOFT / `len(samples) != 12`
-硬校验 / `staging_run("run_pinned_fixture")` 硬编码 / `field_descriptions`
-placeholder / `source_relations` / `processing_log` 硬编码）、§1.5 PubMed
-`download_supplementary` 合规化、§1.7 CSV UTF-8 BOM / `run_manifest.json`
-`model_name=None` / `warnings.csv` 恒空 / `MetricsTracker` 接入 / Pipeline 全链路
-结构化日志、§8.3 数据源硬门控解除、§8.4 Agent INSTRUCTIONS follow-up 策略与
-ReviewerAgent、§8.6 BrowserPool、§8.7 structlog 与错误吞掉点修复。
+未完成能力只以 [TODO.md](TODO.md) 中未勾选条目为准；本节不复制任务清单，避免
+已完成状态在两处维护后产生漂移。

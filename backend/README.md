@@ -237,12 +237,14 @@ backend/
 **模型设置安全语义**
 
 - **Key 掩码**：`GET /settings` 中长度不超过 12 的非空 `api_key` 返回 `****`，更长的 key 返回 `前4...后4`；空 key 返回空串。
-- **Key 修改**：`POST /settings` 中 `api_key` 省略或等于掩码值时保留原值；空串清除 key；非空字符串替换。
+- **Key 修改**：`POST /settings` 中 `api_key` 省略或等于掩码值时保留原值；空串清除 key 且重启后仍保持清除；非空字符串替换。只有持久化文件或 `api_key` 字段缺失时才回退到环境变量。
 - **无 URL 传参**：`api_key` 仅通过 `POST /settings` body 传递，不存在 URL 查询参数泄漏途径。
-- **不安全 URL 拒绝**：供应商 URL 必须通过 `validate_public_http_url` 校验（拒绝内网/文件协议/危险字符），校验失败返回 422。
-- **带凭据发现要求 HTTPS**：`GET /models?use_current_settings=true` 发送带凭据请求时要求 `https://` 协议，`http://` + 非空 key 返回 422。
+- **本地 Host 边界**：应用只接受 `127.0.0.1` 与 `localhost` Host，恶意 Host 在路由执行前返回 400。
+- **不安全 URL 拒绝**：供应商 URL 解析结果必须全部为公网地址；模型发现连接已校验 IP，并用原域名作为 Host/SNI，避免 DNS rebinding。校验失败返回 422。
+- **带凭据请求要求 HTTPS**：模型发现、Agent 文本模型和 VLM 发送 key 前都要求 `https://`，否则拒绝请求。
 - **无重定向**：模型发现 HTTP 客户端配置 `follow_redirects=False`，避免 SSRF 重定向攻击。
 - **原子持久化**：设置写入 `data/user_settings.json` 使用 `tempfile.mkstemp` + `os.replace` 原子交换，中间文件在失败时清理。
+- **显式客户端所有权**：每个 Agent Run 与 VLM 调用都关闭其创建的 `AsyncOpenAI` 客户端，不依赖 SDK delegate 的默认清理。
 
 ### WebSocket
 
