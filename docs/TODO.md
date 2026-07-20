@@ -181,16 +181,31 @@
 
 ### 1.6 配置完整性
 
-- [ ] **P0** 补充 `.env.example` 的 NCBI 配置项
+- [x] **P0** 补充 `.env.example` 的 NCBI 配置项
 
       （`NCBI_EMAIL` / `NCBI_TOOL` / `NCBI_API_KEY` / `NCBI_USER_AGENT`）
+      —— 同时补充了注释化的高级配置项（`TASK_PAGE_*` / `RUNTIME_*`），
+         让新贡献者 `cp .env.example .env` 后能立即看到所有可调参数。
+      —— 回归守卫：`tests/test_config.py::test_env_example_contains_ncbi_config`
 
-- [ ] **P0** 补全 `pyproject.toml` 运行时依赖
+- [x] **P0** 补全 `pyproject.toml` 运行时依赖
 
-      —— 缺 `pdfplumber` / `PyPDF2` / `openpyxl`（当前 `uv sync` 后 ImportError）
-      —— 新增 `[project.optional-dependencies]` 分区：`ocr`（pytesseract）/ `chart`（pdf2image+opencv）
-      —— 修正 `description` 模板默认值
-      —— 同步 `requirements.txt`（当前仅 6 个依赖，与 pyproject.toml 严重不一致）
+      —— 移除死依赖 `biopython`（§1.5 已移除最后一个使用点，由
+         `test_pubmed_module_does_not_import_biopython` 守卫）
+      —— 移除死依赖 `geoparse`（从未在 `app/` 或 `tests/` 中被 import）
+      —— 新增 `openpyxl>=3.1.0`（`app/tools/parse_excel.py` 实际使用）
+      —— 修正 `description` 模板默认值为实际项目描述
+      —— 新增 `[project.optional-dependencies]` 分区：`pdf`（`PyPDF2>=3.0.0`，
+         作为 `extract_tables.py` 的可选 fallback 后端；`pdfplumber` 仍是主后端）
+      —— ~~`ocr`（pytesseract）/ `chart`（pdf2image+opencv）~~ 已放弃：
+         §5.2 已将传统 CV 方案替换为 Qwen-VL 视觉模型降级方案
+      —— 同步 `requirements.txt`（从 6 个依赖扩展到 15 个，与 pyproject.toml
+         `[project].dependencies` 完全一致；被 `.github/workflows/package.yml`
+         用于 Windows PyInstaller 打包）
+      —— 回归守卫：`test_pyproject_does_not_declare_dead_deps` /
+         `test_pyproject_declares_openpyxl` /
+         `test_pyproject_description_is_not_template` /
+         `test_requirements_txt_in_sync_with_pyproject_runtime_deps`
 
 ### 1.7 P0：产物元数据与可观测性
 

@@ -1,16 +1,15 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "BioMed-QAgent backend — multi-source biomedical data acquisition, processing, and analysis agent loop."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "biopython>=1.83",
     "beautifulsoup4>=4.12.0",
     "fastapi>=0.115.0",
-    "geoparse>=2.0.0",
     "httpx>=0.27.0",
     "openai-agents>=0.1.0",
+    "openpyxl>=3.1.0",
     "pdfplumber>=0.11.0",
     "playwright>=1.40.0",
     "pydantic>=2.0.0",
@@ -22,6 +21,20 @@ dependencies = [
     "seaborn>=0.13.0",
     "websockets>=12.0",
 ]
+
+# Optional dependencies — install with `uv sync --extra <name>` or
+# `uv pip install -e ".[<name>]"`. These are NOT pulled in by default `uv sync`.
+#
+# - pdf: PyPDF2 as an alternative backend for extract_tables.py. pdfplumber
+#   remains the primary backend; PyPDF2 is a graceful fallback used only when
+#   pdfplumber fails to parse a given PDF. See app/skills/builtin/processing/
+#   extract_tables.py:_resolve_pdf_backend.
+#
+# Note: the previously-proposed `ocr` (pytesseract) and `chart` (pdf2image +
+# opencv) extras were dropped — §5.2 of TODO.md replaced the traditional CV
+# approach with a Qwen-VL vision-model fallback, so those deps are not needed.
+[project.optional-dependencies]
+pdf = ["PyPDF2>=3.0.0"]
 
 [dependency-groups]
 dev = [
