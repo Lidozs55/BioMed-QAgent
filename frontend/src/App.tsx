@@ -94,7 +94,7 @@ export default function App() {
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
           <SidebarTrigger aria-label="Toggle sidebar" />
-          <h1 className="min-w-0 truncate text-lg font-semibold">BioMed Q-Agent</h1>
+          <h1 className="min-w-0 truncate text-lg font-semibold">BioMed QAgent</h1>
           <div className="flex shrink-0 items-center gap-2">
             <ArtifactPanelToggle />
             <ToolTrace />

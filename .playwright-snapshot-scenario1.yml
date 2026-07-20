@@ -13,7 +13,7 @@
     - generic [ref=f2e26]:
       - button "Toggle sidebar" [ref=f2e27]:
         - generic [ref=f2e28]: Toggle Sidebar
-      - heading "BioMed Q-Agent" [level=1] [ref=f2e29]
+      - heading "BioMed QAgent" [level=1] [ref=f2e29]
       - button "Toggle theme" [ref=f2e30]
     - main [ref=f2e31]:
       - generic [ref=f2e34]:

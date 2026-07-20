@@ -2,7 +2,7 @@
 
 ## Context
 
-BioMed Q-Agent already has an initial end-to-end file import path:
+BioMed QAgent already has an initial end-to-end file import path:
 
 - `AgentComposer` selects files and starts an IMPORT task.
 - `POST /api/v1/import/tasks` accepts multipart uploads.
