@@ -50,7 +50,7 @@ function CapabilityBadge({ label, supported, icon: Icon }: { label: string; supp
     <span className={cn(
       "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
       supported
-        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+        ? "text-emerald-600 dark:text-emerald-400"
         : "bg-muted text-muted-foreground line-through",
     )}>
       {Icon ? <Icon weight="fill" className="size-3" /> : (supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />)}
@@ -321,17 +321,17 @@ export function SettingsPanel({
                               <div className="ml-3 flex shrink-0 gap-1.5">
                                 {model.capabilities.image && (
                                   <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><Image weight="fill" className="size-3" /></span>
+                                    <span className="text-emerald-600 dark:text-emerald-400"><Image weight="fill" className="size-3" /></span>
                                   </TooltipTrigger><TooltipContent>支持图像</TooltipContent></Tooltip></TooltipProvider>
                                 )}
                                 {model.capabilities.video && (
                                   <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><VideoCamera weight="fill" className="size-3" /></span>
+                                    <span className="text-emerald-600 dark:text-emerald-400"><VideoCamera weight="fill" className="size-3" /></span>
                                   </TooltipTrigger><TooltipContent>支持视频</TooltipContent></Tooltip></TooltipProvider>
                                 )}
                                 {model.capabilities.audio && (
                                   <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><SpeakerHigh weight="fill" className="size-3" /></span>
+                                    <span className="text-emerald-600 dark:text-emerald-400"><SpeakerHigh weight="fill" className="size-3" /></span>
                                   </TooltipTrigger><TooltipContent>支持音频</TooltipContent></Tooltip></TooltipProvider>
                                 )}
                               </div>
