@@ -181,6 +181,68 @@ describe("SettingsPanel", () => {
     expect(imgLabel).toHaveAttribute("title", "支持图像");
   });
 
+  it("sends empty api_key string when user clears masked key field", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsPanel
+        settings={MASKED_SETTINGS}
+        models={MODELS}
+        vendors={VENDORS}
+        loading={false}
+        saving={false}
+        modelsLoading={false}
+        error={null}
+        onSave={onSave}
+        onClose={vi.fn()}
+        onFetchModels={vi.fn()}
+      />,
+    );
+
+    // Clear the API key input (user deletes all characters)
+    const apiKeyInput = screen.getByLabelText("API Key");
+    fireEvent.change(apiKeyInput, { target: { value: "" } });
+
+    // Mark dirty by changing a different field
+    const slider = screen.getByLabelText("最大输出 Tokens");
+    fireEvent.change(slider, { target: { value: "16384" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const payload = onSave.mock.calls[0][0] as Record<string, unknown>;
+    // Empty string means "clear the key on the backend"
+    expect(payload.api_key).toBe("");
+  });
+
+  it("omits api_key when mask is untouched (regression: empty mask sends nothing)", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsPanel
+        settings={MASKED_SETTINGS}
+        models={MODELS}
+        vendors={VENDORS}
+        loading={false}
+        saving={false}
+        modelsLoading={false}
+        error={null}
+        onSave={onSave}
+        onClose={vi.fn()}
+        onFetchModels={vi.fn()}
+      />,
+    );
+
+    // Only change max tokens — leave API key untouched
+    const slider = screen.getByLabelText("最大输出 Tokens");
+    fireEvent.change(slider, { target: { value: "16384" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const payload = onSave.mock.calls[0][0] as Record<string, unknown>;
+    // Untouched mask: api_key should NOT appear in payload
+    expect(payload).not.toHaveProperty("api_key");
+  });
+
   it("model dropdown scroll-area uses explicit h-72 height for scroll to work", () => {
     const manyModels: ModelInfo[] = Array.from({ length: 229 }, (_, i) => ({
       id: `model-${i + 1}`,

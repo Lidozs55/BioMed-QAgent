@@ -91,10 +91,11 @@ function ModelInfoCard({ model }: { model: ModelInfo }) {
   )
 }
 
-export function SettingsPanel({
-  settings: initialSettings, models, loading, saving,
-  modelsLoading, error, onSave, onClose, onFetchModels,
-}: SettingsPanelProps) {
+export function SettingsPanel(props: SettingsPanelProps) {
+  const {
+    settings: initialSettings, models, loading, saving,
+    modelsLoading, error, onSave, onClose,
+  } = props
   const [baseUrl, setBaseUrl] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [apiKeyInput, setApiKeyInput] = useState("")
@@ -127,15 +128,7 @@ export function SettingsPanel({
      setThinkingMode(initialSettings.advanced?.thinking_mode ?? false)
    }
  }, [initialSettings])
- /* eslint-enable react-hooks/set-state-in-effect */
-
-  useEffect(() => {
-    // Preview models when base URL changes (without API key in URL).
-    // Full model list is loaded via refreshModels() after settings are saved.
-    if (baseUrl && baseUrl !== initialSettings?.base_url) {
-      void onFetchModels(undefined, baseUrl)
-    }
-  }, [baseUrl, initialSettings?.base_url, onFetchModels])
+   /* eslint-enable react-hooks/set-state-in-effect */
 
   const selectedModel = models.find((m) => m.id === modelName)
   const filteredModels = models.filter((m) =>
@@ -155,8 +148,10 @@ export function SettingsPanel({
     setModelError(null)
     const payload: Record<string, unknown> = {}
     if (baseUrl !== initialSettings?.base_url) payload.base_url = baseUrl
-    // Only send API key if user typed a new value (not the pre-filled masked key)
-    if (apiKeyInput && apiKeyInput !== initialSettings?.api_key) payload.api_key = apiKeyInput
+    // Send api_key only when the user has explicitly modified the input:
+    // - Empty string clears the key; non-empty string updates it.
+    // - Untouched mask (equal to initial) is omitted.
+    if (apiKeyInput !== initialSettings?.api_key) payload.api_key = apiKeyInput
     if (modelName !== initialSettings?.model_name) payload.model_name = modelName
     if (maxTokens !== initialSettings?.max_tokens) payload.max_tokens = maxTokens
     if (temperature !== (initialSettings?.advanced?.temperature ?? 0.7)) payload.temperature = temperature
