@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from agents import Agent
 
 from app.agent_loop.model import LazyDashScopeModel, get_model
+from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.pipeline.tool import run_research_pipeline
 from app.skills.registry import (
@@ -129,6 +130,30 @@ Pipeline **始终保证 `main_data.csv` 至少包含每个样本一行真实数�
   调用 compress_query_log 工具压缩旧记录
 - 压缩后仅保留最近 5 条完整记录，更早的记录转为摘要
 - 上下文管理子 Agent 后续会扩展更多能力（如压缩 records、注入背景等）
+
+## Follow-up 查询策略（TODO §8.4）
+project_memory 硬约束：follow-up loop 最多 3 轮，失败查询标记 `not_found` 不重试。
+
+- **每个 source 最多 3 轮 follow-up**：对同一数据库（如 pubmed）用不同关键词
+  重试查询，累计 3 次 `not_found` 后必须停止该 source 的重试，转用其他 source
+  或进入 pipeline 阶段
+- **`not_found` 不重试**：一次查询返回零结果并标记 `QueryStatus.NOT_FOUND` 后，
+  不得用相同 query 重试。可以换关键词、换字段、换 source，但不得重复同一查询
+- **`followup_search_count` 自查**：RunContext.followup_search_count 暴露当前
+  per-source 最高的 not_found 计数。在每次 follow-up 前检查此值，达到 3 即停止
+- **网络错误可重试**：`QueryStatus.FAILED`（网络/服务错误）不计入 follow-up 计数，
+  可以重试（但要换 query 或降低频率）
+
+## ReviewerAgent 策略审查（TODO §8.4）
+project_memory 硬约束：压缩前完整传递 query log 给 ReviewerAgent。
+
+- **在调用 `run_research_pipeline` 前主动调用 `review_query_strategy` 工具**
+- ReviewerAgent 会审查 query log 的策略合理性：哪些 source 已覆盖、哪些
+  `not_found` 不应重试、是否需要换关键词或换 source
+- 审查结果写入 `RunContext.query_log_summary`，在后续 `compress_query_log`
+  压缩时保留（不会被丢失）
+- 调用时机：当你认为查询阶段已基本完成、准备进入 pipeline 时，先调用
+  `review_query_strategy`，再调用 `run_research_pipeline`
 
 当前确定性 Pipeline 支持 fixture 模式（离线回归用例）和 live 模式（真实外部 API）。
 用户选择的数据库决定加载哪些 acquisition skill：PubMed/GEO 可走 Pipeline 产出主数据 CSV；
@@ -261,6 +286,8 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([run_research_pipeline, read_file, write_file, list_files])
     tools.append(build_compress_query_log_tool(model))
+    # TODO §8.4: ReviewerAgent — strategy review before run_research_pipeline.
+    tools.append(build_review_query_strategy_tool(model))
     seen: set[str] = set()
     unique_tools: list = []
     for t in tools:

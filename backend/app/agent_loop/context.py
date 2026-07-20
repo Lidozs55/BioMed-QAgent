@@ -83,6 +83,15 @@ class RunContext:
         default_factory=asyncio.Event,
         repr=False,
     )
+    # TODO §8.4: per-source follow-up counter for LLM self-enforcement.
+    # Each log_query(status=NOT_FOUND) increments the counter for that source.
+    # LLM reads followup_search_count via RunContext to self-enforce the
+    # 3-round limit (project_memory hard constraint).
+    _followup_counts: dict[str, int] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
     _pipeline_publication_reserved: bool = field(
         default=False,
         init=False,
@@ -286,6 +295,9 @@ class RunContext:
         ``status`` 接受 ``QueryStatus`` 枚举或字符串。枚举值会被序列化为
         其字符串形式（``QueryStatus.SUCCESS`` → ``"success"``），保证
         ``query_log`` JSON 可序列化且跨 skill 一致（TODO §1.8）。
+
+        TODO §8.4: ``NOT_FOUND`` 状态会累加 per-source follow-up 计数，
+        通过 ``followup_search_count`` property 暴露给 LLM 自查 3 轮上限。
         """
         # 支持 QueryStatus 枚举传入;StrEnum 的 __str__ 返回 value,
         # 但显式转换避免任何边界情况。
@@ -298,6 +310,23 @@ class RunContext:
                 "records_count": records_count,
             }
         )
+        # TODO §8.4: per-source follow-up counter.
+        if status_value == QueryStatus.NOT_FOUND.value:
+            self._followup_counts[source] = (
+                self._followup_counts.get(source, 0) + 1
+            )
+
+    @property
+    def followup_search_count(self) -> int:
+        """Total follow-up searches across all sources (NOT_FOUND count).
+
+        LLM reads this via RunContext to self-enforce the 3-round limit.
+        Returns the max per-source count, so the LLM knows the worst-case
+        follow-up depth. A single source hitting 3 triggers the limit.
+        """
+        if not self._followup_counts:
+            return 0
+        return max(self._followup_counts.values())
 
     def query_log_size(self) -> int:
         """估算 query_log 的字符总量（触发压缩判断用）。"""

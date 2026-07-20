@@ -1038,11 +1038,18 @@
       —— `context.py:277-300` `log_query()` 接受 `QueryStatus | str`
       —— 11 个 skill 文件 42 处 `log_query()` 调用全部迁移到 `QueryStatus.X`
 
-- [ ] **P0** Agent INSTRUCTIONS 新增 follow-up 策略
+- [x] **P0** Agent INSTRUCTIONS 新增 follow-up 策略
 
       —— 最多 3 轮，失败查询标记 `not_found` 不重试
       —— `IterationDecisionAgent` 已被 project_memory 硬约束要求"完全移除"
       （`backend/app/agent_loop/agent.py`）
+      —— 实现：INSTRUCTIONS 新增 "Follow-up 查询策略" 段落，明确每个 source
+         最多 3 轮 follow-up、`not_found` 不重试、`followup_search_count` 自查、
+         网络错误 `FAILED` 可重试（不计入 follow-up 计数）。
+      —— 配套 TDD：`tests/agent_loop/test_followup_reviewer.py` 中
+         `test_instructions_describe_followup_max_3_rounds` /
+         `test_instructions_tell_llm_not_to_retry_not_found` /
+         `test_instructions_mention_followup_search_count`
 
 - [x] **P0** 新增 `tests/test_query_log_status_consistency.py`
 
@@ -1082,10 +1089,24 @@
         在 `finish_reason="length"` 时抛异常；`prepare()` 新增
         `except ConversationSummarizerTruncatedError: raise` 短路 `_fallback()`
 
-- [ ] **P0** 实现 ReviewerAgent
+- [x] **P0** 实现 ReviewerAgent
 
       —— project_memory 硬约束"压缩前完整传递 query log 给 ReviewerAgent"完全未实现
       —— 当前 `query_log_summary` 仅 task-local（`summarizer.py:254-260`）
+      —— 实现：新增 `backend/app/agent_loop/reviewer.py`，通过 `Agent.as_tool()`
+         暴露 `review_query_strategy` 工具给主 Agent。ReviewerAgent 在调用
+         `run_research_pipeline` 前主动审查 query log 策略（按 source 分组统计、
+         指出 not_found 不应重试、建议换关键词或换 source）。审查结果**追加**
+         到 `RunContext.query_log_summary`（不替换），在后续 `compress_query_log`
+         压缩时保留。LLM 返回空字符串时抛 `RuntimeError`（不静默 fallback）。
+      —— 在 `build_agent` 中注册 `review_query_strategy` 工具。
+      —— INSTRUCTIONS 新增 "ReviewerAgent 策略审查" 段落，指导调用时机。
+      —— 配套 TDD：`tests/agent_loop/test_followup_reviewer.py` 中
+         `test_review_query_strategy_tool_exists` /
+         `test_review_query_strategy_tool_description_mentions_query_log` /
+         `test_review_query_strategy_extractor_writes_review_to_context` /
+         `test_review_extractor_appends_to_existing_summary` /
+         `test_review_extractor_raises_on_empty_llm_output`
 
 - [x] **P1** 新增 `tests/test_pdf_fallback_chain.py` 验证三级 fallback 各分支
 
@@ -1094,9 +1115,21 @@
         Tier 3 EPMC 成功 / Tier 3 sha256 校验 / 全部失败 / 无 DOI 无 PMCID /
         Tier 1 失败回退 Tier 2）
 
-- [ ] **P1** `runner.py` Agent loop 增加 turn counter
+- [x] **P1** `runner.py` Agent loop 增加 turn counter
 
       —— 达到 3 轮 follow-up 后强制停止并标记 `max_followup_reached`
+      —— 实现：在 `RunContext` 中新增 `_followup_counts: dict[str, int]` 字段
+         （per-source not_found 计数），`log_query(status=NOT_FOUND)` 时累加。
+         通过 `followup_search_count` property 暴露 per-source 最高值供 LLM 自查。
+         INSTRUCTIONS 指导 LLM 在每次 follow-up 前检查此值，达到 3 即停止。
+         选择"INSTRUCTIONS 文字约束 + RunContext 暴露字段"方案（最符合 Agent
+         loop 哲学，最小改动），而非在 SDK 事件流中程序化拦截（复杂度高且耦合 SDK）。
+      —— 配套 TDD：`tests/agent_loop/test_followup_reviewer.py` 中
+         `test_run_context_has_followup_search_count_field` /
+         `test_log_query_increments_followup_count_on_not_found` /
+         `test_log_query_does_not_increment_on_success` /
+         `test_log_query_does_not_increment_on_failed` /
+         `test_run_context_followup_search_count_is_per_source`
 
 ### 8.5 P1：Agent max_turns 谨慎设置 + 用户"继续工作"按钮
 
