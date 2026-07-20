@@ -5,9 +5,14 @@
 
 from __future__ import annotations
 
-from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.builtin import (
+    builtin_skill_modules,
+    load_builtin_skill_descriptors,
+)
 from app.skills.registry import build_agent_config, skill_registry
 from app.tools.io import list_files, read_file, write_file
+
+BUILTIN_SKILL_MODULES = builtin_skill_modules()
 
 
 def _import_skill_modules() -> None:

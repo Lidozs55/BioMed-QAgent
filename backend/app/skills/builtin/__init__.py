@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import pkgutil
 
 from app.skills.catalog import SkillDescriptor
@@ -21,11 +20,19 @@ _NON_SELECTABLE_BUILTINS = {
 _PIPELINE_SUPPORTED_BUILTINS = {"pubmed", "geo"}
 
 
+def builtin_skill_modules() -> tuple[str, ...]:
+    """Return builtin module names from the single package discovery path."""
+    return tuple(
+        module.name
+        for module in pkgutil.walk_packages(__path__, prefix=f"{__name__}.")
+        if not module.ispkg
+    )
+
+
 def load_builtin_skill_descriptors() -> tuple[SkillDescriptor, ...]:
     """Import every builtin skill module and adapt the registered definitions."""
-    for module in pkgutil.walk_packages(__path__, prefix=f"{__name__}."):
-        if not module.ispkg:
-            importlib.import_module(module.name)
+    for module_name in builtin_skill_modules():
+        __import__(module_name)
     return tuple(
         SkillDescriptor.from_skill_def(
             skill,
@@ -40,4 +47,4 @@ def load_builtin_skill_descriptors() -> tuple[SkillDescriptor, ...]:
     )
 
 
-__all__ = ["load_builtin_skill_descriptors"]
+__all__ = ["builtin_skill_modules", "load_builtin_skill_descriptors"]

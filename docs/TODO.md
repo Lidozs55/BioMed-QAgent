@@ -1209,6 +1209,14 @@
 
 ## 9. 前端 UI 改进
 
+- [x] **P1** 动态 Skill Catalog 与自定义数据库管理
+
+      —— 统一 builtin/用户 Skill Catalog，Agent 使用 `find_skill` / `invoke_skill`
+      —— 支持声明式 JSON/YAML 数据库包、Python ZIP Skill、热加载、启停和回滚
+      —— 新增 `/api/v1/skills` 管理面与数据库 CRUD，区分 Agent-only / Pipeline-supported
+      —— 设置页增加 Model / Databases / Skills，模型配置仅影响新建模型实例
+      —— 用户包使用外部可写目录；坏包隔离且保持 `load_error` 可管理
+
 - [ ] 引入 <https://ui.shadcn.com/docs/components/base/command>
             <https://ui.shadcn.com/docs/components/base/context-menu>
             <https://ui.shadcn.com/docs/components/base/menubar>

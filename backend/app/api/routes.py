@@ -161,16 +161,26 @@ def load_database_skills() -> None:
 
 
 @router.get("/databases")
-async def get_databases(request: Request) -> dict:
+async def get_databases(request: Request = None) -> dict:
     """List user-selectable databases from the current catalog snapshot."""
-    catalog: SkillCatalog | None = getattr(request.app.state, "skill_catalog", None)
+    catalog: SkillCatalog | None = (
+        getattr(request.app.state, "skill_catalog", None) if request is not None else None
+    )
     if catalog is None:
-        raise HTTPException(status_code=503, detail="Skill catalog is unavailable")
-    skills = [
-        skill
-        for skill in catalog.snapshot().skills.values()
-        if skill.enabled and skill.user_selectable and skill.supported_sources
-    ]
+        from app.skills.builtin import load_builtin_skill_descriptors
+
+        descriptors = load_builtin_skill_descriptors()
+        skills = [
+            skill
+            for skill in descriptors
+            if skill.enabled and skill.user_selectable and skill.supported_sources
+        ]
+    else:
+        skills = [
+            skill
+            for skill in catalog.snapshot().skills.values()
+            if skill.enabled and skill.user_selectable and skill.supported_sources
+        ]
     databases = []
     for skill in skills:
         databases.append(

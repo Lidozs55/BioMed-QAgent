@@ -17,7 +17,10 @@ from app.pipeline.tool import run_research_pipeline
 from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
 from app.skills.registry import SkillCategory
+from app.tools import _registry as tool_registry
 from app.tools.io import list_files, read_file, write_file
+
+_import_skill_modules = tool_registry._import_skill_modules
 
 #: 主 Agent 的 max_turns 上限。
 #:
