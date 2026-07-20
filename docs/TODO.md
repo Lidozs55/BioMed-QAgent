@@ -227,8 +227,13 @@
 
 - [x] **P0** 修复 `run_manifest.json` 的 `model_name=None`
 
-      （`validation.py`，2026-07-19）—— 改为 `settings.model_name`，
-      从 `app.config.settings` 注入实际 Qwen 模型名。
+      （`validation.py`，2026-07-19；2026-07-20 权威化）—— Run 启动时从
+      `settings_manager.get_settings()` 捕获不可变 `RunModelSettings`，其中
+      `model_name` 经 Pipeline Tool → PipelineRunner → StageContext 传入 Validation
+      Gate 并写入 manifest，不再由 Validation 阶段读取全局设置。每个 Run 持有
+      独立的 `base_url`、`api_key`、`model_name`、`max_tokens`、`temperature`、
+      `top_p`、`repetition_penalty`、`enable_search`、`thinking_mode`，不受中途
+      设置变更影响。
       —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_run_manifest_model_name_not_none`
 
 - [x] **P0** 修复 `warnings.csv` 恒空，cell-line 修正未记入

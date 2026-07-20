@@ -61,6 +61,11 @@ Key points:
 | ------ | ------------------------------------------------- | ---------------------------------- |
 | GET    | `/api/v1/health`                                  | Health check                       |
 | GET    | `/api/v1/databases`                               | List user-selectable databases     |
+| GET    | `/api/v1/settings`                                | Get masked user model settings     |
+| POST   | `/api/v1/settings`                                | Persist user model settings        |
+| GET    | `/api/v1/vendors`                                 | List known model vendors           |
+| GET    | `/api/v1/models`                                  | Discover available provider models |
+| GET    | `/api/v1/models/{model_id}`                       | Get built-in model details         |
 | GET    | `/api/v1/tasks`                                   | List active tasks + paginated history |
 | POST   | `/api/v1/tasks`                                   | Create a durable task and enqueue its first run |
 | GET    | `/api/v1/tasks/{task_id}`                         | Task snapshot (authoritative state) |

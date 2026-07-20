@@ -67,6 +67,8 @@ backend/
 ├── app/
 │   ├── main.py                       # FastAPI lifespan 入口（TaskManager / Repository / EventHub / TaskIndex）
 │   ├── config.py                     # Settings dataclass（含 NCBI + Runtime 配置）
+│   ├── model_config/                 # 模型配置 schema + 目录 + 供应商（UserSettings / RunModelSettings / AdvancedParams / QwenModelEntry）
+│   ├── settings_manager.py           # 用户设置 CRUD（JSON 持久化 + 环境变量回退）
 │   ├── agent_loop/                   # Agent 运行核心
 │   │   ├── agent.py                  # build_agent / AGENT_MAX_TURNS=15 / INSTRUCTIONS
 │   │   ├── runner.py                 # AgentRunExecutor：durable Run + typed 事件转换 + finish_reason 校验
@@ -76,6 +78,7 @@ backend/
 │   │   └── vl_model.py               # Qwen-VL (qwen-vl-max) AsyncOpenAI 客户端
 │   ├── api/                          # HTTP + WebSocket 接口
 │   │   ├── routes.py                 # REST 端点（11 个，详见下方表）
+│   │   ├── settings_router.py        # 模型设置 / 供应商 / 模型发现 REST（5 个端点）
 │   │   ├── ws.py                     # WebSocket 入口（/api/v1/ws）
 │   │   └── ws_events.py              # durable event session（subscribe/replay/ping）
 │   ├── core/
@@ -225,6 +228,21 @@ backend/
 | `GET` | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events |
 | `GET` | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
 | `GET` | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
+| `GET` | `/settings` | 获取当前用户模型设置（api_key 掩码返回） |
+| `POST` | `/settings` | 更新并持久化用户模型设置 |
+| `GET` | `/vendors` | 列出已知模型供应商 |
+| `GET` | `/models` | 可用模型列表，支持 `?query=`、`?preview_base_url=`、`?use_current_settings=` |
+| `GET` | `/models/{model_id}` | 单个模型详情 |
+
+**模型设置安全语义**
+
+- **Key 掩码**：`GET /settings` 中长度不超过 12 的非空 `api_key` 返回 `****`，更长的 key 返回 `前4...后4`；空 key 返回空串。
+- **Key 修改**：`POST /settings` 中 `api_key` 省略或等于掩码值时保留原值；空串清除 key；非空字符串替换。
+- **无 URL 传参**：`api_key` 仅通过 `POST /settings` body 传递，不存在 URL 查询参数泄漏途径。
+- **不安全 URL 拒绝**：供应商 URL 必须通过 `validate_public_http_url` 校验（拒绝内网/文件协议/危险字符），校验失败返回 422。
+- **带凭据发现要求 HTTPS**：`GET /models?use_current_settings=true` 发送带凭据请求时要求 `https://` 协议，`http://` + 非空 key 返回 422。
+- **无重定向**：模型发现 HTTP 客户端配置 `follow_redirects=False`，避免 SSRF 重定向攻击。
+- **原子持久化**：设置写入 `data/user_settings.json` 使用 `tempfile.mkstemp` + `os.replace` 原子交换，中间文件在失败时清理。
 
 ### WebSocket
 

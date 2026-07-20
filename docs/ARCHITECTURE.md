@@ -424,6 +424,11 @@ FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、durable `
 | GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events |
 | GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
 | GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
+| GET | `/settings` | 当前用户模型设置（api_key 掩码返回） |
+| POST | `/settings` | 更新并持久化用户模型设置；api_key 省略/掩码=保留，空串=清除，非空=替换 |
+| GET | `/vendors` | 列出已知模型供应商 |
+| GET | `/models` | 可用模型列表，支持 `?query=` 搜索、`?preview_base_url=` 预览、`?use_current_settings=` 带凭据发现；不安全 URL → 422，供应商失败 → 502 |
+| GET | `/models/{model_id}` | 单个模型详情 |
 
 ### 8.1 后端权威状态
 
@@ -485,6 +490,83 @@ Agent 模式的计划确认会持久化 `user_input_required`，纯 reducer 将 
 默认全局有 4 个 active Run slot 和 4 个 worker；不同 Task 可以并行执行，同一
 Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user_input` 期间仍
 占用原 slot，避免暂停任务被队列中的新任务抢占。
+
+### 8.4 模型配置 API 与 Run 自有生成设置
+
+五个 REST 端点为前端提供模型配置能力。
+
+**GET/POST /api/v1/settings**
+
+`UserSettings` 存储 `base_url`、`api_key`、`model_name`、`max_tokens` 和
+`AdvancedParams`（temperature、top_p、repetition_penalty、enable_search、
+thinking_mode）。GET 响应中，空 `api_key` 返回空串，长度不超过 12 的非空 key
+返回 `****`，更长的 key 返回前 4 + `...` + 后 4 字符。
+POST 合并语义：
+
+- 字段为 `None` 时跳过（保留现有值）。
+- `api_key`：省略或等于掩码 → 保留；空串 → 清除；非空 → 替换。
+- 原子持久化到 `data/user_settings.json`，启动时从环境变量回退
+  （`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`MODEL_NAME`）。
+
+**GET /api/v1/vendors**
+
+返回静态已知供应商列表，含 `id`、`name`、`base_url`、`description` 和
+`recommended` 标记。
+
+**GET /api/v1/models**
+
+查询参数 `query`（搜索过滤）、`preview_base_url`（临时供应商 URL）、
+`use_current_settings`（使用已保存凭据进行带凭据发现）：
+
+- 提供 `use_current_settings=true` 或非空 `preview_base_url` 时，服务端向
+  供应商 OpenAI 兼容端点发送 `GET /models` 以发现可用模型。
+- 带凭据发现要求 HTTPS（`http://` + 非空 key 视为不安全）。
+- HTTP 客户端**不**跟随重定向（`follow_redirects=False`，10s 超时）。
+- 不安全供应商 URL 返回 422；供应商网络故障返回 502。
+- API 发现的模型优先使用内置目录补充元数据；未知模型按名称模式推断能力，
+  并按模型族赋予不同上下文窗口。
+- 未提供发现 URL 时不发起供应商请求，返回空模型列表；内置目录用于补充已发现
+  模型的元数据和单模型详情查询。
+
+**GET /api/v1/models/{model_id}**
+
+返回单个内置模型完整详情，不存在时返回 404。
+
+**Run 自有生成设置**
+
+每个 Run 在构造时捕获不可变 `RunModelSettings` 快照（通过
+`run_model_settings_scope` contextvar），将 Agent 与并发的设置变更隔离。
+快照包含模型身份与凭据（`base_url`、`api_key`、`model_name`）以及六个生成
+参数：`max_tokens`、`temperature`、`top_p`、`repetition_penalty`、
+`enable_search`、`thinking_mode`。
+
+到 OpenAI Agents SDK `ModelSettings` 的映射：
+
+| RunModelSettings 字段 | SDK ModelSettings 字段 | 说明 |
+|---|---|---|
+| `max_tokens` | `max_tokens` | 直接映射 |
+| `temperature` | `temperature` | 直接映射 |
+| `top_p` | `top_p` | 直接映射 |
+| `repetition_penalty` | `extra_body.repetition_penalty` | 仅 DashScope |
+| `enable_search` | `extra_body.enable_search` | 仅 DashScope |
+| `thinking_mode` | `extra_body.enable_thinking` | 仅 DashScope |
+
+DashScope 专有字段仅在 `model_name` 以 `qwen`/`qwq` 开头且 `base_url` 的 host
+与 path 匹配 `dashscope.aliyuncs.com/compatible-mode/v1` 时发送，否则 `extra_body`
+为 `None`。标准字段（max_tokens、temperature、top_p）始终发送。
+`false` 值被显式保留发送。
+
+**VLM 调用语义**
+
+VLM 模块（`app/agent_loop/vl_model.py`）执行一次性 `chat.completions.create`
+调用，固定 `model="qwen-vl-max"`、`temperature=0.1`。每次调用：
+
+- 接收显式 `RunModelSettings` 快照（Run 自有凭据和 base URL）。
+- 创建全新 `AsyncOpenAI` 客户端。
+- 通过 `require_model_credentials` 校验凭据。
+- 在 `finally` 中关闭客户端后返回。
+- 不同于实现 Agents SDK `Model` 接口的 `LazyDashScopeModel`（对话轮次），
+  VLM 不是 Agent 模型。
 
 ## 9. 前端实现架构
 
