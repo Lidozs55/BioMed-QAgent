@@ -87,6 +87,14 @@ async def test_pubmed_and_geo_discovery_adapters_use_typed_services(
     assert isinstance(pubmed["records"][0]["authors"], str)
     assert pubmed["records"][0]["is_open_access"] is True
     assert "pub_date" in pubmed["records"][0]
+    # LLM output hygiene: top-level summary + usage_hint must be present so the
+    # LLM can brief the user without restating the full records array.
+    # See docs/REVIEW_2026-07-20-llm-output-hygiene.md.
+    assert "summary" in pubmed
+    assert "usage_hint" in pubmed
+    assert "records_count" in pubmed
+    assert pubmed["records_count"] == len(pubmed["records"])
+    assert "analyze_papers" in pubmed["usage_hint"]
     assert geo["accessions"] == ["GSE178352"]
     assert "200178352" not in geo["accessions"]
     assert geo["records"][0]["platform_count"] == 1
