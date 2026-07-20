@@ -1,7 +1,14 @@
-"""PubMed discovery skill — search PubMed via Biopython Entrez.
+"""PubMed discovery skill — search PubMed via NCBI E-utilities.
 
 Returns structured JSON records (title, abstract, authors, journal, pub_date,
 doi, pmid, pmcid, open_access_status) and logs each query to RunContext.
+
+All NCBI E-utilities calls route through ``NcbiEutilsClient`` (via
+``NcbiServices.eutils``), which enforces ``tool`` / ``email`` / ``api_key``
+parameters, 3/10 req/s rate limiting, and 429/5xx retry — see
+``app/integrations/ncbi/client.py``. PMC page and supplementary file downloads
+use ``services.http`` (``httpx.AsyncClient``) with ``BROWSER_HEADERS`` to
+satisfy the project_memory L11 real-browser-UA constraint.
 """
 from __future__ import annotations
 
@@ -9,110 +16,22 @@ import json
 import logging
 import os
 import re
-import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
 
+import httpx
 from agents import RunContextWrapper, function_tool
-from Bio import Entrez
 
 from app.agent_loop.context import RunContext
-from app.config import settings
 from app.domain.contracts import Database, QueryStatus, SourceRecord, StageName, make_source_id
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.tools.crawler import BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
-
-Entrez.email = settings.ncbi_email
-
-
-def _parse_pubmed_record(article: ET.Element) -> dict[str, Any]:
-    """Parse a single PubmedArticle XML element into a dict."""
-    medline_citation = article.find(".//MedlineCitation")
-    article_data = article.find(".//Article")
-
-    title = ""
-    if article_data is not None:
-        title_el = article_data.find("ArticleTitle")
-        if title_el is not None and title_el.text:
-            title = title_el.text.strip()
-
-    abstract = ""
-    if article_data is not None:
-        abstract_el = article_data.find("Abstract")
-        if abstract_el is not None:
-            texts = [
-                t.text.strip()
-                for t in abstract_el.findall("AbstractText")
-                if t.text
-            ]
-            abstract = " ".join(texts)
-
-    authors = ""
-    if article_data is not None:
-        author_list = article_data.find("AuthorList")
-        if author_list is not None:
-            names: list[str] = []
-            for author in author_list.findall("Author"):
-                last = author.findtext("LastName", "")
-                fore = author.findtext("ForeName", "")
-                if last or fore:
-                    names.append(f"{fore} {last}".strip())
-            authors = "; ".join(names)
-
-    journal = ""
-    if article_data is not None:
-        journal_el = article_data.find("Journal/Title")
-        if journal_el is not None and journal_el.text:
-            journal = journal_el.text.strip()
-
-    pub_date = ""
-    if medline_citation is not None:
-        date_el = medline_citation.find(
-            ".//DateRevised/Year"
-        )
-        if date_el is not None and date_el.text:
-            year = date_el.text.strip()
-            month_el = medline_citation.find(".//DateRevised/Month")
-            month = month_el.text.strip() if month_el is not None and month_el.text else ""
-            pub_date = f"{year}-{month}" if month else year
-
-    doi = ""
-    pmcid = ""
-    pmid = ""
-    if medline_citation is not None:
-        pmid_el = medline_citation.find("PMID")
-        if pmid_el is not None and pmid_el.text:
-            pmid = pmid_el.text.strip()
-
-    article_ids = article.find(".//PubmedData/ArticleIdList")
-    if article_ids is not None:
-        for aid in article_ids.findall("ArticleId"):
-            id_type = aid.get("IdType", "")
-            if id_type == "doi" and aid.text:
-                doi = aid.text.strip()
-            elif id_type == "pmc" and aid.text:
-                pmcid = aid.text.strip()
-
-    is_open_access = bool(pmcid)
-
-    return {
-        "title": title,
-        "abstract": abstract,
-        "authors": authors,
-        "journal": journal,
-        "pub_date": pub_date,
-        "doi": doi,
-        "pmid": pmid,
-        "pmcid": pmcid,
-        "is_open_access": is_open_access,
-    }
 
 
 async def search_pubmed_adapter(
@@ -281,37 +200,36 @@ class _SupplementaryLinkParser(HTMLParser):
 # download_supplementary tool
 # ---------------------------------------------------------------------------
 
-@function_tool(
-    name_override="download_supplementary",
-    description_override=(
-        "Download open-access supplementary materials for a PubMed article "
-        "given its PMID. Finds supplementary files (.xlsx, .csv, .tsv, .txt, "
-        ".zip, .xls, .docx, .pdf) from the PMC open-access article page, "
-        "downloads them to the task work directory, and returns metadata JSON."
-    ),
-)
-def download_supplementary(
-    ctx: RunContextWrapper[Any],
+async def download_supplementary_adapter(
+    run_ctx: RunContext,
     pmid: str,
+    *,
+    services: NcbiServices,
     max_size_mb: int = 50,
 ) -> str:
-    """Download supplementary materials from PMC for a given PMID.
+    """Download PMC supplementary materials through ``NcbiServices``.
+
+    Routes E-utilities through ``services.eutils`` (``NcbiEutilsClient``) and
+    HTTP downloads through ``services.http`` (``httpx.AsyncClient``) with
+    ``BROWSER_HEADERS``. This satisfies TODO §1.5 (replace Biopython Entrez
+    with the rate-limited, api-key-aware ``NcbiEutilsClient``) and the
+    project_memory L11 real-browser-UA constraint.
 
     Steps
     -----
-    1. Efetch PubMed XML -> extract PMCID.
-    2. Scrape PMC article page for supplementary file links.
-    3. Download each file to ``run_ctx.work_dir.raw/``.
+    1. ``efetch`` PubMed XML via ``services.eutils`` → extract PMCID.
+    2. Fetch the PMC article page via ``services.http`` + BROWSER_HEADERS.
+    3. Download each supplementary file via ``services.http`` + BROWSER_HEADERS,
+       skipping files that exceed ``max_size_mb``.
     4. Record a ``SourceRecord`` via ``run_ctx.add_source()``.
     """
-    run_ctx: RunContext = ctx.context
     max_size_bytes = max_size_mb * 1024 * 1024
 
     # ---- 1. Fetch PubMed record & extract PMCID ------------------------------
     try:
-        handle = Entrez.efetch(db="pubmed", id=pmid, rettype="xml")
-        xml_data = handle.read()
-        handle.close()
+        xml_data = await services.eutils.efetch(
+            db="pubmed", ids=[pmid], retmode="xml"
+        )
     except Exception as exc:
         logger.exception("PubMed efetch failed for PMID=%s", pmid)
         return json.dumps({
@@ -336,17 +254,19 @@ def download_supplementary(
             "error": "No PMCID found — article is not in the PMC open-access subset",
         }, ensure_ascii=False)
 
-    # ---- 2. Scrape PMC article page for supplementary links -------------------
+    # ---- 2. Fetch PMC article page for supplementary links -------------------
     pmc_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
 
     try:
-        req = urllib.request.Request(
+        response = await services.http.get(
             pmc_url,
-            headers={"User-Agent": "BioMed-QAgent/0.1 (biomed-qagent@example.com)"},
+            headers=BROWSER_HEADERS,
+            timeout=30.0,
+            follow_redirects=True,
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except Exception as exc:
+        response.raise_for_status()
+        html = response.text
+    except httpx.HTTPError as exc:
         logger.exception("Failed to fetch PMC page for PMCID=%s", pmcid)
         return json.dumps({
             "source": "pubmed",
@@ -387,23 +307,23 @@ def download_supplementary(
         local_path = raw_dir / filename
 
         try:
-            req = urllib.request.Request(
+            file_response = await services.http.get(
                 file_url,
-                headers={"User-Agent": "BioMed-QAgent/0.1 (biomed-qagent@example.com)"},
+                headers=BROWSER_HEADERS,
+                timeout=60.0,
+                follow_redirects=True,
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                content = resp.read()
-                if len(content) > max_size_bytes:
-                    errors.append(
-                        f"Skipped {filename}: {len(content)} bytes exceeds "
-                        f"{max_size_mb} MB limit"
-                    )
-                    continue
-                local_path.write_bytes(content)
-                downloaded.append(str(local_path))
-            # Brief pause between downloads to be respectful of NCBI servers
-            time.sleep(0.5)
-        except Exception as exc:
+            file_response.raise_for_status()
+            content = file_response.content
+            if len(content) > max_size_bytes:
+                errors.append(
+                    f"Skipped {filename}: {len(content)} bytes exceeds "
+                    f"{max_size_mb} MB limit"
+                )
+                continue
+            local_path.write_bytes(content)
+            downloaded.append(str(local_path))
+        except (httpx.HTTPError, OSError) as exc:
             errors.append(f"Failed to download {filename}: {exc}")
 
     if not downloaded:
@@ -441,6 +361,35 @@ def download_supplementary(
         result["warnings"] = errors
 
     return json.dumps(result, ensure_ascii=False)
+
+
+@function_tool(
+    name_override="download_supplementary",
+    description_override=(
+        "Download open-access supplementary materials for a PubMed article "
+        "given its PMID. Finds supplementary files (.xlsx, .csv, .tsv, .txt, "
+        ".zip, .xls, .docx, .pdf) from the PMC open-access article page, "
+        "downloads them to the task work directory, and returns metadata JSON."
+    ),
+)
+async def download_supplementary(
+    ctx: RunContextWrapper[Any],
+    pmid: str,
+    max_size_mb: int = 50,
+) -> str:
+    """Download supplementary materials from PMC for a given PMID.
+
+    Steps
+    -----
+    1. Efetch PubMed XML -> extract PMCID.
+    2. Scrape PMC article page for supplementary file links.
+    3. Download each file to ``run_ctx.work_dir.raw/``.
+    4. Record a ``SourceRecord`` via ``run_ctx.add_source()``.
+    """
+    async with open_ncbi_services() as services:
+        return await download_supplementary_adapter(
+            ctx.context, pmid, services=services, max_size_mb=max_size_mb
+        )
 
 
 pubmed_skill = SkillDef(

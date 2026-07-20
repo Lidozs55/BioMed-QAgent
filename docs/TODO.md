@@ -157,17 +157,27 @@
 > **背景**：`download_supplementary` 绕过统一 `NcbiEutilsClient`，直接用
 > Biopython Entrez + urllib，无重试/无限速/无 api_key。
 
-- [ ] **P0** 改造 `download_supplementary` 复用 `NcbiEutilsClient`
+- [x] **P0** 改造 `download_supplementary` 复用 `NcbiEutilsClient`
 
-      （`backend/app/skills/builtin/discovery/pubmed.py:283-433`）
+      （`backend/app/skills/builtin/discovery/pubmed.py`）
       —— 将 `Entrez.efetch` 替换为 `services.eutils.efetch`
       —— 将 PMC HTML/文件下载改为 `httpx.AsyncClient` + 限速/重试
+      —— 通过 adapter + `@function_tool` wrapper 模式（与 `download_geo` 对齐），
+         `services.eutils` 提供 3/10 req/s 限速 + 429/5xx 重试 + tool/email/api_key，
+         `services.http` + `BROWSER_HEADERS` 提供 PMC HTML/文件下载（满足
+         project_memory L11 真实浏览器 UA 约束）。
 
-- [ ] **P0** 补全 Biopython Entrez 的 `tool` / `api_key` 参数
+- [x] **P0** 补全 Biopython Entrez 的 `tool` / `api_key` 参数
 
-      （若保留 Biopython 调用）
+      ~~（若保留 Biopython 调用）~~ —— 已彻底移除 Biopython 依赖：
+      `from Bio import Entrez`、`Entrez.email` 全局配置全部删除。
+      合规参数由 `NcbiEutilsClient` 在内部统一注入，无需在调用方补全。
 
-- [ ] **P0** 删除 `pubmed.py:35-115` 的 dead code `_parse_pubmed_record`
+- [x] **P0** 删除 `pubmed.py:35-115` 的 dead code `_parse_pubmed_record`
+
+      已删除；回归守卫 `test_pubmed_module_does_not_define_parse_pubmed_record`
+      防止未来回归。同时移除 `urllib.request` / `urllib.error` 依赖（由
+      `test_pubmed_module_does_not_use_urllib_for_http` 守卫）。
 
 ### 1.6 配置完整性
 

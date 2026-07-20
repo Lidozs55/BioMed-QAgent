@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import cast
 
 import app.skills.builtin.acquisition.geo as geo_module
+import app.skills.builtin.discovery.pubmed as pubmed_module
 import httpx
 import pytest
 from app.agent_loop.context import ProgressEmitter, RunContext
@@ -17,10 +19,12 @@ from app.skills.builtin.acquisition.geo import (
     search_geo_adapter,
 )
 from app.skills.builtin.discovery.pubmed import (
+    download_supplementary_adapter,
     search_pubmed,
     search_pubmed_adapter,
 )
 from app.tools.content_cache import ContentCache
+from app.tools.crawler import BROWSER_UA
 from app.tools.workdir import create_task_workdir
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -373,3 +377,297 @@ async def test_emit_progress_is_noop_without_bound_emitter(tmp_path: Path) -> No
         )
 
     assert payload["records"][0]["pmid"] == "34180400"
+
+
+# ---------------------------------------------------------------------------
+# download_supplementary_adapter (TODO §1.5)
+#
+# Regression guards for the PubMed supplementary download compliance fix:
+#   1. efetch must go through services.eutils (NcbiEutilsClient) — not Biopython
+#      Entrez. NcbiEutilsClient already enforces tool/email/api_key params,
+#      3/10 req/s rate limit, 429/5xx retry, so the adapter inherits compliance.
+#   2. PMC HTML + supplementary file downloads must use services.http (httpx)
+#      with BROWSER_UA — not urllib.request with a fake "BioMed-QAgent/0.1" UA.
+#   3. Dead code _parse_pubmed_record and the Biopython Entrez import must be
+#      removed so future regressions cannot silently resurrect them.
+# ---------------------------------------------------------------------------
+
+
+_PMC_HTML_WITH_SUPP = b"""<html><body><article>
+<p>Main article text.</p>
+<a href="/pmc/articles/PMC8275131/bin/supp_data.xlsx">Supplementary Table S1</a>
+<a href="/pmc/articles/PMC8275131/pdf/main.pdf">Main PDF (full text)</a>
+</article></body></html>"""
+
+_PMC_HTML_NO_SUPP = b"<html><body><p>No supplementary files here.</p></body></html>"
+
+
+class _FixtureNcbiClientForDownload:
+    """Fixture NcbiDiscoveryClient for download_supplementary tests.
+
+    Returns the real ``pubmed_34180400.xml`` fixture (PMID 34180400 has
+    ``<ArticleId IdType="pmc">PMC8275131</ArticleId>``). esearch/esummary
+    raise to assert they are never called by the download path.
+    """
+
+    async def esearch(self, *, db: str, term: str, retmax: int) -> bytes:
+        raise AssertionError("esearch must not be called by download_supplementary")
+
+    async def esummary(self, *, db: str, ids: list[str]) -> bytes:
+        raise AssertionError("esummary must not be called by download_supplementary")
+
+    async def efetch(self, *, db: str, ids: list[str], retmode: str) -> bytes:
+        assert (db, ids, retmode) == ("pubmed", ["34180400"], "xml")
+        return (FIXTURE_DIR / "pubmed_34180400.xml").read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_download_supplementary_adapter_uses_eutils_and_httpx(
+    tmp_path: Path,
+) -> None:
+    """Happy path: efetch via services.eutils, PMC page + file via services.http."""
+    supp_content = b"fake xlsx bytes for supp download"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/pmc/articles/PMC8275131/":
+            return httpx.Response(
+                200,
+                content=_PMC_HTML_WITH_SUPP,
+                headers={"Content-Type": "text/html"},
+            )
+        assert request.url.path.endswith("/bin/supp_data.xlsx")
+        return httpx.Response(
+            200,
+            content=supp_content,
+            headers={
+                "Content-Length": str(len(supp_content)),
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+        )
+
+    client = _FixtureNcbiClientForDownload()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_supplementary_adapter(
+                context, "34180400", services=services, max_size_mb=1
+            )
+        )
+
+    assert payload["source"] == "pubmed"
+    assert payload["accession"] == "34180400"
+    assert payload["source_url"] == (
+        "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8275131/"
+    )
+    assert len(payload["local_files"]) == 1
+    local_path = Path(payload["local_files"][0])
+    assert local_path.name == "supp_data.xlsx"
+    assert local_path.read_bytes() == supp_content
+    # SourceRecord tracked
+    assert len(context.sources) == 1
+    assert context.sources[0].accession == "34180400"
+    assert context.sources[0].url == (
+        "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8275131/"
+    )
+    # raw asset tracked
+    assert context.raw_assets == [str(local_path)]
+
+
+@pytest.mark.asyncio
+async def test_download_supplementary_adapter_no_pmcid_returns_error(
+    tmp_path: Path,
+) -> None:
+    """When PubMed record has no PMCID, return error JSON (not in PMC OA)."""
+
+    xml_no_pmc = (
+        b"<?xml version=\"1.0\"?><PubmedArticleSet><PubmedArticle>"
+        b"<MedlineCitation><PMID>12345</PMID>"
+        b"<Article><ArticleTitle>No PMC</ArticleTitle></Article>"
+        b"</MedlineCitation>"
+        b"<PubmedData><ArticleIdList>"
+        b"<ArticleId IdType=\"pubmed\">12345</ArticleId>"
+        b"<ArticleId IdType=\"doi\">10.1/2</ArticleId>"
+        b"</ArticleIdList></PubmedData>"
+        b"</PubmedArticle></PubmedArticleSet>"
+    )
+
+    class NoPmcClient:
+        async def efetch(self, *, db: str, ids: list[str], retmode: str) -> bytes:
+            assert (db, ids, retmode) == ("pubmed", ["12345"], "xml")
+            return xml_no_pmc
+
+    async with httpx.AsyncClient() as http:
+        services = NcbiServices(
+            eutils=NoPmcClient(),
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_supplementary_adapter(context, "12345", services=services)
+        )
+
+    assert payload["source"] == "pubmed"
+    assert payload["accession"] == "12345"
+    assert "error" in payload
+    assert "PMCID" in payload["error"]
+    # No source/raw asset recorded on the no-PMCID path
+    assert context.sources == []
+    assert context.raw_assets == []
+
+
+@pytest.mark.asyncio
+async def test_download_supplementary_adapter_no_supplementary_links(
+    tmp_path: Path,
+) -> None:
+    """When PMC page has no supplementary links, return error JSON."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/pmc/articles/PMC8275131/"
+        return httpx.Response(200, content=_PMC_HTML_NO_SUPP)
+
+    client = _FixtureNcbiClientForDownload()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_supplementary_adapter(context, "34180400", services=services)
+        )
+
+    assert payload["source"] == "pubmed"
+    assert payload["accession"] == "34180400"
+    assert "error" in payload
+    assert "supplementary" in payload["error"].lower()
+    assert context.raw_assets == []
+
+
+@pytest.mark.asyncio
+async def test_download_supplementary_adapter_skips_oversized_file(
+    tmp_path: Path,
+) -> None:
+    """Files exceeding max_size_mb must be skipped with a warning, not crash."""
+
+    # 2 MB content, max_size_mb=1 -> must be skipped
+    oversized = b"x" * (2 * 1024 * 1024)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/pmc/articles/PMC8275131/":
+            return httpx.Response(200, content=_PMC_HTML_WITH_SUPP)
+        assert request.url.path.endswith("/bin/supp_data.xlsx")
+        return httpx.Response(
+            200,
+            content=oversized,
+            headers={"Content-Length": str(len(oversized))},
+        )
+
+    client = _FixtureNcbiClientForDownload()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        payload = json.loads(
+            await download_supplementary_adapter(
+                context, "34180400", services=services, max_size_mb=1
+            )
+        )
+
+    # No file downloaded -> error payload with details
+    assert payload["source"] == "pubmed"
+    assert "error" in payload
+    details = payload.get("details") or payload.get("warnings")
+    assert details, "expected oversized-skip warning in details or warnings"
+    assert any("exceeds" in str(item) or "Skipped" in str(item) for item in details)
+    assert context.raw_assets == []
+
+
+@pytest.mark.asyncio
+async def test_download_supplementary_adapter_uses_browser_ua(
+    tmp_path: Path,
+) -> None:
+    """All services.http requests must carry the real BROWSER_UA (project_memory
+    L11 hard constraint) — not the old fake 'BioMed-QAgent/0.1' UA."""
+
+    seen_ua_headers: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_ua_headers.append(request.headers.get("User-Agent", ""))
+        if request.url.path == "/pmc/articles/PMC8275131/":
+            return httpx.Response(200, content=_PMC_HTML_WITH_SUPP)
+        return httpx.Response(
+            200,
+            content=b"supp bytes",
+            headers={"Content-Length": "10"},
+        )
+
+    client = _FixtureNcbiClientForDownload()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        services = NcbiServices(
+            eutils=client,
+            http=http,
+            cache=ContentCache(tmp_path / "cache"),
+        )
+        context = run_context(tmp_path)
+        await download_supplementary_adapter(
+            context, "34180400", services=services, max_size_mb=1
+        )
+
+    assert seen_ua_headers, "no requests observed"
+    for ua in seen_ua_headers:
+        assert ua == BROWSER_UA, f"expected BROWSER_UA, got {ua!r}"
+        assert "BioMed-QAgent/0.1" not in ua
+
+
+def test_pubmed_module_does_not_import_biopython() -> None:
+    """TODO §1.5: Biopython Entrez must be removed entirely.
+
+    The compliance fix routes efetch through NcbiEutilsClient, which already
+    enforces tool/email/api_key params + 3/10 req/s rate limit + 429/5xx retry.
+    Importing Biopython Entrez would reintroduce an uncontrolled global HTTP
+    client with no rate limit or retry — a regression we must guard against.
+    """
+    source = inspect.getsource(pubmed_module)
+    assert "from Bio import Entrez" not in source
+    assert "from Bio " not in source
+    assert "import Bio" not in source
+    assert "Entrez.email" not in source
+    assert "Entrez.efetch" not in source
+
+
+def test_pubmed_module_does_not_define_parse_pubmed_record() -> None:
+    """TODO §1.5: dead code _parse_pubmed_record must be removed."""
+    assert not hasattr(pubmed_module, "_parse_pubmed_record")
+    source = inspect.getsource(pubmed_module)
+    assert "_parse_pubmed_record" not in source
+
+
+def test_pubmed_module_does_not_use_urllib_for_http() -> None:
+    """TODO §1.5: HTTP downloads must use services.http (httpx.AsyncClient),
+    not urllib.request — project_memory L11 requires BROWSER_UA + rate limit
+    discipline that urllib.request alone cannot enforce."""
+    source = inspect.getsource(pubmed_module)
+    assert "urllib.request" not in source
+    assert "urlopen" not in source
+
+
+def test_download_supplementary_tool_is_async() -> None:
+    """The function_tool wrapper must be async so it can await services.eutils
+    and services.http. A sync wrapper would block the event loop.
+
+    The ``@function_tool`` decorator wraps the async function into a
+    ``FunctionTool`` dataclass instance, so ``iscoroutinefunction`` returns
+    False on the wrapper. We assert against the source definition instead.
+    """
+    source = inspect.getsource(pubmed_module)
+    assert "async def download_supplementary(" in source
