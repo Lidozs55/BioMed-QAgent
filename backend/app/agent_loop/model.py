@@ -93,18 +93,25 @@ def require_model_credentials(
         )
 
 
-def _build_delegate(
-    model_settings: RunModelSettings | UserSettings | None,
-) -> OpenAIChatCompletionsModel:
-    runtime_settings = _resolve_model_settings(model_settings)
-    require_model_credentials(runtime_settings)
-    base_url = validate_credentialed_public_url(runtime_settings.base_url)
-    client = AsyncOpenAI(
-        api_key=runtime_settings.api_key,
+def _build_client(model_settings: RunModelSettings) -> AsyncOpenAI:
+    """Create one credentialed client for an already-resolved Run snapshot."""
+
+    require_model_credentials(model_settings)
+    base_url = validate_credentialed_public_url(model_settings.base_url)
+    return AsyncOpenAI(
+        api_key=model_settings.api_key,
         base_url=base_url,
     )
+
+
+def _build_delegate(
+    model_settings: RunModelSettings,
+    client: AsyncOpenAI,
+) -> OpenAIChatCompletionsModel:
+    """Wrap the explicitly owned client in the Agents SDK model adapter."""
+
     return OpenAIChatCompletionsModel(
-        model=runtime_settings.model_name,
+        model=model_settings.model_name,
         openai_client=client,
     )
 
@@ -115,10 +122,17 @@ class LazyDashScopeModel(Model):
     def __init__(self, model_settings: RunModelSettings | None = None) -> None:
         self._model_settings = model_settings
         self._delegate: OpenAIChatCompletionsModel | None = None
+        self._client_resources: tuple[RunModelSettings, AsyncOpenAI] | None = None
 
     def _get_delegate(self) -> OpenAIChatCompletionsModel:
         if self._delegate is None:
-            self._delegate = _build_delegate(self._model_settings)
+            client_resources = self._client_resources
+            if client_resources is None:
+                runtime_settings = _resolve_model_settings(self._model_settings)
+                client_resources = (runtime_settings, _build_client(runtime_settings))
+                self._client_resources = client_resources
+            runtime_settings, client = client_resources
+            self._delegate = _build_delegate(runtime_settings, client)
         return self._delegate
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
@@ -128,8 +142,17 @@ class LazyDashScopeModel(Model):
         return self._get_delegate().stream_response(*args, **kwargs)
 
     async def close(self) -> None:
-        if self._delegate is not None:
-            await self._delegate.close()
+        delegate = self._delegate
+        client_resources = self._client_resources
+        self._delegate = None
+        self._client_resources = None
+        try:
+            if delegate is not None:
+                await delegate.close()
+        finally:
+            if client_resources is not None:
+                _, client = client_resources
+                await client.close()
 
 
 @contextmanager

@@ -148,7 +148,7 @@ def test_lazy_model_first_use_raises_stable_error_without_key(
     assert str(caught.value) == "DASHSCOPE_API_KEY is required to run the model"
 
 
-def test_build_delegate_rejects_non_public_base_url_before_client_construction(
+def test_build_client_rejects_non_public_base_url_before_client_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -168,11 +168,11 @@ def test_build_delegate_rejects_non_public_base_url_before_client_construction(
 
     # When / Then
     with pytest.raises(UnsafeUrlError):
-        model_module._build_delegate(model_settings)
+        model_module._build_client(model_settings)
     client_factory.assert_not_called()
 
 
-def test_build_delegate_requires_https_for_credentials(
+def test_build_client_requires_https_for_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -187,21 +187,22 @@ def test_build_delegate_requires_https_for_credentials(
 
     # When / Then
     with pytest.raises(UnsafeUrlError, match="HTTPS"):
-        model_module._build_delegate(model_settings)
+        model_module._build_client(model_settings)
     client_factory.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_lazy_model_builds_reuses_and_closes_configured_delegate(
+async def test_lazy_model_closes_owned_client_when_delegate_close_is_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Given
     runtime_settings = UserSettings(
         api_key="runtime-api-key",
         base_url="https://runtime.example/v1",
         model_name="runtime-model",
     )
     configure_model(monkeypatch, runtime_settings)
-    client = object()
+    client = SimpleNamespace(close=AsyncMock())
     delegate = SimpleNamespace(
         get_response=AsyncMock(return_value="response"),
         stream_response=Mock(return_value="stream"),
@@ -217,10 +218,13 @@ async def test_lazy_model_builds_reuses_and_closes_configured_delegate(
     )
     model = LazyDashScopeModel()
 
+    # When
     assert model.stream_response("one", option=True) == "stream"
     assert await model.get_response("two") == "response"
     await model.close()
+    await model.close()
 
+    # Then
     client_factory.assert_called_once_with(
         api_key="runtime-api-key",
         base_url="https://runtime.example/v1",
@@ -231,7 +235,37 @@ async def test_lazy_model_builds_reuses_and_closes_configured_delegate(
     )
     delegate.stream_response.assert_called_once_with("one", option=True)
     delegate.get_response.assert_awaited_once_with("two")
+    client.close.assert_awaited_once_with()
     delegate.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_lazy_model_closes_owned_client_after_delegate_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    runtime_settings = UserSettings(
+        api_key="runtime-api-key",
+        base_url="https://runtime.example/v1",
+        model_name="runtime-model",
+    )
+    configure_model(monkeypatch, runtime_settings)
+    client = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(model_module, "AsyncOpenAI", Mock(return_value=client))
+    monkeypatch.setattr(
+        model_module,
+        "OpenAIChatCompletionsModel",
+        Mock(side_effect=RuntimeError("delegate construction failed")),
+    )
+    model = LazyDashScopeModel()
+
+    # When
+    with pytest.raises(RuntimeError, match="delegate construction failed"):
+        model.stream_response("one")
+    await model.close()
+
+    # Then
+    client.close.assert_awaited_once_with()
 
 
 def test_lazy_model_uses_explicit_settings_snapshot_after_runtime_change(
