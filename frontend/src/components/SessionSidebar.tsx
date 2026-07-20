@@ -1,7 +1,8 @@
-import {
+﻿import {
   ArrowsClockwiseIcon,
   DownloadSimpleIcon,
   FlaskIcon,
+  GearIcon,
   PlusCircleIcon,
   TrashIcon,
   WifiHighIcon,
@@ -13,7 +14,6 @@ import { toast } from "sonner";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   Alert,
   AlertDescription,
@@ -58,6 +58,7 @@ import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
 interface SessionSidebarProps {
+  onOpenSettings?: () => void;
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
   onLoadAll?: () => Promise<void>;
@@ -173,6 +174,7 @@ export function SessionSidebar({
   onCancelRun,
   onDeleteTask,
   onExportCache,
+  onOpenSettings,
 }: SessionSidebarProps) {
   const tasksById = useAgentStore((state) => state.tasksById);
   const activeItems = useAgentStore((state) => state.activeItems);
@@ -444,9 +446,20 @@ export function SessionSidebar({
               导出缓存
             </Button>
           )}
-          <div className="px-1">
-            <ThemeToggle />
-          </div>
+          {onOpenSettings !== undefined && (
+            <div className="px-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
+                onClick={onOpenSettings}
+                aria-label="打开设置"
+              >
+                <GearIcon className="size-4" aria-hidden="true" />
+                <span>设置</span>
+              </Button>
+            </div>
+          )}
         </SidebarFooter>
       </Sidebar>
 

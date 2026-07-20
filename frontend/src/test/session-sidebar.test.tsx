@@ -403,4 +403,42 @@ describe("SessionSidebar", () => {
     fireEvent.click(btn);
     expect(onExportCache).toHaveBeenCalledTimes(1);
   });
+
+  it("renders settings button only when onOpenSettings is provided", () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [], next_cursor: null },
+      false,
+    );
+
+    // Without onOpenSettings: button is absent.
+    renderSidebar();
+    expect(screen.queryByRole("button", { name: "打开设置" })).toBeNull();
+
+    // With onOpenSettings: button is present and invokes the callback.
+    const onOpenSettings = vi.fn();
+    renderSidebar({ onOpenSettings });
+    const btn = screen.getByRole("button", { name: "打开设置" });
+    fireEvent.click(btn);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("coexists with both settings and export cache buttons simultaneously", () => {
+    useAgentStore.getState().mergeTaskPage(
+      { active_items: [], items: [], next_cursor: null },
+      false,
+    );
+
+    const onExportCache = vi.fn();
+    const onOpenSettings = vi.fn();
+    renderSidebar({ onExportCache, onOpenSettings });
+
+    expect(screen.getByRole("button", { name: "打开设置" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "导出本地缓存为 ZIP" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开设置" }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出本地缓存为 ZIP" }));
+    expect(onExportCache).toHaveBeenCalledTimes(1);
+  });
 });

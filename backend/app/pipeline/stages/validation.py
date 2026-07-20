@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from app.config import settings
 from app.domain.contracts import (
     ArtifactManifestEntry,
     RunManifest,
@@ -662,7 +661,7 @@ def run_validation(
         artifacts=entries,
         validation=validation,
         pipeline_version="0.1.0",
-        model_name=settings.model_name,
+        model_name=ctx.model_name,
         mode=ctx.mode,
         live_accepted=ctx.mode == "live" and validation.status == "valid",
         started_at=ctx.started_at,

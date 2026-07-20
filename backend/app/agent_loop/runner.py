@@ -14,12 +14,14 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
+from app import settings_manager
 from app.agent_loop.agent import AGENT_MAX_TURNS, AgentBuild, build_agent
 from app.agent_loop.context import ManagedPipelineBridge
 from app.agent_loop.import_agent import (
     ATTACHMENT_PARSING_MAX_TURNS,
     build_attachment_parsing_agent,
 )
+from app.agent_loop.model import run_model_settings_scope
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
@@ -41,6 +43,7 @@ from app.domain.contracts import (
     build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
+from app.model_config import RunModelSettings
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
@@ -265,7 +268,7 @@ def _truncate_for_event(
         if len(value) > str_limit:
             return value[:str_limit] + "...[truncated]"
         return value
-    if isinstance(value, (int, float, bool)) or value is None:
+    if isinstance(value, int | float | bool) or value is None:
         return value
     if isinstance(value, list):
         if depth <= 0:
@@ -459,11 +462,18 @@ class AgentRunExecutor:
                 await asyncio.gather(pending_event, return_exceptions=True)
 
     async def __call__(self, execution) -> None:
+        model_settings = RunModelSettings.from_user_settings(
+            settings_manager.get_settings()
+        )
+        bind_model_settings = getattr(execution.context, "bind_model_settings", None)
+        if callable(bind_model_settings):
+            bind_model_settings(model_settings)
         task_session = self._repository.task_session(
             execution.task_id,
             run_id=execution.run_id,
         )
-        build = self._build(execution)
+        with run_model_settings_scope(model_settings):
+            build = self._build(execution)
         text_buffer = _AssistantTextBuffer(execution)
         bind_pipeline_bridge = getattr(
             execution.context,
@@ -477,7 +487,7 @@ class AgentRunExecutor:
                     return
                 if isinstance(
                     event.payload,
-                    (ArtifactProducedPayload, TaskCompletedPayload),
+                    ArtifactProducedPayload | TaskCompletedPayload,
                 ):
                     return
                 await execution.emit(
@@ -851,7 +861,7 @@ class FixtureRunExecutor:
                 return
             if isinstance(
                 event.payload,
-                (ArtifactProducedPayload, TaskCompletedPayload),
+                ArtifactProducedPayload | TaskCompletedPayload,
             ):
                 completion_events.append(event)
             else:

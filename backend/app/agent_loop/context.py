@@ -19,6 +19,7 @@ from app.domain.contracts import (
     StageName,
     UserInputResumedPayload,
 )
+from app.model_config import RunModelSettings
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
@@ -66,6 +67,11 @@ class RunContext:
     task_id: str = "default"
     base_dir: str | Path | None = field(default=None, repr=False, kw_only=True)
     managed_run_id: str | None = field(default=None, repr=False, kw_only=True)
+    model_settings: RunModelSettings = field(
+        default_factory=RunModelSettings.default,
+        repr=False,
+        kw_only=True,
+    )
     topic: str = ""
     preferred_sources: list[str] = field(default_factory=list)
     plan: str = ""
@@ -119,6 +125,7 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _model_settings_bound: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -127,6 +134,14 @@ class RunContext:
             self.task_id,
             base_dir=base_dir,
         )
+
+    def bind_model_settings(self, model_settings: RunModelSettings) -> None:
+        """Bind the executor-captured model snapshot exactly once."""
+
+        if self._model_settings_bound:
+            raise RuntimeError("run model settings are already bound")
+        self.model_settings = model_settings
+        self._model_settings_bound = True
 
     @property
     def work_dir(self) -> TaskWorkDir:

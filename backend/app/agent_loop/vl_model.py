@@ -24,8 +24,8 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from app import settings_manager
 from app.agent_loop.model import require_model_credentials
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ _SUPPORTED_IMAGE_MIMES = {
 
 #: Lazy singleton client — created on first ``get_vl_client()`` call.
 _vl_client: AsyncOpenAI | None = None
+_vl_client_credentials: tuple[str, str] | None = None
 
 
 class ChartExtractionError(RuntimeError):
@@ -109,18 +110,29 @@ def _encode_image_b64(path: Path) -> str:
         return encoded
 
 
-def get_vl_client() -> AsyncOpenAI:
+async def get_vl_client() -> AsyncOpenAI:
     """Return the lazy Qwen-VL AsyncOpenAI client.
+
+    When runtime credentials change, the previous client's ``close()`` is
+    awaited **after** the replacement is constructed, so an invalid new
+    configuration does not discard a working client.
 
     Raises ``ModelConfigurationError`` if ``DASHSCOPE_API_KEY`` is missing.
     """
-    global _vl_client
-    if _vl_client is None:
-        require_model_credentials()
-        _vl_client = AsyncOpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url=settings.dashscope_base_url,
+    global _vl_client, _vl_client_credentials
+    runtime_settings = settings_manager.get_settings()
+    credentials = (runtime_settings.api_key, runtime_settings.base_url)
+    if _vl_client is None or _vl_client_credentials != credentials:
+        require_model_credentials(runtime_settings)
+        new_client = AsyncOpenAI(
+            api_key=runtime_settings.api_key,
+            base_url=runtime_settings.base_url,
         )
+        old_client = _vl_client
+        if old_client is not None:
+            await old_client.close()
+        _vl_client = new_client
+        _vl_client_credentials = credentials
     return _vl_client
 
 
@@ -145,7 +157,7 @@ async def call_vl_model(
         ChartExtractionError: Image too large and cannot be downsampled,
             or the VLM API call fails after retry budget is exhausted.
     """
-    client = get_vl_client()
+    client = await get_vl_client()
     mime = _infer_mime(image_path)
     b64 = _encode_image_b64(image_path)
     data_url = f"data:{mime};base64,{b64}"
@@ -188,5 +200,6 @@ async def call_vl_model(
 
 def reset_vl_client_for_tests() -> None:
     """Clear the lazy singleton — test-only hook for isolated VLM tests."""
-    global _vl_client
+    global _vl_client, _vl_client_credentials
     _vl_client = None
+    _vl_client_credentials = None

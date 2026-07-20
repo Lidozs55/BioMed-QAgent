@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from agents import OpenAIChatCompletionsModel, set_tracing_disabled
 from agents.models.interface import Model
 from openai import AsyncOpenAI
 
-from app.config import settings
+from app import settings_manager
+from app.model_config import RunModelSettings, UserSettings
+
+_run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
+    "run_model_settings",
+    default=None,
+)
 
 
 class ModelConfigurationError(RuntimeError):
@@ -17,23 +26,43 @@ class ModelConfigurationError(RuntimeError):
     code = "configuration_error"
 
 
-def require_model_credentials() -> None:
+def _resolve_model_settings(
+    model_settings: RunModelSettings | UserSettings | None,
+) -> RunModelSettings:
+    """Return an explicit snapshot or resolve standalone runtime settings."""
+
+    match model_settings:
+        case RunModelSettings():
+            return model_settings
+        case UserSettings():
+            return RunModelSettings.from_user_settings(model_settings)
+        case None:
+            return RunModelSettings.from_user_settings(settings_manager.get_settings())
+
+
+def require_model_credentials(
+    model_settings: RunModelSettings | UserSettings | None = None,
+) -> None:
     """Validate credentials only when execution is about to call the model."""
 
-    if not settings.dashscope_api_key:
+    active_settings = _resolve_model_settings(model_settings)
+    if not active_settings.api_key:
         raise ModelConfigurationError(
             "DASHSCOPE_API_KEY is required to run the model"
         )
 
 
-def _build_delegate() -> OpenAIChatCompletionsModel:
-    require_model_credentials()
+def _build_delegate(
+    model_settings: RunModelSettings | UserSettings | None,
+) -> OpenAIChatCompletionsModel:
+    runtime_settings = _resolve_model_settings(model_settings)
+    require_model_credentials(runtime_settings)
     client = AsyncOpenAI(
-        api_key=settings.dashscope_api_key,
-        base_url=settings.dashscope_base_url,
+        api_key=runtime_settings.api_key,
+        base_url=runtime_settings.base_url,
     )
     return OpenAIChatCompletionsModel(
-        model=settings.model_name,
+        model=runtime_settings.model_name,
         openai_client=client,
     )
 
@@ -41,12 +70,13 @@ def _build_delegate() -> OpenAIChatCompletionsModel:
 class LazyDashScopeModel(Model):
     """Agents SDK model that creates its HTTP client on first model call."""
 
-    def __init__(self) -> None:
+    def __init__(self, model_settings: RunModelSettings | None = None) -> None:
+        self._model_settings = model_settings
         self._delegate: OpenAIChatCompletionsModel | None = None
 
     def _get_delegate(self) -> OpenAIChatCompletionsModel:
         if self._delegate is None:
-            self._delegate = _build_delegate()
+            self._delegate = _build_delegate(self._model_settings)
         return self._delegate
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
@@ -60,8 +90,24 @@ class LazyDashScopeModel(Model):
             await self._delegate.close()
 
 
-def get_model() -> LazyDashScopeModel:
+@contextmanager
+def run_model_settings_scope(model_settings: RunModelSettings) -> Iterator[None]:
+    """Scope a Run snapshot to Agent construction without global mutation."""
+
+    token = _run_model_settings.set(model_settings)
+    try:
+        yield
+    finally:
+        _run_model_settings.reset(token)
+
+
+def get_model(
+    model_settings: RunModelSettings | None = None,
+) -> LazyDashScopeModel:
     """Return a model adapter without constructing a credentialed client."""
 
     set_tracing_disabled(True)
-    return LazyDashScopeModel()
+    active_settings = (
+        model_settings if model_settings is not None else _run_model_settings.get()
+    )
+    return LazyDashScopeModel(active_settings)

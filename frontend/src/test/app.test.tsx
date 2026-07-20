@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -70,6 +70,14 @@ describe("App startup ownership", () => {
           return Promise.resolve(
             new Response(JSON.stringify({ databases: [] }), { status: 200 }),
           );
+        }
+        if (url === "/api/v1/settings") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ base_url: "", api_key: "", model_name: "", max_tokens: 8192, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }), { status: 200 }),
+          );
+        }
+        if (url === "/api/v1/vendors") {
+          return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
         }
         if (url === "/api/v1/tasks?limit=10") {
           if (historyFailure) {
@@ -166,5 +174,24 @@ describe("App startup ownership", () => {
         expect.objectContaining({ description: "history unavailable" }),
       ),
     );
+  });
+
+  it("coexists with settings integration without breaking startup or history", async () => {
+    const view = render(<App />);
+    await waitFor(() =>
+      expect(useAgentStore.getState().activeItems).toEqual(["task_active"]),
+    );
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    expect(useAgentStore.getState().draft.input).toBe("");
+
+    // Sidebar renders both settings and export buttons
+    expect(screen.getByRole("button", { name: "打开设置" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "导出本地缓存为 ZIP" })).toBeVisible();
+
+    // Header has unique ThemeToggle and ArtifactPanelToggle
+    expect(screen.getByRole("button", { name: "Toggle theme" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Toggle theme" })).toHaveLength(1);
+
+    view.unmount();
   });
 });

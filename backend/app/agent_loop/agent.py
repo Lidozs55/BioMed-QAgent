@@ -13,6 +13,7 @@ from agents import Agent
 from app.agent_loop.model import LazyDashScopeModel, get_model
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
+from app.model_config import RunModelSettings
 from app.pipeline.tool import run_research_pipeline
 from app.skills.registry import (
     SkillCategory,
@@ -256,7 +257,10 @@ class AgentBuild:
     model: LazyDashScopeModel
 
 
-def build_agent(databases: list[str] | None = None) -> AgentBuild:
+def build_agent(
+    databases: list[str] | None = None,
+    model_settings: RunModelSettings | None = None,
+) -> AgentBuild:
     """构造主 Agent。
 
     Args:
@@ -282,7 +286,7 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
 
     skill_names = tuple(skill.name for skill in skills)
 
-    model = get_model()
+    model = get_model(model_settings)
     instructions_suffix, tools = build_agent_config(skills)
     tools.extend([run_research_pipeline, read_file, write_file, list_files])
     tools.append(build_compress_query_log_tool(model))
