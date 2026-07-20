@@ -11,6 +11,7 @@ from jsonschema.validators import validator_for
 
 from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
+from app.skills.registry import SkillCategory
 
 
 def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:

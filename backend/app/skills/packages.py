@@ -325,22 +325,21 @@ class SkillPackageLoader:
                     follow_redirects=True,
                     timeout=operation.timeout_seconds,
                     event_hooks={"request": [_validate_request_url]},
-                ) as client:
-                    async with client.stream(
+                ) as client, client.stream(
                         operation.method,
                         url,
                         params=query,
                         headers=headers,
                         json=body,
                     ) as response:
-                        response.raise_for_status()
-                        chunks: list[bytes] = []
-                        received = 0
-                        async for chunk in response.aiter_bytes():
-                            received += len(chunk)
-                            if received > 10 * 1024 * 1024:
-                                raise ValueError("response exceeds 10 MiB limit")
-                            chunks.append(chunk)
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    received = 0
+                    async for chunk in response.aiter_bytes():
+                        received += len(chunk)
+                        if received > 10 * 1024 * 1024:
+                            raise ValueError("response exceeds 10 MiB limit")
+                        chunks.append(chunk)
                 payload = json.loads(b"".join(chunks))
                 return _extract_response(payload, operation.extract)
             except (httpx.HTTPError, UnsafeUrlError, ValueError) as error:
