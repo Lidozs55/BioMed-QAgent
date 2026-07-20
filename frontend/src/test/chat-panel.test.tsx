@@ -464,6 +464,17 @@ describe("ChatPanel", () => {
     expect(screen.getByText("正在思考…").closest('[data-slot="marker"]')).toHaveAttribute("role", "status");
 
     act(() => {
+      // Live stream frame 使 segment active=true, isStreaming=true
+      useAgentStore.getState().applyAssistantStreamFrames([
+        {
+          type: "assistant_stream_delta",
+          task_id: "task_background",
+          run_id: "run_background",
+          stream_id: "assistant:run_background",
+          chunk_index: 0,
+          delta: "Streaming answer",
+        },
+      ]);
       useAgentStore.getState().applyEvent({
         schema_version: "2.0",
         event_id: "event_background_delta",

@@ -101,12 +101,16 @@ def _find_supplementary_links(text: str) -> list[str]:
                                      "metabolights", "arrayexpress"))]
 
 
-def _analyze_record(record: dict[str, Any]) -> dict[str, Any]:
-    title = record.get("title", "") or ""
-    abstract = record.get("abstract", "") or ""
-    combined = f"{title} {abstract}".strip()
+def _analyze_title(title: str) -> dict[str, Any]:
+    """对单个 title 执行 regex 提取，返回结构化线索。
+
+    仅基于 title 文本（不含 abstract），提取数据库名、accession、数据类型、
+    物种、关键词等。设计取舍：降低参数体积优先于提取覆盖率——LLM 仍可
+    从 search_pubmed 的完整 records 中自行阅读 abstract 获取更多线索。
+    """
+    combined = (title or "").strip()
     if not combined:
-        return _empty_finding(record)
+        return _empty_finding("")
 
     # --- databases ---
     db_map: dict[str, list[str]] = {}
@@ -133,8 +137,7 @@ def _analyze_record(record: dict[str, Any]) -> dict[str, Any]:
     suggestions = list(dict.fromkeys(suggestions))[:10]
 
     return {
-        "pmid": record.get("pmid", ""),
-        "doi": record.get("doi", ""),
+        "title": title,
         "databases_found": databases_found,
         "data_types": _find_data_types(combined),
         "species": _find_species(combined),
@@ -159,10 +162,9 @@ _ACCESSION_PATTERNS_BY_DB: dict[str, re.Pattern] = {
 }
 
 
-def _empty_finding(record: dict[str, Any]) -> dict[str, Any]:
+def _empty_finding(title: str) -> dict[str, Any]:
     return {
-        "pmid": record.get("pmid", ""),
-        "doi": record.get("doi", ""),
+        "title": title,
         "databases_found": [],
         "data_types": [],
         "species": [],
@@ -179,34 +181,27 @@ def _empty_finding(record: dict[str, Any]) -> dict[str, Any]:
 @function_tool(
     name_override="analyze_papers",
     description_override=(
-        "Analyze paper abstracts and titles to extract structured data clues: "
-        "database names, accession numbers, data types, species, supplementary "
-       "material links, and actionable query suggestions. Input is a JSON string "
-        "of the form {\"records\": [{\"title\": ..., \"abstract\": ..., "
-        "\"doi\": ..., \"pmid\": ...}]}. "
-       "Returns structured JSON with findings per paper plus a cross-paper summary."
+        "Analyze paper titles to extract structured data clues: database names, "
+        "accession numbers, data types, species, and query suggestions. "
+        "Input is a list of title strings. Returns structured JSON with findings "
+        "per paper plus a cross-paper summary. Only pass titles — do NOT pass "
+        "abstracts, authors, or other fields."
     ),
 )
 def analyze_papers(
     ctx: RunContextWrapper[RunContext],
-    papers_json: str,
+    titles: list[str],
 ) -> str:
-    """Extract structured data clues from literature records using regex.
+    """Extract structured data clues from paper titles using regex.
 
     Args:
         ctx: Run context (injected by the SDK, not exposed to the LLM).
-        papers_json: JSON string like
-            ``{"records": [{"title":..., "abstract":..., "doi":..., "pmid":...}]}``.
+        titles: List of paper title strings. Only titles — no abstracts or
+            other fields. Pass titles from search_pubmed records directly.
     """
     run_ctx: RunContext = ctx.context
 
-    try:
-        payload = json.loads(papers_json)
-    except json.JSONDecodeError as exc:
-        return json.dumps({"error": f"Invalid JSON input: {exc}"}, ensure_ascii=False)
-
-    records: list[dict[str, Any]] = payload.get("records", [])
-    if not records:
+    if not titles:
         return json.dumps({
             "papers_analyzed": 0,
             "findings": [],
@@ -223,29 +218,23 @@ def analyze_papers(
     all_data_types: list[str] = []
     errors: list[dict[str, Any]] = []
 
-    try:
-        for rec in records:
-            try:
-                finding = _analyze_record(rec)
-            except Exception as exc:
-                errors.append({"record": rec, "error": str(exc)})
-                continue
-            findings.append(finding)
-            for db in finding["databases_found"]:
-                all_databases.append(db["name"])
-                all_accessions.extend(db["accessions"])
-            all_data_types.extend(finding["data_types"])
-    except Exception as exc:
-        return json.dumps(
-            {"status": "error", "error": str(exc), "partial_findings": findings},
-            ensure_ascii=False,
-        )
+    for title in titles:
+        try:
+            finding = _analyze_title(title)
+        except Exception as exc:
+            errors.append({"title": title, "error": str(exc)})
+            continue
+        findings.append(finding)
+        for db in finding["databases_found"]:
+            all_databases.append(db["name"])
+            all_accessions.extend(db["accessions"])
+        all_data_types.extend(finding["data_types"])
 
     databases_referenced = list(dict.fromkeys(all_databases))
     primary_data_types = list(dict.fromkeys(all_data_types))
 
     result = {
-        "papers_analyzed": len(records),
+        "papers_analyzed": len(findings),
         "findings": findings,
         "errors": errors,
         "summary": {
@@ -259,7 +248,7 @@ def analyze_papers(
         query="analyze_papers",
         source="literature_understanding",
         status=QueryStatus.SUCCESS,
-        records_count=len(records),
+        records_count=len(findings),
     )
 
     return json.dumps(result, ensure_ascii=False)
@@ -273,22 +262,21 @@ lit_understanding_skill = SkillDef(
     name="literature_understanding",
     category=SkillCategory.DISCOVERY,
     description=(
-        "Analyze paper abstracts/summaries to identify databases, accessions, "
-        "data types, species, and supplementary material links for downstream "
-        "data retrieval."
+        "Analyze paper titles to identify databases, accessions, data types, "
+        "species, and query suggestions for downstream data retrieval."
     ),
     instructions=(
-        "The `analyze_papers` tool takes a JSON string of paper records "
-        "(title, abstract, doi, pmid) and returns structured findings: "
-        "database names with accessions, data types, species, supplementary "
-        "links, keywords, and query suggestions. "
-        "Use it after a literature search step to turn free-text abstracts into "
+        "The `analyze_papers` tool takes a list of paper title strings and "
+        "returns structured findings: database names with accessions, data "
+        "types, species, keywords, and query suggestions. "
+        "Only pass titles — never pass abstracts or other fields. "
+        "Use it after a literature search step to turn titles into "
         "actionable data retrieval targets. "
         "Supported source contexts: PubMed, CrossRef, arXiv."
     ),
     tools=[analyze_papers],
     supported_sources=["pubmed", "crossref", "arxiv"],
-    version="0.1.0",
+    version="0.2.0",
 )
 
 skill_registry.register(lit_understanding_skill)

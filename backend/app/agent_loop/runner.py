@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -60,6 +61,15 @@ MAX_TURNS_RESUME_LIMIT: int = 3
 #: Qwen 偶发返回非 JSON 的 function.arguments 导致 400，最多重试次数。
 QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
 
+# 流式 JSON 截断配置
+#: 检测到行首 ``{`` 后，缓冲可疑 JSON 的最大字节数。超过则认定非工具参数
+#: JSON，作为普通文本补发，避免长文本被无谓延迟。
+ASSISTANT_JSON_SUSPECT_MAX_BYTES: int = 65536
+#: Markdown 代码围栏标记（``` 或 ~~~），用于禁用行首 ``{`` 的 JSON 检测。
+_CODE_FENCE_RE = re.compile(r"```|~~~")
+#: 行首 ``{`` 模式（换行后允许可选空白再 ``{``），用于触发 JSON 可疑模式。
+_JSON_START_RE = re.compile(r"\n[ \t]*\{")
+
 
 class _AssistantTextBuffer:
     def __init__(
@@ -88,10 +98,77 @@ class _AssistantTextBuffer:
         self._through_chunk_index: int | None = None
         self._segment_active = False
         self._has_ended = False
+        # 流式 JSON 截断状态
+        # Qwen 等 LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出。
+        # 检测到行首 `{`（非代码围栏内）时进入可疑模式，缓冲后续内容不发出，
+        # 直到 end() 根据 finish_reason 判断丢弃（tool_call 或合法 JSON）或
+        # 补发（非 JSON 文本）。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+        self._json_suspect_active: bool = False
+        self._json_suspect_parts: list[str] = []
+        self._json_suspect_bytes: int = 0
+        self._json_suspect_max_bytes: int = ASSISTANT_JSON_SUSPECT_MAX_BYTES
+        # Markdown 代码围栏状态（跨 chunk 检测）
+        self._in_code_fence: bool = False
+        self._code_fence_tail: str = ""
+        # 已发出文本的最后一个字符（用于跨 chunk 检测 `\n{` 模式）
+        self._last_emitted_char: str = ""
 
     async def add(self, delta: str) -> None:
         if not delta:
             return
+        if self._json_suspect_active:
+            await self._add_to_json_suspect(delta)
+            return
+        # 更新代码围栏状态（跨 chunk 检测 ```` ``` ````）
+        self._update_code_fence_state(delta)
+        # 检测行首 `{`（非代码围栏内）触发 JSON 可疑模式
+        trigger_index = self._find_json_trigger(delta)
+        if trigger_index < 0:
+            await self._add_raw(delta)
+            return
+        before = delta[:trigger_index]
+        after = delta[trigger_index:]
+        if before:
+            await self._add_raw(before)
+        # 进入缓冲模式前先结束当前 segment，让前端显示"正在思考..."提示。
+        # 缓冲结束后若补发文本会创建新 segment（_has_ended=True 触发轮转）。
+        if self._segment_active:
+            await self.end("tool_call_pending")
+        self._json_suspect_active = True
+        await self._add_to_json_suspect(after)
+
+    def _update_code_fence_state(self, delta: str) -> None:
+        """更新代码围栏状态，跨 chunk 检测 ```` ``` ```` 和 ``~~`` 标记。"""
+        combined = self._code_fence_tail + delta
+        tail_len = len(self._code_fence_tail)
+        for match in _CODE_FENCE_RE.finditer(combined):
+            # 跳过完全落在 tail 内的匹配（上次已处理）
+            if match.end() <= tail_len:
+                continue
+            self._in_code_fence = not self._in_code_fence
+        # 保留最后 2 字符用于跨 chunk 检测 3 字符围栏标记
+        self._code_fence_tail = combined[-2:] if len(combined) >= 2 else combined
+
+    def _find_json_trigger(self, delta: str) -> int:
+        """检测行首 ``{`` 触发位置（非代码围栏内）。
+
+        返回 ``{`` 在 delta 中的索引，未触发返回 -1。
+        触发条件：
+        - delta 以 ``{`` 开头，且上文以换行结尾或为 segment 开头；或
+        - delta 中存在 ``\\n[ \\t]*{`` 模式。
+        - 不在代码围栏内。
+        """
+        if self._in_code_fence:
+            return -1
+        if delta.startswith("{") and self._last_emitted_char in ("", "\n"):
+            return 0
+        match = _JSON_START_RE.search(delta)
+        if match:
+            return match.end() - 1  # ``{`` 的索引
+        return -1
+
+    async def _add_raw(self, delta: str) -> None:
+        """原始 add 逻辑：发出 live stream 帧并累积到 durable 缓冲。"""
         chunks = self._split_delta(delta)
         if self._has_ended:
             self._segment_index += 1
@@ -122,6 +199,24 @@ class _AssistantTextBuffer:
             self._segment_active = True
             if self._byte_count >= self._max_bytes:
                 await self.flush()
+        if delta:
+            self._last_emitted_char = delta[-1]
+
+    async def _add_to_json_suspect(self, delta: str) -> None:
+        """将 delta 累积到可疑 JSON 缓冲，超限时作为普通文本补发。"""
+        self._json_suspect_parts.append(delta)
+        self._json_suspect_bytes += len(delta.encode("utf-8"))
+        if self._json_suspect_bytes >= self._json_suspect_max_bytes:
+            await self._flush_json_suspect_as_text()
+
+    async def _flush_json_suspect_as_text(self) -> None:
+        """将可疑 JSON 缓冲作为普通文本补发（认定非工具参数 JSON）。"""
+        text = "".join(self._json_suspect_parts)
+        self._json_suspect_parts = []
+        self._json_suspect_bytes = 0
+        self._json_suspect_active = False
+        if text:
+            await self._add_raw(text)
 
     def _split_delta(self, delta: str) -> list[str]:
         chunks: list[str] = []
@@ -144,6 +239,26 @@ class _AssistantTextBuffer:
         return chunks
 
     async def end(self, finish_reason: str) -> None:
+        # 先处理可疑 JSON 缓冲：tool_call 丢弃，其他情况尝试 json.loads，
+        # 合法 JSON 丢弃，非法则作为普通文本补发。
+        if self._json_suspect_active:
+            text = "".join(self._json_suspect_parts)
+            self._json_suspect_parts = []
+            self._json_suspect_bytes = 0
+            self._json_suspect_active = False
+            if finish_reason == "tool_call":
+                pass  # 确认是工具参数 JSON，丢弃
+            elif text:
+                is_json = False
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, (dict, list)):
+                        is_json = True
+                except json.JSONDecodeError:
+                    pass
+                if not is_json:
+                    # 非 JSON 文本，补发到当前 segment
+                    await self._add_raw(text)
         if not self._segment_active and self._has_ended:
             return
         await self.flush()
@@ -161,6 +276,10 @@ class _AssistantTextBuffer:
         )
         self._segment_active = False
         self._has_ended = True
+        # 重置 markdown 状态，避免上一个 segment 未关闭的围栏影响下一个
+        self._in_code_fence = False
+        self._code_fence_tail = ""
+        self._last_emitted_char = ""
 
     def seconds_until_flush(self) -> float | None:
         if self._started_at is None:

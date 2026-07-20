@@ -166,13 +166,24 @@ export function ChatPanel({
       (item) =>
         item.runId === activeRunId && item.kind === "assistant_segment",
     );
+  // 后端进入 JSON 缓冲模式时会先 end() 当前 segment
+  // （finish_reason="tool_call_pending"），标记为"正在准备工具调用"。
+  // 此时虽然有 assistant_segment 但需要显示提示。
+  const activeRunPendingToolCall =
+    activeRunId !== null &&
+    items.some(
+      (item) =>
+        item.runId === activeRunId &&
+        item.kind === "assistant_segment" &&
+        item.finishReason === "tool_call_pending",
+    );
   const showActiveRunStatus =
     activeTask?.summary.mode === "agent" &&
     (activeTask.summary.status === "queued" ||
       activeTask.summary.status === "running" ||
       activeTask.summary.status === "finalizing") &&
     activeRunId !== null &&
-    !activeRunHasAssistantMessage;
+    (!activeRunHasAssistantMessage || activeRunPendingToolCall);
   const activeRunError = useMemo(() => {
     if (activeTask === undefined) return null;
     const latestRunId = activeTask.runOrder[activeTask.runOrder.length - 1];
