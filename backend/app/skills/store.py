@@ -18,7 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.skills.catalog import SkillCatalog, SkillDescriptor, SkillManifest
 from app.skills.packages import PackageValidationError, SkillPackageLoader
 
-_SENSITIVE_MANIFEST_KEYS = {"authorization", "api-key", "api_key", "token", "secret"}
+_SENSITIVE_MANIFEST_KEYS = {
+    "authorization", "api-key", "api_key", "x-api-key", "x-auth-token",
+    "token", "secret", "password", "credential", "credentials",
+}
 _REDACTED = "[redacted]"
 
 

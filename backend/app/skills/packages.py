@@ -157,7 +157,15 @@ class SkillPackageLoader:
         max_zip_files: int = 100,
         max_zip_bytes: int = 10 * 1024 * 1024,
     ) -> None:
-        self._secrets = dict(os.environ if secrets is None else secrets)
+        self._secrets = (
+            {
+                key: value
+                for key, value in os.environ.items()
+                if key.startswith("BIOMED_SKILL_SECRET_")
+            }
+            if secrets is None
+            else dict(secrets)
+        )
         self._http_transport = http_transport
         self._max_zip_files = max_zip_files
         self._max_zip_bytes = max_zip_bytes
@@ -326,6 +334,8 @@ class SkillPackageLoader:
                         json=body,
                     )
                 response.raise_for_status()
+                if len(response.content) > 10 * 1024 * 1024:
+                    raise ValueError("response exceeds 10 MiB limit")
                 payload = response.json()
                 return _extract_response(payload, operation.extract)
             except (httpx.HTTPError, UnsafeUrlError, ValueError) as error:

@@ -170,3 +170,20 @@ def test_model_factory_exposes_request_defaults(tmp_path: Path) -> None:
         "enable_search": True,
         "enable_thinking": True,
     }
+
+
+def test_model_factory_omits_dashscope_body_for_openai_endpoint(tmp_path: Path) -> None:
+    from app.agent_loop.model import get_model
+    from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+
+    store = ModelSettingsStore(
+        tmp_path / "model.json",
+        defaults=Settings(
+            dashscope_api_key="key",
+            dashscope_base_url="https://api.openai.com/v1",
+            model_name="gpt-4o",
+        ),
+    )
+    set_current_model_settings_store(store)
+
+    assert get_model().model_settings.extra_body is None
