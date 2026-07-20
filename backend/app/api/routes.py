@@ -54,7 +54,7 @@ from app.runtime.manager import (
     TaskRunConflictError,
 )
 from app.runtime.repository import TaskRepository
-from app.skills.registry import SkillCategory, skill_registry
+from app.skills.catalog import SkillCatalog
 from app.tools.workdir import create_task_workdir
 
 router = APIRouter(prefix="/api/v1")
@@ -169,23 +169,28 @@ def load_database_skills() -> None:
 
 
 @router.get("/databases")
-async def get_databases() -> dict:
-    """List all available databases derived from enabled skills."""
+async def get_databases(request: Request) -> dict:
+    """List user-selectable databases from the current catalog snapshot."""
+    catalog: SkillCatalog | None = getattr(request.app.state, "skill_catalog", None)
+    if catalog is None:
+        raise HTTPException(status_code=503, detail="Skill catalog is unavailable")
     skills = [
         skill
-        for skill in skill_registry.list_enabled()
-        if skill.supported_sources
-        and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
-        and skill.name not in ("browser_fallback", "web_visual_capture", "local_cache")
+        for skill in catalog.snapshot().skills.values()
+        if skill.enabled and skill.user_selectable and skill.supported_sources
     ]
     databases = []
     for skill in skills:
         databases.append(
             {
                 "id": skill.name,
-                "name": _display_name(skill.name),
+                "name": skill.display_name or _display_name(skill.name),
                 "category": skill.category.value,
                 "description": skill.description,
+                "available": skill.enabled,
+                "origin": skill.origin,
+                "version": skill.version,
+                "pipeline_supported": skill.pipeline_supported,
             }
         )
     return {"databases": databases}
