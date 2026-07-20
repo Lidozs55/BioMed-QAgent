@@ -248,14 +248,27 @@
       —— 改为 `extrasaction="raise"`，typo 的 row key 会立即抛 `ValueError`。
       —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_write_csv_rejects_extra_fields`
 
-- [ ] **P0** Pipeline 全链路接入结构化日志
+- [x] **P0** Pipeline 全链路接入结构化日志
 
       （`logging.getLogger("app.pipeline")` + JSON handler）
       —— 至少覆盖 stage_started / stage_completed / artifact_produced / validation_failed
+      —— 实现：在 `PipelineRunner._publish_event`（所有事件的唯一汇聚点）中
+         `logger.info(json.dumps(event.model_dump(mode="json")))`，自动覆盖
+         stage_started / stage_completed / artifact_produced / validation_failed
+         及所有其他事件类型。
+      —— JSON handler：`app/main.py` 中给 `app.pipeline` logger 附加 JSONL
+         FileHandler → `logs/pipeline.jsonl`，formatter 用 `%(message)s`
+         （日志记录本身已是 JSON 字符串）。
+      —— 配套 TDD：`tests/pipeline/test_pipeline_observability.py::test_publish_event_emits_structured_json_log`
 
-- [ ] **P0** `MetricsTracker` 接入 Pipeline（已实现但未调用）
+- [x] **P0** `MetricsTracker` 接入 Pipeline（已实现但未调用）
 
       （`backend/app/core/metrics.py`）—— 在 PipelineRunner 中初始化并随 stage 更新
+      —— 实现：`PipelineRunner.__init__` 中 `self.metrics = MetricsTracker(task_id=task_id)`；
+         stage 执行处用 `with self.metrics.stage(stage.value):` 包裹（context manager
+         自动 start/end timing，支持异常路径）；`run()` 的 `finally` 块中
+         `self.metrics.save(self.workdir.logs / "metrics.json")`（即使失败/取消也保存）。
+      —— 配套 TDD：`tests/pipeline/test_pipeline_observability.py::test_pipeline_run_writes_metrics_json`
 
 ### 1.8 P0：query_log 状态枚举统一
 
