@@ -15,7 +15,10 @@ class UnsafeUrlError(ValueError):
 
 def validate_public_http_url(url: str) -> str:
     """Return *url* when it resolves exclusively to public HTTP(S) addresses."""
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise UnsafeUrlError("URL is malformed") from exc
     if parsed.scheme not in {"http", "https"}:
         raise UnsafeUrlError("only HTTP(S) URLs are allowed")
     if parsed.username is not None or parsed.password is not None:

@@ -10,7 +10,8 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from dataclasses import dataclass
+from typing import Annotated, Final
 
 from fastapi import APIRouter, HTTPException, Query
 from httpx import AsyncClient, HTTPError, TimeoutException
@@ -28,17 +29,19 @@ from app.settings_manager import (
     get_settings,
     update_settings,
 )
+from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
 
 _httpx_client: AsyncClient | None = None
+_PROVIDER_DISCOVERY_FAILURE_DETAIL: Final = "Model provider discovery failed"
 
 
 def _get_http_client() -> AsyncClient:
     global _httpx_client
     if _httpx_client is None:
-        _httpx_client = AsyncClient(timeout=10.0, follow_redirects=True)
+        _httpx_client = AsyncClient(timeout=10.0, follow_redirects=False)
     return _httpx_client
 
 
@@ -102,7 +105,12 @@ class ModelListResponse(BaseModel):
     api_source: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ModelProviderDiscoveryError(Exception):
+    """Raised when an otherwise-safe provider cannot return a model catalog."""
 
+    def __str__(self) -> str:
+        return _PROVIDER_DISCOVERY_FAILURE_DETAIL
 
 @router.get("/vendors", response_model=list[VendorResponse])
 async def get_vendors_endpoint() -> list[VendorResponse]:
@@ -177,9 +185,8 @@ async def post_settings(body: UpdateSettingsRequest) -> SettingsResponse:
 async def list_models(
     query: Annotated[str | None, Query(description="Search filter")] = None,
     preview_base_url: Annotated[str | None, Query(description="Preview base URL")] = None,
-    preview_api_key: Annotated[str | None, Query(description="Preview API key")] = None,
     use_current_settings: Annotated[
-        bool, Query(description="Ignore preview params and use saved settings")
+        bool, Query(description="Use saved settings for credentialed discovery")
     ] = False,
 ) -> ModelListResponse:
     settings = get_settings()
@@ -188,17 +195,22 @@ async def list_models(
         use_key = settings.api_key
     else:
         use_base = preview_base_url if preview_base_url is not None else ""
-        use_key = preview_api_key if preview_api_key is not None else ""
+        use_key = ""
     api_source: str | None = None
     api_model_ids: set[str] = set()
 
-    if use_base and use_key:
+    if use_base:
         try:
             remote_ids = await _fetch_remote_model_ids(use_base, use_key)
             api_model_ids.update(remote_ids)
             api_source = use_base
-        except Exception as exc:
-            logger.warning("Failed to fetch remote model list: %s", exc)
+        except UnsafeUrlError as exc:
+            raise HTTPException(status_code=422, detail="Unsafe model provider URL") from exc
+        except ModelProviderDiscoveryError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=_PROVIDER_DISCOVERY_FAILURE_DETAIL,
+            ) from exc
 
     result: list[AvailableModelEntry] = []
     if api_source:
@@ -274,28 +286,37 @@ async def get_model_detail(model_id: str) -> ModelInfoResponse:
 
 def _mask_key(key: str) -> str:
     if len(key) <= 12:
-        return key[:4] + "****" if key else ""
-    return key[:8] + "..." + key[-4:]
+        return "****" if key else ""
+    return key[:4] + "..." + key[-4:]
 
 
 async def _fetch_remote_model_ids(base_url: str, api_key: str) -> set[str]:
     url = base_url.rstrip("/") + "/models"
+    validate_public_http_url(url)
+    if api_key and not url.startswith("https://"):
+        raise UnsafeUrlError("credentialed discovery requires HTTPS")
     client = _get_http_client()
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        resp = await client.get(url, headers=headers,)
+        resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        ids: set[str] = set()
-        for item in data.get("data", []):
-            mid = item.get("id")
-            if mid and isinstance(mid, str):
-                ids.add(mid)
-        logger.info("Fetched %d model IDs from %s", len(ids), base_url)
-        return ids
     except (HTTPError, TimeoutException, ValueError, KeyError) as exc:
-        logger.warning("Failed to query %s/models: %s", base_url, exc)
-        return set()
+        logger.warning("Model provider discovery failed: %s", type(exc).__name__)
+        raise ModelProviderDiscoveryError() from exc
+
+    if not isinstance(data, dict):
+        raise ModelProviderDiscoveryError()
+    model_data = data.get("data")
+    if not isinstance(model_data, list):
+        raise ModelProviderDiscoveryError()
+    return {
+        model_id
+        for item in model_data
+        if isinstance(item, dict)
+        and isinstance(model_id := item.get("id"), str)
+        and model_id
+    }
 
 
 async def shutdown_http_client() -> None:
