@@ -9,9 +9,11 @@ import pytest
 from agents import RunContextWrapper, function_tool
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.skills import gateway as gateway_module
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.gateway import build_skill_gateway
 from app.skills.registry import SkillCategory, SkillDef
+from jsonschema.validators import validator_for as jsonschema_validator_for
 
 
 @function_tool
@@ -26,14 +28,21 @@ async def fetch_record(
     }
 
 
-def _skill(*, enabled: bool = True) -> SkillDescriptor:
+def _skill(
+    *,
+    enabled: bool = True,
+    version: str = "2.1.0",
+    supported_sources: list[str] | None = None,
+) -> SkillDescriptor:
     return SkillDescriptor.from_skill_def(
         SkillDef(
             name="geo_fetch",
             category=SkillCategory.ACQUISITION,
             description="Download GEO expression records.",
-            supported_sources=["geo"],
-            version="2.1.0",
+            supported_sources=(
+                ["geo"] if supported_sources is None else supported_sources
+            ),
+            version=version,
             enabled=enabled,
             tools=[fetch_record],
         ),
@@ -100,6 +109,58 @@ async def test_invoke_skill_success_uses_existing_run_context() -> None:
         "operation": "fetch_record",
         "result": {"task_id": "gateway", "accession": "GSE1", "limit": 3},
     }
+
+
+@pytest.mark.asyncio
+async def test_invoke_skill_uses_handle_pinned_to_one_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = SkillCatalog([_skill(version="1.0.0")])
+    _, invoke_skill = build_skill_gateway(catalog)
+
+    def replace_and_delete_during_validation(schema: dict[str, Any]) -> Any:
+        catalog.replace_all([_skill(version="2.0.0")])
+        catalog.remove("geo_fetch")
+        return jsonschema_validator_for(schema)
+
+    monkeypatch.setattr(
+        gateway_module,
+        "validator_for",
+        replace_and_delete_during_validation,
+    )
+
+    result = await _call(
+        invoke_skill,
+        _context(sources=["geo"]),
+        skill="geo_fetch",
+        operation="fetch_record",
+        arguments={"accession": "GSE1", "limit": 1},
+    )
+
+    assert result["status"] == "ok", json.dumps(result, indent=2)
+    assert result["version"] == "1.0.0"
+    assert result["result"]["accession"] == "GSE1"
+    assert catalog.snapshot().skills == {}
+
+
+@pytest.mark.asyncio
+async def test_source_less_acquisition_skill_is_denied_by_non_empty_allowlist() -> None:
+    catalog = SkillCatalog([_skill(supported_sources=[])])
+    find_skill, invoke_skill = build_skill_gateway(catalog)
+    context = _context(sources=["geo"])
+
+    found = await _call(find_skill, context)
+    invoked = await _call(
+        invoke_skill,
+        context,
+        skill="geo_fetch",
+        operation="fetch_record",
+        arguments={"accession": "GSE1"},
+    )
+
+    assert found["skills"] == []
+    assert invoked["status"] == "error"
+    assert invoked["error"]["code"] == "source_not_allowed"
 
 
 @pytest.mark.asyncio

@@ -18,8 +18,6 @@ def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:
     allowlist = context.preferred_sources
     if not allowlist or descriptor.category != SkillCategory.ACQUISITION:
         return True
-    if not descriptor.supported_sources:
-        return True
     return bool(set(allowlist).intersection(descriptor.supported_sources))
 
 
@@ -110,8 +108,8 @@ def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTo
                 version=descriptor.version,
                 operation=operation,
             )
-        tool = descriptor.resolve_operation(operation)
-        if tool is None:
+        handle = snapshot.resolve(skill, operation)
+        if handle is None:
             return _error(
                 "operation_not_found",
                 f"Operation '{operation}' was not found for skill '{skill}'.",
@@ -128,9 +126,9 @@ def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTo
                 operation=operation,
             )
         try:
-            validator_class = validator_for(tool.params_json_schema)
-            validator_class.check_schema(tool.params_json_schema)
-            validator_class(tool.params_json_schema).validate(arguments)
+            validator_class = validator_for(handle.tool.params_json_schema)
+            validator_class.check_schema(handle.tool.params_json_schema)
+            validator_class(handle.tool.params_json_schema).validate(arguments)
         except JsonSchemaValidationError as exc:
             return _error(
                 "invalid_arguments",
@@ -140,15 +138,6 @@ def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTo
                 operation=operation,
             )
 
-        handle = catalog.resolve(skill, operation)
-        if handle is None:
-            return _error(
-                "operation_not_found",
-                f"Operation '{operation}' is no longer available.",
-                skill=skill,
-                version=descriptor.version,
-                operation=operation,
-            )
         result = await handle.invoke(ctx, arguments)
         return json.dumps(
             {

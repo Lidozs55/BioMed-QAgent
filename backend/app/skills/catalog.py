@@ -172,6 +172,21 @@ class CatalogSnapshot:
     generation: int
     skills: Mapping[str, SkillDescriptor]
 
+    def resolve(self, skill: str, operation: str) -> ResolvedOperation | None:
+        """Resolve an operation pinned to this snapshot."""
+        descriptor = self.skills.get(skill)
+        if descriptor is None:
+            return None
+        tool = descriptor.resolve_operation(operation)
+        if tool is None:
+            return None
+        return ResolvedOperation(
+            skill=descriptor.name,
+            version=descriptor.version,
+            operation=operation,
+            tool=tool,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedOperation:
@@ -255,18 +270,7 @@ class SkillCatalog:
 
     def resolve(self, skill: str, operation: str) -> ResolvedOperation | None:
         """Resolve an operation against one consistent snapshot."""
-        descriptor = self._snapshot.skills.get(skill)
-        if descriptor is None:
-            return None
-        tool = descriptor.resolve_operation(operation)
-        if tool is None:
-            return None
-        return ResolvedOperation(
-            skill=descriptor.name,
-            version=descriptor.version,
-            operation=operation,
-            tool=tool,
-        )
+        return self._snapshot.resolve(skill, operation)
 
     def _publish(self, skills: dict[str, SkillDescriptor]) -> CatalogSnapshot:
         snapshot = CatalogSnapshot(
