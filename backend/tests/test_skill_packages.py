@@ -398,3 +398,66 @@ def test_delete_cleanup_failure_retains_state_catalog_and_files(
     assert catalog.snapshot() is before
     assert store.detail("demo_db").available is True
     assert (tmp_path / "skills" / "packages" / "demo_db").is_dir()
+
+
+def test_broken_package_can_disable_but_cannot_enable_without_loading(
+    tmp_path: Path,
+) -> None:
+    store = UserSkillStore(tmp_path / "skills", catalog=SkillCatalog(), builtins=(_builtin(),))
+    store.put_manifest(_manifest())
+    state_path = tmp_path / "skills" / "state.json"
+    state = json.loads(state_path.read_text("utf-8"))
+    current = state["packages"]["demo_db"]["current"]
+    package_file = next((tmp_path / "skills" / "packages" / "demo_db").glob(f"{current}.*"))
+    package_file.write_text("not json", encoding="utf-8")
+    broken = UserSkillStore(tmp_path / "skills", catalog=SkillCatalog(), builtins=(_builtin(),))
+
+    disabled = broken.set_enabled("demo_db", enabled=False)
+    before_enable = state_path.read_bytes()
+    assert disabled.skill is not None and disabled.skill.enabled is False
+    assert broken.detail("demo_db").available is False
+    with pytest.raises(PackageValidationError):
+        broken.set_enabled("demo_db", enabled=True)
+    assert state_path.read_bytes() == before_enable
+
+
+def test_successful_replacement_clears_stale_load_error(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    initial = UserSkillStore(root, catalog=SkillCatalog(), builtins=(_builtin(),))
+    initial.put_manifest(_manifest())
+    state = json.loads((root / "state.json").read_text("utf-8"))
+    current = state["packages"]["demo_db"]["current"]
+    next((root / "packages" / "demo_db").glob(f"{current}.*")).write_text("bad")
+    reloaded = UserSkillStore(root, catalog=SkillCatalog(), builtins=(_builtin(),))
+    assert reloaded.detail("demo_db").load_error
+
+    reloaded.put_manifest(_manifest(version="2.0.0"))
+
+    assert reloaded.detail("demo_db").available is True
+    assert reloaded.detail("demo_db").load_error is None
+
+
+def test_post_commit_tombstone_cleanup_failure_returns_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = SkillCatalog()
+    store = UserSkillStore(tmp_path / "skills", catalog=catalog, builtins=(_builtin(),))
+    store.put_manifest(_manifest())
+    calls = 0
+
+    def fail_second_cleanup(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("tombstone retained")
+        if path.exists():
+            import shutil
+
+            shutil.rmtree(path)
+
+    monkeypatch.setattr(store, "_remove_tree", fail_second_cleanup)
+    result = store.delete("demo_db")
+
+    assert result.generation == catalog.snapshot().generation
+    assert "demo_db" not in catalog.snapshot().skills
+    assert (tmp_path / "skills" / "packages" / ".demo_db.deleting").is_dir()

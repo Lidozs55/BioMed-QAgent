@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from pathlib import Path
 from threading import RLock
 from typing import Literal
@@ -150,14 +151,20 @@ class UserSkillStore:
     def set_enabled(self, name: str, *, enabled: bool) -> StoreMutation:
         with self._lock:
             package = self._require_user(name)
+            if enabled and name in self._load_errors:
+                self._load_current(package, force=True)
             state = self._replace_package(
                 package.model_copy(update={"enabled": enabled})
             )
             descriptors = self._load_all(state)
             snapshot = self._commit_and_publish(state, descriptors)
+            skill = snapshot.skills.get(name)
+            if skill is None:
+                current = self._version(package, package.current)
+                skill = self._placeholder_descriptor(package, current)
             return StoreMutation(
                 generation=snapshot.generation,
-                skill=snapshot.skills[name].manifest,
+                skill=skill.manifest,
             )
 
     def rollback(self, name: str) -> StoreMutation:
@@ -204,7 +211,8 @@ class UserSkillStore:
                 if tombstone.exists():
                     tombstone.replace(package_dir)
                 raise
-            self._remove_tree(tombstone)
+            with suppress(OSError):
+                self._remove_tree(tombstone)
             for key in [key for key in self._loaded if key[0] == name]:
                 del self._loaded[key]
             self._load_errors.pop(name, None)
@@ -275,23 +283,37 @@ class UserSkillStore:
                 version = self._version(package, package.current)
                 descriptor = self._loaded.get((name, version.version_id))
                 if descriptor is None:
-                    path = self.root / version.relative_path
-                    content = path.read_bytes()
-                    if version.kind == "manifest":
-                        raw = json.loads(content.decode("utf-8"))
-                        descriptor = self._loader.load_manifest(raw)
-                    else:
-                        descriptor = self._loader.load_zip(
-                            content, extraction_root=self.root / ".load"
-                        ).descriptor
-                    self._loaded[(name, version.version_id)] = descriptor
+                    descriptor = self._load_current(package)
                 descriptor = descriptor.model_copy(update={"enabled": package.enabled})
                 descriptors.append(descriptor)
                 names.add(name)
+                self._load_errors.pop(name, None)
             except Exception:
                 self._load_errors[name] = "current package could not be loaded"
                 continue
         return tuple(descriptors)
+
+    def _load_current(
+        self, package: StoredPackage, *, force: bool = False
+    ) -> SkillDescriptor:
+        version = self._version(package, package.current)
+        key = (package.name, version.version_id)
+        if not force and key in self._loaded:
+            return self._loaded[key]
+        path = self.root / version.relative_path
+        content = path.read_bytes()
+        try:
+            if version.kind == "manifest":
+                descriptor = self._loader.load_manifest(json.loads(content.decode("utf-8")))
+            else:
+                descriptor = self._loader.load_zip(
+                    content, extraction_root=self.root / ".load"
+                ).descriptor
+        except Exception as error:
+            raise PackageValidationError("current package could not be loaded") from error
+        self._loaded[key] = descriptor
+        self._load_errors.pop(package.name, None)
+        return descriptor
 
     def _read_state(self) -> StoreState:
         if not self._state_path.exists():
