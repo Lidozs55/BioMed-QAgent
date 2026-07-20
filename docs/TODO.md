@@ -317,11 +317,19 @@
       —— 已记录完整 durable REST/WS/HIL/并发契约、前端 Run 隔离与
       2026-07-17 最新后端/前端验证证据
 
-- [ ] **P0** 提交 1-2 个 artifact 样例到版本控制
+- [x] **P0** 提交 1-2 个 artifact 样例到版本控制
 
       —— 修改 `backend/data/.gitignore`（当前 `*\n!.gitignore` 全部排除）
       —— 至少提交 GSE178352 fixture 的一次完整 artifacts/ 输出样例到 `backend/data/examples/`
       —— 让评委克隆仓库即可查看真实产物
+      —— 实现：`.gitignore` 添加 `!examples/` + `!examples/gse178352/**/*` 例外规则；
+         通过一次性脚本跑 GSE178352 pinned fixture pipeline 生成 14 个 mandatory
+         artifacts（run_manifest.json / main_data.csv / literature.csv /
+         dataset_catalog.csv / sample_metadata.csv / field_descriptions.csv /
+         field_mapping.csv / source_list.csv / source_relations.csv /
+         source_assets.csv / download_log.csv / processing_log.csv /
+         quality_report.csv / warnings.csv）并复制到 `backend/data/examples/gse178352/`；
+         添加 `examples/README.md` 解释每个文件用途与重新生成方法。
 
 - [x] **P0** 完善 `agent_loop/agent.py` 的 INSTRUCTIONS
 

@@ -1,2 +1,9 @@
 *
 !.gitignore
+!examples/
+examples/*
+!examples/gse178352/
+examples/gse178352/*
+!examples/gse178352/**/
+!examples/gse178352/**/*
+!examples/README.md

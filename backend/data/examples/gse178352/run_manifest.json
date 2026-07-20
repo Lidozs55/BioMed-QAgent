@@ -1,0 +1,218 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_sample",
+  "id_generation_version": "1.0",
+  "request": {
+    "schema_version": "1.0",
+    "topic": "breast cancer gene expression under Hsp70 inhibition",
+    "databases": [
+      "pubmed",
+      "geo"
+    ],
+    "keywords": [],
+    "target_fields": [],
+    "time_range": null,
+    "mode": "fixture"
+  },
+  "specification": {
+    "schema_version": "1.0",
+    "topic": "breast cancer gene expression under Hsp70 inhibition",
+    "queries": [
+      {
+        "schema_version": "1.0",
+        "query_id": "query_geo_1",
+        "database": "geo",
+        "query": "GSE178352[Accession]",
+        "generated_by": "pipeline",
+        "purpose": "pinned dataset",
+        "order": 1,
+        "page_size": null,
+        "max_results": null
+      },
+      {
+        "schema_version": "1.0",
+        "query_id": "query_pubmed_1",
+        "database": "pubmed",
+        "query": "34180400[PMID]",
+        "generated_by": "pipeline",
+        "purpose": "pinned literature",
+        "order": 2,
+        "page_size": null,
+        "max_results": null
+      }
+    ],
+    "datasets": [
+      {
+        "schema_version": "1.0",
+        "dataset_id": "ds_geo_gse178352",
+        "database": "geo",
+        "accession": "GSE178352",
+        "source_id": "src_ac3f65715090fc35dff94baae79981fb",
+        "reason": "linked from PMID 34180400"
+      }
+    ],
+    "requested_outputs": [
+      "main_data",
+      "literature",
+      "dataset_catalog",
+      "sample_metadata"
+    ]
+  },
+  "task_state": "completed",
+  "stage_attempt_ids": [
+    "stage_attempt_0508bbdc-8fb6-4435-9fb6-019c944246a5",
+    "stage_attempt_24c8c418-e007-4908-bba7-6834541d5762",
+    "stage_attempt_721969d6-d63f-4a97-83ca-94e3a0d89616",
+    "stage_attempt_c40c22fb-ab95-42b6-9175-56daec368076",
+    "stage_attempt_dea3d8bc-bedc-4472-8db8-2caa7e33bd2b"
+  ],
+  "source_ids": [
+    "src_ac3f65715090fc35dff94baae79981fb",
+    "src_f6058184aaf6e53ec68732f3d6599c55"
+  ],
+  "artifacts": [
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_24e547d247b051d798547cf82a34ed3a",
+      "name": "source_assets.csv",
+      "relative_path": "artifacts/source_assets.csv",
+      "media_type": "text/csv",
+      "size_bytes": 423,
+      "sha256": "24e547d247b051d798547cf82a34ed3a09d348a4f91f7405537109132ab3b7ba",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_3a6fa29dc8c436ff5d77ec8aa00fbc0c",
+      "name": "download_log.csv",
+      "relative_path": "artifacts/download_log.csv",
+      "media_type": "text/csv",
+      "size_bytes": 338,
+      "sha256": "3a6fa29dc8c436ff5d77ec8aa00fbc0ca89516b6c6c712cc8448348fee5244d1",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_6811b6c083f195ac350617aebdfbf01a",
+      "name": "sample_metadata.csv",
+      "relative_path": "artifacts/sample_metadata.csv",
+      "media_type": "text/csv",
+      "size_bytes": 2584,
+      "sha256": "6811b6c083f195ac350617aebdfbf01a679f2abc8c24bafa346b29262b1c5fde",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_6ef28fae6ce2ae10feb30ce338f90acb",
+      "name": "quality_report.csv",
+      "relative_path": "artifacts/quality_report.csv",
+      "media_type": "text/csv",
+      "size_bytes": 646,
+      "sha256": "6ef28fae6ce2ae10feb30ce338f90acbcddd68cf07e249940a4b77e1bdfe45dd",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_773d8d88ba0dc84131595046fb1dc2d4",
+      "name": "literature.csv",
+      "relative_path": "artifacts/literature.csv",
+      "media_type": "text/csv",
+      "size_bytes": 507,
+      "sha256": "773d8d88ba0dc84131595046fb1dc2d4c7fd895c5966228f5c88b9a486947099",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_878bbc25f642bff0d30327908a812ba0",
+      "name": "source_relations.csv",
+      "relative_path": "artifacts/source_relations.csv",
+      "media_type": "text/csv",
+      "size_bytes": 312,
+      "sha256": "878bbc25f642bff0d30327908a812ba0b46e4b904584f378c380f9e16c1e343b",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_96affc136e8be00462859c4aef85eefb",
+      "name": "main_data.csv",
+      "relative_path": "artifacts/main_data.csv",
+      "media_type": "text/csv",
+      "size_bytes": 17327,
+      "sha256": "96affc136e8be00462859c4aef85eefb14751109cde6d86c770e21265f6ca4de",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_9ae6609a46b1307b321fabeed520267c",
+      "name": "field_mapping.csv",
+      "relative_path": "artifacts/field_mapping.csv",
+      "media_type": "text/csv",
+      "size_bytes": 1065,
+      "sha256": "9ae6609a46b1307b321fabeed520267c541f874ec13ee43febc51c3f75616230",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_a0192bc1aca784596a407891d6d96ee1",
+      "name": "warnings.csv",
+      "relative_path": "artifacts/warnings.csv",
+      "media_type": "text/csv",
+      "size_bytes": 2903,
+      "sha256": "a0192bc1aca784596a407891d6d96ee133560774fd35f0b7fff064abe352239e",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_c3d7cf0d1ececd62eb395d6f380f6dca",
+      "name": "processing_log.csv",
+      "relative_path": "artifacts/processing_log.csv",
+      "media_type": "text/csv",
+      "size_bytes": 2403,
+      "sha256": "c3d7cf0d1ececd62eb395d6f380f6dca922aaadd83d2b124aeebbac5c3060a78",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_d7d0c76d50388913ddcc241bfe16c9f4",
+      "name": "field_descriptions.csv",
+      "relative_path": "artifacts/field_descriptions.csv",
+      "media_type": "text/csv",
+      "size_bytes": 3185,
+      "sha256": "d7d0c76d50388913ddcc241bfe16c9f4df42bce56679f5bf32746ff2ab5c1622",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_ea3e5318665b6005833bba23f42af3ef",
+      "name": "dataset_catalog.csv",
+      "relative_path": "artifacts/dataset_catalog.csv",
+      "media_type": "text/csv",
+      "size_bytes": 509,
+      "sha256": "ea3e5318665b6005833bba23f42af3ef650e1fbfe884e70ca4250f7143a5fd73",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    },
+    {
+      "schema_version": "1.0",
+      "artifact_id": "artifact_f0f2a2faf7c0f4e0e8b80cf1e0d8005b",
+      "name": "source_list.csv",
+      "relative_path": "artifacts/source_list.csv",
+      "media_type": "text/csv",
+      "size_bytes": 534,
+      "sha256": "f0f2a2faf7c0f4e0e8b80cf1e0d8005b0a2cbaa5204f05ddba4b36e5f77f1b0f",
+      "generated_by_step_id": "step_artifact_builder_v1"
+    }
+  ],
+  "validation": {
+    "schema_version": "1.0",
+    "status": "valid",
+    "checked_count": 155,
+    "failed_count": 0,
+    "report_path": "logs/validation_report.json"
+  },
+  "pipeline_version": "0.1.0",
+  "model_name": "qwen-plus",
+  "mode": "fixture",
+  "live_accepted": false,
+  "started_at": "2026-07-20T01:32:41.313732Z",
+  "finished_at": "2026-07-20T01:32:41.525809Z"
+}

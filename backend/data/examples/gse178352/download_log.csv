@@ -1,0 +1,2 @@
+﻿attempt_id,source_id,url,status,bytes_received,error_code,error_message,started_at,finished_at
+download_attempt_fixture_gse178352,src_ac3f65715090fc35dff94baae79981fb,https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/suppl/GSE178352_tximportCounts.txt.gz,succeeded,830,,,2026-07-12T08:00:00+00:00,2026-07-12T08:00:00+00:00
