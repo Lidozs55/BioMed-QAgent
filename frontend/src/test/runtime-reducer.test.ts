@@ -1562,7 +1562,28 @@ describe("conversation items projection", () => {
     });
   });
 
-  it("does not create items for run_queued, plan_ready, user_input_required, or conversation_compacted", () => {
+  it("creates a user_message item for run_queued so the user's input is visible during LLM thinking", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "run_queued",
+        request_id: "req_1",
+        input: "question",
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "user_message",
+      itemId: "user:run_items",
+      runId: "run_items",
+      content: "question",
+    });
+  });
+
+  it("does not create items for plan_ready, user_input_required, or conversation_compacted", () => {
     let state = setup();
     state = reduceRuntimeEvent(
       state,
@@ -1600,7 +1621,11 @@ describe("conversation items projection", () => {
       }),
     );
 
-    expect(state.tasksById.task_items.items).toHaveLength(0);
+    // run_queued creates 1 user_message item; the other three create none.
+    expect(state.tasksById.task_items.items).toHaveLength(1);
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "user_message",
+    });
   });
 
   it("deactivates streaming reasoning items on run_finalizing", () => {
