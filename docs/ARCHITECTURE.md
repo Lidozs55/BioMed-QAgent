@@ -493,7 +493,12 @@ Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user
 ```text
 任务创建
     -> 计划确认
-    -> 阶段 Timeline
+    -> 对话流（coding agent 风格步骤流）
+         |-- 用户输入
+         |-- 思维链（reasoning，默认折叠）
+         |-- 工具调用（带 arguments 标签，可展开）
+         |-- 阶段 / 进度 / 警告 / 产物（紧凑单行）
+         `-- Assistant 文本段（按 tool call 分段）
     -> 结果 Tabs
          |-- 主数据
          |-- 文献与数据集
@@ -514,7 +519,7 @@ stage 和 `lastSequence` 投影。HIL prompt 同时绑定 `task_id + run_id + re
 `UserInputDialog` 使用该 Run 提交，并用 prompt key 与 submission attempt ID 隔离
 A → B → A 切换中的旧 Promise settlement。resume 事件只清理匹配 Run 与 request
 的 prompt，terminal 事件按所属 Run 清理，新 Run admission 则清理上一轮 prompt。
-侧栏把 `awaiting_user_input` 计入“运行中 N / 4”，与后端 slot 占用一致。
+侧栏把 `awaiting_user_input` 计入"运行中 N / 4"，与后端 slot 占用一致。
 
 Assistant 文本采用 realtime/durable 双投影：实时 chunk 按 `(run_id, stream_id,
 chunk_index)` 进入 pending，durable `assistant_delta` 的 chunk 范围推进 confirmed
@@ -526,14 +531,61 @@ watermark 去重，因此在线文本与断线重放后的最终文本收敛一�
 stream end、工具开始、Run finalizing/终态、断连或取消订阅后关闭，并遵循
 `prefers-reduced-motion`。
 
-Chat 主流中的 `ExecutionSummary` 只展示安全的结构化执行摘要：工具状态、阶段与
-progress 数量（检索、下载、清洗等）、验证状态和警告；同一 Run/阶段/progress kind
-原位更新，运行中默认展开。工具事件中已有的 output、digest 和诊断详情保留在
-`ToolTrace` 中；`ExecutionSummary` 不渲染任意 `detail`、reasoning-like keys 或
-隐藏提示词。系统不主动传输模型 CoT。
-
 R5 前端修复还补齐了非聊天区域的有界滚动、刷新竞态下的稳定 Task 排序、后台
-通知“查看”失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。
+通知"查看"失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。
+
+### 9.1 对话流展示（Coding Agent 风格）
+
+对话主流使用"按时间顺序交错的步骤流"展示，所有事件类型统一投影到
+`ConversationItem` 列表，按 `sequence` 升序渲染。设计目标：让用户输入、思维链、
+工具调用、阶段进度、产物、警告、Assistant 总结汇报都以独立项的形式内联展示，
+类似 Cursor / Claude Code 的对话体验。
+
+**ConversationItem 联合类型**（`frontend/src/runtime/types.ts`）：
+
+| kind | 来源事件 | 渲染组件 | 默认状态 |
+|------|----------|----------|----------|
+| `user_message` | `MessageRecord(role=user)` hydrate | `UserMessageBubble` | 右对齐气泡 |
+| `assistant_segment` | `assistant_delta`（按 `stream_id` 分段） | `AssistantSegment` | 展开，流式时末尾 `▋` 光标 |
+| `reasoning` | `assistant_reasoning_delta`（按 tool call 分段） | `ReasoningBlock` | 折叠；流式时展开；流式结束 500ms 后自动折叠 |
+| `tool_call` | `tool_started` + `tool_completed` | `ToolCallStep` | 折叠（仅显示标签行）；running 时 Spinner，error 时 WarningCircle，completed 时 CheckCircle |
+| `stage` | `stage_started/completed/failed/skipped` | `StageStep` | 展开（紧凑单行） |
+| `progress` | `stage_progress` | `ProgressStep` | 展开（紧凑单行，同 kind 原位更新） |
+| `warning` | `warning` | `WarningStep` | 展开（紧凑单行，黄色） |
+| `artifact` | `artifact_produced` | `ArtifactStep` | 展开（紧凑单行，含文件大小 Badge） |
+
+**itemId 规则**（reducer 按 itemId 去重 + sequence 排序）：
+
+- `assistant:${streamId}` — 同一 stream_id 的 delta 累积到同一项；工具调用打断后
+  segment_index 递增，自动开新段
+- `reasoning:${runId}:${segmentIndex}` — 收到 `tool_started` 时 segmentIndex++，
+  实现思维链按 tool call 分段
+- `tool:${runId}:${toolCallId}` — started/completed 共用同一 itemId
+- `stage:${runId}:${stage}` — started/completed/failed/skipped 共用
+- `progress:${runId}:${stage}:${kind}` — 同 kind 原位更新
+- `warning:${sequence}` / `artifact:${runId}:${artifactId}`
+- `msg:${messageId}` — MessageRecord hydrate（user/assistant 旧消息）
+
+`run_queued` / `user_input_required` / `user_input_resumed` /
+`conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
+ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理，避免与
+MessageRecord hydrate 重复。
+
+**toolLabels 映射**（`frontend/src/components/conversation/toolLabels.ts`）：
+`toolName + arguments` → `{ verb, target, details? }` 三元组，如
+`search_pubmed_adapter + {query: "lung cancer"}` → `{verb: "检索", target: "PubMed",
+details: "查询: \"lung cancer\""}`。状态条和 ToolCallStep 标签行复用同一映射，
+未在表中的工具兜底显示"调用 {toolName}"。
+
+**状态条简化**：Run running 时，`selectActiveItem` 返回最后一个活跃 item
+（`isStreaming=true` 或 `status=running`），ChatPanel 顶部 Marker 显示
+`formatActiveItemStatus(item)` 简述（如"检索 PubMed · 查询: 'lung cancer'"）；
+无活跃 item 时回退到 `STATUS_LABELS[task.status]`。
+
+**向后兼容**：reducer 仍保留 `messages` / `activitiesById` / `assistantStreamsByRunId`
+字段以支持旧事件回放和分页加载（`mergeOlderMessagePage`），但 ChatPanel 渲染只依赖
+`items`。`MessageRecord` hydrate 通过 `projectMessageToItem` 投影到 items 列表，
+事件回放覆盖 hydrate 项（以事件为准）。
 
 ## 10. 开发阶段
 

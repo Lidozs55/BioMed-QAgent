@@ -250,6 +250,22 @@ backend/
 
 `EventEnvelope` v2 为 managed Run 增加 `run_id`；sequence 是 **Task 级单调递增**，不是每个 Run 重新计数。HIL（人在回路）使用 `user_input_required` / `user_input_resumed` 事件，`POST /resume` 必须匹配 exact `request_id` 且只消费一次。
 
+### 事件 Schema 变更（2026-07-20，向后兼容）
+
+为支持前端 coding-agent 风格对话流展示，`ToolStartedPayload` 与 `ToolCompletedPayload` 增加了可选字段，旧 `events.jsonl` 仍可正常回放：
+
+- `ToolStartedPayload.arguments: dict[str, JsonValue] | None`（默认 `None`）
+  — 由 `agent_loop/runner.py:_extract_tool_arguments` 从 SDK `raw_item.arguments`
+  解析并经 `_truncate_for_event` 递归截断（depth=3, str=200, list=20）。前端
+  据此渲染"检索 PubMed · 查询: 'lung cancer'"等工具标签，无需额外请求。
+- `ToolCompletedPayload.output` 现由 `_truncate_tool_output` 截断到 4 KB
+  （`TOOL_OUTPUT_MAX_BYTES = 4096`），防止 `events.jsonl` 膨胀。原始 output 仍
+  保留在 Run 的 Session 历史中，前端展开 ToolCallStep 详情时显示截断版本。
+
+新增 helper 均为模块级纯函数，单元测试覆盖见
+`tests/agent_loop/test_event_arguments.py`（28 项，含字符串/列表/深度截断、
+JSON 解析失败、向后兼容、序列化往返）。
+
 ## 技术栈
 
 | 组件 | 技术 | 说明 |

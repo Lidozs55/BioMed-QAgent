@@ -113,38 +113,50 @@ frontend/
     │   └── use-mobile.ts       # 移动端检测 Hook（断点 768px）
     ├── components/
     │   ├── AgentComposer.tsx          # 任务创建 / 续跑 composer（输入 + 数据库选择）
-    │   ├── AgentProgress.tsx          # Agent 模式 stage/进度卡片（含 AgentStageList）
     │   ├── ArtifactWorkspace.tsx      # 产物工作区（按 Tab 分类展示 14 个 artifact）
     │   ├── BackgroundTaskNotifications.tsx # 后台任务 toast 通知 + View 失败反馈
-    │   ├── ChatPanel.tsx              # 主工作区对话面板（assistant delta + 工具卡片穿插）
+    │   ├── ChatPanel.tsx              # 主工作区对话面板（ConversationList + 状态条 + 续跑输入）
     │   ├── DatabaseSelector.tsx       # 数据库选择器（分类分组、ToggleGroup）
     │   ├── MarkdownContent.tsx        # Markdown 渲染（react-markdown + remark-gfm）
-    │   ├── ResearchPipeline.tsx       # 5 阶段管道进度条 + 跨模式 stage 投影
     │   ├── ResultsViewer.tsx          # 产物展示（来源清单、文件卡片、CSV 预览）
     │   ├── SessionSidebar.tsx         # 会话历史侧边栏（任务列表、状态 Badge、删除）
     │   ├── ThemeToggle.tsx            # 亮/暗主题切换按钮
-    │   ├── ToolTrace.tsx              # 工具调用追踪面板（shadcn Sheet，右侧滑出）
     │   ├── UserInputDialog.tsx        # 人在回路统一 Dialog（plan_confirmation / max_turns_reached / data_correction）
     │   ├── taskStatus.tsx             # 任务状态 Badge 组件
     │   ├── taskStatusMeta.ts          # 任务状态元数据（颜色、图标、文案映射）
     │   ├── artifactPanelControl.ts    # Artifact 面板状态控制
+    │   ├── conversation/              # Coding agent 风格对话步骤流组件
+    │   │   ├── ConversationList.tsx       # 列表渲染器（Fragment + MessageScrollerItem）
+    │   │   ├── ConversationStep.tsx       # kind 分发器（switch item.kind）
+    │   │   ├── UserMessageBubble.tsx      # 用户消息（右对齐 Bubble）
+    │   │   ├── AssistantSegment.tsx       # Assistant 文本段（Markdown + 流式光标）
+    │   │   ├── ReasoningBlock.tsx         # 思维链（默认折叠，流式时展开，500ms 后自动折叠）
+    │   │   ├── ToolCallStep.tsx           # 工具调用（三态图标 + 可展开 arguments/output）
+    │   │   ├── StageStep.tsx              # 阶段（紧凑单行 + Badge）
+    │   │   ├── ProgressStep.tsx           # 进度（紧凑单行，同 kind 原位更新）
+    │   │   ├── WarningStep.tsx            # 警告（紧凑单行，黄色）
+    │   │   ├── ArtifactStep.tsx           # 产物（紧凑单行 + 文件大小 Badge）
+    │   │   ├── toolLabels.ts              # toolName + args → {verb, target, details?} 映射
+    │   │   ├── stageLabels.ts             # STAGE_LABELS + PROGRESS_LABELS 中文映射
+    │   │   └── __tests__/                 # 组件单元测试（4 文件）
     │   └── ui/                        # 36 个 shadcn/ui 组件（见下方清单）
     └── test/
         ├── setup.ts                   # Vitest 配置导入（jest-dom、jsdom）
         ├── app.test.tsx               # App 根布局渲染
         ├── api.test.ts                # useAPI REST 调用
-        ├── agent-progress.test.tsx    # AgentProgress + AgentStageList
         ├── agent-stream.test.ts       # useAgentStream WebSocket 事件解析
         ├── artifact-workspace.test.tsx # ArtifactWorkspace Tab 切换与 CSV 预览
         ├── background-task-notifications.test.tsx # 后台通知 View 失败反馈
-        ├── chat-panel.test.tsx        # ChatPanel 消息渲染 + 多行换行
-        ├── research-pipeline.test.tsx # ResearchPipeline 阶段卡片
+        ├── chat-panel.test.tsx        # ChatPanel ConversationList 渲染 + 状态条
+        ├── hydrate-compat.test.ts     # MessageRecord → ConversationItem 投影兼容
+        ├── items-ordering.test.ts     # ConversationItem sequence 排序 + 去重
+        ├── markdown-streaming.test.tsx # AssistantSegment 流式光标 + Markdown
+        ├── realtime-stream-reducer.test.ts # 实时 assistant_stream_delta 投影
         ├── results-viewer.test.tsx    # ResultsViewer 空判定与产物列表
         ├── runtime-controller.test.ts # Controller REST + WS 协同
-        ├── runtime-reducer.test.ts    # Reducer 事件投影
+        ├── runtime-reducer.test.ts    # Reducer 事件投影（含 ConversationItem 项目化）
         ├── session-sidebar.test.tsx   # SessionSidebar 任务列表 + 删除
         ├── store.test.ts              # Zustand Store 初始化
-        ├── tool-trace.test.tsx        # ToolTrace Sheet 展开/折叠
         └── user-input-dialog.test.tsx # UserInputDialog plan_confirmation / max_turns_reached
 ```
 
@@ -160,13 +172,21 @@ frontend/
       </header>
       <main>
         <AgentComposer />            ← 任务创建 / 续跑输入区
-        <ResearchPipeline />         ← 5 阶段进度卡片（跨模式 stage 投影）
-        <AgentProgress />            ← Agent 模式 stage/进度 chips
-        <ChatPanel>                  ← 主对话区
+        <ChatPanel>                  ← 主对话区（coding agent 风格步骤流）
+          <Marker>                   ← 状态条：活跃 item 简述（如"检索 PubMed · 查询: ..."）
           <MessageScroller>
-            <Message> + <Bubble>     ← assistant_delta + 工具卡片穿插
+            <ConversationList>       ← 按 sequence 排序的 ConversationItem 列表
+              <UserMessageBubble />  ←   user 消息（右对齐）
+              <ReasoningBlock />     ←   思维链（默认折叠，流式时展开）
+              <ToolCallStep />       ←   工具调用（三态图标 + 可展开）
+              <StageStep />          ←   阶段（紧凑单行）
+              <ProgressStep />       ←   进度（紧凑单行）
+              <WarningStep />        ←   警告（紧凑单行）
+              <ArtifactStep />       ←   产物（紧凑单行）
+              <AssistantSegment />   ←   Assistant 文本段（Markdown + 光标）
+            </ConversationList>
           </MessageScroller>
-          <MarkdownContent />        ← Markdown 渲染
+          <AgentComposer />          ← 续跑输入区
         </ChatPanel>
         <ArtifactWorkspace>          ← 结果展示（按 Tab 分类）
           <Tabs>
@@ -177,7 +197,6 @@ frontend/
           </Tabs>
           <ResultsViewer />
         </ArtifactWorkspace>
-        <ToolTrace />                ← 右下角浮动按钮 → Sheet 面板
         <UserInputDialog />          ← HIL 模态（按 prompt_kind 渲染分支）
         <BackgroundTaskNotifications /> ← toast 通知（含 View 失败反馈）
       </main>
@@ -193,11 +212,10 @@ frontend/
 | 分区 | 组件 | 功能 |
 |------|------|------|
 | **任务创建** | `AgentComposer` + `DatabaseSelector` | 输入研究目标、选择数据库、启动任务或续跑 |
-| **进度可视化** | `ResearchPipeline` + `AgentProgress` | 跨模式 stage 投影、Agent 模式进度 chips、N 篇/M 条/K 行中间进度 |
-| **对话** | `ChatPanel` + `MarkdownContent` | 实时 assistant_delta、工具卡片穿插、用户后续指令 |
+| **对话流** | `ChatPanel` + `ConversationList` + `MarkdownContent` | coding agent 风格步骤流：用户输入 / 思维链 / 工具调用 / 阶段 / 进度 / 警告 / 产物 / Assistant 文本段，按 sequence 顺序交错渲染 |
+| **状态条** | `ChatPanel` 顶部 `Marker` | Run running 时显示活跃 item 简述（如"检索 PubMed · 查询: 'lung cancer'"），否则显示 `STATUS_LABELS[task.status]` |
 | **结果** | `ArtifactWorkspace` + `ResultsViewer` | 14 个 artifact 按 Tab 分类展示，CSV 预览、下载 |
 | **人在回路** | `UserInputDialog` | 计划确认 / max_turns_reached / 数据修正统一 Dialog，按 Run+request_id 隔离 |
-| **工具追踪** | `ToolTrace` | 工具调用完整 trace，默认折叠，按需展开 |
 | **后台通知** | `BackgroundTaskNotifications` | 任务终态、View 失败、HIL 等异步通知 |
 
 ## 状态管理
@@ -210,25 +228,57 @@ frontend/
 interface AgentStore {
   // 任务投影（按 task_id 索引）
   tasksById: Record<string, TaskProjection>
-  activitiesById: Record<string, ActivityRecord>    // stage / progress / tool 事件
-  artifactsById: Record<string, ArtifactRecord>
-
-  // 当前活动任务
+  activeItems: string[]                         // active task_id 列表（按 created_at DESC）
+  // 全局
   activeTaskId: string | null
-
-  // 配置
+  nextCursor: string | null                     // 历史分页 cursor
+  connectionStatus: "idle" | "connected" | "reconnecting" | "error"
+  historyStatus: "idle" | "loading" | "ready" | "error"
+  historyError: string | null
+  // 草稿态
+  draft: {
+    input: string
+    selectedDatabaseIds: string[]
+    mode: "agent" | "fixture"
+    error: string | null
+  }
   databases: DatabaseInfo[]
-  selectedDatabases: string[]
+}
 
-  // 连接状态
-  isWebSocketConnected: boolean
-
-  // 人在回路
-  pendingUserInput: PendingUserInput | null  // 绑定 task_id + run_id + request_id
+interface TaskProjection {
+  summary: TaskSummary                          // 后端权威 TaskSummary
+  runsById: Record<string, RunProjection>
+  runOrder: string[]
+  // ConversationItem 列表（coding agent 风格对话流的主要数据源）
+  items: ConversationItem[]                     // 按 sequence 升序，itemId 去重
+  itemSequences: Record<string, number>         // itemId → latest sequence
+  currentReasoningSegmentByRun: Record<string, number>  // runId → reasoning 段索引
+  // 旧字段（保留用于分页加载和旧事件回放，ChatPanel 不再直接消费）
+  messages: ProjectedMessage[]
+  olderMessagesCursor: string | null
+  activitiesById: Record<string, ActivityProjection>
+  activityOrder: string[]
+  artifactsById: Record<string, ArtifactProjection>
+  artifactOrder: string[]
+  artifactEventSequences: Record<string, number>
+  artifactManifestSequence: number | null
+  stages: Record<string, StageProjection>
+  assistantStreamsByRunId: Record<string, AssistantStreamProjection>
+  pendingUserInput: PendingUserInput | null      // 绑定 task_id + run_id + request_id
+  lastSequence: number
+  hydration: "summary" | "snapshot"
 }
 ```
 
-完整类型定义见 [`runtime/types.ts`](src/runtime/types.ts)，派生选择器见 [`stores/agentSelectors.ts`](src/stores/agentSelectors.ts)。
+**ConversationItem 联合类型**（8 种 kind，详见
+[ARCHITECTURE.md §9.1](../docs/ARCHITECTURE.md#91-对话流展示coding-agent-风格)）：
+`user_message` / `assistant_segment` / `reasoning` / `tool_call` / `stage` /
+`progress` / `warning` / `artifact`。reducer 按 `itemId` 去重 + `sequence` 升序
+维护 `items` 列表，ChatPanel 通过 `selectActiveItems` 订阅，`selectActiveItem`
+返回最后一个活跃 item（`isStreaming=true` 或 `status=running`）用于状态条显示。
+
+完整类型定义见 [`runtime/types.ts`](src/runtime/types.ts)，派生选择器见
+[`stores/agentSelectors.ts`](src/stores/agentSelectors.ts)。
 
 ## 数据流
 
@@ -355,25 +405,30 @@ pnpm lint              # ESLint（0 warnings）
 pnpm build             # TypeScript + Vite 生产构建
 ```
 
-### 测试覆盖（15 文件 / 200+ 测试，2026-07-19）
+### 测试覆盖（17 文件 / 320+ 测试，2026-07-20）
 
 | 测试文件 | 覆盖内容 |
 |----------|----------|
 | `app.test.tsx` | App 根布局渲染 |
 | `api.test.ts` | useAPI REST 调用 |
-| `agent-progress.test.tsx` | AgentProgress + AgentStageList 渲染 |
 | `agent-stream.test.ts` | useAgentStream WebSocket 事件解析 |
 | `artifact-workspace.test.tsx` | ArtifactWorkspace Tab 切换与 CSV 预览 |
 | `background-task-notifications.test.tsx` | 后台通知 View 失败反馈 |
-| `chat-panel.test.tsx` | ChatPanel 消息渲染 + 多行换行保留 |
-| `research-pipeline.test.tsx` | ResearchPipeline 阶段卡片 |
+| `chat-panel.test.tsx` | ChatPanel ConversationList 渲染 + 状态条简述 |
+| `hydrate-compat.test.ts` | MessageRecord → ConversationItem 投影兼容 |
+| `items-ordering.test.ts` | ConversationItem sequence 排序 + itemId 去重 |
+| `markdown-streaming.test.tsx` | AssistantSegment 流式光标 + Markdown 渲染 |
+| `realtime-stream-reducer.test.ts` | 实时 assistant_stream_delta 投影 |
 | `results-viewer.test.tsx` | ResultsViewer 空判定与产物列表 |
 | `runtime-controller.test.ts` | Controller REST + WS 协同 |
-| `runtime-reducer.test.ts` | Reducer 事件投影（含 stage_progress / user_input） |
+| `runtime-reducer.test.ts` | Reducer 事件投影（含 ConversationItem 项目化、stage_progress / user_input） |
 | `session-sidebar.test.tsx` | SessionSidebar 任务列表 + 删除 |
 | `store.test.ts` | Zustand Store 初始化 |
-| `tool-trace.test.tsx` | ToolTrace Sheet 展开/折叠 |
 | `user-input-dialog.test.tsx` | UserInputDialog plan_confirmation / max_turns_reached |
+| `conversation/__tests__/ConversationStep.test.tsx` | 8 种 kind 分发器渲染快照 |
+| `conversation/__tests__/ToolCallStep.test.tsx` | running/completed/error 三态、展开/折叠、arguments/output |
+| `conversation/__tests__/ReasoningBlock.test.tsx` | 默认折叠、流式展开、500ms 自动折叠、手动覆盖 |
+| `conversation/__tests__/toolLabels.test.ts` | 13 个工具映射 + 兜底 |
 
 ## 待补充的内容建议
 

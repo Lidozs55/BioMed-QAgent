@@ -86,12 +86,26 @@ Key points:
    - `{"type":"ping"}` — keepalive; server responds with `{"type":"pong"}`
 4. The server pushes `EventEnvelope` objects (same schema as
    `GET /tasks/{task_id}/events`) and control frames:
-   - `EventEnvelope` — a task event (run_queued, run_started, tool_started,
-     tool_completed, assistant_delta, stage_started, stage_completed,
-     artifact_produced, run_completed, run_failed, run_cancelled,
-     user_input_required, user_input_resumed, plan_ready, etc.)
+   - `EventEnvelope` — a task event. Common types: `run_queued`,
+     `run_started`, `run_finalizing`, `run_completed`, `run_failed`,
+     `run_cancelled`, `run_interrupted`, `run_cancel_requested`,
+     `tool_started`, `tool_completed`, `assistant_delta`,
+     `assistant_reasoning_delta`, `stage_started`, `stage_completed`,
+     `stage_failed`, `stage_skipped`, `stage_progress`,
+     `artifact_produced`, `warning`, `user_input_required`,
+     `user_input_resumed`, `plan_ready`, `conversation_compacted`,
+     `task_created`, `task_cancel_requested`, `task_recovered`,
+     `task_completed`, `task_failed`. See
+     [backend/app/domain/contracts/events.py](backend/app/domain/contracts/events.py)
+     for the authoritative payload schemas.
    - `{"type":"pong"}` — response to ping
    - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
+
+`tool_started` carries an optional `arguments` dict (depth-truncated to
+3, strings to 200 chars, lists to 20 items) so the frontend can render
+"检索 PubMed · 查询: ..." labels without re-fetching. `tool_completed`
+output is truncated to 4 KB. Both fields are backward compatible
+(older `events.jsonl` without `arguments` still replay correctly).
 5. Events are ordered by `sequence` (monotonically increasing per task).
    Reconnection is supported by replaying events via
    `GET /tasks/{task_id}/events?after_sequence=N` then re-subscribing.

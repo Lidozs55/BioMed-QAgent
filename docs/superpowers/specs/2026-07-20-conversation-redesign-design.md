@@ -818,17 +818,17 @@ const statusText = activeItem
 
 ### 8.5 文档
 
-- [ ] AGENTS.md §2 事件列表补全 + `arguments` 字段说明
-- [ ] docs/ARCHITECTURE.md 新增"前端对话流展示"章节
-- [ ] frontend/README.md 组件清单 + store 结构更新
-- [ ] backend/README.md 事件 schema 变更说明
+- [x] AGENTS.md §2 事件列表补全 + `arguments` 字段说明
+- [x] docs/ARCHITECTURE.md 新增"前端对话流展示"章节
+- [x] frontend/README.md 组件清单 + store 结构更新
+- [x] backend/README.md 事件 schema 变更说明
 
 ### 8.6 e2e 验证
 
-- [ ] 后端 + 前端启动正常
-- [ ] fixture 模式研究任务对话流正常
-- [ ] 流式光标、自动折叠、展开详情交互正常
-- [ ] 无控制台错误
+- [x] 后端 + 前端启动正常
+- [ ] fixture 模式研究任务对话流正常（基础页面加载验证通过；真实任务视觉验证待用户在浏览器中确认）
+- [ ] 流式光标、自动折叠、展开详情交互正常（待用户在真实任务中确认）
+- [x] 无控制台错误
 
 ---
 
