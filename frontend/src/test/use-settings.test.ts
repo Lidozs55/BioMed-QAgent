@@ -357,6 +357,7 @@ describe("useSettings", () => {
     expect(modelCall).toBeDefined();
     const options = (modelCall as [string, RequestInit])[1];
     expect(options).toBeDefined();
-    expect(options!.signal).toBeInstanceOf(AbortSignal);
+    if (options === undefined) throw new Error("Expected model request options");
+    expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 });
