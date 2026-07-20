@@ -1,0 +1,23 @@
+﻿field_name,data_type,description,unit,nullable,source,example
+record_id,string,"Stable unique row identifier derived from dataset_id, gene_id and sample_id",,false,GSE178352_tximportCounts.txt,rec_gse178352_ENSG00000000003_GSM8117703
+dataset_id,string,Foreign key to dataset_catalog.csv identifying the dataset this row belongs to,,false,GSE178352_tximportCounts.txt,ds_gse178352
+source_id,string,Foreign key to source_list.csv identifying the originating database,,false,GSE178352_tximportCounts.txt,src_geo_gse178352
+asset_id,string,Foreign key to source_assets.csv identifying the downloaded source file,,false,GSE178352_tximportCounts.txt,asset_a1b2c3d4e5f6
+gene_id_raw,string,Raw gene identifier as it appears in the source file before normalization,,false,GSE178352_tximportCounts.txt,ENSG00000000003
+gene_id,string,Canonical gene identifier after namespace normalization,,false,GSE178352_tximportCounts.txt,ENSG00000000003
+gene_id_namespace,string,"Namespace/authority for the gene identifier (e.g., ensembl_gene, hgnc_symbol)",,false,GSE178352_tximportCounts.txt,ensembl_gene
+gene_id_version,string,"Version suffix of the gene identifier when available (e.g., ENSG00000139618.14)",,true,GSE178352_tximportCounts.txt,ENSG00000139618.14
+sample_id,string,Foreign key to sample_metadata.csv identifying the sample (GEO GSM accession),,false,GSE178352_tximportCounts.txt,GSM8117703
+source_sample_alias,string,Original sample alias used in the source file's column header,,false,GSE178352_tximportCounts.txt,A
+measurement_type,string,"Type of measurement (e.g., tximport_estimated_count, sample_metadata)",,false,GSE178352_tximportCounts.txt,tximport_estimated_count
+value_semantics,string,"Semantic interpretation of the value (e.g., estimated_count, metadata_only)",,false,GSE178352_tximportCounts.txt,estimated_count
+value_scale,string,"Scale of the value (e.g., linear, log2, na for not-applicable)",,false,GSE178352_tximportCounts.txt,linear
+is_normalized,string,Whether the value has been normalized (true/false),,false,GSE178352_tximportCounts.txt,false
+is_integer_expected,string,Whether the value is expected to be an integer (true/false),,false,GSE178352_tximportCounts.txt,false
+expression_value,float,Numeric expression measurement value parsed from the source file,estimated_count,false,GSE178352_tximportCounts.txt,1.0
+expression_unit,string,"Unit of the expression value (e.g., estimated_count, tpm, fpkm)",,false,GSE178352_tximportCounts.txt,estimated_count
+source_logical_file,string,"Logical name of the source file within the asset (e.g., GSE178352_tximportCounts.txt)",,false,GSE178352_tximportCounts.txt,GSE178352_tximportCounts.txt
+source_line_number,integer,1-based line number in the source file where this value appears,,false,GSE178352_tximportCounts.txt,2
+source_column_index,integer,0-based column index in the source file where this value appears,,false,GSE178352_tximportCounts.txt,1
+source_column_name,string,Column header name in the source file,,false,GSE178352_tximportCounts.txt,counts.A
+source_raw_value,string,Original string value as it appears in the source file before parsing,,false,GSE178352_tximportCounts.txt,1.0
