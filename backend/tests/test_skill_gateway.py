@@ -90,6 +90,35 @@ async def test_find_skill_filters_text_category_source_and_allowlist() -> None:
 
 
 @pytest.mark.asyncio
+async def test_geo_only_allowlist_blocks_pubmed_discovery_skill() -> None:
+    pubmed = SkillDescriptor.from_skill_def(
+        SkillDef(
+            name="pubmed",
+            category=SkillCategory.DISCOVERY,
+            description="Search PubMed literature.",
+            supported_sources=["pubmed"],
+            tools=[fetch_record],
+        ),
+        user_selectable=True,
+    )
+    find_skill, invoke_skill = build_skill_gateway(SkillCatalog([pubmed]))
+    context = _context(sources=["geo"])
+
+    found = await _call(find_skill, context, source="pubmed")
+    invoked = await _call(
+        invoke_skill,
+        context,
+        skill="pubmed",
+        operation="fetch_record",
+        arguments={"accession": "PMID1"},
+    )
+
+    assert found["skills"] == []
+    assert invoked["status"] == "error"
+    assert invoked["error"]["code"] == "source_not_allowed"
+
+
+@pytest.mark.asyncio
 async def test_invoke_skill_success_uses_existing_run_context() -> None:
     _, invoke_skill = build_skill_gateway(SkillCatalog([_skill()]))
 

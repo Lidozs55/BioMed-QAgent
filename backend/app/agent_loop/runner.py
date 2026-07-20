@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Mapping
 from functools import partial
@@ -247,6 +248,63 @@ def _tool_identity(item: object) -> tuple[str, str | None]:
     return call_id, name if isinstance(name, str) and name else None
 
 
+def _truncate_for_event(
+    value: object,
+    *,
+    depth: int = 3,
+    str_limit: int = 200,
+    list_limit: int = 20,
+) -> object:
+    """Bound nested tool arguments before persisting them in the event log."""
+    if isinstance(value, str):
+        return value[:str_limit] + "...[truncated]" if len(value) > str_limit else value
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        if depth <= 0:
+            return f"[list:{len(value)}]"
+        return [
+            _truncate_for_event(
+                item,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+            )
+            for item in value[:list_limit]
+        ]
+    if isinstance(value, dict):
+        if depth <= 0:
+            return f"[dict:{len(value)}]"
+        return {
+            str(key): _truncate_for_event(
+                item,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+            )
+            for key, item in value.items()
+        }
+    return str(value)[:str_limit]
+
+
+def _extract_tool_arguments(raw_item: object) -> dict[str, object] | None:
+    """Parse SDK tool arguments and return a bounded event-safe mapping."""
+    raw_arguments = _value(raw_item, "arguments")
+    if not raw_arguments:
+        return None
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    else:
+        parsed = raw_arguments
+    if not isinstance(parsed, dict):
+        return None
+    projected = _truncate_for_event(parsed)
+    return projected if isinstance(projected, dict) else None
+
+
 class AgentRunExecutor:
     """Execute one manager-owned Run against its durable SDK session."""
 
@@ -341,12 +399,14 @@ class AgentRunExecutor:
                 if event.name == "tool_called":
                     await text_buffer.end("tool_call")
                     call_id, tool_name = _tool_identity(event.item)
+                    raw_item = _value(event.item, "raw_item", event.item)
                     resolved_name = tool_name or "unknown"
                     tool_names[call_id] = resolved_name
                     await execution.emit(
                         ToolStartedPayload(
                             tool_call_id=call_id,
                             tool_name=resolved_name,
+                            arguments=_extract_tool_arguments(raw_item),
                         )
                     )
                 elif event.name == "tool_output":
