@@ -7,6 +7,7 @@ import {
 
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
+import { formatToolCall } from "@/components/conversation/toolLabels";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -26,7 +27,9 @@ import type {
   StartTaskInput,
   TaskRunAccepted,
 } from "@/runtime/contracts";
+import type { ConversationItem } from "@/runtime/types";
 import {
+  selectActiveItem,
   selectActiveItems,
   selectActiveTask,
   selectConnectionIsConnected,
@@ -67,6 +70,27 @@ const STATUS_LABELS = {
   interrupted: "任务已中断",
 } as const;
 
+function formatActiveItemStatus(item: ConversationItem): string {
+  switch (item.kind) {
+    case "tool_call":
+      if (item.status !== "running") return STATUS_LABELS.running;
+      {
+        const label = formatToolCall(item.toolName, item.arguments);
+        const parts = [`${label.verb} ${label.target}`];
+        if (label.details) parts.push(label.details);
+        return parts.join(" · ");
+      }
+    case "assistant_segment":
+      return item.isStreaming ? "正在生成回复…" : STATUS_LABELS.running;
+    case "reasoning":
+      return item.isStreaming ? "正在思考…" : STATUS_LABELS.running;
+    case "stage":
+      return STATUS_LABELS.running;
+    default:
+      return STATUS_LABELS.running;
+  }
+}
+
 function latestRunIsTerminal(
   task: NonNullable<ReturnType<typeof selectActiveTask>>,
 ) {
@@ -89,6 +113,7 @@ export function ChatPanel({
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
   const items = useAgentStore(selectActiveItems);
+  const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
@@ -326,7 +351,11 @@ export function ChatPanel({
           <MarkerIcon>
             <TaskStatusIcon status={activeTask.summary.status} />
           </MarkerIcon>
-          <MarkerContent>{STATUS_LABELS[activeTask.summary.status]}</MarkerContent>
+          <MarkerContent>
+            {activeItem !== undefined && activeTask.summary.status === "running"
+              ? formatActiveItemStatus(activeItem)
+              : STATUS_LABELS[activeTask.summary.status]}
+          </MarkerContent>
         </Marker>
       )}
 
