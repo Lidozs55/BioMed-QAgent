@@ -16,10 +16,12 @@ from app.skills.registry import SkillCategory
 
 def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:
     allowlist = context.preferred_sources
-    if not allowlist or not descriptor.supported_sources:
+    if not allowlist:
         return True
     if descriptor.origin != "package" and not descriptor.user_selectable:
         return True
+    if not descriptor.supported_sources:
+        return False
     return bool(set(allowlist).intersection(descriptor.supported_sources))
 
 
