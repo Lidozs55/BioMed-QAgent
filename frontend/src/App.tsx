@@ -1,13 +1,14 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import {
   ArtifactPanelToggle,
   ArtifactWorkspace,
 } from "@/components/ArtifactWorkspace";
+import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
+import { SettingsPanel } from "@/components/SettingsPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SidebarInset,
@@ -16,9 +17,8 @@ import {
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { useAgentStream } from "@/hooks/useAgentStream";
-import { SettingsPanel } from "@/components/SettingsPanel"
-import { useAPI } from "@/hooks/useAPI"
-import { useSettings } from "@/hooks/useSettings"
+import { useAPI } from "@/hooks/useAPI";
+import { useSettings } from "@/hooks/useSettings";
 import { RuntimeController } from "@/runtime/controller";
 
 function errorDescription(reason: unknown): string {
@@ -28,7 +28,7 @@ function errorDescription(reason: unknown): string {
 export default function App() {
   const transport = useAgentStream();
   const api = useAPI();
-    const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const settingsState = useSettings();
 
   const controller = useMemo(
@@ -36,7 +36,13 @@ export default function App() {
     [api, transport],
   );
   const handleModelChange = useCallback((modelId: string) => {
-    void settingsState.updateSettings({ model_name: modelId });
+    settingsState.updateSettings({ model_name: modelId }).catch(
+      (err: unknown) => {
+        toast.error("模型选择失败", {
+          description: err instanceof Error ? err.message : "未知错误",
+        });
+      },
+    );
   }, [settingsState]);
   const selectTask = useCallback(
     (taskId: string) => controller.selectTask(taskId),
