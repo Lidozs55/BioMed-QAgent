@@ -43,6 +43,7 @@ from app.domain.contracts.runtime import validate_task_databases
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
+from app.skills.catalog import SkillCatalog
 
 if TYPE_CHECKING:
     from app.runtime.manager import RunExecution
@@ -249,13 +250,22 @@ def _tool_identity(item: object) -> tuple[str, str | None]:
 class AgentRunExecutor:
     """Execute one manager-owned Run against its durable SDK session."""
 
-    def __init__(self, repository, *, compactor=None) -> None:
+    def __init__(
+        self,
+        repository,
+        *,
+        skill_catalog: SkillCatalog | None = None,
+        compactor=None,
+    ) -> None:
         self._repository = repository
+        self.skill_catalog = skill_catalog
         self._compactor = compactor or ConversationCompactor(repository)
 
     def _build(self, execution) -> AgentBuild:
         """Build the Agent for this executor (overridable by subclasses)."""
-        return build_agent(execution.databases)
+        if self.skill_catalog is None:
+            return build_agent(execution.databases)
+        return build_agent(self.skill_catalog, execution.databases)
 
     def _max_turns(self, execution=None) -> int:
         """Return the max_turns for this executor's Agent loop.
@@ -863,10 +873,15 @@ class FixtureRunExecutor:
 class ModeDispatchRunExecutor:
     """Delegate authoritative Task modes to their focused executors."""
 
-    def __init__(self, repository) -> None:
-        self.agent_executor = AgentRunExecutor(repository)
+    def __init__(
+        self,
+        repository,
+        *,
+        skill_catalog: SkillCatalog | None = None,
+    ) -> None:
+        self.agent_executor = AgentRunExecutor(repository, skill_catalog=skill_catalog)
         self.fixture_executor = FixtureRunExecutor(repository)
-        self.import_executor = ImportRunExecutor(repository)
+        self.import_executor = ImportRunExecutor(repository, skill_catalog=skill_catalog)
 
     async def __call__(self, execution) -> None:
         if execution.mode is TaskMode.AGENT:
@@ -901,7 +916,9 @@ class ImportRunExecutor(AgentRunExecutor):
     def _build(self, execution) -> AgentBuild:
         if self._has_pending_attachments(execution):
             return build_attachment_parsing_agent()
-        return build_agent(execution.databases)
+        if self.skill_catalog is None:
+            return build_agent(execution.databases)
+        return build_agent(self.skill_catalog, execution.databases)
 
     def _max_turns(self, execution=None) -> int:
         if execution is not None and self._has_pending_attachments(execution):

@@ -14,12 +14,9 @@ from app.agent_loop.model import LazyDashScopeModel, get_model
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.pipeline.tool import run_research_pipeline
-from app.skills.registry import (
-    SkillCategory,
-    build_agent_config,
-    skill_registry,
-)
-from app.tools._registry import _import_skill_modules
+from app.skills.catalog import SkillCatalog
+from app.skills.gateway import build_skill_gateway
+from app.skills.registry import SkillCategory
 from app.tools.io import list_files, read_file, write_file
 
 #: 主 Agent 的 max_turns 上限。
@@ -167,18 +164,16 @@ PDB/GDC/PubChem/Reactome/Xena 等通过对应 skill 工具按需检索。不要�
   agent 任务中绝不使用。Pipeline 会根据 topic/databases/pmid/gse 自动推导数据需求规格，
   你不需要也无法手动构造 specification。
 
-## 数据库使用纪律
-用户在 UI 选择的数据库列表已加载为可用 acquisition skill。
-**每个被选中的数据库必须至少调用一次对应的 search 工具**，不得跳过：
-- pubmed → search_pubmed
-- geo → search_geo
-- gdc → search_gdc
-- pdb → search_pdb
-- pubchem → search_pubchem
-- reactome → search_reactome
-- xena → search_xena
-
-调用结果即使为空，也要如实汇报"该数据库无匹配结果"，不得伪造数据。
+## 动态 Skill 发现协议
+- 业务数据库与处理能力不会作为主 Agent 的直接工具注入。先调用 `find_skill`
+  按文本、类别或 source 发现当前已启用能力，再调用 `invoke_skill`，明确传入
+  `skill`、`operation` 和 `arguments`。
+- 用户选择的数据库是硬 allowlist；只能发现和调用 allowlist 内的 acquisition skill。
+- 技能目录更新后（新增、启用、禁用、删除或版本切换），再次调用 `find_skill`
+  获取最新目录，不要依赖此前记住的 operation 列表。
+- `invoke_skill` 返回禁用、删除、参数错误或 source 不允许时，如实处理，不得伪造结果。
+- 正式 CSV 产物仍只由 `run_research_pipeline` 生成。自定义 Agent-only 数据库结果
+  不能作为 Pipeline 完成证据，也不能绕过 Validation Gate。
 
 ## 主题→数据库决策参考
 - 癌症基因表达谱、RNA-seq 计数 → GEO + PubMed
@@ -254,66 +249,66 @@ class AgentBuild:
     agent: Agent
     skill_names: tuple[str, ...]
     model: LazyDashScopeModel
+    catalog: SkillCatalog | None = None
 
 
-def build_agent(databases: list[str] | None = None) -> AgentBuild:
+def build_agent(
+    catalog: SkillCatalog | list[str] | None = None,
+    databases: list[str] | None = None,
+) -> AgentBuild:
     """构造主 Agent。
 
     Args:
         databases: 用户选择的数据库列表。None 时加载所有已启用的技能；
                    给定列表时，仅加载匹配的 acquisition 技能 + 全部非 acquisition 技能。
     """
-    _import_skill_modules()
+    if not isinstance(catalog, SkillCatalog):
+        if catalog is not None:
+            databases = catalog
+        from app.skills.builtin import load_builtin_skill_descriptors
 
-    if databases is not None:
-        acq_skills = skill_registry.get_acquisition_skills(databases)
-        all_enabled = skill_registry.list_enabled()
-        non_acq_skills = [
-            s for s in all_enabled if s.category != SkillCategory.ACQUISITION
-        ]
-        skills: list = acq_skills + non_acq_skills
-        # local_cache 不在用户可选数据库列表中，但 Agent 应始终可查询缓存
-        # （D2 决策：与 GEO/PubMed 同级的可选数据来源）。
-        local_cache = skill_registry.get("local_cache")
-        if local_cache is not None and local_cache not in skills:
-            skills.append(local_cache)
-    else:
-        skills = skill_registry.list_enabled()
-
-    skill_names = tuple(skill.name for skill in skills)
-
+        catalog = SkillCatalog(load_builtin_skill_descriptors())
     model = get_model()
-    instructions_suffix, tools = build_agent_config(skills)
-    tools.extend([run_research_pipeline, read_file, write_file, list_files])
+    find_skill, invoke_skill = build_skill_gateway(catalog)
+    tools = [
+        find_skill,
+        invoke_skill,
+        run_research_pipeline,
+        read_file,
+        write_file,
+        list_files,
+    ]
     tools.append(build_compress_query_log_tool(model))
     # TODO §8.4: ReviewerAgent — strategy review before run_research_pipeline.
     tools.append(build_review_query_strategy_tool(model))
-    seen: set[str] = set()
-    unique_tools: list = []
-    for t in tools:
-        name = getattr(t, "name", str(t))
-        if name not in seen:
-            seen.add(name)
-            unique_tools.append(t)
-    merged_instructions = (
-        INSTRUCTIONS + "\n\n## 已加载技能的说明\n\n" + instructions_suffix
-        if instructions_suffix
-        else INSTRUCTIONS
-    )
     agent = Agent(
         name="BioMedResearcher",
-        instructions=merged_instructions,
-        tools=unique_tools,
+        instructions=INSTRUCTIONS,
+        tools=tools,
         model=model,
+    )
+    snapshot = catalog.snapshot()
+    selected = set(databases or ())
+    skill_names = tuple(
+        descriptor.name
+        for descriptor in snapshot.skills.values()
+        if databases is None
+        or descriptor.category != SkillCategory.ACQUISITION
+        or descriptor.name == "local_cache"
+        or bool(selected.intersection(descriptor.supported_sources))
     )
     return AgentBuild(
         agent=agent,
         skill_names=skill_names,
         model=model,
+        catalog=catalog,
     )
 
 
-def create_agent(databases: list[str] | None = None) -> Agent:
+def create_agent(
+    catalog: SkillCatalog | list[str] | None = None,
+    databases: list[str] | None = None,
+) -> Agent:
     """Build a standalone Agent for callers that do not need owned metadata."""
 
-    return build_agent(databases=databases).agent
+    return build_agent(catalog, databases=databases).agent

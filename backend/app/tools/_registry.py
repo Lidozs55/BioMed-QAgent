@@ -5,41 +5,14 @@
 
 from __future__ import annotations
 
-import logging
-
+from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.registry import build_agent_config, skill_registry
 from app.tools.io import list_files, read_file, write_file
 
-logger = logging.getLogger(__name__)
-
-BUILTIN_SKILL_MODULES = (
-    "app.skills.builtin.discovery.pubmed",
-    "app.skills.builtin.discovery.understanding",
-    "app.skills.builtin.acquisition.geo",
-    "app.skills.builtin.acquisition.pdb",
-    "app.skills.builtin.acquisition.gdc",
-    "app.skills.builtin.acquisition.xena",
-    "app.skills.builtin.acquisition.browser",
-    "app.skills.builtin.acquisition.reactome",
-    "app.skills.builtin.acquisition.pubchem",
-    "app.skills.builtin.acquisition.web_visual_capture",
-    "app.skills.builtin.acquisition.local_cache",
-    "app.skills.builtin.processing.self_evolution",
-    "app.skills.builtin.processing.extract_tables",
-    "app.skills.builtin.processing.extract_chart_data_vlm",
-    "app.skills.builtin.analysis.stats",
-)
-
 
 def _import_skill_modules() -> None:
-    """Import built-ins, tolerating only an absent optional target module."""
-    for module_name in BUILTIN_SKILL_MODULES:
-        try:
-            __import__(module_name)
-        except ModuleNotFoundError as error:
-            if error.name != module_name:
-                raise
-            logger.warning("optional skill module %s is unavailable", module_name)
+    """Compatibility wrapper around the unified builtin bootstrap path."""
+    load_builtin_skill_descriptors()
 
 
 def get_all_tools() -> list:

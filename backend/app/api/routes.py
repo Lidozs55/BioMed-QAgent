@@ -148,20 +148,10 @@ def _display_name(skill_name: str) -> str:
 
 
 def load_database_skills() -> None:
-    """Register the stable user-selectable database integrations.
+    """Compatibility wrapper for callers that still trigger builtin discovery."""
+    from app.skills.builtin import load_builtin_skill_descriptors
 
-    Called once at application lifespan startup (see ``app.main``) so that
-    every ``GET /api/v1/databases`` request reads from the already-populated
-    skill registry instead of re-registering skills per request.
-    """
-
-    import app.skills.builtin.acquisition.gdc  # noqa: F401
-    import app.skills.builtin.acquisition.geo  # noqa: F401
-    import app.skills.builtin.acquisition.pdb  # noqa: F401
-    import app.skills.builtin.acquisition.pubchem  # noqa: F401
-    import app.skills.builtin.acquisition.reactome  # noqa: F401
-    import app.skills.builtin.acquisition.xena  # noqa: F401
-    import app.skills.builtin.discovery.pubmed  # noqa: F401
+    load_builtin_skill_descriptors()
 
 
 
@@ -189,9 +179,7 @@ async def get_databases(request: Request) -> dict:
                 "name": skill.display_name or _display_name(skill.name),
                 "category": skill.category.value,
                 "description": skill.description,
-                # Package descriptors are not Agent-callable until the Agent build
-                # consumes the dynamic catalog in the next migration task.
-                "available": skill.enabled and skill.origin == "builtin",
+                "available": skill.enabled,
                 "origin": skill.origin,
                 "version": skill.version,
                 "pipeline_supported": skill.pipeline_supported,

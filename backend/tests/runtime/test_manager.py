@@ -2824,6 +2824,14 @@ async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> 
             manager.run_executor.agent_executor,
             runner_module.AgentRunExecutor,
         )
+        assert (
+            manager.run_executor.agent_executor.skill_catalog
+            is application.state.skill_catalog
+        )
+        assert (
+            manager.run_executor.import_executor.skill_catalog
+            is application.state.skill_catalog
+        )
         assert manager.event_hub is application.state.event_hub
         assert manager.max_active_runs == 2
         assert manager.max_queued_runs == 5

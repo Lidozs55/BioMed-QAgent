@@ -151,7 +151,3 @@ def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTo
         )
 
     return _find_skill, _invoke_skill
-
-
-skill_catalog = SkillCatalog()
-find_skill, invoke_skill = build_skill_gateway(skill_catalog)

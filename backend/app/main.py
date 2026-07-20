@@ -13,7 +13,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
-from app.api.routes import load_database_skills
 from app.api.routes import router as routes_router
 from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
@@ -22,8 +21,8 @@ from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
-from app.skills.catalog import SkillCatalog, SkillDescriptor
-from app.skills.registry import skill_registry
+from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.catalog import SkillCatalog
 from app.skills.store import UserSkillStore
 from app.tools.cache_store import init_cache_store
 
@@ -84,9 +83,18 @@ def create_app(configured: Settings = settings) -> FastAPI:
         assistant_stream_hub = AssistantStreamHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
+        skill_catalog = SkillCatalog()
+        skill_store = UserSkillStore(
+            configured.skill_data_path,
+            catalog=skill_catalog,
+            builtins=load_builtin_skill_descriptors(),
+        )
         manager = TaskManager(
             repository,
-            run_executor=ModeDispatchRunExecutor(repository),
+            run_executor=ModeDispatchRunExecutor(
+                repository,
+                skill_catalog=skill_catalog,
+            ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,
@@ -104,27 +112,8 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.cache_store = init_cache_store(
             Path(configured.output_dir).parent / "cache"
         )
-        # Register stable user-selectable database skills once at startup so
-        # GET /api/v1/databases does not re-register them on every request.
-        load_database_skills()
-        builtins = tuple(
-            SkillDescriptor.from_skill_def(
-                skill,
-                display_name=skill.name.replace("_", " ").title(),
-                user_selectable=(
-                    bool(skill.supported_sources)
-                    and skill.name not in {"browser_fallback", "web_visual_capture", "local_cache"}
-                ),
-                pipeline_supported=skill.name in {"pubmed", "geo"},
-            )
-            for skill in skill_registry.list_enabled()
-        )
-        application.state.skill_catalog = SkillCatalog()
-        application.state.skill_store = UserSkillStore(
-            configured.skill_data_path,
-            catalog=application.state.skill_catalog,
-            builtins=builtins,
-        )
+        application.state.skill_catalog = skill_catalog
+        application.state.skill_store = skill_store
         try:
             await manager.start()
             yield
