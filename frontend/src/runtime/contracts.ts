@@ -41,6 +41,10 @@ export interface DatabaseRecord {
   name: string;
   category: string;
   description: string;
+  available?: boolean;
+  origin?: "builtin" | "package";
+  version?: string;
+  pipeline_supported?: boolean;
 }
 
 export interface TaskSummary {

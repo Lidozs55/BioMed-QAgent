@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { GearIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
@@ -8,6 +9,7 @@ import {
 } from "@/components/ArtifactWorkspace";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
+import { SettingsPanel } from "@/components/SettingsPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { ToolTrace } from "@/components/ToolTrace";
 import {
@@ -16,6 +18,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI } from "@/hooks/useAPI";
 import { RuntimeController } from "@/runtime/controller";
@@ -25,6 +28,7 @@ function errorDescription(reason: unknown): string {
 }
 
 export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const transport = useAgentStream();
   const api = useAPI();
   const controller = useMemo(
@@ -96,6 +100,9 @@ export default function App() {
           <SidebarTrigger aria-label="Toggle sidebar" />
           <h1 className="min-w-0 truncate text-lg font-semibold">BioMed QAgent</h1>
           <div className="flex shrink-0 items-center gap-2">
+            <Button variant="ghost" size="icon-sm" aria-label="打开设置" onClick={() => setSettingsOpen(true)}>
+              <GearIcon />
+            </Button>
             <ArtifactPanelToggle />
             <ToolTrace />
             <ThemeToggle />
@@ -124,6 +131,7 @@ export default function App() {
         </main>
       </SidebarInset>
       <BackgroundTaskNotifications onViewTask={selectTask} />
+      <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} api={api} />
       <Toaster />
     </SidebarProvider>
   );

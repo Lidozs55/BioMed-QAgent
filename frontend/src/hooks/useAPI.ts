@@ -24,6 +24,67 @@ export interface AdmissionOptions {
   requestId?: string;
 }
 
+export interface ModelSettings {
+  base_url: string;
+  api_key: string;
+  api_key_configured: boolean;
+  model_name: string;
+  max_tokens: number;
+  advanced: {
+    temperature?: number;
+    top_p?: number;
+    repetition_penalty?: number;
+    enable_search?: boolean;
+    thinking_mode?: boolean;
+  };
+}
+
+export interface VendorInfo {
+  id: string;
+  name: string;
+  base_url: string;
+  description: string;
+  recommended: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  context_window: number;
+  suggested_max_tokens: number;
+}
+
+export interface SkillManifest {
+  name: string;
+  display_name: string;
+  version: string;
+  category: string;
+  description: string;
+  origin: "builtin" | "package";
+  supported_sources: string[];
+  operations: string[];
+  enabled: boolean;
+  user_selectable: boolean;
+  pipeline_supported: boolean;
+}
+
+export interface SkillDetail {
+  manifest: SkillManifest;
+  current_version: string;
+  versions: string[];
+  package_kind: "manifest" | "zip";
+  warning: string | null;
+  available: boolean;
+  load_error: string | null;
+}
+
+export interface SkillValidation {
+  valid: boolean;
+  skill: SkillManifest;
+  warning: string | null;
+}
+
 export class APIError extends Error {
   readonly status: number;
   readonly detail: unknown;
@@ -76,6 +137,23 @@ export interface APIClient {
   getCacheExportUrl: () => string;
 }
 
+export interface SettingsAPIClient {
+  fetchSettings: () => Promise<ModelSettings>;
+  saveSettings: (changes: Record<string, unknown>) => Promise<ModelSettings>;
+  fetchVendors: () => Promise<VendorInfo[]>;
+  fetchModels: (preview?: { baseUrl?: string; apiKey?: string; query?: string }) => Promise<ModelInfo[]>;
+  fetchSkills: () => Promise<SkillManifest[]>;
+  fetchSkill: (name: string) => Promise<SkillDetail>;
+  setSkillEnabled: (name: string, enabled: boolean) => Promise<void>;
+  rollbackSkill: (name: string) => Promise<void>;
+  deleteSkill: (name: string) => Promise<void>;
+  validateSkill: (file: File) => Promise<SkillValidation>;
+  uploadSkill: (file: File) => Promise<void>;
+  createDatabase: (manifest: Record<string, unknown>) => Promise<void>;
+  updateDatabase: (name: string, manifest: Record<string, unknown>) => Promise<void>;
+  deleteDatabase: (name: string) => Promise<void>;
+}
+
 interface APIClientOptions {
   baseUrl?: string;
   fetcher?: FetchLike;
@@ -114,7 +192,7 @@ async function errorDetail(response: Response): Promise<unknown> {
   }
 }
 
-export function createAPIClient(options: APIClientOptions = {}): APIClient {
+export function createAPIClient(options: APIClientOptions = {}): APIClient & SettingsAPIClient {
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
   const fetcher: FetchLike = options.fetcher ?? ((input, init) => fetch(input, init));
   const randomUUID = options.randomUUID ?? defaultRandomUUID;
@@ -257,9 +335,53 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient {
       `${baseUrl}/tasks/${encodeId(taskId)}/artifacts/${encodeId(artifactId)}`,
 
     getCacheExportUrl: () => `${baseUrl}/cache/export`,
+
+    fetchSettings: () => request<ModelSettings>(`${baseUrl}/settings`),
+
+    saveSettings: (changes) => request<ModelSettings>(`${baseUrl}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    }),
+
+    fetchVendors: () => request<{ vendors: VendorInfo[] }>(`${baseUrl}/vendors`).then(({ vendors }) => vendors),
+
+    fetchModels: (preview = {}) => request<{ models: ModelInfo[] }>(
+      withQuery(`${baseUrl}/models`, [
+        ["query", preview.query],
+        ["preview_base_url", preview.baseUrl],
+        ["preview_api_key", preview.apiKey],
+      ]),
+    ).then(({ models }) => models),
+
+    fetchSkills: () => request<{ skills: SkillManifest[] }>(`${baseUrl}/skills`).then(({ skills }) => skills),
+    fetchSkill: (name) => request<SkillDetail>(`${baseUrl}/skills/${encodeId(name)}`),
+    setSkillEnabled: (name, enabled) => request<unknown>(
+      `${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`,
+      { method: "POST" },
+    ).then(() => undefined),
+    rollbackSkill: (name) => request<unknown>(`${baseUrl}/skills/${encodeId(name)}/rollback`, { method: "POST" }).then(() => undefined),
+    deleteSkill: (name) => request<unknown>(`${baseUrl}/skills/${encodeId(name)}`, { method: "DELETE" }).then(() => undefined),
+    validateSkill: (file) => {
+      const form = new FormData();
+      form.set("file", file, file.name);
+      return request<SkillValidation>(`${baseUrl}/skills/validate`, { method: "POST", body: form });
+    },
+    uploadSkill: (file) => {
+      const form = new FormData();
+      form.set("file", file, file.name);
+      return request<unknown>(`${baseUrl}/skills/upload`, { method: "POST", body: form }).then(() => undefined);
+    },
+    createDatabase: (manifest) => request<unknown>(`${baseUrl}/databases`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest),
+    }).then(() => undefined),
+    updateDatabase: (name, manifest) => request<unknown>(`${baseUrl}/databases/${encodeId(name)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest),
+    }).then(() => undefined),
+    deleteDatabase: (name) => request<unknown>(`${baseUrl}/databases/${encodeId(name)}`, { method: "DELETE" }).then(() => undefined),
   };
 }
 
-export function useAPI(): APIClient {
+export function useAPI(): APIClient & SettingsAPIClient {
   return useMemo(() => createAPIClient(), []);
 }

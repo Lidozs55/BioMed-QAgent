@@ -9,6 +9,7 @@ from agents.models.interface import Model
 from openai import AsyncOpenAI
 
 from app.config import settings
+from app.model_settings import ModelConfiguration, get_current_model_configuration
 
 
 class ModelConfigurationError(RuntimeError):
@@ -17,23 +18,33 @@ class ModelConfigurationError(RuntimeError):
     code = "configuration_error"
 
 
-def require_model_credentials() -> None:
+def _environment_configuration() -> ModelConfiguration:
+    return ModelConfiguration(
+        base_url=settings.dashscope_base_url,
+        api_key=settings.dashscope_api_key,
+        model_name=settings.model_name,
+    )
+
+
+def require_model_credentials(
+    configuration: ModelConfiguration | None = None,
+) -> None:
     """Validate credentials only when execution is about to call the model."""
 
-    if not settings.dashscope_api_key:
+    if not (configuration or _environment_configuration()).api_key:
         raise ModelConfigurationError(
             "DASHSCOPE_API_KEY is required to run the model"
         )
 
 
-def _build_delegate() -> OpenAIChatCompletionsModel:
-    require_model_credentials()
+def _build_delegate(configuration: ModelConfiguration) -> OpenAIChatCompletionsModel:
+    require_model_credentials(configuration)
     client = AsyncOpenAI(
-        api_key=settings.dashscope_api_key,
-        base_url=settings.dashscope_base_url,
+        api_key=configuration.api_key,
+        base_url=str(configuration.base_url),
     )
     return OpenAIChatCompletionsModel(
-        model=settings.model_name,
+        model=configuration.model_name,
         openai_client=client,
     )
 
@@ -41,12 +52,13 @@ def _build_delegate() -> OpenAIChatCompletionsModel:
 class LazyDashScopeModel(Model):
     """Agents SDK model that creates its HTTP client on first model call."""
 
-    def __init__(self) -> None:
+    def __init__(self, configuration: ModelConfiguration | None = None) -> None:
+        self.configuration = configuration or _environment_configuration()
         self._delegate: OpenAIChatCompletionsModel | None = None
 
     def _get_delegate(self) -> OpenAIChatCompletionsModel:
         if self._delegate is None:
-            self._delegate = _build_delegate()
+            self._delegate = _build_delegate(self.configuration)
         return self._delegate
 
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
@@ -64,4 +76,4 @@ def get_model() -> LazyDashScopeModel:
     """Return a model adapter without constructing a credentialed client."""
 
     set_tracing_disabled(True)
-    return LazyDashScopeModel()
+    return LazyDashScopeModel(get_current_model_configuration())
