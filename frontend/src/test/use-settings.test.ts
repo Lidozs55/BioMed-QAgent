@@ -35,7 +35,7 @@ describe("useSettings", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.settings?.base_url).toBe("https://test.url");
     expect(result.current.settings?.api_key).toBe("sk-xxxx");
-    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/v1/settings");
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/v1/settings", expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
   it("does not include API key in GET model URL", async () => {
@@ -168,5 +168,195 @@ describe("useSettings", () => {
       (call: unknown[]) => String(call[0]).includes("/api/v1/models"),
     );
     expect(modelsCall).toBeUndefined();
+  });
+
+  it("passes AbortSignal to fetch for model requests", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+    fetchSpy.mockReturnValue(jsonOk({ models: [], total_count: 0, api_source: null }));
+
+    await act(async () => {
+      await result.current.fetchModels();
+    });
+
+    const modelCall = fetchSpy.mock.calls.find(
+      (call: unknown[]) => String(call[0]).includes("/api/v1/models"),
+    );
+    expect(modelCall).toBeDefined();
+    const options = (modelCall as [string, RequestInit])[1];
+    expect(options).toBeDefined();
+    expect(options!.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("aborts previous fetchModels when called again", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+
+    let signal1!: AbortSignal;
+    let callCount = 0;
+    fetchSpy.mockImplementation((_url: string, options?: RequestInit) => {
+      callCount++;
+      if (callCount === 1) {
+        if (options?.signal) signal1 = options.signal as AbortSignal;
+        return new Promise<Response>(() => {}); // never resolves
+      }
+      return jsonOk({ models: [{ id: "qwen-max", name: "Qwen Max" }], total_count: 1, api_source: null });
+    });
+
+    // Start first request (never resolves)
+    act(() => { result.current.fetchModels(); });
+
+    // Start second request (resolves)
+    await act(async () => {
+      await result.current.fetchModels();
+    });
+
+    // First signal should be aborted
+    expect(signal1.aborted).toBe(true);
+    expect(result.current.models[0]?.id).toBe("qwen-max");
+  });
+
+  it("sets error state when model request fails", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+    fetchSpy.mockRejectedValue(new Error("Provider rejected"));
+
+    await act(async () => {
+      await result.current.fetchModels();
+    });
+
+    expect(result.current.error).toBe("Provider rejected");
+  });
+
+  it("preserves previous provider error when request is aborted", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+
+    // First, cause a real provider error
+    fetchSpy.mockRejectedValue(new Error("Provider rejected"));
+    await act(async () => {
+      await result.current.fetchModels();
+    });
+    expect(result.current.error).toBe("Provider rejected");
+
+    // Now abort — AbortError should NOT overwrite the error
+    fetchSpy.mockRejectedValue(new DOMException("Aborted", "AbortError"));
+    await act(async () => {
+      await result.current.fetchModels();
+    });
+
+    // Previous error is preserved
+    expect(result.current.error).toBe("Provider rejected");
+  });
+
+  it("aborts model fetch on unmount", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result, unmount } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+
+    let capturedSignal!: AbortSignal;
+    fetchSpy.mockImplementation((_url: string, options?: RequestInit) => {
+      if (options?.signal) capturedSignal = options.signal as AbortSignal;
+      return new Promise<Response>(() => {}); // never resolves
+    });
+
+    act(() => { result.current.fetchModels(); });
+
+    unmount();
+
+    expect(capturedSignal.aborted).toBe(true);
+  });
+
+  it("refreshModels also aborts previous model request", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+
+    let signal1!: AbortSignal;
+    let callCount = 0;
+    fetchSpy.mockImplementation((_url: string, options?: RequestInit) => {
+      callCount++;
+      if (callCount === 1) {
+        if (options?.signal) signal1 = options.signal as AbortSignal;
+        return new Promise<Response>(() => {}); // never resolves
+      }
+      return jsonOk({ models: [{ id: "qwen-max", name: "Qwen Max" }], total_count: 1, api_source: null });
+    });
+
+    // Start fetchModels (never resolves)
+    act(() => { result.current.fetchModels(); });
+
+    // refreshModels should abort it
+    await act(async () => {
+      await result.current.refreshModels();
+    });
+
+    expect(signal1.aborted).toBe(true);
+    expect(result.current.models[0]?.id).toBe("qwen-max");
+  });
+
+  it("refreshModels also passes AbortSignal to fetch", async () => {
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ base_url: "https://test.url", api_key: "sk-xxxx", model_name: "qwen-plus", max_tokens: 4096, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus", name: "Qwen Plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+    fetchSpy.mockReturnValue(jsonOk({ models: [], total_count: 0, api_source: null }));
+
+    await act(async () => {
+      await result.current.refreshModels();
+    });
+
+    const modelCall = fetchSpy.mock.calls.find(
+      (call: unknown[]) => String(call[0]).includes("/api/v1/models"),
+    );
+    expect(modelCall).toBeDefined();
+    const options = (modelCall as [string, RequestInit])[1];
+    expect(options).toBeDefined();
+    expect(options!.signal).toBeInstanceOf(AbortSignal);
   });
 });

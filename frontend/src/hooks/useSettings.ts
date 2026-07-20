@@ -69,8 +69,8 @@ export interface UpdateSettingsPayload {
 
 const BASE_URL = "/api/v1"
 
-async function apiGet<T>(path: string): Promise<T> {
-  const resp = await fetch(`${BASE_URL}${path}`)
+async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const resp = await fetch(`${BASE_URL}${path}`, { signal })
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(typeof detail.detail === "string" ? detail.detail : `API request failed (${resp.status})`)
@@ -78,11 +78,12 @@ async function apiGet<T>(path: string): Promise<T> {
   return resp.json() as Promise<T>
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T> {
+async function apiPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const resp = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   })
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
@@ -117,65 +118,110 @@ export function useSettings() {
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
+  // Distinct abort controllers for each lane
+  const settingsAbortRef = useRef<AbortController | null>(null)
+  const vendorsAbortRef = useRef<AbortController | null>(null)
+  const modelsAbortRef = useRef<AbortController | null>(null)
+
   const fetchSettings = useCallback(async () => {
+    settingsAbortRef.current?.abort()
+    const controller = new AbortController()
+    settingsAbortRef.current = controller
     try {
       setLoading(true)
       setError(null)
-      const data = await apiGet<SettingsResponse>("/settings")
-      if (mountedRef.current) {
+      const data = await apiGet<SettingsResponse>("/settings", controller.signal)
+      if (mountedRef.current && !controller.signal.aborted) {
         setSettings(mapResponse(data))
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : "获取设置失败")
       }
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && !controller.signal.aborted) {
         setLoading(false)
       }
     }
   }, [])
 
   const fetchVendors = useCallback(async () => {
+    vendorsAbortRef.current?.abort()
+    const controller = new AbortController()
+    vendorsAbortRef.current = controller
     try {
-      const data = await apiGet<VendorInfo[]>("/vendors")
-      if (mountedRef.current) setVendors(data)
-    } catch (err) { console.warn("Failed to load vendors:", err) }
+      const data = await apiGet<VendorInfo[]>("/vendors", controller.signal)
+      if (mountedRef.current && !controller.signal.aborted) setVendors(data)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      console.warn("Failed to load vendors:", err)
+    }
   }, [])
 
   const fetchModels = useCallback(async (query?: string, baseUrl?: string) => {
+    modelsAbortRef.current?.abort()
+    const controller = new AbortController()
+    modelsAbortRef.current = controller
     try {
       setModelsLoading(true)
       const params = new URLSearchParams()
       if (query) params.set("query", query)
       if (baseUrl) params.set("preview_base_url", baseUrl)
       const qs = params.toString()
-      const data = await apiGet<ModelListResponse>(`/models${qs ? `?${qs}` : ""}`)
-      if (mountedRef.current) setModels(data.models)
-    } catch (err) { console.warn("Failed to load models:", err) }
-    finally { if (mountedRef.current) setModelsLoading(false) }
+      const data = await apiGet<ModelListResponse>(`/models${qs ? `?${qs}` : ""}`, controller.signal)
+      if (mountedRef.current && !controller.signal.aborted) {
+        setModels(data.models)
+        setError(null)
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : "获取模型列表失败")
+      }
+    } finally {
+      if (mountedRef.current && !controller.signal.aborted) {
+        setModelsLoading(false)
+      }
+    }
   }, [])
 
   const refreshModels = useCallback(async () => {
+    modelsAbortRef.current?.abort()
+    const controller = new AbortController()
+    modelsAbortRef.current = controller
     try {
       setModelsLoading(true)
-      const data = await apiGet<ModelListResponse>("/models?use_current_settings=true")
-      if (mountedRef.current) setModels(data.models)
-    } catch (err) { console.warn("Failed to refresh models:", err) }
-    finally { if (mountedRef.current) setModelsLoading(false) }
+      const data = await apiGet<ModelListResponse>("/models?use_current_settings=true", controller.signal)
+      if (mountedRef.current && !controller.signal.aborted) {
+        setModels(data.models)
+        setError(null)
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : "刷新模型列表失败")
+      }
+    } finally {
+      if (mountedRef.current && !controller.signal.aborted) {
+        setModelsLoading(false)
+      }
+    }
   }, [])
 
   const updateSettings = useCallback(
     async (payload: UpdateSettingsPayload): Promise<UserSettings> => {
+      const controller = new AbortController()
       setSaving(true)
       setError(null)
       try {
-        const data = await apiPost<SettingsResponse>("/settings", payload)
+        const data = await apiPost<SettingsResponse>("/settings", payload, controller.signal)
         const mapped = mapResponse(data)
-        if (mountedRef.current) setSettings(mapped)
+        if (mountedRef.current && !controller.signal.aborted) setSettings(mapped)
         await refreshModels()
         return mapped
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") throw err
         const msg = err instanceof Error ? err.message : "更新设置失败"
         if (mountedRef.current) setError(msg)
         throw err
@@ -191,7 +237,12 @@ export function useSettings() {
     mountedRef.current = true
     void fetchSettings()
     void fetchVendors()
-    return () => { mountedRef.current = false }
+    return () => {
+      mountedRef.current = false
+      settingsAbortRef.current?.abort()
+      vendorsAbortRef.current?.abort()
+      modelsAbortRef.current?.abort()
+    }
   }, [fetchSettings, fetchVendors])
   /* eslint-enable react-hooks/set-state-in-effect */
 
