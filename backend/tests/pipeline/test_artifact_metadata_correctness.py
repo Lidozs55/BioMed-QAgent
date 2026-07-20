@@ -33,7 +33,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from app.config import settings
 from app.domain.contracts import (
     Database,
     FileAsset,
@@ -43,6 +42,7 @@ from app.domain.contracts import (
     SourceRecord,
     asset_id_from_sha256,
 )
+from app.model_config import RunModelSettings
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.stages.artifact_build import (
     _build_source_relations as _build_source_relations_artifact,
@@ -148,17 +148,55 @@ def test_run_manifest_model_name_not_none(tmp_path: Path) -> None:
 
     ``model_name=None`` breaks reproducibility — judges cannot tell which
     model produced the artifacts. The manifest must read
-    ``settings.model_name`` (default ``qwen-plus``).
+    the standalone model snapshot default (``qwen-plus``).
     """
     artifacts = _run_pinned_pipeline(tmp_path)
     manifest_json = json.loads((artifacts / "run_manifest.json").read_text("utf-8"))
     assert manifest_json["model_name"] is not None, (
         "run_manifest.json model_name must not be None"
     )
-    assert manifest_json["model_name"] == settings.model_name, (
-        f"run_manifest.json model_name must equal settings.model_name "
-        f"({settings.model_name!r}); got {manifest_json['model_name']!r}"
+    assert manifest_json["model_name"] == RunModelSettings.default().model_name, (
+        "run_manifest.json model_name must equal the standalone model snapshot "
+        f"({RunModelSettings.default().model_name!r}); "
+        f"got {manifest_json['model_name']!r}"
     )
+
+
+def test_run_manifest_model_name_uses_runner_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Given
+    import app.pipeline.stages.validation as validation_module
+
+    monkeypatch.setattr(
+        validation_module,
+        "settings",
+        type("Settings", (), {"model_name": "updated-global-model"})(),
+        raising=False,
+    )
+    runner = PipelineRunner(
+        task_id="task_model_snapshot",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        model_name="run-start-model",
+    )
+
+    # When
+    manifest = asyncio.run(runner.run())
+
+    # Then
+    assert manifest.model_name == "run-start-model"
+    manifest_json = json.loads(
+        (
+            tmp_path
+            / "tasks"
+            / "task_model_snapshot"
+            / "artifacts"
+            / "run_manifest.json"
+        ).read_text("utf-8")
+    )
+    assert manifest_json["model_name"] == "run-start-model"
 
 
 # ---------------------------------------------------------------------------

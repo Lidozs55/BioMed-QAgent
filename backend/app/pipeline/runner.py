@@ -53,6 +53,7 @@ from app.domain.contracts import (
     build_event,
     generate_prefixed_uuid,
 )
+from app.model_config import RunModelSettings
 from app.pipeline.stages import (
     STANDALONE_RUN_ID,
     AcquisitionOutput,
@@ -184,6 +185,7 @@ class PipelineRunner:
         defer_publication: bool = False,
         event_sink: PipelineEventSink | None = None,
         run_id: str = STANDALONE_RUN_ID,
+        model_name: str = RunModelSettings.default().model_name,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -197,6 +199,7 @@ class PipelineRunner:
         self.cancellation_requested = cancellation_requested
         self.defer_publication = defer_publication
         self._event_sink = event_sink
+        self.model_name = model_name
         self.workdir = create_task_workdir(task_id, base_dir=str(base_dir))
         self.started_at = datetime.now(UTC)
         self.state = load_state(self.workdir.state, task_id, self.started_at)
@@ -212,6 +215,7 @@ class PipelineRunner:
             specification=self.specification,
             cancellation_requested=self._is_cancelled,
             progress_emitter=self._emit_progress_event,
+            model_name=model_name,
         )
         self.events: list[EventEnvelope] = []
         self._persisted_attempt_count = self._load_persisted_attempt_count()
@@ -1268,7 +1272,12 @@ class PipelineRunner:
         await self._emit_event(TaskFailedPayload(error=error))
         self._persist_logs()
         return _build_failed_manifest(
-            self.task_id, self.started_at, error, self.topic, self.mode
+            self.task_id,
+            self.started_at,
+            error,
+            self.topic,
+            self.mode,
+            self.model_name,
         )
 
     async def _finalize_cancelled(self) -> RunManifest:
@@ -1293,7 +1302,11 @@ class PipelineRunner:
         )
         self._persist_logs()
         return _build_cancelled_manifest(
-            self.task_id, self.started_at, self.topic, self.mode
+            self.task_id,
+            self.started_at,
+            self.topic,
+            self.mode,
+            self.model_name,
         )
 
     async def _finalize_completed(
@@ -1540,6 +1553,7 @@ def _build_failed_manifest(
     error: ErrorDetail,
     topic: str,
     mode: Literal["fixture", "live"] = "fixture",
+    model_name: str = RunModelSettings.default().model_name,
 ) -> RunManifest:
     """Build a minimal RunManifest for a failed task."""
     from app.domain.contracts import TaskRequest, TaskSpecification, ValidationSummary
@@ -1559,6 +1573,7 @@ def _build_failed_manifest(
             report_path="logs/validation_report.json",
         ),
         pipeline_version="0.1.0",
+        model_name=model_name,
         mode=mode,
         live_accepted=False,
         started_at=started_at,
@@ -1571,6 +1586,7 @@ def _build_cancelled_manifest(
     started_at: datetime,
     topic: str,
     mode: Literal["fixture", "live"] = "fixture",
+    model_name: str = RunModelSettings.default().model_name,
 ) -> RunManifest:
     """Build a minimal RunManifest for a cancelled task."""
     from app.domain.contracts import TaskRequest, TaskSpecification, ValidationSummary
@@ -1590,6 +1606,7 @@ def _build_cancelled_manifest(
             report_path="logs/validation_report.json",
         ),
         pipeline_version="0.1.0",
+        model_name=model_name,
         mode=mode,
         live_accepted=False,
         started_at=started_at,

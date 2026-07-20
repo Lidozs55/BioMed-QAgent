@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpIcon,
   CaretDownIcon,
   FileIcon,
   ImageIcon,
+  MagnifyingGlassIcon,
   PlusIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -31,19 +32,22 @@ import {
   AttachmentMedia,
   AttachmentTitle,
 } from "@/components/ui/attachment";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-
-const MODELS = [
-  { id: "default", label: "默认模型" },
-  { id: "reasoning", label: "推理模型" },
-  { id: "fast", label: "快速模型" },
-] as const;
+import type { ModelInfo } from "@/hooks/useAPI";
 
 export const MAX_IMPORT_FILES = 10;
 export const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
 export const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+
+const LEGACY_MODELS = [
+  { id: "qwen-plus", label: "Qwen Plus" },
+  { id: "qwen-max", label: "Qwen Max" },
+  { id: "qwen-turbo", label: "Qwen Turbo" },
+  { id: "qwq-plus", label: "QWQ Plus" },
+];
 
 function sanitizeUploadFilename(name: string): string {
   const parts = name.split(/[\\/]/);
@@ -78,6 +82,16 @@ interface AgentComposerProps {
   onAttachmentError?: (message: string) => void;
   compact?: boolean;
   className?: string;
+  /** Available models from settings (non-empty = API key configured) */
+  models?: ModelInfo[];
+  /** Whether the user has configured an API key */
+  hasApiKey?: boolean;
+  /** Opens the settings panel */
+  onOpenSettings?: () => void;
+  /** Called when the user selects a different model */
+  onModelChange?: (modelId: string) => void;
+  /** Currently selected model ID */
+  selectedModelId?: string;
 }
 
 export function AgentComposer({
@@ -97,12 +111,64 @@ export function AgentComposer({
   onAttachmentError,
   compact = false,
   className,
+  models,
+  hasApiKey = false,
+  onOpenSettings,
+  onModelChange,
+  selectedModelId,
 }: AgentComposerProps) {
-  const [model, setModel] = useState("default");
+  // Attachment state (legacy, always applicable)
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [submittingFiles, setSubmittingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const modelLabel = MODELS.find((item) => item.id === model)?.label ?? "默认模型";
+
+  // Model selector state (new settings integration)
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Legacy model selector (backward compat when models prop is absent)
+  const [model, setModel] = useState("default");
+
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setModelDropdownOpen(false);
+        setModelSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [modelDropdownOpen]);
+
+  const modelsList = useMemo(() => models ?? [], [models]);
+
+  const sortedModels = useMemo(() => {
+    if (modelsList.length === 0) return [];
+    return [...modelsList].sort((a, b) => {
+      const aQwen = a.id.toLowerCase().startsWith("qwen") || a.name.toLowerCase().startsWith("qwen") ? 1 : 0;
+      const bQwen = b.id.toLowerCase().startsWith("qwen") || b.name.toLowerCase().startsWith("qwen") ? 1 : 0;
+      if (aQwen !== bQwen) return bQwen - aQwen;
+      if (a.recommended !== b.recommended) return a.recommended ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+  }, [modelsList]);
+
+  const selectedModelDisplay = useMemo(
+    () => modelsList.find((m) => m.id === selectedModelId),
+    [modelsList, selectedModelId],
+  );
+
+  const filteredModels = useMemo(
+    () => sortedModels.filter(
+      (m) => m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+        m.id.toLowerCase().includes(modelSearch.toLowerCase()),
+    ),
+    [sortedModels, modelSearch],
+  );
+
+  const handleOpenSettings = useCallback(() => onOpenSettings?.(), [onOpenSettings]);
 
   const hasFiles = pendingFiles.length > 0;
   const attachmentBusy = disabled || pending || submittingFiles;
@@ -287,36 +353,139 @@ export function AgentComposer({
         )}
 
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
+          <div className="relative" ref={dropdownRef}>
+            {models !== undefined ? (
+              // New searchable model selector (settings integration)
+              hasApiKey && sortedModels.length > 0 ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="max-w-40 gap-1 px-2 text-muted-foreground"
+                    onClick={() => {
+                      setModelDropdownOpen((v) => !v);
+                      setModelSearch("");
+                    }}
+                    disabled={disabled}
+                    aria-label={selectedModelDisplay ? `当前模型 ${selectedModelDisplay.name}，点击切换` : "点击选择模型"}
+                  >
+                    <span className="truncate max-w-28">{selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}</span>
+                    <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                  </Button>
+                  {modelDropdownOpen && (
+                    <div className="absolute right-0 bottom-full mb-1 z-50 w-64 overflow-hidden rounded-lg border bg-popover shadow-md">
+                      <div className="p-2 pb-1">
+                        <div className="relative">
+                          <MagnifyingGlassIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            placeholder="搜索模型..."
+                            value={modelSearch}
+                            onChange={(e) => setModelSearch(e.target.value)}
+                            className="h-8 pl-7 text-sm"
+                            autoFocus
+                          />
+                        </div>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto [scrollbar-width:thin]">
+                        <div className="p-1 pt-0">
+                          {filteredModels.length === 0 ? (
+                            <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                              {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
+                            </div>
+                          ) : (
+                            <>
+                              {filteredModels.map((m) => (
+                                <button
+                                  key={m.id}
+                                  type="button"
+                                  className={cn(
+                                    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
+                                    m.id === selectedModelId && "bg-accent font-medium",
+                                  )}
+                                  onClick={() => {
+                                    onModelChange?.(m.id);
+                                    setModelDropdownOpen(false);
+                                    setModelSearch("");
+                                  }}
+                                >
+                                  <span className="flex-1 truncate">{m.name}</span>
+                                  {m.recommended && (
+                                    <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
+                                  )}
+                                  {m.capabilities?.image && (
+                                    <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
+                                  )}
+                                </button>
+                              ))}
+                              <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
+                                管理模型请前往
+                                <button
+                                  type="button"
+                                  className="ml-1 text-primary underline-offset-2 hover:underline"
+                                  onClick={() => {
+                                    setModelDropdownOpen(false);
+                                    handleOpenSettings();
+                                  }}
+                                >
+                                  设置
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="max-w-32 gap-1 px-2 text-muted-foreground"
-                  aria-label={`切换主模型，当前${modelLabel}`}
+                  className="max-w-40 gap-1 px-2 text-muted-foreground"
+                  onClick={handleOpenSettings}
                   disabled={disabled}
+                  aria-label="未配置 API Key，点击前往设置"
+                >
+                  <span className="truncate">无可用模型</span>
+                  <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                </Button>
+              )
+            ) : (
+              // Legacy model selector (backward compat)
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="max-w-40 gap-1 px-2 text-muted-foreground"
+                      disabled={disabled}
+                      aria-label="切换主模型"
+                    >
+                      <span className="truncate">{LEGACY_MODELS.find((item) => item.id === model)?.label ?? "默认模型"}</span>
+                      <CaretDownIcon aria-hidden="true" />
+                    </Button>
+                  }
                 />
-              }
-            >
-              <span className="truncate">{modelLabel}</span>
-              <CaretDownIcon aria-hidden="true" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" side="top">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>主模型</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={model} onValueChange={setModel}>
-                  {MODELS.map((item) => (
-                    <DropdownMenuRadioItem key={item.id} value={item.id}>
-                      {item.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <DropdownMenuContent align="end" side="top">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>主模型</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup value={model} onValueChange={setModel}>
+                      {LEGACY_MODELS.map((item) => (
+                        <DropdownMenuRadioItem key={item.id} value={item.id}>
+                          {item.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
           <Button
             type="button"
             size="icon-sm"

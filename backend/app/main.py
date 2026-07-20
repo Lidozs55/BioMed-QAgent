@@ -1,4 +1,4 @@
-"""FastAPI application and runtime lifespan ownership."""
+﻿"""FastAPI application and runtime lifespan ownership."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.routes import router as routes_router
@@ -94,7 +95,11 @@ def create_app(configured: Settings = settings) -> FastAPI:
             defaults=configured,
         )
         set_current_model_settings_store(model_settings_store)
-        model_preview_client = httpx.AsyncClient(timeout=10.0)
+        model_preview_client = httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
         skill_store = UserSkillStore(
             configured.skill_data_path,
             catalog=skill_catalog,
@@ -162,6 +167,10 @@ def create_app(configured: Settings = settings) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost"],
     )
     application.include_router(routes_router)
     application.include_router(skills_router)

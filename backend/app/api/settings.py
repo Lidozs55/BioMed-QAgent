@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
-from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
+from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 
@@ -117,19 +117,32 @@ async def list_models(
     base_url = body.preview_base_url
     api_key = body.preview_api_key or current.api_key
     try:
-        validate_public_http_url(base_url)
+        target = resolve_public_http_target(base_url, require_https=bool(api_key))
     except UnsafeUrlError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        raise HTTPException(status_code=422, detail="Model preview URL is not allowed") from error
+    headers = {"Host": target.host_header}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = await request.app.state.model_preview_client.get(
-            f"{base_url.rstrip('/')}/models", headers=headers
+        outbound = request.app.state.model_preview_client.build_request(
+            "GET",
+            f"{target.connect_url.rstrip('/')}/models",
+            headers=headers,
+            extensions={"sni_hostname": target.sni_hostname},
+        )
+        response = await request.app.state.model_preview_client.send(
+            outbound, follow_redirects=False
         )
         response.raise_for_status()
         data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("model preview response must be an object")
+        raw_models = data.get("data")
+        if not isinstance(raw_models, list):
+            raise ValueError("model preview response data must be a list")
     except (httpx.HTTPError, ValueError) as error:
-        raise HTTPException(status_code=502, detail=f"Model preview failed: {error}") from error
-    model_ids = [item.get("id") for item in data.get("data", []) if isinstance(item, dict)]
+        raise HTTPException(status_code=502, detail="Model preview failed") from error
+    model_ids = [item.get("id") for item in raw_models if isinstance(item, dict)]
     models = [
         {
             "id": model_id,

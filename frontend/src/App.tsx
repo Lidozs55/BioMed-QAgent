@@ -2,11 +2,11 @@ import { GearIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import {
   ArtifactPanelToggle,
   ArtifactWorkspace,
 } from "@/components/ArtifactWorkspace";
+import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -30,6 +30,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const transport = useAgentStream();
   const api = useAPI();
+
   const controller = useMemo(
     () => new RuntimeController(api, transport),
     [api, transport],
@@ -93,6 +94,7 @@ export default function App() {
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
         onExportCache={exportCache}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <header className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
@@ -123,6 +125,7 @@ export default function App() {
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }
+                onOpenSettings={() => setSettingsOpen(true)}
               />
             </ArtifactWorkspace>
           </div>

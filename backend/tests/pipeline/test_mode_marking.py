@@ -166,7 +166,7 @@ async def test_task_status_api_exposes_mode_and_live_accepted(
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=application),
-            base_url="http://test",
+            base_url="http://localhost",
         ) as client:
             created = await client.post(
                 "/api/v1/tasks",

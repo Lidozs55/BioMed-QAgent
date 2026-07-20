@@ -38,7 +38,7 @@ async def api_client(
     )
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         yield application, client
 
@@ -218,7 +218,7 @@ async def test_resume_without_lifespan_returns_503(tmp_path: Path) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.post(
             "/api/v1/tasks/task_x/runs/run_x/resume",

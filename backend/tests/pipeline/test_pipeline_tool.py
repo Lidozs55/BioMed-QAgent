@@ -9,6 +9,7 @@ import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.model_config import RunModelSettings, UserSettings
 from app.pipeline.runner import PendingPublicationCleanup
 from app.pipeline.tool import run_research_pipeline
 from app.tools.workdir import create_task_workdir
@@ -81,6 +82,9 @@ async def test_pipeline_function_tool_defers_managed_run_publication(
         task_id="task_tool_managed",
         base_dir=tmp_path / "tasks",
         managed_run_id=run_id,
+        model_settings=RunModelSettings.from_user_settings(
+            UserSettings(model_name="run-start-model")
+        ),
     )
     tool_context = ToolContext(
         context=context,
@@ -121,6 +125,7 @@ async def test_pipeline_function_tool_defers_managed_run_publication(
 
     assert captured["run_id"] == run_id
     assert captured["defer_publication"] is True
+    assert captured["model_name"] == "run-start-model"
     assert context.take_pending_publication() is pending
 
 

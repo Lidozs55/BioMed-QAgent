@@ -150,7 +150,7 @@ async def test_import_tasks_creates_task_and_persists_files(tmp_path: Path) -> N
     observed_files: dict[str, bytes] | None = None
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         async def probe_executor(execution) -> None:
             nonlocal observed_files
@@ -199,7 +199,7 @@ async def test_import_tasks_rejects_no_files(tmp_path: Path) -> None:
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.post(
             "/api/v1/import/tasks",
@@ -219,7 +219,7 @@ async def test_import_tasks_rejects_too_many_files(tmp_path: Path) -> None:
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         files = [
             ("files", (f"f{i}.csv", b"a,b\n1,2\n", "text/csv"))
@@ -249,7 +249,7 @@ async def test_import_tasks_rejects_oversized_file(
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         # Upload one byte more than allowed.
         big = b"x" * 6
@@ -277,7 +277,7 @@ async def test_import_tasks_rejects_total_upload_over_limit(
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.post(
             "/api/v1/import/tasks",
@@ -299,7 +299,7 @@ async def test_import_tasks_rejects_duplicate_filenames(tmp_path: Path) -> None:
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         files = [
             ("files", ("patients.csv", b"a\n1\n", "text/csv")),
@@ -334,7 +334,7 @@ async def test_import_tasks_cleans_staged_partial_upload_after_io_failure(
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application, raise_app_exceptions=False),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.post(
             "/api/v1/import/tasks",
@@ -374,7 +374,7 @@ async def test_import_tasks_stages_then_cleans_when_runtime_is_unavailable(
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         application.state.task_manager = None
         response = await client.post(
@@ -405,7 +405,7 @@ async def test_import_tasks_queue_full_cleans_staging_without_creating_task(
     release_active = asyncio.Event()
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         async def block_executor(execution) -> None:
             if execution.input == "active":
@@ -483,7 +483,7 @@ async def test_import_task_has_import_mode_and_composed_input(
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         files = [
             ("files", ("a.csv", b"x,y\n1,2\n", "text/csv")),

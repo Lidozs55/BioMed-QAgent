@@ -71,6 +71,10 @@ export interface ModelInfo {
   description: string;
   context_window: number;
   suggested_max_tokens: number;
+  capabilities?: { text: boolean; image: boolean; video: boolean; audio: boolean };
+  recommended?: boolean;
+  api_available?: boolean;
+  capability_source?: string;
 }
 
 export interface SkillManifest {

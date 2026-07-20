@@ -22,6 +22,7 @@ from app.domain.contracts import (
     ValidationSummary,
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
+from app.model_config import RunModelSettings
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
@@ -51,6 +52,7 @@ class StageContext:
     topic: str
     started_at: datetime
     run_id: str = STANDALONE_RUN_ID
+    model_name: str = RunModelSettings.default().model_name
     mode: Literal["fixture", "live"] = "fixture"
     databases: list[str] = field(default_factory=list)
     specification: TaskSpecification | None = None

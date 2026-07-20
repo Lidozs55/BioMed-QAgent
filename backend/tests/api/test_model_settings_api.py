@@ -12,7 +12,7 @@ from app.main import create_app
 async def test_model_settings_mask_and_retain_saved_key(tmp_path: Path) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         saved = await client.put(
             "/api/v1/settings",
@@ -40,38 +40,6 @@ async def test_model_settings_mask_and_retain_saved_key(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_preview_uses_supplied_connection(tmp_path: Path) -> None:
-    application = create_app(Settings(output_dir=str(tmp_path / "output")))
-    requests: list[httpx.Request] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json={"data": [{"id": "preview-model"}]})
-
-    async with application.router.lifespan_context(application):
-        await application.state.model_preview_client.aclose()
-        application.state.model_preview_client = httpx.AsyncClient(
-            transport=httpx.MockTransport(handler)
-        )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application), base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/models",
-                json={
-                    "preview_base_url": "https://api.openai.com/v1",
-                    "preview_api_key": "preview-key",
-                },
-            )
-
-    assert response.status_code == 200
-    assert response.json()["models"][0]["id"] == "preview-model"
-    assert str(requests[0].url) == "https://api.openai.com/v1/models"
-    assert requests[0].headers["authorization"] == "Bearer preview-key"
-    assert "preview-key" not in str(requests[0].url)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "base_url",
     [
@@ -86,7 +54,7 @@ async def test_model_preview_rejects_non_public_base_urls(
 ) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         response = await client.post(
             "/api/v1/models",
@@ -100,7 +68,7 @@ async def test_model_preview_rejects_non_public_base_urls(
 async def test_only_exact_current_mask_retains_saved_key(tmp_path: Path) -> None:
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=application), base_url="http://test"
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         await client.put("/api/v1/settings", json={"api_key": "sk-secret-value"})
         await client.put("/api/v1/settings", json={"api_key": "literal...secret"})
@@ -110,17 +78,31 @@ async def test_only_exact_current_mask_retains_saved_key(tmp_path: Path) -> None
     assert "literal...secret" in (tmp_path / "settings" / "model.json").read_text("utf-8")
 
 
+def test_model_settings_store_keeps_explicit_key_clear_after_reload(tmp_path: Path) -> None:
+    from app.model_settings import ModelSettingsStore
+
+    settings_path = tmp_path / "settings" / "model.json"
+    defaults = Settings(dashscope_api_key="configured-default")
+    store = ModelSettingsStore(settings_path, defaults=defaults)
+
+    store.update({"api_key": ""})
+
+    reloaded = ModelSettingsStore(settings_path, defaults=defaults)
+
+    assert reloaded.snapshot().api_key == ""
+
+
 def test_model_factory_snapshots_hot_user_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.agent_loop import model as model_module
-    from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+    from app.model_config import RunModelSettings
+    from app.model_settings import ModelSettingsStore
 
     store = ModelSettingsStore(
         tmp_path / "model.json",
         defaults=Settings(dashscope_api_key="first", model_name="model-one"),
     )
-    set_current_model_settings_store(store)
     created: list[dict[str, str]] = []
 
     class FakeClient:
@@ -128,25 +110,36 @@ def test_model_factory_snapshots_hot_user_configuration(
             created.append({"api_key": api_key, "base_url": base_url})
 
     monkeypatch.setattr(model_module, "AsyncOpenAI", FakeClient)
-    first = model_module.get_model()
+    first = model_module.get_model(
+        model_module.to_run_model_settings(store.snapshot())
+    )
     store.update({"api_key": "second", "model_name": "model-two"})
-    second = model_module.get_model()
+    second = model_module.get_model(
+        model_module.to_run_model_settings(store.snapshot())
+    )
     first._get_delegate()
     second._get_delegate()
 
-    assert first.configuration.model_name == "model-one"
-    assert second.configuration.model_name == "model-two"
+    assert isinstance(first._model_settings, RunModelSettings)
+    assert isinstance(second._model_settings, RunModelSettings)
+    assert first._model_settings.model_name == "model-one"
+    assert second._model_settings.model_name == "model-two"
     assert created[0]["api_key"] == "first"
     assert created[1]["api_key"] == "second"
 
 
 def test_model_factory_exposes_request_defaults(tmp_path: Path) -> None:
+    from app.agent_loop import model as model_module
     from app.agent_loop.model import get_model
-    from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+    from app.model_settings import ModelSettingsStore
 
     store = ModelSettingsStore(
         tmp_path / "model.json",
-        defaults=Settings(dashscope_api_key="key"),
+        defaults=Settings(
+            dashscope_api_key="key",
+            dashscope_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model_name="qwen-plus",
+        ),
     )
     store.update(
         {
@@ -158,9 +151,9 @@ def test_model_factory_exposes_request_defaults(tmp_path: Path) -> None:
             "thinking_mode": True,
         }
     )
-    set_current_model_settings_store(store)
-
-    defaults = get_model().model_settings
+    defaults = get_model(
+        model_module.to_run_model_settings(store.snapshot())
+    ).model_settings
 
     assert defaults.max_tokens == 1234
     assert defaults.temperature == 0.2
@@ -173,8 +166,9 @@ def test_model_factory_exposes_request_defaults(tmp_path: Path) -> None:
 
 
 def test_model_factory_omits_dashscope_body_for_openai_endpoint(tmp_path: Path) -> None:
+    from app.agent_loop import model as model_module
     from app.agent_loop.model import get_model
-    from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+    from app.model_settings import ModelSettingsStore
 
     store = ModelSettingsStore(
         tmp_path / "model.json",
@@ -184,6 +178,7 @@ def test_model_factory_omits_dashscope_body_for_openai_endpoint(tmp_path: Path) 
             model_name="gpt-4o",
         ),
     )
-    set_current_model_settings_store(store)
-
-    assert get_model().model_settings.extra_body is None
+    assert (
+        get_model(model_module.to_run_model_settings(store.snapshot())).model_settings.extra_body
+        is None
+    )

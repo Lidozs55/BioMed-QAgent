@@ -909,4 +909,21 @@ describe("ChatPanel", () => {
       screen.queryByRole("button", { name: "加载更早消息" }),
     ).not.toBeInTheDocument();
   });
+
+  it("passes model props to draft composer when provided", () => {
+    const onModelChange = vi.fn();
+    render(
+      <ChatPanel
+        startTask={vi.fn()}
+        models={[{ id: "qwen-plus", name: "Qwen Plus", description: "", context_window: 131072, suggested_max_tokens: 8192, capabilities: { text: true, image: false, video: false, audio: false }, recommended: true, api_available: true, capability_source: "api" }]}
+        hasApiKey={true}
+        onOpenSettings={vi.fn()}
+        onModelChange={onModelChange}
+        selectedModelId="qwen-plus"
+      />,
+    );
+
+    // The model selector should show the selected model name
+    expect(screen.getByText("Qwen Plus")).toBeVisible();
+  });
 });

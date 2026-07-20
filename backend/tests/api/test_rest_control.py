@@ -44,7 +44,7 @@ async def api_client(
     )
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         yield application, client
 
@@ -118,7 +118,7 @@ async def test_task_runtime_without_lifespan_returns_stable_503(tmp_path: Path) 
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.get("/api/v1/tasks")
 
@@ -444,7 +444,7 @@ async def test_create_returns_stable_503_when_manager_is_unavailable(
         application.state.task_manager = SimpleNamespace(**manager_state)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.post(
             "/api/v1/tasks",
@@ -914,7 +914,7 @@ async def test_cancel_maps_manager_shutdown_race_to_503(
                 app=application,
                 raise_app_exceptions=False,
             ),
-            base_url="http://test",
+            base_url="http://localhost",
         ) as client:
             request_task = asyncio.create_task(
                 client.post(f"/api/v1/tasks/{task_id}/runs/{run_id}/cancel")
@@ -1070,7 +1070,7 @@ async def test_delete_returns_stable_503_when_runtime_is_unavailable(
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.delete("/api/v1/tasks/task_unavailable")
 
@@ -1113,7 +1113,7 @@ async def test_delete_unexpected_storage_error_remains_500(
                 app=application,
                 raise_app_exceptions=False,
             ),
-            base_url="http://test",
+            base_url="http://localhost",
         ) as client:
             response = await client.delete("/api/v1/tasks/task_storage_error")
 
@@ -1197,7 +1197,7 @@ async def test_unexpected_storage_and_manager_errors_remain_500(
                 app=application,
                 raise_app_exceptions=False,
             ),
-            base_url="http://test",
+            base_url="http://localhost",
         ) as client:
             storage_response = await client.get("/api/v1/tasks")
             monkeypatch.setattr(manager, "create_task", fail_create)
