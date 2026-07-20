@@ -581,6 +581,22 @@ function mergeMessagesIntoItems(
   messages: readonly ProjectedMessage[],
 ): TaskProjection {
   let next = task;
+  // 当 hydrate 引入真实 user message 时，删除 run_queued 创建的 live
+  // `user:${runId}` 占位 item，避免同一 runId 的用户消息重复显示。
+  const hydratedUserRunIds = new Set(
+    messages
+      .filter((m) => m.role === "user" && m.runId !== null)
+      .map((m) => m.runId as string),
+  );
+  if (hydratedUserRunIds.size > 0) {
+    const liveIds = new Set(
+      [...hydratedUserRunIds].map((runId) => `user:${runId}`),
+    );
+    const filtered = next.items.filter((i) => !liveIds.has(i.itemId));
+    if (filtered.length !== next.items.length) {
+      next = { ...next, items: filtered };
+    }
+  }
   for (const message of messages) {
     const item = projectMessageToItem(message);
     if (item === null) continue;
@@ -1097,6 +1113,19 @@ export function reduceRuntimeEvent(
         content: payload.input,
         createdAt: envelope.timestamp,
         sequence: envelope.sequence,
+      });
+      // 同步投影到 items：用户输入后立即在对话区显示自己的消息，
+      // 避免在 LLM 思考期（尚无 assistant_delta）items 为空导致
+      // "该任务暂时没有消息" 与 "正在思考..." 同时出现。
+      // itemId=`user:${runId}` 与 hydrate 的真实 user message 一致，
+      // upsertItem 自动覆盖，不会重复。
+      task = upsertItem(task, {
+        kind: "user_message",
+        itemId: `user:${runId}`,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: envelope.timestamp,
+        content: payload.input,
       });
       task = {
         ...task,
