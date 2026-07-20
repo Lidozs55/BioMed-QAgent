@@ -16,6 +16,7 @@ import type {
   AssistantStreamProjection,
   AgentRuntimeData,
   ArtifactProjection,
+  ConversationItem,
   ProjectedMessage,
   RunProjection,
   StageProjection,
@@ -72,6 +73,9 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     pendingUserInput: null,
     lastSequence: summary.latest_sequence,
     hydration: "summary",
+    items: [],
+    itemSequences: {},
+    currentReasoningSegmentByRun: {},
   };
 }
 
@@ -286,15 +290,17 @@ export function mergeOlderMessagePage(
   const incoming = page.messages
     .filter((message) => message.task_id === taskId)
     .map(projectMessage);
+  const mergedTask: TaskProjection = {
+    ...task,
+    messages: mergeProjectedMessages(task.messages, incoming),
+    olderMessagesCursor: page.next_cursor,
+  };
+  const taskWithItems = mergeMessagesIntoItems(mergedTask, incoming);
   return {
     ...state,
     tasksById: {
       ...state.tasksById,
-      [taskId]: {
-        ...task,
-        messages: mergeProjectedMessages(task.messages, incoming),
-        olderMessagesCursor: page.next_cursor,
-      },
+      [taskId]: taskWithItems,
     },
   };
 }
@@ -341,27 +347,30 @@ export function hydrateTaskSnapshot(
     ...base.runsById,
     ...Object.fromEntries(runs.map((run) => [run.runId, run])),
   };
-  const task: TaskProjection = {
-    ...base,
-    summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
-    runsById,
-    runOrder,
-    messages: mergeSnapshotMessages(base, snapshotMessages),
-    assistantStreamsByRunId,
-    pendingUserInput:
-      base.pendingUserInput !== null &&
-      snapshot.task.active_run_id === base.pendingUserInput.runId &&
-      pendingRun?.status === "awaiting_user_input"
-        ? base.pendingUserInput
-        : null,
-    olderMessagesCursor:
-      existing?.hydration === "snapshot" &&
-      snapshotConnectsToExistingHistory(base, snapshotMessages)
-        ? base.olderMessagesCursor
-        : snapshot.older_messages_cursor,
-    lastSequence: snapshot.task.latest_sequence,
-    hydration: "snapshot",
-  };
+  const task: TaskProjection = mergeMessagesIntoItems(
+    {
+      ...base,
+      summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
+      runsById,
+      runOrder,
+      messages: mergeSnapshotMessages(base, snapshotMessages),
+      assistantStreamsByRunId,
+      pendingUserInput:
+        base.pendingUserInput !== null &&
+        snapshot.task.active_run_id === base.pendingUserInput.runId &&
+        pendingRun?.status === "awaiting_user_input"
+          ? base.pendingUserInput
+          : null,
+      olderMessagesCursor:
+        existing?.hydration === "snapshot" &&
+        snapshotConnectsToExistingHistory(base, snapshotMessages)
+          ? base.olderMessagesCursor
+          : snapshot.older_messages_cursor,
+      lastSequence: snapshot.task.latest_sequence,
+      hydration: "snapshot",
+    },
+    snapshotMessages,
+  );
   const classification = updateClassification(state, task);
   return {
     ...state,
@@ -479,6 +488,106 @@ function upsertMessage(
   const messages = [...task.messages];
   messages[index] = message;
   return { ...task, messages };
+}
+
+function upsertItem(
+  task: TaskProjection,
+  item: ConversationItem,
+): TaskProjection {
+  const existingIdx = task.items.findIndex((i) => i.itemId === item.itemId);
+  let items: ConversationItem[];
+  let createdAt = item.createdAt;
+  if (existingIdx >= 0) {
+    const existing = task.items[existingIdx];
+    createdAt = existing.createdAt;
+    items = [...task.items];
+    items[existingIdx] = { ...existing, ...item, createdAt } as ConversationItem;
+  } else {
+    items = [...task.items, item];
+  }
+  items.sort((a, b) => a.sequence - b.sequence);
+  return {
+    ...task,
+    items,
+    itemSequences: {
+      ...task.itemSequences,
+      [item.itemId]: item.sequence,
+    },
+  };
+}
+
+function isRunAssistantStreamActive(
+  task: TaskProjection,
+  runId: string,
+): boolean {
+  const stream = task.assistantStreamsByRunId[runId];
+  if (stream === undefined) return false;
+  return Object.values(stream.streamsById).some((segment) => segment.active);
+}
+
+function deactivateRunStreamingItems(
+  task: TaskProjection,
+  runId: string,
+): TaskProjection {
+  let changed = false;
+  const items = task.items.map((item) => {
+    if (item.runId !== runId) return item;
+    if (item.kind === "reasoning" && item.isStreaming) {
+      changed = true;
+      return { ...item, isStreaming: false };
+    }
+    if (item.kind === "assistant_segment" && item.isStreaming) {
+      changed = true;
+      return { ...item, isStreaming: false };
+    }
+    return item;
+  });
+  if (!changed) return task;
+  return { ...task, items };
+}
+
+function projectMessageToItem(
+  message: ProjectedMessage,
+): ConversationItem | null {
+  const runId = message.runId ?? "";
+  const sequence = message.sequence ?? message.ordinal ?? 0;
+  if (message.role === "user") {
+    return {
+      kind: "user_message",
+      itemId: `msg:${message.messageId}`,
+      runId,
+      sequence,
+      createdAt: message.createdAt,
+      content: message.content,
+    };
+  }
+  if (message.role === "assistant") {
+    return {
+      kind: "assistant_segment",
+      itemId: `msg:${message.messageId}`,
+      runId,
+      sequence,
+      createdAt: message.createdAt,
+      streamId: `hydrate:${message.messageId}`,
+      content: message.content,
+      isStreaming: false,
+      finishReason: null,
+    };
+  }
+  return null;
+}
+
+function mergeMessagesIntoItems(
+  task: TaskProjection,
+  messages: readonly ProjectedMessage[],
+): TaskProjection {
+  let next = task;
+  for (const message of messages) {
+    const item = projectMessageToItem(message);
+    if (item === null) continue;
+    next = upsertItem(next, item);
+  }
+  return next;
 }
 
 function assistantMessage(
@@ -779,7 +888,7 @@ function hasAssistantChunkRange(
   return typeof payload.stream_id === "string";
 }
 
-function applyDurableAssistantDelta(
+function applyDurableAssistantDeltaCore(
   task: TaskProjection,
   runId: string,
   payload: AssistantDeltaPayload,
@@ -864,6 +973,35 @@ function applyDurableAssistantDelta(
     envelope.sequence,
     currentMessage?.createdAt ?? envelope.timestamp,
   );
+}
+
+function applyDurableAssistantDelta(
+  task: TaskProjection,
+  runId: string,
+  payload: AssistantDeltaPayload,
+  envelope: EventEnvelope,
+): TaskProjection {
+  const nextTask = applyDurableAssistantDeltaCore(task, runId, payload, envelope);
+  if (nextTask === task) return task;
+  const streamId = hasAssistantChunkRange(payload)
+    ? payload.stream_id
+    : `live:${runId}:0`;
+  const itemId = `assistant:${streamId}`;
+  const existing = nextTask.items.find((i) => i.itemId === itemId);
+  const prevContent =
+    existing?.kind === "assistant_segment" ? existing.content : "";
+  const isStreaming = isRunAssistantStreamActive(nextTask, runId);
+  return upsertItem(nextTask, {
+    kind: "assistant_segment",
+    itemId,
+    runId,
+    sequence: envelope.sequence,
+    createdAt: existing?.createdAt ?? envelope.timestamp,
+    streamId,
+    content: `${prevContent}${payload.delta}`,
+    isStreaming,
+    finishReason: null,
+  });
 }
 
 function upsertActivity(
@@ -1006,6 +1144,7 @@ export function reduceRuntimeEvent(
         payload.type === "run_cancel_requested"
       ) {
         task = deactivateRunAssistantStream(task, runId);
+        task = deactivateRunStreamingItems(task, runId);
       }
       break;
     }
@@ -1055,6 +1194,7 @@ export function reduceRuntimeEvent(
         );
       }
       task = deactivateRunAssistantStream(task, runId);
+      task = deactivateRunStreamingItems(task, runId);
       break;
     }
     case "user_input_required": {
@@ -1182,11 +1322,39 @@ export function reduceRuntimeEvent(
         code: null,
         message: null,
       });
+      const segmentIndex = task.currentReasoningSegmentByRun[runId] ?? 0;
+      if (!(runId in task.currentReasoningSegmentByRun)) {
+        task = {
+          ...task,
+          currentReasoningSegmentByRun: {
+            ...task.currentReasoningSegmentByRun,
+            [runId]: segmentIndex,
+          },
+        };
+      }
+      const reasoningItemId = `reasoning:${runId}:${segmentIndex}`;
+      const existingReasoningItem = task.items.find(
+        (i) => i.itemId === reasoningItemId,
+      );
+      const prevReasoningContent =
+        existingReasoningItem?.kind === "reasoning"
+          ? existingReasoningItem.content
+          : "";
+      task = upsertItem(task, {
+        kind: "reasoning",
+        itemId: reasoningItemId,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: existingReasoningItem?.createdAt ?? envelope.timestamp,
+        content: `${prevReasoningContent}${payload.delta}`,
+        isStreaming: true,
+      });
       break;
     }
     case "tool_started": {
       if (runId === null) break;
       task = deactivateRunAssistantStream(task, runId);
+      task = deactivateRunStreamingItems(task, runId);
       task = upsertActivity(task, {
         activityId: `tool:${runId}:${payload.tool_call_id}`,
         taskId: envelope.task_id,
@@ -1202,6 +1370,28 @@ export function reduceRuntimeEvent(
         code: null,
         message: null,
       });
+      const toolItemId = `tool:${runId}:${payload.tool_call_id}`;
+      const existingToolItem = task.items.find((i) => i.itemId === toolItemId);
+      task = upsertItem(task, {
+        kind: "tool_call",
+        itemId: toolItemId,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+        toolCallId: payload.tool_call_id,
+        toolName: payload.tool_name,
+        arguments: (payload.arguments ?? null) as Record<string, unknown> | null,
+        status: "running",
+        output: null,
+        completedSequence: null,
+      });
+      task = {
+        ...task,
+        currentReasoningSegmentByRun: {
+          ...task.currentReasoningSegmentByRun,
+          [runId]: (task.currentReasoningSegmentByRun[runId] ?? 0) + 1,
+        },
+      };
       break;
     }
     case "tool_completed": {
@@ -1223,6 +1413,27 @@ export function reduceRuntimeEvent(
           isError: payload.is_error,
           code: null,
           message: null,
+        });
+        const toolItemId = `tool:${runId}:${toolCallId}`;
+        const existingToolItem = task.items.find(
+          (i) => i.itemId === toolItemId,
+        );
+        const toolArguments =
+          existingToolItem?.kind === "tool_call"
+            ? existingToolItem.arguments
+            : null;
+        task = upsertItem(task, {
+          kind: "tool_call",
+          itemId: toolItemId,
+          runId,
+          sequence: envelope.sequence,
+          createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+          toolCallId,
+          toolName: payload.tool_name,
+          arguments: toolArguments,
+          status: payload.is_error ? "error" : "completed",
+          output: payload.output ?? null,
+          completedSequence: envelope.sequence,
         });
       } else {
         task = upsertActivity(task, {
@@ -1278,6 +1489,16 @@ export function reduceRuntimeEvent(
         code: payload.code ?? warning?.code ?? null,
         message: payload.message ?? warning?.message ?? null,
       });
+      const warningItemId = `warning:${envelope.sequence}`;
+      task = upsertItem(task, {
+        kind: "warning",
+        itemId: warningItemId,
+        runId: runId ?? "",
+        sequence: envelope.sequence,
+        createdAt: envelope.timestamp,
+        code: payload.code ?? warning?.code ?? "",
+        message: payload.message ?? warning?.message ?? "",
+      });
       break;
     }
     case "conversation_compacted": {
@@ -1331,6 +1552,21 @@ export function reduceRuntimeEvent(
           ? envelope.sequence
           : task.artifactManifestSequence,
       };
+      const artifactItemId = `artifact:${runId ?? "task"}:${artifact.artifact_id}`;
+      const existingArtifactItem = task.items.find(
+        (i) => i.itemId === artifactItemId,
+      );
+      task = upsertItem(task, {
+        kind: "artifact",
+        itemId: artifactItemId,
+        runId: runId ?? "",
+        sequence: envelope.sequence,
+        createdAt: existingArtifactItem?.createdAt ?? envelope.timestamp,
+        artifactId: artifact.artifact_id,
+        name: artifact.name,
+        sizeBytes: artifact.size,
+        mediaType: artifact.media_type,
+      });
       break;
     }
     case "stage_started":
@@ -1398,13 +1634,36 @@ export function reduceRuntimeEvent(
           message: null,
           stage: payload.stage,
         });
+        const stageItemId = `stage:${runId}:${payload.stage}`;
+        const existingStageItem = task.items.find(
+          (i) => i.itemId === stageItemId,
+        );
+        task = upsertItem(task, {
+          kind: "stage",
+          itemId: stageItemId,
+          runId,
+          sequence: envelope.sequence,
+          createdAt: existingStageItem?.createdAt ?? envelope.timestamp,
+          stage: payload.stage,
+          status:
+            payload.type === "stage_started"
+              ? "running"
+              : payload.type === "stage_completed"
+                ? "completed"
+                : payload.type === "stage_failed"
+                  ? "failed"
+                  : "skipped",
+          attempt: stage.attempt,
+          error:
+            payload.type === "stage_failed" ? payload.error.message : null,
+        });
       }
       break;
     }
     case "stage_progress": {
-      // Agent 模式下 Skills 发射 progress（无 stage_attempt_id），
-      // Pipeline 模式下 stages 发射 progress（有 stage_attempt_id）。
-      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论文"等中间数字。
+      // Agent 模式�?Skills 发射 progress（无 stage_attempt_id），
+      // Pipeline 模式�?stages 发射 progress（有 stage_attempt_id）�?
+      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论�?等中间数字�?
       // See docs/REVIEW_2026-07-18.md §4.
       const existing = task.stages[payload.stage];
       const stageAttemptId =
@@ -1423,8 +1682,8 @@ export function reduceRuntimeEvent(
         detail: payload.detail as Record<string, unknown>,
         updatedAt: envelope.timestamp,
       };
-      // `existing ?? {...}` 的右分支里 existing 被 TS 收窄为 never,
-      // 导致 existing?.attempt 等访问报 TS2339。改为显式 if/else。
+      // `existing ?? {...}` 的右分支�?existing �?TS 收窄�?never,
+      // 导致 existing?.attempt 等访问报 TS2339。改为显�?if/else�?
       const stage: StageProjection = existing !== undefined
         ? existing
         : {
@@ -1468,6 +1727,21 @@ export function reduceRuntimeEvent(
             current: payload.current,
             total: payload.total,
           },
+        });
+        const progressItemId = `progress:${runId}:${payload.stage}:${payload.kind}`;
+        const existingProgressItem = task.items.find(
+          (i) => i.itemId === progressItemId,
+        );
+        task = upsertItem(task, {
+          kind: "progress",
+          itemId: progressItemId,
+          runId,
+          sequence: envelope.sequence,
+          createdAt: existingProgressItem?.createdAt ?? envelope.timestamp,
+          stage: payload.stage,
+          progressKind: payload.kind,
+          current: payload.current,
+          total: payload.total,
         });
       }
       break;

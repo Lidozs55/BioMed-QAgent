@@ -1070,3 +1070,591 @@ describe("runtime event projection", () => {
     },
   );
 });
+
+describe("conversation items projection", () => {
+  function setup(taskId = "task_items") {
+    return mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary(taskId)),
+      false,
+    );
+  }
+
+  it("creates an AssistantSegmentItem accumulating content from assistant_delta without stream_id", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: "Hello",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "assistant_delta",
+        delta: " world",
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "assistant_segment",
+      itemId: "assistant:live:run_items:0",
+      runId: "run_items",
+      sequence: 2,
+      content: "Hello world",
+      isStreaming: false,
+      finishReason: null,
+    });
+    expect(state.tasksById.task_items.itemSequences["assistant:live:run_items:0"]).toBe(2);
+  });
+
+  it("creates distinct AssistantSegmentItems per stream_id", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_delta",
+        delta: "seg1",
+        stream_id: "assistant:run_items:0",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "assistant_delta",
+        delta: "seg2",
+        stream_id: "assistant:run_items:1",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      itemId: "assistant:assistant:run_items:0",
+      content: "seg1",
+    });
+    expect(items[1]).toMatchObject({
+      itemId: "assistant:assistant:run_items:1",
+      content: "seg2",
+    });
+  });
+
+  it("creates a ReasoningItem from assistant_reasoning_delta", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_reasoning_delta",
+        delta: "Thinking...",
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "reasoning",
+      itemId: "reasoning:run_items:0",
+      runId: "run_items",
+      content: "Thinking...",
+      isStreaming: true,
+    });
+  });
+
+  it("splits reasoning into a new segment after tool_started", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_reasoning_delta",
+        delta: "before tool",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_literature",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "assistant_reasoning_delta",
+        delta: "after tool",
+      }),
+    );
+
+    const reasoningItems = state.tasksById.task_items.items.filter(
+      (i) => i.kind === "reasoning",
+    );
+    expect(reasoningItems).toHaveLength(2);
+    expect(reasoningItems[0]).toMatchObject({
+      itemId: "reasoning:run_items:0",
+      content: "before tool",
+      isStreaming: false,
+    });
+    expect(reasoningItems[1]).toMatchObject({
+      itemId: "reasoning:run_items:1",
+      content: "after tool",
+      isStreaming: true,
+    });
+    expect(state.tasksById.task_items.currentReasoningSegmentByRun.run_items).toBe(1);
+  });
+
+  it("creates a ToolCallItem with arguments and status=running from tool_started", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        arguments: { query: "lung cancer", limit: 10 },
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "tool_call",
+      itemId: "tool:run_items:call_1",
+      toolCallId: "call_1",
+      toolName: "search_pubmed",
+      arguments: { query: "lung cancer", limit: 10 },
+      status: "running",
+      output: null,
+      completedSequence: null,
+    });
+  });
+
+  it("defaults arguments to null when tool_started omits the field", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+      }),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "tool_call",
+      arguments: null,
+    });
+  });
+
+  it("updates ToolCallItem to completed with output while preserving arguments", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        arguments: { query: "lung cancer" },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "tool_completed",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        output: "found 10 results",
+        is_error: false,
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "tool_call",
+      itemId: "tool:run_items:call_1",
+      status: "completed",
+      output: "found 10 results",
+      completedSequence: 2,
+      arguments: { query: "lung cancer" },
+    });
+  });
+
+  it("marks ToolCallItem as error on tool_completed with is_error=true", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "tool_started",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "tool_completed",
+        tool_call_id: "call_1",
+        tool_name: "search_pubmed",
+        output: "network error",
+        is_error: true,
+      }),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      status: "error",
+      output: "network error",
+    });
+  });
+
+  it("creates a StageItem with status=running from stage_started", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "stage",
+      itemId: "stage:run_items:discovery",
+      stage: "discovery",
+      status: "running",
+      attempt: 1,
+      error: null,
+    });
+  });
+
+  it("updates StageItem to completed on stage_completed", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        2,
+        {
+          type: "stage_completed",
+          stage: "discovery",
+          status: "succeeded",
+          output_digest: "a".repeat(64),
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "stage",
+      status: "completed",
+    });
+  });
+
+  it("updates StageItem to failed with error message on stage_failed", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "acquisition", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        2,
+        {
+          type: "stage_failed",
+          stage: "acquisition",
+          status: "failed",
+          error: {
+            code: "download_failed",
+            message: "GEO unavailable",
+            retryable: true,
+            stage: "acquisition",
+            details: {},
+          },
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "stage",
+      status: "failed",
+      error: "GEO unavailable",
+    });
+  });
+
+  it("updates StageItem to skipped on stage_skipped", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "processing", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        2,
+        {
+          type: "stage_skipped",
+          stage: "processing",
+          status: "skipped",
+          reason: "no data",
+          reused_stage_attempt_id: null,
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "stage",
+      status: "skipped",
+    });
+  });
+
+  it("creates a ProgressItem from stage_progress and upserts on update", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        2,
+        {
+          type: "stage_progress",
+          stage: "discovery",
+          kind: "records_discovered",
+          current: 5,
+          total: 10,
+          detail: {},
+        },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        3,
+        {
+          type: "stage_progress",
+          stage: "discovery",
+          kind: "records_discovered",
+          current: 8,
+          total: 10,
+          detail: {},
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    const progressItems = state.tasksById.task_items.items.filter(
+      (i) => i.kind === "progress",
+    );
+    expect(progressItems).toHaveLength(1);
+    expect(progressItems[0]).toMatchObject({
+      kind: "progress",
+      itemId: "progress:run_items:discovery:records_discovered",
+      stage: "discovery",
+      progressKind: "records_discovered",
+      current: 8,
+      total: 10,
+      sequence: 3,
+    });
+  });
+
+  it("creates a WarningItem from warning event", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "warning",
+        code: "rate_limit",
+        message: "Approaching rate limit",
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "warning",
+      itemId: "warning:1",
+      runId: "run_items",
+      code: "rate_limit",
+      message: "Approaching rate limit",
+    });
+  });
+
+  it("creates an ArtifactItem from artifact_produced", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "artifact_produced",
+        artifact: {
+          artifact_id: "artifact_1",
+          name: "result.csv",
+          relative_path: "artifacts/result.csv",
+          media_type: "text/csv",
+          size_bytes: 1024,
+          sha256: "a".repeat(64),
+          generated_by_step_id: "step_1",
+        },
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "artifact",
+      itemId: "artifact:run_items:artifact_1",
+      artifactId: "artifact_1",
+      name: "result.csv",
+      sizeBytes: 1024,
+      mediaType: "text/csv",
+    });
+  });
+
+  it("does not create items for run_queued, plan_ready, user_input_required, or conversation_compacted", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "run_queued",
+        request_id: "req_1",
+        input: "question",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "plan_ready",
+        specification: { topic: "test" },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "user_input_required",
+        request_id: "req_1",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 4, {
+        type: "conversation_compacted",
+        covered_through_run_id: "run_old",
+        summary_digest: "digest",
+      }),
+    );
+
+    expect(state.tasksById.task_items.items).toHaveLength(0);
+  });
+
+  it("deactivates streaming reasoning items on run_finalizing", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "assistant_reasoning_delta",
+        delta: "thinking",
+      }),
+    );
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "reasoning",
+      isStreaming: true,
+    });
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, { type: "run_finalizing" }),
+    );
+
+    expect(state.tasksById.task_items.items[0]).toMatchObject({
+      kind: "reasoning",
+      isStreaming: false,
+    });
+  });
+
+  it.each(["run_completed", "run_failed", "run_cancelled", "run_interrupted"] as const)(
+    "deactivates streaming reasoning items on %s",
+    (type) => {
+      let state = setup();
+      state = reduceRuntimeEvent(
+        state,
+        envelope("task_items", "run_items", 1, {
+          type: "assistant_reasoning_delta",
+          delta: "thinking",
+        }),
+      );
+      const terminalPayload: EventPayload =
+        type === "run_completed"
+          ? { type }
+          : type === "run_failed"
+            ? { type, error: "failed" }
+            : { type, reason: "stopped" };
+
+      state = reduceRuntimeEvent(
+        state,
+        envelope("task_items", "run_items", 2, terminalPayload),
+      );
+
+      expect(state.tasksById.task_items.items[0]).toMatchObject({
+        kind: "reasoning",
+        isStreaming: false,
+      });
+    },
+  );
+});

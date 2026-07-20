@@ -150,6 +150,82 @@ export interface AssistantStreamProjection {
   conflicts: AssistantStreamConflictDiagnostic[];
 }
 
+export interface ConversationItemBase {
+  itemId: string;
+  runId: string;
+  sequence: number;
+  createdAt: string;
+}
+
+export interface UserMessageItem extends ConversationItemBase {
+  kind: "user_message";
+  content: string;
+}
+
+export interface AssistantSegmentItem extends ConversationItemBase {
+  kind: "assistant_segment";
+  streamId: string;
+  content: string;
+  isStreaming: boolean;
+  finishReason: string | null;
+}
+
+export interface ReasoningItem extends ConversationItemBase {
+  kind: "reasoning";
+  content: string;
+  isStreaming: boolean;
+}
+
+export interface ToolCallItem extends ConversationItemBase {
+  kind: "tool_call";
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown> | null;
+  status: "running" | "completed" | "error";
+  output: string | null;
+  completedSequence: number | null;
+}
+
+export interface StageItem extends ConversationItemBase {
+  kind: "stage";
+  stage: StageName;
+  status: "running" | "completed" | "failed" | "skipped";
+  attempt: number;
+  error: string | null;
+}
+
+export interface ProgressItem extends ConversationItemBase {
+  kind: "progress";
+  stage: StageName;
+  progressKind: string;
+  current: number;
+  total: number | null;
+}
+
+export interface WarningItem extends ConversationItemBase {
+  kind: "warning";
+  code: string;
+  message: string;
+}
+
+export interface ArtifactItem extends ConversationItemBase {
+  kind: "artifact";
+  artifactId: string;
+  name: string;
+  sizeBytes: number;
+  mediaType: string;
+}
+
+export type ConversationItem =
+  | UserMessageItem
+  | AssistantSegmentItem
+  | ReasoningItem
+  | ToolCallItem
+  | StageItem
+  | ProgressItem
+  | WarningItem
+  | ArtifactItem;
+
 export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
@@ -167,6 +243,9 @@ export interface TaskProjection {
   pendingUserInput: PendingUserInput | null;
   lastSequence: number;
   hydration: "summary" | "snapshot" | "accepted";
+  items: ConversationItem[];
+  itemSequences: Record<string, number>;
+  currentReasoningSegmentByRun: Record<string, number>;
 }
 
 export interface AgentRuntimeData {
