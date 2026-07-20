@@ -46,6 +46,12 @@ class RunModelSettings(BaseModel):
     base_url: str
     api_key: str
     model_name: str
+    max_tokens: int
+    temperature: float
+    top_p: float
+    repetition_penalty: float
+    enable_search: bool
+    thinking_mode: bool
 
     @classmethod
     def from_user_settings(cls, settings: UserSettings) -> RunModelSettings:
@@ -55,6 +61,12 @@ class RunModelSettings(BaseModel):
             base_url=settings.base_url,
             api_key=settings.api_key,
             model_name=settings.model_name,
+            max_tokens=settings.max_tokens,
+            temperature=settings.advanced.temperature,
+            top_p=settings.advanced.top_p,
+            repetition_penalty=settings.advanced.repetition_penalty,
+            enable_search=settings.advanced.enable_search,
+            thinking_mode=settings.advanced.thinking_mode,
         )
 
     @classmethod

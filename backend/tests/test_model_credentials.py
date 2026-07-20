@@ -13,7 +13,8 @@ from app.agent_loop.model import (
     ModelConfigurationError,
     require_model_credentials,
 )
-from app.model_config import RunModelSettings, UserSettings
+from app.model_config import AdvancedParams, RunModelSettings, UserSettings
+from app.tools.network_safety import UnsafeUrlError
 
 
 def configure_model(
@@ -32,6 +33,7 @@ def configure_model(
     )
     runtime_getter = Mock(return_value=runtime_settings)
     monkeypatch.setattr(settings_manager, "get_settings", runtime_getter)
+    monkeypatch.setattr(model_module, "validate_public_http_url", lambda url: url)
     return runtime_getter
 
 
@@ -43,6 +45,82 @@ def test_agent_construction_succeeds_without_model_credentials(
     agent = create_agent()
 
     assert isinstance(agent.model, LazyDashScopeModel)
+
+
+def test_agent_receives_dashscope_generation_settings_from_run_snapshot() -> None:
+    # Given
+    run_settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="run-api-key",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model_name="qwq-32b",
+            max_tokens=2048,
+            advanced=AdvancedParams(
+                temperature=0.15,
+                top_p=0.55,
+                repetition_penalty=1.2,
+                enable_search=False,
+                thinking_mode=True,
+            ),
+        )
+    )
+
+    # When
+    agent = create_agent(model_settings=run_settings)
+
+    # Then
+    assert agent.model_settings.max_tokens == 2048
+    assert agent.model_settings.temperature == 0.15
+    assert agent.model_settings.top_p == 0.55
+    assert agent.model_settings.extra_body == {
+        "repetition_penalty": 1.2,
+        "enable_search": False,
+        "enable_thinking": True,
+    }
+
+
+def test_agent_omits_dashscope_only_settings_for_other_providers() -> None:
+    # Given
+    run_settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="run-api-key",
+            base_url="https://api.openai.com/v1",
+            model_name="gpt-4.1-mini",
+            advanced=AdvancedParams(
+                repetition_penalty=1.2,
+                enable_search=True,
+                thinking_mode=True,
+            ),
+        )
+    )
+
+    # When
+    agent = create_agent(model_settings=run_settings)
+
+    # Then
+    assert agent.model_settings.extra_body is None
+
+
+def test_agent_omits_dashscope_only_settings_when_qwen_uses_other_provider() -> None:
+    # Given
+    run_settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="run-api-key",
+            base_url="https://api.example.com/v1",
+            model_name="qwen-plus",
+            advanced=AdvancedParams(
+                repetition_penalty=1.2,
+                enable_search=True,
+                thinking_mode=True,
+            ),
+        )
+    )
+
+    # When
+    agent = create_agent(model_settings=run_settings)
+
+    # Then
+    assert agent.model_settings.extra_body is None
 
 
 def test_execution_guard_raises_stable_configuration_error_without_key(
@@ -68,6 +146,30 @@ def test_lazy_model_first_use_raises_stable_error_without_key(
 
     assert caught.value.code == "configuration_error"
     assert str(caught.value) == "DASHSCOPE_API_KEY is required to run the model"
+
+
+def test_build_delegate_rejects_non_public_base_url_before_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    model_settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="runtime-api-key",
+            base_url="http://127.0.0.1/v1",
+        )
+    )
+    client_factory = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
+    monkeypatch.setattr(
+        model_module,
+        "OpenAIChatCompletionsModel",
+        Mock(),
+    )
+
+    # When / Then
+    with pytest.raises(UnsafeUrlError):
+        model_module._build_delegate(model_settings)
+    client_factory.assert_not_called()
 
 
 @pytest.mark.asyncio

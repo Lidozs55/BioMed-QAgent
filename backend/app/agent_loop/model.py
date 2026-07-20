@@ -7,12 +7,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from agents import OpenAIChatCompletionsModel, set_tracing_disabled
+from agents import ModelSettings, OpenAIChatCompletionsModel, set_tracing_disabled
 from agents.models.interface import Model
 from openai import AsyncOpenAI
 
 from app import settings_manager
 from app.model_config import RunModelSettings, UserSettings
+from app.tools.network_safety import validate_public_http_url
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
     "run_model_settings",
@@ -40,6 +41,46 @@ def _resolve_model_settings(
             return RunModelSettings.from_user_settings(settings_manager.get_settings())
 
 
+def get_active_model_settings() -> RunModelSettings:
+    """Return the scoped Run snapshot or one standalone runtime snapshot."""
+
+    return _run_model_settings.get() or _resolve_model_settings(None)
+
+
+def build_sdk_model_settings(model_settings: RunModelSettings) -> ModelSettings:
+    """Translate one Run snapshot into Agents SDK request settings."""
+
+    extra_body = (
+        {
+            "repetition_penalty": model_settings.repetition_penalty,
+            "enable_search": model_settings.enable_search,
+            "enable_thinking": model_settings.thinking_mode,
+        }
+        if _uses_dashscope_compatible_qwen(model_settings)
+        else None
+    )
+    return ModelSettings(
+        max_tokens=model_settings.max_tokens,
+        temperature=model_settings.temperature,
+        top_p=model_settings.top_p,
+        extra_body=extra_body,
+    )
+
+
+def _uses_dashscope_compatible_qwen(model_settings: RunModelSettings) -> bool:
+    """Return whether DashScope-only request fields are valid for this Run."""
+
+    from urllib.parse import urlsplit
+
+    model_name = model_settings.model_name.lower()
+    parsed_url = urlsplit(model_settings.base_url)
+    return (
+        model_name.startswith(("qwen", "qwq"))
+        and parsed_url.hostname == "dashscope.aliyuncs.com"
+        and parsed_url.path.rstrip("/") == "/compatible-mode/v1"
+    )
+
+
 def require_model_credentials(
     model_settings: RunModelSettings | UserSettings | None = None,
 ) -> None:
@@ -57,9 +98,10 @@ def _build_delegate(
 ) -> OpenAIChatCompletionsModel:
     runtime_settings = _resolve_model_settings(model_settings)
     require_model_credentials(runtime_settings)
+    base_url = validate_public_http_url(runtime_settings.base_url)
     client = AsyncOpenAI(
         api_key=runtime_settings.api_key,
-        base_url=runtime_settings.base_url,
+        base_url=base_url,
     )
     return OpenAIChatCompletionsModel(
         model=runtime_settings.model_name,
