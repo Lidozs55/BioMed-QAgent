@@ -39,26 +39,34 @@ def test_get_settings_prefers_persisted_values_over_environment(
     assert loaded == persisted
 
 
-def test_get_settings_uses_environment_only_for_empty_persisted_fields(
+def test_get_settings_uses_environment_when_settings_file_is_absent(
     settings_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
-    settings_path.write_text(
-        UserSettings(base_url="", api_key="", model_name="qwen-plus").model_dump_json(),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("DASHSCOPE_BASE_URL", "https://environment.example/v1")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "environment-key")
-    monkeypatch.setenv("MODEL_NAME", "qwen-max")
 
     # When
     loaded = settings_manager.get_settings()
 
     # Then
-    assert loaded.base_url == "https://environment.example/v1"
     assert loaded.api_key == "environment-key"
-    assert loaded.model_name == "qwen-plus"
+
+
+def test_get_settings_keeps_explicitly_cleared_api_key_after_cache_reset(
+    settings_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "environment-key")
+    settings_manager.update_settings(UserSettings(api_key=""))
+
+    # When
+    monkeypatch.setattr(settings_manager, "_runtime_settings", None)
+    loaded = settings_manager.get_settings()
+
+    # Then
+    assert loaded.api_key == ""
 
 
 def test_update_settings_preserves_file_and_cache_when_atomic_replace_fails(

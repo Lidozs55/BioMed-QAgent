@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.routes import load_database_skills
@@ -140,6 +141,10 @@ def create_app(configured: Settings = settings) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost"],
     )
     application.include_router(routes_router)
     application.include_router(ws_router)

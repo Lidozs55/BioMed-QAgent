@@ -62,16 +62,24 @@ def _load_settings() -> UserSettings:
     if _SETTINGS_PATH.exists():
         try:
             data = json.loads(_SETTINGS_PATH.read_text("utf-8"))
-            return _apply_env_fallback(UserSettings(**data))
+            settings = UserSettings(**data)
+            return _apply_env_fallback(
+                settings,
+                use_environment_api_key="api_key" not in data,
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.warning("Failed to parse user settings file, using defaults: %s", exc)
     return _apply_env_fallback(UserSettings())
 
 
-def _apply_env_fallback(settings: UserSettings) -> UserSettings:
+def _apply_env_fallback(
+    settings: UserSettings,
+    *,
+    use_environment_api_key: bool = True,
+) -> UserSettings:
     """Fill in empty fields from environment variables (DashScope defaults)."""
     kwargs = settings.model_dump()
-    if not kwargs.get("api_key"):
+    if use_environment_api_key and not kwargs.get("api_key"):
         kwargs["api_key"] = os.getenv("DASHSCOPE_API_KEY", "")
     if not kwargs.get("base_url"):
         kwargs["base_url"] = os.getenv(
