@@ -210,13 +210,21 @@ async def list_models(
                 )
             else:
                 inferred = infer_capabilities(mid)
+                # Use model-family-specific defaults for API-discovered models
+                ml = mid.lower()
+                if ml.startswith("deepseek"):
+                    cw, smt = 1_000_000, 8_192
+                elif "qwen" in ml:
+                    cw, smt = 128_000, 8_192
+                else:
+                    cw, smt = 32_768, 4_096
                 result.append(
-                    AvailableModelEntry(
-                        id=mid, name=mid,
-                        description="通过 API 发现的模型",
-                        context_window=4096,
-                        suggested_max_tokens=4096,
-                        capabilities=inferred.model_dump() if inferred else {"text": True, "image": False, "video": False, "audio": False},
+                   AvailableModelEntry(
+                       id=mid, name=mid,
+                       description="通过 API 发现的模型",
+                        context_window=cw,
+                        suggested_max_tokens=smt,
+                       capabilities=inferred.model_dump() if inferred else {"text": True, "image": False, "video": False, "audio": False},
                         recommended=False,
                         api_available=True,
                         capability_source="api",

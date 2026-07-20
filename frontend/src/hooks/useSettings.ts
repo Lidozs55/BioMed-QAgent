@@ -184,8 +184,7 @@ export function useSettings() {
         if (mountedRef.current) setSaving(false)
       }
     },
-    [fetchModels],
-    [fetchModels, refreshModels],
+    [refreshModels],
   )
 
   useEffect(() => {

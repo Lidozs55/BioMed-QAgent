@@ -1,10 +1,13 @@
 ﻿import {
-  ArrowLeftIcon,
-  CheckCircleIcon,
-  EyeClosedIcon,
-  EyeIcon,
-  SlidersIcon,
-  XCircleIcon,
+ ArrowLeftIcon,
+ CheckCircleIcon,
+ EyeClosedIcon,
+ EyeIcon,
+  Image,
+ SlidersIcon,
+  SpeakerHigh,
+  VideoCamera,
+ XCircleIcon,
 } from "@phosphor-icons/react"
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -39,10 +42,10 @@ interface SettingsPanelProps {
   error: string | null
   onSave: (payload: Record<string, unknown>) => Promise<void>
   onClose: () => void
-  onFetchModels: (query?: string) => Promise<void>
+  onFetchModels: (query?: string, baseUrl?: string, apiKey?: string) => Promise<void>
 }
 
-function CapabilityBadge({ label, supported }: { label: string; supported: boolean }) {
+function CapabilityBadge({ label, supported, icon: Icon }: { label: string; supported: boolean; icon?: React.ElementType }) {
   return (
     <span className={cn(
       "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
@@ -50,7 +53,7 @@ function CapabilityBadge({ label, supported }: { label: string; supported: boole
         ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
         : "bg-muted text-muted-foreground line-through",
     )}>
-      {supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />}
+      {Icon ? <Icon weight="fill" className="size-3" /> : (supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />)}
       {label}
     </span>
   )
@@ -82,10 +85,10 @@ function ModelInfoCard({ model }: { model: ModelInfo }) {
       <div className="mt-3">
         <span className="text-xs text-muted-foreground">多模态能力</span>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          <CapabilityBadge label="文本" supported={model.capabilities.text} />
-          <CapabilityBadge label="图像" supported={model.capabilities.image} />
-          <CapabilityBadge label="视频" supported={model.capabilities.video} />
-          <CapabilityBadge label="音频" supported={model.capabilities.audio} />
+         <CapabilityBadge label="文本" supported={model.capabilities.text} />
+          <CapabilityBadge icon={Image} label="图像" supported={model.capabilities.image} />
+          <CapabilityBadge icon={VideoCamera} label="视频" supported={model.capabilities.video} />
+          <CapabilityBadge icon={SpeakerHigh} label="音频" supported={model.capabilities.audio} />
         </div>
       </div>
     </div>
@@ -115,25 +118,30 @@ export function SettingsPanel({
   const [selectedVendor, setSelectedVendor] = useState<string | null>(null)
 
   useEffect(() => {
-    if (initialSettings) {
-      setBaseUrl(initialSettings.base_url)
-      setApiKey(initialSettings.api_key)
-      setModelName(initialSettings.model_name)
-      setMaxTokens(initialSettings.max_tokens)
-      setTemperature(initialSettings.advanced?.temperature ?? 0.7)
-      setTopP(initialSettings.advanced?.top_p ?? 1.0)
-      setRepPenalty(initialSettings.advanced?.repetition_penalty ?? 1.0)
-      setEnableSearch(initialSettings.advanced?.enable_search ?? false)
-      setThinkingMode(initialSettings.advanced?.thinking_mode ?? false)
-    }
-  }, [initialSettings])
+   if (initialSettings) {
+     setBaseUrl(initialSettings.base_url)
+     setApiKey(initialSettings.api_key)
+      setApiKeyInput(initialSettings.api_key ?? "")
+     setModelName(initialSettings.model_name)
+     setMaxTokens(initialSettings.max_tokens)
+     setTemperature(initialSettings.advanced?.temperature ?? 0.7)
+     setTopP(initialSettings.advanced?.top_p ?? 1.0)
+     setRepPenalty(initialSettings.advanced?.repetition_penalty ?? 1.0)
+     setEnableSearch(initialSettings.advanced?.enable_search ?? false)
+     setThinkingMode(initialSettings.advanced?.thinking_mode ?? false)
+   }
+ }, [initialSettings])
 
   useEffect(() => {
     const matched = vendors.find((v) => v.base_url.replace(/\/$/, "") === baseUrl.replace(/\/$/, ""))
     setSelectedVendor(matched?.id ?? "custom")
     // Fetch models with current input values (empty = no models shown)
-    void onFetchModels(undefined, baseUrl || "", apiKeyInput || "")
-  }, [baseUrl, vendors, apiKeyInput])
+    // Fetch models only when user actively edits the API key (not pre-filled masked key).
+    // Saved models are already loaded by refreshModels() after save.
+    if (apiKeyInput && apiKeyInput !== initialSettings?.api_key) {
+      void onFetchModels(undefined, baseUrl || "", apiKeyInput)
+    }
+  }, [baseUrl, vendors, apiKeyInput, initialSettings?.api_key])
 
   const selectedModel = models.find((m) => m.id === modelName)
   const filteredModels = models.filter((m) =>
@@ -144,14 +152,19 @@ export function SettingsPanel({
   
 
   const handleSave = useCallback(async () => {
-    if (selectedVendor === "custom" && !modelName.trim()) {
+    if (!modelName.trim()) {
       setModelError("请填写模型名称，例如 qwen-plus")
+      return
+    }
+    if (models.length > 0 && !models.find(m => m.id === modelName)) {
+      setModelError(`模型名称 "${modelName}" 不在可用列表中，请检查拼写是否正确，或从下拉菜单中选择`)
       return
     }
     setModelError(null)
     const payload: Record<string, unknown> = {}
     if (baseUrl !== initialSettings?.base_url) payload.base_url = baseUrl
-    if (apiKeyInput) payload.api_key = apiKeyInput
+    // Only send API key if user typed a new value (not the pre-filled masked key)
+    if (apiKeyInput && apiKeyInput !== initialSettings?.api_key) payload.api_key = apiKeyInput
     if (modelName !== initialSettings?.model_name) payload.model_name = modelName
     if (maxTokens !== initialSettings?.max_tokens) payload.max_tokens = maxTokens
     if (temperature !== (initialSettings?.advanced?.temperature ?? 0.7)) payload.temperature = temperature
@@ -232,9 +245,18 @@ export function SettingsPanel({
             <div className="mt-4 space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="settings-baseurl">Base URL</Label>
-                <Input id="settings-baseurl" value={baseUrl}
-                  onChange={(e) => { setBaseUrl(e.target.value); setSelectedVendor("custom"); markDirty() }}
-                  placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+                <div className="relative">
+                  <Input id="settings-baseurl" value={baseUrl}
+                    onChange={(e) => { setBaseUrl(e.target.value); setSelectedVendor("custom"); markDirty() }}
+                    placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+                  {!baseUrl && (
+                    <button type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-primary hover:text-primary/80 font-medium"
+                      onClick={() => { setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1"); setSelectedVendor("custom"); markDirty() }}>
+                      填入默认
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="settings-apikey">API Key</Label>
@@ -259,7 +281,7 @@ export function SettingsPanel({
             <div className="mt-4 space-y-1.5">
               <Label htmlFor="settings-model">模型</Label>
               <div className="relative">
-                {selectedVendor === "custom" ? (
+                {models.length === 0 ? (
                   <Input
                     id="settings-model"
                     value={modelName}
@@ -275,9 +297,9 @@ export function SettingsPanel({
                       {modelsLoading ? (
                         <span className="flex items-center gap-2 text-muted-foreground"><Spinner className="size-3.5" />加载模型列表中...</span>
                       ) : (
-                         <span>{(apiKeyInput || apiKey) ? ((selectedModel?.name ?? modelName) || "选择模型") : "请先配置 API Key"}</span>
+                         <span>{(apiKeyInput || apiKey) ? (selectedModel?.name || "选择模型") : "请先配置 API Key"}</span>
                        )}
-                      <span className="text-xs text-muted-foreground">{models.length > 0 ? models.length + " 个可用" : "请输入 API Key"}</span>
+                      <span className="text-xs text-muted-foreground">{models.length > 0 ? models.length + " 个可用" : ((apiKeyInput || apiKey) ? "暂无可用模型" : "请输入 API Key")}</span>
                     </button>
                     {showModelDropdown && (
                       <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border bg-popover shadow-md">
@@ -299,11 +321,19 @@ export function SettingsPanel({
                               <div className="ml-3 flex shrink-0 gap-1.5">
                                 {model.capabilities.image && (
                                   <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
+                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><Image weight="fill" className="size-3" /></span>
                                   </TooltipTrigger><TooltipContent>支持图像</TooltipContent></Tooltip></TooltipProvider>
                                 )}
-                                {model.capabilities.video && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">视</span>}
-                                {model.capabilities.audio && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">音</span>}
+                                {model.capabilities.video && (
+                                  <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><VideoCamera weight="fill" className="size-3" /></span>
+                                  </TooltipTrigger><TooltipContent>支持视频</TooltipContent></Tooltip></TooltipProvider>
+                                )}
+                                {model.capabilities.audio && (
+                                  <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                                    <span className="rounded bg-emerald-100 p-1 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"><SpeakerHigh weight="fill" className="size-3" /></span>
+                                  </TooltipTrigger><TooltipContent>支持音频</TooltipContent></Tooltip></TooltipProvider>
+                                )}
                               </div>
                             </button>
                           ))}
