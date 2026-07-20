@@ -44,7 +44,11 @@ _PROVIDER_DISCOVERY_FAILURE_DETAIL: Final = "Model provider discovery failed"
 def _get_http_client() -> AsyncClient:
     global _httpx_client
     if _httpx_client is None:
-        _httpx_client = AsyncClient(timeout=10.0, follow_redirects=False)
+        _httpx_client = AsyncClient(
+            timeout=10.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
     return _httpx_client
 
 

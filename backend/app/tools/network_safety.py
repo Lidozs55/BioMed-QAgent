@@ -65,7 +65,10 @@ def resolve_public_http_target(
             raise UnsafeUrlError(f"URL resolved to a non-public address: {resolved_ip}")
         resolved_addresses.append(resolved_ip)
 
-    resolved_ip = resolved_addresses[0]
+    resolved_ip = next(
+        (address for address in resolved_addresses if address.version == 4),
+        resolved_addresses[0],
+    )
     ip_literal = f"[{resolved_ip}]" if resolved_ip.version == 6 else str(resolved_ip)
     default_port = 443 if parsed.scheme == "https" else 80
     connect_netloc = ip_literal if port == default_port else f"{ip_literal}:{port}"

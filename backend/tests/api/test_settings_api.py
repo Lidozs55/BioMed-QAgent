@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
 from urllib.parse import urlsplit
 
 import app.api.settings_router as settings_router
@@ -33,6 +34,22 @@ def _set_current_settings(
     settings: UserSettings,
 ) -> None:
     monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+
+
+def test_provider_http_client_ignores_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Mock()
+    client_factory = Mock(return_value=client)
+    monkeypatch.setattr(settings_router, "AsyncClient", client_factory)
+    monkeypatch.setattr(settings_router, "_httpx_client", None)
+
+    assert settings_router._get_http_client() is client
+    client_factory.assert_called_once_with(
+        timeout=10.0,
+        follow_redirects=False,
+        trust_env=False,
+    )
 
 
 def _passthrough_target(url: str, *, require_https: bool) -> PublicHttpTarget:
