@@ -429,7 +429,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="flex max-h-[calc(100svh-2rem)] min-h-0 w-[min(70rem,calc(100vw-2rem))] max-w-none flex-col" showCloseButton>
+        <DialogContent className="flex max-h-[calc(100svh-2rem)] min-h-0 w-[min(90rem,calc(100vw-2rem))] max-w-none sm:max-w-none flex-col" showCloseButton>
           <DialogHeader>
             <DialogTitle>设置</DialogTitle>
             <DialogDescription>管理模型连接、数据库目录和 Agent 技能。</DialogDescription>
