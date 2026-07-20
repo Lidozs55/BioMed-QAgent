@@ -41,61 +41,61 @@ async def search_pubmed_adapter(
     *,
     services: NcbiServices,
 ) -> str:
-    """Adapt typed PubMed discovery output to the existing Skill JSON wire shape."""
+    """Adapt typed PubMed discovery output to the existing Skill JSON wire shape.
+
+    Raises the underlying exception on failure so the Agents SDK marks the
+    tool_output as ``is_error=True`` and the frontend ToolCallStep renders the
+    error state. Previously the adapter swallowed the exception and returned a
+    JSON body with ``error``/``total_count=0``, which caused the SDK to report
+    success while the LLM (and user) saw an empty result with no visible error.
+    """
 
     try:
         result = await discover_pubmed(services.eutils, query, max_results)
-        run_ctx.log_query(
-            query=query,
-            source="pubmed",
-            status=QueryStatus.SUCCESS,
-            records_count=len(result.records),
-        )
-        # Surface mid-stage progress so the frontend can show
-        # "PubMed: found N papers (of M total hits)" without waiting for
-        # stage_completed. See docs/REVIEW_2026-07-18.md §4.
-        await run_ctx.emit_progress(
-            stage=StageName.DISCOVERY,
-            kind="discovered_records",
-            current=len(result.records),
-            total=result.total_count,
-            detail={"source": "pubmed", "query": query},
-        )
-        records = [{
-            "title": record.title,
-            "abstract": record.abstract,
-            "authors": "; ".join(record.authors),
-            "journal": record.journal,
-            "pub_date": (
-                record.published_at.isoformat() if record.published_at else ""
-            ),
-            "doi": record.doi or "",
-            "pmid": record.pmid,
-            "pmcid": record.pmcid or "",
-            "is_open_access": bool(record.pmcid),
-            "source_url": record.source_url,
-        } for record in result.records]
-        return json.dumps(
-            {
-                "source": "pubmed",
-                "query": result.query,
-                "query_translation": result.query_translation,
-                "total_count": result.total_count,
-                "records": records,
-            },
-            ensure_ascii=False,
-        )
-    except Exception as exc:
+    except Exception:
         logger.exception("PubMed search failed for query=%r", query)
         run_ctx.log_query(query, "pubmed", QueryStatus.FAILED, 0)
-        return json.dumps({
+        raise
+    run_ctx.log_query(
+        query=query,
+        source="pubmed",
+        status=QueryStatus.SUCCESS,
+        records_count=len(result.records),
+    )
+    # Surface mid-stage progress so the frontend can show
+    # "PubMed: found N papers (of M total hits)" without waiting for
+    # stage_completed. See docs/REVIEW_2026-07-18.md §4.
+    await run_ctx.emit_progress(
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=len(result.records),
+        total=result.total_count,
+        detail={"source": "pubmed", "query": query},
+    )
+    records = [{
+        "title": record.title,
+        "abstract": record.abstract,
+        "authors": "; ".join(record.authors),
+        "journal": record.journal,
+        "pub_date": (
+            record.published_at.isoformat() if record.published_at else ""
+        ),
+        "doi": record.doi or "",
+        "pmid": record.pmid,
+        "pmcid": record.pmcid or "",
+        "is_open_access": bool(record.pmcid),
+        "source_url": record.source_url,
+    } for record in result.records]
+    return json.dumps(
+        {
             "source": "pubmed",
-            "query": query,
-            "query_translation": "",
-            "total_count": 0,
-            "records": [],
-            "error": str(exc),
-        }, ensure_ascii=False)
+            "query": result.query,
+            "query_translation": result.query_translation,
+            "total_count": result.total_count,
+            "records": records,
+        },
+        ensure_ascii=False,
+    )
 
 
 @function_tool(
