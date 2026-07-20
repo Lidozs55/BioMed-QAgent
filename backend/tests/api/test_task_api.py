@@ -15,7 +15,7 @@ async def test_database_api_lists_only_user_selectable_data_sources(
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.get("/api/v1/databases")
 

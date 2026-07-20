@@ -32,7 +32,7 @@ async def api_client(
     application = create_app(Settings(output_dir=str(tmp_path / "isolated-output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         yield application, client
 
@@ -319,7 +319,7 @@ async def test_unexpected_manifest_storage_error_remains_500(
                 app=application,
                 raise_app_exceptions=False,
             ),
-            base_url="http://test",
+            base_url="http://localhost",
         ) as client:
             response = await client.get("/api/v1/tasks/task_storage_error/artifacts")
 

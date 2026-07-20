@@ -24,7 +24,7 @@ def application() -> FastAPI:
 def _api_client(application: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application, raise_app_exceptions=False),
-        base_url="http://testserver",
+        base_url="http://localhost",
     )
 
 

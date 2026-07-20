@@ -75,7 +75,7 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     )
     settings_getter = Mock(return_value=initial_settings)
     monkeypatch.setattr(settings_manager, "get_settings", settings_getter)
-    client = object()
+    client = SimpleNamespace(close=AsyncMock())
     delegate = SimpleNamespace(
         stream_response=Mock(return_value="stream"),
         close=AsyncMock(),
@@ -84,7 +84,7 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     delegate_factory = Mock(return_value=delegate)
     monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
     monkeypatch.setattr(model_module, "OpenAIChatCompletionsModel", delegate_factory)
-    monkeypatch.setattr(model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
     context = RunContext(
         task_id="task_model_snapshot",
         base_dir=tmp_path,
@@ -164,7 +164,7 @@ def test_attachment_agent_uses_active_run_settings_snapshot(
     delegate_factory = Mock(return_value=Mock(stream_response=Mock(return_value="stream")))
     monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
     monkeypatch.setattr(model_module, "OpenAIChatCompletionsModel", delegate_factory)
-    monkeypatch.setattr(model_module, "validate_public_http_url", lambda url: url)
+    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
 
     # When
     with run_model_settings_scope(RunModelSettings.from_user_settings(run_settings)):
