@@ -111,3 +111,37 @@ async def test_validate_and_upload_python_package_warn_about_local_code(
     assert "executes local Python code" in validated.json()["warning"]
     assert uploaded.status_code == 200
     assert uploaded.json()["skill"]["name"] == "demo_db"
+
+
+@pytest.mark.asyncio
+async def test_declarative_database_convenience_crud(tmp_path: Path) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post("/api/v1/databases", json=_manifest())
+        updated = await client.put(
+            "/api/v1/databases/demo_db", json=_manifest(version="2.0.0")
+        )
+        deleted = await client.delete("/api/v1/databases/demo_db")
+
+    assert created.status_code == 200 and created.json()["generation"] > 0
+    assert updated.status_code == 200 and updated.json()["skill"]["version"] == "2.0.0"
+    assert deleted.status_code == 200 and deleted.json()["generation"] > updated.json()["generation"]
+
+
+@pytest.mark.asyncio
+async def test_multipart_upload_is_rejected_at_compressed_byte_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.api.skills.MAX_SKILL_UPLOAD_BYTES", 8)
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills/validate",
+            files={"file": ("manifest.json", b"{" + b"x" * 100, "application/json")},
+        )
+
+    assert response.status_code == 413

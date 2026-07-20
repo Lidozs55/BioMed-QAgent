@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import io
@@ -17,7 +18,7 @@ from importlib import metadata
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 import yaml
@@ -72,6 +73,9 @@ class HttpOperationManifest(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url_template(cls, value: str) -> str:
+        original = urlsplit(value)
+        if _PLACEHOLDER.search(original.netloc):
+            raise ValueError("operation URL authority cannot contain placeholders")
         rendered = _PLACEHOLDER.sub("placeholder", value)
         parsed = urlsplit(rendered)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -80,6 +84,13 @@ class HttpOperationManifest(BaseModel):
             raise ValueError("operation URL credentials are not allowed")
         if parsed.hostname.lower() == "localhost":
             raise ValueError("operation URL must use a public hostname")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def _validate_header_names(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if any(_PLACEHOLDER.search(name) or "\r" in name or "\n" in name for name in value):
+            raise ValueError("header names must be fixed manifest values")
         return value
 
 
@@ -217,6 +228,60 @@ class SkillPackageLoader:
                 descriptor = self._adapt_python_export(exported, manifest, package_hash)
         return LoadedZipPackage(descriptor=descriptor, module_name=module_name)
 
+    def validate_zip(self, content: bytes) -> LoadedZipPackage:
+        """Validate ZIP structure, metadata, dependencies, and Python syntax only."""
+        package_hash = hashlib.sha256(content).hexdigest()
+        module_name = f"_biomed_user_skill_{package_hash}"
+        manifest, source = self._inspect_zip(content)
+        try:
+            ast.parse(source, filename="skill.py")
+        except SyntaxError as error:
+            raise PackageValidationError(f"Python entrypoint syntax is invalid: {error}") from error
+        descriptor = SkillDescriptor(
+            name=manifest.name,
+            display_name=manifest.display_name,
+            version=manifest.version,
+            category=manifest.category,
+            description=manifest.description,
+            origin="package",
+            supported_sources=manifest.supported_sources,
+            operations=(),
+            enabled=manifest.enabled,
+            user_selectable=manifest.user_selectable,
+            pipeline_supported=False,
+            requirements=manifest.requirements,
+            entrypoint=manifest.entrypoint,
+            package_hash=package_hash,
+        )
+        return LoadedZipPackage(descriptor=descriptor, module_name=module_name)
+
+    def _inspect_zip(self, content: bytes) -> tuple[SkillManifest, str]:
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(content))
+        except (zipfile.BadZipFile, OSError) as error:
+            raise PackageValidationError("package is not a valid ZIP archive") from error
+        with archive:
+            infos = archive.infolist()
+            files = [info for info in infos if not info.is_dir()]
+            if len(files) > self._max_zip_files:
+                raise PackageValidationError("ZIP file-count limit exceeded")
+            if sum(info.file_size for info in files) > self._max_zip_bytes:
+                raise PackageValidationError("ZIP uncompressed size limit exceeded")
+            for info in infos:
+                self._validate_zip_member(info)
+            names = {info.filename for info in files}
+            if "manifest.json" not in names or "skill.py" not in names:
+                raise PackageValidationError("ZIP requires manifest.json and skill.py")
+            try:
+                manifest = SkillManifest.model_validate_json(archive.read("manifest.json"))
+                source = archive.read("skill.py").decode("utf-8")
+            except (UnicodeDecodeError, ValueError) as error:
+                raise PackageValidationError("Python package manifest is invalid") from error
+        if manifest.entrypoint != _FIXED_ENTRYPOINT:
+            raise PackageValidationError("Python entrypoint must be skill.py:skill")
+        self._validate_requirements(manifest.requirements)
+        return manifest, source
+
     def _build_http_tool(self, operation: HttpOperationManifest) -> FunctionTool:
         parameters = sorted(_collect_placeholders(operation.model_dump(exclude={"auth"})))
         schema = {
@@ -231,10 +296,12 @@ class SkillPackageLoader:
                 arguments = json.loads(arguments_json)
                 if not isinstance(arguments, dict):
                     raise ValueError("arguments must be an object")
-                url = _render_template(operation.url, arguments)
+                url = _render_url(operation.url, arguments)
                 validate_public_http_url(url)
                 query = _render_value(operation.query, arguments)
                 headers = _render_value(operation.headers, arguments)
+                if any("\r" in str(value) or "\n" in str(value) for value in headers.values()):
+                    raise ValueError("header values cannot contain CR/LF")
                 body = _render_value(operation.body, arguments)
                 if operation.auth is not None:
                     secret = self._secrets.get(operation.auth.reference)
@@ -385,6 +452,17 @@ def _render_template(template: str, arguments: Mapping[str, Any]) -> str:
         return _PLACEHOLDER.sub(lambda match: str(arguments[match.group(1)]), template)
     except KeyError as error:
         raise ValueError(f"missing template argument: {error.args[0]}") from error
+
+
+def _render_url(template: str, arguments: Mapping[str, Any]) -> str:
+    parsed = urlsplit(template)
+    try:
+        path = _PLACEHOLDER.sub(
+            lambda match: quote(str(arguments[match.group(1)]), safe=""), parsed.path
+        )
+    except KeyError as error:
+        raise ValueError(f"missing template argument: {error.args[0]}") from error
+    return parsed._replace(path=path).geturl()
 
 
 def _render_value(value: Any, arguments: Mapping[str, Any]) -> Any:

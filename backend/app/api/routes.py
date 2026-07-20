@@ -32,6 +32,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from app.api.skills import SkillStoreDep
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
@@ -55,6 +56,7 @@ from app.runtime.manager import (
 )
 from app.runtime.repository import TaskRepository
 from app.skills.catalog import SkillCatalog
+from app.skills.store import StoreMutation
 from app.tools.workdir import create_task_workdir
 
 router = APIRouter(prefix="/api/v1")
@@ -194,6 +196,37 @@ async def get_databases(request: Request) -> dict:
             }
         )
     return {"databases": databases}
+
+
+@router.post("/databases", response_model=StoreMutation)
+async def create_database(body: dict[str, object], store: SkillStoreDep) -> StoreMutation:
+    """Create a declarative user database through the shared skill store."""
+    try:
+        return store.put_manifest(body)
+    except (ValueError, FileExistsError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.put("/databases/{name}", response_model=StoreMutation)
+async def update_database(
+    name: str, body: dict[str, object], store: SkillStoreDep
+) -> StoreMutation:
+    if body.get("name") != name:
+        raise HTTPException(status_code=409, detail="Path and manifest names differ")
+    try:
+        return store.put_manifest(body)
+    except (ValueError, FileExistsError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.delete("/databases/{name}", response_model=StoreMutation)
+async def delete_database(name: str, store: SkillStoreDep) -> StoreMutation:
+    try:
+        return store.delete(name)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Database not found") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 # ---------------------------------------------------------------------------

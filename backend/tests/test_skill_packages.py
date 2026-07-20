@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -278,3 +279,85 @@ def test_zip_loader_uses_content_hash_module_name_and_warns_local_code(
     assert first.module_name != second.module_name
     assert first.module_name.startswith("_biomed_user_skill_")
     assert "executes local Python code" in first.warning
+
+
+@pytest.mark.parametrize("mutation", ["put", "disable", "delete", "rollback"])
+def test_publish_failure_restores_state_files_cache_and_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    catalog = SkillCatalog()
+    store = UserSkillStore(tmp_path / "skills", catalog=catalog, builtins=(_builtin(),))
+    store.put_manifest(_manifest(version="1.0.0"))
+    if mutation == "rollback":
+        store.put_manifest(_manifest(version="2.0.0"))
+    before_snapshot = catalog.snapshot()
+    before_state = (tmp_path / "skills" / "state.json").read_bytes()
+    before_files = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+
+    def fail_publish(_descriptors: object) -> object:
+        raise RuntimeError("publish failed")
+
+    monkeypatch.setattr(store, "_publish", fail_publish)
+    with pytest.raises(RuntimeError, match="publish failed"):
+        if mutation == "put":
+            store.put_manifest(_manifest(version="3.0.0"))
+        elif mutation == "disable":
+            store.set_enabled("demo_db", enabled=False)
+        elif mutation == "delete":
+            store.delete("demo_db")
+        else:
+            store.rollback("demo_db")
+
+    assert catalog.snapshot() is before_snapshot
+    assert (tmp_path / "skills" / "state.json").read_bytes() == before_state
+    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before_files
+
+
+@pytest.mark.asyncio
+async def test_http_templates_encode_path_and_reject_authority_and_header_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    loader = SkillPackageLoader(
+        secrets={"DEMO_TOKEN": "secret"},
+        http_transport=httpx.MockTransport(handler),
+    )
+    safe = _manifest()
+    safe["operations"][0]["headers"] = {"X-Value": "{query}"}
+    safe["operations"][0].pop("extract")
+    descriptor = loader.load_manifest(safe)
+    tool = descriptor.resolve_operation("fetch_record")
+    assert tool is not None
+    await tool.on_invoke_tool(
+        RunContextWrapper(RunContext(task_id="safe")),
+        json.dumps({"record_id": "a/b?admin=true", "query": "x&admin=true"}),
+    )
+    assert requests[0].url.raw_path.split(b"?", 1)[0] == b"/records/a%2Fb%3Fadmin%3Dtrue"
+    assert requests[0].url.params["q"] == "x&admin=true"
+
+    with pytest.raises(PackageValidationError):
+        await tool.on_invoke_tool(
+            RunContextWrapper(RunContext(task_id="safe")),
+            json.dumps({"record_id": "ok", "query": "bad\r\nInjected: yes"}),
+        )
+
+    authority = _manifest()
+    authority["operations"][0]["url"] = "https://{record_id}/records"
+    with pytest.raises(PackageValidationError, match="authority"):
+        loader.load_manifest(authority)
+
+
+def test_static_zip_validation_does_not_execute_python(tmp_path: Path) -> None:
+    marker = tmp_path / "executed.txt"
+    manifest = {**_manifest(), "operations": [], "origin": "package", "entrypoint": "skill.py:skill", "requirements": []}
+    source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+    loader = SkillPackageLoader()
+    result = loader.validate_zip(_zip_package(manifest, source))
+    assert result.descriptor.manifest.name == "demo_db"
+    assert not marker.exists()

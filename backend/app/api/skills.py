@@ -12,6 +12,7 @@ from app.skills.packages import PackageValidationError, parse_manifest_document
 from app.skills.store import SkillDetail, StoreMutation, UserSkillStore
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
+MAX_SKILL_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def get_skill_store(request: Request) -> UserSkillStore:
@@ -88,7 +89,7 @@ async def delete_skill(name: str, store: SkillStoreDep) -> StoreMutation:
 async def validate_skill(
     file: Annotated[UploadFile, File()], store: SkillStoreDep
 ) -> ValidationResponse:
-    content = await file.read()
+    content = await _read_bounded(file)
     try:
         if (file.filename or "").lower().endswith(".zip"):
             descriptor = store.validate_zip(content)
@@ -112,7 +113,7 @@ async def validate_skill(
 async def upload_skill(
     file: Annotated[UploadFile, File()], store: SkillStoreDep
 ) -> StoreMutation:
-    content = await file.read()
+    content = await _read_bounded(file)
     try:
         if (file.filename or "").lower().endswith(".zip"):
             return store.put_zip(content)
@@ -147,7 +148,7 @@ async def put_skill_package(
     file: Annotated[UploadFile, File()],
     store: SkillStoreDep,
 ) -> StoreMutation:
-    content = await file.read()
+    content = await _read_bounded(file)
     try:
         descriptor = store.validate_zip(content)
         if descriptor.name != name:
@@ -168,3 +169,16 @@ def _set_enabled(store: UserSkillStore, name: str, *, enabled: bool) -> StoreMut
         raise HTTPException(status_code=404, detail="Skill not found") from error
     except PermissionError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+async def _read_bounded(file: UploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(min(64 * 1024, MAX_SKILL_UPLOAD_BYTES + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > MAX_SKILL_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Skill upload is too large")
+        chunks.append(chunk)

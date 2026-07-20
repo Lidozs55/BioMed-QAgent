@@ -137,9 +137,7 @@ class UserSkillStore:
         return self._loader.load_manifest(raw)
 
     def validate_zip(self, content: bytes) -> SkillDescriptor:
-        return self._loader.load_zip(
-            content, extraction_root=self.root / ".validate"
-        ).descriptor
+        return self._loader.validate_zip(content).descriptor
 
     def set_enabled(self, name: str, *, enabled: bool) -> StoreMutation:
         with self._lock:
@@ -148,8 +146,7 @@ class UserSkillStore:
                 package.model_copy(update={"enabled": enabled})
             )
             descriptors = self._load_all(state)
-            self._commit_state(state)
-            snapshot = self._publish(descriptors)
+            snapshot = self._commit_and_publish(state, descriptors)
             return StoreMutation(
                 generation=snapshot.generation,
                 skill=snapshot.skills[name].manifest,
@@ -169,8 +166,7 @@ class UserSkillStore:
             )
             state = self._replace_package(updated)
             descriptors = self._load_all(state)
-            self._commit_state(state)
-            snapshot = self._publish(descriptors)
+            snapshot = self._commit_and_publish(state, descriptors)
             return StoreMutation(
                 generation=snapshot.generation,
                 skill=snapshot.skills[name].manifest,
@@ -185,8 +181,7 @@ class UserSkillStore:
             del packages[name]
             state = self._state.model_copy(update={"packages": packages})
             descriptors = self._load_all(state)
-            self._commit_state(state)
-            snapshot = self._publish(descriptors)
+            snapshot = self._commit_and_publish(state, descriptors)
             shutil.rmtree(self.root / "packages" / name, ignore_errors=True)
             for key in [key for key in self._loaded if key[0] == name]:
                 del self._loaded[key]
@@ -231,10 +226,10 @@ class UserSkillStore:
             try:
                 descriptors = self._load_all(state)
                 self._atomic_write(self.root / relative, content)
-                self._commit_state(state)
-                snapshot = self._publish(descriptors)
+                snapshot = self._commit_and_publish(state, descriptors)
             except Exception:
                 self._loaded.pop((descriptor.name, version_id), None)
+                (self.root / relative).unlink(missing_ok=True)
                 raise
             return StoreMutation(
                 generation=snapshot.generation,
@@ -252,23 +247,26 @@ class UserSkillStore:
         for name in sorted(state.packages):
             if name in names:
                 raise PackageValidationError(f"skill name conflicts with builtin: {name}")
-            package = state.packages[name]
-            version = self._version(package, package.current)
-            descriptor = self._loaded.get((name, version.version_id))
-            if descriptor is None:
-                path = self.root / version.relative_path
-                content = path.read_bytes()
-                if version.kind == "manifest":
-                    raw = json.loads(content.decode("utf-8"))
-                    descriptor = self._loader.load_manifest(raw)
-                else:
-                    descriptor = self._loader.load_zip(
-                        content, extraction_root=self.root / ".load"
-                    ).descriptor
-                self._loaded[(name, version.version_id)] = descriptor
-            descriptor = descriptor.model_copy(update={"enabled": package.enabled})
-            descriptors.append(descriptor)
-            names.add(name)
+            try:
+                package = state.packages[name]
+                version = self._version(package, package.current)
+                descriptor = self._loaded.get((name, version.version_id))
+                if descriptor is None:
+                    path = self.root / version.relative_path
+                    content = path.read_bytes()
+                    if version.kind == "manifest":
+                        raw = json.loads(content.decode("utf-8"))
+                        descriptor = self._loader.load_manifest(raw)
+                    else:
+                        descriptor = self._loader.load_zip(
+                            content, extraction_root=self.root / ".load"
+                        ).descriptor
+                    self._loaded[(name, version.version_id)] = descriptor
+                descriptor = descriptor.model_copy(update={"enabled": package.enabled})
+                descriptors.append(descriptor)
+                names.add(name)
+            except Exception:
+                continue
         return tuple(descriptors)
 
     def _read_state(self) -> StoreState:
@@ -285,6 +283,24 @@ class UserSkillStore:
             state.model_dump_json(indent=2).encode("utf-8"),
         )
         self._state = state
+
+    def _commit_and_publish(
+        self,
+        state: StoreState,
+        descriptors: tuple[SkillDescriptor, ...],
+    ):
+        previous = self._state
+        previous_bytes = self._state_path.read_bytes() if self._state_path.exists() else None
+        self._commit_state(state)
+        try:
+            return self._publish(descriptors)
+        except Exception:
+            if previous_bytes is None:
+                self._state_path.unlink(missing_ok=True)
+            else:
+                self._atomic_write(self._state_path, previous_bytes)
+            self._state = previous
+            raise
 
     def _publish(self, descriptors: tuple[SkillDescriptor, ...]):
         return self._catalog.replace_all(descriptors)
