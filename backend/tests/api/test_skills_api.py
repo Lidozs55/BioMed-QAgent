@@ -122,12 +122,12 @@ async def test_declarative_database_convenience_crud(tmp_path: Path) -> None:
     ) as client:
         created = await client.post("/api/v1/databases", json=_manifest())
         updated = await client.put(
-            "/api/v1/databases/demo_db", json=_manifest(version="2.0.0")
+            "/api/v1/databases/demo_db", json={"description": "Updated database."}
         )
         deleted = await client.delete("/api/v1/databases/demo_db")
 
     assert created.status_code == 200 and created.json()["generation"] > 0
-    assert updated.status_code == 200 and updated.json()["skill"]["version"] == "2.0.0"
+    assert updated.status_code == 200 and updated.json()["skill"]["version"] == "1.0.0"
     assert deleted.status_code == 200 and deleted.json()["generation"] > updated.json()["generation"]
 
 
@@ -155,6 +155,81 @@ async def test_database_detail_round_trips_declarative_operation(tmp_path: Path)
     assert operation["url"] == "https://example.com/search/{record_id}"
     assert operation["query"] == {"q": "{query}"}
     assert operation["body"] == {"term": "{query}"}
+
+
+@pytest.mark.asyncio
+async def test_database_patch_preserves_secrets_and_unedited_operations(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    manifest["description"] = "Before edit"
+    manifest["operations"] = [
+        {
+            "name": "fetch_demo",
+            "description": "Fetch demo.",
+            "method": "GET",
+            "url": "https://example.com/records/{record_id}",
+            "headers": {"Authorization": "Bearer persisted-secret", "X-Mode": "full"},
+            "auth": {
+                "source": "env",
+                "reference": "DEMO_API_KEY",
+                "location": "header",
+                "name": "X-Api-Key",
+                "prefix": "Bearer ",
+            },
+        },
+        {
+            "name": "describe_demo",
+            "description": "Describe demo.",
+            "method": "GET",
+            "url": "https://example.com/descriptions/{record_id}",
+        },
+    ]
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        await client.post("/api/v1/databases", json=manifest)
+        detail_before = await client.get("/api/v1/skills/demo_db")
+        updated = await client.put(
+            "/api/v1/databases/demo_db",
+            json={
+                "description": "After edit",
+                "operation": {
+                    "name": "fetch_demo",
+                    "url": "https://api.example.com/records/{record_id}",
+                    "headers": {"Authorization": "[redacted]"},
+                },
+            },
+        )
+        detail_after = await client.get("/api/v1/skills/demo_db")
+
+    assert detail_before.json()["declarative_manifest"]["operations"][0][
+        "headers"
+    ]["Authorization"] == "[redacted]"
+    assert updated.status_code == 200
+    stored = detail_after.json()["declarative_manifest"]
+    assert stored["description"] == "After edit"
+    assert [operation["name"] for operation in stored["operations"]] == [
+        "fetch_demo",
+        "describe_demo",
+    ]
+    assert stored["operations"][0]["url"] == (
+        "https://api.example.com/records/{record_id}"
+    )
+    assert stored["operations"][0]["auth"]["reference"] == "DEMO_API_KEY"
+    assert stored["operations"][1]["url"] == (
+        "https://example.com/descriptions/{record_id}"
+    )
+    state = json.loads((tmp_path / "skills" / "state.json").read_text("utf-8"))
+    current = state["packages"]["demo_db"]["current"]
+    package_file = next(
+        (tmp_path / "skills" / "packages" / "demo_db").glob(f"{current}.*")
+    )
+    raw = json.loads(package_file.read_text("utf-8"))
+    assert raw["operations"][0]["headers"]["Authorization"] == (
+        "Bearer persisted-secret"
+    )
 
 
 @pytest.mark.asyncio

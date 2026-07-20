@@ -141,8 +141,23 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const saveDatabase = async () => {
     if (!databaseDraft) return;
     try {
-      const manifest = databaseManifest(databaseDraft, editingDatabase?.version ?? "1.0.0");
-      if (editingDatabase) await api.updateDatabase(editingDatabase.name, manifest); else await api.createDatabase(manifest);
+      if (editingDatabase) {
+        await api.updateDatabase(editingDatabase.name, {
+          display_name: databaseDraft.displayName,
+          description: databaseDraft.description,
+          operation: {
+            name: databaseDraft.operation,
+            description: `Search ${databaseDraft.displayName}`,
+            method: databaseDraft.method,
+            url: databaseDraft.url,
+            query: JSON.parse(databaseDraft.query) as Record<string, unknown>,
+            headers: JSON.parse(databaseDraft.headers) as Record<string, unknown>,
+            body: JSON.parse(databaseDraft.body) as unknown,
+          },
+        });
+      } else {
+        await api.createDatabase(databaseManifest(databaseDraft));
+      }
       setDatabaseDraft(null); setEditingDatabase(null); await refreshSkills(); toast.success("数据库目录已更新");
     } catch (error) { toast.error("数据库保存失败", { description: errorText(error) }); }
   };

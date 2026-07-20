@@ -17,7 +17,7 @@ import tempfile
 import threading
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -30,7 +30,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.skills import SkillStoreDep
 from app.domain.contracts import (
@@ -197,14 +197,38 @@ async def create_database(body: dict[str, object], store: SkillStoreDep) -> Stor
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+class DatabaseOperationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str | None = None
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] | None = None
+    url: str | None = None
+    query: dict[str, Any] | None = None
+    headers: dict[str, Any] | None = None
+    body: Any = None
+    timeout_seconds: float | None = None
+    extract: str | None = None
+
+
+class DatabaseUpdatePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    description: str | None = None
+    operation: DatabaseOperationPatch | None = None
+
+
 @router.put("/databases/{name}", response_model=StoreMutation)
 async def update_database(
-    name: str, body: dict[str, object], store: SkillStoreDep
+    name: str, body: DatabaseUpdatePatch, store: SkillStoreDep
 ) -> StoreMutation:
-    if body.get("name") != name:
-        raise HTTPException(status_code=409, detail="Path and manifest names differ")
     try:
-        return store.put_manifest(body)
+        return store.patch_manifest(name, body.model_dump(exclude_unset=True))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Database or operation not found") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except (ValueError, FileExistsError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

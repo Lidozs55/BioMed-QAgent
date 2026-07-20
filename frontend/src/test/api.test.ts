@@ -276,4 +276,35 @@ describe("runtime REST client", () => {
     });
     expect(fetcher.mock.calls[4]?.[1]).toEqual({ method: "DELETE" });
   });
+
+  it("updates a database with a typed partial patch body", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
+      jsonResponse({ generation: 4, skill: null }),
+    );
+    const api = createAPIClient({ fetcher });
+
+    await api.updateDatabase("demo/db", {
+      description: "Updated",
+      operation: {
+        name: "search",
+        method: "POST",
+        url: "https://example.com/search/{query}",
+        query: { q: "{query}" },
+      },
+    });
+
+    expect(fetcher).toHaveBeenCalledWith("/api/v1/databases/demo%2Fdb", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: "Updated",
+        operation: {
+          name: "search",
+          method: "POST",
+          url: "https://example.com/search/{query}",
+          query: { q: "{query}" },
+        },
+      }),
+    });
+  });
 });

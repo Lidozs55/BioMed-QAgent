@@ -19,11 +19,12 @@ from app.skills.catalog import SkillCatalog, SkillDescriptor, SkillManifest
 from app.skills.packages import PackageValidationError, SkillPackageLoader
 
 _SENSITIVE_MANIFEST_KEYS = {"authorization", "api-key", "api_key", "token", "secret"}
+_REDACTED = "[redacted]"
 
 
 def _redact_manifest(value: object, *, key: str = "") -> object:
     if key.lower() in _SENSITIVE_MANIFEST_KEYS:
-        return "[redacted]"
+        return _REDACTED
     if isinstance(value, dict):
         return {
             str(item_key): _redact_manifest(item, key=str(item_key))
@@ -32,6 +33,19 @@ def _redact_manifest(value: object, *, key: str = "") -> object:
     if isinstance(value, list):
         return [_redact_manifest(item) for item in value]
     return value
+
+
+def _merge_redacted_patch(original: object, patch: object) -> object:
+    if patch == _REDACTED:
+        return original
+    if isinstance(original, dict) and isinstance(patch, Mapping):
+        merged = dict(original)
+        for key, value in patch.items():
+            if key == "name":
+                continue
+            merged[str(key)] = _merge_redacted_patch(merged.get(str(key)), value)
+        return merged
+    return patch
 
 
 class StoredVersion(BaseModel):
@@ -169,6 +183,53 @@ class UserSkillStore:
         descriptor = self._loader.load_manifest(raw)
         content = json.dumps(dict(raw), sort_keys=True, separators=(",", ":")).encode()
         return self._put(descriptor, content, kind="manifest")
+
+    def patch_manifest(
+        self,
+        name: str,
+        patch: Mapping[str, object],
+    ) -> StoreMutation:
+        """Merge an editable patch into the unredacted persisted manifest."""
+        with self._lock:
+            package = self._require_user(name)
+            current = self._version(package, package.current)
+            if current.kind != "manifest":
+                raise PermissionError("Python skill packages are not editable as databases")
+            raw = json.loads((self.root / current.relative_path).read_text("utf-8"))
+            if not isinstance(raw, dict):
+                raise PackageValidationError("stored declarative manifest is invalid")
+            merged = dict(raw)
+            for field in ("display_name", "description"):
+                if field in patch and patch[field] != _REDACTED:
+                    merged[field] = patch[field]
+            operation_patch = patch.get("operation")
+            if operation_patch is not None:
+                if not isinstance(operation_patch, Mapping):
+                    raise PackageValidationError("operation patch must be an object")
+                operation_name = operation_patch.get("name")
+                operations = merged.get("operations")
+                if not isinstance(operation_name, str) or not isinstance(operations, list):
+                    raise PackageValidationError("operation patch is invalid")
+                index = next(
+                    (
+                        index
+                        for index, operation in enumerate(operations)
+                        if isinstance(operation, dict)
+                        and operation.get("name") == operation_name
+                    ),
+                    None,
+                )
+                if index is None:
+                    raise KeyError(operation_name)
+                operation = operations[index]
+                assert isinstance(operation, dict)
+                next_operations = list(operations)
+                next_operations[index] = _merge_redacted_patch(
+                    operation,
+                    operation_patch,
+                )
+                merged["operations"] = next_operations
+            return self.put_manifest(merged)
 
     def put_zip(self, content: bytes) -> StoreMutation:
         loaded = self._loader.load_zip(content, extraction_root=self.root / ".load")

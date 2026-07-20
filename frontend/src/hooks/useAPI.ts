@@ -116,6 +116,24 @@ export interface DeclarativeSkillManifest {
   requirements?: string[];
 }
 
+export interface DatabaseOperationUpdatePatch {
+  name: string;
+  description?: string;
+  method?: DeclarativeOperation["method"];
+  url?: string;
+  query?: Record<string, unknown>;
+  headers?: Record<string, unknown>;
+  body?: unknown;
+  timeout_seconds?: number;
+  extract?: string | null;
+}
+
+export interface DatabaseUpdatePatch {
+  display_name?: string;
+  description?: string;
+  operation?: DatabaseOperationUpdatePatch;
+}
+
 export interface SkillDetail {
   manifest: SkillManifest;
   current_version: string;
@@ -198,7 +216,7 @@ export interface SettingsAPIClient {
   validateSkill: (file: File) => Promise<SkillValidation>;
   uploadSkill: (file: File) => Promise<void>;
   createDatabase: (manifest: DeclarativeSkillManifest) => Promise<void>;
-  updateDatabase: (name: string, manifest: DeclarativeSkillManifest) => Promise<void>;
+  updateDatabase: (name: string, patch: DatabaseUpdatePatch) => Promise<void>;
   deleteDatabase: (name: string) => Promise<void>;
 }
 

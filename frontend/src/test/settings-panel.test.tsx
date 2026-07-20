@@ -66,6 +66,22 @@ describe("SettingsPanel", () => {
     expect(await screen.findByLabelText("Base URL")).toHaveValue("https://api.example.com/search/{query}");
     expect(screen.getByLabelText("Method")).toHaveValue("POST");
     expect(screen.getByLabelText("Query template")).toHaveValue('{"q":"{query}"}');
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated papers" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存数据库" }));
+    await waitFor(() => expect(client.updateDatabase).toHaveBeenCalledWith(
+      "pubmed",
+      expect.objectContaining({
+        description: "Updated papers",
+        operation: expect.objectContaining({
+          name: "search",
+          method: "POST",
+          url: "https://api.example.com/search/{query}",
+        }),
+      }),
+    ));
+    const submitted = vi.mocked(client.updateDatabase).mock.calls[0]?.[1];
+    expect(submitted).not.toHaveProperty("operations");
+    expect(submitted).not.toHaveProperty("supported_sources");
   });
 
   it("confirms package deletion and disables builtin database mutation", async () => {
