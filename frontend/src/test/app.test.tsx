@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -166,5 +166,16 @@ describe("App startup ownership", () => {
         expect.objectContaining({ description: "history unavailable" }),
       ),
     );
+  });
+
+  it("opens and closes settings without replacing the task workspace", async () => {
+    render(<App />);
+    await waitFor(() => expect(useAgentStore.getState().activeItems).toEqual(["task_active"]));
+    fireEvent.click(screen.getByRole("button", { name: "打开设置" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
   });
 });

@@ -91,6 +91,23 @@ backend/app/skills/
 - processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
 - learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
+### 2.4 动态 Skill Catalog 与管理面
+
+业务 Skill 统一由 lifespan 创建的进程级 `SkillCatalog` 管理。Catalog 合并随应用
+发布的 builtin Skill 与外部应用数据目录中的用户 Skill，并通过不可变快照和单调
+递增 `generation` 原子热更新。正在执行的单次调用固定到解析时的 Skill 版本；
+后续调用读取最新快照。
+
+Main Agent 不再直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
+持有稳定的 `find_skill` / `invoke_skill` 网关，以及 Pipeline、文件、压缩和 Reviewer
+等核心 Tool。用户选择的数据库是网关硬 allowlist；`pipeline_supported` 只表示该
+来源能够进入确定性 Pipeline，普通 Agent-only Skill 不能充当完成证据。
+
+用户扩展支持声明式 JSON/YAML HTTP 数据库包和 Python ZIP Skill 包。用户包保存在
+单文件程序之外的可写目录，支持校验、上传、启停、版本回滚和删除。坏包保持
+`unavailable/load_error` 管理可见性，不阻断应用启动。设置页的 Model、Databases
+和 Skills 三个区段使用对应 REST API 管理这些状态。
+
 **视觉证据采集（web_visual_capture）**：
 `acquisition/web_visual_capture.py` 提供 `capture_web_page` 与
 `capture_page_section` 两个 function_tool，使用 Playwright Chromium 截图，

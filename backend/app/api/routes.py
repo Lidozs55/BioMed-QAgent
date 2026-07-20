@@ -17,7 +17,7 @@ import tempfile
 import threading
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -30,8 +30,9 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.api.skills import SkillStoreDep
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
@@ -54,7 +55,8 @@ from app.runtime.manager import (
     TaskRunConflictError,
 )
 from app.runtime.repository import TaskRepository
-from app.skills.registry import SkillCategory, skill_registry
+from app.skills.catalog import SkillCatalog
+from app.skills.store import StoreMutation
 from app.tools.workdir import create_task_workdir
 
 router = APIRouter(prefix="/api/v1")
@@ -146,20 +148,10 @@ def _display_name(skill_name: str) -> str:
 
 
 def load_database_skills() -> None:
-    """Register the stable user-selectable database integrations.
+    """Compatibility wrapper for callers that still trigger builtin discovery."""
+    from app.skills.builtin import load_builtin_skill_descriptors
 
-    Called once at application lifespan startup (see ``app.main``) so that
-    every ``GET /api/v1/databases`` request reads from the already-populated
-    skill registry instead of re-registering skills per request.
-    """
-
-    import app.skills.builtin.acquisition.gdc  # noqa: F401
-    import app.skills.builtin.acquisition.geo  # noqa: F401
-    import app.skills.builtin.acquisition.pdb  # noqa: F401
-    import app.skills.builtin.acquisition.pubchem  # noqa: F401
-    import app.skills.builtin.acquisition.reactome  # noqa: F401
-    import app.skills.builtin.acquisition.xena  # noqa: F401
-    import app.skills.builtin.discovery.pubmed  # noqa: F401
+    load_builtin_skill_descriptors()
 
 
 
@@ -169,26 +161,96 @@ def load_database_skills() -> None:
 
 
 @router.get("/databases")
-async def get_databases() -> dict:
-    """List all available databases derived from enabled skills."""
-    skills = [
-        skill
-        for skill in skill_registry.list_enabled()
-        if skill.supported_sources
-        and (skill.category == SkillCategory.ACQUISITION or skill.name == "pubmed")
-        and skill.name not in ("browser_fallback", "web_visual_capture", "local_cache")
-    ]
+async def get_databases(request: Request = None) -> dict:
+    """List user-selectable databases from the current catalog snapshot."""
+    catalog: SkillCatalog | None = (
+        getattr(request.app.state, "skill_catalog", None) if request is not None else None
+    )
+    if catalog is None:
+        from app.skills.builtin import load_builtin_skill_descriptors
+
+        descriptors = load_builtin_skill_descriptors()
+        skills = [
+            skill
+            for skill in descriptors
+            if skill.enabled and skill.user_selectable and skill.supported_sources
+        ]
+    else:
+        skills = [
+            skill
+            for skill in catalog.snapshot().skills.values()
+            if skill.enabled and skill.user_selectable and skill.supported_sources
+        ]
     databases = []
     for skill in skills:
         databases.append(
             {
                 "id": skill.name,
-                "name": _display_name(skill.name),
+                "name": skill.display_name or _display_name(skill.name),
                 "category": skill.category.value,
                 "description": skill.description,
+                "available": skill.enabled,
+                "origin": skill.origin,
+                "version": skill.version,
+                "pipeline_supported": skill.pipeline_supported,
             }
         )
     return {"databases": databases}
+
+
+@router.post("/databases", response_model=StoreMutation)
+async def create_database(body: dict[str, object], store: SkillStoreDep) -> StoreMutation:
+    """Create a declarative user database through the shared skill store."""
+    try:
+        return store.put_manifest(body)
+    except (ValueError, FileExistsError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+class DatabaseOperationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str | None = None
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] | None = None
+    url: str | None = None
+    query: dict[str, Any] | None = None
+    headers: dict[str, Any] | None = None
+    body: Any = None
+    timeout_seconds: float | None = None
+    extract: str | None = None
+
+
+class DatabaseUpdatePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = None
+    description: str | None = None
+    operation: DatabaseOperationPatch | None = None
+
+
+@router.put("/databases/{name}", response_model=StoreMutation)
+async def update_database(
+    name: str, body: DatabaseUpdatePatch, store: SkillStoreDep
+) -> StoreMutation:
+    try:
+        return store.patch_manifest(name, body.model_dump(exclude_unset=True))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Database or operation not found") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ValueError, FileExistsError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.delete("/databases/{name}", response_model=StoreMutation)
+async def delete_database(name: str, store: SkillStoreDep) -> StoreMutation:
+    try:
+        return store.delete(name)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Database not found") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 # ---------------------------------------------------------------------------

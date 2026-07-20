@@ -13,8 +13,8 @@
     │
     ▼
 Main Agent (OpenAI Agents SDK)
-    │  加载 enabled Skill → 合并 instructions + tools
-    │  LLM 自主决定调用顺序
+    │  find_skill → invoke_skill
+    │  通过动态 SkillCatalog 发现并调用业务能力
     ▼
 @function_tool 工具函数
     │  通过 RunContextWrapper[RunContext] 访问任务状态
@@ -27,9 +27,10 @@ validated artifacts/
 ```
 
 **核心原则**：
-- Skill 是 `instructions 片段 + 工具组合 + 支持的数据源` 的能力包
-- Tool 由 SDK 直接执行，无额外引擎
+- Skill 由 manifest、operation Tool、支持的数据源和运行状态组成
+- Agent 只直接装载稳定网关；业务 Tool 由 `invoke_skill` 解析 Catalog 快照后执行
 - 正式产物必须通过 `run_research_pipeline` 进入 Pipeline，Skill 不直接拼装最终 CSV
+- `pipeline_supported=false` 的自定义数据库只能作为 Agent 动态能力
 
 ---
 
@@ -39,6 +40,10 @@ validated artifacts/
 backend/app/skills/
 ├── __init__.py
 ├── registry.py              # SkillDef + SkillRegistry + build_agent_config
+├── catalog.py               # SkillManifest + 不可变 Catalog 快照
+├── gateway.py               # find_skill + invoke_skill
+├── packages.py              # 声明式/Python 用户包校验与加载
+├── store.py                 # 外部持久化、版本、启停与回滚
 ├── evolution.py             # learned skill 保存/加载引擎
 ├── builtin/                 # 内置 Skill（随代码发布）
 │   ├── discovery/
@@ -134,18 +139,16 @@ my_skill = SkillDef(
 skill_registry.register(my_skill)
 ```
 
-### 3.5 agent.py 接入
+### 3.5 Agent 与 Catalog 接入
 
-新 Skill 必须在 [agent.py](../backend/app/agent_loop/agent.py) 的 `_import_skill_modules()` 模块列表中追加：
+builtin 模块由 `app.skills.builtin` 的统一 bootstrap 发现并适配为
+`SkillDescriptor`，不再修改 `agent.py` 或维护第二份模块列表。Main Agent 先通过
+`find_skill` 查询匹配能力，再使用
+`invoke_skill(skill, operation, arguments)` 调用。
 
-```python
-modules = [
-    ...
-    "app.skills.builtin.acquisition.my_source",  # 新增
-]
-```
-
-`_import_skill_modules()` 在 `create_agent()` 调用时触发 import，从而执行模块级 `register()` 副作用。加载失败会 `logger.warning` 但不阻塞 Agent 启动。
+用户声明式/Python 包通过 `/api/v1/skills/validate` 与 `/api/v1/skills/upload`
+安装。安装成功后 Catalog generation 原子递增，现有 Agent 的网关 closure 立即看到
+新快照，无需重建对话。
 
 ---
 
