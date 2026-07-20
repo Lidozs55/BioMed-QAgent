@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
@@ -246,6 +247,88 @@ def _tool_identity(item: object) -> tuple[str, str | None]:
     return call_id, name if isinstance(name, str) and name else None
 
 
+def _truncate_for_event(
+    value: object,
+    *,
+    depth: int = 3,
+    str_limit: int = 200,
+    list_limit: int = 20,
+) -> Any:
+    """递归截断事件 payload 中的大对象，防止 events.jsonl 膨胀。
+
+    - 字符串超过 str_limit 字符时截断并追加 ``...[truncated]``
+    - 列表截断到前 list_limit 项；深度耗尽时替换为 ``[list:N]``
+    - dict 递归到 depth 层；深度耗尽时替换为 ``[dict:N]``
+    - 原始值（int/float/bool/None）原样返回
+    """
+    if isinstance(value, str):
+        if len(value) > str_limit:
+            return value[:str_limit] + "...[truncated]"
+        return value
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        if depth <= 0:
+            return f"[list:{len(value)}]"
+        truncated = value[:list_limit]
+        return [
+            _truncate_for_event(
+                v,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+            )
+            for v in truncated
+        ]
+    if isinstance(value, dict):
+        if depth <= 0:
+            return f"[dict:{len(value)}]"
+        return {
+            k: _truncate_for_event(
+                v,
+                depth=depth - 1,
+                str_limit=str_limit,
+                list_limit=list_limit,
+            )
+            for k, v in value.items()
+        }
+    return str(value)[:str_limit]
+
+
+def _extract_tool_arguments(raw_item: object) -> dict[str, Any] | None:
+    """从 SDK raw_item.arguments（JSON 字符串）解析并截断工具调用参数。
+
+    返回 ``None`` 表示无参数或解析失败（前端兜底显示"调用 {toolName}"）。
+    """
+    args_json = _value(raw_item, "arguments", None)
+    if not args_json:
+        return None
+    if not isinstance(args_json, str):
+        # 部分 SDK 可能直接返回 dict；直接截断
+        if isinstance(args_json, dict):
+            return _truncate_for_event(args_json)
+        return None
+    try:
+        parsed = json.loads(args_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return _truncate_for_event(parsed)
+
+
+#: ``ToolCompletedPayload.output`` 字符串化后的最大长度（4KB）。
+TOOL_OUTPUT_MAX_BYTES = 4096
+
+
+def _truncate_tool_output(output: object) -> str:
+    """字符串化 tool output 并截断到 4KB，防止 events.jsonl 膨胀。"""
+    text = str(output)
+    if len(text) > TOOL_OUTPUT_MAX_BYTES:
+        return text[:TOOL_OUTPUT_MAX_BYTES] + "...[truncated]"
+    return text
+
+
 class AgentRunExecutor:
     """Execute one manager-owned Run against its durable SDK session."""
 
@@ -333,10 +416,12 @@ class AgentRunExecutor:
                     call_id, tool_name = _tool_identity(event.item)
                     resolved_name = tool_name or "unknown"
                     tool_names[call_id] = resolved_name
+                    raw_item = _value(event.item, "raw_item", event.item)
                     await execution.emit(
                         ToolStartedPayload(
                             tool_call_id=call_id,
                             tool_name=resolved_name,
+                            arguments=_extract_tool_arguments(raw_item),
                         )
                     )
                 elif event.name == "tool_output":
@@ -353,7 +438,9 @@ class AgentRunExecutor:
                         ToolCompletedPayload(
                             tool_call_id=call_id,
                             tool_name=tool_name or tool_names.get(call_id, "unknown"),
-                            output=str(_value(event.item, "output", "")),
+                            output=_truncate_tool_output(
+                                _value(event.item, "output", "")
+                            ),
                             is_error=is_error,
                         )
                     )
