@@ -9,6 +9,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from concurrent.futures import Executor
 from contextlib import ExitStack, asynccontextmanager
@@ -40,7 +41,13 @@ class TaskNotFoundError(LookupError):
 
 
 def atomic_write_text(path: Path, content: str) -> None:
-    """Publish a complete file with a same-directory atomic replace."""
+    """Publish a complete file with a same-directory atomic replace.
+
+    On Windows, ``os.replace`` can raise ``PermissionError`` ([WinError 5]) if
+    the target file is briefly locked by another process (antivirus, search
+    indexer, or a concurrent reader). We retry a few times with short backoff
+    before surfacing the error, since the lock is almost always transient.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -54,9 +61,32 @@ def atomic_write_text(path: Path, content: str) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
+        _replace_with_retry(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _replace_with_retry(
+    src: Path,
+    dst: Path,
+    *,
+    attempts: int = 5,
+    delay_seconds: float = 0.05,
+) -> None:
+    """``os.replace`` with bounded retry on transient PermissionError."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds * (2 ** attempt))
+        except OSError:
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def atomic_write_json(path: Path, value: BaseModel | Mapping[str, Any]) -> None:
