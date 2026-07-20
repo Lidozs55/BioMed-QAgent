@@ -122,6 +122,7 @@ export function useSettings() {
   const settingsAbortRef = useRef<AbortController | null>(null)
   const vendorsAbortRef = useRef<AbortController | null>(null)
   const modelsAbortRef = useRef<AbortController | null>(null)
+  const saveAbortRef = useRef<AbortController | null>(null)
 
   const fetchSettings = useCallback(async () => {
     settingsAbortRef.current?.abort()
@@ -210,23 +211,36 @@ export function useSettings() {
   }, [])
 
   const updateSettings = useCallback(
-    async (payload: UpdateSettingsPayload): Promise<UserSettings> => {
+    async (payload: UpdateSettingsPayload): Promise<UserSettings | undefined> => {
+      // Abort any previous in-flight save — only the latest matters
+      saveAbortRef.current?.abort()
       const controller = new AbortController()
+      saveAbortRef.current = controller
+
       setSaving(true)
       setError(null)
       try {
         const data = await apiPost<SettingsResponse>("/settings", payload, controller.signal)
         const mapped = mapResponse(data)
-        if (mountedRef.current && !controller.signal.aborted) setSettings(mapped)
-        await refreshModels()
+        if (mountedRef.current && !controller.signal.aborted) {
+          setSettings(mapped)
+        }
+        // Trigger model refresh without blocking the save resolution.
+        // A discovery failure must not reject an already-persisted save.
+        void refreshModels()
         return mapped
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") throw err
+        if (err instanceof DOMException && err.name === "AbortError") {
+          // Superseded by a newer save or unmount — settle silently.
+          // Callers must not see a user-facing error for an intentional abort.
+          if (controller !== saveAbortRef.current || !mountedRef.current) return
+          throw err
+        }
         const msg = err instanceof Error ? err.message : "更新设置失败"
-        if (mountedRef.current) setError(msg)
+        if (mountedRef.current && controller === saveAbortRef.current) setError(msg)
         throw err
       } finally {
-        if (mountedRef.current) setSaving(false)
+        if (mountedRef.current && controller === saveAbortRef.current) setSaving(false)
       }
     },
     [refreshModels],
@@ -242,6 +256,7 @@ export function useSettings() {
       settingsAbortRef.current?.abort()
       vendorsAbortRef.current?.abort()
       modelsAbortRef.current?.abort()
+      saveAbortRef.current?.abort()
     }
   }, [fetchSettings, fetchVendors])
   /* eslint-enable react-hooks/set-state-in-effect */

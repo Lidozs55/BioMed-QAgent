@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useSettings } from "@/hooks/useSettings";
+import { useSettings, type UserSettings } from "@/hooks/useSettings";
 
 function jsonOk(body: unknown): Promise<Response> {
   return Promise.resolve(
@@ -191,8 +191,8 @@ describe("useSettings", () => {
     );
     expect(modelCall).toBeDefined();
     const options = (modelCall as [string, RequestInit])[1];
-    expect(options).toBeDefined();
-    expect(options!.signal).toBeInstanceOf(AbortSignal);
+    if (options === undefined) throw new Error("Expected model request options");
+    expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("aborts previous fetchModels when called again", async () => {
@@ -359,5 +359,117 @@ describe("useSettings", () => {
     expect(options).toBeDefined();
     if (options === undefined) throw new Error("Expected model request options");
     expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("supersedes previous in-flight updateSettings when called again", async () => {
+    const initialResp = {
+      base_url: "https://test.url", api_key: "sk-xxxx",
+      model_name: "qwen-plus", max_tokens: 4096,
+      temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0,
+      enable_search: false, thinking_mode: false,
+    };
+    fetchSpy
+      .mockReturnValueOnce(jsonOk(initialResp))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.saving).toBe(false);
+
+    fetchSpy.mockReset();
+
+    const capturedSignal: { current: AbortSignal | null } = { current: null };
+    let callCount = 0;
+
+    fetchSpy.mockImplementation((url: string, options?: RequestInit) => {
+      callCount++;
+      // First POST — hangs until aborted, then rejects with AbortError
+      if (callCount === 1 && url === "/api/v1/settings" && options?.method === "POST") {
+        const signal = options.signal as AbortSignal;
+        capturedSignal.current = signal;
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("Aborted by superseding request", "AbortError"));
+          }, { once: true });
+        });
+      }
+      // Second POST — succeeds
+      if (url === "/api/v1/settings" && options?.method === "POST") {
+        return jsonOk({ ...initialResp, model_name: "qwen-max" });
+      }
+      // refreshModels after second POST
+      if (url.includes("/api/v1/models")) {
+        return jsonOk({ models: [{ id: "qwen-max", name: "Qwen Max" }], total_count: 1, api_source: null });
+      }
+      return Promise.reject(new Error(`Unexpected: ${url}`));
+    });
+
+    // When: first updateSettings starts
+    let firstSettled = false;
+    act(() => {
+      result.current.updateSettings({ model_name: "first" }).finally(() => { firstSettled = true; });
+    });
+
+    // Allow first to start
+    await waitFor(() => expect(capturedSignal.current).not.toBeNull());
+
+    // Second updateSettings starts (should abort first)
+    await act(async () => {
+      await result.current.updateSettings({ model_name: "qwen-max" });
+    });
+
+    // Then: first was aborted
+    expect(capturedSignal.current?.aborted).toBe(true);
+    // First promise settles (silently — does not throw to caller)
+    await waitFor(() => expect(firstSettled).toBe(true));
+    // Saving state: started true for first, still true during second, false after second
+    expect(result.current.saving).toBe(false);
+    // Settings reflect the second save
+    expect(result.current.settings?.model_name).toBe("qwen-max");
+  });
+
+  it("resolves with saved settings when POST succeeds but refreshModels fails", async () => {
+    const initialResp = {
+      base_url: "https://test.url", api_key: "sk-xxxx",
+      model_name: "qwen-plus", max_tokens: 4096,
+      temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0,
+      enable_search: false, thinking_mode: false,
+    };
+    fetchSpy
+      .mockReturnValueOnce(jsonOk(initialResp))
+      .mockReturnValueOnce(jsonOk([]))
+      .mockReturnValueOnce(jsonOk({ models: [{ id: "qwen-plus" }], total_count: 1, api_source: null }));
+
+    const { result } = renderHook(() => useSettings());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    fetchSpy.mockReset();
+
+    // POST succeeds, then refreshModels GET fails
+    fetchSpy
+      .mockReturnValueOnce(jsonOk({ ...initialResp, model_name: "qwen-max" }))
+      .mockRejectedValueOnce(new Error("Provider gateway error"));
+
+    // When: updateSettings is called
+    let saved: UserSettings | undefined;
+    let saveError: unknown;
+    await act(async () => {
+      try {
+        saved = await result.current.updateSettings({ model_name: "qwen-max" });
+      } catch (e) {
+        saveError = e;
+      }
+    });
+
+    // Then: save resolved, not rejected
+    expect(saveError).toBeUndefined();
+    expect(saved).toBeDefined();
+    // Settings are published
+    expect(result.current.settings?.model_name).toBe("qwen-max");
+    // Error state shows provider failure from refreshModels
+    expect(result.current.error).toBe("Provider gateway error");
+    // Saving is false
+    expect(result.current.saving).toBe(false);
   });
 });
