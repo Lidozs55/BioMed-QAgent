@@ -69,6 +69,7 @@ def build_compress_query_log_tool(model: LazyDashScopeModel):
         name="ContextManager",
         instructions=_summarizer_instructions,
         model=model,
+        model_settings=model.model_settings,
     )
     return context_manager_agent.as_tool(
         tool_name="compress_query_log",

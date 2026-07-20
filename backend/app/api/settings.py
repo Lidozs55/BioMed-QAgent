@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
+from app.tools.network_safety import UnsafeUrlError, validate_public_http_url
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 
@@ -34,6 +35,14 @@ class PublicSettings(BaseModel):
     model_name: str
     max_tokens: int
     advanced: dict[str, Any]
+
+
+class ModelPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str | None = None
+    preview_base_url: str
+    preview_api_key: str = ""
 
 
 VENDORS = (
@@ -98,17 +107,19 @@ async def list_vendors() -> dict[str, object]:
     return {"vendors": VENDORS}
 
 
-@router.get("/models")
+@router.post("/models")
 async def list_models(
     request: Request,
     store: StoreDep,
-    query: Annotated[str | None, Query()] = None,
-    preview_base_url: Annotated[str | None, Query()] = None,
-    preview_api_key: Annotated[str | None, Query()] = None,
+    body: ModelPreviewRequest,
 ) -> dict[str, object]:
     current = store.snapshot()
-    base_url = preview_base_url or str(current.base_url)
-    api_key = preview_api_key if preview_api_key is not None else current.api_key
+    base_url = body.preview_base_url
+    api_key = body.preview_api_key or current.api_key
+    try:
+        validate_public_http_url(base_url)
+    except UnsafeUrlError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         response = await request.app.state.model_preview_client.get(
@@ -132,6 +143,7 @@ async def list_models(
             "capability_source": "api",
         }
         for model_id in model_ids
-        if isinstance(model_id, str) and (query is None or query.lower() in model_id.lower())
+        if isinstance(model_id, str)
+        and (body.query is None or body.query.lower() in model_id.lower())
     ]
     return {"models": models, "total_count": len(models), "api_source": base_url}

@@ -132,6 +132,59 @@ async def test_declarative_database_convenience_crud(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_database_detail_round_trips_declarative_operation(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["operations"][0].update(
+        {
+            "method": "POST",
+            "url": "https://example.com/search/{record_id}",
+            "query": {"q": "{query}"},
+            "headers": {"X-Mode": "catalog"},
+            "body": {"term": "{query}"},
+        }
+    )
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        await client.post("/api/v1/databases", json=manifest)
+        detail = await client.get("/api/v1/skills/demo_db")
+
+    operation = detail.json()["declarative_manifest"]["operations"][0]
+    assert operation["method"] == "POST"
+    assert operation["url"] == "https://example.com/search/{record_id}"
+    assert operation["query"] == {"q": "{query}"}
+    assert operation["body"] == {"term": "{query}"}
+
+
+@pytest.mark.asyncio
+async def test_skill_list_includes_unavailable_persistent_package(tmp_path: Path) -> None:
+    configured = Settings(output_dir=str(tmp_path / "output"))
+    first = create_app(configured)
+    async with first.router.lifespan_context(first), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=first), base_url="http://test"
+    ) as client:
+        await client.post("/api/v1/databases", json=_manifest())
+
+    state = json.loads((tmp_path / "skills" / "state.json").read_text("utf-8"))
+    current = state["packages"]["demo_db"]["current"]
+    package_file = next((tmp_path / "skills" / "packages" / "demo_db").glob(f"{current}.*"))
+    package_file.write_text("not json", encoding="utf-8")
+
+    second = create_app(configured)
+    async with second.router.lifespan_context(second), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=second), base_url="http://test"
+    ) as client:
+        listed = await client.get("/api/v1/skills")
+        detail = await client.get("/api/v1/skills/demo_db")
+
+    item = next(skill for skill in listed.json()["skills"] if skill["name"] == "demo_db")
+    assert item["available"] is False
+    assert item["load_error"]
+    assert detail.json()["available"] is False
+
+
+@pytest.mark.asyncio
 async def test_multipart_upload_is_rejected_at_compressed_byte_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

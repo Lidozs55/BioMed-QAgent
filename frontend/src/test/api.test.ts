@@ -262,10 +262,18 @@ describe("runtime REST client", () => {
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/settings",
       "/api/v1/vendors",
-      "/api/v1/models?preview_base_url=https%3A%2F%2Fpreview.test%2Fv1&preview_api_key=secret",
+      "/api/v1/models",
       "/api/v1/skills",
       "/api/v1/skills/demo%2Fskill",
     ]);
+    expect(fetcher.mock.calls[2]?.[1]).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preview_base_url: "https://preview.test/v1",
+        preview_api_key: "secret",
+      }),
+    });
     expect(fetcher.mock.calls[4]?.[1]).toEqual({ method: "DELETE" });
   });
 });

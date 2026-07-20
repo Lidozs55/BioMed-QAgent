@@ -17,7 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
-import type { ModelInfo, ModelSettings, SettingsAPIClient, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
+import type { DeclarativeSkillManifest, ModelInfo, ModelSettings, ModelSettingsUpdate, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -33,18 +33,22 @@ interface DatabaseDraft {
   name: string;
   displayName: string;
   description: string;
-  baseUrl: string;
+  url: string;
   operation: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+  query: string;
+  headers: string;
+  body: string;
 }
 
-const EMPTY_DATABASE: DatabaseDraft = { name: "", displayName: "", description: "", baseUrl: "", operation: "search" };
+const EMPTY_DATABASE: DatabaseDraft = { name: "", displayName: "", description: "", url: "", operation: "search", method: "GET", query: "{}", headers: "{}", body: "null" };
 
-function databaseManifest(draft: DatabaseDraft, version = "1.0.0"): Record<string, unknown> {
+function databaseManifest(draft: DatabaseDraft, version = "1.0.0"): DeclarativeSkillManifest {
   return {
     schema_version: "1.0", name: draft.name, display_name: draft.displayName,
     version, category: "discovery", description: draft.description,
     supported_sources: [draft.name], user_selectable: true, pipeline_supported: false,
-    operations: [{ name: draft.operation, description: `Search ${draft.displayName}`, method: "GET", url: `${draft.baseUrl.replace(/\/$/, "")}/{query}` }],
+    operations: [{ name: draft.operation, description: `Search ${draft.displayName}`, method: draft.method, url: draft.url, query: JSON.parse(draft.query) as Record<string, unknown>, headers: JSON.parse(draft.headers) as Record<string, unknown>, body: JSON.parse(draft.body) as unknown }],
   };
 }
 
@@ -68,6 +72,8 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const [databaseDraft, setDatabaseDraft] = useState<DatabaseDraft | null>(null);
   const [editingDatabase, setEditingDatabase] = useState<SkillManifest | null>(null);
   const [pendingUpload, setPendingUpload] = useState<{ file: File; validation: SkillValidation } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ kind: "database" | "skill"; name: string; label: string } | null>(null);
+  const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const refreshSkills = useCallback(async () => setSkills(await api.fetchSkills()), [api]);
@@ -98,7 +104,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const saveModel = async () => {
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = { base_url: baseUrl, model_name: modelName, max_tokens: maxTokens, temperature, top_p: topP, enable_search: enableSearch, thinking_mode: thinkingMode };
+      const payload: ModelSettingsUpdate = { base_url: baseUrl, model_name: modelName, max_tokens: maxTokens, temperature, top_p: topP, enable_search: enableSearch, thinking_mode: thinkingMode };
       if (apiKey) payload.api_key = apiKey;
       const updated = await api.saveSettings(payload); setSettings(updated); setApiKey("");
       toast.success("模型设置已保存");
@@ -141,6 +147,32 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     } catch (error) { toast.error("数据库保存失败", { description: errorText(error) }); }
   };
 
+  const editDatabase = async (database: SkillManifest) => {
+    try {
+      const detail = await api.fetchSkill(database.name);
+      const manifest = detail.declarative_manifest;
+      const operation = manifest?.operations[0];
+      if (!manifest || !operation) throw new Error("数据库缺少可编辑的声明式操作");
+      setEditingDatabase(database);
+      setDatabaseDraft({ name: manifest.name, displayName: manifest.display_name, description: manifest.description, url: operation.url, operation: operation.name, method: operation.method, query: JSON.stringify(operation.query ?? {}), headers: JSON.stringify(operation.headers ?? {}), body: JSON.stringify(operation.body ?? null) });
+    } catch (error) { toast.error("数据库详情加载失败", { description: errorText(error) }); }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const target = pendingDelete;
+    setPendingDelete(null);
+    await mutateSkill(
+      () => target.kind === "database" ? api.deleteDatabase(target.name) : api.deleteSkill(target.name),
+      target.kind === "database" ? "数据库已删除" : "技能已删除",
+    );
+  };
+
+  const showSkillDetail = async (name: string) => {
+    try { setSkillDetail(await api.fetchSkill(name)); }
+    catch (error) { toast.error("技能详情加载失败", { description: errorText(error) }); }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -165,13 +197,13 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
               <TabsContent value="databases" className="min-h-0 overflow-auto py-2">
                 <Card><CardHeader><CardTitle>数据库目录</CardTitle><CardDescription>数据库是可选择、声明式的检索技能投影。</CardDescription></CardHeader><CardContent>
                   <div className="mb-3 flex flex-wrap justify-end gap-2"><Field><FieldLabel htmlFor="database-upload" className="sr-only">上传数据库包</FieldLabel><Input id="database-upload" type="file" accept=".json,.yaml,.yml,.zip" onChange={(event) => void chooseUpload(event.target.files?.[0])} /></Field><Button size="sm" onClick={() => { setEditingDatabase(null); setDatabaseDraft(EMPTY_DATABASE); }}><DatabaseIcon data-icon="inline-start" />新建数据库</Button></div>
-                  <Table><TableHeader><TableRow><TableHead>名称</TableHead><TableHead>来源</TableHead><TableHead>版本</TableHead><TableHead>可用性</TableHead><TableHead>Pipeline</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{databases.map((database) => <TableRow key={database.name}><TableCell><div className="font-medium">{database.display_name}</div><div className="text-xs text-muted-foreground">{database.description}</div></TableCell><TableCell><Badge variant="outline">{database.origin}</Badge></TableCell><TableCell>{database.version}</TableCell><TableCell><Toggle variant="outline" pressed={database.enabled} aria-label={`${database.enabled ? "停用" : "启用"} ${database.display_name}`} onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(database.name, pressed), "数据库状态已更新")}>{database.enabled ? "已启用" : "已停用"}</Toggle></TableCell><TableCell><Badge variant={database.pipeline_supported ? "secondary" : "outline"}>{database.pipeline_supported ? "支持" : "Agent"}</Badge></TableCell><TableCell className="text-right">{database.origin === "package" && <div className="flex justify-end gap-1"><Button size="icon-sm" variant="ghost" aria-label={`编辑 ${database.display_name}`} onClick={() => { setEditingDatabase(database); setDatabaseDraft({ name: database.name, displayName: database.display_name, description: database.description, baseUrl: "https://example.com", operation: database.operations[0] ?? "search" }); }}><GearIcon /></Button><Button size="icon-sm" variant="ghost" aria-label={`删除 ${database.display_name}`} onClick={() => void mutateSkill(() => api.deleteDatabase(database.name), "数据库已删除")}><TrashIcon /></Button></div>}</TableCell></TableRow>)}</TableBody></Table>
+                  <Table><TableHeader><TableRow><TableHead>名称</TableHead><TableHead>来源</TableHead><TableHead>版本</TableHead><TableHead>可用性</TableHead><TableHead>Pipeline</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader><TableBody>{databases.map((database) => <TableRow key={database.name}><TableCell><div className="font-medium">{database.display_name}</div><div className="text-xs text-muted-foreground">{database.description}</div></TableCell><TableCell><Badge variant="outline">{database.origin}</Badge></TableCell><TableCell>{database.version}</TableCell><TableCell><Toggle variant="outline" pressed={database.enabled} disabled={database.origin === "builtin"} aria-label={`${database.enabled ? "停用" : "启用"} ${database.display_name}`} onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(database.name, pressed), "数据库状态已更新")}>{database.enabled ? "已启用" : "已停用"}</Toggle></TableCell><TableCell><Badge variant={database.pipeline_supported ? "secondary" : "outline"}>{database.pipeline_supported ? "支持" : "Agent"}</Badge></TableCell><TableCell className="text-right">{database.origin === "package" && <div className="flex justify-end gap-1"><Button size="icon-sm" variant="ghost" aria-label={`编辑 ${database.display_name}`} onClick={() => void editDatabase(database)}><GearIcon /></Button><Button size="icon-sm" variant="ghost" aria-label={`删除 ${database.display_name}`} onClick={() => setPendingDelete({ kind: "database", name: database.name, label: database.display_name })}><TrashIcon /></Button></div>}</TableCell></TableRow>)}</TableBody></Table>
                 </CardContent></Card>
               </TabsContent>
               <TabsContent value="skills" className="min-h-0 overflow-auto py-2">
                 <Card><CardHeader><CardTitle>技能管理</CardTitle><CardDescription>筛选、启停、回滚或安装技能包。</CardDescription></CardHeader><CardContent>
                   <div className="mb-3 flex flex-wrap items-center gap-2"><Input className="max-w-xs" placeholder="筛选技能" value={skillFilter} onChange={(event) => setSkillFilter(event.target.value)} /><Field><FieldLabel htmlFor="skill-upload" className="sr-only">上传技能</FieldLabel><Input id="skill-upload" type="file" accept=".json,.yaml,.yml,.zip" onChange={(event) => void chooseUpload(event.target.files?.[0])} /></Field></div>
-                  {filteredSkills.length === 0 ? <Empty><EmptyHeader><EmptyTitle>没有匹配的技能</EmptyTitle><EmptyDescription>调整名称、分类、来源或状态筛选。</EmptyDescription></EmptyHeader></Empty> : <Table><TableHeader><TableRow><TableHead>技能</TableHead><TableHead>分类</TableHead><TableHead>状态</TableHead><TableHead>操作 / 版本</TableHead><TableHead className="text-right">管理</TableHead></TableRow></TableHeader><TableBody>{filteredSkills.map((skill) => <TableRow key={skill.name}><TableCell><div className="font-medium">{skill.display_name}</div><div className="text-xs text-muted-foreground">{skill.description}</div></TableCell><TableCell><Badge variant="outline">{skill.category}</Badge> <Badge variant="secondary">{skill.origin}</Badge></TableCell><TableCell><Toggle variant="outline" pressed={skill.enabled} aria-label={`${skill.enabled ? "停用" : "启用"} ${skill.display_name}`} disabled={skill.origin === "builtin"} onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(skill.name, pressed), "技能状态已更新")}>{skill.enabled ? "已启用" : "已停用"}</Toggle></TableCell><TableCell><div>{skill.operations.join(", ") || "无操作"}</div><div className="text-xs text-muted-foreground">v{skill.version}</div></TableCell><TableCell className="text-right">{skill.origin === "package" && <div className="flex justify-end gap-1"><Button size="icon-sm" variant="ghost" aria-label={`回滚 ${skill.display_name}`} onClick={() => void mutateSkill(() => api.rollbackSkill(skill.name), "技能已回滚")}><ArrowCounterClockwiseIcon /></Button><Button size="icon-sm" variant="ghost" aria-label={`删除 ${skill.display_name}`} onClick={() => void mutateSkill(() => api.deleteSkill(skill.name), "技能已删除")}><TrashIcon /></Button></div>}</TableCell></TableRow>)}</TableBody></Table>}
+                  {filteredSkills.length === 0 ? <Empty><EmptyHeader><EmptyTitle>没有匹配的技能</EmptyTitle><EmptyDescription>调整名称、分类、来源或状态筛选。</EmptyDescription></EmptyHeader></Empty> : <Table><TableHeader><TableRow><TableHead>技能</TableHead><TableHead>分类</TableHead><TableHead>状态</TableHead><TableHead>操作 / 版本</TableHead><TableHead className="text-right">管理</TableHead></TableRow></TableHeader><TableBody>{filteredSkills.map((skill) => <TableRow key={skill.name}><TableCell><div className="font-medium">{skill.display_name}</div><div className="text-xs text-muted-foreground">{skill.description}</div>{skill.load_error && <div className="text-xs text-destructive">{skill.load_error}</div>}</TableCell><TableCell><Badge variant="outline">{skill.category}</Badge> <Badge variant="secondary">{skill.origin}</Badge></TableCell><TableCell>{skill.available === false ? <Badge variant="destructive">不可用</Badge> : <Toggle variant="outline" pressed={skill.enabled} aria-label={`${skill.enabled ? "停用" : "启用"} ${skill.display_name}`} disabled={skill.origin === "builtin"} onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(skill.name, pressed), "技能状态已更新")}>{skill.enabled ? "已启用" : "已停用"}</Toggle>}</TableCell><TableCell><div>{skill.operations.join(", ") || "无操作"}</div><div className="text-xs text-muted-foreground">v{skill.version}</div></TableCell><TableCell className="text-right"><div className="flex justify-end gap-1"><Button size="sm" variant="ghost" aria-label={`查看 ${skill.display_name}`} onClick={() => void showSkillDetail(skill.name)}>详情</Button>{skill.origin === "package" && <><Button size="icon-sm" variant="ghost" aria-label={`回滚 ${skill.display_name}`} onClick={() => void mutateSkill(() => api.rollbackSkill(skill.name), "技能已回滚")}><ArrowCounterClockwiseIcon /></Button><Button size="icon-sm" variant="ghost" aria-label={`删除 ${skill.display_name}`} onClick={() => setPendingDelete({ kind: "skill", name: skill.name, label: skill.display_name })}><TrashIcon /></Button></>}</div></TableCell></TableRow>)}</TableBody></Table>}
                 </CardContent></Card>
               </TabsContent>
             </Tabs>
@@ -179,7 +211,11 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={databaseDraft !== null} onOpenChange={(next) => { if (!next) setDatabaseDraft(null); }}><DialogContent><DialogHeader><DialogTitle>{editingDatabase ? "编辑数据库" : "新建数据库"}</DialogTitle><DialogDescription>创建一个仅包含基础 GET 搜索操作的声明式目录项。</DialogDescription></DialogHeader>{databaseDraft && <FieldGroup><Field><FieldLabel htmlFor="database-name">Name</FieldLabel><Input id="database-name" disabled={editingDatabase !== null} value={databaseDraft.name} onChange={(event) => setDatabaseDraft({ ...databaseDraft, name: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-display">Display name</FieldLabel><Input id="database-display" value={databaseDraft.displayName} onChange={(event) => setDatabaseDraft({ ...databaseDraft, displayName: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-description">Description</FieldLabel><Textarea id="database-description" value={databaseDraft.description} onChange={(event) => setDatabaseDraft({ ...databaseDraft, description: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-url">Base URL</FieldLabel><Input id="database-url" value={databaseDraft.baseUrl} onChange={(event) => setDatabaseDraft({ ...databaseDraft, baseUrl: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-operation">Search operation</FieldLabel><Input id="database-operation" value={databaseDraft.operation} onChange={(event) => setDatabaseDraft({ ...databaseDraft, operation: event.target.value })} /></Field></FieldGroup>}<DialogFooter><Button onClick={() => void saveDatabase()}>保存数据库</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={databaseDraft !== null} onOpenChange={(next) => { if (!next) setDatabaseDraft(null); }}><DialogContent className="max-h-[calc(100svh-2rem)] overflow-auto"><DialogHeader><DialogTitle>{editingDatabase ? "编辑数据库" : "新建数据库"}</DialogTitle><DialogDescription>编辑完整 URL 和基础请求模板；保存时保持声明式操作定义。</DialogDescription></DialogHeader>{databaseDraft && <FieldGroup><Field><FieldLabel htmlFor="database-name">Name</FieldLabel><Input id="database-name" disabled={editingDatabase !== null} value={databaseDraft.name} onChange={(event) => setDatabaseDraft({ ...databaseDraft, name: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-display">Display name</FieldLabel><Input id="database-display" value={databaseDraft.displayName} onChange={(event) => setDatabaseDraft({ ...databaseDraft, displayName: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-description">Description</FieldLabel><Textarea id="database-description" value={databaseDraft.description} onChange={(event) => setDatabaseDraft({ ...databaseDraft, description: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-url">Base URL</FieldLabel><Input id="database-url" value={databaseDraft.url} onChange={(event) => setDatabaseDraft({ ...databaseDraft, url: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-method">Method</FieldLabel><Input id="database-method" value={databaseDraft.method} onChange={(event) => setDatabaseDraft({ ...databaseDraft, method: event.target.value.toUpperCase() as DatabaseDraft["method"] })} /></Field><Field><FieldLabel htmlFor="database-operation">Search operation</FieldLabel><Input id="database-operation" value={databaseDraft.operation} onChange={(event) => setDatabaseDraft({ ...databaseDraft, operation: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-query">Query template</FieldLabel><Textarea id="database-query" value={databaseDraft.query} onChange={(event) => setDatabaseDraft({ ...databaseDraft, query: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-headers">Headers template</FieldLabel><Textarea id="database-headers" value={databaseDraft.headers} onChange={(event) => setDatabaseDraft({ ...databaseDraft, headers: event.target.value })} /></Field><Field><FieldLabel htmlFor="database-body">Body template</FieldLabel><Textarea id="database-body" value={databaseDraft.body} onChange={(event) => setDatabaseDraft({ ...databaseDraft, body: event.target.value })} /></Field></FieldGroup>}<DialogFooter><Button onClick={() => void saveDatabase()}>保存数据库</Button></DialogFooter></DialogContent></Dialog>
+
+      <Dialog open={skillDetail !== null} onOpenChange={(next) => { if (!next) setSkillDetail(null); }}><DialogContent><DialogHeader><DialogTitle>{skillDetail?.manifest.display_name ?? "技能详情"}</DialogTitle><DialogDescription>当前版本、操作与加载状态。</DialogDescription></DialogHeader>{skillDetail && <Card><CardHeader><CardTitle>v{skillDetail.current_version}</CardTitle><CardDescription>{skillDetail.manifest.description}</CardDescription></CardHeader><CardContent><div className="flex flex-col gap-2"><div>操作：{skillDetail.manifest.operations.join(", ") || "无"}</div><div>可用：{skillDetail.available ? "是" : "否"}</div>{skillDetail.load_error && <Alert variant="destructive"><AlertTitle>加载失败</AlertTitle><AlertDescription>{skillDetail.load_error}</AlertDescription></Alert>}</div></CardContent></Card>}</DialogContent></Dialog>
+
+      <AlertDialog open={pendingDelete !== null} onOpenChange={(next) => { if (!next) setPendingDelete(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认删除</AlertDialogTitle><AlertDialogDescription>删除“{pendingDelete?.label}”及其用户版本后无法恢复。内置项目不会提供删除操作。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={(event) => { event.preventDefault(); void confirmDelete(); }}>确认删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 
       <AlertDialog open={pendingUpload !== null} onOpenChange={(next) => { if (!next && !uploading) setPendingUpload(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认安装技能</AlertDialogTitle><AlertDialogDescription>已验证 {pendingUpload?.validation.skill.display_name} v{pendingUpload?.validation.skill.version}。</AlertDialogDescription></AlertDialogHeader>{pendingUpload?.validation.warning && <Alert><UploadSimpleIcon /><AlertTitle>本地代码执行警告</AlertTitle><AlertDescription>{pendingUpload.validation.warning}</AlertDescription></Alert>}<AlertDialogFooter><AlertDialogCancel disabled={uploading}>取消</AlertDialogCancel><AlertDialogAction disabled={uploading} onClick={(event) => { event.preventDefault(); void confirmUpload(); }}>{uploading && <Spinner data-icon="inline-start" />}确认安装</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </>

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents import OpenAIChatCompletionsModel, set_tracing_disabled
+from agents import ModelSettings, OpenAIChatCompletionsModel, set_tracing_disabled
 from agents.models.interface import Model
 from openai import AsyncOpenAI
 
@@ -54,6 +54,17 @@ class LazyDashScopeModel(Model):
 
     def __init__(self, configuration: ModelConfiguration | None = None) -> None:
         self.configuration = configuration or _environment_configuration()
+        advanced = self.configuration.advanced
+        self.model_settings = ModelSettings(
+            max_tokens=self.configuration.max_tokens,
+            temperature=advanced.temperature,
+            top_p=advanced.top_p,
+            extra_body={
+                "repetition_penalty": advanced.repetition_penalty,
+                "enable_search": advanced.enable_search,
+                "enable_thinking": advanced.thinking_mode,
+            },
+        )
         self._delegate: OpenAIChatCompletionsModel | None = None
 
     def _get_delegate(self) -> OpenAIChatCompletionsModel:

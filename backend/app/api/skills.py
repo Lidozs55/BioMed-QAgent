@@ -29,7 +29,12 @@ class SkillListResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     generation: int
-    skills: tuple[SkillManifest, ...]
+    skills: tuple[SkillListEntry, ...]
+
+
+class SkillListEntry(SkillManifest):
+    available: bool = True
+    load_error: str | None = None
 
 
 class ValidationResponse(BaseModel):
@@ -42,7 +47,17 @@ class ValidationResponse(BaseModel):
 
 @router.get("", response_model=SkillListResponse)
 async def list_skills(store: SkillStoreDep) -> SkillListResponse:
-    return SkillListResponse(generation=store.generation, skills=store.list_manifests())
+    return SkillListResponse(
+        generation=store.generation,
+        skills=tuple(
+            SkillListEntry(
+                **detail.manifest.model_dump(),
+                available=detail.available,
+                load_error=detail.load_error,
+            )
+            for detail in store.list_details()
+        ),
+    )
 
 
 @router.get("/{name}", response_model=SkillDetail)

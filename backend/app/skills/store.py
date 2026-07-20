@@ -18,6 +18,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.skills.catalog import SkillCatalog, SkillDescriptor, SkillManifest
 from app.skills.packages import PackageValidationError, SkillPackageLoader
 
+_SENSITIVE_MANIFEST_KEYS = {"authorization", "api-key", "api_key", "token", "secret"}
+
+
+def _redact_manifest(value: object, *, key: str = "") -> object:
+    if key.lower() in _SENSITIVE_MANIFEST_KEYS:
+        return "[redacted]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_manifest(item, key=str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_manifest(item) for item in value]
+    return value
+
 
 class StoredVersion(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -54,6 +69,7 @@ class SkillDetail(BaseModel):
     warning: str | None = None
     available: bool = True
     load_error: str | None = None
+    declarative_manifest: dict[str, object] | None = None
 
 
 class StoreMutation(BaseModel):
@@ -102,6 +118,10 @@ class UserSkillStore:
             )
         )
 
+    def list_details(self) -> tuple[SkillDetail, ...]:
+        names = set(self._catalog.snapshot().skills) | set(self._state.packages)
+        return tuple(self.detail(name) for name in sorted(names))
+
     def detail(self, name: str) -> SkillDetail:
         descriptor = self._catalog.snapshot().skills.get(name)
         package = self._state.packages.get(name)
@@ -131,7 +151,19 @@ class UserSkillStore:
             ),
             available=name not in self._load_errors,
             load_error=self._load_errors.get(name),
+            declarative_manifest=self._declarative_manifest(current),
         )
+
+    def _declarative_manifest(self, version: StoredVersion) -> dict[str, object] | None:
+        if version.kind != "manifest":
+            return None
+        try:
+            raw = json.loads((self.root / version.relative_path).read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return _redact_manifest(raw)
 
     def put_manifest(self, raw: Mapping[str, object]) -> StoreMutation:
         descriptor = self._loader.load_manifest(raw)

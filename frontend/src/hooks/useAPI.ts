@@ -39,6 +39,24 @@ export interface ModelSettings {
   };
 }
 
+export interface ModelSettingsUpdate {
+  base_url?: string;
+  api_key?: string;
+  model_name?: string;
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  repetition_penalty?: number;
+  enable_search?: boolean;
+  thinking_mode?: boolean;
+}
+
+export interface ModelPreviewRequest {
+  baseUrl: string;
+  apiKey?: string;
+  query?: string;
+}
+
 export interface VendorInfo {
   id: string;
   name: string;
@@ -67,6 +85,35 @@ export interface SkillManifest {
   enabled: boolean;
   user_selectable: boolean;
   pipeline_supported: boolean;
+  available?: boolean;
+  load_error?: string | null;
+}
+
+export interface DeclarativeOperation {
+  name: string;
+  description: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+  url: string;
+  query?: Record<string, unknown>;
+  headers?: Record<string, unknown>;
+  body?: unknown;
+  timeout_seconds?: number;
+  extract?: string | null;
+}
+
+export interface DeclarativeSkillManifest {
+  schema_version: "1.0";
+  name: string;
+  display_name: string;
+  version: string;
+  category: string;
+  description: string;
+  supported_sources: string[];
+  operations: DeclarativeOperation[];
+  enabled?: boolean;
+  user_selectable: boolean;
+  pipeline_supported: false;
+  requirements?: string[];
 }
 
 export interface SkillDetail {
@@ -77,6 +124,7 @@ export interface SkillDetail {
   warning: string | null;
   available: boolean;
   load_error: string | null;
+  declarative_manifest: DeclarativeSkillManifest | null;
 }
 
 export interface SkillValidation {
@@ -139,9 +187,9 @@ export interface APIClient {
 
 export interface SettingsAPIClient {
   fetchSettings: () => Promise<ModelSettings>;
-  saveSettings: (changes: Record<string, unknown>) => Promise<ModelSettings>;
+  saveSettings: (changes: ModelSettingsUpdate) => Promise<ModelSettings>;
   fetchVendors: () => Promise<VendorInfo[]>;
-  fetchModels: (preview?: { baseUrl?: string; apiKey?: string; query?: string }) => Promise<ModelInfo[]>;
+  fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
   fetchSkills: () => Promise<SkillManifest[]>;
   fetchSkill: (name: string) => Promise<SkillDetail>;
   setSkillEnabled: (name: string, enabled: boolean) => Promise<void>;
@@ -149,8 +197,8 @@ export interface SettingsAPIClient {
   deleteSkill: (name: string) => Promise<void>;
   validateSkill: (file: File) => Promise<SkillValidation>;
   uploadSkill: (file: File) => Promise<void>;
-  createDatabase: (manifest: Record<string, unknown>) => Promise<void>;
-  updateDatabase: (name: string, manifest: Record<string, unknown>) => Promise<void>;
+  createDatabase: (manifest: DeclarativeSkillManifest) => Promise<void>;
+  updateDatabase: (name: string, manifest: DeclarativeSkillManifest) => Promise<void>;
   deleteDatabase: (name: string) => Promise<void>;
 }
 
@@ -346,13 +394,15 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
 
     fetchVendors: () => request<{ vendors: VendorInfo[] }>(`${baseUrl}/vendors`).then(({ vendors }) => vendors),
 
-    fetchModels: (preview = {}) => request<{ models: ModelInfo[] }>(
-      withQuery(`${baseUrl}/models`, [
-        ["query", preview.query],
-        ["preview_base_url", preview.baseUrl],
-        ["preview_api_key", preview.apiKey],
-      ]),
-    ).then(({ models }) => models),
+    fetchModels: (preview) => request<{ models: ModelInfo[] }>(`${baseUrl}/models`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        preview_base_url: preview.baseUrl,
+        preview_api_key: preview.apiKey ?? "",
+        ...(preview.query === undefined ? {} : { query: preview.query }),
+      }),
+    }).then(({ models }) => models),
 
     fetchSkills: () => request<{ skills: SkillManifest[] }>(`${baseUrl}/skills`).then(({ skills }) => skills),
     fetchSkill: (name) => request<SkillDetail>(`${baseUrl}/skills/${encodeId(name)}`),

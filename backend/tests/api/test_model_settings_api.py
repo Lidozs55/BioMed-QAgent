@@ -56,18 +56,58 @@ async def test_model_preview_uses_supplied_connection(tmp_path: Path) -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=application), base_url="http://test"
         ) as client:
-            response = await client.get(
+            response = await client.post(
                 "/api/v1/models",
-                params={
-                    "preview_base_url": "https://preview.example/v1",
+                json={
+                    "preview_base_url": "https://api.openai.com/v1",
                     "preview_api_key": "preview-key",
                 },
             )
 
     assert response.status_code == 200
     assert response.json()["models"][0]["id"] == "preview-model"
-    assert str(requests[0].url) == "https://preview.example/v1/models"
+    assert str(requests[0].url) == "https://api.openai.com/v1/models"
     assert requests[0].headers["authorization"] == "Bearer preview-key"
+    assert "preview-key" not in str(requests[0].url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost:8000/v1",
+        "http://127.0.0.1/v1",
+        "http://169.254.169.254/v1",
+        "https://user:pass@example.com/v1",
+    ],
+)
+async def test_model_preview_rejects_non_public_base_urls(
+    tmp_path: Path, base_url: str
+) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/models",
+            json={"preview_base_url": base_url, "preview_api_key": "secret"},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_only_exact_current_mask_retains_saved_key(tmp_path: Path) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        await client.put("/api/v1/settings", json={"api_key": "sk-secret-value"})
+        await client.put("/api/v1/settings", json={"api_key": "literal...secret"})
+        loaded = await client.get("/api/v1/settings")
+
+    assert loaded.json()["api_key"] != "sk-secre...alue"
+    assert "literal...secret" in (tmp_path / "settings" / "model.json").read_text("utf-8")
 
 
 def test_model_factory_snapshots_hot_user_configuration(
@@ -98,3 +138,35 @@ def test_model_factory_snapshots_hot_user_configuration(
     assert second.configuration.model_name == "model-two"
     assert created[0]["api_key"] == "first"
     assert created[1]["api_key"] == "second"
+
+
+def test_model_factory_exposes_request_defaults(tmp_path: Path) -> None:
+    from app.agent_loop.model import get_model
+    from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+
+    store = ModelSettingsStore(
+        tmp_path / "model.json",
+        defaults=Settings(dashscope_api_key="key"),
+    )
+    store.update(
+        {
+            "max_tokens": 1234,
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "repetition_penalty": 1.1,
+            "enable_search": True,
+            "thinking_mode": True,
+        }
+    )
+    set_current_model_settings_store(store)
+
+    defaults = get_model().model_settings
+
+    assert defaults.max_tokens == 1234
+    assert defaults.temperature == 0.2
+    assert defaults.top_p == 0.8
+    assert defaults.extra_body == {
+        "repetition_penalty": 1.1,
+        "enable_search": True,
+        "enable_thinking": True,
+    }

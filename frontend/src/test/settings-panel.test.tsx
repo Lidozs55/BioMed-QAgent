@@ -19,7 +19,7 @@ function api(): SettingsAPIClient {
     fetchModels: vi.fn().mockResolvedValue([]),
     fetchDatabases: vi.fn().mockResolvedValue([{ id: "pubmed", name: "PubMed", category: "discovery", description: "Papers", origin: "builtin", version: "1", available: true, pipeline_supported: true }]),
     fetchSkills: vi.fn().mockResolvedValue([{ name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true }]),
-    fetchSkill: vi.fn().mockResolvedValue({ manifest: {}, current_version: "1", versions: ["1"], package_kind: "manifest", warning: null, available: true, load_error: null }),
+    fetchSkill: vi.fn().mockResolvedValue({ manifest: { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false }, current_version: "1", versions: ["1"], package_kind: "manifest", warning: null, available: true, load_error: null, declarative_manifest: { schema_version: "1.0", name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", supported_sources: ["pubmed"], user_selectable: true, pipeline_supported: false, operations: [{ name: "search", description: "Search", method: "POST", url: "https://api.example.com/search/{query}", query: { q: "{query}" }, headers: {}, body: { term: "{query}" } }] } }),
     setSkillEnabled: vi.fn().mockResolvedValue(undefined),
     rollbackSkill: vi.fn().mockResolvedValue(undefined),
     deleteSkill: vi.fn().mockResolvedValue(undefined),
@@ -53,5 +53,34 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "停用 PubMed" }));
     await waitFor(() => expect(client.setSkillEnabled).toHaveBeenCalledWith("pubmed", false));
     expect(client.fetchSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads the full declarative manifest before editing a database", async () => {
+    const client = api();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={client} />);
+    await screen.findByLabelText("API Key");
+    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 PubMed" }));
+
+    expect(client.fetchSkill).toHaveBeenCalledWith("pubmed");
+    expect(await screen.findByLabelText("Base URL")).toHaveValue("https://api.example.com/search/{query}");
+    expect(screen.getByLabelText("Method")).toHaveValue("POST");
+    expect(screen.getByLabelText("Query template")).toHaveValue('{"q":"{query}"}');
+  });
+
+  it("confirms package deletion and disables builtin database mutation", async () => {
+    const client = api();
+    client.fetchSkills = vi.fn().mockResolvedValue([
+      { name: "builtin_db", display_name: "Builtin DB", version: "1", category: "discovery", description: "Builtin", origin: "builtin", supported_sources: ["builtin_db"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true, available: true, load_error: null },
+      { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false, available: true, load_error: null },
+    ]);
+    render(<SettingsPanel open onOpenChange={() => undefined} api={client} />);
+    await screen.findByLabelText("API Key");
+    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    expect(await screen.findByRole("button", { name: "停用 Builtin DB" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "删除 PubMed" }));
+    expect(client.deleteDatabase).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(client.deleteDatabase).toHaveBeenCalledWith("pubmed"));
   });
 });

@@ -286,6 +286,7 @@ def build_agent(
         instructions=INSTRUCTIONS,
         tools=tools,
         model=model,
+        model_settings=model.model_settings,
     )
     snapshot = catalog.snapshot()
     selected = set(databases or ())

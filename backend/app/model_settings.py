@@ -42,10 +42,6 @@ def mask_api_key(value: str) -> str:
     return f"{value[:8]}...{value[-4:]}"
 
 
-def is_masked_api_key(value: str) -> bool:
-    return value.endswith("****") or "..." in value
-
-
 class ModelSettingsStore:
     """Thread-safe settings snapshot with atomic JSON persistence."""
 
@@ -67,7 +63,7 @@ class ModelSettingsStore:
         with self._lock:
             payload = self._current.model_dump(mode="json")
             api_key = changes.get("api_key")
-            if isinstance(api_key, str) and is_masked_api_key(api_key):
+            if isinstance(api_key, str) and api_key == mask_api_key(self._current.api_key):
                 changes = {key: value for key, value in changes.items() if key != "api_key"}
             advanced_updates = {
                 key: changes.pop(key)
