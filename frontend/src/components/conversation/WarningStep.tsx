@@ -1,6 +1,5 @@
 import { WarningCircleIcon } from "@phosphor-icons/react";
 
-import { Badge } from "@/components/ui/badge";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent } from "@/components/ui/message";
 import type { WarningItem } from "@/runtime/types";
@@ -14,10 +13,9 @@ export function WarningStep({ item }: WarningStepProps) {
     <Message align="start">
       <MessageContent>
         <Bubble variant="ghost" className="w-full">
-          <BubbleContent className="w-full gap-2 text-sm text-yellow-700 dark:text-yellow-400">
-            <WarningCircleIcon className="size-4" aria-hidden="true" />
+          <BubbleContent className="flex items-start gap-2 w-full text-sm text-yellow-700 dark:text-yellow-400">
+            <WarningCircleIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{item.message}</span>
-            <Badge variant="outline">{item.code}</Badge>
           </BubbleContent>
         </Bubble>
       </MessageContent>

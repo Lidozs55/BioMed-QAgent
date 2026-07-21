@@ -200,14 +200,6 @@ export function ChatPanel({
       activeTask.summary.status === "finalizing") &&
     activeRunId !== null &&
     (!activeRunHasAssistantMessage || activeRunPendingToolCall);
-  const activeRunError = useMemo(() => {
-    if (activeTask === undefined) return null;
-    const latestRunId = activeTask.runOrder[activeTask.runOrder.length - 1];
-    return latestRunId === undefined
-      ? null
-      : activeTask.runsById[latestRunId]?.error ?? null;
-  }, [activeTask]);
-
   const continuationDisabledReason = useMemo(() => {
     if (activeTask === undefined) return "选择已完成的 Agent 任务后继续提问";
     if (activeTask.summary.mode !== "agent") return "固定验收任务不支持继续提问";
@@ -443,14 +435,7 @@ export function ChatPanel({
                   </MessageScrollerItem>
                 )}
 
-                {activeTask?.summary.status === "failed" && activeRunError !== null && (
-                  <MessageScrollerItem messageId={`failure:${activeTaskId}`}>
-                    <Alert variant="destructive" role="alert">
-                      <WarningCircleIcon />
-                      <AlertDescription>{activeRunError}</AlertDescription>
-                    </Alert>
-                  </MessageScrollerItem>
-                )}
+
               </MessageScrollerContent>
             </MessageScrollerViewport>
             <MessageScrollerButton />
