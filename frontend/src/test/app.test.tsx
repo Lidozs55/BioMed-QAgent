@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -70,6 +70,17 @@ describe("App startup ownership", () => {
           return Promise.resolve(
             new Response(JSON.stringify({ databases: [] }), { status: 200 }),
           );
+        }
+        if (url === "/api/v1/settings") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ base_url: "", api_key: "", model_name: "", max_tokens: 8192, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }), { status: 200 }),
+          );
+        }
+        if (url === "/api/v1/vendors") {
+          return Promise.resolve(new Response(JSON.stringify({ vendors: [] }), { status: 200 }));
+        }
+        if (url === "/api/v1/skills") {
+          return Promise.resolve(new Response(JSON.stringify({ skills: [] }), { status: 200 }));
         }
         if (url === "/api/v1/tasks?limit=10") {
           if (historyFailure) {
@@ -166,5 +177,16 @@ describe("App startup ownership", () => {
         expect.objectContaining({ description: "history unavailable" }),
       ),
     );
+  });
+
+  it("opens and closes settings without replacing the task workspace", async () => {
+    render(<App />);
+    await waitFor(() => expect(useAgentStore.getState().activeItems).toEqual(["task_active"]));
+    fireEvent.click(screen.getAllByRole("button", { name: "打开设置" })[0]);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(useAgentStore.getState().activeTaskId).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
   });
 });

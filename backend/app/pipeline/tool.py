@@ -183,6 +183,7 @@ async def run_research_pipeline(
             defer_publication=managed_run_id is not None,
             event_sink=bridge.event_sink if bridge is not None else None,
             run_id=managed_run_id or STANDALONE_RUN_ID,
+            model_name=run_context.model_settings.model_name,
         )
         if bridge is not None:
             submitter = runner.submit_user_input

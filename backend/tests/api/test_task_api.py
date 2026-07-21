@@ -15,7 +15,7 @@ async def test_database_api_lists_only_user_selectable_data_sources(
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         response = await client.get("/api/v1/databases")
 
@@ -31,3 +31,8 @@ async def test_database_api_lists_only_user_selectable_data_sources(
             "pdf_extraction",
         }
     )
+    projected = {item["id"]: item for item in response.json()["databases"]}
+    assert all(item["available"] is True for item in projected.values())
+    assert projected["pubmed"]["pipeline_supported"] is True
+    assert projected["geo"]["pipeline_supported"] is True
+    assert projected["gdc"]["pipeline_supported"] is False

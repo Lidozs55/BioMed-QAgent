@@ -2,6 +2,15 @@
 
 导出 SkillDef、SkillCategory、SkillRegistry 和 build_agent_config。
 """
+from app.skills.catalog import (
+    CatalogSnapshot,
+    DuplicateSkillError,
+    ResolvedOperation,
+    SkillCatalog,
+    SkillDescriptor,
+    SkillManifest,
+    SkillOperation,
+)
 from app.skills.registry import (
     HARD_MAX_TOOLS,
     SUGGESTED_MAX_TOOLS,
@@ -20,4 +29,11 @@ __all__ = [
     "SkillRegistry",
     "build_agent_config",
     "skill_registry",
+    "CatalogSnapshot",
+    "DuplicateSkillError",
+    "ResolvedOperation",
+    "SkillCatalog",
+    "SkillDescriptor",
+    "SkillManifest",
+    "SkillOperation",
 ]

@@ -1,8 +1,4 @@
-"""主 Agent 定义 — Agent loop 核心。
-
-管理者模式：主 Agent 配备全部工具，LLM 自主决定调用顺序与循环。
-替代 v0 的 Orchestrator 固定流水线。
-"""
+"""Main research Agent construction for the catalog-backed runtime."""
 
 from __future__ import annotations
 
@@ -12,25 +8,22 @@ from dataclasses import dataclass
 from agents import Agent, RunContextWrapper
 
 from app.agent_loop.context import RunContext
-from app.agent_loop.model import LazyDashScopeModel, get_model
+from app.agent_loop.model import (
+    LazyDashScopeModel,
+    build_sdk_model_settings,
+    get_active_model_settings,
+    get_model,
+)
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
+from app.model_config import RunModelSettings
 from app.pipeline.tool import run_research_pipeline
-from app.skills.registry import (
-    SkillCategory,
-    build_agent_config,
-    skill_registry,
-)
-from app.tools._registry import _import_skill_modules
+from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.catalog import SkillCatalog
+from app.skills.gateway import build_skill_gateway
+from app.skills.registry import SkillCategory
 from app.tools.io import list_files, read_file, write_file
 
-#: 主 Agent 的 max_turns 上限。
-#:
-#: 覆盖正常 4-8 轮（discovery + acquisition + processing + validation 各 1 轮）
-#: 加上 followup 3 轮 + 余量。达到此值后 AgentRunExecutor 捕获
-#: ``MaxTurnsExceeded`` 并发射 ``UserInputRequiredPayload(prompt_kind=
-#: "max_turns_reached")``，暂停 Run 等待用户选择继续或停止。
-#: See docs/REVIEW_2026-07-18.md §11.
 AGENT_MAX_TURNS: int = 15
 
 INSTRUCTIONS = """\
@@ -49,7 +42,7 @@ Pipeline 生成。
 3. **检索发现**：调用 search 工具检索文献和数据集，评估结果质量
 4. **数据获取**：对相关数据集调用 download 工具下载原始文件
 5. **结构化整理**：调用 `run_research_pipeline` 让 Pipeline 完成清洗和对齐
-6. **汇报发现**：用自然语言向用户解释研究思路、关键发现和产物内容
+6. **汇报发现**：说明来源追踪、研究思路、关键发现和产物内容
 
 ## 主题→数据库决策参考
 - 癌症基因表达谱、RNA-seq 计数 → GEO + PubMed
@@ -61,8 +54,7 @@ Pipeline 生成。
 
 用户在 UI 选择的数据库已加载为可用工具。**优先检索与课题相关的数据库**；
 若某个被选中的数据库与课题明显不相关（如研究表达谱时选了 PDB），
-**向用户说明为何跳过**（如"本次研究聚焦表达谱，PDB 蛋白结构数据不适用"），
-而不是无脑调用一次得到空结果。
+**向用户说明为何跳过**，而不是无脑调用一次得到空结果。
 
 ## 调用工具的方式
 通过 function_call 机制直接调用工具——参数走 function_call 通道，不要在
@@ -76,22 +68,7 @@ assistant 文本中写出参数 JSON。工具结果会自动以结构化卡片�
   重试，换其他 source 或进入 Pipeline 阶段
 - 网络错误（非 `not_found`）可重试（换 query 或降低频率），不算入 follow-up
   计数
-- 工具失败时如实说明（如"该数据库暂无匹配结果"或"工具调用失败，将尝试
-  其他策略"），**不要在文本中编造未发生的工具调用**
-
-## 文本输出纪律
-你的文本输出会实时呈现给用户。工具调用的细节由前端工具卡片自动展示，
-你不需要复述工具的输入输出。**好的文本应该面向用户解释研究思路和发现**。
-
-**推荐做法**：
-- "关于 Sclerostin 在骨代谢中的作用，现有文献主要集中在 Wnt 通路调控..."
-- "找到 20 篇相关文献，涉及 Sclerostin、Wnt 通路等共享机制"
-- "GEO 检索到 3 个相关数据集，最大的一个包含 48 个样本"
-
-**禁止做法**：
-- 在文本中输出工具调用的参数 JSON（如 `{"query": "...", "max_results": 20}`）
-- 在文本中复述工具返回的结果 JSON（如逐条复制 records 的 title/abstract/authors）
-- 编造未发生的工具调用（如"GEO搜索也失败了"但实际并未调用 search_geo）
+- 工具失败时如实说明，**不要在文本中编造未发生的工具调用**
 
 ## 工作目录与文件管理
 每个任务有独立工作目录 `data/output/tasks/<task_id>/`，主要子目录：
@@ -107,32 +84,14 @@ assistant 文本中写出参数 JSON。工具结果会自动以结构化卡片�
 调用时传：
 - `topic`（必填）：用户研究主题
 - `databases`（必填）：用户选择的数据库列表
-- `pmid`/`gse`（可选）：你先前调用 search_pubmed / search_geo / describe_geo
-  发现的 accession。传入后 Pipeline 用直接 NCBI 查询替代按主题搜索，
-  避免中文课题在 PubMed 上零结果
+- `pmid`/`gse`（可选）：你先前发现的 accession
 - 不要传 `mode` 参数（默认即对接真实外部 API）
-
-Pipeline 会根据 topic/databases/pmid/gse 自动推导数据需求规格，
-你不需要也无法手动构造 specification。
 
 ## Pipeline 产物与汇报
 Pipeline 执行成功后会在 `artifacts/` 目录产出 CSV 包（外加一个
 `run_manifest.json`）。**引用产物时用 `list_files` 查看实际文件名，
 不要编造文件名或列名**——字段含义参考 `field_descriptions.csv` 的
 `description` 列。
-
-Pipeline 完成后你的汇报应包含：
-1. 研究主题与检索策略简述（哪些数据库、哪些关键词）
-2. 关键发现（找到的文献/数据集数量、主要生物学结论）
-3. 产物概况（`main_data.csv` 的行数和 `measurement_type` 分布、
-   `literature.csv` 的文献数等）
-
-**关于 `main_data.csv`**：
-- 有表达矩阵的 series：每行一个 `gene × sample` 表达值
-- 无表达矩阵的 series（如 snRNAseq）：每个样本一行元数据，表达字段留空
-- 若 series_matrix 解析失败，可能为 0 行——如实说明，**不要编造表达值、
-  基因名或路径**
-- 如需完整表达矩阵，建议用户从 GEO supplementary files 下载（如 Seurat/HDF5）
 
 ## 上下文管理
 所有检索查询会自动记录为"已完成检索清单"，并在每轮开始时注入到你的系统提示
@@ -148,17 +107,21 @@ source 已覆盖、哪些零结果不应重试、是否需要换关键词或换 
 会在后续压缩时保留，不会丢失。
 
 ## 图表数据提取
-`extract_chart_data_vlm` 工具从论文图表中提取结构化数据（柱状图/折线图/
-散点图/箱线图/热图等）。适用于论文图表中包含需要量化的数值数据，或表格以
-图片形式呈现（无法用 `extract_pdf_tables` 提取）时。工具失败会抛异常，
-由你决定是否换源重试。**不要用于纯文本提取**——使用 `extract_pdf_metadata`
-或 `extract_pdf_tables`。不要对同一图片重复调用。
+`extract_chart_data_vlm` 工具从论文图表中提取结构化数据。适用于包含需要量化的
+数值数据的论文图表，或表格以图片形式呈现时。不要用于纯文本提取，也不要对同一
+图片重复调用。
 
 ## 视觉证据采集
 `capture_web_page` 与 `capture_page_section` 用于结构化 API 失败时的视觉兜底，
-**不得替代已有结构化 API**。优先使用 search_pubmed/search_geo 等结构化接口；
-仅当 API 不可用或返回空且页面确有可视数据时才调用视觉采集。
-不要对同一 URL 重复截图；如需不同区域，使用 `capture_page_section` 指定 selector。
+**不得替代已有结构化 API**。优先使用结构化接口；仅当 API 不可用或返回空且页面
+确有可视数据时才调用视觉采集。
+
+## 动态 Skill 发现协议
+- 业务数据库与处理能力不会作为主 Agent 的直接工具注入。执行相关操作前先调用
+  `find_skill`，再用 `invoke_skill` 提交 `skill`、`operation` 和结构化参数。
+- 用户选择的数据库是硬 allowlist；只能发现和调用 allowlist 内的 acquisition Skill。
+- 技能目录更新后重新调用 `find_skill`，不要依赖此前记住的 operation 列表。
+- 自定义 Agent-only 数据库不能作为 Pipeline 完成证据，也不能绕过 Validation Gate。
 """
 
 
@@ -169,6 +132,7 @@ class AgentBuild:
     agent: Agent
     skill_names: tuple[str, ...]
     model: LazyDashScopeModel
+    catalog: SkillCatalog | None = None
 
 
 def _format_query_log_section(run_ctx: RunContext) -> str:
@@ -217,67 +181,81 @@ def _make_instructions_fn(
     return _fn
 
 
-def build_agent(databases: list[str] | None = None) -> AgentBuild:
-    """构造主 Agent。
+def build_agent(
+    catalog: SkillCatalog | list[str] | None = None,
+    databases: list[str] | None = None,
+    *,
+    model_settings: RunModelSettings | None = None,
+) -> AgentBuild:
+    """Build a main Agent with a catalog gateway and one model settings snapshot.
 
-    Args:
-        databases: 用户选择的数据库列表。None 时加载所有已启用的技能；
-                   给定列表时，仅加载匹配的 acquisition 技能 + 全部非 acquisition 技能。
+    ``catalog`` retains the main-branch compatibility shorthand where a list is
+    treated as ``databases``. ``model_settings`` is injected by a managed Run;
+    standalone callers capture the active model-store configuration once.
     """
-    _import_skill_modules()
 
-    if databases is not None:
-        acq_skills = skill_registry.get_acquisition_skills(databases)
-        all_enabled = skill_registry.list_enabled()
-        non_acq_skills = [
-            s for s in all_enabled if s.category != SkillCategory.ACQUISITION
-        ]
-        skills: list = acq_skills + non_acq_skills
-        # local_cache 不在用户可选数据库列表中，但 Agent 应始终可查询缓存
-        # （D2 决策：与 GEO/PubMed 同级的可选数据来源）。
-        local_cache = skill_registry.get("local_cache")
-        if local_cache is not None and local_cache not in skills:
-            skills.append(local_cache)
-    else:
-        skills = skill_registry.list_enabled()
+    resolved_catalog: SkillCatalog
+    selected_databases = databases
+    match catalog:
+        case SkillCatalog():
+            resolved_catalog = catalog
+        case list():
+            resolved_catalog = SkillCatalog(load_builtin_skill_descriptors())
+            selected_databases = catalog
+        case None:
+            resolved_catalog = SkillCatalog(load_builtin_skill_descriptors())
 
-    skill_names = tuple(skill.name for skill in skills)
-
-    model = get_model()
-    instructions_suffix, tools = build_agent_config(skills)
-    tools.extend([run_research_pipeline, read_file, write_file, list_files])
-    tools.append(build_compress_query_log_tool(model))
-    # TODO §8.4: ReviewerAgent — strategy review before run_research_pipeline.
-    tools.append(build_review_query_strategy_tool(model))
-    seen: set[str] = set()
-    unique_tools: list = []
-    for t in tools:
-        name = getattr(t, "name", str(t))
-        if name not in seen:
-            seen.add(name)
-            unique_tools.append(t)
-    merged_instructions = (
-        INSTRUCTIONS + "\n\n## 已加载技能的说明\n\n" + instructions_suffix
-        if instructions_suffix
-        else INSTRUCTIONS
-    )
-    # 动态 instructions：每轮注入 query_log + query_log_summary，
-    # 让 LLM 始终看到"已完成检索清单"，避免会话压缩后丢失历史导致循环。
-    instructions_fn = _make_instructions_fn(merged_instructions)
+    active_model_settings = model_settings or get_active_model_settings()
+    model = get_model(active_model_settings)
+    find_skill, invoke_skill = build_skill_gateway(resolved_catalog)
+    tools = [
+        find_skill,
+        invoke_skill,
+        run_research_pipeline,
+        read_file,
+        write_file,
+        list_files,
+        build_compress_query_log_tool(model),
+        build_review_query_strategy_tool(model),
+    ]
+    # 动态 instructions：每轮注入 query_log + query_log_summary，让 LLM
+    # 始终看到"已完成检索清单"，避免会话压缩后丢失历史导致重复循环。
+    instructions_fn = _make_instructions_fn(INSTRUCTIONS)
     agent = Agent(
         name="BioMedResearcher",
         instructions=instructions_fn,
-        tools=unique_tools,
+        tools=tools,
         model=model,
+        model_settings=build_sdk_model_settings(active_model_settings),
+    )
+    snapshot = resolved_catalog.snapshot()
+    selected_sources = set(selected_databases or ())
+    skill_names = tuple(
+        descriptor.name
+        for descriptor in snapshot.skills.values()
+        if selected_databases is None
+        or descriptor.category is not SkillCategory.ACQUISITION
+        or descriptor.name == "local_cache"
+        or bool(selected_sources.intersection(descriptor.supported_sources))
     )
     return AgentBuild(
         agent=agent,
         skill_names=skill_names,
         model=model,
+        catalog=resolved_catalog,
     )
 
 
-def create_agent(databases: list[str] | None = None) -> Agent:
+def create_agent(
+    catalog: SkillCatalog | list[str] | None = None,
+    databases: list[str] | None = None,
+    *,
+    model_settings: RunModelSettings | None = None,
+) -> Agent:
     """Build a standalone Agent for callers that do not need owned metadata."""
 
-    return build_agent(databases=databases).agent
+    return build_agent(
+        catalog,
+        databases=databases,
+        model_settings=model_settings,
+    ).agent

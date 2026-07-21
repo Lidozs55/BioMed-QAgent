@@ -109,9 +109,11 @@ frontend/
     ├── hooks/
     │   ├── useAgentStream.ts   # WebSocket Hook（连接/断开/发送/解析事件）
     │   ├── useAPI.ts           # REST API Hook（数据库、任务、产物、resume）
+    │   ├── useSettings.ts      # 模型设置 REST Hook（GET/POST /settings, GET /vendors, GET /models），内置 abort/last-request-wins 和初始带凭据加载
     │   ├── useTheme.ts         # 主题切换 Hook（localStorage 持久化）
     │   └── use-mobile.ts       # 移动端检测 Hook（断点 768px）
     ├── components/
+    │   ├── SettingsPanel.tsx          # 模型设置面板（API 连接、模型选择、生成参数、高级参数），驱动 useSettings hook
     │   ├── AgentComposer.tsx          # 任务创建 / 续跑 composer（输入 + 数据库选择）
     │   ├── ArtifactWorkspace.tsx      # 产物工作区（按 Tab 分类展示 14 个 artifact）
     │   ├── BackgroundTaskNotifications.tsx # 后台任务 toast 通知 + View 失败反馈
@@ -165,12 +167,13 @@ frontend/
 ```
 <App>
   <SidebarProvider>
-    <SessionSidebar />              ← 左侧：任务历史、运行中 N/4、当前任务信息
+    <SessionSidebar />              ← 左侧：任务历史、运行中 N/4、当前任务信息（含"设置"入口）
     <SidebarInset>
       <header>                       ← 顶部：侧边栏触发器 + 标题 + 主题切换
         <ThemeToggle />
       </header>
       <main>
+        <SettingsPanel />            ← 设置面板（showSettings=true 时替代主工作区）：API 连接 / 模型选择 / 生成参数 / 高级参数
         <AgentComposer />            ← 任务创建 / 续跑输入区
         <ChatPanel>                  ← 主对话区（coding agent 风格步骤流）
           <Marker>                   ← 状态条：活跃 item 简述（如"检索 PubMed · 查询: ..."）
@@ -207,10 +210,11 @@ frontend/
 
 ### 页面说明
 
-当前应用为**单页应用**，不使用 React Router。任务工作台按以下分区组织：
+当前应用为**单页应用**，不使用 React Router。任务工作台和设置面板按以下分区组织：
 
 | 分区 | 组件 | 功能 |
 |------|------|------|
+| **模型设置** | `SettingsPanel` + `useSettings` | 替代主工作区的全屏面板：API 连接（Base URL + API Key）、模型下拉选择（`ScrollArea className="h-72"` 固定高度可滚动列表，带凭据发现后显示可用模型及多模态能力 Badge）、生成参数（max_tokens 滑块 + 高级展开区）。api_key 空输入清除、掩码保留；四路独立 AbortController 实现 last-request-wins；`onSave` 仅发送 dirty 字段，保存成功后异步刷新模型列表 |
 | **任务创建** | `AgentComposer` + `DatabaseSelector` | 输入研究目标、选择数据库、启动任务或续跑 |
 | **对话流** | `ChatPanel` + `ConversationList` + `MarkdownContent` | coding agent 风格步骤流：用户输入 / 思维链 / 工具调用 / 阶段 / 进度 / 警告 / 产物 / Assistant 文本段，按 sequence 顺序交错渲染 |
 | **状态条** | `ChatPanel` 顶部 `Marker` | Run running 时显示活跃 item 简述（如"检索 PubMed · 查询: 'lung cancer'"），否则显示 `STATUS_LABELS[task.status]` |
@@ -308,7 +312,14 @@ WebSocket 仅发送 `subscribe`、`unsubscribe` 和 `ping` 控制命令；断线
 
 ### REST API 补充数据
 
-`hooks/useAPI.ts` 通过 HTTP 获取初始化数据和静态资源：
+`hooks/useAPI.ts`（任务相关）和 `hooks/useSettings.ts`（模型配置）通过 HTTP 获取数据：
+
+`useSettings.ts` 使用四个独立的 **AbortController**（settings / vendors / models /
+save）。每条 lane 的新请求都会 `abort()` 前一个未完成请求；只有当前 save 可以更新
+设置与 `saving` 状态，组件卸载会取消全部 lane。POST 成功即代表设置已持久化，后续
+模型发现失败只更新可见错误状态，不会把已成功保存误报为失败。模型列表在设置加载
+完毕且含有效凭据后自动触发一次 `GET /models?use_current_settings=true`；初始化时
+并行加载 settings 和 vendors。
 
 | 调用 | 端点 | 时机 |
 |------|------|------|
@@ -320,6 +331,11 @@ WebSocket 仅发送 `subscribe`、`unsubscribe` 和 `ping` 控制命令；断线
 | `submitResume(...)` | `POST /api/v1/tasks/{id}/runs/{rid}/resume` | HIL 决策提交 |
 | `cancelRun(...)` | `POST /api/v1/tasks/{id}/runs/{rid}/cancel` | 取消 Run |
 | `getArtifactUrl(...)` | `GET /api/v1/tasks/{id}/artifacts/{aid}` | 下载产物 |
+| `fetchSettings()` | `GET /api/v1/settings` | 加载用户设置（api_key 掩码）|
+| `updateSettings(payload)` | `POST /api/v1/settings` | 保存用户设置 |
+| `fetchVendors()` | `GET /api/v1/vendors` | 加载供应商列表 |
+| `fetchModels(query, baseUrl)` | `GET /api/v1/models?query=&preview_base_url=` | 按搜索或预览 URL 发现模型 |
+| `refreshModels()` | `GET /api/v1/models?use_current_settings=true` | 使用已保存凭据发现模型 |
 
 ### Vite 代理配置
 

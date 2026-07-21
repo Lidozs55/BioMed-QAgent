@@ -1,4 +1,4 @@
-"""FastAPI application and runtime lifespan ownership."""
+﻿"""FastAPI application and runtime lifespan ownership."""
 
 from __future__ import annotations
 
@@ -9,18 +9,25 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
-from app.api.routes import load_database_skills
 from app.api.routes import router as routes_router
+from app.api.settings import router as settings_router
+from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
+from app.model_settings import ModelSettingsStore, set_current_model_settings_store
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
+from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.catalog import SkillCatalog
+from app.skills.store import UserSkillStore
 from app.tools.cache_store import init_cache_store
 
 logging.basicConfig(
@@ -80,9 +87,30 @@ def create_app(configured: Settings = settings) -> FastAPI:
         assistant_stream_hub = AssistantStreamHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
+        skill_catalog = SkillCatalog()
+        model_settings_store = ModelSettingsStore(
+            Path(configured.output_dir).expanduser().resolve().parent
+            / "settings"
+            / "model.json",
+            defaults=configured,
+        )
+        set_current_model_settings_store(model_settings_store)
+        model_preview_client = httpx.AsyncClient(
+            timeout=10.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
+        skill_store = UserSkillStore(
+            configured.skill_data_path,
+            catalog=skill_catalog,
+            builtins=load_builtin_skill_descriptors(),
+        )
         manager = TaskManager(
             repository,
-            run_executor=ModeDispatchRunExecutor(repository),
+            run_executor=ModeDispatchRunExecutor(
+                repository,
+                skill_catalog=skill_catalog,
+            ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
             event_hub=event_hub,
@@ -100,29 +128,33 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.cache_store = init_cache_store(
             Path(configured.output_dir).parent / "cache"
         )
-        # Register stable user-selectable database skills once at startup so
-        # GET /api/v1/databases does not re-register them on every request.
-        load_database_skills()
+        application.state.skill_catalog = skill_catalog
+        application.state.skill_store = skill_store
+        application.state.model_settings_store = model_settings_store
+        application.state.model_preview_client = model_preview_client
         try:
             await manager.start()
             yield
         finally:
             try:
-                await manager.close()
+                await model_preview_client.aclose()
             finally:
                 try:
-                    await assistant_stream_hub.close()
+                    await manager.close()
                 finally:
                     try:
-                        await event_hub.close()
+                        await assistant_stream_hub.close()
                     finally:
                         try:
-                            await index_executor.close()
+                            await event_hub.close()
                         finally:
                             try:
-                                storage_executor.shutdown(wait=True)
+                                await index_executor.close()
                             finally:
-                                sync_executor.shutdown(wait=True)
+                                try:
+                                    storage_executor.shutdown(wait=True)
+                                finally:
+                                    sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",
@@ -136,7 +168,13 @@ def create_app(configured: Settings = settings) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost"],
+    )
     application.include_router(routes_router)
+    application.include_router(skills_router)
+    application.include_router(settings_router)
     application.include_router(ws_router)
     application.add_api_route("/api/v1/health", health, methods=["GET"])
     return application

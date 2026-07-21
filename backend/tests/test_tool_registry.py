@@ -4,7 +4,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from app.agent_loop import agent as agent_module
 from app.tools import _registry
 from app.tools._registry import get_all_tools
 
@@ -47,10 +46,7 @@ def test_all_tools_have_name() -> None:
         assert hasattr(t, "name"), f"工具 {t} 缺少 name 属性"
 
 
-@pytest.mark.parametrize(
-    "loader", [_registry._import_skill_modules, agent_module._import_skill_modules]
-)
-def test_builtin_loader_reraises_nested_missing_dependency(loader) -> None:
+def test_builtin_loader_reraises_nested_missing_dependency() -> None:
     target = _registry.BUILTIN_SKILL_MODULES[0]
     real_import = __import__
 
@@ -62,8 +58,4 @@ def test_builtin_loader_reraises_nested_missing_dependency(loader) -> None:
     with patch("builtins.__import__", side_effect=fail_nested), pytest.raises(
         ModuleNotFoundError, match="missing dependency"
     ):
-        loader()
-
-
-def test_agent_and_registry_share_builtin_loader() -> None:
-    assert agent_module._import_skill_modules is _registry._import_skill_modules
+        _registry._import_skill_modules()

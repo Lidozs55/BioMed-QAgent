@@ -68,7 +68,7 @@ async def _runtime_client(
     application = create_app(Settings(output_dir=str(output_dir)))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application),
-        base_url="http://test",
+        base_url="http://localhost",
     ) as client:
         yield application, client
 

@@ -1572,6 +1572,31 @@ async def test_task_selection_is_persisted_and_reused_by_continuations(
 
 
 @pytest.mark.asyncio
+async def test_run_context_receives_task_database_allowlist(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    observed: list[list[str]] = []
+
+    async def run(execution) -> None:
+        observed.append(list(execution.context.preferred_sources))
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await manager.create_task(
+            StartTaskRequest(
+                request_id="req_allowlist_context",
+                input="allowlist context",
+                databases=["geo"],
+            )
+        )
+        await manager.wait_until_idle()
+        assert observed == [["geo"]]
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_submit_run_rejects_fixture_task_with_typed_conflict(tmp_path) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
@@ -2823,6 +2848,14 @@ async def test_fastapi_lifespan_owns_runtime_executors_and_manager(tmp_path) -> 
         assert isinstance(
             manager.run_executor.agent_executor,
             runner_module.AgentRunExecutor,
+        )
+        assert (
+            manager.run_executor.agent_executor.skill_catalog
+            is application.state.skill_catalog
+        )
+        assert (
+            manager.run_executor.import_executor.skill_catalog
+            is application.state.skill_catalog
         )
         assert manager.event_hub is application.state.event_hub
         assert manager.max_active_runs == 2

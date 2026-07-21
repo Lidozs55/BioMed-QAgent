@@ -10,9 +10,9 @@ distinct from ``app.agent_loop.model.LazyDashScopeModel`` because:
 2. The model name differs (``qwen-vl-max`` vs ``qwen-plus``); a second
    independent client avoids mutating the Agent's model.
 
-The client is created lazily on first use so that missing
-``DASHSCOPE_API_KEY`` does not crash import. Configuration errors surface
-as ``ModelConfigurationError`` (reused from ``model.py`` for a stable
+Each call receives an explicit Run-owned snapshot, constructs its own client,
+and closes that client before returning. Configuration errors surface as
+``ModelConfigurationError`` (reused from ``model.py`` for a stable
 execution-boundary error code).
 """
 from __future__ import annotations
@@ -22,10 +22,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 
 from app.agent_loop.model import require_model_credentials
-from app.config import settings
+from app.model_config import RunModelSettings
+from app.tools.network_safety import validate_credentialed_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,6 @@ _SUPPORTED_IMAGE_MIMES = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
-
-#: Lazy singleton client — created on first ``get_vl_client()`` call.
-_vl_client: AsyncOpenAI | None = None
-
 
 class ChartExtractionError(RuntimeError):
     """Raised when the full L1→L2→L3 chart extraction chain fails.
@@ -109,25 +106,11 @@ def _encode_image_b64(path: Path) -> str:
         return encoded
 
 
-def get_vl_client() -> AsyncOpenAI:
-    """Return the lazy Qwen-VL AsyncOpenAI client.
-
-    Raises ``ModelConfigurationError`` if ``DASHSCOPE_API_KEY`` is missing.
-    """
-    global _vl_client
-    if _vl_client is None:
-        require_model_credentials()
-        _vl_client = AsyncOpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url=settings.dashscope_base_url,
-        )
-    return _vl_client
-
-
 async def call_vl_model(
     image_path: Path,
     prompt: str,
     *,
+    model_settings: RunModelSettings,
     timeout: float = 60.0,
 ) -> str:
     """Send one image to ``qwen-vl-max`` and return the raw text response.
@@ -145,10 +128,15 @@ async def call_vl_model(
         ChartExtractionError: Image too large and cannot be downsampled,
             or the VLM API call fails after retry budget is exhausted.
     """
-    client = get_vl_client()
+    require_model_credentials(model_settings)
+    base_url = validate_credentialed_public_url(model_settings.base_url)
     mime = _infer_mime(image_path)
     b64 = _encode_image_b64(image_path)
     data_url = f"data:{mime};base64,{b64}"
+    client = AsyncOpenAI(
+        api_key=model_settings.api_key,
+        base_url=base_url,
+    )
 
     try:
         response = await client.chat.completions.create(
@@ -168,25 +156,21 @@ async def call_vl_model(
             temperature=0.1,
             timeout=timeout,
         )
-    except Exception as exc:
+    except APIError as exc:
         raise ChartExtractionError(
             f"qwen-vl-max call failed for {image_path}: {exc}"
         ) from exc
-
-    content: str = ""
-    choices: list[Any] = getattr(response, "choices", []) or []
-    if choices:
-        message = getattr(choices[0], "message", None)
-        if message is not None:
-            content = getattr(message, "content", "") or ""
-    if not content:
-        raise ChartExtractionError(
-            f"qwen-vl-max returned empty content for {image_path}"
-        )
-    return content
-
-
-def reset_vl_client_for_tests() -> None:
-    """Clear the lazy singleton — test-only hook for isolated VLM tests."""
-    global _vl_client
-    _vl_client = None
+    else:
+        content: str = ""
+        choices: list[Any] = getattr(response, "choices", []) or []
+        if choices:
+            message = getattr(choices[0], "message", None)
+            if message is not None:
+                content = getattr(message, "content", "") or ""
+        if not content:
+            raise ChartExtractionError(
+                f"qwen-vl-max returned empty content for {image_path}"
+            )
+        return content
+    finally:
+        await client.close()

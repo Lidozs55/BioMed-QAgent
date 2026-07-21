@@ -227,8 +227,13 @@
 
 - [x] **P0** 修复 `run_manifest.json` 的 `model_name=None`
 
-      （`validation.py`，2026-07-19）—— 改为 `settings.model_name`，
-      从 `app.config.settings` 注入实际 Qwen 模型名。
+      （`validation.py`，2026-07-19；2026-07-20 权威化）—— Run 启动时从
+      `settings_manager.get_settings()` 捕获不可变 `RunModelSettings`，其中
+      `model_name` 经 Pipeline Tool → PipelineRunner → StageContext 传入 Validation
+      Gate 并写入 manifest，不再由 Validation 阶段读取全局设置。每个 Run 持有
+      独立的 `base_url`、`api_key`、`model_name`、`max_tokens`、`temperature`、
+      `top_p`、`repetition_penalty`、`enable_search`、`thinking_mode`，不受中途
+      设置变更影响。
       —— 配套 TDD：`tests/pipeline/test_artifact_metadata_correctness.py::test_run_manifest_model_name_not_none`
 
 - [x] **P0** 修复 `warnings.csv` 恒空，cell-line 修正未记入
@@ -1208,6 +1213,14 @@
       —— 当前默认 `data/output`（相对路径）cwd 依赖，生产环境风险
 
 ## 9. 前端 UI 改进
+
+- [x] **P1** 动态 Skill Catalog 与自定义数据库管理
+
+      —— 统一 builtin/用户 Skill Catalog，Agent 使用 `find_skill` / `invoke_skill`
+      —— 支持声明式 JSON/YAML 数据库包、Python ZIP Skill、热加载、启停和回滚
+      —— 新增 `/api/v1/skills` 管理面与数据库 CRUD，区分 Agent-only / Pipeline-supported
+      —— 设置页增加 Model / Databases / Skills，模型配置仅影响新建模型实例
+      —— 用户包使用外部可写目录；坏包隔离且保持 `load_error` 可管理
 
 - [ ] 引入 <https://ui.shadcn.com/docs/components/base/command>
             <https://ui.shadcn.com/docs/components/base/context-menu>

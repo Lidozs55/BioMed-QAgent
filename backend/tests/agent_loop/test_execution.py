@@ -1812,8 +1812,14 @@ async def test_executor_emits_ordered_tool_activity(
                 item=SimpleNamespace(
                     raw_item=SimpleNamespace(
                         call_id="call_123",
-                        name="search_pubmed",
-                        arguments='{"query":"BRCA1"}',
+                        name="invoke_skill",
+                        arguments=json.dumps(
+                            {
+                                "skill": "pubmed",
+                                "operation": "search_pubmed",
+                                "arguments": {"query": "BRCA1"},
+                            }
+                        ),
                     )
                 ),
             )
@@ -1842,10 +1848,34 @@ async def test_executor_emits_ordered_tool_activity(
         ToolCompletedPayload,
     ]
     assert emitted[1].tool_call_id == "call_123"
-    assert emitted[1].tool_name == "search_pubmed"
+    assert emitted[1].tool_name == "invoke_skill"
+    assert emitted[1].arguments == {
+        "skill": "pubmed",
+        "operation": "search_pubmed",
+        "arguments": {"query": "BRCA1"},
+    }
     assert emitted[2].tool_call_id == "call_123"
-    assert emitted[2].tool_name == "search_pubmed"
+    assert emitted[2].tool_name == "invoke_skill"
     assert emitted[2].output == "{'hits': 2}"
+
+
+def test_tool_arguments_are_bounded_for_event_projection() -> None:
+    raw_item = SimpleNamespace(
+        arguments=json.dumps(
+            {
+                "text": "x" * 250,
+                "items": list(range(25)),
+                "nested": {"one": {"two": {"three": {"four": "hidden"}}}},
+            }
+        )
+    )
+
+    projected = runner_module._extract_tool_arguments(raw_item)
+
+    assert projected is not None
+    assert projected["text"] == "x" * 200 + "...[truncated]"
+    assert projected["items"] == list(range(20))
+    assert projected["nested"]["one"]["two"] == "[dict:1]"
 
 
 @pytest.mark.asyncio

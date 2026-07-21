@@ -78,6 +78,7 @@ def build_review_query_strategy_tool(model: LazyDashScopeModel):
         name="ReviewerAgent",
         instructions=_reviewer_instructions,
         model=model,
+        model_settings=model.model_settings,
     )
     return reviewer_agent.as_tool(
         tool_name="review_query_strategy",

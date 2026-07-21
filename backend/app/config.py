@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -33,6 +34,10 @@ class Settings:
     port: int = int(os.getenv("PORT", "8000"))
     # 数据产物目录
     output_dir: str = os.getenv("OUTPUT_DIR", "data/output")
+    # User-installed skills live outside the bundled Python package.  When
+    # unset, derive a sibling of OUTPUT_DIR so packaged application upgrades
+    # cannot overwrite user data.
+    skill_data_dir: str | None = os.getenv("SKILL_DATA_DIR") or None
     # Durable task/session pagination
     task_page_size: int = int(os.getenv("TASK_PAGE_SIZE", "30"))
     task_page_max_size: int = int(os.getenv("TASK_PAGE_MAX_SIZE", "100"))
@@ -48,6 +53,13 @@ class Settings:
     runtime_subscriber_queue_size: int = int(
         os.getenv("RUNTIME_SUBSCRIBER_QUEUE_SIZE", "1000")
     )
+
+    @property
+    def skill_data_path(self) -> Path:
+        """Return the absolute, test-injectable user skill data directory."""
+        if self.skill_data_dir is not None:
+            return Path(self.skill_data_dir).expanduser().resolve()
+        return (Path(self.output_dir).expanduser().resolve().parent / "skills").resolve()
 
 
 settings = Settings()

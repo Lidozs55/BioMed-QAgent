@@ -33,12 +33,13 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.agent_loop.vl_model import ChartExtractionError
+from app.model_config import RunModelSettings, UserSettings
 from app.skills.builtin.processing.extract_chart_data_vlm import (
     _CHART_DATA_COLUMNS,
     _CHART_DATA_POINTS_COLUMNS,
@@ -184,6 +185,29 @@ def test_extract_from_image_l1_success(tmp_path: Path) -> None:
     assert len(run_ctx.query_log) == 1
     assert run_ctx.query_log[0]["status"] == "success"
     assert run_ctx.query_log[0]["records_count"] == 1
+
+
+def test_extract_from_image_passes_run_owned_settings_to_vlm(tmp_path: Path) -> None:
+    # Given
+    ctx = _make_ctx(tmp_path=tmp_path)
+    run_ctx: RunContext = ctx.context
+    run_settings = RunModelSettings.from_user_settings(
+        UserSettings(api_key="run-api-key", base_url="https://run.example/v1")
+    )
+    run_ctx.model_settings = run_settings
+    image_path = _write_fake_png(run_ctx.work_dir.source_asset_file("chart.png"))
+    call_vl = AsyncMock(return_value=_VALID_VLM_JSON)
+
+    # When
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        new=call_vl,
+    ):
+        data = _call_tool(ctx, str(image_path))
+
+    # Then
+    assert data["status"] == "ok"
+    assert call_vl.await_args.kwargs["model_settings"] is run_settings
 
 
 def test_extract_from_image_already_in_figures_no_copy(tmp_path: Path) -> None:

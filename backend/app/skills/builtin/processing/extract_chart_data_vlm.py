@@ -542,7 +542,11 @@ async def _extract_from_image(
     if was_copied:
         run_ctx.add_raw_asset(str(figures_path))
 
-    raw_response = await call_vl_model(figures_path, prompt)
+    raw_response = await call_vl_model(
+        figures_path,
+        prompt,
+        model_settings=run_ctx.model_settings,
+    )
     chart_json = _parse_vlm_json(raw_response, source_label)
 
     chart_row, point_rows = _normalize_chart_json(
