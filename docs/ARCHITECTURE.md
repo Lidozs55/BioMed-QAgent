@@ -98,6 +98,14 @@ backend/app/skills/
 递增 `generation` 原子热更新。正在执行的单次调用固定到解析时的 Skill 版本；
 后续调用读取最新快照。
 
+该进程级 Catalog 必须由 lifespan 同时传给 `UserSkillStore` 和
+`ModeDispatchRunExecutor`，并继续下传到 Agent 与 Import executor，确保管理面热更新
+和后续 Run 使用同一个快照来源。提交 `5008c56` 最初建立了这条链路；合并提交
+`2cf9a01` 保留了 `main.py` 中的 catalog-aware 调用，却从其本地父提交 `0110062`
+恢复了 `runner.py` 的旧构造器，导致启动时出现 unexpected keyword argument。
+`tests/runtime/test_manager.py::test_fastapi_lifespan_owns_runtime_executors_and_manager`
+固定此共享实例和启动不变量，防止跨分支合并再次拆断调用方与实现方。
+
 Main Agent 不再直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
 持有稳定的 `find_skill` / `invoke_skill` 网关，以及 Pipeline、文件、压缩和 Reviewer
 等核心 Tool。用户选择的数据库是网关硬 allowlist；`pipeline_supported` 只表示该
