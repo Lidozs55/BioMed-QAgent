@@ -94,3 +94,8 @@ coverage.xml
 opencode.json
 .codex/config.toml
 fix_ruff.py
+
+
+# omo
+
+.omo/
