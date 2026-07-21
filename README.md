@@ -60,14 +60,14 @@ BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pip
 
 ### 环境要求
 
-| 组件 | 要求 |
-| --- | --- |
-| Python | 3.12+ |
-| Node.js | 18+ |
-| Python 包管理器 | [uv](https://docs.astral.sh/uv/) |
-| Node 包管理器 | [pnpm](https://pnpm.io/)（不要使用 npm） |
-| LLM | DashScope API Key，或其他 OpenAI 兼容模型配置 |
-| 可选 | Playwright Chromium，用于网页视觉证据采集 |
+| 组件            | 要求                                          |
+| --------------- | --------------------------------------------- |
+| Python          | 3.12+                                         |
+| Node.js         | 18+                                           |
+| Python 包管理器 | [uv](https://docs.astral.sh/uv/)               |
+| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
+| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
+| 可选            | Playwright Chromium，用于网页视觉证据采集     |
 
 ### 1. 配置后端
 
@@ -119,10 +119,10 @@ pnpm dev
 
 前端默认运行在 `http://localhost:5173`。启动后可访问：
 
-- Web 界面：<http://localhost:5173>
-- Swagger：<http://127.0.0.1:8000/docs>
-- ReDoc：<http://127.0.0.1:8000/redoc>
-- 健康检查：<http://127.0.0.1:8000/api/v1/health>
+- Web 界面：[http://localhost:5173](http://localhost:5173)
+- Swagger：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- ReDoc：[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+- 健康检查：[http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
 
 ### 3. 运行后端演示
 
@@ -168,25 +168,25 @@ API 只公开通过 manifest 注册并通过验证的 `artifacts/` 文件。任�
 
 所有 REST 路由统一使用 `/api/v1` 前缀。
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| `GET` | `/api/v1/health` | 健康检查 |
-| `GET` | `/api/v1/databases` | 列出可选数据库 |
-| `GET` / `POST` | `/api/v1/tasks` | 查询任务 / 创建任务并排队首个 Run |
-| `GET` | `/api/v1/tasks/{task_id}` | 获取权威任务快照 |
-| `DELETE` | `/api/v1/tasks/{task_id}` | 删除终态任务及其历史 |
-| `POST` | `/api/v1/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
-| `POST` | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel` | 请求取消 Run |
-| `POST` | `/api/v1/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |
-| `GET` | `/api/v1/tasks/{task_id}/messages` | 分页读取任务消息 |
-| `GET` | `/api/v1/tasks/{task_id}/events` | 按 sequence 重放 durable events |
-| `GET` | `/api/v1/tasks/{task_id}/artifacts` | 列出已验证产物 |
-| `GET` | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | 下载并校验指定产物 |
-| `GET` / `POST` | `/api/v1/settings` | 读取 / 持久化模型设置，返回时掩码 API Key |
-| `GET` | `/api/v1/vendors` | 列出已知模型供应商 |
-| `GET` | `/api/v1/models` | 发现或筛选可用模型 |
-| `GET` | `/api/v1/models/{model_id}` | 获取单个模型详情 |
-| `GET` | `/api/v1/skills` | 列出内置和用户 Skill |
+| 方法               | 路径                                                | 用途                                      |
+| ------------------ | --------------------------------------------------- | ----------------------------------------- |
+| `GET`            | `/api/v1/health`                                  | 健康检查                                  |
+| `GET`            | `/api/v1/databases`                               | 列出可选数据库                            |
+| `GET` / `POST` | `/api/v1/tasks`                                   | 查询任务 / 创建任务并排队首个 Run         |
+| `GET`            | `/api/v1/tasks/{task_id}`                         | 获取权威任务快照                          |
+| `DELETE`         | `/api/v1/tasks/{task_id}`                         | 删除终态任务及其历史                      |
+| `POST`           | `/api/v1/tasks/{task_id}/runs`                    | 为 idle Agent Task 排队下一轮 Run         |
+| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | 请求取消 Run                              |
+| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | 提交人在回路决策                          |
+| `GET`            | `/api/v1/tasks/{task_id}/messages`                | 分页读取任务消息                          |
+| `GET`            | `/api/v1/tasks/{task_id}/events`                  | 按 sequence 重放 durable events           |
+| `GET`            | `/api/v1/tasks/{task_id}/artifacts`               | 列出已验证产物                            |
+| `GET`            | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | 下载并校验指定产物                        |
+| `GET` / `POST` | `/api/v1/settings`                                | 读取 / 持久化模型设置，返回时掩码 API Key |
+| `GET`            | `/api/v1/vendors`                                 | 列出已知模型供应商                        |
+| `GET`            | `/api/v1/models`                                  | 发现或筛选可用模型                        |
+| `GET`            | `/api/v1/models/{model_id}`                       | 获取单个模型详情                          |
+| `GET`            | `/api/v1/skills`                                  | 列出内置和用户 Skill                      |
 
 Skill 管理 API 还提供启用、禁用、回滚、上传、校验和删除操作，详见 FastAPI 文档和 [backend/README.md](backend/README.md)。
 
@@ -246,34 +246,34 @@ BioMed-QAgent/
 
 ## 技术栈
 
-| 层级 | 技术 |
-| --- | --- |
-| 后端 | Python 3.12+、FastAPI、uvicorn |
-| Agent | OpenAI Agents SDK、Qwen / DashScope OpenAI 兼容接口 |
-| 数据契约 | Pydantic v2、dataclass |
+| 层级           | 技术                                                   |
+| -------------- | ------------------------------------------------------ |
+| 后端           | Python 3.12+、FastAPI、uvicorn                         |
+| Agent          | OpenAI Agents SDK、Qwen / DashScope OpenAI 兼容接口    |
+| 数据契约       | Pydantic v2、dataclass                                 |
 | 数据获取与解析 | httpx、BeautifulSoup、pdfplumber、openpyxl、Playwright |
-| 科学计算 | matplotlib、SciPy、seaborn |
-| 前端 | React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui |
-| 状态与数据展示 | Zustand、React Markdown、PapaParse |
-| 测试 | pytest、pytest-asyncio、Vitest、Testing Library |
-| 工具链 | uv、pnpm、ruff、ESLint |
+| 科学计算       | matplotlib、SciPy、seaborn                             |
+| 前端           | React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui |
+| 状态与数据展示 | Zustand、React Markdown、PapaParse                     |
+| 测试           | pytest、pytest-asyncio、Vitest、Testing Library        |
+| 工具链         | uv、pnpm、ruff、ESLint                                 |
 
 ## 配置参考
 
 `.env.example` 是配置入口。常用变量如下：
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DASHSCOPE_API_KEY` | 空 | DashScope API Key；使用真实 Agent / Qwen 时需要 |
-| `DASHSCOPE_BASE_URL` | DashScope OpenAI 兼容地址 | 模型服务的 OpenAI 兼容 base URL |
-| `MODEL_NAME` | `qwen-plus` | 默认模型名 |
-| `NCBI_EMAIL` | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱 |
-| `NCBI_TOOL` | `BioMedQAgent` | NCBI E-utilities tool 名称 |
-| `NCBI_API_KEY` | 空 | 可选的 NCBI API Key |
-| `HOST` | `127.0.0.1` | 后端监听地址 |
-| `PORT` | `8000` | 后端监听端口 |
-| `OUTPUT_DIR` | `data/output` | durable task 和产物输出目录 |
-| `LOG_LEVEL` | `INFO` | 日志级别 |
+| 变量                   | 默认值                        | 说明                                            |
+| ---------------------- | ----------------------------- | ----------------------------------------------- |
+| `DASHSCOPE_API_KEY`  | 空                            | DashScope API Key；使用真实 Agent / Qwen 时需要 |
+| `DASHSCOPE_BASE_URL` | DashScope OpenAI 兼容地址     | 模型服务的 OpenAI 兼容 base URL                 |
+| `MODEL_NAME`         | `qwen-plus`                 | 默认模型名                                      |
+| `NCBI_EMAIL`         | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱                       |
+| `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
+| `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
+| `HOST`               | `127.0.0.1`                 | 后端监听地址                                    |
+| `PORT`               | `8000`                      | 后端监听端口                                    |
+| `OUTPUT_DIR`         | `data/output`               | durable task 和产物输出目录                     |
+| `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
 
 模型设置也可以通过 `/api/v1/settings` 持久化到 `data/user_settings.json`。保存的用户设置会在 Run 创建时形成不可变快照，避免并发运行中的配置变更影响已开始的任务。
 
@@ -349,15 +349,15 @@ pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-impor
 
 ## 相关文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 权威架构、数据流、契约、事件和安全模型 |
+| 文档                                                        | 内容                                    |
+| ----------------------------------------------------------- | --------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
 | [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
-| [docs/TODO.md](docs/TODO.md) | P0/P1/P2 开发任务与架构决策 |
-| [PROBLEM.md](PROBLEM.md) | 赛题背景、目标和评价标准 |
-| [backend/README.md](backend/README.md) | 后端 API、Skill、测试、打包与故障排查 |
-| [frontend/README.md](frontend/README.md) | 前端组件、状态管理、数据流与测试 |
-| [backend/REPRODUCIBILITY.md](backend/REPRODUCIBILITY.md) | 可复现性与演示说明 |
+| [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |
+| [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
+| [backend/README.md](backend/README.md)                       | 后端 API、Skill、测试、打包与故障排查   |
+| [frontend/README.md](frontend/README.md)                     | 前端组件、状态管理、数据流与测试        |
+| [backend/REPRODUCIBILITY.md](backend/REPRODUCIBILITY.md)     | 可复现性与演示说明                      |
 
 ## 许可证
 
