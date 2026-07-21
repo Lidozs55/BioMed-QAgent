@@ -170,10 +170,13 @@ def _format_query_log_section(run_ctx: RunContext) -> str:
 
 def _make_instructions_fn(
     base: str,
-) -> Callable[[RunContextWrapper[RunContext]], Awaitable[str]]:
+) -> Callable[[RunContextWrapper[RunContext], Agent[RunContext]], Awaitable[str]]:
     """构造动态 instructions callable，在 base 后追加已完成检索清单。"""
 
-    async def _fn(ctx: RunContextWrapper[RunContext]) -> str:
+    async def _fn(
+        ctx: RunContextWrapper[RunContext],
+        _agent: Agent[RunContext],
+    ) -> str:
         run_ctx: RunContext = ctx.context
         search_section = _format_query_log_section(run_ctx)
         return f"{base}\n\n---\n\n{search_section}"
