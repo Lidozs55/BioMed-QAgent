@@ -114,7 +114,8 @@ async def search_pubmed_adapter(
             "records_count": len(records),
             "records": records,
             "usage_hint": (
-                "完整记录在 records 字段，可传给 analyze_papers 工具进行结构化分析。"
+                "可将 records 中每条记录的 title 字段提取为列表，传给 analyze_papers "
+                "工具进行结构化分析（只传 title，不要传 abstract 或完整 records）。"
                 "不要在 assistant 文本中复述 records 内容——工具卡片已自动展示。"
             ),
         },
@@ -129,9 +130,10 @@ async def search_pubmed_adapter(
         "`summary` field (brief overview + top 3 titles) and a `records` field "
         "(full structured records: title, abstract, authors, journal, pub_date, "
         "doi, pmid, pmcid, is_open_access, source_url). Use the summary to brief "
-        "the user; pass `records` to `analyze_papers` for structured clue "
-        "extraction. Do NOT restate records in assistant text — the frontend "
-        "tool card already displays them."
+        "the user. To extract structured clues, pass only the `title` field from "
+        "each record (as a list of strings) to `analyze_papers` — do NOT pass "
+        "the full records or abstracts. Do NOT restate records in assistant text "
+        "— the frontend tool card already displays them."
     ),
 )
 async def search_pubmed(

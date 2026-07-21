@@ -133,6 +133,13 @@ export interface AssistantStreamSegmentProjection {
   confirmedThroughChunkIndex: number;
   active: boolean;
   durableSeen: boolean;
+  /**
+   * ``finish_reason`` from the ``assistant_stream_end`` frame.
+   * ``null`` before the end frame arrives; ``"tool_call_pending"`` when the
+   * backend enters JSON buffer mode (signals frontend to keep showing
+   * "正在调用工具" placeholder).
+   */
+  finishReason: string | null;
 }
 
 export interface AssistantStreamConflictDiagnostic {

@@ -9,7 +9,7 @@ Validates:
 
 from __future__ import annotations
 
-from app.agent_loop.agent import build_agent
+from app.agent_loop.agent import INSTRUCTIONS, build_agent
 
 
 def test_agent_has_correct_name() -> None:
@@ -19,29 +19,29 @@ def test_agent_has_correct_name() -> None:
 
 
 def test_instructions_contain_required_keywords() -> None:
-    """Instructions must mention structured data, source tracking, and CSV output."""
-    agent = build_agent().agent
-
-    # 检查结构化数据关键词
-    assert "CSV" in agent.instructions, (
+    """Base instructions must mention structured data, source tracking, and CSV output."""
+    # agent.instructions is a dynamic callable (query_log injection); validate
+    # the base content via the module-level INSTRUCTIONS constant.
+    assert "CSV" in INSTRUCTIONS, (
         "instructions should mention CSV as output format"
     )
-    # 结构化产物/结构化数据
-    assert "结构化" in agent.instructions, (
+    assert "结构化" in INSTRUCTIONS, (
         "instructions should mention structured output (结构化)"
     )
-    # 来源记录/来源清单
-    assert "来源" in agent.instructions, (
+    assert "来源" in INSTRUCTIONS, (
         "instructions should mention source tracking (来源)"
     )
 
 
 def test_agent_instructions_are_non_empty() -> None:
-    """Agent must have non-empty instructions string."""
+    """Agent must have a non-empty instructions callable backed by a substantial base."""
     agent = build_agent().agent
-    assert isinstance(agent.instructions, str)
-    assert len(agent.instructions) > 100, (
-        "instructions should be substantial ( > 100 chars )"
+    # instructions is now a callable that appends query_log sections to INSTRUCTIONS.
+    assert callable(agent.instructions), (
+        "instructions should be a callable for dynamic query_log injection"
+    )
+    assert len(INSTRUCTIONS) > 100, (
+        "base instructions should be substantial ( > 100 chars )"
     )
 
 

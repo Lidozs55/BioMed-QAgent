@@ -625,6 +625,234 @@ async def test_text_buffer_does_not_swallow_live_publish_cancellation() -> None:
     assert durable_payloads == []
 
 
+def _make_text_buffer_execution(
+    durable_payloads: list[object], live_frames: list[object]
+) -> RunExecution:
+    async def emit_durable(payload: object) -> None:
+        durable_payloads.append(payload)
+
+    async def emit_live(frame: object) -> None:
+        live_frames.append(frame)
+
+    return RunExecution(
+        task_id="task_json_strip",
+        run_id="run_json_strip",
+        request_id="request_json_strip",
+        input="json strip",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+        _assistant_stream_emitter=emit_live,
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_discards_suspect_json_on_tool_call_finish() -> None:
+    """行首 `{` 触发可疑模式，tool_call 结束时丢弃缓冲。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    # 文本 + 行首 JSON（模拟 Qwen 工具参数泄露）
+    await buffer.add("开始检索。\n")
+    await buffer.add('{"query": "alzheimer", "max_results": 20}')
+    await buffer.end("tool_call")
+
+    # 只有 "开始检索。\n" 被发出，JSON 被丢弃
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "开始检索。\n"
+    durable_text = "".join(
+        p.delta for p in durable_payloads if isinstance(p, AssistantDeltaPayload)
+    )
+    assert durable_text == "开始检索。\n"
+    assert buffer._json_suspect_active is False
+    assert buffer._json_suspect_parts == []
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_discards_suspect_json_on_stop_when_valid_json() -> None:
+    """stop 结束时，缓冲中是合法 JSON 则丢弃。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add('{"key": "value"}')
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert live_deltas == []
+    assert durable_payloads == [] or all(
+        not isinstance(p, AssistantDeltaPayload) or p.delta == ""
+        for p in durable_payloads
+    )
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_flushes_suspect_buffer_as_text_when_not_json() -> None:
+    """stop 结束时，缓冲中非合法 JSON 则作为普通文本补发。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    # 行首 `{` 触发，但内容不是合法 JSON
+    await buffer.add("{这是普通文本，不是 JSON")
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "{这是普通文本，不是 JSON"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_does_not_trigger_json_mode_inside_code_fence() -> None:
+    """代码围栏内的行首 `{` 不触发 JSON 可疑模式。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add("```python\n")
+    await buffer.add('{"key": "value"}\n')
+    await buffer.add("```\n")
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == '```python\n{"key": "value"}\n```\n'
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_does_not_trigger_json_mode_for_inline_brace() -> None:
+    """非行首的 `{` 不触发 JSON 可疑模式。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add("配置项 {key: value} 结束")
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "配置项 {key: value} 结束"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_detects_newline_brace_across_chunks() -> None:
+    """`\\n{` 跨 chunk 边界时仍能检测（\\n 在上一 chunk，{ 在下一 chunk）。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add("文本结束\n")
+    await buffer.add('{"query": "test"}')
+    await buffer.end("tool_call")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "文本结束\n"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_flushes_suspect_as_text_when_exceeding_cap() -> None:
+    """可疑缓冲超过上限时作为普通文本补发，退出可疑模式。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+    buffer._json_suspect_max_bytes = 20  # 设小上限便于测试
+
+    # 行首 `{` 触发，但内容超过 20 字节且非合法 JSON
+    await buffer.add("{这是很长很长的非 JSON 文本内容，超过上限")
+    # 触发上限后应已补发并退出可疑模式
+    assert buffer._json_suspect_active is False
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "{这是很长很长的非 JSON 文本内容，超过上限"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_discards_large_tool_args_json_via_tool_call() -> None:
+    """模拟大参数 JSON（如长 titles 列表）：tool_call 时整体丢弃。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+    # 释放上限，验证大 JSON 也能正确缓冲
+    buffer._json_suspect_max_bytes = 10 * 1024 * 1024
+
+    # 模拟真实场景：文本 + 行首大 JSON
+    await buffer.add("现在开始执行文献线索提取。\n\n")
+    big_payload = '{"titles": ["Paper A with a very long title", "Paper B another long title"]}'
+    await buffer.add(big_payload)
+    await buffer.end("tool_call")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    assert "".join(f.delta for f in live_deltas) == "现在开始执行文献线索提取。\n\n"
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_emits_tool_call_pending_end_frame_on_suspect_entry() -> None:
+    """进入缓冲模式时发射 finish_reason='tool_call_pending' 的 end frame。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add("文本前缀\n")
+    await buffer.add('{"query": "test"}')
+    # 此时已进入缓冲模式，应已发射 tool_call_pending end frame
+    end_frames = [
+        f for f in live_frames
+        if isinstance(f, AssistantStreamEndFrame) and f.finish_reason == "tool_call_pending"
+    ]
+    assert len(end_frames) == 1
+    assert end_frames[0].stream_id == "assistant:run_json_strip"
+    await buffer.end("tool_call")
+
+
+@pytest.mark.asyncio
+async def test_text_buffer_creates_new_segment_when_flushing_non_json_text() -> None:
+    """缓冲模式补发非 JSON 文本时创建新 segment（新 stream_id）。"""
+    durable_payloads: list[object] = []
+    live_frames: list[object] = []
+    execution = _make_text_buffer_execution(durable_payloads, live_frames)
+    buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
+
+    await buffer.add("前缀文本\n")
+    await buffer.add("{这是非JSON文本")
+    await buffer.end("stop")
+
+    live_deltas = [
+        f for f in live_frames if isinstance(f, AssistantStreamDeltaFrame)
+    ]
+    # 前缀在 segment 0，补发文本在 segment 1
+    segment_0_text = "".join(
+        f.delta for f in live_deltas if f.stream_id == "assistant:run_json_strip"
+    )
+    segment_1_text = "".join(
+        f.delta for f in live_deltas if f.stream_id == "assistant:run_json_strip:1"
+    )
+    assert segment_0_text == "前缀文本\n"
+    assert segment_1_text == "{这是非JSON文本"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("boundary", "finish_reason", "expected_exception"),

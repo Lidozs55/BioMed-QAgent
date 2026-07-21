@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from agents import Agent
+from agents import Agent, RunContextWrapper
 
+from app.agent_loop.context import RunContext
 from app.agent_loop.model import LazyDashScopeModel, get_model
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
@@ -133,11 +135,17 @@ Pipeline 完成后你的汇报应包含：
 - 如需完整表达矩阵，建议用户从 GEO supplementary files 下载（如 Seurat/HDF5）
 
 ## 上下文管理
-所有检索查询会自动记录。当查询日志累计较长（约 8000 字符，通常对应 15-20 条
-查询）时，调用 `compress_query_log` 工具压缩旧记录，压缩后仅保留最近 5 条
-完整记录。在调用 `run_research_pipeline` 前主动调用 `review_query_strategy`
-工具，让 ReviewerAgent 审查查询策略合理性（哪些 source 已覆盖、哪些零结果
-不应重试、是否需要换关键词或换 source）。审查结果会在后续压缩时保留，不会丢失。
+所有检索查询会自动记录为"已完成检索清单"，并在每轮开始时注入到你的系统提示
+顶部（见"已完成的检索"小节）。**该清单是权威的进度追踪来源**——会话历史可能
+被压缩为摘要，但清单始终可见。规划下一步检索前，先查看清单避免重复搜索相同的
+query+source 组合。
+
+当查询日志累计较长（约 8000 字符，通常对应 15-20 条查询）时，调用
+`compress_query_log` 工具压缩旧记录，压缩后仅保留最近 5 条完整记录；
+压缩摘要也会注入到清单顶部。在调用 `run_research_pipeline` 前主动调用
+`review_query_strategy` 工具，让 ReviewerAgent 审查查询策略合理性（哪些
+source 已覆盖、哪些零结果不应重试、是否需要换关键词或换 source）。审查结果
+会在后续压缩时保留，不会丢失。
 
 ## 图表数据提取
 `extract_chart_data_vlm` 工具从论文图表中提取结构化数据（柱状图/折线图/
@@ -161,6 +169,52 @@ class AgentBuild:
     agent: Agent
     skill_names: tuple[str, ...]
     model: LazyDashScopeModel
+
+
+def _format_query_log_section(run_ctx: RunContext) -> str:
+    """格式化"已完成的检索"小节，注入到系统提示顶部。
+
+    让 LLM 始终能看到 query_log + query_log_summary，避免会话压缩后
+    丢失检索历史导致重复循环（问题 #3 根因修复）。
+    """
+    parts: list[str] = []
+
+    summary = run_ctx.query_log_summary
+    if summary:
+        parts.append("## 检索历史摘要（旧记录已压缩）\n")
+        parts.append(summary)
+        parts.append("")
+
+    query_log = run_ctx.query_log
+    if query_log:
+        parts.append(f"## 已完成的检索（共 {len(query_log)} 次，按时间顺序）")
+        for i, entry in enumerate(query_log, 1):
+            query = entry.get("query", "")
+            source = entry.get("source", "")
+            status = entry.get("status", "")
+            count = entry.get("records_count", 0)
+            parts.append(f"{i}. [{source}] \"{query}\" → {status} ({count} records)")
+        parts.append(
+            "\n**重要**：以上检索已完成，不要重复搜索相同的 query+source 组合。"
+            "如需换关键词或换 source，请在文本中说明理由。"
+        )
+    else:
+        parts.append("## 已完成的检索\n\n（暂无检索记录）")
+
+    return "\n".join(parts)
+
+
+def _make_instructions_fn(
+    base: str,
+) -> Callable[[RunContextWrapper[RunContext]], Awaitable[str]]:
+    """构造动态 instructions callable，在 base 后追加已完成检索清单。"""
+
+    async def _fn(ctx: RunContextWrapper[RunContext]) -> str:
+        run_ctx: RunContext = ctx.context
+        search_section = _format_query_log_section(run_ctx)
+        return f"{base}\n\n---\n\n{search_section}"
+
+    return _fn
 
 
 def build_agent(databases: list[str] | None = None) -> AgentBuild:
@@ -207,9 +261,12 @@ def build_agent(databases: list[str] | None = None) -> AgentBuild:
         if instructions_suffix
         else INSTRUCTIONS
     )
+    # 动态 instructions：每轮注入 query_log + query_log_summary，
+    # 让 LLM 始终看到"已完成检索清单"，避免会话压缩后丢失历史导致循环。
+    instructions_fn = _make_instructions_fn(merged_instructions)
     agent = Agent(
         name="BioMedResearcher",
-        instructions=merged_instructions,
+        instructions=instructions_fn,
         tools=unique_tools,
         model=model,
     )

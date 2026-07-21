@@ -859,12 +859,17 @@ export function reduceAssistantStreamFrames(
             confirmedThroughChunkIndex: -1,
             active: false,
             durableSeen: false,
+            finishReason: frame.finish_reason,
           };
           aggregate.streamsById[frame.stream_id] = segment;
           aggregate.liveStreamOrder.push(frame.stream_id);
           changedRuns.add(frame.run_id);
-        } else if (segment.active) {
-          aggregate.streamsById[frame.stream_id] = { ...segment, active: false };
+        } else if (segment.active || segment.finishReason === null) {
+          aggregate.streamsById[frame.stream_id] = {
+            ...segment,
+            active: false,
+            finishReason: frame.finish_reason,
+          };
           changedRuns.add(frame.run_id);
         }
         continue;
@@ -881,6 +886,7 @@ export function reduceAssistantStreamFrames(
           confirmedThroughChunkIndex: -1,
           active: false,
           durableSeen: false,
+          finishReason: null,
         };
         aggregate.streamsById[frame.stream_id] = segment;
         aggregate.liveStreamOrder.push(frame.stream_id);
@@ -933,9 +939,33 @@ export function reduceAssistantStreamFrames(
       else messages[index] = message;
     }
     if (tasksById === state.tasksById) tasksById = { ...tasksById };
+    // Propagate finishReason from segments to existing assistant_segment items.
+    // This lets ChatPanel show "正在调用工具" when finishReason === "tool_call_pending".
+    let items = task.items;
+    for (const runId of mutableRuns) {
+      const aggregate = streamsByRunId[runId];
+      if (aggregate === undefined) continue;
+      for (const segment of Object.values(aggregate.streamsById)) {
+        if (segment.finishReason === null) continue;
+        const itemId = `assistant:${segment.streamId}`;
+        const existing = items.find((i) => i.itemId === itemId);
+        if (
+          existing?.kind === "assistant_segment" &&
+          existing.finishReason !== segment.finishReason
+        ) {
+          if (items === task.items) items = [...items];
+          const itemIndex = items.indexOf(existing);
+          items[itemIndex] = {
+            ...existing,
+            finishReason: segment.finishReason,
+          };
+        }
+      }
+    }
     tasksById[taskId] = {
       ...task,
       messages,
+      items,
       assistantStreamsByRunId: streamsByRunId,
     };
   }
@@ -1070,6 +1100,7 @@ function applyDurableAssistantDeltaCore(
     confirmedThroughChunkIndex: -1,
     active: false,
     durableSeen: false,
+    finishReason: null,
   };
   const pendingChunks = Object.fromEntries(
     Object.entries(segment.pendingChunks).filter(
@@ -1117,6 +1148,14 @@ function applyDurableAssistantDelta(
   const prevContent =
     existing?.kind === "assistant_segment" ? existing.content : "";
   const isStreaming = isRunAssistantStreamActive(nextTask, runId);
+  // Preserve finishReason from the live segment (set by assistant_stream_end
+  // frame) or from the existing item. This prevents durable deltas from
+  // overwriting finishReason="tool_call_pending" with null.
+  const segment = nextTask.assistantStreamsByRunId[runId]?.streamsById[streamId];
+  const finishReason =
+    segment?.finishReason ??
+    (existing?.kind === "assistant_segment" ? existing.finishReason : null) ??
+    null;
   return upsertItem(nextTask, {
     kind: "assistant_segment",
     itemId,
@@ -1126,7 +1165,7 @@ function applyDurableAssistantDelta(
     streamId,
     content: `${prevContent}${payload.delta}`,
     isStreaming,
-    finishReason: null,
+    finishReason,
   });
 }
 
