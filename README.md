@@ -28,6 +28,10 @@ Main Agent (Qwen / OpenAI Agents SDK)
 
 ## 快速开始
 
+> 📖 **新手？** 如果你对 Python/Node 开发环境不太熟悉，请先阅读 **[开发者快速入门指南](docs/DEVELOPER_QUICKSTART.md)**，里面包含了 uv/pnpm 安装指引、AI-Native 开发技巧和常见问题排查。
+>
+> 🤖 **如果你在用 AI Agent 工具**，直接把 `docs/DEVELOPER_QUICKSTART.md` 丢给它，让它帮你完成环境配置。
+
 ### 环境要求
 
 | 组件 | 版本要求 |
