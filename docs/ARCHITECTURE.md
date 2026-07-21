@@ -604,6 +604,27 @@ VLM 模块（`app/agent_loop/vl_model.py`）执行一次性 `chat.completions.cr
 - 不同于实现 Agents SDK `Model` 接口的 `LazyDashScopeModel`（对话轮次），
   VLM 不是 Agent 模型。
 
+### 8.5 Agent SDK 动态 instructions 契约
+
+Main Agent 使用动态 instructions，在每轮模型调用前把当前 Run 的已完成检索记录
+注入 system prompt。该 callable 必须遵守 OpenAI Agents SDK 的公开二参数契约
+`(context, agent)`；即使实现只读取 `context`，也不能省略 `agent` 参数。
+
+2026-07-21 的故障中，提交 `05f32c9` 将该 callable 实现为单参数 `(context)`。
+OpenAI Agents SDK 0.18.2 在首轮解析 instructions 时拒绝此签名，因此 durable event
+只出现 `run_queued -> run_started -> run_failed`，尚未来得及产生模型或 Tool 事件；
+权威错误为：
+
+```text
+'instructions' callable must accept exactly 2 arguments (context, agent), but got 1: ['ctx']
+```
+
+SDK 日志中的 `Resetting current trace` 是异常后的 trace 清理，不是根因。该故障与
+模型凭据、上下文压缩和 `2cf9a01` 的 merge drift 无关。修复保持检索记录注入逻辑
+不变，只补齐二参数签名。`tests/test_agent.py::test_dynamic_instructions_resolve_through_sdk`
+通过 SDK 的 `Agent.get_system_prompt()` 公共边界解析动态 instructions，防止只检查
+callable 存在性而遗漏 SDK 契约回归。
+
 ## 9. 前端实现架构
 
 前端已按后端 durable 契约实现为任务工作台，而不是聊天窗口加日志：

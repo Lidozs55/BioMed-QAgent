@@ -9,7 +9,12 @@ Validates:
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+from agents import RunContextWrapper
 from app.agent_loop.agent import INSTRUCTIONS, build_agent
+from app.agent_loop.context import RunContext
 
 
 def test_agent_has_correct_name() -> None:
@@ -43,6 +48,19 @@ def test_agent_instructions_are_non_empty() -> None:
     assert len(INSTRUCTIONS) > 100, (
         "base instructions should be substantial ( > 100 chars )"
     )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_instructions_resolve_through_sdk(tmp_path: Path) -> None:
+    """SDK instruction resolution must accept and render the run context."""
+    run_context = RunContext(task_id="dynamic-instructions", base_dir=tmp_path)
+    query = "fixture-query-that-must-be-injected"
+    run_context.log_query(query, "pubmed", "success", records_count=3)
+
+    prompt = await build_agent().agent.get_system_prompt(RunContextWrapper(run_context))
+
+    assert prompt is not None
+    assert prompt.count(query) == 1
 
 
 def test_tools_list_is_non_empty() -> None:
