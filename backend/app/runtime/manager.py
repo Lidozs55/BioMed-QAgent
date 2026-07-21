@@ -1155,6 +1155,7 @@ class TaskManager:
             await self._append_status(accepted, RunStartedPayload())
             try:
                 context = self._context_factory(accepted.task_id)
+                context.preferred_sources = list(snapshot.task.databases)
                 context.bind_managed_run(accepted.run_id)
                 execution = RunExecution(
                     task_id=accepted.task_id,
