@@ -1,5 +1,5 @@
 import { GearIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -19,7 +19,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
-import { useAPI } from "@/hooks/useAPI";
+import { useAPI, type ModelInfo, type ModelSettings } from "@/hooks/useAPI";
 import { RuntimeController } from "@/runtime/controller";
 
 function errorDescription(reason: unknown): string {
@@ -28,6 +28,10 @@ function errorDescription(reason: unknown): string {
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<ModelSettings | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const prevSettingsOpenRef = useRef(settingsOpen);
   const transport = useAgentStream();
   const api = useAPI();
 
@@ -67,6 +71,51 @@ export default function App() {
       transport.disconnect();
     };
   }, [controller, transport]);
+
+  const loadModels = useCallback(async () => {
+    try {
+      const currentSettings = await api.fetchSettings();
+      setSettings(currentSettings);
+      setSelectedModelId(currentSettings.model_name);
+      if (currentSettings.api_key_configured && currentSettings.base_url) {
+        const discovered = await api.fetchModels({ baseUrl: currentSettings.base_url });
+        setModels(discovered);
+      } else {
+        setModels([]);
+      }
+    } catch {
+      setModels([]);
+    }
+  }, [api]);
+
+  // Load models on mount (deferred to avoid sync setState warning)
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadModels(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadModels]);
+
+  // Reload models when settings dialog closes
+  useEffect(() => {
+    const prev = prevSettingsOpenRef.current;
+    prevSettingsOpenRef.current = settingsOpen;
+    if (prev === true && settingsOpen === false) {
+      const timer = window.setTimeout(() => void loadModels(), 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [settingsOpen, loadModels]);
+
+  const handleModelChange = useCallback(
+    async (modelId: string) => {
+      try {
+        const updated = await api.saveSettings({ model_name: modelId });
+        setSettings(updated);
+        setSelectedModelId(modelId);
+      } catch {
+        toast.error("模型切换失败");
+      }
+    },
+    [api],
+  );
 
   const exportCache = useCallback(() => {
     const url = api.getCacheExportUrl();
@@ -125,6 +174,10 @@ export default function App() {
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }
+                models={models}
+                hasApiKey={settings?.api_key_configured ?? false}
+                selectedModelId={selectedModelId}
+                onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}
               />
             </ArtifactWorkspace>

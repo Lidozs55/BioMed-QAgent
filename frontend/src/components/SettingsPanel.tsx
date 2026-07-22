@@ -145,6 +145,8 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
   const [models, setModels] = useState<RichModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  void modelsLoaded;
   const [skills, setSkills] = useState<SkillManifest[]>([]);
 
   /* ---- model preview state ---- */
@@ -202,7 +204,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       setSettings(nextSettings);
       setVendors(nextVendors);
       setSkills(nextSkills);
-      setBaseUrl(nextSettings.base_url);
+      setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1");
       setApiKey("");
       apiKeyDirtyRef.current = false;
       setModelName(nextSettings.model_name);
@@ -226,9 +228,12 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
 
   useEffect(() => {
     if (!open) return undefined;
-    const timer = window.setTimeout(() => void load(), 0);
+    const timer = window.setTimeout(() => {
+      setModelsLoaded(false);
+      void load();
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [load, open]);
+  }, [load, open, setModelsLoaded]);
 
   /* ---- model form save with key-clear semantics ---- */
   const saveModel = async () => {
@@ -245,9 +250,17 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     const seq = ++saveSeqRef.current;
     setSaving(true);
     try {
+      // Verify API key works with current base URL
+      try {
+        await api.fetchModels({ baseUrl, apiKey });
+      } catch {
+        setSaving(false);
+        setModelError("API \u5bc6\u94a5\u9a8c\u8bc1\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u5bc6\u94a5\u662f\u5426\u6b63\u786e\u6216\u4e0e Base URL \u662f\u5426\u5339\u914d");
+        return;
+      }
+
       const payload: Record<string, unknown> = {};
       if (baseUrl !== settings?.base_url) payload.base_url = baseUrl;
-      if (apiKeyDirtyRef.current) payload.api_key = apiKey;
       if (modelName !== settings?.model_name) payload.model_name = modelName;
       if (maxTokens !== settings?.max_tokens) payload.max_tokens = maxTokens;
       if (temperature !== (settings?.advanced.temperature ?? 0.7)) payload.temperature = temperature;
@@ -257,6 +270,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
 
       if (Object.keys(payload).length === 0) {
         setDirty(false);
+        onOpenChange(false);
         return;
       }
 
@@ -269,8 +283,10 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       setShowModelDropdown(false);
       apiKeyDirtyRef.current = false;
       setDirty(false);
+      setModelsLoaded(true);
 
       toast.success("模型设置已保存");
+      onOpenChange(false);
 
       // Model discovery — non-blocking after save
       setModelsLoading(true);
@@ -298,14 +314,14 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     abortRef.current = abort;
     setModelsLoading(true);
     try {
-      const fresh = (await api.fetchModels({ baseUrl, apiKey: apiKey || undefined })) as RichModelInfo[];
-      if (!abort.signal.aborted) setModels(fresh);
+      const fresh = (await api.fetchModels({ baseUrl, apiKey: apiKeyDirtyRef.current ? apiKey : undefined })) as RichModelInfo[];
+      if (!abort.signal.aborted) { setModels(fresh); setModelsLoaded(true); }
     } catch (error) {
       if (!abort.signal.aborted) toast.error("模型列表加载失败", { description: errorText(error) });
     } finally {
       if (!abort.signal.aborted) setModelsLoading(false);
     }
-  }, [api, baseUrl, apiKey]);
+  }, [api, baseUrl, apiKey, setModelsLoaded]);
 
   /* ---- database / skill handlers ---- */
   const mutateSkill = async (action: () => Promise<void>, success: string) => {
@@ -533,7 +549,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                             {models.length === 0 ? (
                               <Input
                                 id="settings-model"
-                                value={modelName}
+                                value={modelsLoaded ? modelName : ""}
                                 onChange={(e) => { setModelName(e.target.value); markDirty(); setModelError(null); }}
                                 placeholder="输入模型名称（如 qwen-plus）"
                               />
@@ -739,7 +755,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                     </FieldGroup>
                   </CardContent>
                   <CardFooter className="justify-end">
-                    <Button onClick={() => void saveModel()} disabled={!dirty || saving}>
+                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || !apiKey.trim()}>
                       {saving && <Spinner data-icon="inline-start" />}
                       保存模型设置
                     </Button>
