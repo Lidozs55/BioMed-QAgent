@@ -19,7 +19,7 @@ async def test_model_settings_mask_and_retain_saved_key(tmp_path: Path) -> None:
             json={
                 "base_url": "https://example.com/v1",
                 "api_key": "sk-secret-value",
-                "model_name": "demo-model",
+                "model_name": "qwen-max",
                 "max_tokens": 4096,
             },
         )
@@ -70,7 +70,15 @@ async def test_only_exact_current_mask_retains_saved_key(tmp_path: Path) -> None
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
-        await client.put("/api/v1/settings", json={"api_key": "sk-secret-value"})
+        await client.put(
+            "/api/v1/settings",
+            json={
+                "base_url": "https://example.com/v1",
+                "model_name": "qwen-max",
+                "max_tokens": 4096,
+                "api_key": "sk-secret-value",
+            },
+        )
         await client.put("/api/v1/settings", json={"api_key": "literal...secret"})
         loaded = await client.get("/api/v1/settings")
 
@@ -82,7 +90,11 @@ def test_model_settings_store_keeps_explicit_key_clear_after_reload(tmp_path: Pa
     from app.model_settings import ModelSettingsStore
 
     settings_path = tmp_path / "settings" / "model.json"
-    defaults = Settings(dashscope_api_key="configured-default")
+    defaults = Settings(
+        dashscope_api_key="configured-default",
+        dashscope_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name="qwen-max",
+    )
     store = ModelSettingsStore(settings_path, defaults=defaults)
 
     store.update({"api_key": ""})
@@ -103,6 +115,7 @@ def test_model_factory_snapshots_hot_user_configuration(
         tmp_path / "model.json",
         defaults=Settings(dashscope_api_key="first", model_name="model-one"),
     )
+    store.update({"context_window": 65_536})
     created: list[dict[str, str]] = []
 
     class FakeClient:
@@ -113,7 +126,13 @@ def test_model_factory_snapshots_hot_user_configuration(
     first = model_module.get_model(
         model_module.to_run_model_settings(store.snapshot())
     )
-    store.update({"api_key": "second", "model_name": "model-two"})
+    store.update(
+        {
+            "api_key": "second",
+            "model_name": "model-two",
+            "context_window": 131_072,
+        }
+    )
     second = model_module.get_model(
         model_module.to_run_model_settings(store.snapshot())
     )
