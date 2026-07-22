@@ -73,7 +73,7 @@ describe("App startup ownership", () => {
         }
         if (url === "/api/v1/settings") {
           return Promise.resolve(
-            new Response(JSON.stringify({ base_url: "", api_key: "", model_name: "", max_tokens: 8192, temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false }), { status: 200 }),
+            new Response(JSON.stringify({ base_url: "", api_key: "", api_key_configured: false, model_name: "", max_tokens: 8192, context_window: 0, context_window_source: "catalog", safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384, compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60, available_input_tokens: 0, advanced: { temperature: 0.7, top_p: 1.0, repetition_penalty: 1.0, enable_search: false, thinking_mode: false } }), { status: 200 }),
           );
         }
         if (url === "/api/v1/vendors") {
