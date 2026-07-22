@@ -147,7 +147,7 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       const form = new FormData();
       form.set("request_id", requestId(admission.requestId));
       if (note !== undefined && note.trim().length > 0) form.set("input", note.trim());
-      for (const file of files) form.append("files", file, file.name);
+      for (const file of files) form.append("files", file);
       return fetcher(`${baseUrl}/import/tasks`, { method: "POST", body: form }).then((r) => parseResponse(r).then((b) => parseTaskRunAccepted(b)));
     },
     continueTask: (taskId, input, admission = {}) =>
@@ -175,8 +175,8 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
     setSkillEnabled: (name, enabled) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
     rollbackSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/rollback`, { method: "POST" }),
     deleteSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}`, { method: "DELETE" }),
-    validateSkill: (file) => { const form = new FormData(); form.set("file", file, file.name); return request(`${baseUrl}/skills/validate`, { method: "POST", body: form }).then((b) => parseSkillValidation(b)); },
-    uploadSkill: (file) => { const form = new FormData(); form.set("file", file, file.name); return requestVoid(`${baseUrl}/skills/upload`, { method: "POST", body: form }); },
+    validateSkill: (file) => { const form = new FormData(); form.set("file", file); return request(`${baseUrl}/skills/validate`, { method: "POST", body: form }).then((b) => parseSkillValidation(b)); },
+    uploadSkill: (file) => { const form = new FormData(); form.set("file", file); return requestVoid(`${baseUrl}/skills/upload`, { method: "POST", body: form }); },
     createDatabase: (manifest) => requestVoid(`${baseUrl}/databases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
     updateDatabase: (name, manifest) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
     deleteDatabase: (name) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "DELETE" }),

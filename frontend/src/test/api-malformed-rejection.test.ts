@@ -245,15 +245,12 @@ describe("database create/delete request paths", () => {
 /* ---- startImportTask valid multipart ---- */
 describe("startImportTask multipart request", () => {
   it("sends FormData body with request_id, input, ordered files identity and no Content-Type header", async () => {
-    const appendSpy = vi.spyOn(FormData.prototype, "append");
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ status: "queued", request_id: "req_abc", task_id: "t1", run_id: "r1" }));
     const api = createAPIClient({ fetcher, randomUUID: () => "abc" });
     const fileA = new File(["a"], "a.csv", { type: "text/csv" });
     const fileB = new File(["b"], "b.csv", { type: "text/csv" });
     const result = await api.startImportTask({ files: [fileA, fileB], note: "my note" });
     expect(result.task_id).toBe("t1");
-    expect(appendSpy).toHaveBeenCalledWith("files", fileA, fileA.name);
-    expect(appendSpy).toHaveBeenCalledWith("files", fileB, fileB.name);
     const calls = fetcher.mock.calls[0];
     if (calls === undefined) throw new Error("Expected fetch call");
     const [, init] = calls;
@@ -266,19 +263,26 @@ describe("startImportTask multipart request", () => {
       expect(init.body.get("input")).toBe("my note");
       const entries = init.body.getAll("files");
       expect(entries).toHaveLength(2);
+      expect(entries[0]).toBeInstanceOf(File);
+      expect(entries[1]).toBeInstanceOf(File);
+      if (entries[0] instanceof File && entries[1] instanceof File) {
+        expect(entries[0].name).toBe(fileA.name);
+        expect(entries[0].size).toBe(fileA.size);
+        expect(entries[0].type).toBe(fileA.type);
+        expect(entries[1].name).toBe(fileB.name);
+        expect(entries[1].size).toBe(fileB.size);
+        expect(entries[1].type).toBe(fileB.type);
+      }
     }
-    appendSpy.mockRestore();
   });
 });
 
 describe("uploadSkill body", () => {
   it("sends FormData body with the exact file identity to upload", async () => {
-    const setSpy = vi.spyOn(FormData.prototype, "set");
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(new Response("{}", { status: 200 }));
     const api = createAPIClient({ fetcher });
     const file = new File(['{"name":"test"}'], "test-skill.yaml", { type: "application/x-yaml" });
     await api.uploadSkill(file);
-    expect(setSpy).toHaveBeenCalledWith("file", file, file.name);
     const calls = fetcher.mock.calls[0];
     if (calls === undefined) throw new Error("Expected fetch call");
     const [, init] = calls;
@@ -286,6 +290,14 @@ describe("uploadSkill body", () => {
     expect(init.method).toBe("POST");
     expect(init.headers).toBeUndefined();
     expect(init.body).toBeInstanceOf(FormData);
-    setSpy.mockRestore();
+    if (init.body instanceof FormData) {
+      const f = init.body.get("file");
+      expect(f).toBeInstanceOf(File);
+      if (f instanceof File) {
+        expect(f.name).toBe(file.name);
+        expect(f.size).toBe(file.size);
+        expect(f.type).toBe(file.type);
+      }
+    }
   });
 });
