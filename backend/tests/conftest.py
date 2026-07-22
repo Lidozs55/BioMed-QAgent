@@ -6,6 +6,22 @@ import contextlib
 import pytest
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect live tests by default without blocking explicit live selection."""
+
+    requested_args = tuple(
+        str(argument).replace("\\", "/") for argument in config.invocation_params.args
+    )
+    explicitly_requested_live_file = any("tests/live/" in argument for argument in requested_args)
+    if config.getoption("markexpr") or explicitly_requested_live_file:
+        return
+    live_items = [item for item in items if item.get_closest_marker("live") is not None]
+    if not live_items:
+        return
+    config.hook.pytest_deselected(items=live_items)
+    items[:] = [item for item in items if item.get_closest_marker("live") is None]
+
+
 @pytest.fixture(autouse=True)
 def _disable_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable all rate limiters during tests to avoid 2s delays.
