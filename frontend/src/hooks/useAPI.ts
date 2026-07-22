@@ -13,6 +13,25 @@ import type {
   TaskSnapshot,
 } from "@/runtime/contracts";
 
+// Re-export all settings contracts for backward compatibility
+export type { CapabilitySource, ModelSettings, ModelSettingsUpdate, ModelPreviewRequest, VendorInfo, ModelInfo, SettingsAPIClient, DeclarativeOperation, DeclarativeSkillManifest, DatabaseOperationUpdatePatch, DatabaseUpdatePatch, SkillManifest, SkillDetail, SkillValidation } from "@/hooks/settingsContracts";
+export type { ContextBudgetSettings } from "@/hooks/settingsContracts";
+
+// Re-export APIError class, normalizer, and runtime parsers
+export { APIError, normalizeErrorDetail } from "@/hooks/settingsContracts";
+export { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
+import { APIError } from "@/hooks/settingsContracts";
+import { parseModelSettings, parseVendorsEnvelope, parseModelsEnvelope } from "@/hooks/settingsParsers";
+import {
+  parseEventPage, parseMessagePage, parseTaskPage,
+  parseTaskRunAccepted, parseTaskSnapshot,
+} from "@/lib/apiResponseParsers";
+import {
+  parseArtifactsEnvelope, parseDatabasesEnvelope,
+  parseSkillDetail, parseSkillsEnvelope, parseSkillValidation,
+} from "@/lib/apiEnvelopeParsers";
+import type { SettingsAPIClient } from "@/hooks/settingsContracts";
+
 const DEFAULT_BASE_URL = "/api/v1";
 
 export type FetchLike = (
@@ -24,204 +43,21 @@ export interface AdmissionOptions {
   requestId?: string;
 }
 
-export interface ModelSettings {
-  base_url: string;
-  api_key: string;
-  api_key_configured: boolean;
-  model_name: string;
-  max_tokens: number;
-  advanced: {
-    temperature?: number;
-    top_p?: number;
-    repetition_penalty?: number;
-    enable_search?: boolean;
-    thinking_mode?: boolean;
-  };
-}
-
-export interface ModelSettingsUpdate {
-  base_url?: string;
-  api_key?: string;
-  model_name?: string;
-  max_tokens?: number;
-  temperature?: number;
-  top_p?: number;
-  repetition_penalty?: number;
-  enable_search?: boolean;
-  thinking_mode?: boolean;
-}
-
-export interface ModelPreviewRequest {
-  baseUrl: string;
-  apiKey?: string;
-  query?: string;
-}
-
-export interface VendorInfo {
-  id: string;
-  name: string;
-  base_url: string;
-  description: string;
-  recommended: boolean;
-}
-
-export interface ModelInfo {
-  id: string;
-  name: string;
-  description: string;
-  context_window: number;
-  suggested_max_tokens: number;
-  capabilities?: { text: boolean; image: boolean; video: boolean; audio: boolean };
-  recommended?: boolean;
-  api_available?: boolean;
-  capability_source?: string;
-}
-
-export interface SkillManifest {
-  name: string;
-  display_name: string;
-  version: string;
-  category: string;
-  description: string;
-  origin: "builtin" | "package";
-  supported_sources: string[];
-  operations: string[];
-  enabled: boolean;
-  user_selectable: boolean;
-  pipeline_supported: boolean;
-  available?: boolean;
-  load_error?: string | null;
-}
-
-export interface DeclarativeOperation {
-  name: string;
-  description: string;
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
-  url: string;
-  query?: Record<string, unknown>;
-  headers?: Record<string, unknown>;
-  body?: unknown;
-  timeout_seconds?: number;
-  extract?: string | null;
-}
-
-export interface DeclarativeSkillManifest {
-  schema_version: "1.0";
-  name: string;
-  display_name: string;
-  version: string;
-  category: string;
-  description: string;
-  supported_sources: string[];
-  operations: DeclarativeOperation[];
-  enabled?: boolean;
-  user_selectable: boolean;
-  pipeline_supported: false;
-  requirements?: string[];
-}
-
-export interface DatabaseOperationUpdatePatch {
-  name: string;
-  description?: string;
-  method?: DeclarativeOperation["method"];
-  url?: string;
-  query?: Record<string, unknown>;
-  headers?: Record<string, unknown>;
-  body?: unknown;
-  timeout_seconds?: number;
-  extract?: string | null;
-}
-
-export interface DatabaseUpdatePatch {
-  display_name?: string;
-  description?: string;
-  operation?: DatabaseOperationUpdatePatch;
-}
-
-export interface SkillDetail {
-  manifest: SkillManifest;
-  current_version: string;
-  versions: string[];
-  package_kind: "manifest" | "zip";
-  warning: string | null;
-  available: boolean;
-  load_error: string | null;
-  declarative_manifest: DeclarativeSkillManifest | null;
-}
-
-export interface SkillValidation {
-  valid: boolean;
-  skill: SkillManifest;
-  warning: string | null;
-}
-
-export class APIError extends Error {
-  readonly status: number;
-  readonly detail: unknown;
-
-  constructor(status: number, detail: unknown) {
-    super(typeof detail === "string" ? detail : `API request failed (${status})`);
-    this.name = "APIError";
-    this.status = status;
-    this.detail = detail;
-  }
-}
-
 export interface APIClient {
   fetchDatabases: () => Promise<DatabaseRecord[]>;
-  fetchTasks: (params?: {
-    limit?: number;
-    cursor?: string | null;
-  }) => Promise<TaskPage>;
+  fetchTasks: (params?: { limit?: number; cursor?: string | null }) => Promise<TaskPage>;
   fetchTask: (taskId: string) => Promise<TaskSnapshot>;
-  fetchMessages: (
-    taskId: string,
-    params?: { limit?: number; cursor?: string | null },
-  ) => Promise<MessagePage>;
-  fetchEvents: (
-    taskId: string,
-    params?: { afterSequence?: number; limit?: number },
-  ) => Promise<EventPage["events"]>;
-  createTask: (
-    input: StartTaskInput,
-    options?: AdmissionOptions,
-  ) => Promise<TaskRunAccepted>;
-  startImportTask: (
-    input: { files: File[]; note?: string },
-    options?: AdmissionOptions,
-  ) => Promise<TaskRunAccepted>;
-  continueTask: (
-    taskId: string,
-    input: ContinueTaskInput,
-    options?: AdmissionOptions,
-  ) => Promise<TaskRunAccepted>;
+  fetchMessages: (taskId: string, params?: { limit?: number; cursor?: string | null }) => Promise<MessagePage>;
+  fetchEvents: (taskId: string, params?: { afterSequence?: number; limit?: number }) => Promise<EventPage["events"]>;
+  createTask: (input: StartTaskInput, options?: AdmissionOptions) => Promise<TaskRunAccepted>;
+  startImportTask: (input: { files: File[]; note?: string }, options?: AdmissionOptions) => Promise<TaskRunAccepted>;
+  continueTask: (taskId: string, input: ContinueTaskInput, options?: AdmissionOptions) => Promise<TaskRunAccepted>;
   cancelRun: (taskId: string, runId: string) => Promise<TaskSnapshot>;
-  resumeRun: (
-    taskId: string,
-    runId: string,
-    input: ResumeRunInput,
-  ) => Promise<TaskSnapshot>;
+  resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
   deleteTask: (taskId: string) => Promise<void>;
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
   getCacheExportUrl: () => string;
-}
-
-export interface SettingsAPIClient {
-  fetchSettings: () => Promise<ModelSettings>;
-  saveSettings: (changes: ModelSettingsUpdate) => Promise<ModelSettings>;
-  fetchVendors: () => Promise<VendorInfo[]>;
-  fetchModels: (preview: ModelPreviewRequest) => Promise<ModelInfo[]>;
-  fetchSkills: () => Promise<SkillManifest[]>;
-  fetchSkill: (name: string) => Promise<SkillDetail>;
-  setSkillEnabled: (name: string, enabled: boolean) => Promise<void>;
-  rollbackSkill: (name: string) => Promise<void>;
-  deleteSkill: (name: string) => Promise<void>;
-  validateSkill: (file: File) => Promise<SkillValidation>;
-  uploadSkill: (file: File) => Promise<void>;
-  createDatabase: (manifest: DeclarativeSkillManifest) => Promise<void>;
-  updateDatabase: (name: string, patch: DatabaseUpdatePatch) => Promise<void>;
-  deleteDatabase: (name: string) => Promise<void>;
 }
 
 interface APIClientOptions {
@@ -267,190 +103,83 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
   const fetcher: FetchLike = options.fetcher ?? ((input, init) => fetch(input, init));
   const randomUUID = options.randomUUID ?? defaultRandomUUID;
 
-  const parseResponse = async <T>(response: Response): Promise<T> => {
-    if (!response.ok) {
-      throw new APIError(response.status, await errorDetail(response));
-    }
-    return response.json() as Promise<T>;
+  /** Parse any response as unknown — callers narrow with endpoint-specific helpers. */
+  const parseResponse = async (response: Response): Promise<unknown> => {
+    if (!response.ok) throw new APIError(response.status, await errorDetail(response));
+    return response.json();
   };
 
-  const request = async <T>(url: string, init?: RequestInit): Promise<T> =>
-    parseResponse<T>(await fetcher(url, init));
+  /** Generic request — returns unknown, callers parse with concrete parsers. */
+  const request = async (url: string, init?: RequestInit): Promise<unknown> => {
+    return parseResponse(await fetcher(url, init));
+  };
 
   const requestVoid = async (url: string, init?: RequestInit): Promise<void> => {
     const response = await fetcher(url, init);
-    if (!response.ok) {
-      throw new APIError(response.status, await errorDetail(response));
-    }
+    if (!response.ok) throw new APIError(response.status, await errorDetail(response));
   };
 
-  const postAdmission = async <T>(url: string, body: string): Promise<T> => {
-    const init: RequestInit = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    };
+  /** POST with retry — returns unknown, callers parse with concrete parsers. */
+  const postAdmission = async (url: string, body: string): Promise<unknown> => {
+    const init: RequestInit = { method: "POST", headers: { "Content-Type": "application/json" }, body };
     let response: Response;
-    try {
-      response = await fetcher(url, init);
-    } catch {
-      response = await fetcher(url, init);
-    }
-    return parseResponse<T>(response);
+    try { response = await fetcher(url, init); }
+    catch { response = await fetcher(url, init); }
+    return parseResponse(response);
   };
 
-  const requestId = (provided?: string): string =>
-    provided ?? `req_${randomUUID()}`;
+  const requestId = (provided?: string): string => provided ?? `req_${randomUUID()}`;
 
   return {
     fetchDatabases: () =>
-      request<{ databases: DatabaseRecord[] }>(`${baseUrl}/databases`).then(
-        ({ databases }) => databases,
-      ),
-
+      request(`${baseUrl}/databases`).then((b) => parseDatabasesEnvelope(b)).then(({ databases }) => databases),
     fetchTasks: (params = {}) =>
-      request<TaskPage>(
-        withQuery(`${baseUrl}/tasks`, [
-          ["limit", params.limit],
-          ["cursor", params.cursor],
-        ]),
-      ),
-
-    fetchTask: (taskId) =>
-      request<TaskSnapshot>(`${baseUrl}/tasks/${encodeId(taskId)}`),
-
+      request(withQuery(`${baseUrl}/tasks`, [["limit", params.limit], ["cursor", params.cursor]])).then((b) => parseTaskPage(b)),
+    fetchTask: (taskId) => request(`${baseUrl}/tasks/${encodeId(taskId)}`).then((b) => parseTaskSnapshot(b)),
     fetchMessages: (taskId, params = {}) =>
-      request<MessagePage>(
-        withQuery(`${baseUrl}/tasks/${encodeId(taskId)}/messages`, [
-          ["limit", params.limit],
-          ["cursor", params.cursor],
-        ]),
-      ),
-
+      request(withQuery(`${baseUrl}/tasks/${encodeId(taskId)}/messages`, [["limit", params.limit], ["cursor", params.cursor]])).then((b) => parseMessagePage(b)),
     fetchEvents: (taskId, params = {}) =>
-      request<EventPage>(
-        withQuery(`${baseUrl}/tasks/${encodeId(taskId)}/events`, [
-          ["after_sequence", params.afterSequence],
-          ["limit", params.limit],
-        ]),
-      ).then(({ events }) => events),
-
-    createTask: (input, admission = {}) => {
-      const body = JSON.stringify({
-        request_id: requestId(admission.requestId),
-        input: input.input,
-        databases: input.databases,
-        mode: input.mode,
-      });
-      return postAdmission<TaskRunAccepted>(`${baseUrl}/tasks`, body);
-    },
-
+      request(withQuery(`${baseUrl}/tasks/${encodeId(taskId)}/events`, [["after_sequence", params.afterSequence], ["limit", params.limit]])).then((b) => parseEventPage(b)).then(({ events }) => events),
+    createTask: (input, admission = {}) => postAdmission(`${baseUrl}/tasks`, JSON.stringify({
+      request_id: requestId(admission.requestId), input: input.input, databases: input.databases, mode: input.mode,
+    })).then((b) => parseTaskRunAccepted(b)),
     startImportTask: ({ files, note }, admission = {}) => {
       const form = new FormData();
       form.set("request_id", requestId(admission.requestId));
-      if (note !== undefined && note.trim().length > 0) {
-        form.set("input", note.trim());
-      }
-      for (const file of files) {
-        form.append("files", file, file.name);
-      }
-      return fetcher(`${baseUrl}/import/tasks`, {
-        method: "POST",
-        body: form,
-      }).then((response) => parseResponse<TaskRunAccepted>(response));
+      if (note !== undefined && note.trim().length > 0) form.set("input", note.trim());
+      for (const file of files) form.append("files", file, file.name);
+      return fetcher(`${baseUrl}/import/tasks`, { method: "POST", body: form }).then((r) => parseResponse(r).then((b) => parseTaskRunAccepted(b)));
     },
-
-    continueTask: (taskId, input, admission = {}) => {
-      const body = JSON.stringify({
-        request_id: requestId(admission.requestId),
-        input: input.input,
-      });
-      return postAdmission<TaskRunAccepted>(
-        `${baseUrl}/tasks/${encodeId(taskId)}/runs`,
-        body,
-      );
-    },
-
+    continueTask: (taskId, input, admission = {}) =>
+      postAdmission(`${baseUrl}/tasks/${encodeId(taskId)}/runs`, JSON.stringify({
+        request_id: requestId(admission.requestId), input: input.input,
+      })).then((b) => parseTaskRunAccepted(b)),
     cancelRun: (taskId, runId) =>
-      request<TaskSnapshot>(
-        `${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/cancel`,
-        { method: "POST" },
-      ),
-
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/cancel`, { method: "POST" }).then((b) => parseTaskSnapshot(b)),
     resumeRun: (taskId, runId, input) =>
-      request<TaskSnapshot>(
-        `${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/resume`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            request_id: input.request_id,
-            decision: input.decision,
-            detail: input.detail,
-          }),
-        },
-      ),
-
-    deleteTask: (taskId) =>
-      requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}`, {
-        method: "DELETE",
-      }),
-
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/resume`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: input.request_id, decision: input.decision, detail: input.detail }),
+      }).then((b) => parseTaskSnapshot(b)),
+    deleteTask: (taskId) => requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}`, { method: "DELETE" }),
     fetchArtifacts: (taskId) =>
-      request<{ artifacts: ArtifactRecord[] }>(
-        `${baseUrl}/tasks/${encodeId(taskId)}/artifacts`,
-      ).then(({ artifacts }) => artifacts),
-
-    getArtifactUrl: (taskId, artifactId) =>
-      `${baseUrl}/tasks/${encodeId(taskId)}/artifacts/${encodeId(artifactId)}`,
-
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/artifacts`).then((b) => parseArtifactsEnvelope(b)).then(({ artifacts }) => artifacts),
+    getArtifactUrl: (taskId, artifactId) => `${baseUrl}/tasks/${encodeId(taskId)}/artifacts/${encodeId(artifactId)}`,
     getCacheExportUrl: () => `${baseUrl}/cache/export`,
-
-    fetchSettings: () => request<ModelSettings>(`${baseUrl}/settings`),
-
-    saveSettings: (changes) => request<ModelSettings>(`${baseUrl}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(changes),
-    }),
-
-    fetchVendors: () => request<{ vendors: VendorInfo[] }>(`${baseUrl}/vendors`).then(({ vendors }) => vendors),
-
-    fetchModels: (preview) => request<{ models: ModelInfo[] }>(`${baseUrl}/models`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_base_url: preview.baseUrl,
-        preview_api_key: preview.apiKey ?? "",
-        ...(preview.query === undefined ? {} : { query: preview.query }),
-      }),
-    }).then(({ models }) => models),
-
-    fetchSkills: () => request<{ skills: SkillManifest[] }>(`${baseUrl}/skills`).then(({ skills }) => skills),
-    fetchSkill: (name) => request<SkillDetail>(`${baseUrl}/skills/${encodeId(name)}`),
-    setSkillEnabled: (name, enabled) => request<unknown>(
-      `${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`,
-      { method: "POST" },
-    ).then(() => undefined),
-    rollbackSkill: (name) => request<unknown>(`${baseUrl}/skills/${encodeId(name)}/rollback`, { method: "POST" }).then(() => undefined),
-    deleteSkill: (name) => request<unknown>(`${baseUrl}/skills/${encodeId(name)}`, { method: "DELETE" }).then(() => undefined),
-    validateSkill: (file) => {
-      const form = new FormData();
-      form.set("file", file, file.name);
-      return request<SkillValidation>(`${baseUrl}/skills/validate`, { method: "POST", body: form });
-    },
-    uploadSkill: (file) => {
-      const form = new FormData();
-      form.set("file", file, file.name);
-      return request<unknown>(`${baseUrl}/skills/upload`, { method: "POST", body: form }).then(() => undefined);
-    },
-    createDatabase: (manifest) => request<unknown>(`${baseUrl}/databases`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest),
-    }).then(() => undefined),
-    updateDatabase: (name, manifest) => request<unknown>(`${baseUrl}/databases/${encodeId(name)}`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest),
-    }).then(() => undefined),
-    deleteDatabase: (name) => request<unknown>(`${baseUrl}/databases/${encodeId(name)}`, { method: "DELETE" }).then(() => undefined),
+    fetchSettings: () => fetcher(`${baseUrl}/settings`).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
+    saveSettings: (changes) => fetcher(`${baseUrl}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
+    fetchVendors: () => fetcher(`${baseUrl}/vendors`).then((r) => parseResponse(r).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors)),
+    fetchModels: (preview) => fetcher(`${baseUrl}/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preview_base_url: preview.baseUrl, preview_api_key: preview.apiKey ?? "", ...(preview.query === undefined ? {} : { query: preview.query }) }) }).then((r) => parseResponse(r).then((b) => parseModelsEnvelope(b)).then(({ models }) => models)),
+    fetchSkills: () => request(`${baseUrl}/skills`).then((b) => parseSkillsEnvelope(b)).then(({ skills }) => skills),
+    fetchSkill: (name) => request(`${baseUrl}/skills/${encodeId(name)}`).then((b) => parseSkillDetail(b)),
+    setSkillEnabled: (name, enabled) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+    rollbackSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}/rollback`, { method: "POST" }),
+    deleteSkill: (name) => requestVoid(`${baseUrl}/skills/${encodeId(name)}`, { method: "DELETE" }),
+    validateSkill: (file) => { const form = new FormData(); form.set("file", file, file.name); return request(`${baseUrl}/skills/validate`, { method: "POST", body: form }).then((b) => parseSkillValidation(b)); },
+    uploadSkill: (file) => { const form = new FormData(); form.set("file", file, file.name); return requestVoid(`${baseUrl}/skills/upload`, { method: "POST", body: form }); },
+    createDatabase: (manifest) => requestVoid(`${baseUrl}/databases`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
+    updateDatabase: (name, manifest) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest) }),
+    deleteDatabase: (name) => requestVoid(`${baseUrl}/databases/${encodeId(name)}`, { method: "DELETE" }),
   };
 }
 
