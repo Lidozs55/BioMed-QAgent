@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import app.agent_loop.runner as runner_module
 import app.pipeline.runner as pipeline_runner_module
@@ -76,11 +76,16 @@ class NoopCompactor:
         *,
         model_handle,
         emit,
+        request=None,
         session,
         cancellation_requested,
         commit,
     ):
-        return SimpleNamespace(session=session)
+        return SimpleNamespace(
+            session=session,
+            agent_input=request.agent_input if request is not None else "",
+            estimate=Mock(total=0),
+        )
 
 
 class ScriptedPipelineModel(Model):
@@ -1907,6 +1912,7 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
             *,
             model_handle,
             emit,
+            request=None,
             session,
             cancellation_requested,
             commit,
@@ -1917,7 +1923,11 @@ async def test_executor_prepares_compaction_before_starting_sdk_run(
             assert session is original_session
             assert cancellation_requested is execution.context.cancellation_requested
             assert commit == execution.commit_compaction
-            return SimpleNamespace(session=effective_session)
+            return SimpleNamespace(
+                session=effective_session,
+                agent_input=request.agent_input if request is not None else "continue",
+                estimate=Mock(total=0),
+            )
 
     class FakeResult:
         async def stream_events(self):
@@ -1960,7 +1970,7 @@ async def test_executor_ends_stream_when_compaction_preparation_fails(
     )
 
     class FailingCompactor:
-        async def prepare(self, task_id, **kwargs):
+        async def prepare(self, task_id, *, request=None, **kwargs):
             raise failure
 
     monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
@@ -2009,7 +2019,7 @@ async def test_executor_ends_stream_when_compaction_preparation_is_cancelled(
     )
 
     class CancelledCompactor:
-        async def prepare(self, task_id, **kwargs):
+        async def prepare(self, task_id, *, request=None, **kwargs):
             raise cancellation
 
     monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
@@ -2058,9 +2068,9 @@ async def test_executor_does_not_start_sdk_run_after_compaction_cancellation(
     )
 
     class Compactor:
-        async def prepare(self, task_id, **kwargs):
+        async def prepare(self, task_id, *, request=None, **kwargs):
             cancellation_requested.set()
-            return SimpleNamespace(session=object())
+            return SimpleNamespace(session=object(), agent_input="", estimate=Mock(total=0))
 
     def run_streamed(*args, **kwargs):
         raise AssertionError("SDK Run must not start after cancellation")
