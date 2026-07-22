@@ -18,8 +18,13 @@ from app.runtime.manager import RunExecution
 
 
 class NoopCompactor:
-    async def prepare(self, task_id, **kwargs):
-        return SimpleNamespace(session=object())
+    async def prepare(self, task_id, *, model_handle=None, emit=None, request=None,
+                      session=None, cancellation_requested=None, commit=None, **kwargs):
+        return SimpleNamespace(
+            session=object(),
+            agent_input=request.agent_input if request is not None else "",
+            estimate=Mock(total=0),
+        )
 
 
 def test_run_model_settings_copies_all_persisted_generation_fields() -> None:
@@ -28,6 +33,7 @@ def test_run_model_settings_copies_all_persisted_generation_fields() -> None:
         api_key="run-api-key",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         model_name="qwen3.5-plus",
+        context_window=65_536,
         max_tokens=4096,
         advanced=AdvancedParams(
             temperature=0.2,
@@ -48,6 +54,8 @@ def test_run_model_settings_copies_all_persisted_generation_fields() -> None:
     assert run_settings.repetition_penalty == 1.15
     assert run_settings.enable_search is False
     assert run_settings.thinking_mode is True
+    assert run_settings.context_budget.context_window == 65_536
+    assert run_settings.context_budget.max_output_tokens == 4096
 
 
 @pytest.mark.asyncio
@@ -168,6 +176,7 @@ def test_attachment_agent_uses_active_run_settings_snapshot(
         api_key="attachment-api-key",
         base_url="https://attachment.example/v1",
         model_name="attachment-model",
+        context_window=65_536,
     )
     runtime_getter = Mock(
         return_value=UserSettings(
