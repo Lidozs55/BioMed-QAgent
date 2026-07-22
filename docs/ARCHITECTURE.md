@@ -522,14 +522,22 @@ Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user
 
 **GET/POST /api/v1/settings**
 
-`UserSettings` 存储 `base_url`、`api_key`、`model_name`、`max_tokens` 和
+`ModelConfiguration` 存储 `base_url`、`api_key`、`model_name`、输出上限
+`max_tokens`、可选输入窗口覆盖 `context_window`、上下文预算比例，以及
 `AdvancedParams`（temperature、top_p、repetition_penalty、enable_search、
-thinking_mode）。GET 响应中，空 `api_key` 返回空串，长度不超过 12 的非空 key
+thinking_mode）。GET 同时返回已解析的窗口来源、保留 token 数和可用输入容量。
+空 `api_key` 返回空串，长度不超过 12 的非空 key
 返回 `****`，更长的 key 返回前 4 + `...` + 后 4 字符。
 POST 合并语义：
 
 - 字段为 `None` 时跳过（保留现有值）。
 - `api_key`：省略或等于掩码 → 保留；空串 → 清除；非空 → 替换。
+- `context_window`：省略 → 保留当前覆盖；正整数 → 记录用户覆盖；显式 `null` →
+  清除覆盖并恢复已知模型的精确目录值。未知模型没有可靠目录值，必须先提供正整数
+  窗口才能运行。
+- 完整合并候选必须满足 `0 <= safety_reserve_ratio <= 0.25`、
+  `0 < compaction_target_ratio < compaction_trigger_ratio < 1`，且输出上限与安全保留
+  之后仍有正的输入容量。校验失败不会修改内存快照或持久化文件。
 - 原子持久化到 `data/user_settings.json`。持久化文件中的 `api_key` 字段（包括
   空串）是权威值；只有文件或字段缺失时才从 `DASHSCOPE_API_KEY` 回退，确保显式
   清除在重启后不会被环境变量恢复。其他空字段仍按现有环境变量契约回退。
@@ -554,8 +562,8 @@ POST 合并语义：
   的 IP；原域名仅通过 `Host` 与 HTTPX `sni_hostname` 传递，以同时保持 TLS
   证书校验并消除 DNS 校验与连接之间的重绑定窗口。
 - 不安全供应商 URL 返回 422；供应商网络故障返回 502。
-- API 发现的模型优先使用内置目录补充元数据；未知模型按名称模式推断能力，
-  并按模型族赋予不同上下文窗口。
+- API 发现的模型优先使用内置目录补充精确、版本化的上下文窗口；未知模型可以显示，
+  但返回 `context_window=0`，不按名称或模型族猜测窗口。
 - 未提供发现 URL 时不发起供应商请求，返回空模型列表；内置目录用于补充已发现
   模型的元数据和单模型详情查询。
 
@@ -567,9 +575,10 @@ POST 合并语义：
 
 每个 Run 在构造时捕获不可变 `RunModelSettings` 快照（通过
 `run_model_settings_scope` contextvar），将 Agent 与并发的设置变更隔离。
-快照包含模型身份与凭据（`base_url`、`api_key`、`model_name`）以及六个生成
-参数：`max_tokens`、`temperature`、`top_p`、`repetition_penalty`、
-`enable_search`、`thinking_mode`。
+快照包含模型身份与凭据（`base_url`、`api_key`、`model_name`）、六个生成
+参数，以及不可变 `ContextBudget`。预算保留精确目录窗口或用户覆盖、窗口来源、
+tokenizer 类型、校准余量和本 Run 的触发/目标 token 数；运行期间的设置变更和
+新校准只影响后续 Run。
 
 到 OpenAI Agents SDK `ModelSettings` 的映射：
 
@@ -586,6 +595,49 @@ DashScope 专有字段仅在 `model_name` 以 `qwen`/`qwq` 开头且 `base_url` 
 与 path 匹配 `dashscope.aliyuncs.com/compatible-mode/v1` 时发送，否则 `extra_body`
 为 `None`。标准字段（max_tokens、temperature、top_p）始终发送。
 `false` 值被显式保留发送。
+
+### 8.5 Token 估算、压缩与校准
+
+输入容量按以下公式捕获一次：
+
+```text
+safety_reserve_tokens = max(16384, ceil(context_window * safety_reserve_ratio))
+input_capacity = context_window - max_tokens - safety_reserve_tokens
+trigger_tokens = floor(input_capacity * compaction_trigger_ratio)
+target_tokens = floor(input_capacity * compaction_target_ratio)
+```
+
+默认比例为安全保留 `0.05`、压缩触发 `0.85`、压缩目标 `0.60`。安全保留只从
+容量中扣除一次，不重复加入 prompt 估算。完整估算覆盖已解析 instructions、工具
+schema 的紧凑排序 JSON、Session items、当前输入、Chat Completions wrapper 与历史
+校准余量。
+
+Qwen/QwQ 在安装 `qwen-tokenizer` extra 时尝试使用本地
+`dashscope.get_tokenizer(model).encode`；默认安装和不支持的模型使用确定性的 UTF-8
+字节上界。运行路径不调用远程 `dashscope.Tokenization.call`，也不把
+`o200k_base` 当成 Qwen tokenizer。每次成功请求的最终 provider usage 是权威值；
+只保存 `actual_prompt_tokens - estimate_without_margin` 的正残差。校准按标准化
+provider origin + model 分组，仅保留最近 20 个正残差，采用最大值并限制在精确窗口
+的 10%，不保存 prompt 内容。
+
+`AgentRunExecutor` 在每一次 `Runner.run_streamed` 之前执行预算预检，包括首轮、
+获批的 MaxTurns continuation 和 Qwen 非法 function arguments 重试。超过触发值时，
+压缩器以完整 Run 为最小单元，先摘要最旧段并保留最新段，再缩短摘要或移除最旧完整
+段，直到不高于目标值；固定 instructions、tools、当前输入与输出保留本身已超容量时，
+在 provider 调用前抛出类型化配置错误。重复用户输入导致的对齐歧义会保留已验证的
+durable summary，把歧义后缀作为不可拆分保守段，并发出降级 warning。原始 SDK
+Session 仍 append-only，`conversation_summary.json` 与 durable event 继续按原子提交
+和回滚契约持久化。
+
+live 比较位于 `tests/live/test_context_budget_estimator_live.py`。它使用固定双语消息
+和最小工具，通过最终 streaming `include_usage` 比较 provider prompt token，并验证
+校准残差。默认 pytest 会排除所有 `live` 测试；任意显式 `-m` 表达式完全交给 pytest
+处理。运行命令：
+
+```bash
+uv run pytest -m live tests/live/test_context_budget_estimator_live.py -v
+uv run --extra qwen-tokenizer pytest -m live tests/live/test_context_budget_estimator_live.py -v
+```
 
 Agent 文本模型发送凭据前同样要求公网 HTTPS URL。`LazyDashScopeModel` 显式持有
 其创建的 `AsyncOpenAI` 客户端，不依赖 Agents SDK delegate 的默认 `close()`；
