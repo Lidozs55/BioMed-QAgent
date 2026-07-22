@@ -117,4 +117,41 @@ describe("declarative manifest field constraints", () => {
     const detail = await api.fetchSkill("s1");
     expect(detail.declarative_manifest?.operations[0].method).toBe("POST");
   });
+
+  /* ---- RED: header placeholder validation should reject only backend-matching braces ---- */
+  it("RED: rejects header name with backend-style lowercase placeholder {user}", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{user}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+  });
+
+  it("RED: rejects header name with backend-style lowercase placeholder {record_id}", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{record_id}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).rejects.toThrow(APIError);
+  });
+
+  it("RED: accepts header name with uppercase braces {A} (not backend placeholder)", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{A}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+  });
+
+  it("RED: accepts header name with numeric braces {1} (not backend placeholder)", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{1}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+  });
+
+  it("RED: accepts header name with empty braces {} (not backend placeholder)", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+  });
+
+  it("RED: accepts header name with mixed-case braces {MixedCase} (not backend placeholder)", async () => {
+    const ops = [{ ...baseDM.operations[0], headers: { "X-{MixedCase}": "x" } }];
+    const api = createAPIClient({ fetcher: vi.fn<FetchLike>().mockResolvedValue(jsonResponse(dm({ operations: ops }))) });
+    await expect(api.fetchSkill("s1")).resolves.toBeDefined();
+  });
 });
