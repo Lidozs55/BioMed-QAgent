@@ -213,6 +213,8 @@ def assistant_stream_delta(
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 @pytest.mark.asyncio
 async def test_text_buffer_publishes_atomic_live_chunk_before_blocked_durable_flush(
