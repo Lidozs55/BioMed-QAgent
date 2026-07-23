@@ -11,6 +11,49 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # qwen3-coder family — text-only OpenAI-compatible coding models
+    pytest.param(
+        "qwen3-coder-plus",
+        1_000_000,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-plus",
+    ),
+    pytest.param(
+        "qwen3-coder-plus-2025-09-23",
+        1_000_000,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-plus-2025-09-23",
+    ),
+    pytest.param(
+        "qwen3-coder-plus-2025-07-22",
+        1_000_000,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-plus-2025-07-22",
+    ),
+    pytest.param(
+        "qwen3-coder-flash",
+        1_000_000,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-flash",
+    ),
+    pytest.param(
+        "qwen3-coder-flash-2025-07-28",
+        1_000_000,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-flash-2025-07-28",
+    ),
+    pytest.param(
+        "qwen3-coder-next",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-coder-next",
+    ),
     # qwen3.7-max family — text-only, 1M context
     pytest.param("qwen3.7-max", 1_000_000, 64_000, _TEXT_ONLY, id="qwen3.7-max"),
     pytest.param(
