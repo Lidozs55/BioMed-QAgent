@@ -178,6 +178,52 @@ INFO:     Application startup complete.
 - 浏览器打开 http://127.0.0.1:8000/docs — 能看到 Swagger API 文档就对了
 - 或者 http://127.0.0.1:8000/api/v1/health — 返回 `{"status":"ok"}`
 
+### 4.1 Windows 自动启动 smoke test
+
+自动化脚本需要启动后端、请求 health endpoint，并在结束时可靠关闭进程。请在
+`backend/` 目录使用项目虚拟环境的 Python 直接启动 Uvicorn：
+
+```powershell
+$process = Start-Process `
+  -FilePath ".\.venv\Scripts\python.exe" `
+  -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8017") `
+  -PassThru
+
+try {
+  $deadline = (Get-Date).AddSeconds(30)
+  $response = $null
+
+  do {
+    Start-Sleep -Milliseconds 500
+    try {
+      $response = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:8017/api/v1/health" `
+        -TimeoutSec 2
+    } catch {
+      if ($process.HasExited) {
+        throw "Uvicorn exited early with code $($process.ExitCode)"
+      }
+    }
+  } while (($null -eq $response) -and ((Get-Date) -lt $deadline))
+
+  if ($null -eq $response) {
+    throw "Health check timed out"
+  }
+
+  $response | ConvertTo-Json -Compress
+} finally {
+  if (-not $process.HasExited) {
+    Stop-Process -Id $process.Id -Force
+    $process.WaitForExit()
+  }
+}
+```
+
+不要在 Windows 自动 smoke test 中使用
+`Start-Process uv -ArgumentList "run", "uvicorn", ...`。`uv run` 是包装进程，
+Uvicorn 子进程可能在 health 请求成功后继续存活，使脚本卡住并需要手动关闭。
+交互式开发仍可正常使用 `uv run uvicorn app.main:app --reload`。
+
 ---
 
 ## 5. 第四步：启动前端

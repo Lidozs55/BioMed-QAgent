@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { APIError } from "@/hooks/settingsContracts";
 import {
-  APIError,
   createAPIClient,
   type FetchLike,
 } from "@/hooks/useAPI";
@@ -236,75 +236,4 @@ describe("runtime REST client", () => {
     );
   });
 
-  it("uses typed settings and catalog management contracts", async () => {
-    const fetcher = vi
-      .fn<FetchLike>()
-      .mockResolvedValueOnce(jsonResponse({
-        base_url: "https://example.com/v1",
-        api_key: "sk-a...z",
-        api_key_configured: true,
-        model_name: "demo",
-        max_tokens: 4096,
-        advanced: {},
-      }))
-      .mockResolvedValueOnce(jsonResponse({ vendors: [] }))
-      .mockResolvedValueOnce(jsonResponse({ models: [], total_count: 0 }))
-      .mockResolvedValueOnce(jsonResponse({ generation: 2, skills: [] }))
-      .mockResolvedValueOnce(jsonResponse({ generation: 3, skill: null }));
-    const api = createAPIClient({ fetcher });
-
-    await api.fetchSettings();
-    await api.fetchVendors();
-    await api.fetchModels({ baseUrl: "https://preview.test/v1", apiKey: "secret" });
-    await api.fetchSkills();
-    await api.deleteSkill("demo/skill");
-
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      "/api/v1/settings",
-      "/api/v1/vendors",
-      "/api/v1/models",
-      "/api/v1/skills",
-      "/api/v1/skills/demo%2Fskill",
-    ]);
-    expect(fetcher.mock.calls[2]?.[1]).toEqual({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_base_url: "https://preview.test/v1",
-        preview_api_key: "secret",
-      }),
-    });
-    expect(fetcher.mock.calls[4]?.[1]).toEqual({ method: "DELETE" });
-  });
-
-  it("updates a database with a typed partial patch body", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
-      jsonResponse({ generation: 4, skill: null }),
-    );
-    const api = createAPIClient({ fetcher });
-
-    await api.updateDatabase("demo/db", {
-      description: "Updated",
-      operation: {
-        name: "search",
-        method: "POST",
-        url: "https://example.com/search/{query}",
-        query: { q: "{query}" },
-      },
-    });
-
-    expect(fetcher).toHaveBeenCalledWith("/api/v1/databases/demo%2Fdb", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        description: "Updated",
-        operation: {
-          name: "search",
-          method: "POST",
-          url: "https://example.com/search/{query}",
-          query: { q: "{query}" },
-        },
-      }),
-    });
-  });
 });

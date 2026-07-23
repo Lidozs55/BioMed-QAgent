@@ -415,6 +415,20 @@ RunExecutor = Callable[[RunExecution], Awaitable[None]]
 RunContextFactory = Callable[[str], RunContext]
 
 
+class RunAdmission(Protocol):
+    """Synchronous policy gate evaluated before a model-backed Run is durable."""
+
+    def __call__(self, mode: TaskMode) -> None: ...
+
+
+class RunAdmissionRejectedError(RuntimeError):
+    """Raised when active runtime policy disallows a new model-backed Run."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 class TaskRunConflictError(RuntimeError):
     """Raised when a Task already owns a nonterminal Run."""
 
@@ -565,6 +579,7 @@ class TaskManager:
         max_active_runs: int = 4,
         max_queued_runs: int = 100,
         context_factory: RunContextFactory | None = None,
+        run_admission: RunAdmission | None = None,
         event_hub: EventHub | None = None,
         assistant_stream_hub: AssistantStreamHub | None = None,
     ) -> None:
@@ -585,6 +600,7 @@ class TaskManager:
             )
         else:
             self._context_factory = context_factory
+        self._run_admission = run_admission
         self._queue = _RemovableRunQueue(max_queued_runs)
         self._semaphore = asyncio.Semaphore(max_active_runs)
         self._admission_lock = asyncio.Lock()
@@ -669,6 +685,7 @@ class TaskManager:
                         task_id,
                         snapshot.task.active_run_id,
                     )
+                self._check_run_admission(snapshot.task.mode)
                 if self._queue.full():
                     raise RunQueueFullError(self.max_queued_runs)
                 accepted = TaskRunAccepted(
@@ -699,6 +716,7 @@ class TaskManager:
             if existing is not None:
                 return existing
             validate_task_databases(request.mode, request.databases)
+            self._check_run_admission(request.mode)
             if self._queue.full():
                 raise RunQueueFullError(self.max_queued_runs)
 
@@ -727,6 +745,12 @@ class TaskManager:
                     prepare_task,
                 )
             )
+
+    def _check_run_admission(self, mode: TaskMode) -> None:
+        """Apply the injected model-readiness policy only to model-backed modes."""
+
+        if mode in {TaskMode.AGENT, TaskMode.IMPORT} and self._run_admission is not None:
+            self._run_admission(mode)
 
     async def delete_task(self, task_id: str) -> None:
         if not self._started or self._closing:

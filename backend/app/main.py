@@ -20,10 +20,15 @@ from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
+from app.domain.contracts import TaskMode
+from app.model_config.context_budget import (
+    ContextBudgetConfigurationError,
+    resolve_context_budget,
+)
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
-from app.runtime.manager import TaskManager
+from app.runtime.manager import RunAdmissionRejectedError, TaskManager
 from app.runtime.repository import TaskRepository
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
@@ -105,6 +110,15 @@ def create_app(configured: Settings = settings) -> FastAPI:
             catalog=skill_catalog,
             builtins=load_builtin_skill_descriptors(),
         )
+
+        def admit_model_backed_run(_mode: TaskMode) -> None:
+            """Reject model-backed admission when active settings lack a budget."""
+
+            try:
+                resolve_context_budget(model_settings_store.snapshot())
+            except ContextBudgetConfigurationError as error:
+                raise RunAdmissionRejectedError(error.reason) from error
+
         manager = TaskManager(
             repository,
             run_executor=ModeDispatchRunExecutor(
@@ -113,6 +127,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
+            run_admission=admit_model_backed_run,
             event_hub=event_hub,
             assistant_stream_hub=assistant_stream_hub,
         )

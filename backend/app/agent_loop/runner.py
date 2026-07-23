@@ -16,10 +16,14 @@ from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
 from app.agent_loop.agent import AGENT_MAX_TURNS, AgentBuild, build_agent
-from app.agent_loop.context import ManagedPipelineBridge
+from app.agent_loop.context import ManagedPipelineBridge, RunContext
 from app.agent_loop.import_agent import (
     ATTACHMENT_PARSING_MAX_TURNS,
     build_attachment_parsing_agent,
+)
+from app.agent_loop.invocation import (
+    InvocationPreflight,
+    record_calibration_from_result,
 )
 from app.agent_loop.model import run_model_settings_scope, to_run_model_settings
 from app.domain.contracts import (
@@ -43,6 +47,10 @@ from app.domain.contracts import (
     build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
+from app.model_config.token_estimation import (
+    ChatCompletionsPromptShape,
+    ChatCompletionsStructuralPolicy,
+)
 from app.model_settings import get_current_model_configuration
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
@@ -663,18 +671,19 @@ class AgentRunExecutor:
 
             bind_progress_emitter(emit_progress)
         try:
-            preparation = await self._compactor.prepare(
-                execution.task_id,
-                model_handle=build.model,
-                emit=execution.emit,
-                session=task_session,
-                cancellation_requested=execution.context.cancellation_requested,
-                commit=execution.commit_compaction,
+            # Build per-invocation preflight from the immutable Run budget.
+            # Every SDK invocation is gated by a fresh CompactionRequest that
+            # carries the current ``agent_input``, resolved instructions, and
+            # the frozen ContextBudget.
+            prompt_shape = getattr(
+                build, "prompt_shape",
+                _default_prompt_shape(),
             )
-            if execution.context.cancellation_requested.is_set():
-                raise CompactionCancelledError(
-                    "conversation compaction was cancelled before Agent Run"
-                )
+            preflight_builder = InvocationPreflight.from_budget(
+                budget=model_settings.context_budget,
+                prompt_shape=prompt_shape,
+                compactor=self._compactor,
+            )
             # Agent 循环：每次 Runner.run_streamed 消耗 max_turns 个 turn；
             # 若 SDK 抛 MaxTurnsExceeded，发射 UserInputRequiredPayload 走
             # pause-resume，用户选"继续"则用 result.to_input_list() 续跑。
@@ -684,13 +693,30 @@ class AgentRunExecutor:
             resume_count = 0
             qwen_retry_count = 0
             while True:
+                run_ctx = execution.context
+                preparation = await preflight_builder.preflight(
+                    execution.task_id,
+                    agent_input,
+                    model_handle=build.model,
+                    emit=execution.emit,
+                    session=task_session,
+                    cancellation_requested=execution.context.cancellation_requested,
+                    commit=execution.commit_compaction,
+                    context=(
+                        run_ctx if isinstance(run_ctx, RunContext) else None
+                    ),
+                )
+                if execution.context.cancellation_requested.is_set():
+                    raise CompactionCancelledError(
+                        "conversation compaction was cancelled before Agent Run"
+                    )
                 # reset_streaming_result 让续跑的 Runner.run_streamed 能挂载新的
                 # RunResultStreaming (上一轮已 exhausted),保持 cancel 通道对准
                 # 当前活跃的 SDK run。首轮为 no-op (_streaming_result 本就为 None)。
                 execution.reset_streaming_result()
                 result = Runner.run_streamed(
                     build.agent,
-                    agent_input,
+                    preparation.agent_input,
                     context=execution.context,
                     session=preparation.session,
                     max_turns=self._max_turns(execution),
@@ -745,6 +771,13 @@ class AgentRunExecutor:
                     raise
                 finally:
                     await text_buffer.flush()
+                # 消耗成功后，记录权威输入 usage 残差供未来 Run 校准。
+                # 缺失/不支持/零 input usage 为 no-op；活跃 Run 的预算不变。
+                record_calibration_from_result(
+                    result,
+                    preparation.estimate,
+                    model_settings.context_budget,
+                )
                 break
             # final_output 校验:若 Agent 未产出有效输出则抛异常,
             # 避免 LLM 截断/不调 tool 时静默 completed。
@@ -1240,3 +1273,12 @@ def _normalize_assistant_finish_reason(finish_reason: str) -> str:
     if finish_reason in {"tool_calls", "function_call"}:
         return "tool_call"
     return finish_reason
+
+
+def _default_prompt_shape() -> ChatCompletionsPromptShape:
+    """Return a minimal prompt shape for builds that do not carry one."""
+    return ChatCompletionsPromptShape(
+        instructions="",
+        serialized_tool_schemas=(),
+        policy=ChatCompletionsStructuralPolicy(),
+    )

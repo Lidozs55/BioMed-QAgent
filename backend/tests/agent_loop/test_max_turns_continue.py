@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import app.agent_loop.runner as runner_module
 import pytest
@@ -42,11 +42,16 @@ class NoopCompactor:
         *,
         model_handle,
         emit,
+        request=None,
         session,
         cancellation_requested,
         commit,
     ):
-        return SimpleNamespace(session=session)
+        return SimpleNamespace(
+            session=session,
+            agent_input=request.agent_input if request is not None else "",
+            estimate=Mock(total=0),
+        )
 
 
 def make_executor(repository):

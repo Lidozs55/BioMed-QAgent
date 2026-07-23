@@ -42,6 +42,7 @@ from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskRepository
+from compaction_support import budgeted_request
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
@@ -2956,6 +2957,7 @@ async def test_event_reconciliation_requires_exact_envelope_identity() -> None:
 async def test_executor_cancelled_error_after_cancel_keeps_single_worker_alive(
     tmp_path,
     monkeypatch,
+    runnable_agent_model_settings,
 ) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     runner_module = importlib.import_module("app.agent_loop.runner")
@@ -2987,7 +2989,12 @@ async def test_executor_cancelled_error_after_cancel_keeps_single_worker_alive(
 
     class NoopCompactor:
         async def prepare(self, task_id, **kwargs):
-            return SimpleNamespace(session=kwargs["session"])
+            request = kwargs["request"]
+            return SimpleNamespace(
+                session=kwargs["session"],
+                agent_input=request.agent_input,
+                estimate=SimpleNamespace(total=0),
+            )
 
     streaming_result = CancelledStreamingResult()
 
@@ -4639,7 +4646,7 @@ async def test_manager_suppresses_compaction_warning_when_cancel_wins_lock(
         return snapshot
 
     async def fail_summary_load(task_id: str):
-        raise RuntimeError("summary marker unavailable")
+        raise ValueError("summary marker unavailable")
 
     monkeypatch.setattr(repository, "append_event", append_event)
     monkeypatch.setattr(
@@ -4660,6 +4667,7 @@ async def test_manager_suppresses_compaction_warning_when_cancel_wins_lock(
                 execution.task_id,
                 model_handle=object(),
                 emit=delayed_emit,
+                request=budgeted_request(trigger_tokens=1, target_tokens=1),
                 cancellation_requested=execution.context.cancellation_requested,
                 commit=execution.commit_compaction,
             )
@@ -4717,7 +4725,7 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
         return snapshot
 
     async def fail_summary_load(task_id: str):
-        raise RuntimeError("summary marker unavailable")
+        raise ValueError("summary marker unavailable")
 
     monkeypatch.setattr(repository, "append_event", append_event)
     monkeypatch.setattr(
@@ -4728,11 +4736,12 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
 
     async def run(execution) -> None:
         await ConversationCompactor(repository).prepare(
-            execution.task_id,
-            model_handle=object(),
-            emit=execution.emit,
-            cancellation_requested=execution.context.cancellation_requested,
-            commit=execution.commit_compaction,
+                execution.task_id,
+                model_handle=object(),
+                emit=execution.emit,
+                request=budgeted_request(trigger_tokens=1, target_tokens=1),
+                cancellation_requested=execution.context.cancellation_requested,
+                commit=execution.commit_compaction,
         )
         await release_executor.wait()
 

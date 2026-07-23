@@ -4,6 +4,22 @@
 > 目标：完成本 TODO 后可作为初步赛题成果提交。
 > 上一版本归档于 git history（2026-07-17 之前）。
 
+## 0. Agent 上下文预算（TASK-024..027）
+
+- [x] **P0** 用精确模型窗口、输出保留和安全余量替换固定字符阈值；默认安全保留
+      下限为 16,384 tokens，未知模型必须显式配置上下文窗口。
+- [x] **P0** 为 instructions、工具 schema、Session、当前输入和结构开销建立确定性
+      token 估算；可选使用本地 Qwen tokenizer，默认使用保守 UTF-8 字节上界。
+- [x] **P1** 在每次 provider 调用前执行预算预检，包括 MaxTurns continuation 与
+      Qwen function-arguments retry；按完整 Run 压缩到 token 目标。
+- [x] **P2** 保留重复输入歧义前的 durable summary，并把歧义后缀作为不可拆分段；
+      原始 Session 继续 append-only。
+- [x] **P1** 设置 API 与前端支持精确窗口、来源、输出上限、安全余量和压缩比例；
+      显式 `null` 可清除已知模型的用户窗口覆盖。
+- [x] **P1** 增加标记为 `live` 的 DashScope usage 对比测试；默认测试不访问网络，
+      `uv run --extra qwen-tokenizer pytest -m live
+      tests/live/test_context_budget_estimator_live.py -v` 验证本地 tokenizer 路径。
+
 ## 1. P0：核心真实性修复（让 pipeline 真正按用户输入工作）
 
 > **背景**：当前 `_build_specification_for_plan`（runner.py:737-781）完全硬编码

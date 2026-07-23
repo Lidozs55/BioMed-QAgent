@@ -36,6 +36,7 @@ dependencies = [
 # approach with a Qwen-VL vision-model fallback, so those deps are not needed.
 [project.optional-dependencies]
 pdf = ["PyPDF2>=3.0.0"]
+qwen-tokenizer = ["dashscope[tokenizer]>=1.26.3"]
 
 [dependency-groups]
 dev = [
@@ -47,7 +48,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "-m 'not live'"
 markers = [
     "live: tests that make explicit network requests to official services",
 ]

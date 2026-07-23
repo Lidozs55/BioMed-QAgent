@@ -159,6 +159,11 @@ Notes:
   `http://127.0.0.1:5173`.
 - `pytest` is configured with `asyncio_mode = "strict"` and treats warnings as
   errors.
+- On Windows, automated startup smoke tests must launch
+  `.\.venv\Scripts\python.exe -m uvicorn ...` directly and terminate that
+  process in `finally`. Do not wrap Uvicorn with `Start-Process uv run ...`:
+  `uv` may exit or remain detached from its child, leaving the smoke test hung.
+  See `docs/DEVELOPER_QUICKSTART.md` §4.1 for the verified PowerShell template.
 
 #### Frontend (cwd: `frontend/`)
 

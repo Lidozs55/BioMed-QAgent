@@ -1,191 +1,115 @@
 # BioMed-QAgent
 
-BioMed-QAgent 是一个面向生物医学研究的数据检索、获取、处理与交付系统。用户提交研究主题并选择数据源后，Main Agent 负责理解需求、规划检索和调用 Skill；确定性 Pipeline 负责生成并验证可追溯的数据包。
+BioMed-QAgent 是一个面向生物医学研究数据的 **Agent + 确定性 Pipeline** 应用：用户用自然语言描述研究主题，系统负责检索文献与数据集、获取原始文件、解析和清洗数据、完成字段对齐，并生成带来源、校验信息和处理记录的结构化产物。
 
-系统的核心交付物是结构化数据、来源清单、处理记录和质量报告，而不是缺少数据依据的科研或临床结论。
+项目的目标是让数据处理过程**可追溯、可验证、可恢复**，而不是让大语言模型直接“猜”出一个 CSV。系统可以展示统计结果和可视化数据，但不会在缺少数据证据时生成科研或临床结论。
+
+> 当前项目仍处于持续开发阶段。实际支持的数据库、Skill 和产物格式以代码及 [架构文档](docs/ARCHITECTURE.md) 为准。
 
 ## 核心能力
 
-- **研究任务工作台**：创建研究任务、继续追问、取消 Run、恢复人在回路决策，并查看历史任务。
-- **多源数据访问**：内置 PubMed、GEO、GDC、PDB、PubChem、Reactome 和 Xena 数据源。
-- **动态 Skill Catalog**：Main Agent 通过 `find_skill` / `invoke_skill` 网关发现和调用 Skill；支持管理用户安装的声明式数据库包和 Python Skill 包。
-- **确定性数据闭环**：Pipeline 固定执行 Discovery → Acquisition → Processing → Artifact Build → Validation Gate。
-- **可追溯交付**：记录来源、下载尝试、字段映射、处理步骤、警告、质量检查和文件哈希。
-- **持久化任务运行时**：任务事件写入 append-only JSONL；支持快照重建、事件回放、断线重连和服务重启后的任务恢复。
-- **实时过程展示**：前端按事件序列展示 Assistant 输出、推理、工具调用、Pipeline 阶段、进度、警告和产物。
-- **本地文件导入**：上传文件创建 Import Task，将解析和清洗结果写入本地可查询缓存。
-- **产物查看与下载**：Artifact 面板支持文件下载及 CSV 前 100 行预览。
-
-> **当前能力边界**：7 个内置数据库均可供 Agent 选择和调用，但目前只有 **PubMed + GEO** 已接入正式的确定性 Pipeline。Live Processing 当前主要完成 GEO 样本元数据恢复；任意数据源的通用清洗、字段对齐和多源合并尚未全部接入 Pipeline 主链。
+- **自然语言研究任务**：从主题、关键词、数据库、目标字段和时间范围生成结构化任务规格。
+- **多源检索与获取**：通过可插拔 Skill 访问 PubMed、GEO 等生物医学数据源，记录 accession、来源关系、下载尝试和文件校验信息。
+- **确定性数据处理**：按固定阶段执行 Discovery → Acquisition → Processing → Artifact Build → Validation Gate。
+- **可验证交付物**：只有通过 Validation Gate 的文件才会发布到 `artifacts/` 并通过 API 暴露。
+- **Durable Task Runtime**：任务、Run、消息、事件和产物状态持久化，支持取消、恢复、事件重放以及人在回路（HITL）暂停/继续。
+- **实时进度反馈**：前端通过 REST + WebSocket 接收 Agent 文本、工具调用、Pipeline 阶段、进度、警告和产物事件。
+- **模型与 Skill 管理**：支持通过设置 API 配置 OpenAI 兼容模型，动态查看和管理 Skill；`learned/` Skill 默认禁用。
+- **视觉证据采集**：可选使用 Playwright 截取网页或论文页面，并使用 Qwen-VL / PDF 解析 / caption 文本组成降级链路提取图表数据。
 
 ## 架构概览
 
 ```text
-React 19 / Vite / Tailwind / shadcn
-        |
-        | REST：任务控制、快照、历史、回放、产物
-        | WebSocket：durable events + realtime assistant stream
-        v
-FastAPI (app.main:app)
-        |
-        +-- Durable Runtime
-        |     TaskManager / TaskRepository / EventStore
-        |     EventHub / AssistantStreamHub / TaskIndex
-        |
-        +-- OpenAI Agents SDK Main Agent (Qwen)
-        |     |
-        |     +-- Skill Gateway
-        |     |     find_skill / invoke_skill
-        |     |
-        |     `-- run_research_pipeline
-        |             |
-        |             v
-        |       Deterministic Pipeline
-        |       Discovery
-        |         -> Acquisition
-        |         -> Processing
-        |         -> Artifact Build
-        |         -> Validation Gate
-        |                 |
-        |                 v
-        |          validated artifacts/
-        |
-        `-- User Skill / Database Management
+┌──────────────────────────────────────────────────────────────┐
+│ Frontend: React 19 + Vite + Tailwind CSS v4 + shadcn/ui     │
+│ REST API + durable WebSocket event stream                   │
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│ FastAPI: app.main:app                                       │
+│ TaskManager · TaskRepository · EventHub · TaskIndex         │
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Main Agent: OpenAI Agents SDK + Qwen                         │
+│ 理解意图、选择 Skill、生成 TaskSpecification、解释结果        │
+└───────────────────────────────┬──────────────────────────────┘
+                                │ run_research_pipeline tool
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│ Deterministic Pipeline Runner                                │
+│ Discovery → Acquisition → Processing → Artifact → Validation │
+└───────────────────────────────┬──────────────────────────────┘
+                                │ 仅发布通过验证的 Artifact
+                                ▼
+                    data/output/tasks/<task_id>/artifacts/
 ```
 
-### Agent 与 Pipeline 的职责边界
+职责边界如下：
 
-**Main Agent** 负责：
+- **Agent** 负责理解用户意图、选择数据库和 Skill、生成查询参数，并调用唯一的 Pipeline Function Tool。
+- **Pipeline** 负责按照契约执行数据处理、记录审计信息、检查完整性，并拒绝未经验证的产物。
+- **Skill** 是 instructions 与 Function Tools 的能力包，按 `discovery/`、`acquisition/`、`processing/`、`analysis/` 分类。
+- **Runtime** 负责任务生命周期和事件持久化；前端状态是后端事件的投影，不是事实来源。
 
-- 理解研究主题、数据库限制和用户补充信息；
-- 设计检索策略并发现 PMID、GSE 等 accession；
-- 通过动态 Skill 网关调用检索、获取、解析和分析能力；
-- 调用唯一的 `run_research_pipeline` Function Tool；
-- 解释 Pipeline 返回的结构化结果、错误和警告。
-
-**Pipeline** 负责：
-
-- 按固定顺序执行数据阶段并校验阶段契约；
-- 保存 checkpoint，按输入、参数和产物摘要决定能否复用阶段结果；
-- 在 staging 中构建候选数据包；
-- 校验文件存在性、大小、SHA-256、来源与处理记录；
-- 仅将通过 Validation Gate 的文件发布到 `artifacts/`。
-
-Main Agent 不直接拼装最终 CSV，也不能绕过 Validation Gate。
-
-## 数据 Pipeline 与产物
-
-### 五个阶段
-
-| 阶段 | 作用 |
-| --- | --- |
-| Discovery | 根据 topic 或明确 accession 获取 PubMed 与 GEO 来源记录 |
-| Acquisition | 下载 GEO 数据，记录下载尝试、来源和 SHA-256 |
-| Processing | 将来源资产解析为规范化中间数据；当前 live 路径主要恢复 GEO 样本元数据 |
-| Artifact Build | 在 staging 中构建主数据、来源、字段、处理和警告表 |
-| Validation Gate | 校验数据包契约与文件完整性，生成质量报告和 manifest，并发布有效产物 |
-
-### 标准交付文件
-
-Artifact Build 生成以下 CSV：
-
-- `main_data.csv`
-- `literature.csv`
-- `dataset_catalog.csv`
-- `sample_metadata.csv`
-- `field_descriptions.csv`
-- `field_mapping.csv`
-- `source_list.csv`
-- `source_relations.csv`
-- `source_assets.csv`
-- `download_log.csv`
-- `processing_log.csv`
-- `warnings.csv`
-
-Validation Gate 额外生成：
-
-- `quality_report.csv`
-- `run_manifest.json`
-
-Artifact API 会复核发布 marker、manifest、文件大小和哈希，不会暴露 staging 中的半成品。
-
-## Durable Task Runtime
-
-任务和 Run 由 FastAPI lifespan 创建的进程级运行时管理。典型成功状态流为：
-
-```text
-QUEUED -> RUNNING -> FINALIZING -> COMPLETED
-```
-
-运行时还支持 `AWAITING_USER_INPUT`、`CANCEL_REQUESTED`、`FAILED`、`CANCELLED` 和 `INTERRUPTED` 等状态。
-
-每个 Task 的 durable event 都带有单调递增的 `sequence` 并写入 `events.jsonl`。前端使用 Task 级 `lastSequence` 去重：常规 WebSocket 重连通过 `after_sequence` 续订；任务切换等权威衔接场景通过 REST Event API 补齐。服务重启后，排队中的 Run 可重新入队，未完成的运行中 Run 会被标记为中断。
-
-Agent 返回自然语言并不等于任务成功。Agent Run 必须产生新的、可验证的正式 Artifact，否则运行时会将其判为失败。
-
-## 内置数据源与 Skill
-
-| 类别 | 内置能力 |
-| --- | --- |
-| Discovery | PubMed、Literature Understanding |
-| Acquisition | GEO、GDC、PDB、PubChem、Reactome、Xena、Browser Fallback、Web Visual Capture、Local Cache |
-| Processing | PDF Extraction、Qwen-VL Chart Extraction、Self Evolution |
-| Analysis | 基础统计、差异表达、热图和相关矩阵 |
-
-用户可选择的数据源为 PubMed、GEO、GDC、PDB、PubChem、Reactome 和 Xena。其中 PubMed、GEO 标记为 `pipeline_supported`；其他数据源目前作为 Agent-only Skill 使用。
-
-用户扩展存放在应用包之外的可写目录中。系统支持：
-
-- JSON/YAML 声明式 HTTP 数据库包；
-- Python ZIP Skill 包；
-- 校验、上传、启用、停用、版本回滚和删除；
-- Catalog 不可变快照和 generation 递增的原子热更新。
-
-> Python Skill 包以本地后端进程权限执行，只应安装可信来源的包。
+完整设计、状态模型和安全边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 快速开始
 
 ### 环境要求
 
-| 组件 | 要求 |
-| --- | --- |
-| Python | 3.12+ |
-| Node.js | 18+ |
-| 后端包管理 | [uv](https://docs.astral.sh/uv/) |
-| 前端包管理 | [pnpm](https://pnpm.io/) |
-| 模型 | Qwen / DashScope OpenAI 兼容接口 |
+| 组件            | 要求                                          |
+| --------------- | --------------------------------------------- |
+| Python          | 3.12+                                         |
+| Node.js         | 18+                                           |
+| Python 包管理器 | [uv](https://docs.astral.sh/uv/)               |
+| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）       |
+| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置 |
+| 可选            | Playwright Chromium，用于网页视觉证据采集     |
 
-### 1. 启动后端
+### 1. 配置后端
 
-`.env.example` 位于仓库根目录。PowerShell：
+在项目根目录复制环境变量模板，然后编辑 `backend/.env`：
+
+**Windows PowerShell**：
 
 ```powershell
-Set-Location backend
-Copy-Item ..\.env.example .env
-uv sync
-uv run uvicorn app.main:app --reload
+Copy-Item .env.example backend/.env
+notepad backend/.env
 ```
 
-Bash：
+**macOS / Linux / Git Bash**：
+
+```bash
+cp .env.example backend/.env
+$EDITOR backend/.env
+```
+
+至少配置：
+
+```dotenv
+DASHSCOPE_API_KEY=your-api-key-here
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL_NAME=qwen-plus
+```
+
+若使用 NCBI E-utilities，建议同时填写真实的 `NCBI_EMAIL` 和 `NCBI_USER_AGENT`。完整变量说明见 [.env.example](.env.example)。
+
+安装依赖并启动 FastAPI：
 
 ```bash
 cd backend
-cp ../.env.example .env
 uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-如需运行网页截图 Skill，再安装 Playwright Chromium：
-
-```bash
-uv run playwright install chromium
-```
-
-后端默认地址：`http://127.0.0.1:8000`。
+后端默认监听 `http://127.0.0.1:8000`。
 
 ### 2. 启动前端
 
-另开终端：
+另开一个终端：
 
 ```bash
 cd frontend
@@ -193,232 +117,248 @@ pnpm install
 pnpm dev
 ```
 
-前端默认地址：`http://localhost:5173`。
+前端默认运行在 `http://localhost:5173`。启动后可访问：
 
-### 3. 配置模型
+- Web 界面：[http://localhost:5173](http://localhost:5173)
+- Swagger：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- ReDoc：[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+- 健康检查：[http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
 
-真实 Agent、模型发现和 Qwen-VL 调用需要有效的模型凭据。可任选一种方式：
+### 3. 运行后端演示
 
-1. 编辑 `backend/.env`，填写 `DASHSCOPE_API_KEY`；
-2. 服务启动后，在前端设置面板中配置 Vendor、Base URL、API Key、模型和生成参数。
+演示脚本位于 `backend/scripts/demo_workflow.py`：
 
-未配置 API Key 时，后端仍可启动并提供健康检查、任务管理和不调用模型的本地能力。
-
-### 4. 访问入口
-
-- 前端：<http://localhost:5173>
-- Swagger：<http://127.0.0.1:8000/docs>
-- ReDoc：<http://127.0.0.1:8000/redoc>
-- 健康检查：<http://127.0.0.1:8000/api/v1/health>
-
-当前 CORS 和 Trusted Host 配置面向本机开发，仅允许 `localhost` / `127.0.0.1`。只把 `HOST` 改为 `0.0.0.0` 并不会自动开放局域网访问。
-
-## 配置
-
-| 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DASHSCOPE_API_KEY` | 空 | 真实模型调用所需的 API Key |
-| `DASHSCOPE_BASE_URL` | DashScope OpenAI 兼容地址 | 模型 API 地址 |
-| `MODEL_NAME` | `qwen-plus` | 默认模型 |
-| `NCBI_EMAIL` | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱 |
-| `NCBI_TOOL` | `BioMedQAgent` | NCBI 工具标识 |
-| `NCBI_API_KEY` | 空 | 可选；提高 NCBI 请求配额 |
-| `NCBI_USER_AGENT` | 项目默认 UA | NCBI HTTP User-Agent |
-| `HOST` | `127.0.0.1` | 后端监听地址 |
-| `PORT` | `8000` | 后端监听端口 |
-| `OUTPUT_DIR` | `data/output` | 任务和数据输出根目录 |
-| `SKILL_DATA_DIR` | 未设置 | 用户 Skill 目录；默认由 `OUTPUT_DIR` 推导 |
-| `TASK_PAGE_SIZE` | `30` | 默认任务分页大小 |
-| `TASK_PAGE_MAX_SIZE` | `100` | 任务分页上限 |
-| `TASK_MESSAGE_PAGE_SIZE` | `100` | 消息分页大小 |
-| `RUNTIME_MAX_ACTIVE_RUNS` | `4` | 最大 active Run 数 |
-| `RUNTIME_SYNC_WORKER_THREADS` | `4` | 同步工作线程数 |
-| `RUNTIME_RUN_QUEUE_SIZE` | `100` | Run 队列容量 |
-| `RUNTIME_SUBSCRIBER_QUEUE_SIZE` | `1000` | 实时订阅队列容量 |
-| `LOG_LEVEL` | `INFO` | 后端日志等级 |
-
-## API 概览
-
-主要接口均以 `/api/v1` 为前缀。
-
-### 基础与模型设置
-
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| GET / PUT | `/settings` | 读取或保存模型设置；敏感字段以掩码返回 |
-| GET | `/vendors` | 查询已知模型供应商 |
-| POST | `/models` | 从当前模型端点发现模型 |
-
-### 数据库与 Skill
-
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET / POST | `/databases` | 列出或创建声明式数据库 |
-| PUT / DELETE | `/databases/{name}` | 更新或删除用户数据库 |
-| GET | `/skills` | 列出 Skill Catalog |
-| GET | `/skills/{name}` | 获取 Skill 详情 |
-| POST | `/skills/validate` | 校验扩展包 |
-| POST | `/skills/upload` | 上传扩展包 |
-| POST | `/skills/{name}/enable` | 启用用户 Skill |
-| POST | `/skills/{name}/disable` | 停用用户 Skill |
-| POST | `/skills/{name}/rollback` | 回滚用户 Skill |
-| DELETE | `/skills/{name}` | 删除用户 Skill |
-
-### Task、Run 与 Artifact
-
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET / POST | `/tasks` | 分页列出 Task，或创建 durable Task 和首个 Run |
-| GET / DELETE | `/tasks/{task_id}` | 获取权威快照，或删除终态 Task |
-| POST | `/tasks/{task_id}/runs` | 为已有 Agent Task 创建下一轮 Run |
-| POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 请求取消 Run |
-| POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |
-| GET | `/tasks/{task_id}/messages` | 分页读取消息 |
-| GET | `/tasks/{task_id}/events` | 按 sequence 回放 durable events |
-| GET | `/tasks/{task_id}/artifacts` | 列出已验证产物 |
-| GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 下载产物 |
-| POST | `/import/tasks` | 上传本地文件并创建 Import Task |
-| GET | `/cache/export` | 导出本地缓存 ZIP |
-
-### WebSocket
-
-入口：`ws://127.0.0.1:8000/api/v1/ws`
-
-客户端命令：
-
-```json
-{"type":"subscribe","task_id":"...","after_sequence":0}
-{"type":"unsubscribe","task_id":"..."}
-{"type":"ping"}
+```bash
+cd backend
+uv run python scripts/demo_workflow.py
 ```
 
-WebSocket 负责 durable event 和低延迟 Assistant stream；创建 Task 或 Run 必须使用 REST。
+脚本会把结果写入 `backend/data/demo_output/`。配置了 `DASHSCOPE_API_KEY` 时可执行真实 Agent / NCBI 流程；未配置时会使用开发用 mock 数据。mock 演示用于烟雾测试，不代表真实数据流程已经成功，也不替代正式验收。
 
-## 任务目录
+## 任务与数据产物
 
-从 `backend/` 使用默认配置启动时，任务通常保存在：
+每个任务使用独立目录保存中间文件、事件和最终产物：
 
 ```text
 data/output/tasks/<task_id>/
-├── events.jsonl              # 权威 append-only 事件日志
-├── source_assets/            # 下载或导入的来源资产
-├── download_tmp/             # 下载临时文件
-├── parsed/                   # 解析结果
-├── normalized/               # 规范化中间数据
-├── staging/                  # 验证前候选产物
-├── artifacts/                # 已验证并正式发布的产物
-├── state/                    # Snapshot、Pipeline checkpoint、发布 marker
-└── logs/                     # 阶段尝试与任务指标
+├── source_assets/   # 成功获取并校验的不可变来源文件
+├── download_tmp/    # 未完成下载，不能交给 Parser
+├── parsed/          # 解析结果
+├── normalized/      # 清洗和字段对齐结果
+├── staging/         # 按 run_id 隔离的候选产物
+├── artifacts/       # 通过 Validation Gate 的公开产物
+├── state/           # task snapshot、锁和恢复状态
+└── logs/            # 阶段、事件、验证和诊断记录
 ```
 
-模型设置默认保存在 `data/settings/model.json`，用户扩展默认保存在 `data/skills/`。Pipeline 审计事件另写入进程工作目录下的 `logs/pipeline.jsonl`。
+标准产物包可能包含：
+
+- `run_manifest.json`：输入、计划、版本、时间和产物清单；
+- `main_data.csv`：统一行粒度的主数据；
+- `literature.csv`：文献元数据；
+- `dataset_catalog.csv`、`sample_metadata.csv`：数据集和样本元数据；
+- `field_descriptions.csv`、`field_mapping.csv`：字段说明与来源字段映射；
+- `source_list.csv`、`source_relations.csv`：来源及其证据关系；
+- `source_assets.csv`、`download_log.csv`：文件资产、checksum 和下载尝试；
+- `processing_log.csv`、`quality_report.csv`、`warnings.csv`：处理审计、质量门禁和警告。
+
+API 只公开通过 manifest 注册并通过验证的 `artifacts/` 文件。任务事件日志 `<task_id>/events.jsonl` 是追加写入的权威事实来源，snapshot 可以从事件重建。
+
+## HTTP API
+
+所有 REST 路由统一使用 `/api/v1` 前缀。
+
+| 方法               | 路径                                                | 用途                                      |
+| ------------------ | --------------------------------------------------- | ----------------------------------------- |
+| `GET`            | `/api/v1/health`                                  | 健康检查                                  |
+| `GET`            | `/api/v1/databases`                               | 列出可选数据库                            |
+| `GET` / `POST` | `/api/v1/tasks`                                   | 查询任务 / 创建任务并排队首个 Run         |
+| `GET`            | `/api/v1/tasks/{task_id}`                         | 获取权威任务快照                          |
+| `DELETE`         | `/api/v1/tasks/{task_id}`                         | 删除终态任务及其历史                      |
+| `POST`           | `/api/v1/tasks/{task_id}/runs`                    | 为 idle Agent Task 排队下一轮 Run         |
+| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/cancel`    | 请求取消 Run                              |
+| `POST`           | `/api/v1/tasks/{task_id}/runs/{run_id}/resume`    | 提交人在回路决策                          |
+| `GET`            | `/api/v1/tasks/{task_id}/messages`                | 分页读取任务消息                          |
+| `GET`            | `/api/v1/tasks/{task_id}/events`                  | 按 sequence 重放 durable events           |
+| `GET`            | `/api/v1/tasks/{task_id}/artifacts`               | 列出已验证产物                            |
+| `GET`            | `/api/v1/tasks/{task_id}/artifacts/{artifact_id}` | 下载并校验指定产物                        |
+| `GET` / `POST` | `/api/v1/settings`                                | 读取 / 持久化模型设置，返回时掩码 API Key |
+| `GET`            | `/api/v1/vendors`                                 | 列出已知模型供应商                        |
+| `GET`            | `/api/v1/models`                                  | 发现或筛选可用模型                        |
+| `GET`            | `/api/v1/models/{model_id}`                       | 获取单个模型详情                          |
+| `GET`            | `/api/v1/skills`                                  | 列出内置和用户 Skill                      |
+
+Skill 管理 API 还提供启用、禁用、回滚、上传、校验和删除操作，详见 FastAPI 文档和 [backend/README.md](backend/README.md)。
+
+### Durable WebSocket
+
+前端连接：`ws://127.0.0.1:8000/api/v1/ws`。
+
+客户端只发送以下命令：
+
+```json
+{"type":"subscribe","task_id":"<task-id>","after_sequence":0}
+{"type":"unsubscribe","task_id":"<task-id>"}
+{"type":"ping"}
+```
+
+订阅时服务端先重放 `sequence > after_sequence` 的事件，再切换到实时推送。服务端返回 `EventEnvelope`、`pong` 或 `error`。事件包括 Run 生命周期、工具调用、Agent 文本、Pipeline 阶段、进度、警告、用户输入请求和产物生成等。
+
+WebSocket 不负责创建 Run，也不提供 SSE；创建任务和提交新一轮用户输入通过 REST 完成。前端会自动重连，并用最后的 durable sequence 补齐断线期间的事件。
 
 ## 项目结构
 
 ```text
-BioMedQAgent/
+BioMed-QAgent/
 ├── backend/
 │   ├── app/
-│   │   ├── agent_loop/       # Main Agent、模型、Reviewer、Run executor
-│   │   ├── api/              # REST 与 WebSocket 接口
-│   │   ├── domain/           # Task、事件、来源、Pipeline 契约
-│   │   ├── integrations/     # NCBI、Europe PMC、Unpaywall 等集成
-│   │   ├── pipeline/         # 五阶段确定性 Pipeline、状态与 checkpoint
-│   │   ├── runtime/          # Durable Task Runtime 与事件溯源
-│   │   ├── skills/           # Builtin/User Skill Catalog、Gateway 与 Store
-│   │   └── tools/            # 文件、缓存、解析、清洗、导出与安全工具
-│   ├── tests/                # pytest 测试
-│   ├── launcher.py           # 打包/静态前端启动入口
-│   ├── pyproject.toml
-│   └── uv.lock
+│   │   ├── agent_loop/       # Agent 创建、运行、上下文和模型适配
+│   │   ├── api/              # REST、WebSocket、设置和 Skill 管理路由
+│   │   ├── domain/            # Task、Run、Event、Artifact 等领域契约
+│   │   ├── integrations/      # NCBI 等外部服务集成
+│   │   ├── pipeline/          # 确定性 Pipeline Runner 和各阶段
+│   │   ├── runtime/           # TaskManager、Repository、EventHub、Index
+│   │   ├── skills/            # builtin / learned Skill 仓库与 Catalog
+│   │   └── tools/             # I/O、解析、清洗、对齐和导出工具
+│   ├── tests/                 # pytest 测试
+│   ├── scripts/               # demo 和维护脚本
+│   ├── launcher.py            # 桌面打包入口
+│   ├── pyproject.toml         # Python 项目配置
+│   └── uv.lock                # Python 依赖锁文件
 ├── frontend/
 │   ├── src/
-│   │   ├── components/       # 会话、产物、设置和 shadcn/Base UI 组件
-│   │   ├── hooks/            # REST 与 WebSocket Hooks
-│   │   ├── runtime/          # Controller、Transport、Reducer 与事件契约
-│   │   ├── stores/           # Zustand 运行时投影
-│   │   ├── styles/
-│   │   └── test/             # Vitest 测试
+│   │   ├── components/       # 业务组件与 shadcn/ui 组件
+│   │   ├── runtime/           # WebSocket transport、controller、reducer
+│   │   ├── stores/            # Zustand 状态管理
+│   │   ├── hooks/             # API、实时流和主题 Hook
+│   │   └── styles/            # Tailwind CSS v4 样式
 │   ├── package.json
-│   └── pnpm-lock.yaml
+│   ├── pnpm-lock.yaml
+│   └── vite.config.ts
 ├── docs/
-│   ├── ARCHITECTURE.md       # 架构与设计决策的权威说明
-│   ├── DEVELOPER_QUICKSTART.md
-│   └── TODO.md
-├── PROBLEM.md                # 赛题背景与评价标准
-├── AGENTS.md                 # 工程与 Agent 协作约定
-└── .env.example
+│   ├── ARCHITECTURE.md        # 权威架构和数据契约
+│   ├── DEVELOPER_QUICKSTART.md # 开发者快速入门
+│   └── TODO.md                # 当前开发任务与优先级
+├── AGENTS.md                  # AI Agent 与协作约定
+├── PROBLEM.md                 # 赛题背景与评价标准
+└── .env.example               # 环境变量模板
 ```
 
 ## 技术栈
 
-| 层级 | 技术 |
-| --- | --- |
-| Backend | Python 3.12+、FastAPI、Uvicorn、Pydantic v2、httpx |
-| Agent | OpenAI Agents SDK、Qwen / DashScope OpenAI 兼容接口 |
-| Data / Document | openpyxl、pdfplumber、PyYAML、Playwright |
-| Analysis | SciPy、Matplotlib、Seaborn |
-| Frontend | React 19、TypeScript 5.6、Vite 5 |
-| UI | Tailwind CSS v4、shadcn、Base UI、Resizable Panels |
-| State / Stream | Zustand、durable event reducer、REST + WebSocket |
-| Preview | React Markdown、Papa Parse |
-| Test / Lint | pytest、pytest-asyncio、Ruff、Vitest、Testing Library、ESLint |
-| Package Management | uv、pnpm |
+| 层级           | 技术                                                   |
+| -------------- | ------------------------------------------------------ |
+| 后端           | Python 3.12+、FastAPI、uvicorn                         |
+| Agent          | OpenAI Agents SDK、Qwen / DashScope OpenAI 兼容接口    |
+| 数据契约       | Pydantic v2、dataclass                                 |
+| 数据获取与解析 | httpx、BeautifulSoup、pdfplumber、openpyxl、Playwright |
+| 科学计算       | matplotlib、SciPy、seaborn                             |
+| 前端           | React 19、Vite、TypeScript、Tailwind CSS v4、shadcn/ui |
+| 状态与数据展示 | Zustand、React Markdown、PapaParse                     |
+| 测试           | pytest、pytest-asyncio、Vitest、Testing Library        |
+| 工具链         | uv、pnpm、ruff、ESLint                                 |
 
-Zustand 只将草稿的数据源选择偏好持久化到 `localStorage`；Task、Run、消息、事件和产物的权威状态均来自后端 durable runtime。
+## 配置参考
 
-## 开发与校验
+`.env.example` 是配置入口。常用变量如下：
+
+| 变量                   | 默认值                        | 说明                                            |
+| ---------------------- | ----------------------------- | ----------------------------------------------- |
+| `DASHSCOPE_API_KEY`  | 空                            | DashScope API Key；使用真实 Agent / Qwen 时需要 |
+| `DASHSCOPE_BASE_URL` | DashScope OpenAI 兼容地址     | 模型服务的 OpenAI 兼容 base URL                 |
+| `MODEL_NAME`         | `qwen-plus`                 | 默认模型名                                      |
+| `NCBI_EMAIL`         | `biomed-qagent@example.com` | NCBI E-utilities 联系邮箱                       |
+| `NCBI_TOOL`          | `BioMedQAgent`              | NCBI E-utilities tool 名称                      |
+| `NCBI_API_KEY`       | 空                            | 可选的 NCBI API Key                             |
+| `HOST`               | `127.0.0.1`                 | 后端监听地址                                    |
+| `PORT`               | `8000`                      | 后端监听端口                                    |
+| `OUTPUT_DIR`         | `data/output`               | durable task 和产物输出目录                     |
+| `LOG_LEVEL`          | `INFO`                      | 日志级别                                        |
+
+模型设置也可以通过 `/api/v1/settings` 持久化到 `data/user_settings.json`。保存的用户设置会在 Run 创建时形成不可变快照，避免并发运行中的配置变更影响已开始的任务。
+
+## 开发与质量检查
 
 ### 后端
 
-所有后端命令从 `backend/` 运行：
+所有后端命令从 `backend/` 目录执行：
 
 ```bash
+cd backend
 uv sync
-uv run pytest
-uv run pytest -m live
+uv run pytest                         # 默认跳过 live 网络测试
+uv run pytest -m live                 # 仅运行显式联网测试
+uv run pytest tests/test_runner.py    # 运行单个测试文件
+uv run pytest -k "skill"             # 按关键词筛选
 uv run ruff check app/ tests/ launcher.py
-uv run uvicorn app.main:app --reload
 ```
 
-默认测试排除 `@pytest.mark.live` 网络测试，并将警告视为错误。
+Windows 下启动 smoke test 时，建议直接运行 `backend/.venv/Scripts/python.exe -m uvicorn ...`，并在测试结束后显式终止该进程；不要用可能脱离子进程的 `Start-Process uv run ...` 组合。
 
 ### 前端
 
-所有前端命令从 `frontend/` 运行，使用 pnpm：
-
-```bash
-pnpm install
-pnpm lint
-pnpm tsc
-pnpm test
-pnpm build
-```
-
-## 打包运行
-
-`backend/launcher.py` 复用与开发服务器相同的 FastAPI lifespan，并在找到 `frontend/dist/` 时挂载静态前端、提供 SPA fallback 和自动打开浏览器。
-
-先构建前端，再从源码运行整合入口：
+所有前端命令从 `frontend/` 目录执行：
 
 ```bash
 cd frontend
-pnpm build
-
-cd ../backend
-uv run python launcher.py
+pnpm install
+pnpm lint       # ESLint，要求 0 warnings
+pnpm tsc        # TypeScript 类型检查
+pnpm test       # Vitest 单次运行
+pnpm build      # tsc -b && vite build
 ```
 
-PyInstaller 打包时需要将 `frontend/dist` 作为 `dist` 数据目录加入 bundle；具体构建参数应与目标平台和 CI 配置保持一致。
+前端组件优先复用 `frontend/src/components/ui/` 中已有的 shadcn/ui 组件；开始前端任务前请先阅读 [frontend/AGENTS.md](frontend/AGENTS.md) 和 shadcn 相关约定。
 
-## 文档
+### 开发文档
 
-- [系统架构](docs/ARCHITECTURE.md)
-- [开发者快速入门](docs/DEVELOPER_QUICKSTART.md)
-- [开发任务清单](docs/TODO.md)
-- [赛题背景与评价标准](PROBLEM.md)
-- [工程协作约定](AGENTS.md)
-- [后端说明](backend/README.md)
-- [前端说明](frontend/README.md)
-- [可复现性指南](backend/REPRODUCIBILITY.md)
+建议按以下顺序阅读：
+
+1. [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md)：环境配置、启动和常见问题；
+2. [AGENTS.md](AGENTS.md)：代码规范、工作流和质量门禁；
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统边界、事件模型和数据契约；
+4. [docs/TODO.md](docs/TODO.md)：当前未完成工作与已批准决策；
+5. [PROBLEM.md](PROBLEM.md)：项目背景与评测要求。
+
+## 桌面打包
+
+项目提供 `backend/launcher.py` 作为 PyInstaller 入口：它启动 FastAPI、挂载前端 `dist/`，并在服务就绪后打开浏览器。
+
+手动打包示例（Windows PowerShell）：
+
+```powershell
+cd frontend
+pnpm install
+pnpm build
+
+cd ..\backend
+Copy-Item ..\frontend\dist .\dist -Recurse -Force
+uv pip install pyinstaller
+pyinstaller --onefile --name BioMed-QAgent --add-data "dist;dist" --hidden-import app --collect-all app launcher.py
+```
+
+产物通常位于 `backend/dist/BioMed-QAgent.exe`。GitHub Actions 工作流 [`.github/workflows/package.yml`](.github/workflows/package.yml) 会在推送 `v*` 标签或手动触发时构建 Windows 可执行文件并创建 Release。
+
+## 安全与边界
+
+- 任务文件访问限制在任务工作目录内，拒绝绝对路径、路径穿越和不安全符号链接。
+- 下载工具限制协议、目标域名、文件大小和超时时间；未完成或校验失败的文件不会进入解析阶段。
+- API Key 在设置 API 的读取响应中会被掩码；模型配置通过受控的设置存储管理。
+- `learned/` Skill 默认禁用，且不能绕过 Pipeline 与 Validation Gate。
+- 任务终态、事件和 Artifact 校验结果必须由后端持久化状态决定，不能以 mock 成功替代真实流程失败。
+
+## 相关文档
+
+| 文档                                                        | 内容                                    |
+| ----------------------------------------------------------- | --------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 权威架构、数据流、契约、事件和安全模型  |
+| [docs/DEVELOPER_QUICKSTART.md](docs/DEVELOPER_QUICKSTART.md) | 开发环境、启动、测试和 AI-Native 工作流 |
+| [docs/TODO.md](docs/TODO.md)                                 | P0/P1/P2 开发任务与架构决策             |
+| [PROBLEM.md](PROBLEM.md)                                     | 赛题背景、目标和评价标准                |
+| [backend/README.md](backend/README.md)                       | 后端 API、Skill、测试、打包与故障排查   |
+| [frontend/README.md](frontend/README.md)                     | 前端组件、状态管理、数据流与测试        |
+| [backend/REPRODUCIBILITY.md](backend/REPRODUCIBILITY.md)     | 可复现性与演示说明                      |
+
+## 许可证
+
+仓库当前未声明独立开源许可证。若要对外发布，请先补充许可证文件及第三方依赖声明。
