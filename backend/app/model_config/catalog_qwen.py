@@ -239,6 +239,23 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=64_000,
         capabilities=Capabilities(text=True, image=True, video=True),
     ),
+    # qwen3-max family — text-only, OpenAI-compatible models
+    "qwen3-max": QwenModelEntry(
+        id="qwen3-max",
+        name="Qwen3 Max",
+        description="Qwen3 旗舰文本模型，256K 上下文，适合复杂推理与工具调用。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
+    "qwen3-max-2026-01-23": QwenModelEntry(
+        id="qwen3-max-2026-01-23",
+        name="Qwen3 Max 2026-01-23",
+        description="Qwen3 Max 快照版本，256K 上下文。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
     # qwen3-coder family — text-only, OpenAI Compatible coding models
     "qwen3-coder-plus": QwenModelEntry(
         id="qwen3-coder-plus",

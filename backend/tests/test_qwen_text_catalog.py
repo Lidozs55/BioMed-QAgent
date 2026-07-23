@@ -11,6 +11,15 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # qwen3-max family — text-only OpenAI-compatible models
+    pytest.param("qwen3-max", 262_144, 64_000, _TEXT_ONLY, id="qwen3-max"),
+    pytest.param(
+        "qwen3-max-2026-01-23",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-max-2026-01-23",
+    ),
     # qwen3-coder family — text-only OpenAI-compatible coding models
     pytest.param(
         "qwen3-coder-plus",
