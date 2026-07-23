@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 import pytest
 
@@ -40,3 +41,20 @@ def _disable_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
         # Skill module may not be importable in all test environments.
         with contextlib.suppress(AttributeError, ModuleNotFoundError):
             monkeypatch.setattr(module_path, lambda: None)
+
+
+@pytest.fixture
+def runnable_agent_model_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Provide an explicitly known model only to opted-in Agent execution tests."""
+
+    import app.model_settings as model_settings
+    from app.config import Settings
+
+    store = model_settings.ModelSettingsStore(
+        tmp_path / "settings" / "model.json",
+        defaults=Settings(model_name="qwen-plus"),
+    )
+    monkeypatch.setattr(model_settings, "_current_store", store)

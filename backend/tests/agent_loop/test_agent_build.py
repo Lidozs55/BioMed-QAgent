@@ -11,6 +11,8 @@ from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.registry import SkillCategory, SkillDef
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
     build = build_agent(databases=[])

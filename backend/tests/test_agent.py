@@ -9,7 +9,10 @@ Validates:
 
 from __future__ import annotations
 
+import pytest
 from app.agent_loop.agent import INSTRUCTIONS, build_agent
+
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
 
 
 def test_agent_has_correct_name() -> None:
