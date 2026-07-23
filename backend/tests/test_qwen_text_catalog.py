@@ -23,6 +23,20 @@ _ALL_TEXT_MODELS = [
         _TEXT_ONLY,
         id="qwen3-max-2026-01-23",
     ),
+    pytest.param(
+        "qwen3-max-preview",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-max-preview",
+    ),
+    pytest.param(
+        "qwen3-max-2025-09-23",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3-max-2025-09-23",
+    ),
     # qwen3-coder family — text-only OpenAI-compatible coding models
     pytest.param(
         "qwen3-coder-plus",

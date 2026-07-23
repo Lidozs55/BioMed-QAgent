@@ -25,6 +25,8 @@ def test_catalog_preserves_stable_model_ids() -> None:
         "qwq-plus",
         "qwen3-max",
         "qwen3-max-2026-01-23",
+        "qwen3-max-preview",
+        "qwen3-max-2025-09-23",
         "qwen3-235b-a22b",
         "qwen3-coder-plus",
         "qwen3-coder-plus-2025-09-23",
