@@ -92,6 +92,10 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
             api_key=initial_settings.api_key,
             model_name=initial_settings.model_name,
             max_tokens=initial_settings.max_tokens,
+            context_window=initial_settings.context_window,
+            safety_reserve_ratio=initial_settings.safety_reserve_ratio,
+            compaction_trigger_ratio=initial_settings.compaction_trigger_ratio,
+            compaction_target_ratio=initial_settings.compaction_target_ratio,
             advanced=AdvancedModelSettings(
                 temperature=initial_settings.advanced.temperature,
                 top_p=initial_settings.advanced.top_p,
