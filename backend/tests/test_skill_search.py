@@ -77,6 +77,34 @@ def test_chinese_domain_intent_expands_to_english_metadata() -> None:
     assert [item.name for item in structure] == ["pdb"]
 
 
+def test_search_intent_ranks_retrieval_above_title_analysis() -> None:
+    strategy = LexicalSkillSearchStrategy()
+    understanding = _descriptor(
+        "literature_understanding",
+        "Analyze paper titles to identify databases and accessions.",
+        sources=["pubmed"],
+        category=SkillCategory.DISCOVERY,
+    )
+    pubmed = _descriptor(
+        "pubmed",
+        "Search biomedical literature and research papers.",
+        sources=["pubmed"],
+        category=SkillCategory.DISCOVERY,
+    )
+    reactome = _descriptor(
+        "reactome",
+        "Search biological pathways and literature references.",
+        sources=["reactome"],
+    )
+
+    candidates = (understanding, reactome, pubmed)
+    english = strategy.search(candidates, "literature search")
+    chinese = strategy.search(candidates, "检索相关文献")
+
+    assert english[0].name == "pubmed"
+    assert chinese[0].name == "pubmed"
+
+
 def test_identity_fields_rank_above_description_only_matches() -> None:
     strategy = LexicalSkillSearchStrategy()
     source_match = _descriptor(

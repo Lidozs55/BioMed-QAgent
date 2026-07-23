@@ -23,7 +23,8 @@ _STOP_WORDS = {
     "检索",
 }
 _DOMAIN_INTENTS: dict[str, tuple[str, ...]] = {
-    "文献": ("literature", "papers"),
+    "literature": ("papers", "abstracts", "pubmed"),
+    "文献": ("literature", "papers", "search", "pubmed"),
     "基因表达": ("gene", "expression"),
     "差异表达": ("differential", "expression"),
     "蛋白结构": ("protein", "structure"),
@@ -36,7 +37,7 @@ _DOMAIN_INTENTS: dict[str, tuple[str, ...]] = {
 _IDENTITY_WEIGHT = 12
 _OPERATION_WEIGHT = 6
 _DESCRIPTION_WEIGHT = 3
-_COVERAGE_WEIGHT = 4
+_COVERAGE_WEIGHT = 8
 _EXACT_IDENTITY_BONUS = 20
 
 
@@ -48,12 +49,23 @@ def normalize_skill_search_text(value: str) -> str:
 
 def _query_tokens(text: str) -> tuple[str, ...]:
     normalized = normalize_skill_search_text(text)
-    tokens = [
+    raw_tokens = normalized.split()
+    distinguishing_tokens = [
         token for token in normalized.split() if token not in _STOP_WORDS
     ]
-    for phrase, expansions in _DOMAIN_INTENTS.items():
+    expansion_tokens: list[str] = []
+    for phrase, phrase_expansions in _DOMAIN_INTENTS.items():
         if phrase in normalized:
-            tokens.extend(expansions)
+            expansion_tokens.extend(phrase_expansions)
+    distinguishing_tokens.extend(expansion_tokens)
+    if not distinguishing_tokens:
+        return ()
+    tokens = [
+        token
+        for token in raw_tokens
+        if token not in {"skill", "skills", "技能"}
+    ]
+    tokens.extend(expansion_tokens)
     return tuple(dict.fromkeys(tokens))
 
 
@@ -85,6 +97,7 @@ class LexicalSkillSearchStrategy:
         query_tokens = _query_tokens(text)
         if not query_tokens:
             return tuple(candidates)
+        distinguishing_tokens = set(query_tokens).difference(_STOP_WORDS)
 
         ranked: list[tuple[int, int, SkillDescriptor]] = []
         for index, descriptor in enumerate(candidates):
@@ -108,7 +121,7 @@ class LexicalSkillSearchStrategy:
                 elif token in description_tokens:
                     score += _DESCRIPTION_WEIGHT
                     matched.add(token)
-            if not matched:
+            if not matched.intersection(distinguishing_tokens):
                 continue
             normalized_identities = {
                 normalize_skill_search_text(value)
