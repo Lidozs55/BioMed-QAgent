@@ -106,6 +106,10 @@ def test_catalog_preserves_stable_model_ids() -> None:
         "qwen2.5-14b-instruct-1m",
         "qwen2.5-7b-instruct",
         "qwen2.5-7b-instruct-1m",
+        "qwen3.5-omni-plus",
+        "qwen3.5-omni-plus-2026-03-15",
+        "qwen3.5-omni-flash",
+        "qwen3.5-omni-flash-2026-03-15",
     }
 
     # When
