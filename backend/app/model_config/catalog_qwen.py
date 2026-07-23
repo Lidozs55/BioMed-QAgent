@@ -433,6 +433,22 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=64_000,
         capabilities=Capabilities(text=True),
     ),
+    "qwen3-coder-480b-a35b-instruct": QwenModelEntry(
+        id="qwen3-coder-480b-a35b-instruct",
+        name="Qwen3 Coder 480B A35B Instruct",
+        description="Qwen3 Coder 开源指令模型，262K 上下文。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
+    "qwen3-coder-30b-a3b-instruct": QwenModelEntry(
+        id="qwen3-coder-30b-a3b-instruct",
+        name="Qwen3 Coder 30B A3B Instruct",
+        description="Qwen3 Coder 开源指令模型，262K 上下文。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
     # qwen3.7-max text-only batch (2026-07-23, QwenCloud text-generation table)
     "qwen3.7-max": QwenModelEntry(
         id="qwen3.7-max",

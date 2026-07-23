@@ -47,6 +47,8 @@ def test_catalog_preserves_stable_model_ids() -> None:
         "qwen3-coder-flash",
         "qwen3-coder-flash-2025-07-28",
         "qwen3-coder-next",
+        "qwen3-coder-480b-a35b-instruct",
+        "qwen3-coder-30b-a3b-instruct",
         "qwen3.6-35b-a3b",
         "qwen3.6-flash",
         "qwen3.6-flash-2026-04-16",
