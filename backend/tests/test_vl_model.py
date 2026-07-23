@@ -34,6 +34,7 @@ async def test_call_vl_model_uses_run_credentials_fixed_model_and_closes_client(
             api_key="runtime-api-key",
             base_url="https://runtime.example/v1",
             model_name="user-selected-text-model",
+            context_window=65_536,
         )
     )
     validated_url = "https://validated.example/v1"
