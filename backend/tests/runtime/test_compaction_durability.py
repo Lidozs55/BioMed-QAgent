@@ -16,7 +16,7 @@ from compaction_support import (
 
 
 @pytest.mark.asyncio
-async def test_compaction_failure_preserves_raw_session_and_uses_latest_twenty_runs() -> None:
+async def test_compaction_failure_preserves_raw_session_with_bounded_groups() -> None:
     # Given
     items = conversation_items(27, "x" * 2_000)
     marker = valid_summary_record(items, covered_index=20)
@@ -78,7 +78,9 @@ async def test_compaction_failure_preserves_raw_session_and_uses_latest_twenty_r
     assert repository.saved == []
     assert preparation.fallback is True
     assert emitted[0].code == "compaction_failed"
-    assert await preparation.session.get_items() == items[-40:]
+    effective = await preparation.session.get_items()
+    assert preparation.estimate.total <= 500
+    assert effective == []
 
 
 @pytest.mark.asyncio
@@ -93,7 +95,7 @@ async def test_compaction_failure_preserves_raw_session_and_uses_latest_twenty_r
         ("covered_history_digest", "covered_history_digest"),
     ],
 )
-async def test_corrupt_summary_marker_retains_compaction_failed_fallback(
+async def test_corrupt_summary_marker_retains_bounded_compaction_failed_fallback(
     corruption: str,
     expected_fragment: str,
 ) -> None:
@@ -156,12 +158,15 @@ async def test_corrupt_summary_marker_retains_compaction_failed_fallback(
     assert isinstance(emitted[0], WarningPayload)
     assert emitted[0].code == "compaction_failed"
     assert expected_fragment in emitted[0].message
-    assert await preparation.session.get_items() == items[-40:]
+    effective = await preparation.session.get_items()
+    assert preparation.estimate.total <= 500
+    assert effective == items[-len(effective) :]
+    assert len(effective) % 2 == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("alignment", ["ambiguous", "impossible"])
-async def test_non_unique_history_alignment_falls_back_without_coverage(
+async def test_non_unique_history_alignment_falls_back_with_bounded_groups(
     alignment: str,
 ) -> None:
     # Given
@@ -239,4 +244,6 @@ async def test_non_unique_history_alignment_falls_back_without_coverage(
     assert summarized is False
     assert preparation.fallback is True
     assert emitted[0].code == "compaction_failed"
-    assert await preparation.session.get_items() == items
+    effective = await preparation.session.get_items()
+    assert preparation.estimate.total <= 500
+    assert effective == []
