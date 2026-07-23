@@ -31,6 +31,7 @@ def test_catalog_preserves_stable_model_ids() -> None:
         "qwen3.7-plus",
         "qwen3.7-plus-2026-05-26",
         "qwen3.5-plus",
+        "qwen3.5-plus-2026-04-20",
         "qwen3.5-plus-2026-02-15",
         "qwen3.5-flash",
         "qwen3.5-flash-2026-02-23",
