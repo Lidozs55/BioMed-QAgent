@@ -23,7 +23,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     items[:] = [item for item in items if item.get_closest_marker("live") is None]
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="session")
 def _disable_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable all rate limiters during tests to avoid 2s delays.
 
@@ -43,7 +43,7 @@ def _disable_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.setattr(module_path, lambda: None)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def runnable_agent_model_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
