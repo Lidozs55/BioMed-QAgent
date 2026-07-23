@@ -15,7 +15,13 @@ _ALL_VISION_MODELS = [
     # existing
     pytest.param("qwen3.7-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.7-plus"),
     pytest.param("qwen3.6-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-plus"),
+    pytest.param("qwen3.6-flash", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-flash"),
     pytest.param("qwen3.6-35b-a3b", 262_144, 64_000, _VISION_CHAT, id="qwen3.6-35b-a3b"),
+    # qwen3.7 vision snapshot batch (2026-07-15 Model Studio)
+    pytest.param("qwen3.7-plus-2026-05-26", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.7-plus-2026-05-26"),
+    # qwen3.6 vision snapshot batch
+    pytest.param("qwen3.6-plus-2026-04-02", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-plus-2026-04-02"),
+    pytest.param("qwen3.6-flash-2026-04-16", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-flash-2026-04-16"),
     # qwen3.5 vision batch (2026-07-15 Model Studio)
     pytest.param("qwen3.5-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-plus"),
     pytest.param("qwen3.5-plus-2026-02-15", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-plus-2026-02-15"),
