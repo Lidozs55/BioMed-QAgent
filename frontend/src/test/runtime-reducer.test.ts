@@ -993,6 +993,156 @@ describe("runtime event projection", () => {
     ).toEqual(["durable_user", "durable_assistant"]);
   });
 
+  it("renders duplicate durable user records once per run", () => {
+    const state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_duplicate_user",
+        [
+          message("task_duplicate_user", 1, {
+            messageId: "user_first",
+            runId: "run_duplicate",
+            content: "question",
+          }),
+          message("task_duplicate_user", 57, {
+            messageId: "user_replayed",
+            runId: "run_duplicate",
+            content: "question",
+          }),
+        ],
+        null,
+      ),
+    );
+
+    const task = state.tasksById.task_duplicate_user;
+    expect(task.messages).toHaveLength(2);
+    expect(
+      task.items.filter((item) => item.kind === "user_message"),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "user:run_duplicate",
+        content: "question",
+        sequence: 1,
+      }),
+    ]);
+  });
+
+  it("prefers event assistant segments when events arrive before hydration", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_event_first", "running")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_event_first", "run_event_first", 1, {
+        type: "assistant_delta",
+        delta: "answer",
+        stream_id: "stream_event_first",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = hydrateTaskSnapshot(
+      state,
+      taskSnapshot(
+        "task_event_first",
+        [
+          message("task_event_first", 2, {
+            messageId: "durable_assistant",
+            runId: "run_event_first",
+            role: "assistant",
+            content: "answer",
+          }),
+        ],
+        null,
+        1,
+      ),
+    );
+
+    expect(
+      state.tasksById.task_event_first.items.filter(
+        (item) => item.kind === "assistant_segment",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "assistant:stream_event_first",
+        streamId: "stream_event_first",
+        content: "answer",
+      }),
+    ]);
+  });
+
+  it("evicts hydrated assistant fallback when its event arrives later", () => {
+    let state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_hydrate_first",
+        [
+          message("task_hydrate_first", 2, {
+            messageId: "durable_assistant",
+            runId: "run_hydrate_first",
+            role: "assistant",
+            content: "answer",
+          }),
+        ],
+        null,
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_hydrate_first", "run_hydrate_first", 1, {
+        type: "assistant_delta",
+        delta: "answer",
+        stream_id: "stream_hydrate_first",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+
+    expect(
+      state.tasksById.task_hydrate_first.items.filter(
+        (item) => item.kind === "assistant_segment",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "assistant:stream_hydrate_first",
+        streamId: "stream_hydrate_first",
+        content: "answer",
+      }),
+    ]);
+  });
+
+  it("keeps hydrated assistant fallback when a run has no assistant events", () => {
+    const state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_legacy_assistant",
+        [
+          message("task_legacy_assistant", 2, {
+            messageId: "legacy_assistant",
+            runId: "run_legacy",
+            role: "assistant",
+            content: "legacy answer",
+          }),
+        ],
+        null,
+      ),
+    );
+
+    expect(
+      state.tasksById.task_legacy_assistant.items.filter(
+        (item) => item.kind === "assistant_segment",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "msg:legacy_assistant",
+        streamId: "hydrate:legacy_assistant",
+        content: "legacy answer",
+      }),
+    ]);
+  });
+
   it("keeps fixture task terminal payloads informational until runtime terminalizes the Run", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
