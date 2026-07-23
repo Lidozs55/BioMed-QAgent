@@ -50,6 +50,8 @@ def test_catalog_preserves_stable_model_ids() -> None:
         "qwen3-coder-480b-a35b-instruct",
         "qwen3-coder-30b-a3b-instruct",
         "qwen3.6-35b-a3b",
+        "qwen3.6-max-preview",
+        "qwen3.6-27b",
         "qwen3.6-flash",
         "qwen3.6-flash-2026-04-16",
         "qwen3.6-plus",

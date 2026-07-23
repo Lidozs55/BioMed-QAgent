@@ -11,6 +11,21 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # qwen3.6 text family — Model Studio/QwenCloud exact limits
+    pytest.param(
+        "qwen3.6-max-preview",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3.6-max-preview",
+    ),
+    pytest.param(
+        "qwen3.6-27b",
+        262_144,
+        64_000,
+        _TEXT_ONLY,
+        id="qwen3.6-27b",
+    ),
     # qwen2.5 open-source text family — OpenAI-compatible models
     pytest.param(
         "qwen2.5-72b-instruct",

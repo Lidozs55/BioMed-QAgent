@@ -303,6 +303,22 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=64_000,
         capabilities=Capabilities(text=True, image=True, video=True),
     ),
+    "qwen3.6-max-preview": QwenModelEntry(
+        id="qwen3.6-max-preview",
+        name="Qwen3.6 Max Preview",
+        description="Qwen3.6 预览版旗舰文本模型，256K 上下文。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
+    "qwen3.6-27b": QwenModelEntry(
+        id="qwen3.6-27b",
+        name="Qwen3.6 27B",
+        description="Qwen3.6 27B 文本模型，256K 上下文。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
     "qwen3.6-flash": QwenModelEntry(
         id="qwen3.6-flash",
         name="Qwen3.6 Flash",
