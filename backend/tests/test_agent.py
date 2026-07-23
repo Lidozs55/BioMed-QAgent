@@ -11,9 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agents import RunContextWrapper
 import pytest
-
+from agents import RunContextWrapper
 from app.agent_loop.agent import INSTRUCTIONS, build_agent
 from app.agent_loop.context import RunContext
 
