@@ -110,6 +110,14 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=8_192,
         capabilities=Capabilities(text=True, image=True),
     ),
+    "qwen3.6-flash": QwenModelEntry(
+        id="qwen3.6-flash",
+        name="Qwen3.6 Flash",
+        description="最新高速文本模型，1M 超长上下文，适合大规模文档处理。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True),
+    ),
     "qwen-vl-max-0319": QwenModelEntry(
         id="qwen-vl-max-0319",
         name="Qwen VL Max 0319",
