@@ -17,6 +17,11 @@ from app.agent_loop.model import (
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.model_config import RunModelSettings
+from app.model_config.token_estimation import (
+    ChatCompletionsPromptShape,
+    ChatCompletionsStructuralPolicy,
+    serialize_function_tool_schemas,
+)
 from app.pipeline.tool import run_research_pipeline
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
@@ -132,6 +137,7 @@ class AgentBuild:
     agent: Agent
     skill_names: tuple[str, ...]
     model: LazyDashScopeModel
+    prompt_shape: ChatCompletionsPromptShape
     catalog: SkillCatalog | None = None
 
 
@@ -168,6 +174,17 @@ def _format_query_log_section(run_ctx: RunContext) -> str:
     return "\n".join(parts)
 
 
+def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
+    """Return the exact dynamic instruction string the Agent will receive.
+
+    This is the single typed resolution function used by both Agent
+    construction and prompt estimation so they share one prompt-shape source.
+    """
+
+    search_section = _format_query_log_section(run_ctx)
+    return f"{base}\n\n---\n\n{search_section}"
+
+
 def _make_instructions_fn(
     base: str,
 ) -> Callable[[RunContextWrapper[RunContext], Agent[RunContext]], Awaitable[str]]:
@@ -177,9 +194,7 @@ def _make_instructions_fn(
         ctx: RunContextWrapper[RunContext],
         _agent: Agent[RunContext],
     ) -> str:
-        run_ctx: RunContext = ctx.context
-        search_section = _format_query_log_section(run_ctx)
-        return f"{base}\n\n---\n\n{search_section}"
+        return resolve_agent_instructions(base, ctx.context)
 
     return _fn
 
@@ -221,6 +236,11 @@ def build_agent(
         build_compress_query_log_tool(model),
         build_review_query_strategy_tool(model),
     ]
+    prompt_shape = ChatCompletionsPromptShape(
+        instructions=INSTRUCTIONS,
+        serialized_tool_schemas=serialize_function_tool_schemas(tools),
+        policy=ChatCompletionsStructuralPolicy(),
+    )
     # 动态 instructions：每轮注入 query_log + query_log_summary，让 LLM
     # 始终看到"已完成检索清单"，避免会话压缩后丢失历史导致重复循环。
     instructions_fn = _make_instructions_fn(INSTRUCTIONS)
@@ -245,6 +265,7 @@ def build_agent(
         agent=agent,
         skill_names=skill_names,
         model=model,
+        prompt_shape=prompt_shape,
         catalog=resolved_catalog,
     )
 

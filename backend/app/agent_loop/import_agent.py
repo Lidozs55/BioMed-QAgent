@@ -28,6 +28,12 @@ from agents import Agent
 
 from app.agent_loop.agent import AgentBuild
 from app.agent_loop.model import get_model
+from app.model_config import RunModelSettings
+from app.model_config.token_estimation import (
+    ChatCompletionsPromptShape,
+    ChatCompletionsStructuralPolicy,
+    serialize_function_tool_schemas,
+)
 from app.tools.cache_tools import commit_to_cache
 from app.tools.io import list_files, read_file, write_file
 from app.tools.sandbox import run_python_script
@@ -240,7 +246,10 @@ commit_to_cache(
 """
 
 
-def build_attachment_parsing_agent() -> AgentBuild:
+def build_attachment_parsing_agent(
+    *,
+    model_settings: RunModelSettings | None = None,
+) -> AgentBuild:
     """构造附件解析 Agent。
 
     与 ``build_agent`` 的差异：
@@ -253,7 +262,7 @@ def build_attachment_parsing_agent() -> AgentBuild:
     from app.tools.cache_export import parse_cache_export_zip
     from app.tools.pdf_tools import extract_pdf
 
-    model = get_model()
+    model = get_model(model_settings) if model_settings is not None else get_model()
     tools = [
         read_file,
         write_file,
@@ -273,4 +282,9 @@ def build_attachment_parsing_agent() -> AgentBuild:
         agent=agent,
         skill_names=("__attachment_parsing__",),
         model=model,
+        prompt_shape=ChatCompletionsPromptShape(
+            instructions=IMPORT_INSTRUCTIONS,
+            serialized_tool_schemas=serialize_function_tool_schemas(tools),
+            policy=ChatCompletionsStructuralPolicy(),
+        ),
     )
