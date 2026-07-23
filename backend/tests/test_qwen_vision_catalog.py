@@ -2,47 +2,51 @@
 
 from __future__ import annotations
 
+import pytest
 from app.model_config import (
     Capabilities,
     get_known_model,
 )
 from app.model_config.context_budget import resolve_context_budget
 
+_VISION_CHAT = Capabilities(text=True, image=True, video=True)
 
-def test_find_qwen37_plus() -> None:
+_ALL_VISION_MODELS = [
+    # existing
+    pytest.param("qwen3.7-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.7-plus"),
+    pytest.param("qwen3.6-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-plus"),
+    pytest.param("qwen3.6-35b-a3b", 262_144, 64_000, _VISION_CHAT, id="qwen3.6-35b-a3b"),
+    # qwen3.5 vision batch (2026-07-15 Model Studio)
+    pytest.param("qwen3.5-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-plus"),
+    pytest.param("qwen3.5-plus-2026-02-15", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-plus-2026-02-15"),
+    pytest.param("qwen3.5-flash", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-flash"),
+    pytest.param("qwen3.5-flash-2026-02-23", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.5-flash-2026-02-23"),
+    pytest.param("qwen3.5-397b-a17b", 32_768, 8_192, _VISION_CHAT, id="qwen3.5-397b-a17b"),
+    pytest.param("qwen3.5-122b-a10b", 32_768, 8_192, _VISION_CHAT, id="qwen3.5-122b-a10b"),
+    pytest.param("qwen3.5-27b", 32_768, 8_192, _VISION_CHAT, id="qwen3.5-27b"),
+    pytest.param("qwen3.5-35b-a3b", 32_768, 8_192, _VISION_CHAT, id="qwen3.5-35b-a3b"),
+]
+
+
+@pytest.mark.parametrize(
+    ("model_id", "context_window", "suggested_max_tokens", "capabilities"),
+    _ALL_VISION_MODELS,
+)
+def test_known_vision_model(
+    model_id: str,
+    context_window: int,
+    suggested_max_tokens: int,
+    capabilities: Capabilities,
+) -> None:
     # Given / When
-    entry = get_known_model("qwen3.7-plus")
+    entry = get_known_model(model_id)
 
     # Then
     assert entry is not None
-    assert entry.id == "qwen3.7-plus"
-    assert entry.context_window == 1_000_000
-    assert entry.suggested_max_tokens == 64_000
-    assert entry.capabilities == Capabilities(text=True, image=True, video=True)
-
-
-def test_find_qwen36_plus() -> None:
-    # Given / When
-    entry = get_known_model("qwen3.6-plus")
-
-    # Then
-    assert entry is not None
-    assert entry.id == "qwen3.6-plus"
-    assert entry.context_window == 1_000_000
-    assert entry.suggested_max_tokens == 64_000
-    assert entry.capabilities == Capabilities(text=True, image=True, video=True)
-
-
-def test_find_qwen36_35b_a3b() -> None:
-    # Given / When
-    entry = get_known_model("qwen3.6-35b-a3b")
-
-    # Then
-    assert entry is not None
-    assert entry.id == "qwen3.6-35b-a3b"
-    assert entry.context_window == 262_144
-    assert entry.suggested_max_tokens == 64_000
-    assert entry.capabilities == Capabilities(text=True, image=True, video=True)
+    assert entry.id == model_id
+    assert entry.context_window == context_window
+    assert entry.suggested_max_tokens == suggested_max_tokens
+    assert entry.capabilities == capabilities
 
 
 def test_qwen36_plus_context_budget_with_caller_max_tokens_distinct_from_suggested() -> None:

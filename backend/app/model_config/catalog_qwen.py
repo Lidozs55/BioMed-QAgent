@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .schemas import Capabilities, QwenModelEntry
 
+# allow: SIZE_OK — pure-data-table (model entry dict)
 QWEN_MODELS: dict[str, QwenModelEntry] = {
     "qwen-plus": QwenModelEntry(
         id="qwen-plus",
@@ -109,6 +110,70 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         context_window=32_768,
         suggested_max_tokens=8_192,
         capabilities=Capabilities(text=True, image=True),
+    ),
+    "qwen3.5-plus": QwenModelEntry(
+        id="qwen3.5-plus",
+        name="Qwen3.5 Plus",
+        description="Qwen3.5 系列视觉语言旗舰模型，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-plus-2026-02-15": QwenModelEntry(
+        id="qwen3.5-plus-2026-02-15",
+        name="Qwen3.5 Plus 2026-02-15",
+        description="Qwen3.5 Plus 快照版本，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-flash": QwenModelEntry(
+        id="qwen3.5-flash",
+        name="Qwen3.5 Flash",
+        description="Qwen3.5 系列高速视觉语言模型，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-flash-2026-02-23": QwenModelEntry(
+        id="qwen3.5-flash-2026-02-23",
+        name="Qwen3.5 Flash 2026-02-23",
+        description="Qwen3.5 Flash 快照版本，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-397b-a17b": QwenModelEntry(
+        id="qwen3.5-397b-a17b",
+        name="Qwen3.5 397B A17B",
+        description="Qwen3.5 系列 MoE 视觉语言旗舰模型，397B 总参数/17B 激活，支持图像与视频理解。",
+        context_window=32_768,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-122b-a10b": QwenModelEntry(
+        id="qwen3.5-122b-a10b",
+        name="Qwen3.5 122B A10B",
+        description="Qwen3.5 系列 MoE 视觉语言模型，122B 总参数/10B 激活，支持图像与视频理解。",
+        context_window=32_768,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-27b": QwenModelEntry(
+        id="qwen3.5-27b",
+        name="Qwen3.5 27B",
+        description="Qwen3.5 系列 27B 密集视觉语言模型，支持图像与视频理解。",
+        context_window=32_768,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.5-35b-a3b": QwenModelEntry(
+        id="qwen3.5-35b-a3b",
+        name="Qwen3.5 35B A3B",
+        description="Qwen3.5 系列 MoE 轻量视觉语言模型，高效推理，支持图像与视频理解。",
+        context_window=32_768,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True, image=True, video=True),
     ),
     "qwen3.6-35b-a3b": QwenModelEntry(
         id="qwen3.6-35b-a3b",
