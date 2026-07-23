@@ -1,7 +1,7 @@
 # Chat Message Deduplication Design
 
 **Date:** 2026-07-24
-**Status:** Proposed
+**Status:** Accepted and implemented
 **Scope:** TASK-028
 
 ## 1. Problem
