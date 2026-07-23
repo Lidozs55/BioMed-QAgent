@@ -86,7 +86,7 @@ def test_sdk_callback_and_estimator_consume_same_resolved_instructions() -> None
     # When — invoke the actual Agent's SDK instructions callback
     build = build_agent(model_settings=RunModelSettings.default())
     wrapper = RunContextWrapper(context=ctx)
-    callback_result = asyncio.run(build.agent.instructions(wrapper))
+    callback_result = asyncio.run(build.agent.instructions(wrapper, build.agent))
 
     # And resolve independently through the shared function
     resolver_result = resolve_agent_instructions(INSTRUCTIONS, ctx)
