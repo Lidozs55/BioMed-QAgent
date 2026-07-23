@@ -110,6 +110,14 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=8_192,
         capabilities=Capabilities(text=True, image=True),
     ),
+    "qwen3.6-35b-a3b": QwenModelEntry(
+        id="qwen3.6-35b-a3b",
+        name="Qwen3.6 35B A3B",
+        description="Qwen3.6 系列 MoE 视觉语言模型，高效推理，支持图像与视频理解。",
+        context_window=262_144,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
     "qwen3.6-flash": QwenModelEntry(
         id="qwen3.6-flash",
         name="Qwen3.6 Flash",
@@ -117,6 +125,22 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         context_window=1_000_000,
         suggested_max_tokens=64_000,
         capabilities=Capabilities(text=True),
+    ),
+    "qwen3.6-plus": QwenModelEntry(
+        id="qwen3.6-plus",
+        name="Qwen3.6 Plus",
+        description="Qwen3.6 系列视觉语言模型，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
+    "qwen3.7-plus": QwenModelEntry(
+        id="qwen3.7-plus",
+        name="Qwen3.7 Plus",
+        description="Qwen3.7 系列视觉语言模型，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
     ),
     "qwen-vl-max-0319": QwenModelEntry(
         id="qwen-vl-max-0319",
