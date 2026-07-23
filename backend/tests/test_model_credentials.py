@@ -41,6 +41,10 @@ def configure_model(
             api_key=current.api_key,
             model_name=current.model_name,
             max_tokens=current.max_tokens,
+            context_window=current.context_window,
+            safety_reserve_ratio=current.safety_reserve_ratio,
+            compaction_trigger_ratio=current.compaction_trigger_ratio,
+            compaction_target_ratio=current.compaction_target_ratio,
             advanced=AdvancedModelSettings(**current.advanced.model_dump()),
         )
 
@@ -98,6 +102,7 @@ def test_agent_omits_dashscope_only_settings_for_other_providers() -> None:
             api_key="run-api-key",
             base_url="https://api.openai.com/v1",
             model_name="gpt-4.1-mini",
+            context_window=65_536,
             advanced=AdvancedParams(
                 repetition_penalty=1.2,
                 enable_search=True,
@@ -212,6 +217,7 @@ async def test_lazy_model_closes_owned_client_when_delegate_close_is_noop(
         api_key="runtime-api-key",
         base_url="https://runtime.example/v1",
         model_name="runtime-model",
+        context_window=65_536,
     )
     configure_model(monkeypatch, runtime_settings)
     client = SimpleNamespace(close=AsyncMock())
@@ -260,6 +266,7 @@ async def test_lazy_model_closes_owned_client_after_delegate_construction_failur
         api_key="runtime-api-key",
         base_url="https://runtime.example/v1",
         model_name="runtime-model",
+        context_window=65_536,
     )
     configure_model(monkeypatch, runtime_settings)
     client = SimpleNamespace(close=AsyncMock())
@@ -288,11 +295,13 @@ def test_lazy_model_uses_explicit_settings_snapshot_after_runtime_change(
         api_key="run-api-key",
         base_url="https://run.example/v1",
         model_name="run-model",
+        context_window=65_536,
     )
     updated_settings = UserSettings(
         api_key="updated-api-key",
         base_url="https://updated.example/v1",
         model_name="updated-model",
+        context_window=65_536,
     )
     runtime_getter = configure_model(monkeypatch, updated_settings)
     client = object()
@@ -324,11 +333,13 @@ def test_lazy_model_keeps_its_first_runtime_settings_for_the_run(
         api_key="first-api-key",
         base_url="https://first.example/v1",
         model_name="first-model",
+        context_window=65_536,
     )
     updated_settings = UserSettings(
         api_key="second-api-key",
         base_url="https://second.example/v1",
         model_name="second-model",
+        context_window=65_536,
     )
     runtime_getter = configure_model(monkeypatch, initial_settings)
     client_factory = Mock(return_value=object())
@@ -357,11 +368,13 @@ def test_fresh_lazy_model_uses_runtime_settings_persisted_between_runs(
         api_key="first-api-key",
         base_url="https://first.example/v1",
         model_name="first-model",
+        context_window=65_536,
     )
     updated_settings = UserSettings(
         api_key="second-api-key",
         base_url="https://second.example/v1",
         model_name="second-model",
+        context_window=65_536,
     )
     runtime_getter = configure_model(monkeypatch, initial_settings)
     client_factory = Mock(side_effect=[object(), object()])

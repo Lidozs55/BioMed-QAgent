@@ -23,6 +23,8 @@ from app.domain.contracts import (
 )
 from app.runtime.manager import RunExecution
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 class NoopCompactor:
     async def prepare(
@@ -31,11 +33,16 @@ class NoopCompactor:
         *,
         model_handle,
         emit,
+        request=None,
         session,
         cancellation_requested,
         commit,
     ):
-        return SimpleNamespace(session=session)
+        return SimpleNamespace(
+            session=session,
+            agent_input=request.agent_input if request is not None else "",
+            estimate=SimpleNamespace(total=0),
+        )
 
 
 def make_executor(repository):

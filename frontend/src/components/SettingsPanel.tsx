@@ -1,172 +1,28 @@
-import { ArrowCounterClockwiseIcon, CheckCircleIcon, DatabaseIcon, EyeClosedIcon, EyeIcon, GearIcon, Image, SpeakerHigh, TrashIcon, UploadSimpleIcon, VideoCamera, XCircleIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { Toggle } from "@/components/ui/toggle";
-import { cn } from "@/lib/utils";
-import type { DeclarativeSkillManifest, ModelInfo, ModelSettings, ModelSettingsUpdate, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
+import { ModelForm } from "@/components/ModelForm";
+import { SettingsDialogs } from "@/components/SettingsDialogs";
+import { DatabasesTabContent, SkillsTabContent } from "@/components/DataTabs";
+import { EMPTY_DATABASE, databaseManifest, hasDatabaseErrors, parseHttpMethod, parseJsonBody, parseJsonTemplate, validateDatabaseDraft, type DatabaseDraft } from "@/lib/databaseDraft";
+import type { ModelSettings, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
 
-/* ------------------------------------------------------------------ */
-/*  Rich model info with capabilities (backed by runtime API data)    */
-/* ------------------------------------------------------------------ */
-interface ModelCapabilities {
-  text: boolean;
-  image: boolean;
-  video: boolean;
-  audio: boolean;
-}
-
-interface RichModelInfo extends ModelInfo {
-  capabilities?: ModelCapabilities;
-  recommended?: boolean;
-  api_available?: boolean;
-  capability_source?: string;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Props                                                             */
-/* ------------------------------------------------------------------ */
 interface SettingsPanelProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  api: SettingsAPIClient;
+  open: boolean; onOpenChange: (open: boolean) => void; api: SettingsAPIClient;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Shared helpers                                                     */
-/* ------------------------------------------------------------------ */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "请求失败";
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : "请求失败";
 }
 
-function CapabilityBadge({ label, supported, icon: Icon }: { label: string; supported: boolean; icon?: React.ElementType }) {
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-      supported
-        ? "text-emerald-600 dark:text-emerald-400"
-        : "bg-muted text-muted-foreground line-through",
-    )}>
-      {Icon ? <Icon weight="fill" className="size-3" /> : (supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />)}
-      {label}
-    </span>
-  );
-}
-
-function ModelInfoCard({ model }: { model: RichModelInfo }) {
-  const capabilities = model.capabilities ?? { text: true, image: false, video: false, audio: false };
-  const fn = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n);
-  return (
-    <div className="mt-4 rounded-xl border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h4 className="text-base font-semibold">{model.name}</h4>
-            {model.recommended && <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">推荐</span>}
-            {model.api_available && <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">可用</span>}
-            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {model.capability_source === "api" ? "接口验证" : model.capability_source === "inferred" ? "名称推断" : "内置数据"}
-            </span>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">{model.description}</p>
-        </div>
-        <span className="shrink-0 rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{model.id}</span>
-      </div>
-      <Separator className="my-3" />
-      <div className="grid grid-cols-2 gap-3 text-sm">
-        <div><span className="text-xs text-muted-foreground">上下文窗口</span><p className="mt-0.5 font-medium">{fn(model.context_window)} tokens</p></div>
-        <div><span className="text-xs text-muted-foreground">建议输出上限</span><p className="mt-0.5 font-medium">{fn(model.suggested_max_tokens)} tokens</p></div>
-      </div>
-      <div className="mt-3">
-        <span className="text-xs text-muted-foreground">多模态能力</span>
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          <CapabilityBadge label="文本" supported={capabilities.text} />
-          <CapabilityBadge icon={Image} label="图像" supported={capabilities.image} />
-          <CapabilityBadge icon={VideoCamera} label="视频" supported={capabilities.video} />
-          <CapabilityBadge icon={SpeakerHigh} label="音频" supported={capabilities.audio} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Database draft helpers (ported from main)                          */
-/* ------------------------------------------------------------------ */
-interface DatabaseDraft {
-  name: string;
-  displayName: string;
-  description: string;
-  url: string;
-  operation: string;
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
-  query: string;
-  headers: string;
-  body: string;
-}
-
-const EMPTY_DATABASE: DatabaseDraft = { name: "", displayName: "", description: "", url: "", operation: "search", method: "GET", query: "{}", headers: "{}", body: "null" };
-
-function databaseManifest(draft: DatabaseDraft, version = "1.0.0"): DeclarativeSkillManifest {
-  return {
-    schema_version: "1.0", name: draft.name, display_name: draft.displayName,
-    version, category: "discovery", description: draft.description,
-    supported_sources: [draft.name], user_selectable: true, pipeline_supported: false,
-    operations: [{ name: draft.operation, description: `Search ${draft.displayName}`, method: draft.method, url: draft.url, query: JSON.parse(draft.query) as Record<string, unknown>, headers: JSON.parse(draft.headers) as Record<string, unknown>, body: JSON.parse(draft.body) as unknown }],
-  };
-}
-
-/* ================================================================== */
-/*  SettingsPanel component                                            */
-/* ================================================================== */
 export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
-  /* ---- core data ---- */
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
-  const [models, setModels] = useState<RichModelInfo[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [skills, setSkills] = useState<SkillManifest[]>([]);
-
-  /* ---- model preview state ---- */
-  const abortRef = useRef<AbortController | null>(null);
-
-  /* ---- model form state (enhanced) ---- */
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const apiKeyDirtyRef = useRef(false);
-  const [modelName, setModelName] = useState("");
-  const [maxTokens, setMaxTokens] = useState(8192);
-  const [temperature, setTemperature] = useState(0.7);
-  const [topP, setTopP] = useState(1);
-  const [enableSearch, setEnableSearch] = useState(false);
-  const [thinkingMode, setThinkingMode] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
-  const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [modelError, setModelError] = useState<string | null>(null);
-
-  /* ---- database / skill state ---- */
   const [skillFilter, setSkillFilter] = useState("");
   const [databaseDraft, setDatabaseDraft] = useState<DatabaseDraft | null>(null);
   const [editingDatabase, setEditingDatabase] = useState<SkillManifest | null>(null);
@@ -175,156 +31,28 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  /* ---- last-save-wins sequencing ---- */
-  const saveSeqRef = useRef(0);
+  const databases = skills.filter((s) => s.user_selectable && s.supported_sources.length > 0);
 
-  /* ---- derive derived ---- */
-  const selectedModel = models.find((m) => m.id === modelName) ?? null;
-  const filteredModels = models.filter((m) =>
-    m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-    m.id.toLowerCase().includes(modelSearch.toLowerCase()),
-  );
-  const databases = useMemo(() => skills.filter((skill) => skill.user_selectable && skill.supported_sources.length > 0), [skills]);
-  const filteredSkills = useMemo(() => {
-    const query = skillFilter.trim().toLowerCase();
-    return skills.filter((skill) => !query || [skill.name, skill.display_name, skill.category, skill.origin].some((value) => value.toLowerCase().includes(query)));
-  }, [skillFilter, skills]);
-
-  const markDirty = useCallback(() => setDirty(true), []);
-
-  /* ---- data loading ---- */
   const refreshSkills = useCallback(async () => setSkills(await api.fetchSkills()), [api]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextSettings, nextVendors, nextSkills] = await Promise.all([api.fetchSettings(), api.fetchVendors(), api.fetchSkills()]);
-      setSettings(nextSettings);
-      setVendors(nextVendors);
-      setSkills(nextSkills);
-      setBaseUrl(nextSettings.base_url);
-      setApiKey("");
-      apiKeyDirtyRef.current = false;
-      setModelName(nextSettings.model_name);
-      setMaxTokens(nextSettings.max_tokens);
-      setTemperature(nextSettings.advanced.temperature ?? 0.7);
-      setTopP(nextSettings.advanced.top_p ?? 1);
-      setEnableSearch(nextSettings.advanced.enable_search ?? false);
-      setThinkingMode(nextSettings.advanced.thinking_mode ?? false);
-      setModels([]);
-      setModelSearch("");
-      setShowModelDropdown(false);
-      setDirty(false);
-      setModelError(null);
-    } catch (error) {
-      toast.error("设置加载失败", { description: errorText(error) });
-    } finally {
-      setLoading(false);
-    }
-    abortRef.current = null;
+      const [s, v, sk] = await Promise.all([api.fetchSettings(), api.fetchVendors(), api.fetchSkills()]);
+      setSettings(s); setVendors(v); setSkills(sk);
+    } catch (e) { toast.error("设置加载失败", { description: errMsg(e) }); }
+    finally { setLoading(false); }
   }, [api]);
 
   useEffect(() => {
-    if (!open) return undefined;
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    if (!open) return;
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
   }, [load, open]);
 
-  /* ---- model form save with key-clear semantics ---- */
-  const saveModel = async () => {
-    if (!modelName.trim()) {
-      setModelError("请填写模型名称，例如 qwen-plus");
-      return;
-    }
-    if (models.length > 0 && !models.find((m) => m.id === modelName)) {
-      setModelError(`模型名称 "${modelName}" 不在可用列表中，请检查拼写是否正确，或从下拉菜单中选择`);
-      return;
-    }
-    setModelError(null);
-
-    const seq = ++saveSeqRef.current;
-    setSaving(true);
-    try {
-      const payload: Record<string, unknown> = {};
-      if (baseUrl !== settings?.base_url) payload.base_url = baseUrl;
-      if (apiKeyDirtyRef.current) payload.api_key = apiKey;
-      if (modelName !== settings?.model_name) payload.model_name = modelName;
-      if (maxTokens !== settings?.max_tokens) payload.max_tokens = maxTokens;
-      if (temperature !== (settings?.advanced.temperature ?? 0.7)) payload.temperature = temperature;
-      if (topP !== (settings?.advanced.top_p ?? 1)) payload.top_p = topP;
-      if (enableSearch !== (settings?.advanced.enable_search ?? false)) payload.enable_search = enableSearch;
-      if (thinkingMode !== (settings?.advanced.thinking_mode ?? false)) payload.thinking_mode = thinkingMode;
-
-      if (Object.keys(payload).length === 0) {
-        setDirty(false);
-        return;
-      }
-
-      const updated = await api.saveSettings(payload as ModelSettingsUpdate);
-      if (saveSeqRef.current !== seq) return; // superseded
-
-      setSettings(updated);
-      setApiKey("");
-      setModelSearch("");
-      setShowModelDropdown(false);
-      apiKeyDirtyRef.current = false;
-      setDirty(false);
-
-      toast.success("模型设置已保存");
-
-      // Model discovery — non-blocking after save
-      setModelsLoading(true);
-      try {
-        const freshModels = (await api.fetchModels({ baseUrl: updated.base_url })) as RichModelInfo[];
-        if (saveSeqRef.current === seq) setModels(freshModels);
-      } catch {
-        // Discovery failure must not revert the save success
-      } finally {
-        if (saveSeqRef.current === seq) setModelsLoading(false);
-      }
-    } catch (error) {
-      const msg = errorText(error);
-      setModelError(msg);
-      toast.error("模型设置保存失败", { description: msg });
-    } finally {
-      if (saveSeqRef.current === seq) setSaving(false);
-    }
-  };
-
-  /* ---- preview models ---- */
-  const previewModels = useCallback(async () => {
-    abortRef.current?.abort();
-    const abort = new AbortController();
-    abortRef.current = abort;
-    setModelsLoading(true);
-    try {
-      const fresh = (await api.fetchModels({ baseUrl, apiKey: apiKey || undefined })) as RichModelInfo[];
-      if (!abort.signal.aborted) setModels(fresh);
-    } catch (error) {
-      if (!abort.signal.aborted) toast.error("模型列表加载失败", { description: errorText(error) });
-    } finally {
-      if (!abort.signal.aborted) setModelsLoading(false);
-    }
-  }, [api, baseUrl, apiKey]);
-
-  /* ---- database / skill handlers ---- */
-  const mutateSkill = async (action: () => Promise<void>, success: string) => {
-    try {
-      await action();
-      await refreshSkills();
-      toast.success(success);
-    } catch (error) {
-      toast.error("操作失败", { description: errorText(error) });
-    }
-  };
-
-  const chooseUpload = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      setPendingUpload({ file, validation: await api.validateSkill(file) });
-    } catch (error) {
-      toast.error("文件验证失败", { description: errorText(error) });
-    }
+  const mutateSkill = async (action: () => Promise<void>, msg: string) => {
+    try { await action(); await refreshSkills(); toast.success(msg); }
+    catch (e) { toast.error("操作失败", { description: errMsg(e) }); }
   };
 
   const confirmUpload = async () => {
@@ -335,717 +63,102 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       setPendingUpload(null);
       await refreshSkills();
       toast.success("技能已安装");
-    } catch (error) {
-      toast.error("技能安装失败", { description: errorText(error) });
-    } finally {
-      setUploading(false);
-    }
+    } catch (e) { toast.error("技能安装失败", { description: errMsg(e) }); }
+    finally { setUploading(false); }
   };
 
-  const saveDatabase = async () => {
-    if (!databaseDraft) return;
+  const onEditDB = async (db: SkillManifest) => {
     try {
-      if (editingDatabase) {
-        await api.updateDatabase(editingDatabase.name, {
-          display_name: databaseDraft.displayName,
-          description: databaseDraft.description,
-          operation: {
-            name: databaseDraft.operation,
-            description: `Search ${databaseDraft.displayName}`,
-            method: databaseDraft.method,
-            url: databaseDraft.url,
-            query: JSON.parse(databaseDraft.query) as Record<string, unknown>,
-            headers: JSON.parse(databaseDraft.headers) as Record<string, unknown>,
-            body: JSON.parse(databaseDraft.body) as unknown,
-          },
-        });
-      } else {
-        await api.createDatabase(databaseManifest(databaseDraft));
-      }
-      setDatabaseDraft(null);
-      setEditingDatabase(null);
-      await refreshSkills();
-      toast.success("数据库目录已更新");
-    } catch (error) {
-      toast.error("数据库保存失败", { description: errorText(error) });
-    }
-  };
-
-  const editDatabase = async (database: SkillManifest) => {
-    try {
-      const detail = await api.fetchSkill(database.name);
-      const manifest = detail.declarative_manifest;
-      const operation = manifest?.operations[0];
-      if (!manifest || !operation) throw new Error("数据库缺少可编辑的声明式操作");
-      setEditingDatabase(database);
+      const detail = await api.fetchSkill(db.name);
+      const op = detail.declarative_manifest?.operations[0];
+      if (!detail.declarative_manifest || !op) throw new Error("缺少操作");
+      setEditingDatabase(db);
       setDatabaseDraft({
-        name: manifest.name,
-        displayName: manifest.display_name,
-        description: manifest.description,
-        url: operation.url,
-        operation: operation.name,
-        method: operation.method,
-        query: JSON.stringify(operation.query ?? {}),
-        headers: JSON.stringify(operation.headers ?? {}),
-        body: JSON.stringify(operation.body ?? null),
+        name: detail.declarative_manifest.name, displayName: detail.declarative_manifest.display_name,
+        description: detail.declarative_manifest.description, url: op.url, operation: op.name,
+        method: op.method, query: JSON.stringify(op.query ?? {}),
+        headers: JSON.stringify(op.headers ?? {}), body: JSON.stringify(op.body ?? null),
       });
-    } catch (error) {
-      toast.error("数据库详情加载失败", { description: errorText(error) });
-    }
+    } catch (e) { toast.error("数据库详情加载失败", { description: errMsg(e) }); }
   };
 
-  const confirmDelete = async () => {
-    if (!pendingDelete) return;
-    const target = pendingDelete;
-    setPendingDelete(null);
-    await mutateSkill(
-      () => target.kind === "database" ? api.deleteDatabase(target.name) : api.deleteSkill(target.name),
-      target.kind === "database" ? "数据库已删除" : "技能已删除",
-    );
-  };
-
-  const showSkillDetail = async (name: string) => {
-    try {
-      setSkillDetail(await api.fetchSkill(name));
-    } catch (error) {
-      toast.error("技能详情加载失败", { description: errorText(error) });
-    }
-  };
-
-  const handleModelSelect = useCallback((id: string) => {
-    setModelName(id);
-    setShowModelDropdown(false);
-    setDirty(true);
-    setModelError(null);
-  }, []);
-
-  const handleModelSearchChange = useCallback((value: string) => {
-    setModelSearch(value);
-  }, []);
-
-  /* ================================================================ */
-  /*  RENDER                                                           */
-  /* ================================================================ */
   return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="flex max-h-[calc(100svh-2rem)] min-h-0 w-[min(90rem,calc(100vw-2rem))] max-w-none sm:max-w-none flex-col" showCloseButton>
-          <DialogHeader>
-            <DialogTitle>设置</DialogTitle>
-            <DialogDescription>管理模型连接、数据库目录和 Agent 技能。</DialogDescription>
-          </DialogHeader>
-
-          {loading ? (
-            <div className="flex flex-col gap-3">
-              <Skeleton className="h-8 w-72" />
-              <Skeleton className="h-64 w-full" />
-            </div>
-          ) : (
-            <Tabs defaultValue="model" className="min-h-0 flex-1">
-              <TabsList>
-                <TabsTrigger value="model">Model</TabsTrigger>
-                <TabsTrigger value="databases">Databases</TabsTrigger>
-                <TabsTrigger value="skills">Skills</TabsTrigger>
-              </TabsList>
-
-              {/* ======================================================
-                  MODEL TAB (enhanced with HEAD guarantees)
-                  ====================================================== */}
-              <TabsContent value="model" className="min-h-0 overflow-auto py-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>模型连接</CardTitle>
-                    <CardDescription>新任务会使用保存后的配置；运行中的模型实例保持不变。</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <FieldGroup>
-                      {/* Vendor quick-select */}
-                      <Field>
-                        <FieldLabel>Vendor</FieldLabel>
-                        <div className="flex flex-wrap gap-2">
-                          {vendors.map((vendor) => (
-                            <Button
-                              key={vendor.id}
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => { setBaseUrl(vendor.base_url); markDirty(); }}
-                            >
-                              {vendor.name}{vendor.recommended ? " · 推荐" : ""}
-                            </Button>
-                          ))}
-                        </div>
-                      </Field>
-
-                      {/* Base URL */}
-                      <Field>
-                        <FieldLabel htmlFor="settings-baseurl">Base URL</FieldLabel>
-                        <div className="relative">
-                          <Input
-                            id="settings-baseurl"
-                            value={baseUrl}
-                            onChange={(e) => { setBaseUrl(e.target.value); markDirty(); }}
-                            placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
-                          />
-                          {!baseUrl && (
-                            <button
-                              type="button"
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-medium text-primary hover:text-primary/80"
-                              onClick={() => { setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1"); markDirty(); }}
-                            >
-                              填入默认
-                            </button>
-                          )}
-                        </div>
-                      </Field>
-
-                      {/* API Key — explicit clear / omit semantics, no secret in DOM */}
-                      <Field>
-                        <FieldLabel htmlFor="settings-apikey">API Key</FieldLabel>
-                        <div className="relative">
-                          <Input
-                            id="settings-apikey"
-                            type={showApiKey ? "text" : "password"}
-                            value={apiKey}
-                            onChange={(e) => { setApiKey(e.target.value); apiKeyDirtyRef.current = true; markDirty(); }}
-                            placeholder={settings?.api_key_configured ? "输入新值覆盖已配置密钥" : "sk-..."}
-                          />
-                          <button
-                            type="button"
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                            onClick={() => setShowApiKey((v) => !v)}
-                            tabIndex={-1}
-                          >
-                            {showApiKey ? <EyeClosedIcon className="size-4" /> : <EyeIcon className="size-4" />}
-                          </button>
-                        </div>
-                        <FieldDescription>
-                          已保存的密钥不会回填输入框。留空并保存，可将密钥清除。
-                        </FieldDescription>
-                      </Field>
-
-                      {/* Model — bounded scrollable dropdown (h-72) */}
-                      <Field>
-                        <FieldLabel htmlFor="settings-model">Model</FieldLabel>
-                        <div className="flex gap-2">
-                          <div className="relative flex-1">
-                            {/* Dropdown trigger */}
-                            {models.length === 0 ? (
-                              <Input
-                                id="settings-model"
-                                value={modelName}
-                                onChange={(e) => { setModelName(e.target.value); markDirty(); setModelError(null); }}
-                                placeholder="输入模型名称（如 qwen-plus）"
-                              />
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  id="settings-model"
-                                  className="flex h-10 w-full items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  onClick={() => setShowModelDropdown((v) => !v)}
-                                >
-                                  {modelsLoading ? (
-                                    <span className="flex items-center gap-2 text-muted-foreground">
-                                      <Spinner className="size-3.5" />
-                                      加载模型列表中...
-                                    </span>
-                                  ) : (
-                                    <span>
-                                      {selectedModel ? selectedModel.name : "选择模型"}
-                                    </span>
-                                  )}
-                                  <span className="text-xs text-muted-foreground">
-                                    {models.length > 0 ? `${models.length} 个可用` : ""}
-                                  </span>
-                                </button>
-
-                                {/* Dropdown popover */}
-                                {showModelDropdown && (
-                                  <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border bg-popover shadow-md">
-                                    <div className="p-2">
-                                      <Input
-                                        placeholder="搜索模型..."
-                                        value={modelSearch}
-                                        onChange={(e) => handleModelSearchChange(e.target.value)}
-                                        className="h-9 text-sm"
-                                        autoFocus
-                                      />
-                                    </div>
-                                    <ScrollArea className="h-72">
-                                      {filteredModels.length === 0 ? (
-                                        <div className="p-4 text-center text-sm text-muted-foreground">
-                                          没有匹配的模型
-                                        </div>
-                                      ) : filteredModels.map((model) => (
-                                        <button
-                                          key={model.id}
-                                          type="button"
-                                          className={cn(
-                                            "flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-accent",
-                                            model.id === modelName && "bg-accent font-medium",
-                                          )}
-                                          onClick={() => handleModelSelect(model.id)}
-                                        >
-                                          <div className="min-w-0">
-                                            <div className="flex items-center gap-2">
-                                              <span className="truncate">{model.name}</span>
-                                              {model.recommended && (
-                                                <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                                                  推荐
-                                                </span>
-                                              )}
-                                            </div>
-                                            <p className="truncate text-xs text-muted-foreground">{model.description}</p>
-                                          </div>
-                                          <div className="ml-3 flex shrink-0 gap-1.5">
-                                            {model.capabilities?.image && (
-                                              <span role="img" className="text-emerald-600 dark:text-emerald-400" title="支持图像" aria-label="支持图像">
-                                                <Image weight="fill" className="size-3" />
-                                              </span>
-                                            )}
-                                            {model.capabilities?.video && (
-                                              <span role="img" className="text-emerald-600 dark:text-emerald-400" title="支持视频" aria-label="支持视频">
-                                                <VideoCamera weight="fill" className="size-3" />
-                                              </span>
-                                            )}
-                                            {model.capabilities?.audio && (
-                                              <span role="img" className="text-emerald-600 dark:text-emerald-400" title="支持音频" aria-label="支持音频">
-                                                <SpeakerHigh weight="fill" className="size-3" />
-                                              </span>
-                                            )}
-                                          </div>
-                                        </button>
-                                      ))}
-                                    </ScrollArea>
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void previewModels()}
-                            disabled={modelsLoading}
-                          >
-                            {modelsLoading && <Spinner data-icon="inline-start" />}
-                            加载模型
-                          </Button>
-                        </div>
-                        {/* Model info card + error */}
-                        {selectedModel && <ModelInfoCard model={selectedModel} />}
-                        {modelError && (
-                          <p className="mt-2 text-xs text-destructive">{modelError}</p>
-                        )}
-                      </Field>
-
-                      {/* Max tokens slider */}
-                      <Field>
-                        <FieldLabel htmlFor="settings-maxtokens">最大输出 Tokens</FieldLabel>
-                        <div className="flex items-center gap-3">
-                          <input
-                            id="settings-maxtokens"
-                            type="range"
-                            min={512}
-                            max={131072}
-                            step={512}
-                            value={maxTokens}
-                            onChange={(e) => { setMaxTokens(Number(e.target.value)); markDirty(); }}
-                            className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
-                          />
-                          <span className="w-24 text-right font-mono text-sm tabular-nums text-muted-foreground">
-                            {maxTokens.toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-[11px] text-muted-foreground">
-                          <span>512</span>
-                          <span>131K</span>
-                        </div>
-                      </Field>
-
-                      {/* Temperature + Top P */}
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <Label htmlFor="settings-temperature">Temperature</Label>
-                            <span className="font-mono text-xs tabular-nums text-muted-foreground">{temperature.toFixed(1)}</span>
-                          </div>
-                          <input
-                            id="settings-temperature"
-                            type="range"
-                            min={0}
-                            max={2}
-                            step={0.1}
-                            value={temperature}
-                            onChange={(e) => { setTemperature(Number(e.target.value)); markDirty(); }}
-                            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
-                          />
-                          <div className="flex justify-between text-[10px] text-muted-foreground">
-                            <span>精确 (0)</span>
-                            <span>平衡 (1)</span>
-                            <span>创意 (2)</span>
-                          </div>
-                        </div>
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <Label htmlFor="settings-topp">Top P</Label>
-                            <span className="font-mono text-xs tabular-nums text-muted-foreground">{topP.toFixed(2)}</span>
-                          </div>
-                          <input
-                            id="settings-topp"
-                            type="range"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={topP}
-                            onChange={(e) => { setTopP(Number(e.target.value)); markDirty(); }}
-                            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
-                          />
-                          <div className="flex justify-between text-[10px] text-muted-foreground">
-                            <span>严格 (0)</span>
-                            <span>默认 (1)</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Advanced switches */}
-                      <div className="space-y-3 pt-2">
-                        {selectedModel?.id?.startsWith("qwq") && (
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <Label htmlFor="settings-thinking" className="text-sm">思维链模式</Label>
-                              <p className="text-xs text-muted-foreground">为推理模型启用/禁用长思考过程</p>
-                            </div>
-                            <Switch
-                              id="settings-thinking"
-                              checked={thinkingMode}
-                              onCheckedChange={(v) => { setThinkingMode(v); markDirty(); }}
-                            />
-                          </div>
-                        )}
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <Label htmlFor="settings-search" className="text-sm">联网搜索</Label>
-                            <p className="text-xs text-muted-foreground">让模型在需要时自动检索互联网</p>
-                          </div>
-                          <Switch
-                            id="settings-search"
-                            checked={enableSearch}
-                            onCheckedChange={(v) => { setEnableSearch(v); markDirty(); }}
-                          />
-                        </div>
-                      </div>
-                    </FieldGroup>
-                  </CardContent>
-                  <CardFooter className="justify-end">
-                    <Button onClick={() => void saveModel()} disabled={!dirty || saving}>
-                      {saving && <Spinner data-icon="inline-start" />}
-                      保存模型设置
-                    </Button>
-                  </CardFooter>
-                </Card>
-              </TabsContent>
-
-              {/* ======================================================
-                  DATABASES TAB (ported from main)
-                  ====================================================== */}
-              <TabsContent value="databases" className="min-h-0 overflow-auto py-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>数据库目录</CardTitle>
-                    <CardDescription>数据库是可选择、声明式的检索技能投影。</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="mb-3 flex flex-wrap justify-end gap-2">
-                      <Field>
-                        <FieldLabel htmlFor="database-upload" className="sr-only">上传数据库包</FieldLabel>
-                        <Input id="database-upload" type="file" accept=".json,.yaml,.yml,.zip" onChange={(event) => void chooseUpload(event.target.files?.[0])} />
-                      </Field>
-                      <Button size="sm" onClick={() => { setEditingDatabase(null); setDatabaseDraft(EMPTY_DATABASE); }}>
-                        <DatabaseIcon data-icon="inline-start" />
-                        新建数据库
-                      </Button>
-                    </div>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>名称</TableHead>
-                          <TableHead>来源</TableHead>
-                          <TableHead>版本</TableHead>
-                          <TableHead>可用性</TableHead>
-                          <TableHead>Pipeline</TableHead>
-                          <TableHead className="text-right">操作</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {databases.map((database) => (
-                          <TableRow key={database.name}>
-                            <TableCell>
-                              <div className="font-medium">{database.display_name}</div>
-                              <div className="text-xs text-muted-foreground">{database.description}</div>
-                            </TableCell>
-                            <TableCell><Badge variant="outline">{database.origin}</Badge></TableCell>
-                            <TableCell>{database.version}</TableCell>
-                            <TableCell>
-                              <Toggle
-                                variant="outline"
-                                pressed={database.enabled}
-                                disabled={database.origin === "builtin"}
-                                aria-label={`${database.enabled ? "停用" : "启用"} ${database.display_name}`}
-                                onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(database.name, pressed), "数据库状态已更新")}
-                              >
-                                {database.enabled ? "已启用" : "已停用"}
-                              </Toggle>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={database.pipeline_supported ? "secondary" : "outline"}>
-                                {database.pipeline_supported ? "支持" : "Agent"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {database.origin === "package" && (
-                                <div className="flex justify-end gap-1">
-                                  <Button size="icon-sm" variant="ghost" aria-label={`编辑 ${database.display_name}`} onClick={() => void editDatabase(database)}>
-                                    <GearIcon />
-                                  </Button>
-                                  <Button size="icon-sm" variant="ghost" aria-label={`删除 ${database.display_name}`} onClick={() => setPendingDelete({ kind: "database", name: database.name, label: database.display_name })}>
-                                    <TrashIcon />
-                                  </Button>
-                                </div>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* ======================================================
-                  SKILLS TAB (ported from main)
-                  ====================================================== */}
-              <TabsContent value="skills" className="min-h-0 overflow-auto py-2">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>技能管理</CardTitle>
-                    <CardDescription>筛选、启停、回滚或安装技能包。</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="mb-3 flex flex-wrap items-center gap-2">
-                      <Input className="max-w-xs" placeholder="筛选技能" value={skillFilter} onChange={(event) => setSkillFilter(event.target.value)} />
-                      <Field>
-                        <FieldLabel htmlFor="skill-upload" className="sr-only">上传技能</FieldLabel>
-                        <Input id="skill-upload" type="file" accept=".json,.yaml,.yml,.zip" onChange={(event) => void chooseUpload(event.target.files?.[0])} />
-                      </Field>
-                    </div>
-                    {filteredSkills.length === 0 ? (
-                      <Empty>
-                        <EmptyHeader>
-                          <EmptyTitle>没有匹配的技能</EmptyTitle>
-                          <EmptyDescription>调整名称、分类、来源或状态筛选。</EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>技能</TableHead>
-                            <TableHead>分类</TableHead>
-                            <TableHead>状态</TableHead>
-                            <TableHead>操作 / 版本</TableHead>
-                            <TableHead className="text-right">管理</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredSkills.map((skill) => (
-                            <TableRow key={skill.name}>
-                              <TableCell>
-                                <div className="font-medium">{skill.display_name}</div>
-                                <div className="text-xs text-muted-foreground">{skill.description}</div>
-                                {skill.load_error && <div className="text-xs text-destructive">{skill.load_error}</div>}
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant="outline">{skill.category}</Badge>
-                                <Badge variant="secondary">{skill.origin}</Badge>
-                              </TableCell>
-                              <TableCell>
-                                {skill.available === false ? (
-                                  <Badge variant="destructive">不可用</Badge>
-                                ) : (
-                                  <Toggle
-                                    variant="outline"
-                                    pressed={skill.enabled}
-                                    aria-label={`${skill.enabled ? "停用" : "启用"} ${skill.display_name}`}
-                                    disabled={skill.origin === "builtin"}
-                                    onPressedChange={(pressed) => void mutateSkill(() => api.setSkillEnabled(skill.name, pressed), "技能状态已更新")}
-                                  >
-                                    {skill.enabled ? "已启用" : "已停用"}
-                                  </Toggle>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <div>{skill.operations.join(", ") || "无操作"}</div>
-                                <div className="text-xs text-muted-foreground">v{skill.version}</div>
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <div className="flex justify-end gap-1">
-                                  <Button size="sm" variant="ghost" aria-label={`查看 ${skill.display_name}`} onClick={() => void showSkillDetail(skill.name)}>
-                                    详情
-                                  </Button>
-                                  {skill.origin === "package" && (
-                                    <>
-                                      <Button size="icon-sm" variant="ghost" aria-label={`回滚 ${skill.display_name}`} onClick={() => void mutateSkill(() => api.rollbackSkill(skill.name), "技能已回滚")}>
-                                        <ArrowCounterClockwiseIcon />
-                                      </Button>
-                                      <Button size="icon-sm" variant="ghost" aria-label={`删除 ${skill.display_name}`} onClick={() => setPendingDelete({ kind: "skill", name: skill.name, label: skill.display_name })}>
-                                        <TrashIcon />
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* ---- Database editor dialog ---- */}
-      <Dialog open={databaseDraft !== null} onOpenChange={(next) => { if (!next) setDatabaseDraft(null); }}>
-        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-auto">
-          <DialogHeader>
-            <DialogTitle>{editingDatabase ? "编辑数据库" : "新建数据库"}</DialogTitle>
-            <DialogDescription>编辑完整 URL 和基础请求模板；保存时保持声明式操作定义。</DialogDescription>
-          </DialogHeader>
-          {databaseDraft && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="database-name">Name</FieldLabel>
-                <Input id="database-name" disabled={editingDatabase !== null} value={databaseDraft.name} onChange={(event) => setDatabaseDraft({ ...databaseDraft, name: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-display">Display name</FieldLabel>
-                <Input id="database-display" value={databaseDraft.displayName} onChange={(event) => setDatabaseDraft({ ...databaseDraft, displayName: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-description">Description</FieldLabel>
-                <Textarea id="database-description" value={databaseDraft.description} onChange={(event) => setDatabaseDraft({ ...databaseDraft, description: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-url">Base URL</FieldLabel>
-                <Input id="database-url" value={databaseDraft.url} onChange={(event) => setDatabaseDraft({ ...databaseDraft, url: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-method">Method</FieldLabel>
-                <Input id="database-method" value={databaseDraft.method} onChange={(event) => setDatabaseDraft({ ...databaseDraft, method: event.target.value.toUpperCase() as DatabaseDraft["method"] })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-operation">Search operation</FieldLabel>
-                <Input id="database-operation" value={databaseDraft.operation} onChange={(event) => setDatabaseDraft({ ...databaseDraft, operation: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-query">Query template</FieldLabel>
-                <Textarea id="database-query" value={databaseDraft.query} onChange={(event) => setDatabaseDraft({ ...databaseDraft, query: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-headers">Headers template</FieldLabel>
-                <Textarea id="database-headers" value={databaseDraft.headers} onChange={(event) => setDatabaseDraft({ ...databaseDraft, headers: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="database-body">Body template</FieldLabel>
-                <Textarea id="database-body" value={databaseDraft.body} onChange={(event) => setDatabaseDraft({ ...databaseDraft, body: event.target.value })} />
-              </Field>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setDatabaseDraft(null)}>取消</Button>
-                <Button onClick={() => void saveDatabase()}>保存数据库</Button>
-              </DialogFooter>
-            </FieldGroup>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* ---- Skill detail dialog ---- */}
-      <Dialog open={skillDetail !== null} onOpenChange={(next) => { if (!next) setSkillDetail(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{skillDetail?.manifest.display_name ?? "技能详情"}</DialogTitle>
-            <DialogDescription>当前版本、操作与加载状态。</DialogDescription>
-          </DialogHeader>
-          {skillDetail && (
-            <Card>
-              <CardHeader>
-                <CardTitle>v{skillDetail.current_version}</CardTitle>
-                <CardDescription>{skillDetail.manifest.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col gap-2">
-                  <div>操作：{skillDetail.manifest.operations.join(", ") || "无"}</div>
-                  <div>可用：{skillDetail.available ? "是" : "否"}</div>
-                  {skillDetail.load_error && (
-                    <Alert variant="destructive">
-                      <AlertTitle>加载失败</AlertTitle>
-                      <AlertDescription>{skillDetail.load_error}</AlertDescription>
-                    </Alert>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* ---- Delete confirmation dialog ---- */}
-      <AlertDialog open={pendingDelete !== null} onOpenChange={(next) => { if (!next) setPendingDelete(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认删除</AlertDialogTitle>
-            <AlertDialogDescription>
-              删除“{pendingDelete?.label}”及其用户版本后无法恢复。内置项目不会提供删除操作。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={(event) => { event.preventDefault(); void confirmDelete(); }}>
-              确认删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* ---- Upload confirmation dialog ---- */}
-      <AlertDialog open={pendingUpload !== null} onOpenChange={(next) => { if (!next && !uploading) setPendingUpload(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认安装技能</AlertDialogTitle>
-            <AlertDialogDescription>
-              已验证 {pendingUpload?.validation.skill.display_name} v{pendingUpload?.validation.skill.version}。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {pendingUpload?.validation.warning && (
-            <Alert>
-              <UploadSimpleIcon />
-              <AlertTitle>本地代码执行警告</AlertTitle>
-              <AlertDescription>{pendingUpload.validation.warning}</AlertDescription>
-            </Alert>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={uploading}>取消</AlertDialogCancel>
-            <AlertDialogAction disabled={uploading} onClick={(event) => { event.preventDefault(); void confirmUpload(); }}>
-              {uploading && <Spinner data-icon="inline-start" />}
-              确认安装
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[calc(100svh-2rem)] min-h-0 w-[min(90rem,calc(100vw-2rem))] max-w-none sm:max-w-none flex-col" showCloseButton>
+        <DialogHeader>
+          <DialogTitle>设置</DialogTitle>
+          <DialogDescription>管理模型连接、数据库目录和 Agent 技能。</DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex flex-col gap-3">
+            <Skeleton className="h-8 w-72" /><Skeleton className="h-64 w-full" />
+          </div>
+        ) : (
+          <Tabs defaultValue="model" className="min-h-0 flex-1">
+            <TabsList>
+              <TabsTrigger value="model">Model</TabsTrigger>
+              <TabsTrigger value="databases">Databases</TabsTrigger>
+              <TabsTrigger value="skills">Skills</TabsTrigger>
+            </TabsList>
+            <TabsContent value="model" className="min-h-0 overflow-auto py-2">
+              <ModelForm key={settings?.base_url ?? 'fresh'} api={api} settings={settings} vendors={vendors} onSaved={(u) => setSettings(u)} />
+            </TabsContent>
+            <TabsContent value="databases" className="min-h-0 overflow-auto py-2">
+              <DatabasesTabContent databases={databases} api={api} onRefresh={refreshSkills}
+                onEditDB={onEditDB}
+                onDeleteDB={(db) => setPendingDelete({ kind: "database", name: db.name, label: db.display_name })}
+                onNewDB={() => { setEditingDatabase(null); setDatabaseDraft(EMPTY_DATABASE); }}
+                onUploadValidation={async (file) => {
+                  try { setPendingUpload({ file, validation: await api.validateSkill(file) }); }
+                  catch (e) { toast.error("文件验证失败", { description: e instanceof Error ? e.message : String(e) }); }
+                }} />
+            </TabsContent>
+            <TabsContent value="skills" className="min-h-0 overflow-auto py-2">
+              <SkillsTabContent skills={skills} skillFilter={skillFilter} onFilterChange={setSkillFilter}
+                api={api} onRefresh={refreshSkills}
+                onViewDetail={async (sk) => { try { setSkillDetail(await api.fetchSkill(sk.name)); } catch (e) { toast.error("技能详情加载失败", { description: e instanceof Error ? e.message : String(e) }); } }}
+                onDeleteSkill={(sk) => setPendingDelete({ kind: "skill", name: sk.name, label: sk.display_name })}
+                onUploadValidation={async (file) => {
+                  try { setPendingUpload({ file, validation: await api.validateSkill(file) }); }
+                  catch (e) { toast.error("文件验证失败", { description: e instanceof Error ? e.message : String(e) }); }
+                }} />
+            </TabsContent>
+          </Tabs>
+        )}
+      </DialogContent>
+      <SettingsDialogs
+        databaseDraft={databaseDraft} editingDatabase={editingDatabase}
+        skillDetail={skillDetail} pendingDelete={pendingDelete}
+        pendingUpload={pendingUpload} uploading={uploading}
+        onDatabaseDraftChange={(d) => { setDatabaseDraft(d); if (!d) setEditingDatabase(null); }}
+        onEditingDatabaseChange={setEditingDatabase}
+        onSkillDetailChange={setSkillDetail}
+        onPendingDeleteChange={setPendingDelete}
+        onPendingUploadChange={setPendingUpload}
+        onSaveDatabase={async (draft, editing) => {
+          try {
+            const errors = hasDatabaseErrors(validateDatabaseDraft(draft));
+            if (errors) {
+              throw new Error("Please fix field errors before saving");
+            }
+            if (editing) await api.updateDatabase(editing.name, {
+              display_name: draft.displayName, description: draft.description,
+              operation: { name: draft.operation, description: `Search ${draft.displayName}`, method: parseHttpMethod(draft.method), url: draft.url, query: parseJsonTemplate(draft.query), headers: parseJsonTemplate(draft.headers), body: parseJsonBody(draft.body) },
+            });
+            else await api.createDatabase(databaseManifest(draft));
+            setDatabaseDraft(null); setEditingDatabase(null);
+            await refreshSkills();
+            toast.success("数据库目录已更新");
+          } catch (e) { toast.error("数据库保存失败", { description: errMsg(e) }); }
+        }}
+        onConfirmDelete={async () => {
+          if (!pendingDelete) return;
+          const t = pendingDelete;
+          setPendingDelete(null);
+          await mutateSkill(() => t.kind === "database" ? api.deleteDatabase(t.name) : api.deleteSkill(t.name), t.kind === "database" ? "数据库已删除" : "技能已删除");
+        }}
+        onConfirmUpload={confirmUpload}
+      />
+    </Dialog>
   );
 }
