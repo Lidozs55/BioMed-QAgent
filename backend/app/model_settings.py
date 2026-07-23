@@ -12,6 +12,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, RootModel, ValidationError
 
 from app.config import Settings, settings
+from app.model_config.catalog import get_known_model
 from app.model_config.context_budget import (
     ContextBudget,
     ContextBudgetConfigurationError,
@@ -155,7 +156,13 @@ class ModelSettingsStore:
             return self._defaults
         try:
             resolve_context_budget(candidate)
-        except ContextBudgetConfigurationError:
+        except ContextBudgetConfigurationError as error:
+            if (
+                error.reason == "a positive context window is required"
+                and candidate.context_window is None
+                and get_known_model(candidate.model_name) is None
+            ):
+                return candidate
             return self._defaults
         return candidate
 

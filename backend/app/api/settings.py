@@ -42,7 +42,7 @@ class PublicSettings(BaseModel):
     max_tokens: int
     advanced: dict[str, Any]
     context_window: int
-    context_window_source: Literal["catalog", "user"]
+    context_window_source: Literal["catalog", "user", "unknown"]
     safety_reserve_ratio: float
     safety_reserve_tokens: int
     compaction_trigger_ratio: float
@@ -91,6 +91,22 @@ StoreDep = Annotated[ModelSettingsStore, Depends(get_store)]
 
 
 def _public(value: ModelConfiguration) -> PublicSettings:
+    if value.context_window is None and get_known_model(value.model_name) is None:
+        return PublicSettings(
+            base_url=str(value.base_url).rstrip("/"),
+            api_key=mask_api_key(value.api_key),
+            api_key_configured=bool(value.api_key),
+            model_name=value.model_name,
+            max_tokens=value.max_tokens,
+            advanced=value.advanced.model_dump(),
+            context_window=0,
+            context_window_source="unknown",
+            safety_reserve_ratio=value.safety_reserve_ratio,
+            safety_reserve_tokens=0,
+            compaction_trigger_ratio=value.compaction_trigger_ratio,
+            compaction_target_ratio=value.compaction_target_ratio,
+            available_input_tokens=0,
+        )
     budget = resolve_context_budget(value)
     source: Literal["catalog", "user"] = (
         "user" if value.context_window is not None else "catalog"
