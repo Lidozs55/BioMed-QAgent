@@ -603,8 +603,8 @@ DashScope 专有字段仅在 `model_name` 以 `qwen`/`qwq` 开头且 `base_url` 
 ```text
 safety_reserve_tokens = max(16384, ceil(context_window * safety_reserve_ratio))
 input_capacity = context_window - max_tokens - safety_reserve_tokens
-trigger_tokens = floor(input_capacity * compaction_trigger_ratio)
-target_tokens = floor(input_capacity * compaction_target_ratio)
+trigger_tokens = ceil(input_capacity * compaction_trigger_ratio)
+target_tokens = ceil(input_capacity * compaction_target_ratio)
 ```
 
 默认比例为安全保留 `0.05`、压缩触发 `0.85`、压缩目标 `0.60`。安全保留只从
