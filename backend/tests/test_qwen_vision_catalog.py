@@ -12,6 +12,18 @@ from app.model_config.context_budget import resolve_context_budget
 _VISION_CHAT = Capabilities(text=True, image=True, video=True)
 
 _ALL_VISION_MODELS = [
+    # qwen2.5 VL function-calling vision batch (QwenCloud Vision Models table)
+    pytest.param("qwen2.5-vl-72b-instruct", 128_000, 8_000, _VISION_CHAT, id="qwen2.5-vl-72b-instruct"),
+    pytest.param("qwen2.5-vl-32b-instruct", 128_000, 8_000, _VISION_CHAT, id="qwen2.5-vl-32b-instruct"),
+    pytest.param("qwen2.5-vl-7b-instruct", 128_000, 8_000, _VISION_CHAT, id="qwen2.5-vl-7b-instruct"),
+    pytest.param("qwen2.5-vl-3b-instruct", 128_000, 8_000, _VISION_CHAT, id="qwen2.5-vl-3b-instruct"),
+    # qwen3 VL function-calling vision batch (QwenCloud Vision Models table)
+    pytest.param("qwen3-vl-plus", 262_144, 32_000, _VISION_CHAT, id="qwen3-vl-plus"),
+    pytest.param("qwen3-vl-flash", 262_144, 32_000, _VISION_CHAT, id="qwen3-vl-flash"),
+    pytest.param("qwen3-vl-235b-a22b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-235b-a22b-instruct"),
+    pytest.param("qwen3-vl-32b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-32b-instruct"),
+    pytest.param("qwen3-vl-30b-a3b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-30b-a3b-instruct"),
+    pytest.param("qwen3-vl-8b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-8b-instruct"),
     # existing
     pytest.param("qwen3.7-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.7-plus"),
     pytest.param("qwen3.6-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-plus"),
