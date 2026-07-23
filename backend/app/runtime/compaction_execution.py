@@ -12,6 +12,7 @@ from agents.memory import Session
 from app.domain.contracts import ConversationCompactedPayload, WarningPayload
 from app.model_config.context_budget import ContextBudgetOverflowError
 
+from .compaction_fallback import fallback
 from .compaction_history import EffectiveSession
 from .compaction_planning import (
     HistoryView,
@@ -195,32 +196,6 @@ async def compact_view(
         estimate=current_estimate,
         compacted=True,
         degraded_alignment=view.degraded_alignment,
-    )
-
-
-async def fallback(
-    session: Session,
-    groups: list[tuple[TResponseInputItem, ...]],
-    request: CompactionRequest,
-    emit: EventEmitter,
-    error: Exception,
-    cancellation_requested: asyncio.Event | None,
-) -> CompactionPreparation:
-    """Retain the legacy corrupt-marker fallback when no valid anchor exists."""
-
-    raise_if_cancelled(cancellation_requested)
-    await emit(
-        WarningPayload(
-            message=f"conversation compaction failed: {error}",
-            code="compaction_failed",
-        )
-    )
-    effective = [item for group in groups[-20:] for item in group]
-    return CompactionPreparation(
-        session=EffectiveSession(session, effective),
-        agent_input=request.agent_input,
-        estimate=estimate(request, effective),
-        fallback=True,
     )
 
 
