@@ -11,6 +11,65 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # qwen3 legacy family — OpenAI-compatible commercial and open-source models
+    pytest.param(
+        "qwen3-235b-a22b",
+        131_072,
+        16_000,
+        _TEXT_ONLY,
+        id="qwen3-235b-a22b",
+    ),
+    pytest.param(
+        "qwen3-235b-a22b-thinking-2507",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-235b-a22b-thinking-2507",
+    ),
+    pytest.param(
+        "qwen3-235b-a22b-instruct-2507",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-235b-a22b-instruct-2507",
+    ),
+    pytest.param(
+        "qwen3-next-80b-a3b-thinking",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-next-80b-a3b-thinking",
+    ),
+    pytest.param(
+        "qwen3-next-80b-a3b-instruct",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-next-80b-a3b-instruct",
+    ),
+    pytest.param("qwen3-32b", 131_072, 16_000, _TEXT_ONLY, id="qwen3-32b"),
+    pytest.param(
+        "qwen3-30b-a3b", 131_072, 16_000, _TEXT_ONLY, id="qwen3-30b-a3b"
+    ),
+    pytest.param(
+        "qwen3-30b-a3b-thinking-2507",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-30b-a3b-thinking-2507",
+    ),
+    pytest.param(
+        "qwen3-30b-a3b-instruct-2507",
+        131_072,
+        32_000,
+        _TEXT_ONLY,
+        id="qwen3-30b-a3b-instruct-2507",
+    ),
+    pytest.param("qwen3-14b", 131_072, 8_000, _TEXT_ONLY, id="qwen3-14b"),
+    pytest.param("qwen3-8b", 131_072, 8_000, _TEXT_ONLY, id="qwen3-8b"),
+    pytest.param("qwen3-4b", 131_072, 8_000, _TEXT_ONLY, id="qwen3-4b"),
+    pytest.param("qwen3-1.7b", 32_768, 8_000, _TEXT_ONLY, id="qwen3-1.7b"),
+    pytest.param("qwen3-0.6b", 32_768, 8_000, _TEXT_ONLY, id="qwen3-0.6b"),
     # Current legacy text models — OpenAI-compatible Responses models
     pytest.param("qwen-plus", 1_000_000, 32_000, _TEXT_ONLY, id="qwen-plus"),
     pytest.param("qwen-flash", 1_000_000, 32_000, _TEXT_ONLY, id="qwen-flash"),
