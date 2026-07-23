@@ -11,6 +11,49 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # qwen2.5 open-source text family — OpenAI-compatible models
+    pytest.param(
+        "qwen2.5-72b-instruct",
+        32_768,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-72b-instruct",
+    ),
+    pytest.param(
+        "qwen2.5-32b-instruct",
+        32_768,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-32b-instruct",
+    ),
+    pytest.param(
+        "qwen2.5-14b-instruct",
+        32_768,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-14b-instruct",
+    ),
+    pytest.param(
+        "qwen2.5-14b-instruct-1m",
+        1_000_000,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-14b-instruct-1m",
+    ),
+    pytest.param(
+        "qwen2.5-7b-instruct",
+        32_768,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-7b-instruct",
+    ),
+    pytest.param(
+        "qwen2.5-7b-instruct-1m",
+        1_000_000,
+        8_000,
+        _TEXT_ONLY,
+        id="qwen2.5-7b-instruct-1m",
+    ),
     # qwen3 legacy family — OpenAI-compatible commercial and open-source models
     pytest.param(
         "qwen3-235b-a22b",
