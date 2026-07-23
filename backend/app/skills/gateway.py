@@ -12,6 +12,11 @@ from jsonschema.validators import validator_for
 from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.registry import SkillCategory
+from app.skills.search import (
+    LexicalSkillSearchStrategy,
+    SkillSearchStrategy,
+    normalize_skill_search_text,
+)
 
 
 def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:
@@ -45,8 +50,16 @@ def _error(
     )
 
 
-def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTool]:
+def build_skill_gateway(
+    catalog: SkillCatalog,
+    search_strategy: SkillSearchStrategy | None = None,
+) -> tuple[FunctionTool, FunctionTool]:
     """Build stable SDK gateway tools bound to a catalog object."""
+    resolved_search_strategy = (
+        search_strategy
+        if search_strategy is not None
+        else LexicalSkillSearchStrategy()
+    )
 
     @function_tool(name_override="find_skill")
     async def _find_skill(
@@ -55,34 +68,41 @@ def build_skill_gateway(catalog: SkillCatalog) -> tuple[FunctionTool, FunctionTo
         category: SkillCategory | None = None,
         source: str | None = None,
     ) -> str:
-        """Find enabled skills by text, category, and supported data source."""
-        query = text.casefold().strip()
+        """Find enabled skills by capability text, category, and data source.
+
+        Pass a short natural-language capability description in ``text``. When
+        the database is known, prefer ``source`` for an exact, case-insensitive
+        source filter.
+        """
         snapshot = catalog.snapshot()
-        matches: list[dict[str, Any]] = []
+        normalized_source = (
+            normalize_skill_search_text(source)
+            if source is not None
+            else None
+        )
+        candidates: list[SkillDescriptor] = []
         for descriptor in snapshot.skills.values():
             if not descriptor.enabled or not _is_allowed(descriptor, ctx.context):
                 continue
             if category is not None and descriptor.category != category:
                 continue
-            if source is not None and source not in descriptor.supported_sources:
-                continue
-            haystack = " ".join(
-                (
-                    descriptor.name,
-                    descriptor.display_name,
-                    descriptor.description,
-                    *descriptor.supported_sources,
-                    *descriptor.operation_names,
-                ),
-            ).casefold()
-            if query and query not in haystack:
-                continue
-            matches.append(descriptor.manifest.model_dump(mode="json"))
+            if normalized_source is not None:
+                normalized_supported_sources = {
+                    normalize_skill_search_text(item)
+                    for item in descriptor.supported_sources
+                }
+                if normalized_source not in normalized_supported_sources:
+                    continue
+            candidates.append(descriptor)
+        matches = resolved_search_strategy.search(candidates, text)
         return json.dumps(
             {
                 "status": "ok",
                 "generation": snapshot.generation,
-                "skills": matches,
+                "skills": [
+                    descriptor.manifest.model_dump(mode="json")
+                    for descriptor in matches
+                ],
             },
             ensure_ascii=False,
         )
