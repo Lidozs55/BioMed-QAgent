@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
-import { normalizeErrorDetail, APIError } from "@/hooks/settingsContracts";
+import { APIError, normalizeErrorDetail } from "@/hooks/settingsContracts";
 import type { ModelSettings } from "@/hooks/settingsContracts";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -50,6 +50,21 @@ describe("API settings/catalog management contracts", () => {
 });
 
 describe("API budget field contracts", () => {
+  it("accepts unavailable unknown-model capacity from the settings server", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({
+      base_url: "https://example.com/v1", api_key: "", api_key_configured: false,
+      model_name: "provider-only", max_tokens: 4096, context_window: 0, context_window_source: "unknown",
+      safety_reserve_ratio: 0.05, safety_reserve_tokens: 0,
+      compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
+      available_input_tokens: 0, advanced: {},
+    }));
+    const settings = await createAPIClient({ fetcher }).fetchSettings();
+    expect(settings.context_window_source).toBe("unknown");
+    expect(settings.context_window).toBe(0);
+    expect(settings.safety_reserve_tokens).toBe(0);
+    expect(settings.available_input_tokens).toBe(0);
+  });
+
   it("exposes budget fields from fetchSettings", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({
       base_url: "https://example.com/v1", api_key: "sk-a...z", api_key_configured: true,

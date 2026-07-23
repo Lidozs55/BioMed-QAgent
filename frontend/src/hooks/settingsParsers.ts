@@ -28,11 +28,12 @@ function assertObject(v: unknown, path: string): Record<string, unknown> {
   return result;
 }
 
-/** Settings response source — backend only emits "catalog" or "user". */
-function assertSettingsSource(v: unknown, path: string): "catalog" | "user" {
+/** Settings response source — unavailable capacity is explicitly "unknown". */
+function assertSettingsSource(v: unknown, path: string): "catalog" | "user" | "unknown" {
   if (v === "catalog") return "catalog";
   if (v === "user") return "user";
-  throw new APIError(502, `Expected catalog|user at ${path}, got ${String(v)}`);
+  if (v === "unknown") return "unknown";
+  throw new APIError(502, `Expected catalog|user|unknown at ${path}, got ${String(v)}`);
 }
 
 /** Model capability source — backend emits "catalog" or "api". */
@@ -61,19 +62,26 @@ function optBoolean(v: unknown, path: string): boolean | undefined {
 /** Parse a settings response body into ModelSettings, rejecting malformed shapes. */
 export function parseModelSettings(body: unknown): ModelSettings {
   const obj = assertObject(body, "settings");
+  const contextWindow = assertNumber(Reflect.get(obj, "context_window"), "settings.context_window");
+  const contextWindowSource = assertSettingsSource(Reflect.get(obj, "context_window_source"), "settings.context_window_source");
+  const safetyReserveTokens = assertNumber(Reflect.get(obj, "safety_reserve_tokens"), "settings.safety_reserve_tokens");
+  const availableInputTokens = assertNumber(Reflect.get(obj, "available_input_tokens"), "settings.available_input_tokens");
+  if (contextWindowSource === "unknown" && (contextWindow !== 0 || safetyReserveTokens !== 0 || availableInputTokens !== 0)) {
+    throw new APIError(502, "Unknown context capacity must use zero-valued budget fields");
+  }
   return {
     base_url: assertString(Reflect.get(obj, "base_url"), "settings.base_url"),
     api_key: assertString(Reflect.get(obj, "api_key"), "settings.api_key"),
     api_key_configured: assertBoolean(Reflect.get(obj, "api_key_configured"), "settings.api_key_configured"),
     model_name: assertString(Reflect.get(obj, "model_name"), "settings.model_name"),
     max_tokens: assertNumber(Reflect.get(obj, "max_tokens"), "settings.max_tokens"),
-    context_window: assertNumber(Reflect.get(obj, "context_window"), "settings.context_window"),
-    context_window_source: assertSettingsSource(Reflect.get(obj, "context_window_source"), "settings.context_window_source"),
+    context_window: contextWindow,
+    context_window_source: contextWindowSource,
     safety_reserve_ratio: assertNumber(Reflect.get(obj, "safety_reserve_ratio"), "settings.safety_reserve_ratio"),
-    safety_reserve_tokens: assertNumber(Reflect.get(obj, "safety_reserve_tokens"), "settings.safety_reserve_tokens"),
+    safety_reserve_tokens: safetyReserveTokens,
     compaction_trigger_ratio: assertNumber(Reflect.get(obj, "compaction_trigger_ratio"), "settings.compaction_trigger_ratio"),
     compaction_target_ratio: assertNumber(Reflect.get(obj, "compaction_target_ratio"), "settings.compaction_target_ratio"),
-    available_input_tokens: assertNumber(Reflect.get(obj, "available_input_tokens"), "settings.available_input_tokens"),
+    available_input_tokens: availableInputTokens,
     advanced: parseAdvanced(Reflect.get(obj, "advanced"), "settings.advanced"),
   };
 }
