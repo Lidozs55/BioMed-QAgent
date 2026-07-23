@@ -91,6 +91,7 @@ def build_sdk_model_settings(model_settings: RunModelSettings) -> ModelSettings:
         max_tokens=model_settings.max_tokens,
         temperature=model_settings.temperature,
         top_p=model_settings.top_p,
+        include_usage=True,
         extra_body=extra_body,
     )
 
