@@ -11,6 +11,7 @@ def test_catalog_preserves_stable_model_ids() -> None:
     # Given
     expected_model_ids = {
         "qwen-plus",
+        "qwen-flash",
         "qwen-max",
         "qwen-turbo",
         "qwen-vl-max",

@@ -11,6 +11,9 @@ from app.model_config import (
 _TEXT_ONLY = Capabilities(text=True)
 
 _ALL_TEXT_MODELS = [
+    # Current legacy text models — OpenAI-compatible Responses models
+    pytest.param("qwen-plus", 1_000_000, 32_000, _TEXT_ONLY, id="qwen-plus"),
+    pytest.param("qwen-flash", 1_000_000, 32_000, _TEXT_ONLY, id="qwen-flash"),
     # qwen3-max family — text-only OpenAI-compatible models
     pytest.param("qwen3-max", 262_144, 64_000, _TEXT_ONLY, id="qwen3-max"),
     pytest.param(
