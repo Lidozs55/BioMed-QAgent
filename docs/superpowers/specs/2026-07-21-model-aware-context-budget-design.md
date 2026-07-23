@@ -1,7 +1,7 @@
 # Model-Aware Context Budget Design
 
-**Date:** 2026-07-21  
-**Status:** Approved for implementation planning  
+**Date:** 2026-07-21
+**Status:** Approved for implementation planning
 **Scope:** Agent-loop context accounting, compaction, model settings, and regression coverage
 
 ## Goal
