@@ -109,10 +109,8 @@ export function deriveEffectiveBudget(
   // A model IS selected from fetched results (catalog or API-only)
   if (selectionKnown) {
     if (catalogWindow <= 0) {
-      const safety = computeSafetyReserveTokens(0, safetyReserveRatio);
-      const avail = computeInputCapacity(0, draftMaxTokens, safety);
       const v = isBudgetValid(0, draftMaxTokens, safetyReserveRatio, compactionTargetRatio, compactionTriggerRatio);
-      return { contextWindow: 0, source: "unknown" as const, safetyReserveTokens: safety, availableInputTokens: avail, budgetValid: v.valid, budgetErrors: v.errors };
+      return { contextWindow: 0, source: "unknown" as const, safetyReserveTokens: 0, availableInputTokens: 0, budgetValid: v.valid, budgetErrors: v.errors };
     }
     const w = catalogWindow;
     const safety = computeSafetyReserveTokens(w, safetyReserveRatio);
@@ -122,6 +120,10 @@ export function deriveEffectiveBudget(
   }
 
   // No model selected — fall back to saved
+  if (savedSource === "unknown") {
+    const v = isBudgetValid(0, draftMaxTokens, safetyReserveRatio, compactionTargetRatio, compactionTriggerRatio);
+    return { contextWindow: 0, source: "unknown", safetyReserveTokens: 0, availableInputTokens: 0, budgetValid: v.valid, budgetErrors: v.errors };
+  }
   const w = savedWindow > 0 ? savedWindow : 0;
   const safety = computeSafetyReserveTokens(w, safetyReserveRatio);
   const avail = computeInputCapacity(w, draftMaxTokens, safety);

@@ -53,16 +53,32 @@ describe("malformed settings response rejection", () => {
     await expect(api.fetchSettings()).rejects.toThrow(APIError);
   });
 
-  it("rejects settings with context_window_source: 'unknown' (not a valid response source)", async () => {
+  it("accepts unavailable unknown-model capacity from the settings server", async () => {
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({
+      base_url: "", api_key: "", api_key_configured: true, model_name: "", max_tokens: 1,
+      context_window: 0, context_window_source: "unknown",
+      safety_reserve_ratio: 0.05, safety_reserve_tokens: 0,
+      compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
+      available_input_tokens: 0, advanced: {},
+    }));
+    const api = createAPIClient({ fetcher });
+    await expect(api.fetchSettings()).resolves.toMatchObject({
+      context_window: 0,
+      context_window_source: "unknown",
+      safety_reserve_tokens: 0,
+      available_input_tokens: 0,
+    });
+  });
+
+  it("rejects unknown source paired with guessed capacity", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({
       base_url: "", api_key: "", api_key_configured: true, model_name: "", max_tokens: 1,
       context_window: 32768, context_window_source: "unknown",
       safety_reserve_ratio: 0.05, safety_reserve_tokens: 16384,
       compaction_trigger_ratio: 0.85, compaction_target_ratio: 0.60,
-      available_input_tokens: 1, advanced: {},
+      available_input_tokens: 16383, advanced: {},
     }));
-    const api = createAPIClient({ fetcher });
-    await expect(api.fetchSettings()).rejects.toThrow(APIError);
+    await expect(createAPIClient({ fetcher }).fetchSettings()).rejects.toThrow(APIError);
   });
 
   it("rejects vendors response with string instead of array", async () => {

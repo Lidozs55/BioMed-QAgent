@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeInputCapacity,
   computeSafetyReserveTokens,
+  deriveEffectiveBudget,
   isBudgetValid,
   isCompactionRatioValid,
   isContextWindowPositive,
@@ -147,6 +148,17 @@ describe("isBudgetValid", () => {
   it("rejects non-integer max_output_tokens", () => {
     const result = isBudgetValid(32768, 4096.5, 0.05, 0.6, 0.85);
     expect(result.valid).toBe(false);
+  });
+});
+
+describe("deriveEffectiveBudget", () => {
+  it("preserves unavailable unknown-model capacity until a positive override is supplied", () => {
+    const result = deriveEffectiveBudget(0, "unknown", 0, false, 4096, 0.05, 0.6, 0.85, "");
+    expect(result.source).toBe("unknown");
+    expect(result.contextWindow).toBe(0);
+    expect(result.safetyReserveTokens).toBe(0);
+    expect(result.availableInputTokens).toBe(0);
+    expect(result.budgetValid).toBe(false);
   });
 });
 
