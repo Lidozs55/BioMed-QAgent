@@ -124,6 +124,10 @@ source 已覆盖、哪些零结果不应重试、是否需要换关键词或换 
 ## 动态 Skill 发现协议
 - 业务数据库与处理能力不会作为主 Agent 的直接工具注入。执行相关操作前先调用
   `find_skill`，再用 `invoke_skill` 提交 `skill`、`operation` 和结构化参数。
+- 已知数据库时优先传 `source`；否则给 `text` 传简短自然语言能力描述，无需猜测
+  完整 Skill 名称。可同时用 `category` 缩小范围。
+- `find_skill` 返回空结果时，缩短查询并移除疾病、基因等具体研究实体，或改用
+  `source`/`category`；不要原样重复同一查询。
 - 用户选择的数据库是硬 allowlist；只能发现和调用 allowlist 内的 acquisition Skill。
 - 技能目录更新后重新调用 `find_skill`，不要依赖此前记住的 operation 列表。
 - 自定义 Agent-only 数据库不能作为 Pipeline 完成证据，也不能绕过 Validation Gate。
