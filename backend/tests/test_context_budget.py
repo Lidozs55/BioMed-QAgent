@@ -42,6 +42,19 @@ def test_resolve_context_budget_preserves_exact_million_token_catalog_window() -
     assert budget.safety_reserve_tokens == 50_000
 
 
+def test_resolve_context_budget_recognizes_qwen36_flash_catalog_window() -> None:
+    # Given
+    settings = UserSettings(model_name="qwen3.6-flash", max_tokens=8_192)
+
+    # When
+    budget = resolve_context_budget(settings)
+
+    # Then
+    assert budget.context_window == 1_000_000
+    assert budget.max_output_tokens == 8_192
+    assert budget.input_capacity == 941_808
+
+
 def test_resolve_context_budget_prefers_positive_user_window_override() -> None:
     # Given
     settings = UserSettings(

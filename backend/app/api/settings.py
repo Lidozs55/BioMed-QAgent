@@ -9,7 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from app.model_config.catalog import get_known_model
-from app.model_config.context_budget import resolve_context_budget
+from app.model_config.context_budget import (
+    ContextBudgetConfigurationError,
+    resolve_context_budget,
+)
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
 from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
@@ -48,6 +51,8 @@ class PublicSettings(BaseModel):
     compaction_trigger_ratio: float
     compaction_target_ratio: float
     available_input_tokens: int
+    run_ready: bool
+    run_block_reason: str | None
 
 
 class ModelPreviewRequest(BaseModel):
@@ -91,7 +96,9 @@ StoreDep = Annotated[ModelSettingsStore, Depends(get_store)]
 
 
 def _public(value: ModelConfiguration) -> PublicSettings:
-    if value.context_window is None and get_known_model(value.model_name) is None:
+    try:
+        budget = resolve_context_budget(value)
+    except ContextBudgetConfigurationError as error:
         return PublicSettings(
             base_url=str(value.base_url).rstrip("/"),
             api_key=mask_api_key(value.api_key),
@@ -106,8 +113,9 @@ def _public(value: ModelConfiguration) -> PublicSettings:
             compaction_trigger_ratio=value.compaction_trigger_ratio,
             compaction_target_ratio=value.compaction_target_ratio,
             available_input_tokens=0,
+            run_ready=False,
+            run_block_reason=error.reason,
         )
-    budget = resolve_context_budget(value)
     source: Literal["catalog", "user"] = (
         "user" if value.context_window is not None else "catalog"
     )
@@ -125,6 +133,8 @@ def _public(value: ModelConfiguration) -> PublicSettings:
         compaction_trigger_ratio=value.compaction_trigger_ratio,
         compaction_target_ratio=value.compaction_target_ratio,
         available_input_tokens=budget.input_capacity,
+        run_ready=True,
+        run_block_reason=None,
     )
 
 

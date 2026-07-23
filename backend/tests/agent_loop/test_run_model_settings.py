@@ -43,7 +43,6 @@ def test_run_model_settings_copies_all_persisted_generation_fields() -> None:
             thinking_mode=True,
         ),
     )
-
     # When
     run_settings = RunModelSettings.from_user_settings(user_settings)
 

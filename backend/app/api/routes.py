@@ -49,6 +49,7 @@ from app.domain.contracts import (
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
+    RunAdmissionRejectedError,
     RunQueueFullError,
     TaskDeletionConflictError,
     TaskManager,
@@ -283,6 +284,8 @@ async def create_task(
 
     try:
         return await manager.create_task(request)
+    except RunAdmissionRejectedError as error:
+        raise HTTPException(status_code=422, detail=error.reason) from error
     except RunQueueFullError as error:
         raise HTTPException(status_code=429, detail="Run queue is full") from error
     except RuntimeError as error:
@@ -429,6 +432,8 @@ async def create_import_task(
 
         try:
             return await manager.create_task(request, prepare_task=prepare_task)
+        except RunAdmissionRejectedError as error:
+            raise HTTPException(status_code=422, detail=error.reason) from error
         except RunQueueFullError as error:
             raise HTTPException(status_code=429, detail="Run queue is full") from error
         except RuntimeError as error:
@@ -522,6 +527,8 @@ async def continue_task(
         )
     try:
         return await manager.submit_run(task_id, request)
+    except RunAdmissionRejectedError as error:
+        raise HTTPException(status_code=422, detail=error.reason) from error
     except RequestIdConflictError as error:
         raise HTTPException(
             status_code=409,
