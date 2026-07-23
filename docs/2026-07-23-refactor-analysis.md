@@ -387,25 +387,42 @@ TODO §3.6 已记录此迁移但未执行。
 
 **After**: 确认测试迁移后移除 `settings_router.py`。
 
-**收益**: 消除约 200 行死代码 + 一个死亡 API 入口 + 降低维护面的 CR 误读风险。
+**收益**: 消除 338 行死代码（`settings_router.py` 全文）+ 一个死亡 API 入口 + 降低维护面的 CR 误读风险。
 
-**前置条件**: `test_settings_api.py` 中所有对旧模块的导入迁移到 `app.api.settings` 对应模型。
+**前置条件**:
 
-**风险**: 低。仅需确认测试覆盖映射正确。
+1. **端点审计**：`settings_router.py` 和 `settings.py` 存在路由差异，移除前需逐一对齐：
+
+   | 端点 | `settings_router.py` | `settings.py`（生产） | 前端调用 |
+   |------|:---:|:---:|:---:|
+   | `GET /settings` | ✅ | ✅ | `fetchSettings()` |
+   | `* /settings` (写) | `POST` | `PUT` | `saveSettings()` (`PUT`) |
+   | `GET /vendors` | ✅ | ✅ | `fetchVendors()` |
+   | `GET /models` | ✅ | — | — |
+   | `POST /models` | — | ✅ | `fetchModels()` |
+   | `GET /models/{model_id}` | ✅ | — | **未使用** |
+
+   前端 `useAPI.ts` 中的 `SettingsAPIClient` 未定义 `GET /models/{model_id}` 调用，确认可安全移除。
+2. `test_settings_api.py` 中所有对旧模块的导入迁移到 `app.api.settings` 对应模型。
+3. `backend/README.md:81` 的目录树引用需从 `settings_router.py` 更新为 `settings.py`。
+
+**风险**: 低。前端不依赖 `GET /models/{model_id}`；生产路由方法（PUT）已覆盖前端调用。
 
 ---
 
 ### 【待确认】候选 B：GDC/PDB/Xena 迁移到统一 `crawler.py` HTTP 基础设施
 
-**Before**: 三个 acquisition skill 各自实现 `_rate_limit` + `_fetch_json` + `_download_file` 等 ~150 行重复的 `urllib.request` 封装。
+**Before**: 三个 acquisition skill 各自实现 `_rate_limit`（8 行 × 3，逐字相同）+ `_fetch_json` + `_download_file` + 私有 HTTP 封装共约 130 行重复的 `urllib.request` 封装，使用过时 Chrome 120 UA。
 
-**After**: 迁移到 `crawler.py` 的统一 `httpx_fetch`/`api_fetch`，删除各自的私有实现。
+**After**: 迁移到 `crawler.py` 的统一 `httpx_fetch`/`api_fetch`/`RateLimiter`，使用 Chrome 131 `BROWSER_HEADERS`，删除各自的私有实现。
 
-**收益**: -150 行重复代码；统一限速和反爬行为；实现对 TODO §3.1 的承诺。
+**收益**: -130 行重复代码；消除 3 个 `global _last_request_ts` 竞态限流器；统一限速和反爬行为；实现对 TODO §3.1 的承诺。
 
 **附加收益**: 同时满足 project_memory 硬约束"使用真实浏览器 UA"（`BROWSER_HEADERS`）。
 
-**风险**: 低。`browser.py` 已成功走通此模式；需确保各数据源特定参数在迁移后不变。
+**迁移注意**：`xena.py` 的 `_fetch_hub_index()`（84 行）解析 S3 ListObjectsV2 XML 响应，不是标准 JSON API fetch — 不能直接替换为 `api_fetch()`，需改为 `httpx_fetch()` 获取原始字节后保留现有 XML 解析逻辑。GDC 和 PDB 是标准的 JSON API，可直接替换。
+
+**风险**: 低-中。GDC/PDB 是直接替换；`xena.py` 的 S3 XML 解析是唯一需要特殊处理的迁移点。`browser.py`、`pubchem.py`、`reactome.py` 已成功走通此模式。
 
 ---
 
@@ -442,19 +459,21 @@ TODO §3.6 已记录此迁移但未执行。
 | 1.1 | 独立处理前端两个失败测试：确认产品语义 → 决定修复渲染还是测试 |
 | 1.2 | 确认 `ISSUES.md` 所述"任务执行失败但无具体信息"是否与失败测试同源 |
 
-### Phase 2：消除死代码（P1，1-2 小时，需候选 A 批准）
+### Phase 2：消除死代码（P1，2-3 小时，需候选 A 批准）
 
 | # | 任务 |
 |---|------|
-| 2.1 | 迁移 `test_settings_api.py` 到 `app.api.settings` |
-| 2.2 | 全仓确认无其他引用后移除 `api/settings_router.py` |
-| 2.3 | 删除前端三个未使用导出 |
+| 2.1 | 审计 `settings_router.py` 与 `settings.py` 路由差异（端点/方法/响应模型），确认无前端/脚本依赖 |
+| 2.2 | 迁移 `test_settings_api.py` 到 `app.api.settings` |
+| 2.3 | 全仓确认无其他引用后移除 `api/settings_router.py` |
+| 2.4 | 更新 `backend/README.md:81` 目录树引用：`settings_router.py` → `settings.py` |
+| 2.5 | 删除前端三个未使用导出 |
 
 ### Phase 3：消除重复代码（P1，4-6 小时，需候选 B 批准）
 
 | # | 任务 | 减少行数 |
 |---|------|---------|
-| 3.1 | GDC/PDB/Xena 迁移到 `crawler.py` 统一 HTTP 客户端 | -150 |
+| 3.1 | GDC/PDB/Xena 迁移到 `crawler.py` 统一 HTTP 客户端（xena 注意 S3 XML 解析保留） | -130 |
 | 3.2 | 提取共享 `_write_csv` 到 `tools/io.py` | -20 |
 | 3.3 | 前端提取 `errorDescription` 到 `lib/utils.ts` | -20 |
 | 3.4 | 前端统一 `formatSize` 到 `fileUtils.ts` | -15 |
