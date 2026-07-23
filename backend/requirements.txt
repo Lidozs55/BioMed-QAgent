@@ -17,3 +17,4 @@ matplotlib>=3.9.0
 scipy>=1.14.0
 seaborn>=0.13.0
 websockets>=12.0
+pytest-xdist>=3.6.0
