@@ -261,6 +261,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
 
       const payload: Record<string, unknown> = {};
       if (baseUrl !== settings?.base_url) payload.base_url = baseUrl;
+      if (apiKeyDirtyRef.current) payload.api_key = apiKey;
       if (modelName !== settings?.model_name) payload.model_name = modelName;
       if (maxTokens !== settings?.max_tokens) payload.max_tokens = maxTokens;
       if (temperature !== (settings?.advanced.temperature ?? 0.7)) payload.temperature = temperature;
@@ -755,7 +756,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                     </FieldGroup>
                   </CardContent>
                   <CardFooter className="justify-end">
-                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || !apiKey.trim()}>
+                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || (!apiKey.trim() && !settings?.api_key_configured)}>
                       {saving && <Spinner data-icon="inline-start" />}
                       保存模型设置
                     </Button>
