@@ -20,6 +20,8 @@ from app.domain.contracts import QueryStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 # ---------------------------------------------------------------------------
 # §8.4 P0: Agent INSTRUCTIONS follow-up strategy

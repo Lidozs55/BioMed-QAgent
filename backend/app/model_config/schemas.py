@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .context_budget import ContextBudget, resolve_context_budget
+
 
 class Capabilities(BaseModel):
     text: bool = True
@@ -35,6 +37,10 @@ class UserSettings(BaseModel):
     api_key: str = ""
     model_name: str = "qwen-plus"
     max_tokens: int = 8192
+    context_window: int | None = Field(default=None, ge=1)
+    safety_reserve_ratio: float = Field(default=0.05, ge=0, le=0.25)
+    compaction_trigger_ratio: float = Field(default=0.85, gt=0, lt=1)
+    compaction_target_ratio: float = Field(default=0.60, gt=0, lt=1)
     advanced: AdvancedParams = Field(default_factory=AdvancedParams)
 
 
@@ -52,6 +58,7 @@ class RunModelSettings(BaseModel):
     repetition_penalty: float
     enable_search: bool
     thinking_mode: bool
+    context_budget: ContextBudget
 
     @classmethod
     def from_user_settings(cls, settings: UserSettings) -> RunModelSettings:
@@ -67,6 +74,7 @@ class RunModelSettings(BaseModel):
             repetition_penalty=settings.advanced.repetition_penalty,
             enable_search=settings.advanced.enable_search,
             thinking_mode=settings.advanced.thinking_mode,
+            context_budget=resolve_context_budget(settings),
         )
 
     @classmethod

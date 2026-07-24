@@ -83,7 +83,7 @@ async def test_pipeline_function_tool_defers_managed_run_publication(
         base_dir=tmp_path / "tasks",
         managed_run_id=run_id,
         model_settings=RunModelSettings.from_user_settings(
-            UserSettings(model_name="run-start-model")
+            UserSettings(model_name="run-start-model", context_window=65_536)
         ),
     )
     tool_context = ToolContext(

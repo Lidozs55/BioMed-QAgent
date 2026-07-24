@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,7 +14,12 @@ from agents.models.interface import Model
 from openai import AsyncOpenAI
 
 from app.model_config import RunModelSettings
-from app.model_settings import ModelConfiguration, get_current_model_configuration
+from app.model_config.context_budget import resolve_context_budget
+from app.model_settings import (
+    ModelConfiguration,
+    calibration_margin_for,
+    get_current_model_configuration,
+)
 from app.tools.network_safety import validate_credentialed_public_url
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
@@ -31,6 +37,7 @@ class ModelConfigurationError(RuntimeError):
 def to_run_model_settings(configuration: ModelConfiguration) -> RunModelSettings:
     """Convert the mutable-store snapshot into one immutable Run snapshot."""
 
+    budget = resolve_context_budget(configuration)
     return RunModelSettings(
         base_url=str(configuration.base_url),
         api_key=configuration.api_key,
@@ -41,6 +48,10 @@ def to_run_model_settings(configuration: ModelConfiguration) -> RunModelSettings
         repetition_penalty=configuration.advanced.repetition_penalty,
         enable_search=configuration.advanced.enable_search,
         thinking_mode=configuration.advanced.thinking_mode,
+        context_budget=replace(
+            budget,
+            calibration_margin_tokens=calibration_margin_for(budget),
+        ),
     )
 
 
@@ -80,6 +91,7 @@ def build_sdk_model_settings(model_settings: RunModelSettings) -> ModelSettings:
         max_tokens=model_settings.max_tokens,
         temperature=model_settings.temperature,
         top_p=model_settings.top_p,
+        include_usage=True,
         extra_body=extra_body,
     )
 

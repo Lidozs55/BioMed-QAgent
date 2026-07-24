@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
+from app.model_config.catalog import get_known_model
+from app.model_config.context_budget import (
+    ContextBudgetConfigurationError,
+    resolve_context_budget,
+)
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
 from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
@@ -21,6 +26,10 @@ class SettingsUpdate(BaseModel):
     api_key: str | None = None
     model_name: str | None = None
     max_tokens: int | None = None
+    context_window: int | None = None
+    safety_reserve_ratio: float | None = None
+    compaction_trigger_ratio: float | None = None
+    compaction_target_ratio: float | None = None
     temperature: float | None = None
     top_p: float | None = None
     repetition_penalty: float | None = None
@@ -35,6 +44,15 @@ class PublicSettings(BaseModel):
     model_name: str
     max_tokens: int
     advanced: dict[str, Any]
+    context_window: int
+    context_window_source: Literal["catalog", "user", "unknown"]
+    safety_reserve_ratio: float
+    safety_reserve_tokens: int
+    compaction_trigger_ratio: float
+    compaction_target_ratio: float
+    available_input_tokens: int
+    run_ready: bool
+    run_block_reason: str | None
 
 
 class ModelPreviewRequest(BaseModel):
@@ -78,6 +96,29 @@ StoreDep = Annotated[ModelSettingsStore, Depends(get_store)]
 
 
 def _public(value: ModelConfiguration) -> PublicSettings:
+    try:
+        budget = resolve_context_budget(value)
+    except ContextBudgetConfigurationError as error:
+        return PublicSettings(
+            base_url=str(value.base_url).rstrip("/"),
+            api_key=mask_api_key(value.api_key),
+            api_key_configured=bool(value.api_key),
+            model_name=value.model_name,
+            max_tokens=value.max_tokens,
+            advanced=value.advanced.model_dump(),
+            context_window=0,
+            context_window_source="unknown",
+            safety_reserve_ratio=value.safety_reserve_ratio,
+            safety_reserve_tokens=0,
+            compaction_trigger_ratio=value.compaction_trigger_ratio,
+            compaction_target_ratio=value.compaction_target_ratio,
+            available_input_tokens=0,
+            run_ready=False,
+            run_block_reason=error.reason,
+        )
+    source: Literal["catalog", "user"] = (
+        "user" if value.context_window is not None else "catalog"
+    )
     return PublicSettings(
         base_url=str(value.base_url).rstrip("/"),
         api_key=mask_api_key(value.api_key),
@@ -85,6 +126,15 @@ def _public(value: ModelConfiguration) -> PublicSettings:
         model_name=value.model_name,
         max_tokens=value.max_tokens,
         advanced=value.advanced.model_dump(),
+        context_window=budget.context_window,
+        context_window_source=source,
+        safety_reserve_ratio=value.safety_reserve_ratio,
+        safety_reserve_tokens=budget.safety_reserve_tokens,
+        compaction_trigger_ratio=value.compaction_trigger_ratio,
+        compaction_target_ratio=value.compaction_target_ratio,
+        available_input_tokens=budget.input_capacity,
+        run_ready=True,
+        run_block_reason=None,
     )
 
 
@@ -95,9 +145,23 @@ async def get_settings(store: StoreDep) -> PublicSettings:
 
 @router.put("/settings", response_model=PublicSettings)
 async def update_settings(body: SettingsUpdate, store: StoreDep) -> PublicSettings:
-    changes = body.model_dump(exclude_none=True)
+    # ── field-presence semantics ──────────────────────────────────────
+    # model_dump(exclude_unset=True) keeps every explicitly-provided
+    # field (even null); model_dump(exclude_none=True, exclude_unset=True)
+    # keeps only explicitly-provided *non-null* fields.  Their set
+    # difference reveals fields the caller explicitly sent as null
+    # (intent: clear).  This is the foundation for distinguishing
+    # "omit context_window" (leave override) from "null" (clear to catalog).
+    set_fields = body.model_dump(exclude_unset=True)
+    non_none = body.model_dump(exclude_none=True, exclude_unset=True)
+    changes = dict(non_none)
+    clears = {
+        key
+        for key, value in set_fields.items()
+        if value is None and key not in changes
+    }
     try:
-        return _public(store.update(changes))
+        return _public(store.update(changes, clears=clears))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -143,62 +207,84 @@ async def list_models(
     except (httpx.HTTPError, ValueError) as error:
         raise HTTPException(status_code=502, detail="Model preview failed") from error
     model_ids = [item.get("id") for item in raw_models if isinstance(item, dict)]
-    def _infer_context_window(model_id: str) -> int:
-        ml = model_id.lower()
-        if ml.startswith("deepseek"):
-            return 1_000_000
-        if "qwen" in ml:
-            return 128_000
-        if ml.startswith("gpt-4") or ml.startswith("gpt4"):
-            return 128_000
-        if ml.startswith("gpt-3.5") or ml.startswith("gpt3.5"):
-            return 16_384
-        if ml.startswith("claude"):
-            return 200_000
-        if ml.startswith("gemini"):
-            return 1_000_000
-        if ml.startswith("moonshot") or ml.startswith("kimi"):
-            return 128_000
-        if ml.startswith("glm") or ml.startswith("chatglm"):
-            return 128_000
-        if ml.startswith("baichuan"):
-            return 128_000
-        if ml.startswith("yi-") or ml.startswith("01-ai"):
-            return 128_000
-        if ml.startswith("minimax"):
-            return 1_000_000
-        if ml.startswith("mistral") or ml.startswith("mixtral"):
-            return 32_768
-        if ml.startswith("llama"):
-            return 128_000
-        if ml.startswith("command") or ml.startswith("cohere"):
-            return 256_000
-        return 128_000
-
-    def _infer_suggested_max_tokens(model_id: str) -> int:
-        ml = model_id.lower()
-        if ml.startswith("deepseek"):
-            return 8_192
-        if ml.startswith("qwq") or ml.startswith("qwen"):
-            return 8_192
-        if ml.startswith("gpt-4") or ml.startswith("gpt4"):
-            return 4_096
-        return 4_096
-
     models = [
-        {
-            "id": model_id,
-            "name": model_id,
-            "description": "API discovered model",
-            "context_window": _infer_context_window(model_id),
-            "suggested_max_tokens": _infer_suggested_max_tokens(model_id),
-            "capabilities": {"text": True, "image": False, "video": False, "audio": False},
-            "recommended": model_id == current.model_name,
-            "api_available": True,
-            "capability_source": "api",
-        }
+        _model_preview_item(model_id, current)
         for model_id in model_ids
         if isinstance(model_id, str)
         and (body.query is None or body.query.lower() in model_id.lower())
     ]
     return {"models": models, "total_count": len(models), "api_source": base_url}
+
+
+def _infer_context_window(model_id: str) -> int:
+    ml = model_id.lower()
+    if ml.startswith("deepseek"):
+        return 1_000_000
+    if "qwen" in ml:
+        return 128_000
+    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
+        return 128_000
+    if ml.startswith("gpt-3.5") or ml.startswith("gpt3.5"):
+        return 16_384
+    if ml.startswith("claude"):
+        return 200_000
+    if ml.startswith("gemini"):
+        return 1_000_000
+    if ml.startswith("moonshot") or ml.startswith("kimi"):
+        return 128_000
+    if ml.startswith("glm") or ml.startswith("chatglm"):
+        return 128_000
+    if ml.startswith("baichuan"):
+        return 128_000
+    if ml.startswith("yi-") or ml.startswith("01-ai"):
+        return 128_000
+    if ml.startswith("minimax"):
+        return 1_000_000
+    if ml.startswith("mistral") or ml.startswith("mixtral"):
+        return 32_768
+    if ml.startswith("llama"):
+        return 128_000
+    if ml.startswith("command") or ml.startswith("cohere"):
+        return 256_000
+    return 128_000
+
+
+def _infer_suggested_max_tokens(model_id: str) -> int:
+    ml = model_id.lower()
+    if ml.startswith("deepseek"):
+        return 8_192
+    if ml.startswith("qwq") or ml.startswith("qwen"):
+        return 8_192
+    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
+        return 4_096
+    return 4_096
+
+
+def _model_preview_item(
+    model_id: str, current: ModelConfiguration
+) -> dict[str, object]:
+    """Build a model preview entry using catalog metadata when available."""
+    known = get_known_model(model_id)
+    if known is not None:
+        return {
+            "id": model_id,
+            "name": known.name,
+            "description": known.description,
+            "context_window": known.context_window,
+            "suggested_max_tokens": known.suggested_max_tokens,
+            "capabilities": known.capabilities.model_dump(),
+            "recommended": model_id == current.model_name,
+            "api_available": True,
+            "capability_source": "catalog",
+        }
+    return {
+        "id": model_id,
+        "name": model_id,
+        "description": "API discovered model",
+        "context_window": _infer_context_window(model_id),
+        "suggested_max_tokens": _infer_suggested_max_tokens(model_id),
+        "capabilities": {"text": True, "image": False, "video": False, "audio": False},
+        "recommended": model_id == current.model_name,
+        "api_available": True,
+        "capability_source": "api",
+    }

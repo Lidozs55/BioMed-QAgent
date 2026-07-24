@@ -1,5 +1,5 @@
-import { ArrowCounterClockwiseIcon, CheckCircleIcon, DatabaseIcon, EyeClosedIcon, EyeIcon, GearIcon, Image, SpeakerHigh, TrashIcon, UploadSimpleIcon, VideoCamera, XCircleIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowCounterClockwiseIcon, DatabaseIcon, EyeClosedIcon, EyeIcon, GearIcon, Image, SpeakerHigh, TrashIcon, UploadSimpleIcon, VideoCamera } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -13,7 +13,6 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -21,154 +20,60 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
+import { RichModelInfo, ModelInfoCard } from "@/components/model-info-card";
+import { EMPTY_DATABASE, databaseManifest, hasDatabaseErrors, parseHttpMethod, parseJsonBody, parseJsonTemplate, validateDatabaseDraft, type DatabaseDraft } from "@/lib/databaseDraft";
 import { cn } from "@/lib/utils";
-import type { DeclarativeSkillManifest, ModelInfo, ModelSettings, ModelSettingsUpdate, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
-
-/* ------------------------------------------------------------------ */
-/*  Rich model info with capabilities (backed by runtime API data)    */
-/* ------------------------------------------------------------------ */
-interface ModelCapabilities {
-  text: boolean;
-  image: boolean;
-  video: boolean;
-  audio: boolean;
-}
-
-interface RichModelInfo extends ModelInfo {
-  capabilities?: ModelCapabilities;
-  recommended?: boolean;
-  api_available?: boolean;
-  capability_source?: string;
-}
+import type { ModelSettings, ModelSettingsUpdate, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                             */
 /* ------------------------------------------------------------------ */
 interface SettingsPanelProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  api: SettingsAPIClient;
+  open: boolean; onOpenChange: (open: boolean) => void; api: SettingsAPIClient;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Shared helpers                                                     */
+/*  Error helpers                                                     */
 /* ------------------------------------------------------------------ */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "请求失败";
-}
-
-function CapabilityBadge({ label, supported, icon: Icon }: { label: string; supported: boolean; icon?: React.ElementType }) {
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-      supported
-        ? "text-emerald-600 dark:text-emerald-400"
-        : "bg-muted text-muted-foreground line-through",
-    )}>
-      {Icon ? <Icon weight="fill" className="size-3" /> : (supported ? <CheckCircleIcon weight="fill" className="size-3" /> : <XCircleIcon weight="fill" className="size-3" />)}
-      {label}
-    </span>
-  );
-}
-
-function ModelInfoCard({ model }: { model: RichModelInfo }) {
-  const capabilities = model.capabilities ?? { text: true, image: false, video: false, audio: false };
-  const fn = (n: number) => n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}K` : String(n);
-  return (
-    <div className="mt-4 rounded-xl border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h4 className="text-base font-semibold">{model.name}</h4>
-            {model.recommended && <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">推荐</span>}
-            {model.api_available && <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">可用</span>}
-            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {model.capability_source === "api" ? "接口验证" : model.capability_source === "inferred" ? "名称推断" : "内置数据"}
-            </span>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">{model.description}</p>
-        </div>
-        <span className="shrink-0 rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{model.id}</span>
-      </div>
-      <Separator className="my-3" />
-      <div className="grid grid-cols-2 gap-3 text-sm">
-        <div><span className="text-xs text-muted-foreground">上下文窗口</span><p className="mt-0.5 font-medium">{fn(model.context_window)} tokens</p></div>
-        <div><span className="text-xs text-muted-foreground">建议输出上限</span><p className="mt-0.5 font-medium">{fn(model.suggested_max_tokens)} tokens</p></div>
-      </div>
-      <div className="mt-3">
-        <span className="text-xs text-muted-foreground">多模态能力</span>
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          <CapabilityBadge label="文本" supported={capabilities.text} />
-          <CapabilityBadge icon={Image} label="图像" supported={capabilities.image} />
-          <CapabilityBadge icon={VideoCamera} label="视频" supported={capabilities.video} />
-          <CapabilityBadge icon={SpeakerHigh} label="音频" supported={capabilities.audio} />
-        </div>
-      </div>
-    </div>
-  );
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : "请求失败";
 }
 
 /* ------------------------------------------------------------------ */
-/*  Database draft helpers (ported from main)                          */
+/*  Component                                                         */
 /* ------------------------------------------------------------------ */
-interface DatabaseDraft {
-  name: string;
-  displayName: string;
-  description: string;
-  url: string;
-  operation: string;
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
-  query: string;
-  headers: string;
-  body: string;
-}
-
-const EMPTY_DATABASE: DatabaseDraft = { name: "", displayName: "", description: "", url: "", operation: "search", method: "GET", query: "{}", headers: "{}", body: "null" };
-
-function databaseManifest(draft: DatabaseDraft, version = "1.0.0"): DeclarativeSkillManifest {
-  return {
-    schema_version: "1.0", name: draft.name, display_name: draft.displayName,
-    version, category: "discovery", description: draft.description,
-    supported_sources: [draft.name], user_selectable: true, pipeline_supported: false,
-    operations: [{ name: draft.operation, description: `Search ${draft.displayName}`, method: draft.method, url: draft.url, query: JSON.parse(draft.query) as Record<string, unknown>, headers: JSON.parse(draft.headers) as Record<string, unknown>, body: JSON.parse(draft.body) as unknown }],
-  };
-}
-
-/* ================================================================== */
-/*  SettingsPanel component                                            */
-/* ================================================================== */
 export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
-  /* ---- core data ---- */
+  /* ---- refs ---- */
+  const apiKeyDirtyRef = useRef(false);
+  const saveSeqRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  /* ---- core state ---- */
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
   const [models, setModels] = useState<RichModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
-  void modelsLoaded;
-  const [skills, setSkills] = useState<SkillManifest[]>([]);
 
-  /* ---- model preview state ---- */
-  const abortRef = useRef<AbortController | null>(null);
-
-  /* ---- model form state (enhanced) ---- */
+  /* ---- inline model form state ---- */
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const apiKeyDirtyRef = useRef(false);
   const [modelName, setModelName] = useState("");
   const [maxTokens, setMaxTokens] = useState(8192);
   const [temperature, setTemperature] = useState(0.7);
   const [topP, setTopP] = useState(1);
   const [enableSearch, setEnableSearch] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  /* ---- database / skill state ---- */
+  /* ---- skill / database state ---- */
+  const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [skillFilter, setSkillFilter] = useState("");
   const [databaseDraft, setDatabaseDraft] = useState<DatabaseDraft | null>(null);
   const [editingDatabase, setEditingDatabase] = useState<SkillManifest | null>(null);
@@ -177,21 +82,22 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  /* ---- last-save-wins sequencing ---- */
-  const saveSeqRef = useRef(0);
+  /* ---- computed ---- */
+  const databases = skills.filter((s) => s.user_selectable && s.supported_sources.length > 0);
 
-  /* ---- derive derived ---- */
+  const filteredSkills = skills.filter((s) => {
+    const q = skillFilter.trim().toLowerCase();
+    return !q || [s.name, s.display_name, s.category, s.origin].some((v) => v.toLowerCase().includes(q));
+  });
+
+  const filteredModels = models.filter((m) => {
+    const q = modelSearch.trim().toLowerCase();
+    return !q || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q);
+  });
+
   const selectedModel = models.find((m) => m.id === modelName) ?? null;
-  const filteredModels = models.filter((m) =>
-    m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-    m.id.toLowerCase().includes(modelSearch.toLowerCase()),
-  );
-  const databases = useMemo(() => skills.filter((skill) => skill.user_selectable && skill.supported_sources.length > 0), [skills]);
-  const filteredSkills = useMemo(() => {
-    const query = skillFilter.trim().toLowerCase();
-    return skills.filter((skill) => !query || [skill.name, skill.display_name, skill.category, skill.origin].some((value) => value.toLowerCase().includes(query)));
-  }, [skillFilter, skills]);
 
+  /* ---- dirty tracker ---- */
   const markDirty = useCallback(() => setDirty(true), []);
 
   /* ---- data loading ---- */
@@ -255,7 +161,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
         await api.fetchModels({ baseUrl, apiKey });
       } catch {
         setSaving(false);
-        setModelError("API \u5bc6\u94a5\u9a8c\u8bc1\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u5bc6\u94a5\u662f\u5426\u6b63\u786e\u6216\u4e0e Base URL \u662f\u5426\u5339\u914d");
+        setModelError("API 密钥验证失败，请检查密钥是否正确或与 Base URL 是否匹配");
         return;
       }
 
@@ -324,6 +230,20 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     }
   }, [api, baseUrl, apiKey, setModelsLoaded]);
 
+  /* ---- model search / select ---- */
+  const handleModelSearchChange = useCallback((value: string) => {
+    setModelSearch(value);
+    setShowModelDropdown(true);
+  }, []);
+
+  const handleModelSelect = useCallback((id: string) => {
+    setModelName(id);
+    setModelSearch("");
+    setShowModelDropdown(false);
+    markDirty();
+    setModelError(null);
+  }, [markDirty]);
+
   /* ---- database / skill handlers ---- */
   const mutateSkill = async (action: () => Promise<void>, success: string) => {
     try {
@@ -352,28 +272,46 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       setPendingUpload(null);
       await refreshSkills();
       toast.success("技能已安装");
+    } catch (e) { toast.error("技能安装失败", { description: errorText(e) }); }
+    finally { setUploading(false); }
+  };
+
+  const editDatabase = async (db: SkillManifest) => {
+    try {
+      const detail = await api.fetchSkill(db.name);
+      const op = detail.declarative_manifest?.operations[0];
+      if (!detail.declarative_manifest || !op) throw new Error("缺少操作");
+      setEditingDatabase(db);
+      setDatabaseDraft({
+        name: detail.declarative_manifest.name, displayName: detail.declarative_manifest.display_name,
+        description: detail.declarative_manifest.description, url: op.url, operation: op.name,
+        method: op.method, query: JSON.stringify(op.query ?? {}),
+        headers: JSON.stringify(op.headers ?? {}), body: JSON.stringify(op.body ?? null),
+      });
+    } catch (e) { toast.error("数据库详情加载失败", { description: errorText(e) }); }
+  };
+
+  const showSkillDetail = async (name: string) => {
+    try {
+      setSkillDetail(await api.fetchSkill(name));
     } catch (error) {
-      toast.error("技能安装失败", { description: errorText(error) });
-    } finally {
-      setUploading(false);
+      toast.error("技能详情加载失败", { description: errorText(error) });
     }
   };
 
   const saveDatabase = async () => {
     if (!databaseDraft) return;
     try {
+      const errors = hasDatabaseErrors(validateDatabaseDraft(databaseDraft));
+      if (errors) throw new Error("请先修正字段错误");
       if (editingDatabase) {
         await api.updateDatabase(editingDatabase.name, {
-          display_name: databaseDraft.displayName,
-          description: databaseDraft.description,
+          display_name: databaseDraft.displayName, description: databaseDraft.description,
           operation: {
-            name: databaseDraft.operation,
-            description: `Search ${databaseDraft.displayName}`,
-            method: databaseDraft.method,
-            url: databaseDraft.url,
-            query: JSON.parse(databaseDraft.query) as Record<string, unknown>,
-            headers: JSON.parse(databaseDraft.headers) as Record<string, unknown>,
-            body: JSON.parse(databaseDraft.body) as unknown,
+            name: databaseDraft.operation, description: `Search ${databaseDraft.displayName}`,
+            method: parseHttpMethod(databaseDraft.method), url: databaseDraft.url,
+            query: parseJsonTemplate(databaseDraft.query), headers: parseJsonTemplate(databaseDraft.headers),
+            body: parseJsonBody(databaseDraft.body),
           },
         });
       } else {
@@ -388,61 +326,19 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     }
   };
 
-  const editDatabase = async (database: SkillManifest) => {
-    try {
-      const detail = await api.fetchSkill(database.name);
-      const manifest = detail.declarative_manifest;
-      const operation = manifest?.operations[0];
-      if (!manifest || !operation) throw new Error("数据库缺少可编辑的声明式操作");
-      setEditingDatabase(database);
-      setDatabaseDraft({
-        name: manifest.name,
-        displayName: manifest.display_name,
-        description: manifest.description,
-        url: operation.url,
-        operation: operation.name,
-        method: operation.method,
-        query: JSON.stringify(operation.query ?? {}),
-        headers: JSON.stringify(operation.headers ?? {}),
-        body: JSON.stringify(operation.body ?? null),
-      });
-    } catch (error) {
-      toast.error("数据库详情加载失败", { description: errorText(error) });
-    }
-  };
-
   const confirmDelete = async () => {
     if (!pendingDelete) return;
-    const target = pendingDelete;
+    const t = pendingDelete;
     setPendingDelete(null);
     await mutateSkill(
-      () => target.kind === "database" ? api.deleteDatabase(target.name) : api.deleteSkill(target.name),
-      target.kind === "database" ? "数据库已删除" : "技能已删除",
+      () => t.kind === "database" ? api.deleteDatabase(t.name) : api.deleteSkill(t.name),
+      t.kind === "database" ? "数据库已删除" : "技能已删除",
     );
   };
 
-  const showSkillDetail = async (name: string) => {
-    try {
-      setSkillDetail(await api.fetchSkill(name));
-    } catch (error) {
-      toast.error("技能详情加载失败", { description: errorText(error) });
-    }
-  };
-
-  const handleModelSelect = useCallback((id: string) => {
-    setModelName(id);
-    setShowModelDropdown(false);
-    setDirty(true);
-    setModelError(null);
-  }, []);
-
-  const handleModelSearchChange = useCallback((value: string) => {
-    setModelSearch(value);
-  }, []);
-
-  /* ================================================================ */
-  /*  RENDER                                                           */
-  /* ================================================================ */
+  /* ================================================================== */
+  /*  Render                                                            */
+  /* ================================================================== */
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -465,9 +361,9 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                 <TabsTrigger value="skills">Skills</TabsTrigger>
               </TabsList>
 
-              {/* ======================================================
-                  MODEL TAB (enhanced with HEAD guarantees)
-                  ====================================================== */}
+              {/* =========================================================
+                  MODEL TAB
+                  ========================================================= */}
               <TabsContent value="model" className="min-h-0 overflow-auto py-2">
                 <Card>
                   <CardHeader>
@@ -516,7 +412,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                         </div>
                       </Field>
 
-                      {/* API Key — explicit clear / omit semantics, no secret in DOM */}
+                      {/* API Key */}
                       <Field>
                         <FieldLabel htmlFor="settings-apikey">API Key</FieldLabel>
                         <div className="relative">
@@ -541,12 +437,11 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                         </FieldDescription>
                       </Field>
 
-                      {/* Model — bounded scrollable dropdown (h-72) */}
+                      {/* Model — bounded scrollable dropdown */}
                       <Field>
                         <FieldLabel htmlFor="settings-model">Model</FieldLabel>
                         <div className="flex gap-2">
                           <div className="relative flex-1">
-                            {/* Dropdown trigger */}
                             {models.length === 0 ? (
                               <Input
                                 id="settings-model"
@@ -577,7 +472,6 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                                   </span>
                                 </button>
 
-                                {/* Dropdown popover */}
                                 {showModelDropdown && (
                                   <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border bg-popover shadow-md">
                                     <div className="p-2">
@@ -650,7 +544,6 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                             加载模型
                           </Button>
                         </div>
-                        {/* Model info card + error */}
                         {selectedModel && <ModelInfoCard model={selectedModel} />}
                         {modelError && (
                           <p className="mt-2 text-xs text-destructive">{modelError}</p>
@@ -764,9 +657,9 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                 </Card>
               </TabsContent>
 
-              {/* ======================================================
-                  DATABASES TAB (ported from main)
-                  ====================================================== */}
+              {/* =========================================================
+                  DATABASES TAB
+                  ========================================================= */}
               <TabsContent value="databases" className="min-h-0 overflow-auto py-2">
                 <Card>
                   <CardHeader>
@@ -840,9 +733,9 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                 </Card>
               </TabsContent>
 
-              {/* ======================================================
-                  SKILLS TAB (ported from main)
-                  ====================================================== */}
+              {/* =========================================================
+                  SKILLS TAB
+                  ========================================================= */}
               <TabsContent value="skills" className="min-h-0 overflow-auto py-2">
                 <Card>
                   <CardHeader>

@@ -8,6 +8,7 @@ from .catalog import (
     infer_capabilities,
     list_known_models,
 )
+from .context_budget import ContextBudget, ContextBudgetOverflowError
 from .schemas import (
     AdvancedParams,
     Capabilities,
@@ -20,6 +21,8 @@ from .vendors import VENDORS, Vendor, get_vendors, list_vendors
 __all__ = [
     "AdvancedParams",
     "Capabilities",
+    "ContextBudget",
+    "ContextBudgetOverflowError",
     "QWEN_MODELS_DB",
     "QwenModelEntry",
     "RunModelSettings",

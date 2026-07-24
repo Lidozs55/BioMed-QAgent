@@ -11,6 +11,8 @@ from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.registry import SkillCategory, SkillDef
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
     build = build_agent(databases=[])
@@ -60,6 +62,9 @@ def test_agent_instructions_require_dynamic_skill_discovery_protocol() -> None:
     assert "find_skill" in INSTRUCTIONS
     assert "invoke_skill" in INSTRUCTIONS
     assert "技能目录更新后" in INSTRUCTIONS
+    assert "简短自然语言能力描述" in INSTRUCTIONS
+    assert "缩短查询" in INSTRUCTIONS
+    assert "优先传 `source`" in INSTRUCTIONS
     assert "每个被选中的数据库必须至少调用一次" not in INSTRUCTIONS
 
 

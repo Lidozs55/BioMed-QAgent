@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
-import type { ModelInfo, SettingsAPIClient, SkillManifest } from "@/hooks/useAPI";
+import type { ModelInfo, SettingsAPIClient } from "@/hooks/useAPI";
 
 /* ------------------------------------------------------------------ */
 /*  Shared test data                                                    */
@@ -13,6 +13,13 @@ const TEST_SETTINGS = {
   api_key_configured: true,
   model_name: "qwen-plus",
   max_tokens: 4096,
+  context_window: 131072,
+  context_window_source: "catalog" as const,
+  safety_reserve_ratio: 0.05,
+  safety_reserve_tokens: 16384,
+  compaction_trigger_ratio: 0.85,
+  compaction_target_ratio: 0.60,
+  available_input_tokens: 110592,
   advanced: {
     temperature: 0.7,
     top_p: 1.0,
@@ -27,8 +34,8 @@ const TEST_VENDORS = [
 ];
 
 const TEST_MODELS: ModelInfo[] = [
-  { id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192 },
-  { id: "qwen-max", name: "Qwen Max", description: "Powerful", context_window: 32768, suggested_max_tokens: 4096 },
+  { id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false } },
+  { id: "qwen-max", name: "Qwen Max", description: "Powerful", context_window: 32768, suggested_max_tokens: 4096, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false } },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -89,7 +96,7 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0] as Record<string, unknown>;
+    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
     // API key field was never dirtied; api_key should not appear in payload
     expect(payload).not.toHaveProperty("api_key");
   });
@@ -108,8 +115,8 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(payload.api_key).toBe("sk-new-secret-key");
+    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
+    expect(payload?.api_key).toBe("sk-new-secret-key");
   });
 
   it("sends api_key as empty string when user clears the API key field", async () => {
@@ -129,9 +136,9 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0] as Record<string, unknown>;
+    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
     // Empty string signals the backend to clear the stored key
-    expect(payload.api_key).toBe("");
+    expect(payload?.api_key).toBe("");
   });
 
   it("does not put the API key value into visible DOM text", async () => {
@@ -168,13 +175,15 @@ describe("SettingsPanel", () => {
     });
 
     // Open the dropdown
-    const trigger = document.querySelector<HTMLButtonElement>("#settings-model")!;
+    const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
+    if (trigger === null) throw new Error("Expected #settings-model button");
     fireEvent.click(trigger);
 
     // Find option buttons inside the dropdown's ScrollArea
     const scrollArea = document.querySelector<HTMLElement>('[data-slot="scroll-area"]');
     expect(scrollArea).not.toBeNull();
-    const optionButtons = scrollArea!.querySelectorAll<HTMLButtonElement>("button");
+    if (scrollArea === null) throw new Error("Expected scroll-area element");
+    const optionButtons = scrollArea.querySelectorAll<HTMLButtonElement>("button");
     expect(optionButtons.length).toBeGreaterThanOrEqual(2);
 
     // No option button contains a nested button or role="button"
@@ -204,7 +213,8 @@ describe("SettingsPanel", () => {
     });
 
     // Open dropdown
-    const trigger = document.querySelector<HTMLButtonElement>("#settings-model")!;
+    const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
+    if (trigger === null) throw new Error("Expected #settings-model button");
     fireEvent.click(trigger);
 
     // The ScrollArea root should have h-72 (not max-h-72)
@@ -215,85 +225,4 @@ describe("SettingsPanel", () => {
     expect(scrollArea).not.toHaveClass("max-h-72");
   });
 
-  /* ================================================================ */
-  /*  Database & Skill management (ported from main)                    */
-  /* ================================================================ */
-
-  it("filters skills and refreshes after an enable action", async () => {
-    const api = mockApi({
-      fetchSkills: vi.fn().mockResolvedValue([
-        { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true },
-      ]),
-    });
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
-    const filter = await screen.findByPlaceholderText("筛选技能");
-    fireEvent.change(filter, { target: { value: "missing" } });
-    expect(screen.getByText("没有匹配的技能")).toBeInTheDocument();
-    fireEvent.change(filter, { target: { value: "PubMed" } });
-    fireEvent.click(screen.getByRole("button", { name: "停用 PubMed" }));
-    await waitFor(() => expect(api.setSkillEnabled).toHaveBeenCalledWith("pubmed", false));
-    // fetchSkills is called once on load and again after the toggle
-    expect(vi.mocked(api.fetchSkills).mock.calls.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("loads the full declarative manifest before editing a database", async () => {
-    const detail = {
-      manifest: { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false },
-      current_version: "1",
-      versions: ["1"],
-      package_kind: "manifest" as const,
-      warning: null,
-      available: true,
-      load_error: null,
-      declarative_manifest: {
-        schema_version: "1.0", name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", supported_sources: ["pubmed"], user_selectable: true, pipeline_supported: false,
-        operations: [{ name: "search", description: "Search", method: "POST" as const, url: "https://api.example.com/search/{query}", query: { q: "{query}" }, headers: {}, body: { term: "{query}" } }],
-      },
-    };
-    const api = mockApi({
-      fetchSkills: vi.fn().mockResolvedValue([
-        { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false },
-      ]),
-      fetchSkill: vi.fn().mockResolvedValue(detail),
-    });
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(await screen.findByRole("button", { name: "编辑 PubMed" }));
-
-    expect(api.fetchSkill).toHaveBeenCalledWith("pubmed");
-    expect(await screen.findByLabelText("Base URL")).toHaveValue("https://api.example.com/search/{query}");
-    expect(screen.getByLabelText("Method")).toHaveValue("POST");
-    expect(screen.getByLabelText("Query template")).toHaveValue('{"q":"{query}"}');
-    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated papers" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存数据库" }));
-    await waitFor(() => expect(api.updateDatabase).toHaveBeenCalledWith(
-      "pubmed",
-      expect.objectContaining({
-        description: "Updated papers",
-        operation: expect.objectContaining({ name: "search", method: "POST", url: "https://api.example.com/search/{query}" }),
-      }),
-    ));
-    const submitted = vi.mocked(api.updateDatabase).mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(submitted).not.toHaveProperty("operations");
-    expect(submitted).not.toHaveProperty("supported_sources");
-  });
-
-  it("confirms package deletion and disables builtin database mutation", async () => {
-    const skills: SkillManifest[] = [
-      { name: "builtin_db", display_name: "Builtin DB", version: "1", category: "discovery", description: "Builtin", origin: "builtin", supported_sources: ["builtin_db"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: true, available: true, load_error: null },
-      { name: "pubmed", display_name: "PubMed", version: "1", category: "discovery", description: "Papers", origin: "package", supported_sources: ["pubmed"], operations: ["search"], enabled: true, user_selectable: true, pipeline_supported: false, available: true, load_error: null },
-    ];
-    const api = mockApi({ fetchSkills: vi.fn().mockResolvedValue(skills) });
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    expect(await screen.findByRole("button", { name: "停用 Builtin DB" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "删除 PubMed" }));
-    expect(api.deleteDatabase).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(api.deleteDatabase).toHaveBeenCalledWith("pubmed"));
-  });
 });

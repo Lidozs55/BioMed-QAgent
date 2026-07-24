@@ -39,6 +39,8 @@ from app.tools.cache_tools import commit_to_cache
 from app.tools.io import list_files, read_file
 from app.tools.sandbox import run_python_script
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 # ── build_attachment_parsing_agent ─────────────────────────────────
 
 

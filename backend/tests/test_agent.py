@@ -16,6 +16,8 @@ from agents import RunContextWrapper
 from app.agent_loop.agent import INSTRUCTIONS, build_agent
 from app.agent_loop.context import RunContext
 
+pytestmark = pytest.mark.usefixtures("runnable_agent_model_settings")
+
 
 def test_agent_has_correct_name() -> None:
     """Agent must be named BioMedResearcher."""
