@@ -493,7 +493,7 @@ describe("ChatPanel", () => {
     expect(screen.getByText("Streaming answer")).toBeInTheDocument();
   });
 
-  it("shows the authoritative failure reason in the message stream", () => {
+  it("shows failed status without duplicating the run failure alert", () => {
     seedTerminalTask();
     useAgentStore.setState((state) => {
       const task = state.tasksById.task_terminal;
@@ -517,7 +517,9 @@ describe("ChatPanel", () => {
 
     render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
 
-    expect(screen.getByRole("alert")).toHaveTextContent("模型未产出有效产物");
+    expect(screen.getByRole("status")).toHaveTextContent("任务执行失败");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("模型未产出有效产物")).not.toBeInTheDocument();
   });
 
   it("does not show processing status while an Agent waits for user input", () => {
