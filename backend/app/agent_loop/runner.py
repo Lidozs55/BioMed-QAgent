@@ -686,7 +686,8 @@ class AgentRunExecutor:
             )
             # Agent 循环：每次 Runner.run_streamed 消耗 max_turns 个 turn；
             # 若 SDK 抛 MaxTurnsExceeded，发射 UserInputRequiredPayload 走
-            # pause-resume，用户选"继续"则用 result.to_input_list() 续跑。
+            # pause-resume。用户选"继续"时复用 durable Session，但不把
+            # 已持久化的历史再次作为新输入追加。
             # See docs/REVIEW_2026-07-18.md §11.
             agent_input: str | list = execution.input
             result = None
@@ -740,8 +741,10 @@ class AgentRunExecutor:
                             "agent run cancelled by user after max_turns reached"
                         ) from None
                     resume_count += 1
-                    # 用上一轮的 to_input_list() 续跑，保留完整上下文。
-                    agent_input = result.to_input_list()
+                    # Durable Session 已拥有上一轮的完整上下文。这里若传
+                    # result.to_input_list()，SDK 会把历史再次 append 到
+                    # Session，进而生成重复 MessageRecord。
+                    agent_input = []
                     continue
                 except Exception as exc:
                     # Qwen 偶发返回非 JSON 的 function.arguments 导致 400。

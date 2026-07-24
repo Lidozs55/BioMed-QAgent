@@ -13,6 +13,7 @@ import type {
 } from "./contracts";
 import type {
   ActivityProjection,
+  AssistantSegmentItem,
   AssistantStreamProjection,
   AgentRuntimeData,
   ArtifactProjection,
@@ -295,7 +296,7 @@ export function mergeOlderMessagePage(
     messages: mergeProjectedMessages(task.messages, incoming),
     olderMessagesCursor: page.next_cursor,
   };
-  const taskWithItems = mergeMessagesIntoItems(mergedTask, incoming);
+  const taskWithItems = mergeMessagesIntoItems(mergedTask);
   return {
     ...state,
     tasksById: {
@@ -347,30 +348,27 @@ export function hydrateTaskSnapshot(
     ...base.runsById,
     ...Object.fromEntries(runs.map((run) => [run.runId, run])),
   };
-  const task: TaskProjection = mergeMessagesIntoItems(
-    {
-      ...base,
-      summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
-      runsById,
-      runOrder,
-      messages: mergeSnapshotMessages(base, snapshotMessages),
-      assistantStreamsByRunId,
-      pendingUserInput:
-        base.pendingUserInput !== null &&
-        snapshot.task.active_run_id === base.pendingUserInput.runId &&
-        pendingRun?.status === "awaiting_user_input"
-          ? base.pendingUserInput
-          : null,
-      olderMessagesCursor:
-        existing?.hydration === "snapshot" &&
-        snapshotConnectsToExistingHistory(base, snapshotMessages)
-          ? base.olderMessagesCursor
-          : snapshot.older_messages_cursor,
-      lastSequence: snapshot.task.latest_sequence,
-      hydration: "snapshot",
-    },
-    snapshotMessages,
-  );
+  const task: TaskProjection = mergeMessagesIntoItems({
+    ...base,
+    summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
+    runsById,
+    runOrder,
+    messages: mergeSnapshotMessages(base, snapshotMessages),
+    assistantStreamsByRunId,
+    pendingUserInput:
+      base.pendingUserInput !== null &&
+      snapshot.task.active_run_id === base.pendingUserInput.runId &&
+      pendingRun?.status === "awaiting_user_input"
+        ? base.pendingUserInput
+        : null,
+    olderMessagesCursor:
+      existing?.hydration === "snapshot" &&
+      snapshotConnectsToExistingHistory(base, snapshotMessages)
+        ? base.olderMessagesCursor
+        : snapshot.older_messages_cursor,
+    lastSequence: snapshot.task.latest_sequence,
+    hydration: "snapshot",
+  });
   const classification = updateClassification(state, task);
   return {
     ...state,
@@ -664,7 +662,10 @@ function projectMessageToItem(
   if (message.role === "user") {
     return {
       kind: "user_message",
-      itemId: `msg:${message.messageId}`,
+      itemId:
+        message.runId === null
+          ? `msg:${message.messageId}`
+          : `user:${message.runId}`,
       runId,
       sequence,
       createdAt: message.createdAt,
@@ -689,26 +690,48 @@ function projectMessageToItem(
 
 function mergeMessagesIntoItems(
   task: TaskProjection,
-  messages: readonly ProjectedMessage[],
 ): TaskProjection {
-  let next = task;
-  // 当 hydrate 引入真实 user message 时，删除 run_queued 创建的 live
-  // `user:${runId}` 占位 item，避免同一 runId 的用户消息重复显示。
-  const hydratedUserRunIds = new Set(
-    messages
-      .filter((m) => m.role === "user" && m.runId !== null)
-      .map((m) => m.runId as string),
+  const userRunIds = new Set(
+    task.messages
+      .filter(
+        (message): message is ProjectedMessage & { runId: string } =>
+          message.role === "user" && message.runId !== null,
+      )
+      .map((message) => message.runId),
   );
-  if (hydratedUserRunIds.size > 0) {
-    const liveIds = new Set(
-      [...hydratedUserRunIds].map((runId) => `user:${runId}`),
-    );
-    const filtered = next.items.filter((i) => !liveIds.has(i.itemId));
-    if (filtered.length !== next.items.length) {
-      next = { ...next, items: filtered };
+  const eventAssistantRunIds = new Set(
+    task.items
+      .filter(
+        (item): item is AssistantSegmentItem =>
+          item.kind === "assistant_segment" &&
+          !item.streamId.startsWith("hydrate:"),
+      )
+      .map((item) => item.runId),
+  );
+  const items = task.items.filter((item) => {
+    if (item.kind === "user_message" && userRunIds.has(item.runId)) {
+      return false;
     }
-  }
-  for (const message of messages) {
+    return !(
+      item.kind === "assistant_segment" &&
+      item.streamId.startsWith("hydrate:")
+    );
+  });
+  let next = items.length === task.items.length ? task : { ...task, items };
+  const projectedUserRunIds = new Set<string>();
+
+  for (const message of task.messages) {
+    if (message.role === "user" && message.runId !== null) {
+      if (projectedUserRunIds.has(message.runId)) continue;
+      projectedUserRunIds.add(message.runId);
+    }
+    if (
+      message.role === "assistant" &&
+      message.runId !== null &&
+      eventAssistantRunIds.has(message.runId)
+    ) {
+      continue;
+    }
     const item = projectMessageToItem(message);
     if (item === null) continue;
     next = upsertItem(next, item);
@@ -1138,8 +1161,14 @@ function applyDurableAssistantDelta(
   payload: AssistantDeltaPayload,
   envelope: EventEnvelope,
 ): TaskProjection {
-  const nextTask = applyDurableAssistantDeltaCore(task, runId, payload, envelope);
-  if (nextTask === task) return task;
+  const reconciledTask = withoutHydratedAssistantItems(task, runId);
+  const nextTask = applyDurableAssistantDeltaCore(
+    reconciledTask,
+    runId,
+    payload,
+    envelope,
+  );
+  if (nextTask === reconciledTask) return reconciledTask;
   const streamId = hasAssistantChunkRange(payload)
     ? payload.stream_id
     : `live:${runId}:0`;
@@ -1167,6 +1196,21 @@ function applyDurableAssistantDelta(
     isStreaming,
     finishReason,
   });
+}
+
+function withoutHydratedAssistantItems(
+  task: TaskProjection,
+  runId: string,
+): TaskProjection {
+  const items = task.items.filter(
+    (item) =>
+      !(
+        item.kind === "assistant_segment" &&
+        item.runId === runId &&
+        item.streamId.startsWith("hydrate:")
+      ),
+  );
+  return items.length === task.items.length ? task : { ...task, items };
 }
 
 function upsertActivity(

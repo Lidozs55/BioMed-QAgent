@@ -3,7 +3,7 @@
 验证 docs/REVIEW_2026-07-18.md §11 / docs/TODO.md §8.5 批次 3 的关键不变量：
 - ``MaxTurnsExceeded`` → 发射 ``UserInputRequiredPayload(prompt_kind=
   "max_turns_reached")`` → Run 进入 ``AWAITING_USER_INPUT``
-- 用户 approve → 用 ``result.to_input_list()`` 续跑 → 第二轮成功产出 artifact
+- 用户 approve → 复用 durable Session 并以空的新输入续跑 → 第二轮成功产出 artifact
   → ``RunCompletedPayload``
 - 用户 reject → ``PipelineCancelledError`` → ``RunFailedPayload``
 - 连续超过 ``MAX_TURNS_RESUME_LIMIT`` 次 → ``RunFailedPayload`` (RuntimeError)
@@ -159,7 +159,7 @@ async def test_max_turns_exceeded_emits_prompt_and_resumes_on_approve(
     1. 第一次 Runner.run_streamed 抛 MaxTurnsExceeded 后发射
        ``UserInputRequiredPayload(prompt_kind="max_turns_reached")``
     2. manager.resume_run(decision="approve") 后第二轮 Runner.run_streamed
-       用 result.to_input_list() 续跑并产出 artifact
+       复用 durable Session、以空的新输入续跑并产出 artifact
     3. Run 最终 COMPLETED（有 RunCompletedPayload + ArtifactProducedPayload）
     4. 事件顺序：user_input_required < user_input_resumed < run_completed
     """
@@ -168,10 +168,12 @@ async def test_max_turns_exceeded_emits_prompt_and_resumes_on_approve(
     repository = TaskRepository(output_dir)
     build = _make_build()
     call_count = 0
+    agent_inputs: list[str | list[object]] = []
 
     def run_streamed(*args, **kwargs):
         nonlocal call_count
         call_count += 1
+        agent_inputs.append(args[1])
         context = kwargs["context"]
         if call_count == 1:
             return _MaxTurnsResult(context)
@@ -210,6 +212,7 @@ async def test_max_turns_exceeded_emits_prompt_and_resumes_on_approve(
         await manager.wait_until_idle()
 
         assert call_count == 2  # 第一轮 max_turns + 第二轮 success
+        assert agent_inputs == ["max_turns approve path", []]
 
         events = await repository.list_events(accepted.task_id)
         payloads = [event.payload for event in events]

@@ -107,7 +107,7 @@ describe("ConversationStep dispatcher", () => {
     });
     render(<ConversationStep item={item} isActive={false} />);
     expect(screen.getByText("部分记录不可用")).toBeInTheDocument();
-    expect(screen.getByText("partial_results")).toBeInTheDocument();
+    expect(screen.queryByText("partial_results")).not.toBeInTheDocument();
   });
 
   it("renders artifact items via ArtifactStep with formatted bytes", () => {

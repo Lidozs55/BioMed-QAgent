@@ -114,7 +114,7 @@ describe("hydrate compatibility", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "user_message",
-      itemId: "msg:msg_user",
+      itemId: "user:run_1",
       runId: "run_1",
       content: "question",
     });
@@ -192,7 +192,7 @@ describe("hydrate compatibility", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({
       kind: "user_message",
-      itemId: "msg:msg_user",
+      itemId: "user:run_live",
     });
     expect(items[1]).toMatchObject({
       kind: "assistant_segment",
@@ -220,7 +220,7 @@ describe("hydrate compatibility", () => {
     );
 
     const items = state.tasksById.task_hydrate.items;
-    expect(items.map((i) => i.itemId)).toEqual(["msg:msg_4", "msg:msg_5"]);
+    expect(items.map((i) => i.itemId)).toEqual(["user:run_1", "msg:msg_5"]);
   });
 
   it("mergeOlderMessagePage adds items for newly loaded messages", () => {
@@ -272,9 +272,8 @@ describe("hydrate compatibility", () => {
 
     const items = state.tasksById.task_hydrate.items;
     expect(items.map((i) => i.itemId)).toEqual([
-      "msg:msg_2",
+      "user:run_1",
       "msg:msg_3",
-      "msg:msg_4",
       "msg:msg_5",
     ]);
   });
@@ -318,7 +317,7 @@ describe("hydrate compatibility", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "user_message",
-      itemId: "msg:msg_4",
+      itemId: "user:run_1",
       content: "q4 refreshed",
     });
   });
@@ -364,11 +363,11 @@ describe("hydrate compatibility", () => {
     );
 
     const items = state.tasksById.task_hydrate.items;
-    // Live item (user:run_live) removed, real item (msg:msg_real_user) added
+    // The durable message updates the canonical user:run_live item in place.
     expect(items.filter((i) => i.kind === "user_message")).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "user_message",
-      itemId: "msg:msg_real_user",
+      itemId: "user:run_live",
       content: "real question",
     });
   });
