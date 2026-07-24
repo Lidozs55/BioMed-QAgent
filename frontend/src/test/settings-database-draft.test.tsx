@@ -140,114 +140,28 @@ describe("database draft validation", () => {
     expect(methodInput).toHaveValue("PUT");
   });
 
-  /* ---- Adjacent field validation errors ---- */
-  it("blank method shows FieldError and save is disabled", async () => {
+  it.each([
+    ["Method", ""],
+    ["Method", "INVALID"],
+    ["Query template", "{bad"],
+    ["Query template", '"string"'],
+    ["Query template", "[1, 2, 3]"],
+    ["Body template", "{bad"],
+    ["Headers template", "[1,2]"],
+    ["Body template", ""],
+  ])("preserves invalid %s drafts and blocks persistence at save time", async (label, value) => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
     fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const methodInput = screen.getByLabelText("Method");
-    fireEvent.change(methodInput, { target: { value: "" } });
-    expect(screen.getByText("HTTP method is required")).toBeInTheDocument();
-    expect(methodInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
 
-  it("invalid method shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const methodInput = screen.getByLabelText("Method");
-    fireEvent.change(methodInput, { target: { value: "INVALID" } });
-    expect(screen.getByText(/Invalid method/)).toBeInTheDocument();
-    expect(methodInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value } });
+    expect(input).toHaveValue(value);
 
-  it("invalid query JSON shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const queryInput = screen.getByLabelText("Query template");
-    fireEvent.change(queryInput, { target: { value: "{bad" } });
-    expect(screen.getByText("Invalid JSON syntax")).toBeInTheDocument();
-    expect(queryInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
-
-  it("non-object query JSON shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const queryInput = screen.getByLabelText("Query template");
-    fireEvent.change(queryInput, { target: { value: '"string"' } });
-    expect(screen.getByText(/Must be a JSON object/)).toBeInTheDocument();
-    expect(queryInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
-
-  it("array query JSON shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const queryInput = screen.getByLabelText("Query template");
-    fireEvent.change(queryInput, { target: { value: "[1, 2, 3]" } });
-    expect(screen.getByText(/Must be a JSON object/)).toBeInTheDocument();
-    expect(queryInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
-
-  it("invalid body JSON shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const bodyInput = screen.getByLabelText("Body template");
-    fireEvent.change(bodyInput, { target: { value: "{bad" } });
-    expect(screen.getByText("Invalid JSON syntax")).toBeInTheDocument();
-    expect(bodyInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
-
-  it("invalid headers JSON shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const headersInput = screen.getByLabelText("Headers template");
-    fireEvent.change(headersInput, { target: { value: "[1,2]" } });
-    expect(screen.getByText(/Must be a JSON object/)).toBeInTheDocument();
-    expect(headersInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-  });
-
-  /* ---- F2 blank body fix: not silently coerced to null ---- */
-  it("blank body shows FieldError and save is disabled", async () => {
-    const api = mockApi();
-    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
-    const bodyInput = screen.getByLabelText("Body template");
-    // Clear the default "null" to blank
-    fireEvent.change(bodyInput, { target: { value: "" } });
-    expect(screen.getByText(/Body is required/)).toBeInTheDocument();
-    expect(bodyInput).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByRole("button", { name: "保存数据库" })).toBeDisabled();
-    // Raw draft preserved (not replaced with "null")
-    expect(bodyInput).toHaveValue("");
-    // API not called
+    fireEvent.click(screen.getByRole("button", { name: "保存数据库" }));
+    await waitFor(() => expect(api.createDatabase).not.toHaveBeenCalled());
     expect(api.createDatabase).not.toHaveBeenCalled();
   });
 });

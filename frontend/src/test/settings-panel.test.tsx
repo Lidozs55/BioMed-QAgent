@@ -82,14 +82,13 @@ describe("SettingsPanel", () => {
   /*  Model settings — key omission / explicit clear / scrollability   */
   /* ================================================================ */
 
-  it("omits api_key from save payload when the field was never touched", async () => {
+  it("omits api_key from the persisted payload after connection validation", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
-    // Wait for the dialog content to load
-    await screen.findByLabelText("API Key");
+    const secret = await screen.findByLabelText("API Key");
+    fireEvent.change(secret, { target: { value: "sk-validation-key" } });
 
-    // Change max tokens to mark form dirty
     const slider = screen.getByLabelText("最大输出 Tokens");
     fireEvent.change(slider, { target: { value: "16384" } });
 
@@ -97,11 +96,10 @@ describe("SettingsPanel", () => {
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    // API key field was never dirtied; api_key should not appear in payload
     expect(payload).not.toHaveProperty("api_key");
   });
 
-  it("includes api_key in save payload when user types a new key", async () => {
+  it("uses a typed API key for validation without persisting it", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
@@ -116,10 +114,13 @@ describe("SettingsPanel", () => {
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    expect(payload?.api_key).toBe("sk-new-secret-key");
+    expect(api.fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: "sk-new-secret-key",
+    }));
+    expect(payload).not.toHaveProperty("api_key");
   });
 
-  it("sends api_key as empty string when user clears the API key field", async () => {
+  it("disables saving when the fresh API key is cleared", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
@@ -133,12 +134,8 @@ describe("SettingsPanel", () => {
     const slider = screen.getByLabelText("最大输出 Tokens");
     fireEvent.change(slider, { target: { value: "16384" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
-
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    // Empty string signals the backend to clear the stored key
-    expect(payload?.api_key).toBe("");
+    expect(screen.getByRole("button", { name: "保存模型设置" })).toBeDisabled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
   });
 
   it("does not put the API key value into visible DOM text", async () => {
