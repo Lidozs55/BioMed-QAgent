@@ -166,6 +166,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       }
 
       const payload: Record<string, unknown> = {};
+      if (apiKeyDirtyRef.current) payload.api_key = apiKey;
       if (baseUrl !== settings?.base_url) payload.base_url = baseUrl;
       if (modelName !== settings?.model_name) payload.model_name = modelName;
       if (maxTokens !== settings?.max_tokens) payload.max_tokens = maxTokens;
@@ -648,7 +649,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                     </FieldGroup>
                   </CardContent>
                   <CardFooter className="justify-end">
-                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || !apiKey.trim()}>
+                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || !apiKey.trim() || !modelsLoaded}>
                       {saving && <Spinner data-icon="inline-start" />}
                       保存模型设置
                     </Button>

@@ -116,7 +116,14 @@ class ModelSettingsStore:
             try:
                 resolve_context_budget(updated)
             except ContextBudgetConfigurationError as error:
-                raise ValueError(str(error)) from error
+                if (
+                    error.reason == "a positive context window is required"
+                    and updated.context_window is None
+                    and get_known_model(updated.model_name) is None
+                ):
+                    pass
+                else:
+                    raise ValueError(str(error)) from error
             self._write(updated)
             self._current = updated
             return updated

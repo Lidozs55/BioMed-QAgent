@@ -34,8 +34,8 @@ const TEST_VENDORS = [
 ];
 
 const TEST_MODELS: ModelInfo[] = [
-  { id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false } },
-  { id: "qwen-max", name: "Qwen Max", description: "Powerful", context_window: 32768, suggested_max_tokens: 4096, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false } },
+  { id: "qwen-plus", name: "Qwen Plus", description: "Balanced", context_window: 131072, suggested_max_tokens: 8192, max_output_tokens: 8192, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false }, vendor_id: "dashscope", knowledge_cutoff: null, pricing_input_per_1m: null, pricing_output_per_1m: null, model_family: null, function_calling: true, supports_streaming: true },
+  { id: "qwen-max", name: "Qwen Max", description: "Powerful", context_window: 32768, suggested_max_tokens: 4096, max_output_tokens: 4096, recommended: false, api_available: true, capability_source: "catalog", capabilities: { text: true, image: false, video: false, audio: false }, vendor_id: "dashscope", knowledge_cutoff: null, pricing_input_per_1m: null, pricing_output_per_1m: null, model_family: null, function_calling: true, supports_streaming: true },
 ];
 
 /* ------------------------------------------------------------------ */

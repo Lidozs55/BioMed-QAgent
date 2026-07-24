@@ -10,7 +10,7 @@
 - 注：数据库这个界面我不懂，我就只提skill这里的（意为设置界面问题可能并不全面
 - 状态：未解决
 
-- [ ] (260721)完成模型设置后，主页面工作区模型选择存在问题。
+- [X] (260721)完成模型设置后，主页面工作区模型选择存在问题。
 
 - 状态：已解决
 - 具体说明：问题在于只要配置apikey后就会显示Qwen系列的四个模型，即使你接入ds的模型。进一步说明这里的没有发挥任何配置作用
@@ -26,10 +26,23 @@
 
 > NOTE by modenc：这地方应该是哪次 merge 把不该 merge 的 合进去了。 我们称之为 merge drift.
 
-- [ ] (260721)主页面工作区附件上传
+- [X] (260721)主页面工作区附件上传
 
-- 状态：未解决
+- 状态：已解决
 - 具体说明：文件上传文字应该是“上传文件（从本地缓存）”吧，原文为“上传文件到本地缓存”，同时文件上传功能未实现
+-  **原因** ：
+
+1. `DropdownMenu` 用的是 `@base-ui/react/menu`，不是 Radix UI。`MenuPrimitive.Item` 不识别 `onSelect`，回调被静默丢弃，点击"上传文件"无反应。
+1. 任务进行中的延续 composer 缺少 `onSubmitFiles`／`onAttachmentError`／`importPending`，上传按钮一直 disabled。
+1. 文件选择器未做类型过滤，默认 `*.*`
+1. 图片与文件共享同一输入框，后续难以单独接入 VL 模型。
+
+*  **修复** ：
+
+1. `AgentComposer.tsx` 中 `onSelect` → `onClick`，使 Base UI DropdownMenuItem 回调正常触发
+2. `ChatPanel.tsx` 延续 composer 补上 `onSubmitFiles={...}`、`onAttachmentError={setDraftError}`、`pending={continuationPending || importPending}`
+3. 文件输入框加上 `accept=".pdf,.xlsx,.xls,.csv,.tsv,.json,.xml,.txt,.pdb,.zip,.md"`，屏蔽 `*.*`
+4. 独立图片输入框（`accept="image/*"` + `imageInputRef`），"上传图片"菜单项从 `disabled` 改为激活，与文件上传解耦
 
 - [ ] （260721）模型设置界面模型上下文窗口显示错误
 
