@@ -18,6 +18,7 @@ MANDATORY_ARTIFACTS = {
     "sample_metadata.csv",
     "field_descriptions.csv",
     "field_mapping.csv",
+    "cleaning_report.csv",
     "source_list.csv",
     "source_relations.csv",
     "source_assets.csv",

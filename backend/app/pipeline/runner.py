@@ -871,6 +871,8 @@ class PipelineRunner:
                 specification=discovery.specification,
                 retrieved_at=acquisition.retrieved_at,
                 stage_attempt_id=stage_attempt_id,
+                cleaning_report=processing.cleaning_report,
+                field_alignment=processing.field_alignment,
             )
         if stage is StageName.VALIDATION:
             build = self._get_output(stage_outputs, StageName.ARTIFACT_BUILD, ArtifactBuildOutput)

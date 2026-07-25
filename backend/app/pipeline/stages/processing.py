@@ -1,8 +1,10 @@
 """Processing stage: parse GEO tximport counts into ParsedDataset."""
 from __future__ import annotations
 
+import csv
 import hashlib
 import logging
+from pathlib import Path
 
 from app.domain.contracts import ParsedDataset, SourceAsset, StageName
 from app.pipeline.processing.geo_tximport import (
@@ -12,7 +14,13 @@ from app.pipeline.processing.geo_tximport import (
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )
-from app.pipeline.stages.base import ProcessingOutput, StageContext, StageResult
+from app.pipeline.stages.base import (
+    CleaningReportModel,
+    ProcessingOutput,
+    StageContext,
+    StageResult,
+)
+from app.tools.alignment import normalize_field_names
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +122,203 @@ def _build_minimal_parsed_dataset(
         source_row_count=0,
         processing_parameters=processing_parameters,
     )
+
+
+def _clean_parsed_dataset(
+    ctx: StageContext,
+    parsed: ParsedDataset,
+) -> CleaningReportModel:
+    """Analyze a parsed CSV for data quality issues.
+
+    Returns a ``CleaningReportModel`` with missing value stats, duplicate
+    detection, type-consistency checks, and anomaly flags that can be
+    persisted to ``warnings.csv`` and ``cleaning_report.csv``.
+    """
+    csv_path = ctx.workdir.root / parsed.file_asset.relative_path
+    if not csv_path.is_file():
+        logger.warning("cleaning: parsed CSV not found at %s", csv_path)
+        return CleaningReportModel()
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        all_rows = list(reader)
+        columns = reader.fieldnames or []
+
+    if not all_rows:
+        return CleaningReportModel()
+
+    # --- missing value stats ---
+    missing_stats: dict[str, int] = {}
+    for col in columns:
+        count = sum(
+            1 for row in all_rows
+            if row.get(col) is None or row.get(col, "").strip() == ""
+        )
+        if count > 0:
+            missing_stats[col] = count
+
+    # --- duplicate detection ---
+    seen: set[str] = set()
+    duplicate_count = 0
+    for row in all_rows:
+        fingerprint = repr(tuple(str(row.get(c, "")) for c in columns))
+        if fingerprint in seen:
+            duplicate_count += 1
+        else:
+            seen.add(fingerprint)
+
+    # --- type-consistency check ---
+    # Heuristic: for each column, try to infer the most common type and flag
+    # rows where the value does not match.
+    type_issues: dict[str, int] = {}
+    for col in columns:
+        mismatch = 0
+        # Collect non-empty values for type inference
+        values = [
+            row.get(col, "") for row in all_rows
+            if row.get(col) is not None and row.get(col, "").strip() != ""
+        ]
+        if not values:
+            continue
+        # Quick majority-type inference
+        ints = 0
+        floats = 0
+        others = 0
+        for v in values:
+            try:
+                int(v)
+                ints += 1
+            except (ValueError, TypeError):
+                try:
+                    float(v)
+                    floats += 1
+                except (ValueError, TypeError):
+                    others += 1
+        total = ints + floats + others
+        majority = max(ints, floats, others)
+        if majority == 0:
+            continue
+        if majority == ints and ints / total >= 0.8:
+            # Expect ints — flag non-int values
+            for row in all_rows:
+                val = row.get(col, "")
+                if val and val.strip():
+                    try:
+                        int(val.strip())
+                    except (ValueError, TypeError):
+                        mismatch += 1
+        elif majority == floats and (ints + floats) / total >= 0.8:
+            # Expect numeric — flag non-numeric values
+            for row in all_rows:
+                val = row.get(col, "")
+                if val and val.strip():
+                    try:
+                        float(val.strip())
+                    except (ValueError, TypeError):
+                        mismatch += 1
+        if mismatch > 0:
+            type_issues[col] = mismatch
+
+    # --- anomaly flags ---
+    anomaly_flags: list[str] = []
+    for col, count in missing_stats.items():
+        anomaly_flags.append(
+            f"字段 '{col}' 有 {count} 个缺失值"
+        )
+    if duplicate_count > 0:
+        anomaly_flags.append(
+            f"检测到 {duplicate_count} 个精确重复行"
+        )
+    for col, count in type_issues.items():
+        anomaly_flags.append(
+            f"字段 '{col}' 有 {count} 个类型不匹配值"
+        )
+
+    total_anomalies = (
+        sum(missing_stats.values())
+        + duplicate_count
+        + sum(type_issues.values())
+    )
+
+    return CleaningReportModel(
+        missing_stats=missing_stats,
+        duplicate_count=duplicate_count,
+        type_issues=type_issues,
+        anomaly_flags=anomaly_flags,
+        total_anomalies=total_anomalies,
+    )
+
+
+def _build_field_alignment(
+    parsed_datasets: list[ParsedDataset],
+    ctx: StageContext,
+) -> dict[str, list[str]]:
+    """Build a field-name alignment across one or more parsed CSV files.
+
+    For a single dataset the result is a simple ``{normalized: [raw]}``
+    mapping derived from ``normalize_field_names``.  When two or more
+    datasets are present their column sets are aligned via
+    ``alignment.align_fields`` so that downstream merging can use it.
+    """
+    if not parsed_datasets:
+        return {}
+
+    if len(parsed_datasets) == 1:
+        csv_path = ctx.workdir.root / parsed_datasets[0].file_asset.relative_path
+        try:
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                columns = csv.DictReader(handle).fieldnames or []
+        except (OSError, UnicodeDecodeError):
+            logger.warning("alignment: cannot read CSV at %s", csv_path)
+            return {}
+        norm_map = normalize_field_names(columns)
+        return {norm: [orig] for orig, norm in norm_map.items()}
+
+    # --- multi-dataset alignment (TODO §1.2: merge_datasets) ---
+    from app.domain.processing import ParsedDataset as OldParsedDataset
+
+    old_datasets: list[OldParsedDataset] = []
+    for pd_dataset in parsed_datasets:
+        csv_path = ctx.workdir.root / pd_dataset.file_asset.relative_path
+        try:
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                columns = reader.fieldnames or []
+                rows = list(reader)
+        except (OSError, UnicodeDecodeError):
+            logger.warning("alignment: cannot read CSV at %s", csv_path)
+            continue
+        field_types: dict[str, str] = {}
+        for col in columns:
+            for row in rows:
+                val = row.get(col, "")
+                if val and val.strip():
+                    try:
+                        int(val)
+                        field_types[col] = "int"
+                    except (ValueError, TypeError):
+                        try:
+                            float(val)
+                            field_types[col] = "float"
+                        except (ValueError, TypeError):
+                            field_types[col] = "string"
+                    break
+            if col not in field_types:
+                field_types[col] = "string"
+        old_datasets.append(
+            OldParsedDataset(
+                dataset_id=pd_dataset.dataset_id,
+                source_file=str(csv_path),
+                table_name=pd_dataset.dataset_id,
+                field_names=list(columns),
+                field_types=field_types,
+                rows=rows,
+                source_locator="csv",
+            )
+        )
+    from app.tools.alignment import align_fields
+
+    return align_fields(old_datasets)
 
 
 def _recover_samples_from_series_matrix(
@@ -248,6 +453,17 @@ def run_processing(
         },
     )
 
-    output = ProcessingOutput(parsed_datasets=[parsed], samples=samples)
+    # --- cleaning ---
+    cleaning_report = _clean_parsed_dataset(ctx, parsed)
+
+    # --- field alignment ---
+    field_alignment = _build_field_alignment([parsed], ctx)
+
+    output = ProcessingOutput(
+        parsed_datasets=[parsed],
+        samples=samples,
+        cleaning_report=cleaning_report,
+        field_alignment=field_alignment,
+    )
     digest = hashlib.sha256(parsed.file_asset.sha256.encode("utf-8")).hexdigest()
     return StageResult(output_digest=digest, output=output)

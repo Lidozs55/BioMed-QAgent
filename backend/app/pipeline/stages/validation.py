@@ -588,6 +588,35 @@ def _validate_package(
             "details": "",
         }
     )
+    # Cleaning report completeness: verify cleaning_report.csv exists and its
+    # anomaly counts are consistent with warnings.csv cleaning entries.
+    cleaning_path = staging / "cleaning_report.csv"
+    cleaning_rows = _read_csv(cleaning_path) if cleaning_path.is_file() else []
+    cleaning_warnings = [
+        w for w in warning_rows
+        if w.get("code") in {"missing_values", "duplicate_rows", "type_inconsistency"}
+    ]
+    cleaning_missing = sum(
+        1 for r in cleaning_rows if r.get("rule") == "missing_values"
+    )
+    cleaning_dup = any(r.get("rule") == "duplicate_rows" for r in cleaning_rows)
+    cleaning_type = sum(
+        1 for r in cleaning_rows if r.get("rule") == "type_inconsistency"
+    )
+    cleaning_warn_count = len(cleaning_warnings)
+    cleaning_expected = cleaning_missing + (1 if cleaning_dup else 0) + cleaning_type
+    cleaning_mismatch = abs(cleaning_expected - cleaning_warn_count)
+    checks.append(
+        {
+            "check_id": "cleaning_report_consistency",
+            "scope": "cleaning",
+            "check_name": "cleaning_report.csv anomaly counts match warnings.csv cleaning entries",
+            "status": "passed" if cleaning_mismatch == 0 else "failed",
+            "checked_count": cleaning_expected + cleaning_warn_count,
+            "failed_count": cleaning_mismatch,
+            "details": "",
+        }
+    )
     total_failed = sum(int(check["failed_count"]) for check in checks)
     report = {
         "schema_version": "1.0",

@@ -331,7 +331,10 @@ class RunExecution:
             except asyncio.CancelledError:
                 pass
             except Exception:
-                pass
+                logger.error(
+                    "_commit_task failed in _abort_completion_once",
+                    exc_info=True,
+                )
         if self._completion_committed or self._completion_aborter is None:
             return
         try:

@@ -586,11 +586,13 @@ def test_e2e_cancel_before_validation_stops_pipeline(tmp_path: Path) -> None:
         ctx, sources, source_assets, download_attempts,
         parsed_dataset, samples,
         literature, geo, specification, retrieved_at, stage_attempt_id,
+        cleaning_report=None, field_alignment=None,
     ):
         result = original_artifact_build(
             ctx, sources, source_assets, download_attempts,
             parsed_dataset, samples,
             literature, geo, specification, retrieved_at, stage_attempt_id,
+            cleaning_report=cleaning_report, field_alignment=field_alignment,
         )
         runner.request_cancel(reason="user requested cancel after build")
         return result

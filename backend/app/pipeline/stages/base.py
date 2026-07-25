@@ -158,11 +158,28 @@ class AcquisitionOutput(ContractModel):
     retrieved_at: datetime
 
 
+class CleaningReportModel(ContractModel):
+    """Cleaning report produced during the processing stage.
+
+    Mirrors ``app.domain.processing.CleaningReport`` but uses Pydantic
+    and omits the dataclass dependency so the pipeline is self-contained.
+    """
+
+    missing_stats: dict[str, int] = {}
+    duplicate_count: int = 0
+    type_issues: dict[str, int] = {}
+    format_corrections: dict[str, int] = {}
+    anomaly_flags: list[str] = []
+    total_anomalies: int = 0
+
+
 class ProcessingOutput(ContractModel):
-    """Output of the processing stage: parsed datasets + samples."""
+    """Output of the processing stage: parsed datasets + samples + cleaning + alignment."""
 
     parsed_datasets: list[ParsedDataset]
     samples: list[GeoSampleMetadata]
+    cleaning_report: CleaningReportModel | None = None
+    field_alignment: dict[str, list[str]] | None = None
 
 
 class ArtifactBuildOutput(ContractModel):

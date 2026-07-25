@@ -47,7 +47,7 @@ async def test_pipeline_function_tool_runs_explicit_fixture_mode(
     assert payload["task_id"] == "task_tool"
     assert payload["status"] == "completed"
     assert payload["validation_status"] == "valid"
-    assert payload["artifact_count"] == 14
+    assert payload["artifact_count"] == 15
 
     # Tool 必须返回实际 artifact 文件名清单，避免 LLM 在报告中编造文件名
     # (例如把 main_data.csv 编造成 merged_comorbidity_data.csv)。

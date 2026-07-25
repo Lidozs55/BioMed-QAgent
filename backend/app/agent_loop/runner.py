@@ -324,7 +324,7 @@ class _AssistantTextBuffer:
                     await asyncio.shield(emit_task)
                 except asyncio.CancelledError:
                     continue
-                except BaseException:
+                except Exception:
                     break
             if not emit_task.cancelled():
                 try:

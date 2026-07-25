@@ -20,6 +20,7 @@ from app.domain.contracts.discovery import GeoSeriesRecord
 from app.pipeline.processing.geo_tximport import _OUTPUT_COLUMNS, GeoSampleMetadata
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
+    CleaningReportModel,
     StageContext,
     StageResult,
 )
@@ -46,6 +47,9 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
     "field_mapping.csv": [
         "dataset_id", "raw_field", "canonical_field", "conversion",
         "confidence", "notes",
+    ],
+    "cleaning_report.csv": [
+        "rule", "field_name", "affected_count", "message",
     ],
     "source_list.csv": [
         "source_id", "database", "accession", "url", "title", "retrieved_at",
@@ -306,6 +310,149 @@ def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) ->
         writer.writerows(rows)
 
 
+def _build_field_mapping_rows(
+    dataset_id: str,
+    field_alignment: dict[str, list[str]] | None,
+    samples: list[GeoSampleMetadata],
+) -> list[dict[str, object]]:
+    """Build ``field_mapping.csv`` rows from the alignment result.
+
+    When ``field_alignment`` is available (e.g. from ``alignment.normalize_field_names``),
+    each entry maps ``raw_field → canonical_field`` with a confidence score
+    derived from the similarity heuristic. Falls back to the per-sample
+    expression-value mapping when alignment is missing.
+    """
+    if field_alignment:
+        rows: list[dict[str, object]] = []
+        for norm_name, originals in field_alignment.items():
+            raw = originals[0] if originals else ""
+            if not raw:
+                continue
+            rows.append({
+                "dataset_id": dataset_id,
+                "raw_field": raw,
+                "canonical_field": norm_name,
+                "conversion": "identity",
+                "confidence": "1.0" if raw == norm_name else "0.9",
+                "notes": f"alignment:normalize_field_names",
+            })
+        return rows
+
+    # Fallback: per-sample expression_value mapping (backward compat).
+    return [
+        {
+            "dataset_id": dataset_id,
+            "raw_field": f"counts.{sample.source_alias}",
+            "canonical_field": "expression_value",
+            "conversion": "identity numeric parse",
+            "confidence": "1.0",
+            "notes": sample.sample_id,
+        }
+        for sample in samples
+    ]
+
+
+def _build_cleaning_report_rows(
+    cleaning_report: CleaningReportModel | None,
+) -> list[dict[str, object]]:
+    """Build ``cleaning_report.csv`` rows from the cleaning analysis."""
+    if cleaning_report is None:
+        return []
+
+    rows: list[dict[str, object]] = []
+
+    # Missing values per column
+    for col, count in cleaning_report.missing_stats.items():
+        rows.append({
+            "rule": "missing_values",
+            "field_name": col,
+            "affected_count": str(count),
+            "message": f"字段 '{col}' 有 {count} 个缺失值",
+        })
+
+    # Duplicates
+    if cleaning_report.duplicate_count > 0:
+        rows.append({
+            "rule": "duplicate_rows",
+            "field_name": "",
+            "affected_count": str(cleaning_report.duplicate_count),
+            "message": f"检测到 {cleaning_report.duplicate_count} 个精确重复行",
+        })
+
+    # Type issues per column
+    for col, count in cleaning_report.type_issues.items():
+        rows.append({
+            "rule": "type_inconsistency",
+            "field_name": col,
+            "affected_count": str(count),
+            "message": f"字段 '{col}' 有 {count} 个类型不匹配值",
+        })
+
+    return rows
+
+
+def _build_warnings_rows(
+    cell_line_warnings: list[dict[str, object]],
+    cleaning_report: CleaningReportModel | None,
+    geo_source_id: str,
+    asset_id: str,
+    retrieved_at: datetime,
+) -> list[dict[str, object]]:
+    """Merge cell-line warnings with cleaning anomalies into ``warnings.csv``."""
+    warnings: list[dict[str, object]] = list(cell_line_warnings)
+
+    if cleaning_report is None:
+        return warnings
+
+    idx = 0
+    # Missing values → warnings
+    for col, count in cleaning_report.missing_stats.items():
+        warnings.append({
+            "warning_id": f"warn_cleaning_{idx}",
+            "severity": "info",
+            "stage": "processing",
+            "code": "missing_values",
+            "message": f"字段 '{col}' 有 {count} 个缺失值",
+            "source_id": geo_source_id,
+            "asset_id": asset_id,
+            "record_id": "",
+            "created_at": retrieved_at.isoformat(),
+        })
+        idx += 1
+
+    # Duplicates → warnings
+    if cleaning_report.duplicate_count > 0:
+        warnings.append({
+            "warning_id": f"warn_cleaning_{idx}",
+            "severity": "warning",
+            "stage": "processing",
+            "code": "duplicate_rows",
+            "message": f"检测到 {cleaning_report.duplicate_count} 个精确重复行",
+            "source_id": geo_source_id,
+            "asset_id": asset_id,
+            "record_id": "",
+            "created_at": retrieved_at.isoformat(),
+        })
+        idx += 1
+
+    # Type issues → warnings
+    for col, count in cleaning_report.type_issues.items():
+        warnings.append({
+            "warning_id": f"warn_cleaning_{idx}",
+            "severity": "warning",
+            "stage": "processing",
+            "code": "type_inconsistency",
+            "message": f"字段 '{col}' 有 {count} 个类型不匹配值",
+            "source_id": geo_source_id,
+            "asset_id": asset_id,
+            "record_id": "",
+            "created_at": retrieved_at.isoformat(),
+        })
+        idx += 1
+
+    return warnings
+
+
 def run_artifact_build(
     ctx: StageContext,
     sources: list[SourceRecord],
@@ -318,6 +465,8 @@ def run_artifact_build(
     specification: TaskSpecification,
     retrieved_at: datetime,
     stage_attempt_id: str,
+    cleaning_report: CleaningReportModel | None = None,
+    field_alignment: dict[str, list[str]] | None = None,
 ) -> StageResult:
     """Build the staging CSV package from upstream stage outputs.
 
@@ -342,11 +491,18 @@ def run_artifact_build(
     download_attempt = download_attempts[0]
 
     # Build cell-line normalization warnings (TODO §1.7). Each sample whose
-    # cell_line_raw was canonicalized produces one warning row; the same
-    # list is serialized into processing_log.csv's ``warnings`` JSON array
-    # so the warnings_metrics_consistency validation check stays satisfied.
+    # cell_line_raw was canonicalized produces one warning row.
     cell_line_warnings = _build_cell_line_warnings(
         samples=samples,
+        geo_source_id=geo_source_id,
+        asset_id=source_asset.asset_id,
+        retrieved_at=retrieved_at,
+    )
+    # Merge cleaning anomalies into the warnings list so
+    # warnings_metrics_consistency validation stays satisfied.
+    all_warnings = _build_warnings_rows(
+        cell_line_warnings=cell_line_warnings,
+        cleaning_report=cleaning_report,
         geo_source_id=geo_source_id,
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
@@ -358,7 +514,7 @@ def run_artifact_build(
                 "code": row["code"],
                 "message": row["message"],
             }
-            for row in cell_line_warnings
+            for row in all_warnings
         ],
         sort_keys=True,
     )
@@ -424,17 +580,12 @@ def run_artifact_build(
             }
             for field in _OUTPUT_COLUMNS
         ],
-        "field_mapping.csv": [
-            {
-                "dataset_id": dataset_id,
-                "raw_field": f"counts.{sample.source_alias}",
-                "canonical_field": "expression_value",
-                "conversion": "identity numeric parse",
-                "confidence": "1.0",
-                "notes": sample.sample_id,
-            }
-            for sample in samples
-        ],
+        "field_mapping.csv": _build_field_mapping_rows(
+            dataset_id=dataset_id,
+            field_alignment=field_alignment,
+            samples=samples,
+        ),
+        "cleaning_report.csv": _build_cleaning_report_rows(cleaning_report),
         "source_list.csv": [
             record.model_dump(mode="json", exclude={"schema_version"})
             for record in sources
@@ -506,7 +657,7 @@ def run_artifact_build(
                 "warnings": processing_log_warnings,
             }
         ],
-        "warnings.csv": cell_line_warnings,
+        "warnings.csv": all_warnings,
     }
 
     for name, columns in _ARTIFACT_COLUMNS.items():
