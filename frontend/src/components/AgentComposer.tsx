@@ -121,6 +121,7 @@ export function AgentComposer({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [submittingFiles, setSubmittingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Model selector state (new settings integration)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -321,16 +322,19 @@ export function AgentComposer({
           <DropdownMenuContent align="start" side="top">
             <DropdownMenuGroup>
               <DropdownMenuLabel>添加附件</DropdownMenuLabel>
-              <DropdownMenuItem disabled>
+              <DropdownMenuItem
+                disabled={onSubmitFiles === undefined || attachmentBusy}
+                onClick={() => imageInputRef.current?.click()}
+              >
                 <ImageIcon aria-hidden="true" />
-                上传图片（即将支持）
+                上传图片
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={onSubmitFiles === undefined || attachmentBusy}
-                onSelect={() => fileInputRef.current?.click()}
+                onClick={() => fileInputRef.current?.click()}
               >
                 <FileIcon aria-hidden="true" />
-                上传文件到本地缓存
+                上传文件（从本地缓存）
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
@@ -340,6 +344,17 @@ export function AgentComposer({
           type="file"
           multiple
           className="hidden"
+          accept=".pdf,.xlsx,.xls,.csv,.tsv,.json,.xml,.txt,.pdb,.zip,.md"
+          onChange={handleFilePick}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+        <input
+          ref={imageInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          accept="image/*"
           onChange={handleFilePick}
           aria-hidden="true"
           tabIndex={-1}

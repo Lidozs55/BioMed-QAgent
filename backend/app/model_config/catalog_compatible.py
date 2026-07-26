@@ -78,6 +78,22 @@ COMPATIBLE_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=8_192,
         capabilities=Capabilities(text=True),
     ),
+    "deepseek-v4-flash": QwenModelEntry(
+        id="deepseek-v4-flash",
+        name="DeepSeek V4 Flash",
+        description="DeepSeek V4 高速对话模型，1M 上下文窗口，低延迟高吞吐。",
+        context_window=1_000_000,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True),
+    ),
+    "deepseek-v4-pro": QwenModelEntry(
+        id="deepseek-v4-pro",
+        name="DeepSeek V4 Pro",
+        description="DeepSeek V4 专业版，更强推理能力，1M 上下文窗口。",
+        context_window=1_000_000,
+        suggested_max_tokens=8_192,
+        capabilities=Capabilities(text=True),
+    ),
     "moonshot-v1-8k": QwenModelEntry(
         id="moonshot-v1-8k",
         name="Moonshot V1 8K",

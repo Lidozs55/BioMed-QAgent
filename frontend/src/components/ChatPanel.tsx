@@ -454,10 +454,16 @@ export function ChatPanel({
                 ariaLabel="继续提问"
                 sendAriaLabel="发送继续问题"
                 disabled={!continuationEditable}
-                pending={continuationPending}
+                pending={continuationPending || importPending}
                 sendDisabled={!continuationCanSend || !continuationInput.trim()}
                 compact
                 className="shadow-md"
+                onSubmitFiles={
+                  uploadFiles !== undefined
+                    ? (files, note) => submitFiles(files, note)
+                    : undefined
+                }
+                onAttachmentError={setDraftError}
                 models={models}
                 hasApiKey={hasApiKey}
                 onOpenSettings={onOpenSettings}

@@ -166,6 +166,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
       }
 
       const payload: Record<string, unknown> = {};
+      if (apiKeyDirtyRef.current) payload.api_key = apiKey;
       if (baseUrl !== settings?.base_url) payload.base_url = baseUrl;
       if (apiKeyDirtyRef.current) payload.api_key = apiKey;
       if (modelName !== settings?.model_name) payload.model_name = modelName;
@@ -649,7 +650,7 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                     </FieldGroup>
                   </CardContent>
                   <CardFooter className="justify-end">
-                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || (!apiKey.trim() && !settings?.api_key_configured)}>
+                    <Button onClick={() => void saveModel()} disabled={!dirty || saving || (!apiKey.trim() && !settings?.api_key_configured) || !modelsLoaded}>
                       {saving && <Spinner data-icon="inline-start" />}
                       保存模型设置
                     </Button>
