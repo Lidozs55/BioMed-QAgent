@@ -179,6 +179,7 @@ export default function App() {
                 selectedModelId={selectedModelId}
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}
+                contextWindow={settings?.context_window}
               />
             </ArtifactWorkspace>
           </div>

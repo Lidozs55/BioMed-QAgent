@@ -61,6 +61,8 @@ interface ChatPanelProps {
   onModelChange?: (modelId: string) => void;
   /** Currently selected model ID */
   selectedModelId?: string;
+  /** Context window capacity in tokens from model settings */
+  contextWindow?: number;
 }
 
 const TERMINAL_STATUSES = new Set([
@@ -126,6 +128,7 @@ export function ChatPanel({
   onOpenSettings,
   onModelChange,
   selectedModelId,
+  contextWindow,
 }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
@@ -386,7 +389,7 @@ export function ChatPanel({
           <div className="border-b px-5 py-1">
             <ContextUsageBar
               usedTokens={activeTask.contextTokensUsed ?? 0}
-              totalTokens={activeTask.contextWindow ?? 0}
+              totalTokens={contextWindow ?? activeTask.contextWindow ?? 0}
               compacting={activeTask.summary.status === "running" && activeTask.compacting === true}
             />
           </div>

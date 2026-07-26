@@ -76,23 +76,41 @@ export function ContextWindowSlider({
     return idx >= 0 ? idx : -1;
   }, [value]);
 
-  // Slider uses index-based positioning; -1 means custom (show at nearest)
-  const sliderValue = useMemo(() => {
-    if (presetIndex >= 0) return [presetIndex];
-    // Find nearest preset below current value
+  // Derive the committed index from the current value
+  const committedIndex = useMemo(() => {
+    if (presetIndex >= 0) return presetIndex;
     let nearest = 0;
     for (let i = 0; i < PRESETS.length; i++) {
       if (PRESETS[i].value <= value) nearest = i;
     }
-    return [nearest];
+    return nearest;
   }, [presetIndex, value]);
 
-  const handleSliderChange = useCallback(
+  // Local state tracks the thumb during drag; synced back when value changes externally
+  const [localIndex, setLocalIndex] = useState(committedIndex);
+  const [dragging, setDragging] = useState(false);
+
+  // Sync local state when the committed value changes (e.g. from "更多设置" or API response)
+  const prevCommitted = useMemo(() => committedIndex, [committedIndex]);
+  if (!dragging && localIndex !== prevCommitted) {
+    setLocalIndex(prevCommitted);
+  }
+
+  const displayIndex = dragging ? localIndex : committedIndex;
+
+  // During drag: only update local state (thumb moves freely)
+  const handleDrag = useCallback((newVal: number[]) => {
+    setDragging(true);
+    setLocalIndex(newVal[0]);
+  }, []);
+
+  // On release: commit the selected preset value
+  const handleCommit = useCallback(
     (newVal: number[]) => {
+      setDragging(false);
       const idx = newVal[0];
       if (idx >= 0 && idx < PRESETS.length) {
         const selected = PRESETS[idx].value;
-        // Clamp to catalog max if known
         if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
           onChange(maxCatalogWindow);
         } else {
@@ -109,7 +127,9 @@ export function ContextWindowSlider({
         <FieldLabel>上下文窗口</FieldLabel>
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            {value > 0 ? formatTokens(value) : "?"}
+            {dragging
+              ? PRESETS[localIndex]?.label ?? "?"
+              : value > 0 ? formatTokens(value) : "?"}
           </span>
           {source === "inferred" && (
             <span className="rounded border border-dashed border-muted-foreground/40 px-1 py-0.5 text-[10px] text-muted-foreground">
@@ -125,11 +145,12 @@ export function ContextWindowSlider({
       </div>
       <div className="flex flex-col gap-1.5 pt-1">
         <Slider
-          value={sliderValue}
+          value={[displayIndex]}
           min={0}
           max={PRESETS.length - 1}
           step={1}
-          onValueChange={handleSliderChange}
+          onValueChange={handleDrag}
+          onValueCommitted={handleCommit}
         />
         <div className="flex justify-between">
           {PRESETS.map((p, i) => (
@@ -145,7 +166,7 @@ export function ContextWindowSlider({
               }}
               className={cn(
                 "text-[10px] transition-colors hover:text-foreground",
-                sliderValue[0] === i
+                displayIndex === i
                   ? "font-medium text-primary"
                   : "text-muted-foreground",
               )}
