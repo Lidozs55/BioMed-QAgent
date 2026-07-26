@@ -21,13 +21,13 @@ def test_resolve_context_budget_preserves_exact_32768_catalog_window() -> None:
     # When
     budget = resolve_context_budget(settings)
 
-    # Then
+    # Then — reserve floor is capped at 20% of window: min(16384, ceil(32768*0.2))=6554
     assert budget.context_window == 32_768
     assert budget.max_output_tokens == 4096
-    assert budget.safety_reserve_tokens == 16_384
-    assert budget.input_capacity == 12_288
-    assert budget.trigger_tokens == 10_445
-    assert budget.target_tokens == 7373
+    assert budget.safety_reserve_tokens == 6_554
+    assert budget.input_capacity == 22_118
+    assert budget.trigger_tokens == 18_801
+    assert budget.target_tokens == 13_271
 
 
 def test_resolve_context_budget_preserves_exact_million_token_catalog_window() -> None:
@@ -85,13 +85,16 @@ def test_resolve_context_budget_accepts_pydantic_url_configuration() -> None:
     assert budget.provider_origin == "https://dashscope.aliyuncs.com"
 
 
-def test_resolve_context_budget_rejects_unknown_model_without_positive_window() -> None:
-    # Given
+def test_resolve_context_budget_infers_window_for_unknown_model() -> None:
+    # Given — model not in catalog gets name-based inference (default 128K)
     settings = UserSettings(model_name="compatible-unknown", max_tokens=4096)
 
-    # When / Then
-    with pytest.raises(ContextBudgetConfigurationError, match="context window"):
-        resolve_context_budget(settings)
+    # When
+    budget = resolve_context_budget(settings)
+
+    # Then
+    assert budget.context_window == 128_000
+    assert budget.input_capacity > 0
 
 
 def test_context_budget_is_frozen_after_resolution() -> None:
@@ -123,8 +126,8 @@ def test_resolve_context_budget_rejects_invalid_compaction_ratio_order() -> None
 
 
 def test_resolve_context_budget_rejects_non_positive_input_capacity() -> None:
-    # Given
-    settings = UserSettings(model_name="qwen-max", max_tokens=16_384)
+    # Given — max_tokens so large that capacity overflows even with reduced reserve
+    settings = UserSettings(model_name="qwen-max", max_tokens=30_000)
 
     # When / Then
     with pytest.raises(ContextBudgetConfigurationError, match="input capacity"):

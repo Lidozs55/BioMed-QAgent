@@ -186,10 +186,6 @@ export function useModelSettingsDraft(
       setModelError(`Cannot save: ${effectiveBudget.budgetErrors.join("; ")}`);
       return;
     }
-    if (effectiveBudget.source === "unknown" && parseOverrideWindow(draft.budgetValues.contextWindowOverrideStr) <= 0) {
-      setModelError("Unknown model requires an explicit positive context window override");
-      return;
-    }
     if (!draft.modelName.trim()) {
       setModelError("请填写模型名称，例如 qwen-plus");
       return;

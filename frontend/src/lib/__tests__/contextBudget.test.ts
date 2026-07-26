@@ -13,9 +13,15 @@ import {
 } from "@/lib/contextBudget";
 
 describe("computeSafetyReserveTokens", () => {
-  it("ensures minimum floor of 16384", () => {
-    expect(computeSafetyReserveTokens(4096, 0.01)).toBe(16384);
-    expect(computeSafetyReserveTokens(32768, 0.05)).toBe(16384);
+  it("caps floor at 20% of context window for small models", () => {
+    // 4096 * 0.2 = 820 floor; max(820, ceil(4096*0.01)=41) = 820
+    expect(computeSafetyReserveTokens(4096, 0.01)).toBe(820);
+    // 32768 * 0.2 = 6554 floor; max(6554, ceil(32768*0.05)=1639) = 6554
+    expect(computeSafetyReserveTokens(32768, 0.05)).toBe(6554);
+  });
+
+  it("returns 0 for non-positive context window", () => {
+    expect(computeSafetyReserveTokens(0, 0.05)).toBe(0);
   });
 
   it("scales above 16384 when context_window * ratio exceeds it", () => {
@@ -124,10 +130,10 @@ describe("isBudgetValid", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it("rejects non-positive context_window", () => {
+  it("accepts unknown (zero) context_window without blocking", () => {
     const result = isBudgetValid(0, 4096, 0.05, 0.6, 0.85);
-    expect(result.valid).toBe(false);
-    expect(result.errors.length).toBeGreaterThanOrEqual(1);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
   });
 
   it("rejects out-of-range safety_reserve_ratio", () => {
@@ -152,13 +158,13 @@ describe("isBudgetValid", () => {
 });
 
 describe("deriveEffectiveBudget", () => {
-  it("preserves unavailable unknown-model capacity until a positive override is supplied", () => {
+  it("allows unknown-model with zero window (budget arithmetic skipped)", () => {
     const result = deriveEffectiveBudget(0, "unknown", 0, false, 4096, 0.05, 0.6, 0.85, "");
     expect(result.source).toBe("unknown");
     expect(result.contextWindow).toBe(0);
     expect(result.safetyReserveTokens).toBe(0);
     expect(result.availableInputTokens).toBe(0);
-    expect(result.budgetValid).toBe(false);
+    expect(result.budgetValid).toBe(true);
   });
 });
 

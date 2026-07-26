@@ -14,7 +14,7 @@ from app.model_settings import ModelConfiguration
 
 
 @pytest.mark.asyncio
-async def test_get_settings_exposes_incomplete_unknown_model_budget_for_recovery(
+async def test_get_settings_exposes_inferred_budget_for_unknown_model(
     tmp_path: Path,
 ) -> None:
     # Given
@@ -37,16 +37,15 @@ async def test_get_settings_exposes_incomplete_unknown_model_budget_for_recovery
     ) as client:
         response = await client.get("/api/v1/settings")
 
-    # Then
+    # Then — unknown model gets inferred 128K window
     assert response.status_code == 200
     data = response.json()
     assert data["model_name"] == "unregistered-current-model"
-    assert data["context_window"] == 0
-    assert data["context_window_source"] == "unknown"
-    assert data["safety_reserve_tokens"] == 0
-    assert data["available_input_tokens"] == 0
-    assert data["run_ready"] is False
-    assert data["run_block_reason"] == "a positive context window is required"
+    assert data["context_window"] == 128_000
+    assert data["context_window_source"] == "catalog"
+    assert data["available_input_tokens"] > 0
+    assert data["run_ready"] is True
+    assert data["run_block_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -101,7 +100,7 @@ async def test_get_settings_marks_known_qwen36_flash_as_run_ready(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_put_rejects_unknown_model_without_positive_context_window(tmp_path: Path) -> None:
+async def test_put_accepts_unknown_model_with_inferred_context_window(tmp_path: Path) -> None:
     # Given
     application = create_app(
         Settings(
@@ -116,15 +115,20 @@ async def test_put_rejects_unknown_model_without_positive_context_window(tmp_pat
     ) as client:
         response = await client.put("/api/v1/settings", json={"max_tokens": 4096})
 
-    # Then
-    assert response.status_code == 422
-    assert not (tmp_path / "settings" / "model.json").exists()
+    # Then — unknown model is accepted with inferred 128K window
+    assert response.status_code == 200
+    data = response.json()
+    assert data["context_window"] == 128_000
+    assert data["run_ready"] is True
 
 
-def test_run_model_settings_rejects_unknown_model_without_positive_context_window() -> None:
-    # Given
+def test_run_model_settings_resolves_unknown_model_with_inferred_window() -> None:
+    # Given — unknown model gets inferred 128K window
     settings = UserSettings(model_name="unregistered-current-model")
 
-    # When / Then
-    with pytest.raises(ContextBudgetConfigurationError, match="context window"):
-        RunModelSettings.from_user_settings(settings)
+    # When
+    run_settings = RunModelSettings.from_user_settings(settings)
+
+    # Then
+    assert run_settings.context_budget.context_window == 128_000
+    assert run_settings.context_budget.input_capacity > 0

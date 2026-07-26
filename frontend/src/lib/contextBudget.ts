@@ -7,13 +7,17 @@
 import type { DraftSource } from "@/hooks/settingsContracts";
 
 /**
- * Compute safety reserve tokens: max(16_384, ceil(context_window * ratio)).
+ * Compute safety reserve tokens: max(floor, ceil(context_window * ratio)).
+ * The floor is capped at 20% of contextWindow so small-window models
+ * (e.g. 16K/32K) are not starved of usable capacity.
  */
 export function computeSafetyReserveTokens(
   contextWindow: number,
   ratio: number,
 ): number {
-  return Math.max(16_384, Math.ceil(contextWindow * ratio));
+  if (contextWindow <= 0) return 0;
+  const floor = Math.min(16_384, Math.ceil(contextWindow * 0.2));
+  return Math.max(floor, Math.ceil(contextWindow * ratio));
 }
 
 /**
@@ -131,7 +135,10 @@ export function deriveEffectiveBudget(
   return { contextWindow: w, source: savedSource, safetyReserveTokens: safety, availableInputTokens: avail, budgetValid: v.valid, budgetErrors: v.errors };
 }
 
-/** Validate entire budget: capacity must be positive */
+/** Validate entire budget.
+ *  When contextWindow is unknown (<= 0), budget arithmetic is skipped —
+ *  saving must not be blocked by a missing catalog entry.
+ */
 export function isBudgetValid(
   contextWindow: number,
   maxOutputTokens: number,
@@ -141,9 +148,6 @@ export function isBudgetValid(
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!isContextWindowPositive(contextWindow)) {
-    errors.push("context_window must be positive");
-  }
   if (!isPositiveSafeInteger(maxOutputTokens)) {
     errors.push("max_tokens must be a positive integer");
   }
@@ -154,7 +158,8 @@ export function isBudgetValid(
     errors.push("compaction ratios must satisfy 0 < target < trigger < 1");
   }
 
-  if (errors.length === 0) {
+  // Only run capacity check when context window is known
+  if (errors.length === 0 && isContextWindowPositive(contextWindow)) {
     const reserve = computeSafetyReserveTokens(contextWindow, safetyReserveRatio);
     const capacity = computeInputCapacity(contextWindow, maxOutputTokens, reserve);
     if (capacity <= 0) {

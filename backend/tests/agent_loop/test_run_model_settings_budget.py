@@ -14,14 +14,16 @@ from app.runtime.manager import RunExecution
 
 
 @pytest.mark.asyncio
-async def test_executor_rejects_unresolved_budget_before_agent_construction(
+async def test_executor_rejects_invalid_budget_before_agent_construction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # Given
+    # Given — invalid compaction ratios trigger budget resolution failure
     configuration = ModelConfiguration(
         base_url="https://provider.example/v1",
-        model_name="unregistered-current-model",
+        model_name="qwen-max",
+        compaction_target_ratio=0.90,
+        compaction_trigger_ratio=0.80,
     )
     repository = Mock()
     executor = runner_module.AgentRunExecutor(repository, compactor=Mock())
@@ -35,15 +37,15 @@ async def test_executor_rejects_unresolved_budget_before_agent_construction(
     run_streamed = Mock()
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
     execution = RunExecution(
-        task_id="task_unresolved_budget",
-        run_id="run_unresolved_budget",
-        request_id="req_unresolved_budget",
+        task_id="task_invalid_budget",
+        run_id="run_invalid_budget",
+        request_id="req_invalid_budget",
         input="blocked before SDK",
-        context=RunContext(task_id="task_unresolved_budget", base_dir=tmp_path),
+        context=RunContext(task_id="task_invalid_budget", base_dir=tmp_path),
     )
 
     # When / Then
-    with pytest.raises(ContextBudgetConfigurationError, match="context window"):
+    with pytest.raises(ContextBudgetConfigurationError, match="target ratio"):
         await executor(execution)
 
     assert build.call_count == 0

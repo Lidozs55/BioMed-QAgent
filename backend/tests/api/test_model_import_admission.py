@@ -1,4 +1,4 @@
-"""Import admission regression coverage for incomplete model budgets."""
+"""Import admission regression coverage for model budgets."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from app.runtime.manager import RunExecution
 
 
 @pytest.mark.asyncio
-async def test_import_rejects_incomplete_model_before_creating_task_and_cleans_staging(
+async def test_import_admits_unknown_model_via_inferred_window(
     tmp_path: Path,
 ) -> None:
-    # Given
+    # Given — unknown model gets inferred 128K window, so import is admitted
     settings_path = tmp_path / "settings" / "model.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -38,20 +38,12 @@ async def test_import_rejects_incomplete_model_before_creating_task_and_cleans_s
         # When
         response = await client.post(
             "/api/v1/import/tasks",
-            data={"request_id": "req-incomplete-import", "input": "blocked import"},
+            data={"request_id": "req-inferred-import", "input": "admitted import"},
             files=[("files", ("patients.csv", b"id\n1\n", "text/csv"))],
         )
+        await manager.wait_until_idle()
 
-        # Then
-        assert response.status_code == 422
-        assert response.json() == {
-            "detail": "a positive context window is required",
-        }
-        assert [
-            path
-            for path in repository.tasks_dir.iterdir()
-            if path.is_dir() and path.name != ".uploads"
-        ] == []
-        assert await repository.find_request("req-incomplete-import") is None
-        assert not (repository.tasks_dir / ".uploads").exists()
-        assert executions == []
+        # Then — unknown model is admitted via inferred context window
+        assert response.status_code == 202
+        assert await repository.find_request("req-inferred-import") is not None
+        assert len(executions) == 1

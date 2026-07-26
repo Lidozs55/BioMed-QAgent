@@ -96,8 +96,11 @@ def resolve_context_budget(
     _validate_ratios(settings)
     context_window = _resolve_context_window(settings)
     provider_url = str(settings.base_url)
+    # Cap the reserve floor at 20% of context_window so small-window
+    # models (16K/32K) are not starved of usable input capacity.
+    reserve_floor = min(MINIMUM_SAFETY_RESERVE_TOKENS, ceil(context_window * 0.2))
     safety_reserve_tokens = max(
-        MINIMUM_SAFETY_RESERVE_TOKENS,
+        reserve_floor,
         ceil(context_window * settings.safety_reserve_ratio),
     )
     input_capacity = context_window - settings.max_tokens - safety_reserve_tokens
@@ -124,16 +127,52 @@ def resolve_context_budget(
 
 
 def _resolve_context_window(settings: BudgetSettings) -> int:
-    """Prefer a positive explicit override, otherwise preserve the catalog value."""
+    """Prefer a positive explicit override, then catalog, then name-based inference."""
 
     if settings.context_window is not None:
         return settings.context_window
     from .catalog import get_known_model
 
     model = get_known_model(settings.model_name)
-    if model is None:
-        raise ContextBudgetConfigurationError("a positive context window is required")
-    return model.context_window
+    if model is not None:
+        return model.context_window
+    # Fallback: infer from model name so unknown models still get a usable budget.
+    return _infer_context_window_from_name(settings.model_name)
+
+
+def _infer_context_window_from_name(model_id: str) -> int:
+    """Heuristic context-window inference for models absent from the catalog."""
+
+    ml = model_id.lower()
+    if ml.startswith("deepseek"):
+        return 1_000_000
+    if "qwen" in ml:
+        return 128_000
+    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
+        return 128_000
+    if ml.startswith("gpt-3.5") or ml.startswith("gpt3.5"):
+        return 16_384
+    if ml.startswith("claude"):
+        return 200_000
+    if ml.startswith("gemini"):
+        return 1_000_000
+    if ml.startswith("moonshot") or ml.startswith("kimi"):
+        return 128_000
+    if ml.startswith("glm") or ml.startswith("chatglm"):
+        return 128_000
+    if ml.startswith("baichuan"):
+        return 128_000
+    if ml.startswith("yi-") or ml.startswith("01-ai"):
+        return 128_000
+    if ml.startswith("minimax"):
+        return 1_000_000
+    if ml.startswith("mistral") or ml.startswith("mixtral"):
+        return 32_768
+    if ml.startswith("llama"):
+        return 128_000
+    if ml.startswith("command") or ml.startswith("cohere"):
+        return 256_000
+    return 128_000
 
 
 def _validate_ratios(settings: BudgetSettings) -> None:

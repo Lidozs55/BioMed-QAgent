@@ -90,15 +90,15 @@ async def test_explicit_null_context_window_clears_to_catalog_source(
     assert '"context_window"' not in persisted
 
 
-# ── Scenario 10: Explicit null for unknown model → rejected ────────────
+# ── Scenario 10: Explicit null for unknown model → inferred window ─────
 
 
 @pytest.mark.asyncio
-async def test_explicit_null_context_window_for_unknown_model_rejected(
+async def test_explicit_null_context_window_for_unknown_model_uses_inference(
     tmp_path: Path,
 ) -> None:
-    """Scenario 10: Clearing context_window for an unknown model is
-    rejected (no catalog to fall back to) — disk and memory unchanged."""
+    """Scenario 10: Clearing context_window for an unknown model succeeds —
+    the model gets a name-based inferred window (128K default)."""
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
@@ -112,20 +112,18 @@ async def test_explicit_null_context_window_for_unknown_model_rejected(
                 "max_tokens": 4096,
             },
         )
-        settings_path = tmp_path / "settings" / "model.json"
-        original_bytes = settings_path.read_bytes()
-        snapshot_before = await client.get("/api/v1/settings")
 
-        # Switch to unknown model AND attempt to clear context_window
+        # Switch to unknown model AND clear context_window
         response = await client.put(
             "/api/v1/settings",
             json={"model_name": "compatible-unknown", "context_window": None},
         )
 
-        assert response.status_code == 422
-        assert settings_path.read_bytes() == original_bytes
-        after = await client.get("/api/v1/settings")
-        assert after.json() == snapshot_before.json()
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model_name"] == "compatible-unknown"
+        assert data["context_window"] == 128_000
+        assert data["run_ready"] is True
 
 
 # ── Scenario 11: Cleared override survives reload ──────────────────────
@@ -176,12 +174,12 @@ def test_clears_idempotent_on_already_cleared_field(tmp_path: Path) -> None:
     assert store.snapshot().max_tokens == 2048
 
 
-# ── Scenario 13: Unknown model with clears-rejected preserves disk ─────
+# ── Scenario 13: Unknown model with clears succeeds via inference ──────
 
 
-def test_clears_for_unknown_model_preserves_disk(tmp_path: Path) -> None:
-    """Scenario 13: When clears + unknown model is rejected by budget
-    validation, the store file remains byte-identical."""
+def test_clears_for_unknown_model_succeeds_with_inferred_window(tmp_path: Path) -> None:
+    """Scenario 13: When clears + unknown model is used, the store succeeds
+    because the model gets a name-based inferred context window."""
     from app.model_settings import ModelSettingsStore
 
     settings_path = tmp_path / "settings" / "model.json"
@@ -191,10 +189,8 @@ def test_clears_for_unknown_model_preserves_disk(tmp_path: Path) -> None:
     )
     store = ModelSettingsStore(settings_path, defaults=defaults)
     store.update({"max_tokens": 4096})
-    original_bytes = settings_path.read_bytes()
 
-    with pytest.raises(ValueError, match="a positive context window is required"):
-        store.update({"model_name": "compatible-unknown"}, clears={"context_window"})
+    store.update({"model_name": "compatible-unknown"}, clears={"context_window"})
 
-    assert settings_path.read_bytes() == original_bytes
-    assert store.snapshot().model_name == "qwen-max"
+    assert store.snapshot().model_name == "compatible-unknown"
+    assert store.snapshot().context_window is None

@@ -93,9 +93,12 @@ async def test_invalid_readiness_preserves_existing_request_and_blocks_continuat
         )
         await manager.wait_until_idle()
         before = await repository.list_events(initial.task_id)
+        # Use invalid compaction ratios to create an unresolvable budget
         application.state.model_settings_store._current = ModelConfiguration(
             base_url="https://provider.example/v1",
-            model_name="unregistered-current-model",
+            model_name="qwen-max",
+            compaction_target_ratio=0.90,
+            compaction_trigger_ratio=0.80,
         )
 
         # When
@@ -112,9 +115,7 @@ async def test_invalid_readiness_preserves_existing_request_and_blocks_continuat
         assert retry.status_code == 202
         assert retry.json() == initial.model_dump(mode="json")
         assert rejected.status_code == 422
-        assert rejected.json() == {
-            "detail": "a positive context window is required",
-        }
+        assert "target ratio must be below trigger ratio" in rejected.json()["detail"]
         after = await repository.get_snapshot(initial.task_id)
         assert after is not None
         assert [run.run_id for run in after.runs] == [initial.run_id]
@@ -124,10 +125,10 @@ async def test_invalid_readiness_preserves_existing_request_and_blocks_continuat
 
 
 @pytest.mark.asyncio
-async def test_incomplete_settings_reject_model_backed_task_and_allow_fixture(
+async def test_unknown_model_settings_admit_model_backed_task_via_inference(
     tmp_path: Path,
 ) -> None:
-    # Given
+    # Given — unknown model gets inferred 128K window, so tasks are admitted
     settings_path = tmp_path / "settings" / "model.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -144,38 +145,15 @@ async def test_incomplete_settings_reject_model_backed_task_and_allow_fixture(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
     ) as client:
         manager = application.state.task_manager
-        repository = application.state.task_repository
         manager.run_executor = record_execution
 
         # When
-        rejected = await client.post(
+        accepted = await client.post(
             "/api/v1/tasks",
-            json={"request_id": "req_incomplete_agent", "input": "blocked agent"},
-        )
-
-        # Then
-        assert rejected.status_code == 422
-        assert rejected.json() == {
-            "detail": "a positive context window is required",
-        }
-        page = await repository.list_tasks()
-        assert page.active_items == page.items == []
-        assert await repository.find_request("req_incomplete_agent") is None
-        assert [path for path in repository.tasks_dir.iterdir() if path.is_dir()] == []
-        assert executions == []
-
-        # When
-        fixture = await client.post(
-            "/api/v1/tasks",
-            json={
-                "request_id": "req_incomplete_fixture",
-                "input": "allowed fixture",
-                "databases": ["pubmed", "geo"],
-                "mode": "fixture",
-            },
+            json={"request_id": "req_inferred_agent", "input": "admitted agent"},
         )
         await manager.wait_until_idle()
 
-        # Then
-        assert fixture.status_code == 202
+        # Then — unknown model is admitted via inferred context window
+        assert accepted.status_code == 202
         assert len(executions) == 1

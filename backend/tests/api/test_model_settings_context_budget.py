@@ -39,10 +39,10 @@ async def test_get_settings_returns_resolved_context_budget(tmp_path: Path) -> N
     assert data["context_window_source"] == "catalog"
     assert data["max_tokens"] == 4096
     assert data["safety_reserve_ratio"] == 0.05
-    assert data["safety_reserve_tokens"] == 16_384
+    assert data["safety_reserve_tokens"] == 6_554
     assert data["compaction_trigger_ratio"] == 0.85
     assert data["compaction_target_ratio"] == 0.60
-    assert data["available_input_tokens"] == 12_288
+    assert data["available_input_tokens"] == 22_118
 
 
 # ── Scenario 2: Known model resolves catalog window ─────────────────────
@@ -106,15 +106,15 @@ async def test_positive_user_window_override_persists_as_user_source(
     assert '"context_window": 65536' in persisted
 
 
-# ── Scenario 4 (save half): Unknown model rejected ────────────────────
+# ── Scenario 4: Unknown model saved with inferred window ─────────────────
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_rejected_without_positive_window(
+async def test_unknown_model_saved_with_inferred_window(
     tmp_path: Path,
 ) -> None:
-    """Scenario 4 (save half): Unknown model cannot be saved as active
-    without a positive explicit window."""
+    """Scenario 4: Unknown model is saved successfully with a name-based
+    inferred context window (default 128K for unrecognized names)."""
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
@@ -128,19 +128,17 @@ async def test_unknown_model_rejected_without_positive_window(
                 "max_tokens": 4096,
             },
         )
-        settings_path = tmp_path / "settings" / "model.json"
-        original_bytes = settings_path.read_bytes()
 
         response = await client.put(
             "/api/v1/settings",
             json={"model_name": "compatible-unknown"},
         )
 
-        assert response.status_code == 422
-        assert settings_path.read_bytes() == original_bytes
-        # In-memory snapshot must still expose the prior model
-        snapshot = await client.get("/api/v1/settings")
-        assert snapshot.json()["model_name"] == "qwen-max"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model_name"] == "compatible-unknown"
+        assert data["context_window"] == 128_000
+        assert data["run_ready"] is True
 
 
 # ── Scenario 5: Partial update validates merged candidate ───────────────
@@ -173,7 +171,7 @@ async def test_partial_update_validates_merged_candidate(tmp_path: Path) -> None
     data = response.json()
     assert data["max_tokens"] == 2048
     assert data["context_window"] == 32_768
-    assert data["available_input_tokens"] == 32_768 - 2048 - 16_384
+    assert data["available_input_tokens"] == 32_768 - 2048 - 6_554
 
 
 # ── Scenario 6: Invalid inputs → 422, no state change ───────────────────
@@ -259,4 +257,4 @@ def test_runtime_snapshot_matches_active_get_settings(tmp_path: Path) -> None:
     assert run_settings.context_budget == budget
     assert run_settings.context_budget.context_window == 32_768
     assert run_settings.context_budget.max_output_tokens == 4096
-    assert budget.input_capacity == 32_768 - 4096 - max(16_384, math.ceil(0.05 * 32_768))
+    assert budget.input_capacity == 32_768 - 4096 - min(16_384, math.ceil(0.2 * 32_768))
