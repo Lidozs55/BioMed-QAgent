@@ -375,6 +375,14 @@ class RunExecution:
         self.context.cancellation_requested.set()
         return True
 
+    def request_compaction(self) -> bool:
+        """Signal the agent loop to compact at its next preflight check."""
+
+        if self._completion_sealed:
+            return False
+        self.context.compaction_requested.set()
+        return True
+
     def seal_completion(self) -> None:
         """Choose completion as the winner over all later cancel requests."""
 
@@ -992,6 +1000,18 @@ class TaskManager:
         if snapshot is None:
             raise LookupError(task_id)
         return snapshot
+
+    async def request_compaction(self, task_id: str, run_id: str) -> None:
+        """Signal a running execution to compact at its next preflight check.
+
+        Raises ``LookupError`` when no live execution matches the given
+        task/run pair.
+        """
+
+        live_execution = self._running.get((task_id, run_id))
+        if live_execution is None:
+            raise LookupError(f"no active execution for {task_id}/{run_id}")
+        live_execution.request_compaction()
 
     async def resume_run(
         self,

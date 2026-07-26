@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentComposer } from "@/components/AgentComposer";
+import { ContextUsageBar } from "@/components/ContextUsageBar";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { TaskStatusIcon } from "@/components/taskStatus";
@@ -371,16 +372,25 @@ export function ChatPanel({
       )}
 
       {activeTask !== undefined && (
-        <Marker variant="border" className="shrink-0 px-5 py-2" role="status">
-          <MarkerIcon>
-            <TaskStatusIcon status={activeTask.summary.status} />
-          </MarkerIcon>
-          <MarkerContent>
-            {activeItem !== undefined && activeTask.summary.status === "running"
-              ? formatActiveItemStatus(activeItem)
-              : STATUS_LABELS[activeTask.summary.status]}
-          </MarkerContent>
-        </Marker>
+        <div className="flex shrink-0 flex-col">
+          <Marker variant="border" className="px-5 py-2" role="status">
+            <MarkerIcon>
+              <TaskStatusIcon status={activeTask.summary.status} />
+            </MarkerIcon>
+            <MarkerContent>
+              {activeItem !== undefined && activeTask.summary.status === "running"
+                ? formatActiveItemStatus(activeItem)
+                : STATUS_LABELS[activeTask.summary.status]}
+            </MarkerContent>
+          </Marker>
+          <div className="border-b px-5 py-1">
+            <ContextUsageBar
+              usedTokens={activeTask.contextTokensUsed ?? 0}
+              totalTokens={activeTask.contextWindow ?? 0}
+              compacting={activeTask.summary.status === "running" && activeTask.compacting === true}
+            />
+          </div>
+        </div>
       )}
 
       <MessageScrollerProvider autoScroll>
