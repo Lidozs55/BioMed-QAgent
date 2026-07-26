@@ -216,6 +216,50 @@ async def list_models(
     return {"models": models, "total_count": len(models), "api_source": base_url}
 
 
+def _infer_context_window(model_id: str) -> int:
+    ml = model_id.lower()
+    if ml.startswith("deepseek"):
+        return 1_000_000
+    if "qwen" in ml:
+        return 128_000
+    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
+        return 128_000
+    if ml.startswith("gpt-3.5") or ml.startswith("gpt3.5"):
+        return 16_384
+    if ml.startswith("claude"):
+        return 200_000
+    if ml.startswith("gemini"):
+        return 1_000_000
+    if ml.startswith("moonshot") or ml.startswith("kimi"):
+        return 128_000
+    if ml.startswith("glm") or ml.startswith("chatglm"):
+        return 128_000
+    if ml.startswith("baichuan"):
+        return 128_000
+    if ml.startswith("yi-") or ml.startswith("01-ai"):
+        return 128_000
+    if ml.startswith("minimax"):
+        return 1_000_000
+    if ml.startswith("mistral") or ml.startswith("mixtral"):
+        return 32_768
+    if ml.startswith("llama"):
+        return 128_000
+    if ml.startswith("command") or ml.startswith("cohere"):
+        return 256_000
+    return 128_000
+
+
+def _infer_suggested_max_tokens(model_id: str) -> int:
+    ml = model_id.lower()
+    if ml.startswith("deepseek"):
+        return 8_192
+    if ml.startswith("qwq") or ml.startswith("qwen"):
+        return 8_192
+    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
+        return 4_096
+    return 4_096
+
+
 def _model_preview_item(
     model_id: str, current: ModelConfiguration
 ) -> dict[str, object]:
@@ -237,8 +281,8 @@ def _model_preview_item(
         "id": model_id,
         "name": model_id,
         "description": "API discovered model",
-        "context_window": 0,
-        "suggested_max_tokens": 0,
+        "context_window": _infer_context_window(model_id),
+        "suggested_max_tokens": _infer_suggested_max_tokens(model_id),
         "capabilities": {"text": True, "image": False, "video": False, "audio": False},
         "recommended": model_id == current.model_name,
         "api_available": True,
