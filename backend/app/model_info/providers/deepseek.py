@@ -1,4 +1,4 @@
-﻿"""DeepSeek model data provider."""
+"""DeepSeek model data provider."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""Model information warehouse — aggregate model metadata from every provider.
+"""Model information warehouse — aggregate model metadata from every provider.
 
 This module provides a centralized, modular data warehouse for model
 information.  It is separated from ``model_config`` which holds the

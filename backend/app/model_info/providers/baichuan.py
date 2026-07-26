@@ -1,4 +1,4 @@
-﻿"""Baichuan model data provider."""
+"""Baichuan model data provider."""
 
 from __future__ import annotations
 

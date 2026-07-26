@@ -1,4 +1,4 @@
-﻿"""ModelInfoRepository — data warehouse for comprehensive model metadata.
+"""ModelInfoRepository — data warehouse for comprehensive model metadata.
 
 This module provides a singleton repository that aggregates model
 information from all provider-specific modules and exposes rich

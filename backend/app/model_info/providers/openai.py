@@ -1,4 +1,4 @@
-﻿"""OpenAI model data provider."""
+"""OpenAI model data provider."""
 
 from __future__ import annotations
 

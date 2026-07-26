@@ -1,4 +1,4 @@
-﻿"""FastAPI application and runtime lifespan ownership."""
+"""FastAPI application and runtime lifespan ownership."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.agent_loop.runner import ModeDispatchRunExecutor
+from app.api.model_info_router import router as model_info_router
 from app.api.routes import router as routes_router
 from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
@@ -190,6 +191,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
     application.include_router(routes_router)
     application.include_router(skills_router)
     application.include_router(settings_router)
+    application.include_router(model_info_router)
     application.include_router(ws_router)
     application.add_api_route("/api/v1/health", health, methods=["GET"])
     return application
