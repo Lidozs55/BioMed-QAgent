@@ -43,7 +43,7 @@ export interface ModelConnectionSectionProps {
   apiKeyConfigured: boolean;
 
   contextWindow: number;
-  source: "catalog" | "user" | "unknown";
+  source: "catalog" | "user" | "inferred" | "unknown";
   safetyReserveTokens: number;
   availableInputTokens: number;
   budgetRatios: ContextBudgetValues;

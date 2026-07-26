@@ -91,7 +91,7 @@ export interface EffectiveBudget {
  */
 export function deriveEffectiveBudget(
   savedWindow: number,
-  savedSource: "catalog" | "user" | "unknown",
+  savedSource: "catalog" | "user" | "inferred" | "unknown",
   catalogWindow: number,
   selectionKnown: boolean, // true when a model was actually selected (catalog or API-only)
   draftMaxTokens: number,

@@ -45,7 +45,7 @@ class PublicSettings(BaseModel):
     max_tokens: int
     advanced: dict[str, Any]
     context_window: int
-    context_window_source: Literal["catalog", "user", "unknown"]
+    context_window_source: Literal["catalog", "user", "inferred", "unknown"]
     safety_reserve_ratio: float
     safety_reserve_tokens: int
     compaction_trigger_ratio: float
@@ -116,9 +116,12 @@ def _public(value: ModelConfiguration) -> PublicSettings:
             run_ready=False,
             run_block_reason=error.reason,
         )
-    source: Literal["catalog", "user"] = (
-        "user" if value.context_window is not None else "catalog"
-    )
+    if value.context_window is not None:
+        source: Literal["catalog", "user", "inferred", "unknown"] = "user"
+    elif get_known_model(value.model_name) is not None:
+        source = "catalog"
+    else:
+        source = "inferred"
     return PublicSettings(
         base_url=str(value.base_url).rstrip("/"),
         api_key=mask_api_key(value.api_key),

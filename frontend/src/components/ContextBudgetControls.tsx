@@ -20,7 +20,7 @@ export interface ContextBudgetValues {
 export interface ContextBudgetControlsProps extends ContextBudgetValues {
   showAdvanced: boolean;
   /** Effective budget source — used to determine if blank override is "required" (API-only) or "use catalog" (known). */
-  source: "catalog" | "user" | "unknown";
+  source: "catalog" | "user" | "inferred" | "unknown";
   onChange: (values: ContextBudgetValues) => void;
 }
 

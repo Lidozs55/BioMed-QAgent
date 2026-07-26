@@ -3,8 +3,8 @@
 /* ------------------------------------------------------------------ */
 
 /* ---- Source types — server vs client ---- */
-/** Server-facing source for catalog, explicit-user, or unavailable unknown capacity. */
-export type ServerSource = "catalog" | "user" | "unknown";
+/** Server-facing source for catalog, explicit-user, name-inferred, or unavailable unknown capacity. */
+export type ServerSource = "catalog" | "user" | "inferred" | "unknown";
 /** Client-local draft/effective source mirrors the authoritative server source. */
 export type DraftSource = ServerSource;
 

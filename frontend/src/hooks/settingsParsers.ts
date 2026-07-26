@@ -29,11 +29,12 @@ function assertObject(v: unknown, path: string): Record<string, unknown> {
 }
 
 /** Settings response source — unavailable capacity is explicitly "unknown". */
-function assertSettingsSource(v: unknown, path: string): "catalog" | "user" | "unknown" {
+function assertSettingsSource(v: unknown, path: string): "catalog" | "user" | "inferred" | "unknown" {
   if (v === "catalog") return "catalog";
   if (v === "user") return "user";
+  if (v === "inferred") return "inferred";
   if (v === "unknown") return "unknown";
-  throw new APIError(502, `Expected catalog|user|unknown at ${path}, got ${String(v)}`);
+  throw new APIError(502, `Expected catalog|user|inferred|unknown at ${path}, got ${String(v)}`);
 }
 
 /** Model capability source — backend emits "catalog" or "api". */
