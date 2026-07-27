@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -70,11 +69,13 @@ export function ContextWindowSlider({
   source,
   onChange,
 }: ContextWindowSliderProps) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+
   // Find which preset index the current value corresponds to
   const committedIndex = useMemo(() => {
     const idx = PRESETS.findIndex((p) => p.value === value);
     if (idx >= 0) return idx;
-    // Snap to nearest preset by distance
     let nearest = 0;
     let minDist = Infinity;
     for (let i = 0; i < PRESETS.length; i++) {
@@ -84,30 +85,60 @@ export function ContextWindowSlider({
     return nearest;
   }, [value]);
 
-  // Local index for immediate thumb feedback during interaction
   const [localIndex, setLocalIndex] = useState(committedIndex);
 
-  // Sync local index when committed value changes externally
   useEffect(() => {
     setLocalIndex(committedIndex);
   }, [committedIndex]);
 
-  // On any slider interaction (click track or drag thumb): snap + commit
-  const handleChange = useCallback(
-    (newVal: number[]) => {
-      const idx = Math.round(newVal[0]);
-      setLocalIndex(idx);
-      if (idx >= 0 && idx < PRESETS.length) {
-        const selected = PRESETS[idx].value;
-        if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
-          onChange(maxCatalogWindow);
-        } else {
-          onChange(selected);
-        }
+  // Commit a preset index
+  const commitIndex = useCallback(
+    (idx: number) => {
+      const clamped = Math.max(0, Math.min(PRESETS.length - 1, idx));
+      setLocalIndex(clamped);
+      const selected = PRESETS[clamped].value;
+      if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
+        onChange(maxCatalogWindow);
+      } else {
+        onChange(selected);
       }
     },
     [maxCatalogWindow, onChange],
   );
+
+  // Calculate nearest index from pointer X position on track
+  const indexFromPointer = useCallback((clientX: number): number => {
+    const track = trackRef.current;
+    if (!track) return localIndex;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return Math.round(ratio * (PRESETS.length - 1));
+  }, [localIndex]);
+
+  // Pointer down on track: snap immediately + start drag
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      draggingRef.current = true;
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      commitIndex(indexFromPointer(e.clientX));
+    },
+    [commitIndex, indexFromPointer],
+  );
+
+  // Pointer move while dragging
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!draggingRef.current) return;
+      commitIndex(indexFromPointer(e.clientX));
+    },
+    [commitIndex, indexFromPointer],
+  );
+
+  // Pointer up: end drag
+  const handlePointerUp = useCallback(() => {
+    draggingRef.current = false;
+  }, []);
 
   // Display: show preset label when value matches, otherwise format
   const displayValue = useMemo(() => {
@@ -116,6 +147,9 @@ export function ContextWindowSlider({
     if (value > 0) return formatTokens(value);
     return PRESETS[localIndex]?.label ?? "?";
   }, [value, localIndex]);
+
+  // Thumb position as percentage
+  const thumbPct = (localIndex / (PRESETS.length - 1)) * 100;
 
   return (
     <Field>
@@ -138,27 +172,35 @@ export function ContextWindowSlider({
         </div>
       </div>
       <div className="flex flex-col gap-1.5 pt-2">
-        <Slider
-          value={[localIndex]}
-          min={0}
-          max={PRESETS.length - 1}
-          step={1}
-          onValueChange={handleChange}
-          onValueCommitted={handleChange}
-        />
+        {/* Custom track with pointer events */}
+        <div
+          ref={trackRef}
+          className="relative h-6 cursor-pointer touch-none select-none"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
+          {/* Track background */}
+          <div className="absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-muted" />
+          {/* Filled portion */}
+          <div
+            className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-primary transition-[width] duration-100"
+            style={{ width: `${thumbPct}%` }}
+          />
+          {/* Thumb */}
+          <div
+            className="absolute top-1/2 size-4.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-white shadow-sm transition-[left] duration-100 active:cursor-grabbing"
+            style={{ left: `${thumbPct}%` }}
+          />
+        </div>
+        {/* Preset labels */}
         <div className="flex justify-between px-0.5">
           {PRESETS.map((p, i) => (
             <button
               key={p.value}
               type="button"
-              onClick={() => {
-                setLocalIndex(i);
-                if (maxCatalogWindow > 0 && p.value > maxCatalogWindow) {
-                  onChange(maxCatalogWindow);
-                } else {
-                  onChange(p.value);
-                }
-              }}
+              onClick={() => commitIndex(i)}
               className={cn(
                 "rounded px-1 py-0.5 text-[10px] transition-all hover:text-foreground",
                 localIndex === i
