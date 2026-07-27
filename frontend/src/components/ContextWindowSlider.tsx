@@ -70,13 +70,16 @@ export function ContextWindowSlider({
   source,
   onChange,
 }: ContextWindowSliderProps) {
-  // Derive the committed index from the current value
+  // Find which preset index the current value corresponds to
   const committedIndex = useMemo(() => {
     const idx = PRESETS.findIndex((p) => p.value === value);
     if (idx >= 0) return idx;
+    // Snap to nearest preset by distance
     let nearest = 0;
+    let minDist = Infinity;
     for (let i = 0; i < PRESETS.length; i++) {
-      if (PRESETS[i].value <= value) nearest = i;
+      const dist = Math.abs(PRESETS[i].value - value);
+      if (dist < minDist) { minDist = dist; nearest = i; }
     }
     return nearest;
   }, [value]);
@@ -84,15 +87,15 @@ export function ContextWindowSlider({
   // Local index for immediate thumb feedback during interaction
   const [localIndex, setLocalIndex] = useState(committedIndex);
 
-  // Sync local index when committed value changes externally (API response, "更多设置", model switch)
+  // Sync local index when committed value changes externally
   useEffect(() => {
     setLocalIndex(committedIndex);
   }, [committedIndex]);
 
-  // On any slider interaction (click or drag): update thumb + commit immediately
+  // On any slider interaction (click track or drag thumb): snap + commit
   const handleChange = useCallback(
     (newVal: number[]) => {
-      const idx = newVal[0];
+      const idx = Math.round(newVal[0]);
       setLocalIndex(idx);
       if (idx >= 0 && idx < PRESETS.length) {
         const selected = PRESETS[idx].value;
@@ -106,17 +109,20 @@ export function ContextWindowSlider({
     [maxCatalogWindow, onChange],
   );
 
-  // Display: always show a meaningful value, never blank
-  const displayValue = value > 0
-    ? formatTokens(value)
-    : PRESETS[localIndex]?.label ?? "?";
+  // Display: show preset label when value matches, otherwise format
+  const displayValue = useMemo(() => {
+    const match = PRESETS.find((p) => p.value === value);
+    if (match) return match.label;
+    if (value > 0) return formatTokens(value);
+    return PRESETS[localIndex]?.label ?? "?";
+  }, [value, localIndex]);
 
   return (
     <Field>
       <div className="flex items-center justify-between">
         <FieldLabel>上下文窗口</FieldLabel>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+          <span className="font-mono text-xs font-medium text-foreground tabular-nums">
             {displayValue}
           </span>
           {source === "inferred" && (
@@ -131,7 +137,7 @@ export function ContextWindowSlider({
           />
         </div>
       </div>
-      <div className="flex flex-col gap-1.5 pt-1">
+      <div className="flex flex-col gap-1.5 pt-2">
         <Slider
           value={[localIndex]}
           min={0}
@@ -140,7 +146,7 @@ export function ContextWindowSlider({
           onValueChange={handleChange}
           onValueCommitted={handleChange}
         />
-        <div className="flex justify-between">
+        <div className="flex justify-between px-0.5">
           {PRESETS.map((p, i) => (
             <button
               key={p.value}
@@ -154,9 +160,9 @@ export function ContextWindowSlider({
                 }
               }}
               className={cn(
-                "text-[10px] transition-colors hover:text-foreground",
+                "rounded px-1 py-0.5 text-[10px] transition-all hover:text-foreground",
                 localIndex === i
-                  ? "font-medium text-primary"
+                  ? "bg-primary/10 font-semibold text-primary"
                   : "text-muted-foreground",
               )}
             >
