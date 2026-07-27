@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
 
 import { Button } from "@/components/ui/button";
@@ -70,38 +70,28 @@ export function ContextWindowSlider({
   source,
   onChange,
 }: ContextWindowSliderProps) {
-  // Find closest preset index for the slider position
-  const presetIndex = useMemo(() => {
-    const idx = PRESETS.findIndex((p) => p.value === value);
-    return idx >= 0 ? idx : -1;
-  }, [value]);
-
   // Derive the committed index from the current value
   const committedIndex = useMemo(() => {
-    if (presetIndex >= 0) return presetIndex;
+    const idx = PRESETS.findIndex((p) => p.value === value);
+    if (idx >= 0) return idx;
     let nearest = 0;
     for (let i = 0; i < PRESETS.length; i++) {
       if (PRESETS[i].value <= value) nearest = i;
     }
     return nearest;
-  }, [presetIndex, value]);
+  }, [value]);
 
-  // Local state tracks the thumb during drag; synced back when value changes externally
+  // Local index for immediate thumb feedback during interaction
   const [localIndex, setLocalIndex] = useState(committedIndex);
-  const [dragging, setDragging] = useState(false);
 
-  // Sync local state when the committed value changes (e.g. from "更多设置" or API response)
-  const prevCommitted = useMemo(() => committedIndex, [committedIndex]);
-  if (!dragging && localIndex !== prevCommitted) {
-    setLocalIndex(prevCommitted);
-  }
+  // Sync local index when committed value changes externally (API response, "更多设置", model switch)
+  useEffect(() => {
+    setLocalIndex(committedIndex);
+  }, [committedIndex]);
 
-  const displayIndex = dragging ? localIndex : committedIndex;
-
-  // On any slider interaction (click or drag): commit immediately
-  const handleDrag = useCallback(
+  // On any slider interaction (click or drag): update thumb + commit immediately
+  const handleChange = useCallback(
     (newVal: number[]) => {
-      setDragging(true);
       const idx = newVal[0];
       setLocalIndex(idx);
       if (idx >= 0 && idx < PRESETS.length) {
@@ -116,22 +106,10 @@ export function ContextWindowSlider({
     [maxCatalogWindow, onChange],
   );
 
-  // On release: finalize drag state
-  const handleCommit = useCallback(
-    (newVal: number[]) => {
-      setDragging(false);
-      const idx = newVal[0];
-      if (idx >= 0 && idx < PRESETS.length) {
-        const selected = PRESETS[idx].value;
-        if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
-          onChange(maxCatalogWindow);
-        } else {
-          onChange(selected);
-        }
-      }
-    },
-    [maxCatalogWindow, onChange],
-  );
+  // Display: always show a meaningful value, never blank
+  const displayValue = value > 0
+    ? formatTokens(value)
+    : PRESETS[localIndex]?.label ?? "?";
 
   return (
     <Field>
@@ -139,9 +117,7 @@ export function ContextWindowSlider({
         <FieldLabel>上下文窗口</FieldLabel>
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            {dragging
-              ? PRESETS[localIndex]?.label ?? "?"
-              : value > 0 ? formatTokens(value) : "?"}
+            {displayValue}
           </span>
           {source === "inferred" && (
             <span className="rounded border border-dashed border-muted-foreground/40 px-1 py-0.5 text-[10px] text-muted-foreground">
@@ -157,12 +133,12 @@ export function ContextWindowSlider({
       </div>
       <div className="flex flex-col gap-1.5 pt-1">
         <Slider
-          value={[displayIndex]}
+          value={[localIndex]}
           min={0}
           max={PRESETS.length - 1}
           step={1}
-          onValueChange={handleDrag}
-          onValueCommitted={handleCommit}
+          onValueChange={handleChange}
+          onValueCommitted={handleChange}
         />
         <div className="flex justify-between">
           {PRESETS.map((p, i) => (
@@ -170,6 +146,7 @@ export function ContextWindowSlider({
               key={p.value}
               type="button"
               onClick={() => {
+                setLocalIndex(i);
                 if (maxCatalogWindow > 0 && p.value > maxCatalogWindow) {
                   onChange(maxCatalogWindow);
                 } else {
@@ -178,7 +155,7 @@ export function ContextWindowSlider({
               }}
               className={cn(
                 "text-[10px] transition-colors hover:text-foreground",
-                displayIndex === i
+                localIndex === i
                   ? "font-medium text-primary"
                   : "text-muted-foreground",
               )}
