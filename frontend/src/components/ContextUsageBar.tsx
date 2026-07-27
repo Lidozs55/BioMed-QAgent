@@ -10,7 +10,6 @@ import {
   PopoverDescription,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ProgressTrack, ProgressIndicator } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
@@ -81,12 +80,12 @@ export function ContextUsageBar({
             type="button"
             className="group flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/60"
           >
-            <ProgressTrack className="h-1.5 flex-1">
-              <ProgressIndicator
+            <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
                 className={cn("h-full rounded-full transition-all duration-500", usageColor(pct))}
                 style={{ width: `${pct}%` }}
               />
-            </ProgressTrack>
+            </div>
             <span
               className={cn(
                 "min-w-[3.5rem] text-right font-mono text-[10px] tabular-nums transition-colors",
@@ -112,12 +111,12 @@ export function ContextUsageBar({
               {pct}%
             </span>
           </div>
-          <ProgressTrack className="h-2">
-            <ProgressIndicator
+          <div className="relative h-2 overflow-hidden rounded-full bg-muted">
+            <div
               className={cn("h-full rounded-full", usageColor(pct))}
               style={{ width: `${pct}%` }}
             />
-          </ProgressTrack>
+          </div>
           {onCompact && (
             <Button
               size="sm"
