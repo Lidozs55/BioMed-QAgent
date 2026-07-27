@@ -12,10 +12,10 @@
 
 ### 1.1 清洗能力接入 Pipeline
 
-- [ ] **P0** `pipeline/stages/processing.py` 调用 `cleaning.clean_dataset`，对 `ParsedDataset` 产出 `CleaningReport`
-- [ ] **P0** 生成 `cleaning_report.csv` artifact
-- [ ] **P0** 将 `CleaningReport.anomaly_flags` 写入 `warnings.csv`
-- [ ] **P0** `validation.py` 增加 cleaning_report 完整性校验
+- [x] **P0** `pipeline/stages/processing.py` 按当前文件型 `ParsedDataset` 契约执行清洗并产出 `CleaningReportModel`
+- [x] **P0** 生成 `cleaning_report.csv` artifact
+- [x] **P0** 将 `CleaningReportModel.anomaly_flags` 写入 `warnings.csv`
+- [x] **P0** `validation.py` 增加 cleaning_report 存在性与异常计数一致性校验
 
 ### 1.2 字段对齐能力接入
 
@@ -25,7 +25,7 @@
 
 ### 1.3 清洗测试
 
-- [ ] **P0** 新增 `tests/pipeline/test_processing_cleaning.py`，验证缺失/重复/类型异常被正确标记到 warnings.csv
+- [x] **P0** 新增 `tests/pipeline/test_processing_cleaning.py`，验证缺失/重复/类型异常被正确标记到 warnings.csv
 
 ### 1.4 数据源硬门控解除
 
@@ -121,6 +121,16 @@
 
 - [ ] **P2** `web_visual_capture` 与 `extract_chart_data_vlm` 联调（集成测试：capture → VLM → CSV）
 - [ ] **P2** BrowserPool 接入 `crawler.py`（切换为 `pool.acquire_context()`）
+
+### 2.8 GEO 主产物数据恢复
+
+> 现有 live Acquisition 可能下载 tximport counts，但 Processing 将其按 series matrix
+> 解析，无法恢复样本时会生成零行占位数据。Validation Gate 已拒绝零行
+> `main_data.csv`，但真实表达数据恢复仍需修正 acquisition/processing 契约。
+
+- [ ] **P0** 保证 GEO Discovery accession、下载资产与 `dataset_id` 一致，并同时获取表达矩阵所需的权威样本元数据
+- [ ] **P0** Processing 按资产类型路由 tximport counts 解析器，产出真实表达记录而非 `geo_minimal_placeholder`
+- [ ] **P0** 新增 live fixture 回归：GEO counts + 样本元数据经 Pipeline 后 `main_data.csv` 至少包含一条表达记录
 
 ---
 
