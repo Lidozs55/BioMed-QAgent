@@ -440,6 +440,17 @@ def _validate_package(
     }
 
     checks: list[dict[str, object]] = []
+    checks.append(
+        {
+            "check_id": "main_data_nonempty",
+            "scope": "main_data",
+            "check_name": "main data contains at least one record",
+            "status": "passed" if main_rows else "failed",
+            "checked_count": len(main_rows),
+            "failed_count": 0 if main_rows else 1,
+            "details": "",
+        }
+    )
     reference_failures = sum(
         row["dataset_id"] not in dataset_ids
         or row["sample_id"] not in sample_ids
@@ -591,7 +602,8 @@ def _validate_package(
     # Cleaning report completeness: verify cleaning_report.csv exists and its
     # anomaly counts are consistent with warnings.csv cleaning entries.
     cleaning_path = staging / "cleaning_report.csv"
-    cleaning_rows = _read_csv(cleaning_path) if cleaning_path.is_file() else []
+    cleaning_report_exists = cleaning_path.is_file()
+    cleaning_rows = _read_csv(cleaning_path) if cleaning_report_exists else []
     cleaning_warnings = [
         w for w in warning_rows
         if w.get("code") in {"missing_values", "duplicate_rows", "type_inconsistency"}
@@ -606,14 +618,15 @@ def _validate_package(
     cleaning_warn_count = len(cleaning_warnings)
     cleaning_expected = cleaning_missing + (1 if cleaning_dup else 0) + cleaning_type
     cleaning_mismatch = abs(cleaning_expected - cleaning_warn_count)
+    cleaning_failures = cleaning_mismatch + (0 if cleaning_report_exists else 1)
     checks.append(
         {
             "check_id": "cleaning_report_consistency",
             "scope": "cleaning",
             "check_name": "cleaning_report.csv anomaly counts match warnings.csv cleaning entries",
-            "status": "passed" if cleaning_mismatch == 0 else "failed",
-            "checked_count": cleaning_expected + cleaning_warn_count,
-            "failed_count": cleaning_mismatch,
+            "status": "passed" if cleaning_failures == 0 else "failed",
+            "checked_count": cleaning_expected + cleaning_warn_count + 1,
+            "failed_count": cleaning_failures,
             "details": "",
         }
     )
