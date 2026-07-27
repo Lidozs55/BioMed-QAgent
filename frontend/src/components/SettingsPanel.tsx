@@ -244,7 +244,14 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     setShowModelDropdown(false);
     markDirty();
     setModelError(null);
-  }, [markDirty]);
+    // Auto-set context window to the selected model's max supported size
+    const model = models.find((m) => m.id === id);
+    if (model && model.context_window > 0) {
+      void api.saveSettings({ model_name: id, context_window: model.context_window }).then((updated) => {
+        setSettings(updated);
+      }).catch(() => { /* save will be retried on explicit save click */ });
+    }
+  }, [markDirty, models, api]);
 
   /* ---- database / skill handlers ---- */
   const mutateSkill = async (action: () => Promise<void>, success: string) => {

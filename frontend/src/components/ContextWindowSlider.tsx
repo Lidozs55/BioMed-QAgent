@@ -98,13 +98,25 @@ export function ContextWindowSlider({
 
   const displayIndex = dragging ? localIndex : committedIndex;
 
-  // During drag: only update local state (thumb moves freely)
-  const handleDrag = useCallback((newVal: number[]) => {
-    setDragging(true);
-    setLocalIndex(newVal[0]);
-  }, []);
+  // On any slider interaction (click or drag): commit immediately
+  const handleDrag = useCallback(
+    (newVal: number[]) => {
+      setDragging(true);
+      const idx = newVal[0];
+      setLocalIndex(idx);
+      if (idx >= 0 && idx < PRESETS.length) {
+        const selected = PRESETS[idx].value;
+        if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
+          onChange(maxCatalogWindow);
+        } else {
+          onChange(selected);
+        }
+      }
+    },
+    [maxCatalogWindow, onChange],
+  );
 
-  // On release: commit the selected preset value
+  // On release: finalize drag state
   const handleCommit = useCallback(
     (newVal: number[]) => {
       setDragging(false);
