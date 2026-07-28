@@ -244,11 +244,6 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
-            if entry.pending_result is not None:
-                return await self._persist_terminal_locked(
-                    entry,
-                    entry.pending_result,
-                )
             if not entry.cancel_requested:
                 await self._emit(
                     entry,
@@ -259,6 +254,11 @@ class SubagentSupervisor:
                     ),
                 )
                 await self._complete_cancel_finalization(entry, subagent_id)
+            if entry.pending_result is not None:
+                return await self._persist_terminal_locked(
+                    entry,
+                    entry.pending_result,
+                )
 
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
@@ -316,36 +316,42 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
-            if entry.pending_result is not None:
+            terminal_was_pending = entry.pending_result is not None
+            if terminal_was_pending:
+                entry.forced_interruption = True
+                entry.forced_interruption_reason = reason
+            if not entry.cancel_requested:
+                try:
+                    await self._emit(
+                        entry,
+                        subagent_id,
+                        SubagentCancelRequestedPayload(
+                            subagent_id=subagent_id,
+                            reason=reason,
+                        ),
+                    )
+                except BaseException as error:
+                    entry.sink_error = error
+                    entry.forced_interruption = True
+                    entry.forced_interruption_reason = reason
+                    if entry.task is not None:
+                        entry.task.cancel()
+                    raise
+                entry.cancel_requested = True
+                if self._input_broker is not None:
+                    await self._input_broker.cancel_subagent(
+                        task_id=entry.task_id,
+                        run_id=entry.run_id,
+                        subagent_id=subagent_id,
+                    )
+                if entry.task is not None:
+                    entry.task.cancel()
+            if terminal_was_pending:
+                assert entry.pending_result is not None
                 return await self._persist_terminal_locked(
                     entry,
                     entry.pending_result,
                 )
-            try:
-                await self._emit(
-                    entry,
-                    subagent_id,
-                    SubagentCancelRequestedPayload(
-                        subagent_id=subagent_id,
-                        reason=reason,
-                    ),
-                )
-            except BaseException as error:
-                entry.sink_error = error
-                entry.forced_interruption = True
-                entry.forced_interruption_reason = reason
-                if entry.task is not None:
-                    entry.task.cancel()
-                raise
-            entry.cancel_requested = True
-            if self._input_broker is not None:
-                await self._input_broker.cancel_subagent(
-                    task_id=entry.task_id,
-                    run_id=entry.run_id,
-                    subagent_id=subagent_id,
-                )
-            if entry.task is not None:
-                entry.task.cancel()
 
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
@@ -526,20 +532,19 @@ class SubagentSupervisor:
         result: SubagentResult,
     ) -> SubagentResult:
         pending = entry.pending_result
-        if pending is None:
-            if entry.forced_interruption:
-                result = self._task_cancelled_result(
-                    entry,
-                    result.subagent_id,
-                )
-            elif (
-                entry.cancel_requested
-                and result.status is not SubagentStatus.CANCELLED
-            ):
-                result = self._cancelled_result(result.subagent_id)
-            entry.pending_result = result
-        else:
+        if entry.forced_interruption:
+            result = self._task_cancelled_result(
+                entry,
+                result.subagent_id,
+            )
+        elif (
+            entry.cancel_requested
+            and result.status is not SubagentStatus.CANCELLED
+        ):
+            result = self._cancelled_result(result.subagent_id)
+        elif pending is not None:
             result = pending
+        entry.pending_result = result
 
         payload = self._terminal_payload(result)
         try:

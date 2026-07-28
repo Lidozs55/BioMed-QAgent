@@ -260,35 +260,31 @@ async def test_parent_and_child_events_share_atomic_sequence_allocation(
         event_hub=hub,
         subagent_event_sink=sink,
     )
-    real_append_event = repository.append_event
-    child_emitted = False
+    real_append_payload = repository.append_event_payload
+    competitors_ready = asyncio.Event()
+    competitor_count = 0
 
-    async def append_parent_after_child(event):
-        nonlocal child_emitted
-        if isinstance(event.payload, RunStartedPayload):
-            await sink.emit(
-                task_id=accepted.task_id,
-                run_id=accepted.run_id,
-                subagent_id="sub_atomic",
-                parent_tool_call_id="call_atomic",
-                payload=SubagentQueuedPayload(
-                    subagent_id="sub_atomic",
-                    request=SubagentRequest(
-                        agent_type=SubagentType.SOURCE_RESEARCH,
-                        objective="Interleave a child event",
-                        domain="example.org",
-                        capability="dataset_search",
-                    ),
-                ),
-            )
-            child_emitted = True
-        return await real_append_event(event)
+    async def release_competing_atomic_appends(**kwargs):
+        nonlocal competitor_count
+        if isinstance(
+            kwargs["payload"],
+            (RunStartedPayload, SubagentQueuedPayload),
+        ):
+            competitor_count += 1
+            if competitor_count == 2:
+                competitors_ready.set()
+            await asyncio.wait_for(competitors_ready.wait(), timeout=1)
+        return await real_append_payload(**kwargs)
 
-    monkeypatch.setattr(repository, "append_event", append_parent_after_child)
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        release_competing_atomic_appends,
+    )
     try:
-        await manager._append_status(accepted, RunStartedPayload())
-        if not child_emitted:
-            await sink.emit(
+        await asyncio.gather(
+            manager._append_status(accepted, RunStartedPayload()),
+            sink.emit(
                 task_id=accepted.task_id,
                 run_id=accepted.run_id,
                 subagent_id="sub_atomic",
@@ -302,12 +298,15 @@ async def test_parent_and_child_events_share_atomic_sequence_allocation(
                         capability="dataset_search",
                     ),
                 ),
-            )
+            ),
+        )
 
         events = await repository.list_events(accepted.task_id)
+        assert competitor_count == 2
         assert [event.sequence for event in events] == [1, 2, 3]
-        assert isinstance(events[1].payload, RunStartedPayload)
-        assert isinstance(events[2].payload, SubagentQueuedPayload)
+        assert {
+            type(event.payload) for event in events[1:]
+        } == {RunStartedPayload, SubagentQueuedPayload}
     finally:
         await manager.close()
         await hub.close()
