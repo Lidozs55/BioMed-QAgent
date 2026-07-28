@@ -115,12 +115,13 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
     name_override="run_research_pipeline",
     description_override=(
         "Run the deterministic validated research-data pipeline. "
-        "Pass ``pmid``/``gse`` when you have already discovered explicit "
-        "accessions via search_pubmed/search_geo/describe_geo — this avoids "
-        "re-searching NCBI by topic (which fails for non-English topics). "
-        "Defaults to live mode (real external APIs) for production agent runs; "
-        "fixture mode is reserved for offline regression tests and must be set "
-        "explicitly."
+        "Call this tool exactly once per research task — it cannot be "
+        "called repeatedly.  Pass ``pmid``/``gse`` when you have already "
+        "discovered explicit accessions via search_pubmed/search_geo/describe_geo "
+        "— this avoids re-searching NCBI by topic (which fails for non-English "
+        "topics).  Defaults to live mode (real external APIs) for production "
+        "agent runs; fixture mode is reserved for offline regression tests "
+        "and must be set explicitly."
     ),
 )
 async def run_research_pipeline(
@@ -136,7 +137,24 @@ async def run_research_pipeline(
         raise ValueError("databases must be a non-empty list of database identifiers")
 
     run_context = ctx.context
-    managed_run_id = run_context.reserve_pipeline_publication()
+    try:
+        managed_run_id = run_context.reserve_pipeline_publication()
+    except RuntimeError:
+        # Pipeline was already called in this Run.  Return a clear message
+        # so the Agent does not retry and instead reports the final results
+        # to the user based on the pipeline output it already received.
+        return json.dumps(
+            {
+                "status": "already_run",
+                "message": (
+                    "The research pipeline has already been executed for this "
+                    "task.  Do not call run_research_pipeline again.  Instead, "
+                    "summarize the final results to the user based on the "
+                    "pipeline output you already received."
+                ),
+            },
+            ensure_ascii=False,
+        )
     fixture_dir = (
         Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     )
@@ -210,27 +228,39 @@ async def run_research_pipeline(
     finally:
         if bridge is not None and submitter_installed and submitter is not None:
             bridge.clear_user_input_submitter(submitter)
-    return json.dumps(
-        {
-            "task_id": manifest.task_id,
-            "status": manifest.task_state.value,
-            "validation_status": manifest.validation.status,
-            "artifact_count": len(manifest.artifacts) + 1,
-            "artifacts": [
-                {
-                    "name": entry.name,
-                    "size_bytes": entry.size_bytes,
-                    "media_type": entry.media_type,
-                }
-                for entry in manifest.artifacts
-            ],
-            "mode": mode,
-            "topic": topic,
-            "note": (
-                "Artifacts are published to the task's artifacts/ directory "
-                "with the exact names listed above. Reference these filenames "
-                "verbatim in any user-facing report; do not invent filenames."
-            ),
-        },
-        ensure_ascii=False,
-    )
+
+    # Extract error details from failed stage attempts so the Agent can
+    # understand the specific reason and avoid repeating the same mistake.
+    failed_attempts = [
+        attempt for attempt in runner.state.stage_attempts
+        if attempt.status.value == "failed" and attempt.error is not None
+    ]
+    last_error = failed_attempts[-1] if failed_attempts else None
+
+    result = {
+        "task_id": manifest.task_id,
+        "status": manifest.task_state.value,
+        "validation_status": manifest.validation.status,
+        "artifact_count": len(manifest.artifacts) + 1,
+        "artifacts": [
+            {
+                "name": entry.name,
+                "size_bytes": entry.size_bytes,
+                "media_type": entry.media_type,
+            }
+            for entry in manifest.artifacts
+        ],
+        "mode": mode,
+        "topic": topic,
+        "note": (
+            "Artifacts are published to the task's artifacts/ directory "
+            "with the exact names listed above. Reference these filenames "
+            "verbatim in any user-facing report; do not invent filenames."
+        ),
+    }
+    if last_error is not None:
+        result["failed_stage"] = last_error.stage.value
+        result["error_message"] = last_error.error.message
+        result["error_code"] = last_error.error.code.value
+        result["retryable"] = last_error.error.retryable
+    return json.dumps(result, ensure_ascii=False)

@@ -569,9 +569,15 @@ class PipelineRunner:
         # This covers process interruption, completed reruns, and failed-task
         # retries without treating a truly fresh CREATED task as recovery.
         recovered_inflight = self._recover_inflight_attempt()
+        # A task is recovered when its prior state is not CREATED:
+        # - inflight work from a crash (recovered_inflight),
+        # - completed reruns (COMPLETED with progress),
+        # - failed-task retries (FAILED, even if no stage completed).
+        # The previous logic required ``bool(completed_stages)``, which
+        # treated FAILED tasks without any completed stage as "fresh",
+        # re-emitting PlanReadyPayload and re-pausing for plan confirmation.
         is_recovered = recovered_inflight or (
             self.state.task_state is not TaskState.CREATED
-            and bool(self.state.completed_stages)
         )
         if is_recovered:
             await self._emit_event(
