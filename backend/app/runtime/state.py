@@ -14,6 +14,18 @@ from app.domain.contracts import (
     RunRecord,
     RunStartedPayload,
     RunStatus,
+    SubagentCancelledPayload,
+    SubagentCancelRequestedPayload,
+    SubagentCompletedPayload,
+    SubagentFailedPayload,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
+    SubagentInterruptedPayload,
+    SubagentProgressPayload,
+    SubagentQueuedPayload,
+    SubagentRecord,
+    SubagentStartedPayload,
+    SubagentStatus,
     TaskSnapshot,
     UserInputRequiredPayload,
     UserInputResumedPayload,
@@ -70,12 +82,99 @@ _LEGAL_TRANSITIONS = {
     RunStatus.INTERRUPTED: set(),
 }
 
+_SUBAGENT_TRANSITIONS: dict[SubagentStatus, frozenset[SubagentStatus]] = {
+    SubagentStatus.QUEUED: frozenset(
+        {
+            SubagentStatus.RUNNING,
+            SubagentStatus.CANCEL_REQUESTED,
+            SubagentStatus.CANCELLED,
+            SubagentStatus.INTERRUPTED,
+        }
+    ),
+    SubagentStatus.RUNNING: frozenset(
+        {
+            SubagentStatus.COMPLETED,
+            SubagentStatus.FAILED,
+            SubagentStatus.CANCEL_REQUESTED,
+            SubagentStatus.CANCELLED,
+            SubagentStatus.INTERRUPTED,
+        }
+    ),
+    SubagentStatus.CANCEL_REQUESTED: frozenset(
+        {
+            SubagentStatus.CANCELLED,
+            SubagentStatus.COMPLETED,
+            SubagentStatus.FAILED,
+            SubagentStatus.INTERRUPTED,
+        }
+    ),
+    SubagentStatus.COMPLETED: frozenset(),
+    SubagentStatus.FAILED: frozenset(),
+    SubagentStatus.CANCELLED: frozenset(),
+    SubagentStatus.INTERRUPTED: frozenset(),
+}
+
+_SUBAGENT_TERMINAL_STATUSES = frozenset(
+    {
+        SubagentStatus.COMPLETED,
+        SubagentStatus.FAILED,
+        SubagentStatus.CANCELLED,
+        SubagentStatus.INTERRUPTED,
+    }
+)
+
+_SUBAGENT_STATUS_PAYLOADS = {
+    SubagentStartedPayload: SubagentStatus.RUNNING,
+    SubagentCancelRequestedPayload: SubagentStatus.CANCEL_REQUESTED,
+}
+
+_SUBAGENT_TERMINAL_PAYLOADS = (
+    SubagentCompletedPayload,
+    SubagentFailedPayload,
+    SubagentCancelledPayload,
+    SubagentInterruptedPayload,
+)
+
+_SUBAGENT_PAYLOADS = (
+    SubagentStartedPayload,
+    SubagentProgressPayload,
+    *_SUBAGENT_TERMINAL_PAYLOADS,
+    SubagentCancelRequestedPayload,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
+)
+
 
 def _run_index(snapshot: TaskSnapshot, run_id: str) -> int:
     for index, run in enumerate(snapshot.runs):
         if run.run_id == run_id:
             return index
     raise ValueError(f"unknown run_id: {run_id}")
+
+
+def _subagent_index(snapshot: TaskSnapshot, subagent_id: str) -> int:
+    for index, subagent in enumerate(snapshot.subagents):
+        if subagent.subagent_id == subagent_id:
+            return index
+    raise ValueError(f"unknown subagent_id: {subagent_id}")
+
+
+def _subagent_terminal_matches(
+    record: SubagentRecord,
+    payload: SubagentCompletedPayload
+    | SubagentFailedPayload
+    | SubagentCancelledPayload
+    | SubagentInterruptedPayload,
+) -> bool:
+    result = payload.result
+    return (
+        record.status is result.status
+        and record.result_summary == result.summary
+        and record.source_asset_ids == result.source_asset_ids
+        and record.recipe_id == result.recipe_id
+        and record.error_code is result.error_code
+        and record.error_message == result.error_message
+    )
 
 
 def reduce_task_event(
@@ -90,6 +189,7 @@ def reduce_task_event(
         raise ValueError("event sequence must be task-local and strictly increasing")
 
     runs = list(snapshot.runs)
+    subagents = list(snapshot.subagents)
     payload = event.payload
 
     if isinstance(payload, RunQueuedPayload):
@@ -138,6 +238,84 @@ def reduce_task_event(
         runs[index] = RunRecord.model_validate(
             runs[index].model_dump() | updates
         )
+    elif isinstance(payload, SubagentQueuedPayload):
+        if event.run_id is None or event.parent_tool_call_id is None:
+            raise ValueError("subagent events require parent run linkage")
+        _run_index(snapshot, event.run_id)
+        if any(item.subagent_id == payload.subagent_id for item in subagents):
+            raise ValueError(f"subagent_id already exists: {payload.subagent_id}")
+        request = payload.request
+        subagents.append(
+            SubagentRecord(
+                subagent_id=payload.subagent_id,
+                task_id=event.task_id,
+                run_id=event.run_id,
+                agent_type=request.agent_type,
+                objective=request.objective,
+                target_source=request.target_source,
+                status=SubagentStatus.QUEUED,
+                parent_tool_call_id=event.parent_tool_call_id,
+                created_at=event.timestamp,
+                progress_current=0,
+            )
+        )
+        status = snapshot.task.status
+    elif isinstance(payload, _SUBAGENT_PAYLOADS):
+        if event.run_id is None:
+            raise ValueError("subagent events require parent run linkage")
+        _run_index(snapshot, event.run_id)
+        index = _subagent_index(snapshot, payload.subagent_id)
+        record = subagents[index]
+        if record.run_id != event.run_id:
+            raise ValueError("subagent run_id must match event run_id")
+
+        if record.status in _SUBAGENT_TERMINAL_STATUSES:
+            if isinstance(payload, _SUBAGENT_TERMINAL_PAYLOADS) and _subagent_terminal_matches(
+                record, payload
+            ):
+                updates: dict[str, object] = {}
+            else:
+                raise ValueError(
+                    "invalid subagent transition: "
+                    f"terminal subagent is immutable: {record.subagent_id}"
+                )
+        elif type(payload) in _SUBAGENT_STATUS_PAYLOADS:
+            next_status = _SUBAGENT_STATUS_PAYLOADS[type(payload)]
+            if next_status not in _SUBAGENT_TRANSITIONS[record.status]:
+                raise ValueError(
+                    f"invalid subagent transition: {record.status} -> {next_status}"
+                )
+            updates = {"status": next_status}
+            if next_status is SubagentStatus.RUNNING:
+                updates["started_at"] = event.timestamp
+        elif isinstance(payload, SubagentProgressPayload):
+            updates = {
+                "progress_current": payload.current,
+                "progress_total": payload.total,
+                "progress_message": payload.message,
+            }
+        elif isinstance(payload, SubagentInputRequiredPayload):
+            updates = {"pending_request_id": payload.request_id}
+        elif isinstance(payload, SubagentInputResumedPayload):
+            updates = {"pending_request_id": None}
+        else:
+            next_status = payload.result.status
+            if next_status not in _SUBAGENT_TRANSITIONS[record.status]:
+                raise ValueError(
+                    f"invalid subagent transition: {record.status} -> {next_status}"
+                )
+            updates = {
+                "status": next_status,
+                "finished_at": event.timestamp,
+                "result_summary": payload.result.summary,
+                "source_asset_ids": payload.result.source_asset_ids,
+                "recipe_id": payload.result.recipe_id,
+                "error_code": payload.result.error_code,
+                "error_message": payload.result.error_message,
+                "pending_request_id": None,
+            }
+        subagents[index] = record.model_copy(update=updates)
+        status = snapshot.task.status
     elif event.run_id is not None:
         index = _run_index(snapshot, event.run_id)
         if runs[index].status in _TERMINAL_STATUSES:
@@ -158,4 +336,6 @@ def reduce_task_event(
             "latest_sequence": event.sequence,
         }
     )
-    return snapshot.model_copy(update={"task": task, "runs": runs})
+    return snapshot.model_copy(
+        update={"task": task, "runs": runs, "subagents": subagents}
+    )

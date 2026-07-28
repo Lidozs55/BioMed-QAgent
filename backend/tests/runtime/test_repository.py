@@ -14,6 +14,13 @@ from app.domain.contracts import (
     RunQueuedPayload,
     RunRecord,
     RunStatus,
+    SubagentCompletedPayload,
+    SubagentQueuedPayload,
+    SubagentRequest,
+    SubagentResult,
+    SubagentStartedPayload,
+    SubagentStatus,
+    SubagentType,
     TaskMode,
     TaskRunAccepted,
     TaskSnapshot,
@@ -49,6 +56,73 @@ def queued_event(task_id: str = "task_123"):
         timestamp=NOW + timedelta(seconds=1),
         payload=RunQueuedPayload(request_id="req_123", input="question"),
     )
+
+
+@pytest.mark.asyncio
+async def test_repository_replays_subagent_record_from_events(tmp_path) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    snapshot = snapshot_with_run(
+        task_id="task_123",
+        request_id="req_123",
+        run_id="run_123",
+    )
+    await repository.save_snapshot(snapshot)
+    try:
+        queued = build_event(
+            task_id="task_123",
+            run_id="run_123",
+            sequence=1,
+            timestamp=NOW + timedelta(seconds=1),
+            subagent_id="subagent_1",
+            parent_tool_call_id="call_1",
+            payload=SubagentQueuedPayload(
+                subagent_id="subagent_1",
+                request=SubagentRequest(
+                    agent_type=SubagentType.SOURCE_RESEARCH,
+                    objective="Find public cohort metadata",
+                    domain="ncbi.nlm.nih.gov",
+                    capability="metadata_search",
+                ),
+            ),
+        )
+        started = build_event(
+            task_id="task_123",
+            run_id="run_123",
+            sequence=2,
+            timestamp=NOW + timedelta(seconds=2),
+            subagent_id="subagent_1",
+            parent_tool_call_id="call_1",
+            payload=SubagentStartedPayload(subagent_id="subagent_1"),
+        )
+        completed = build_event(
+            task_id="task_123",
+            run_id="run_123",
+            sequence=3,
+            timestamp=NOW + timedelta(seconds=3),
+            subagent_id="subagent_1",
+            parent_tool_call_id="call_1",
+            payload=SubagentCompletedPayload(
+                subagent_id="subagent_1",
+                result=SubagentResult(
+                    subagent_id="subagent_1",
+                    status=SubagentStatus.COMPLETED,
+                    summary="Found one source asset",
+                    source_asset_ids=["source_1"],
+                ),
+            ),
+        )
+        for event in (queued, started, completed):
+            await asyncio.to_thread(repository.events.append, event)
+
+        rebuilt = await repository.get_snapshot("task_123")
+
+        assert rebuilt is not None
+        assert rebuilt.subagents[0].status is SubagentStatus.COMPLETED
+        assert rebuilt.subagents[0].source_asset_ids == ["source_1"]
+        assert rebuilt.task.latest_sequence == 3
+    finally:
+        await repository.close()
 
 
 @pytest.mark.asyncio
