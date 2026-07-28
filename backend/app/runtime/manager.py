@@ -28,6 +28,7 @@ from app.domain.contracts import (
     RunStatus,
     StartRunRequest,
     StartTaskRequest,
+    SubagentStatus,
     TaskMode,
     TaskRunAccepted,
     TaskSnapshot,
@@ -42,6 +43,8 @@ from app.domain.contracts import (
 from app.domain.contracts.runtime import validate_task_databases
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
+from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.supervisor import SubagentSupervisor
 
 logger = logging.getLogger(__name__)
 
@@ -585,6 +588,8 @@ class TaskManager:
         run_admission: RunAdmission | None = None,
         event_hub: EventHub | None = None,
         assistant_stream_hub: AssistantStreamHub | None = None,
+        subagent_supervisor: SubagentSupervisor | None = None,
+        subagent_input_broker: SubagentInputBroker | None = None,
     ) -> None:
         if max_active_runs < 1:
             raise ValueError("max_active_runs must be positive")
@@ -596,6 +601,8 @@ class TaskManager:
         self.max_queued_runs = max_queued_runs
         self.event_hub = event_hub or EventHub()
         self.assistant_stream_hub = assistant_stream_hub
+        self._subagent_supervisor = subagent_supervisor
+        self._subagent_input_broker = subagent_input_broker
         if context_factory is None:
             self._context_factory = lambda task_id: RunContext(
                 task_id=task_id,
@@ -993,6 +1000,62 @@ class TaskManager:
             raise LookupError(task_id)
         return snapshot
 
+    async def cancel_subagent(
+        self,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+        *,
+        reason: str | None = None,
+    ) -> TaskSnapshot:
+        if not self._started or self._closing:
+            raise RuntimeError("task manager is not running")
+
+        lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+            snapshot = await self.repository.get_snapshot(task_id)
+            if snapshot is None:
+                raise LookupError(task_id)
+            run = next(
+                (
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == run_id
+                ),
+                None,
+            )
+            if run is None:
+                raise LookupError(run_id)
+            subagent = next(
+                (
+                    candidate
+                    for candidate in snapshot.subagents
+                    if candidate.subagent_id == subagent_id
+                    and candidate.task_id == task_id
+                    and candidate.run_id == run_id
+                ),
+                None,
+            )
+            if subagent is None:
+                raise LookupError(subagent_id)
+            if subagent.status in {
+                SubagentStatus.COMPLETED,
+                SubagentStatus.FAILED,
+                SubagentStatus.CANCELLED,
+                SubagentStatus.INTERRUPTED,
+            }:
+                raise RuntimeError(
+                    f"subagent {subagent_id} is not cancellable"
+                )
+            supervisor = self._subagent_supervisor
+            if supervisor is None:
+                raise RuntimeError("subagent runtime is unavailable")
+            try:
+                await supervisor.cancel(subagent_id, reason=reason)
+            except LookupError as error:
+                raise RuntimeError("subagent runtime is unavailable") from error
+            return await self._require_snapshot(task_id)
+
     async def resume_run(
         self,
         task_id: str,
@@ -1014,6 +1077,16 @@ class TaskManager:
 
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
+        if self._subagent_input_broker is not None and (
+            await self._subagent_input_broker.try_resume(
+                task_id=task_id,
+                run_id=run_id,
+                request_id=request_id,
+                decision=decision,
+                detail=detail,
+            )
+        ):
+            return await self._require_snapshot(task_id)
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)

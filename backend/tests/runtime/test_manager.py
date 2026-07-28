@@ -31,6 +31,10 @@ from app.domain.contracts import (
     RunStatus,
     StartRunRequest,
     StartTaskRequest,
+    SubagentInputRequiredPayload,
+    SubagentRecord,
+    SubagentStatus,
+    SubagentType,
     TaskMode,
     TaskRunAccepted,
     TaskSnapshot,
@@ -42,6 +46,7 @@ from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskRepository
+from app.subagents.input_broker import SubagentInputBroker
 from compaction_support import budgeted_request
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -100,6 +105,252 @@ def snapshot_with_status(task_id: str, status: RunStatus) -> TaskSnapshot:
             )
         ],
     )
+
+
+def snapshot_with_subagent(
+    task_id: str,
+    *,
+    subagent_id: str = "sub_1",
+    subagent_status: SubagentStatus = SubagentStatus.RUNNING,
+) -> TaskSnapshot:
+    run_id = f"run_{task_id}"
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id=task_id,
+            mode=TaskMode.AGENT,
+            title=task_id,
+            status=RunStatus.RUNNING,
+            active_run_id=run_id,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id=run_id,
+                task_id=task_id,
+                request_id=f"req_{task_id}",
+                status=RunStatus.RUNNING,
+                input=task_id,
+                created_at=NOW,
+                updated_at=NOW,
+                started_at=NOW,
+            )
+        ],
+        subagents=[
+            SubagentRecord(
+                subagent_id=subagent_id,
+                task_id=task_id,
+                run_id=run_id,
+                agent_type=SubagentType.SOURCE_RESEARCH,
+                objective="Find a source",
+                status=subagent_status,
+                parent_tool_call_id="call_1",
+                created_at=NOW,
+                started_at=NOW,
+                finished_at=(
+                    NOW
+                    if subagent_status
+                    in {
+                        SubagentStatus.COMPLETED,
+                        SubagentStatus.FAILED,
+                        SubagentStatus.CANCELLED,
+                        SubagentStatus.INTERRUPTED,
+                    }
+                    else None
+                ),
+                progress_current=0,
+            )
+        ],
+    )
+
+
+class _RecordingSubagentSupervisor:
+    def __init__(self, repository: TaskRepository) -> None:
+        self.repository = repository
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def cancel(
+        self,
+        subagent_id: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        self.calls.append((subagent_id, reason))
+        tasks = await self.repository.list_tasks(limit=100)
+        assert len(tasks.tasks) == 1
+        snapshot = await self.repository.get_snapshot(tasks.tasks[0].task_id)
+        assert snapshot is not None
+        updated = [
+            child.model_copy(
+                update={
+                    "status": SubagentStatus.CANCELLED,
+                    "finished_at": NOW,
+                }
+            )
+            if child.subagent_id == subagent_id
+            else child
+            for child in snapshot.subagents
+        ]
+        await self.repository.save_snapshot(
+            snapshot.model_copy(update={"subagents": updated})
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_run_routes_matching_child_request_before_parent_status(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    broker = SubagentInputBroker()
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        subagent_input_broker=broker,
+    )
+    await manager.start()
+    task_id = "task_child_hil"
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(snapshot_with_subagent(task_id))
+    waiter = asyncio.create_task(
+        broker.request(
+            task_id=task_id,
+            run_id=run_id,
+            payload=SubagentInputRequiredPayload(
+                subagent_id="sub_1",
+                request_id="request_child",
+                summary="Confirm access",
+                prompt_kind="confirmation",
+            ),
+        )
+    )
+    await asyncio.sleep(0)
+    try:
+        returned = await manager.resume_run(
+            task_id,
+            run_id,
+            request_id="request_child",
+            decision="approve",
+            detail={"confirmed": True},
+        )
+
+        resumed = await waiter
+        assert resumed.subagent_id == "sub_1"
+        assert resumed.detail == {"confirmed": True}
+        assert returned.runs[0].status is RunStatus.RUNNING
+        assert returned.task.status is RunStatus.RUNNING
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_run_broker_miss_preserves_existing_parent_validation(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        subagent_input_broker=SubagentInputBroker(),
+    )
+    await manager.start()
+    task_id = "task_parent_fallback"
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(snapshot_with_subagent(task_id))
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=f"run {run_id} is not awaiting user input",
+        ):
+            await manager.resume_run(
+                task_id,
+                run_id,
+                request_id="request_missing",
+                decision="approve",
+                detail={},
+            )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_subagent_validates_snapshot_and_returns_refreshed_state(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    supervisor = _RecordingSubagentSupervisor(repository)
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        subagent_supervisor=supervisor,
+    )
+    await manager.start()
+    task_id = "task_cancel_child"
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(snapshot_with_subagent(task_id))
+    try:
+        returned = await manager.cancel_subagent(
+            task_id,
+            run_id,
+            "sub_1",
+        )
+
+        assert supervisor.calls == [("sub_1", None)]
+        assert returned.subagents[0].status is SubagentStatus.CANCELLED
+        assert returned.runs[0].status is RunStatus.RUNNING
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_subagent_rejects_missing_runtime_child_and_terminal_child(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    task_id = "task_cancel_child_errors"
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(snapshot_with_subagent(task_id))
+    try:
+        with pytest.raises(RuntimeError, match="subagent runtime is unavailable"):
+            await manager.cancel_subagent(task_id, run_id, "sub_1")
+
+        manager._subagent_supervisor = _RecordingSubagentSupervisor(repository)
+        with pytest.raises(LookupError):
+            await manager.cancel_subagent(task_id, run_id, "sub_missing")
+
+        await repository.save_snapshot(
+            snapshot_with_subagent(
+                task_id,
+                subagent_status=SubagentStatus.COMPLETED,
+            )
+        )
+        with pytest.raises(RuntimeError, match="subagent sub_1 is not cancellable"):
+            await manager.cancel_subagent(task_id, run_id, "sub_1")
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,9 @@ from app.domain.contracts import (
     RunRecord,
     RunStartedPayload,
     RunStatus,
+    SubagentRecord,
+    SubagentStatus,
+    SubagentType,
     TaskMode,
     TaskRunAccepted,
     TaskSnapshot,
@@ -95,6 +98,60 @@ def snapshot(
         ),
         runs=runs,
     )
+
+
+def snapshot_with_subagent(
+    task_id: str,
+    *,
+    subagent_status: SubagentStatus = SubagentStatus.RUNNING,
+) -> TaskSnapshot:
+    base = snapshot(task_id, status=RunStatus.RUNNING)
+    run_id = f"run_{task_id}"
+    return base.model_copy(
+        update={
+            "subagents": [
+                SubagentRecord(
+                    subagent_id="sub_1",
+                    task_id=task_id,
+                    run_id=run_id,
+                    agent_type=SubagentType.SOURCE_RESEARCH,
+                    objective="Find a source",
+                    status=subagent_status,
+                    parent_tool_call_id="call_1",
+                    created_at=NOW,
+                    started_at=NOW,
+                    finished_at=(
+                        NOW
+                        if subagent_status
+                        in {
+                            SubagentStatus.COMPLETED,
+                            SubagentStatus.FAILED,
+                            SubagentStatus.CANCELLED,
+                            SubagentStatus.INTERRUPTED,
+                        }
+                        else None
+                    ),
+                    progress_current=0,
+                )
+            ]
+        }
+    )
+
+
+class RecordingSubagentSupervisor:
+    def __init__(self, *, missing_runtime: bool = False) -> None:
+        self.missing_runtime = missing_runtime
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def cancel(
+        self,
+        subagent_id: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        self.calls.append((subagent_id, reason))
+        if self.missing_runtime:
+            raise LookupError(subagent_id)
 
 
 @pytest.mark.asyncio
@@ -951,6 +1008,83 @@ async def test_cancel_maps_manager_shutdown_race_to_503(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Task runtime is unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_cancel_subagent_endpoint_targets_one_running_child(
+    tmp_path: Path,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        supervisor = RecordingSubagentSupervisor()
+        manager._subagent_supervisor = supervisor
+        task_id = "task_cancel_subagent"
+        run_id = f"run_{task_id}"
+        await repository.save_snapshot(snapshot_with_subagent(task_id))
+
+        response = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_1/cancel"
+        )
+
+    assert response.status_code == 202
+    assert supervisor.calls == [("sub_1", None)]
+    returned = TaskSnapshot.model_validate(response.json())
+    assert returned.task.status is RunStatus.RUNNING
+    assert returned.runs[0].status is RunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_cancel_subagent_endpoint_maps_child_and_runtime_errors(
+    tmp_path: Path,
+) -> None:
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        repository = application.state.task_repository
+        task_id = "task_cancel_subagent_errors"
+        run_id = f"run_{task_id}"
+        await repository.save_snapshot(snapshot_with_subagent(task_id))
+
+        unavailable = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_1/cancel"
+        )
+        missing_without_runtime = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_missing/cancel"
+        )
+
+        manager._subagent_supervisor = RecordingSubagentSupervisor()
+        missing = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_missing/cancel"
+        )
+
+        await repository.save_snapshot(
+            snapshot_with_subagent(
+                task_id,
+                subagent_status=SubagentStatus.COMPLETED,
+            )
+        )
+        terminal = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_1/cancel"
+        )
+
+        manager._subagent_supervisor = RecordingSubagentSupervisor(
+            missing_runtime=True
+        )
+        await repository.save_snapshot(snapshot_with_subagent(task_id))
+        missing_runtime = await client.post(
+            f"/api/v1/tasks/{task_id}/runs/{run_id}/subagents/sub_1/cancel"
+        )
+
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"detail": "Subagent runtime is unavailable"}
+    assert missing_without_runtime.status_code == 404
+    assert missing_without_runtime.json() == {"detail": "Subagent not found"}
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "Subagent not found"}
+    assert terminal.status_code == 409
+    assert terminal.json() == {"detail": "Subagent is not cancellable"}
+    assert missing_runtime.status_code == 503
+    assert missing_runtime.json() == {"detail": "Subagent runtime is unavailable"}
 
 
 @pytest.mark.asyncio

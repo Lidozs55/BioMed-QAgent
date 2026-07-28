@@ -23,6 +23,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.domain.contracts.events import EventPayload
+from app.subagents.input_broker import SubagentInputBroker
 
 
 class SubagentEventSink(Protocol):
@@ -72,6 +73,7 @@ class SubagentSupervisor:
         batch_limit: int = 8,
         timeout_seconds: float = 900,
         event_timeout_seconds: float = 30,
+        input_broker: SubagentInputBroker | None = None,
     ) -> None:
         if global_limit < 1:
             raise ValueError("global_limit must be at least 1")
@@ -89,6 +91,7 @@ class SubagentSupervisor:
         self._batch_limit = batch_limit
         self._timeout_seconds = timeout_seconds
         self._event_timeout_seconds = event_timeout_seconds
+        self._input_broker = input_broker
         self._run_semaphores: dict[tuple[str, str], asyncio.Semaphore] = {}
         self._entries: dict[str, _SubagentEntry] = {}
         self._admissions: dict[
@@ -237,6 +240,12 @@ class SubagentSupervisor:
                     ),
                 )
                 entry.cancel_requested = True
+                if self._input_broker is not None:
+                    await self._input_broker.cancel_subagent(
+                        task_id=entry.task_id,
+                        run_id=entry.run_id,
+                        subagent_id=subagent_id,
+                    )
                 if entry.task is not None:
                     entry.task.cancel()
 
@@ -271,6 +280,12 @@ class SubagentSupervisor:
                     entry.task.cancel()
                 raise
             entry.cancel_requested = True
+            if self._input_broker is not None:
+                await self._input_broker.cancel_subagent(
+                    task_id=entry.task_id,
+                    run_id=entry.run_id,
+                    subagent_id=subagent_id,
+                )
             if entry.task is not None:
                 entry.task.cancel()
 
