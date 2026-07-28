@@ -154,6 +154,14 @@ export function ChatPanel({
   const [compacting, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (activeTaskId === null || compactTask === undefined) return;
+    // Manual compaction threshold: only allow when usage > 65%
+    const pct = contextWindow && contextWindow > 0
+      ? Math.round((estimatedTokens / contextWindow) * 100)
+      : 0;
+    if (pct <= 65) {
+      toast.info("上下文占用较低，无需压缩", { description: `当前占用 ${pct}%，超过 65% 时才建议压缩` });
+      return;
+    }
     setCompacting(true);
     try {
       await compactTask(activeTaskId);
@@ -163,7 +171,7 @@ export function ChatPanel({
     } finally {
       setCompacting(false);
     }
-  }, [activeTaskId, compactTask]);
+  }, [activeTaskId, compactTask, contextWindow, estimatedTokens]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);

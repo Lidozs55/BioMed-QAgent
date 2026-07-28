@@ -102,7 +102,7 @@ export function ContextUsageInline({
             </span>
           </div>
           <PopoverDescription className="text-xs leading-relaxed">
-            展示当前对话的上下文占用情况；压缩会摘要早期内容，需等待片刻并消耗少量积分。
+            展示当前对话的上下文占用情况；压缩会摘要早期内容，需等待片刻并消耗少量 tokens。
           </PopoverDescription>
         </PopoverHeader>
         <div className="flex flex-col gap-2.5">
@@ -122,7 +122,7 @@ export function ContextUsageInline({
             size="sm"
             variant="outline"
             className="h-8 w-full gap-1.5 text-xs"
-            disabled={compacting || pct < 10}
+            disabled={compacting || pct <= 65}
             onClick={handleCompact}
           >
             {compacting ? (
