@@ -138,6 +138,36 @@ def _terminal_event(sequence: int, status: SubagentStatus):
     )
 
 
+def _input_required_event(sequence: int, request_id: str, *, subagent_id: str = "subagent_1"):
+    return _event(
+        sequence,
+        SubagentInputRequiredPayload(
+            subagent_id=subagent_id,
+            request_id=request_id,
+            summary="Confirm access terms",
+            prompt_kind="terms_approval",
+        ),
+        subagent_id=subagent_id,
+    )
+
+
+def _input_resumed_event(sequence: int, request_id: str, *, subagent_id: str = "subagent_1"):
+    return _event(
+        sequence,
+        SubagentInputResumedPayload(
+            subagent_id=subagent_id,
+            request_id=request_id,
+            decision="approve",
+        ),
+        subagent_id=subagent_id,
+    )
+
+
+def _running_subagent_snapshot() -> TaskSnapshot:
+    snapshot = reduce_task_event(_snapshot(), _queued_event(sequence=2))
+    return reduce_task_event(snapshot, _started_event(sequence=3))
+
+
 def test_reducer_projects_subagent_lifecycle() -> None:
     snapshot = _snapshot()
     snapshot = reduce_task_event(snapshot, _queued_event(sequence=2))
@@ -192,6 +222,18 @@ def test_reducer_rejects_subagent_event_for_another_parent_run() -> None:
         )
 
 
+def test_reducer_rejects_subagent_event_for_mismatched_record_task() -> None:
+    snapshot = reduce_task_event(_snapshot(), _queued_event(sequence=2))
+    record = snapshot.subagents[0].model_copy(update={"task_id": "task_legacy"})
+    snapshot = snapshot.model_copy(update={"subagents": [record]})
+
+    with pytest.raises(ValueError, match="subagent task_id"):
+        reduce_task_event(
+            snapshot,
+            _event(3, SubagentProgressPayload(subagent_id="subagent_1", current=1)),
+        )
+
+
 @pytest.mark.parametrize(
     ("prelude", "terminal_status"),
     [
@@ -223,6 +265,69 @@ def test_reducer_projects_remaining_subagent_terminal_lifecycles(
 
     assert snapshot.subagents[0].status is terminal_status
     assert snapshot.subagents[0].finished_at is not None
+
+
+@pytest.mark.parametrize("status", [SubagentStatus.QUEUED, SubagentStatus.CANCEL_REQUESTED])
+def test_reducer_rejects_input_required_when_subagent_is_not_running(
+    status: SubagentStatus,
+) -> None:
+    snapshot = reduce_task_event(_snapshot(), _queued_event(sequence=2))
+    sequence = 3
+    if status is SubagentStatus.CANCEL_REQUESTED:
+        snapshot = reduce_task_event(
+            snapshot,
+            _event(
+                sequence,
+                SubagentCancelRequestedPayload(subagent_id="subagent_1"),
+            ),
+        )
+        sequence += 1
+
+    with pytest.raises(ValueError, match="input required"):
+        reduce_task_event(snapshot, _input_required_event(sequence, "input_1"))
+
+
+def test_reducer_accepts_identical_input_required_event_idempotently() -> None:
+    snapshot = _running_subagent_snapshot()
+    snapshot = reduce_task_event(snapshot, _input_required_event(4, "input_1"))
+    snapshot = reduce_task_event(snapshot, _input_required_event(5, "input_1"))
+
+    assert snapshot.subagents[0].pending_request_id == "input_1"
+    assert snapshot.task.latest_sequence == 5
+
+
+def test_reducer_rejects_conflicting_input_required_request() -> None:
+    snapshot = _running_subagent_snapshot()
+    snapshot = reduce_task_event(snapshot, _input_required_event(4, "input_1"))
+
+    with pytest.raises(ValueError, match="pending input"):
+        reduce_task_event(snapshot, _input_required_event(5, "input_2"))
+
+
+def test_reducer_rejects_resume_without_pending_input() -> None:
+    with pytest.raises(ValueError, match="pending input"):
+        reduce_task_event(_running_subagent_snapshot(), _input_resumed_event(4, "input_1"))
+
+
+def test_reducer_rejects_resume_for_mismatched_input_request() -> None:
+    snapshot = _running_subagent_snapshot()
+    snapshot = reduce_task_event(snapshot, _input_required_event(4, "input_1"))
+
+    with pytest.raises(ValueError, match="pending input"):
+        reduce_task_event(snapshot, _input_resumed_event(5, "input_2"))
+
+
+def test_reducer_resumes_matching_input_without_changing_sibling() -> None:
+    snapshot = reduce_task_event(_snapshot(), _queued_event(sequence=2))
+    snapshot = reduce_task_event(snapshot, _queued_event(sequence=3, subagent_id="subagent_2"))
+    snapshot = reduce_task_event(snapshot, _started_event(sequence=4))
+    snapshot = reduce_task_event(snapshot, _input_required_event(5, "input_1"))
+    snapshot = reduce_task_event(snapshot, _input_resumed_event(6, "input_1"))
+
+    first, second = snapshot.subagents
+    assert first.pending_request_id is None
+    assert second.pending_request_id is None
+    assert snapshot.runs[0].status is RunStatus.RUNNING
 
 
 def test_reducer_projects_progress_and_hil_only_to_matching_subagent() -> None:

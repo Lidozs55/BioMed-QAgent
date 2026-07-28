@@ -266,6 +266,8 @@ def reduce_task_event(
         _run_index(snapshot, event.run_id)
         index = _subagent_index(snapshot, payload.subagent_id)
         record = subagents[index]
+        if record.task_id != event.task_id:
+            raise ValueError("subagent task_id must match event task_id")
         if record.run_id != event.run_id:
             raise ValueError("subagent run_id must match event run_id")
 
@@ -295,8 +297,16 @@ def reduce_task_event(
                 "progress_message": payload.message,
             }
         elif isinstance(payload, SubagentInputRequiredPayload):
+            if record.status is not SubagentStatus.RUNNING:
+                raise ValueError("subagent input required is legal only while running")
+            if record.pending_request_id not in {None, payload.request_id}:
+                raise ValueError("subagent already has a pending input request")
             updates = {"pending_request_id": payload.request_id}
         elif isinstance(payload, SubagentInputResumedPayload):
+            if record.status is not SubagentStatus.RUNNING:
+                raise ValueError("subagent input resume is legal only while running")
+            if record.pending_request_id != payload.request_id:
+                raise ValueError("subagent has no matching pending input request")
             updates = {"pending_request_id": None}
         else:
             next_status = payload.result.status
