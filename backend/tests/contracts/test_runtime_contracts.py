@@ -25,10 +25,20 @@ from app.domain.contracts import (
     RuntimeEventType,
     StartRunRequest,
     StartTaskRequest,
+    SubagentCancelledPayload,
+    SubagentCancelRequestedPayload,
+    SubagentCompletedPayload,
     SubagentErrorCode,
+    SubagentFailedPayload,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
+    SubagentInterruptedPayload,
+    SubagentProgressPayload,
+    SubagentQueuedPayload,
     SubagentRecord,
     SubagentRequest,
     SubagentResult,
+    SubagentStartedPayload,
     SubagentStatus,
     SubagentType,
     TaskCreatedPayload,
@@ -71,6 +81,66 @@ RUNTIME_PAYLOADS = [
     ),
     WarningPayload(message="compaction failed", code="compaction_failed"),
 ]
+
+def make_subagent_runtime_payloads() -> list[object]:
+    return [
+        SubagentQueuedPayload(
+            subagent_id="subagent_123",
+            request=SubagentRequest(
+                agent_type=SubagentType.SOURCE_RESEARCH,
+                objective="Find datasets",
+                domain="bioinformatics",
+                capability="source_research",
+                inputs={},
+            ),
+        ),
+        SubagentStartedPayload(subagent_id="subagent_123"),
+        SubagentProgressPayload(subagent_id="subagent_123", current=1, total=2),
+        SubagentCompletedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.COMPLETED,
+                summary="Found datasets",
+            ),
+        ),
+        SubagentFailedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.FAILED,
+                summary="Search failed",
+            ),
+        ),
+        SubagentCancelRequestedPayload(subagent_id="subagent_123"),
+        SubagentCancelledPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.CANCELLED,
+                summary="Cancelled",
+            ),
+        ),
+        SubagentInterruptedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.INTERRUPTED,
+                summary="Interrupted",
+            ),
+        ),
+        SubagentInputRequiredPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            summary="Credentials required",
+            prompt_kind="api_key_or_credential",
+        ),
+        SubagentInputResumedPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            decision="approve",
+        ),
+    ]
 
 
 def test_event_envelope_accepts_v2_run_linkage() -> None:
@@ -288,6 +358,16 @@ def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
         )
         parsed = EventEnvelope.model_validate_json(envelope.model_dump_json())
         assert type(parsed.payload) is type(payload)
+
+
+def test_runtime_payload_fixtures_cover_every_runtime_event_type() -> None:
+    payload_types = {
+        payload.type
+        for payload in [*RUNTIME_PAYLOADS, *make_subagent_runtime_payloads()]
+        if isinstance(payload.type, RuntimeEventType)
+    }
+
+    assert payload_types == set(RuntimeEventType)
 
 
 @pytest.mark.parametrize(

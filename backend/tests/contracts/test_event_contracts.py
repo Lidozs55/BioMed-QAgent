@@ -481,10 +481,15 @@ def test_subagent_payloads_are_discriminated_and_round_trip() -> None:
             subagent_id="subagent_123",
             request_id="request_123",
             summary="Credentials required",
+            prompt_kind="api_key_or_credential",
+            expires_at=NOW,
+            detail={"source": "GEO"},
         ),
         SubagentInputResumedPayload(
             subagent_id="subagent_123",
             request_id="request_123",
+            decision="approve",
+            detail={"source": "GEO"},
         ),
     ]
 
@@ -500,3 +505,112 @@ def test_subagent_payloads_are_discriminated_and_round_trip() -> None:
         )
         parsed = EventEnvelope.model_validate_json(event.model_dump_json())
         assert type(parsed.payload) is type(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "values"),
+    [
+        (
+            SubagentInputRequiredPayload,
+            {
+                "subagent_id": "subagent_123",
+                "request_id": "request_123",
+                "summary": "Credentials required",
+                "prompt_kind": "api_key_or_credential",
+                "expires_at": NOW,
+                "detail": {"source": "GEO"},
+            },
+        ),
+        (
+            SubagentInputResumedPayload,
+            {
+                "subagent_id": "subagent_123",
+                "request_id": "request_123",
+                "decision": "approve",
+                "detail": {"source": "GEO"},
+            },
+        ),
+    ],
+)
+def test_subagent_hil_payloads_round_trip_and_forbid_extra_fields(
+    payload_type: type[SubagentInputRequiredPayload | SubagentInputResumedPayload],
+    values: dict[str, object],
+) -> None:
+    payload = payload_type.model_validate(values)
+
+    assert payload_type.model_validate_json(payload.model_dump_json()) == payload
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        payload_type.model_validate({**values, "unexpected": True})
+
+
+def test_subagent_hil_payloads_default_empty_detail() -> None:
+    required = SubagentInputRequiredPayload(
+        subagent_id="subagent_123",
+        request_id="request_123",
+        summary="Confirm source terms",
+        prompt_kind="terms_approval",
+    )
+    resumed = SubagentInputResumedPayload(
+        subagent_id="subagent_123",
+        request_id="request_123",
+        decision="approve",
+    )
+
+    assert required.expires_at is None
+    assert required.detail == {}
+    assert resumed.detail == {}
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "expected_status", "other_status"),
+    [
+        (
+            SubagentCompletedPayload,
+            SubagentStatus.COMPLETED,
+            SubagentStatus.FAILED,
+        ),
+        (
+            SubagentFailedPayload,
+            SubagentStatus.FAILED,
+            SubagentStatus.CANCELLED,
+        ),
+        (
+            SubagentCancelledPayload,
+            SubagentStatus.CANCELLED,
+            SubagentStatus.INTERRUPTED,
+        ),
+        (
+            SubagentInterruptedPayload,
+            SubagentStatus.INTERRUPTED,
+            SubagentStatus.COMPLETED,
+        ),
+    ],
+)
+def test_subagent_terminal_payloads_require_matching_result(
+    payload_type: type[
+        SubagentCompletedPayload
+        | SubagentFailedPayload
+        | SubagentCancelledPayload
+        | SubagentInterruptedPayload
+    ],
+    expected_status: SubagentStatus,
+    other_status: SubagentStatus,
+) -> None:
+    with pytest.raises(ValidationError, match="subagent_id must match result"):
+        payload_type(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_other",
+                status=expected_status,
+                summary="Terminal result",
+            ),
+        )
+    with pytest.raises(ValidationError, match="result status must match"):
+        payload_type(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=other_status,
+                summary="Terminal result",
+            ),
+        )

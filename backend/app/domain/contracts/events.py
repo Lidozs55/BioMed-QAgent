@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import Field, JsonValue, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.enums import AttemptStatus, StageName
+from app.domain.contracts.enums import AttemptStatus, StageName, SubagentStatus
 from app.domain.contracts.ids import generate_prefixed_uuid
 from app.domain.contracts.pipeline import (
     ArtifactManifestEntry,
@@ -341,18 +341,30 @@ class SubagentProgressPayload(ContractModel):
     message: str | None = Field(default=None, min_length=1)
 
 
-class SubagentCompletedPayload(ContractModel):
+class _SubagentTerminalPayload(ContractModel):
+    subagent_id: str = Field(min_length=1)
+    result: SubagentResult
+    expected_result_status: ClassVar[SubagentStatus]
+
+    @model_validator(mode="after")
+    def validate_terminal_result(self) -> Self:
+        if self.subagent_id != self.result.subagent_id:
+            raise ValueError("payload subagent_id must match result subagent_id")
+        if self.result.status is not self.expected_result_status:
+            raise ValueError("result status must match terminal event type")
+        return self
+
+
+class SubagentCompletedPayload(_SubagentTerminalPayload):
     type: Literal[RuntimeEventType.SUBAGENT_COMPLETED] = (
         RuntimeEventType.SUBAGENT_COMPLETED
     )
-    subagent_id: str = Field(min_length=1)
-    result: SubagentResult
+    expected_result_status: ClassVar[SubagentStatus] = SubagentStatus.COMPLETED
 
 
-class SubagentFailedPayload(ContractModel):
+class SubagentFailedPayload(_SubagentTerminalPayload):
     type: Literal[RuntimeEventType.SUBAGENT_FAILED] = RuntimeEventType.SUBAGENT_FAILED
-    subagent_id: str = Field(min_length=1)
-    result: SubagentResult
+    expected_result_status: ClassVar[SubagentStatus] = SubagentStatus.FAILED
 
 
 class SubagentCancelRequestedPayload(ContractModel):
@@ -363,20 +375,18 @@ class SubagentCancelRequestedPayload(ContractModel):
     reason: str | None = Field(default=None, min_length=1)
 
 
-class SubagentCancelledPayload(ContractModel):
+class SubagentCancelledPayload(_SubagentTerminalPayload):
     type: Literal[RuntimeEventType.SUBAGENT_CANCELLED] = (
         RuntimeEventType.SUBAGENT_CANCELLED
     )
-    subagent_id: str = Field(min_length=1)
-    result: SubagentResult
+    expected_result_status: ClassVar[SubagentStatus] = SubagentStatus.CANCELLED
 
 
-class SubagentInterruptedPayload(ContractModel):
+class SubagentInterruptedPayload(_SubagentTerminalPayload):
     type: Literal[RuntimeEventType.SUBAGENT_INTERRUPTED] = (
         RuntimeEventType.SUBAGENT_INTERRUPTED
     )
-    subagent_id: str = Field(min_length=1)
-    result: SubagentResult
+    expected_result_status: ClassVar[SubagentStatus] = SubagentStatus.INTERRUPTED
 
 
 class SubagentInputRequiredPayload(ContractModel):
@@ -386,6 +396,16 @@ class SubagentInputRequiredPayload(ContractModel):
     subagent_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
     summary: str = Field(min_length=1)
+    prompt_kind: Literal[
+        "authentication",
+        "captcha",
+        "api_key_or_credential",
+        "payment",
+        "terms_approval",
+        "confirmation",
+    ]
+    expires_at: datetime | None = None
+    detail: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class SubagentInputResumedPayload(ContractModel):
@@ -394,6 +414,8 @@ class SubagentInputResumedPayload(ContractModel):
     )
     subagent_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
+    detail: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 EventPayload = Annotated[
