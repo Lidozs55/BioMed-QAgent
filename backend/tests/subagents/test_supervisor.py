@@ -406,7 +406,8 @@ class TerminalProblemSink(RecordingSink):
             self.terminal_entered.set()
             if self.mode == "fail":
                 raise RuntimeError("terminal event failed")
-            await asyncio.Event().wait()
+            if self.mode == "stall":
+                await asyncio.Event().wait()
         await super().emit(
             task_id=task_id,
             run_id=run_id,
@@ -1126,7 +1127,9 @@ async def test_cancel_request_problem_leaves_child_running(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["fail", "stall"])
-async def test_terminal_sink_problem_retains_stable_result(mode: str) -> None:
+async def test_terminal_sink_problem_retains_ownership_until_retry(
+    mode: str,
+) -> None:
     sink = TerminalProblemSink(mode)
     supervisor = SubagentSupervisor(event_timeout_seconds=0.01)
     records = await supervisor.start_batch(
@@ -1138,12 +1141,19 @@ async def test_terminal_sink_problem_retains_stable_result(mode: str) -> None:
         sink=sink,
     )
 
+    error_type = RuntimeError if mode == "fail" else TimeoutError
+    with pytest.raises(error_type):
+        await supervisor.wait(records[0].subagent_id)
+    with pytest.raises(RuntimeError, match="nonterminal"):
+        await supervisor.release_run("task_1", "run_1")
+
+    sink.mode = "ok"
     first = await supervisor.wait(records[0].subagent_id)
     second = await supervisor.wait(records[0].subagent_id)
-
     assert first is second
     assert first.status is SubagentStatus.COMPLETED
-    assert sink.terminal_attempts == 1
+    assert sink.terminal_attempts == 2
+    await supervisor.release_run("task_1", "run_1")
     await supervisor.shutdown()
 
 

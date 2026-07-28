@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from concurrent.futures import Executor
 from contextlib import ExitStack, asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -268,8 +269,10 @@ class TaskRepository:
         task_id: str,
         run_id: str,
         payload: EventPayload,
+        stage_attempt_id: str | None = None,
         subagent_id: str | None = None,
         parent_tool_call_id: str | None = None,
+        timestamp: datetime | None = None,
     ) -> tuple[TaskSnapshot, EventEnvelope]:
         """Allocate a Task-local sequence and append one event atomically."""
 
@@ -287,13 +290,45 @@ class TaskRepository:
                             task_id,
                             run_id,
                             payload,
+                            stage_attempt_id,
                             subagent_id,
                             parent_tool_call_id,
+                            timestamp,
                         )
                         await self._project_snapshot_locked(snapshot)
                         return snapshot, event
 
                 return await self._shield_and_drain(build_append_and_index())
+
+    async def find_matching_event(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        payload: EventPayload,
+        after_sequence: int = 0,
+        stage_attempt_id: str | None = None,
+        subagent_id: str | None = None,
+        parent_tool_call_id: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> EventEnvelope | None:
+        events = await self.list_events(
+            task_id,
+            after_sequence=after_sequence,
+        )
+        return next(
+            (
+                event
+                for event in reversed(events)
+                if event.run_id == run_id
+                and event.payload == payload
+                and event.stage_attempt_id == stage_attempt_id
+                and event.subagent_id == subagent_id
+                and event.parent_tool_call_id == parent_tool_call_id
+                and (timestamp is None or event.timestamp == timestamp)
+            ),
+            None,
+        )
 
     async def list_events(
         self,
@@ -580,8 +615,10 @@ class TaskRepository:
         task_id: str,
         run_id: str,
         payload: EventPayload,
+        stage_attempt_id: str | None,
         subagent_id: str | None,
         parent_tool_call_id: str | None,
+        timestamp: datetime | None,
     ) -> tuple[TaskSnapshot, EventEnvelope]:
         current = self._load_snapshot_sync(task_id)
         if current is None:
@@ -591,8 +628,10 @@ class TaskRepository:
             run_id=run_id,
             sequence=current.task.latest_sequence + 1,
             payload=payload,
+            stage_attempt_id=stage_attempt_id,
             subagent_id=subagent_id,
             parent_tool_call_id=parent_tool_call_id,
+            timestamp=timestamp,
         )
         updated = reduce_task_event(current, event)
         self.events.append(event)

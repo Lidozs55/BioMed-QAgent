@@ -31,9 +31,14 @@ from app.domain.contracts import (
     RunStatus,
     StartRunRequest,
     StartTaskRequest,
+    SubagentCancelledPayload,
     SubagentInputRequiredPayload,
     SubagentInterruptedPayload,
+    SubagentQueuedPayload,
     SubagentRecord,
+    SubagentRequest,
+    SubagentResult,
+    SubagentStartedPayload,
     SubagentStatus,
     SubagentType,
     TaskMode,
@@ -49,6 +54,7 @@ from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskRepository
 from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.supervisor import SubagentSupervisor
 from compaction_support import budgeted_request
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -219,6 +225,96 @@ class _RecordingRunSupervisor:
 
     async def release_run(self, task_id: str, run_id: str) -> None:
         self.released.append((task_id, run_id))
+
+
+@pytest.mark.asyncio
+async def test_parent_and_child_events_share_atomic_sequence_allocation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(empty_snapshot("task_atomic_sequence"))
+    accepted = TaskRunAccepted(
+        request_id="req_atomic_sequence",
+        task_id="task_atomic_sequence",
+        run_id="run_atomic_sequence",
+    )
+    await repository.append_event(
+        build_event(
+            task_id=accepted.task_id,
+            run_id=accepted.run_id,
+            sequence=1,
+            payload=RunQueuedPayload(
+                request_id=accepted.request_id,
+                input="race parent and child",
+            ),
+        )
+    )
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+        event_hub=hub,
+        subagent_event_sink=sink,
+    )
+    real_append_event = repository.append_event
+    child_emitted = False
+
+    async def append_parent_after_child(event):
+        nonlocal child_emitted
+        if isinstance(event.payload, RunStartedPayload):
+            await sink.emit(
+                task_id=accepted.task_id,
+                run_id=accepted.run_id,
+                subagent_id="sub_atomic",
+                parent_tool_call_id="call_atomic",
+                payload=SubagentQueuedPayload(
+                    subagent_id="sub_atomic",
+                    request=SubagentRequest(
+                        agent_type=SubagentType.SOURCE_RESEARCH,
+                        objective="Interleave a child event",
+                        domain="example.org",
+                        capability="dataset_search",
+                    ),
+                ),
+            )
+            child_emitted = True
+        return await real_append_event(event)
+
+    monkeypatch.setattr(repository, "append_event", append_parent_after_child)
+    try:
+        await manager._append_status(accepted, RunStartedPayload())
+        if not child_emitted:
+            await sink.emit(
+                task_id=accepted.task_id,
+                run_id=accepted.run_id,
+                subagent_id="sub_atomic",
+                parent_tool_call_id="call_atomic",
+                payload=SubagentQueuedPayload(
+                    subagent_id="sub_atomic",
+                    request=SubagentRequest(
+                        agent_type=SubagentType.SOURCE_RESEARCH,
+                        objective="Interleave a child event",
+                        domain="example.org",
+                        capability="dataset_search",
+                    ),
+                ),
+            )
+
+        events = await repository.list_events(accepted.task_id)
+        assert [event.sequence for event in events] == [1, 2, 3]
+        assert isinstance(events[1].payload, RunStartedPayload)
+        assert isinstance(events[2].payload, SubagentQueuedPayload)
+    finally:
+        await manager.close()
+        await hub.close()
+
+
+async def _do_nothing(_execution) -> None:
+    return None
 
 
 @pytest.mark.asyncio
@@ -2714,14 +2810,18 @@ async def test_abort_failure_blocks_cancelled_when_failure_event_cannot_persist(
     repository = TaskRepository(tmp_path / "output")
     executor_ready = asyncio.Event()
     release_executor = asyncio.Event()
-    real_append_event = repository.append_event
+    real_append_payload = repository.append_event_payload
 
-    async def fail_run_failed_append(event):
-        if isinstance(event.payload, RunFailedPayload):
+    async def fail_run_failed_append(**kwargs):
+        if isinstance(kwargs["payload"], RunFailedPayload):
             raise OSError("run_failed event unavailable")
-        return await real_append_event(event)
+        return await real_append_payload(**kwargs)
 
-    monkeypatch.setattr(repository, "append_event", fail_run_failed_append)
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        fail_run_failed_append,
+    )
 
     async def run(execution) -> None:
         async def commit() -> list:
@@ -2938,18 +3038,21 @@ async def test_durable_artifact_event_survives_append_projection_failure(
 ) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
-    real_append_event = repository.append_event
+    real_append_payload = repository.append_event_payload
     failed_once = False
 
-    async def append_then_fail(event):
+    async def append_then_fail(**kwargs):
         nonlocal failed_once
-        snapshot = await real_append_event(event)
-        if isinstance(event.payload, ArtifactProducedPayload) and not failed_once:
+        result = await real_append_payload(**kwargs)
+        if (
+            isinstance(kwargs["payload"], ArtifactProducedPayload)
+            and not failed_once
+        ):
             failed_once = True
             raise OSError("artifact append projection failed")
-        return snapshot
+        return result
 
-    monkeypatch.setattr(repository, "append_event", append_then_fail)
+    monkeypatch.setattr(repository, "append_event_payload", append_then_fail)
 
     async def run(execution) -> None:
         async def commit() -> list:
@@ -3145,6 +3248,269 @@ async def test_startup_interrupts_children_after_parent_run_event(tmp_path) -> N
         assert isinstance(events[-1].payload, SubagentInterruptedPayload)
         assert [event.sequence for event in events] == [1, 2]
     finally:
+        await manager.close()
+        await hub.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_repairs_partial_child_interruptions_idempotently(
+    tmp_path,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_partial_child_recovery"
+    run_id = "run_partial_child_recovery"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    payloads = [
+        RunQueuedPayload(request_id="req_partial_child_recovery", input="recover"),
+        RunStartedPayload(),
+    ]
+    for sequence, payload in enumerate(payloads, start=1):
+        await seed.append_event(
+            build_event(
+                task_id=task_id,
+                run_id=run_id,
+                sequence=sequence,
+                payload=payload,
+            )
+        )
+    sequence = len(payloads)
+    for subagent_id in ("sub_recover_1", "sub_recover_2"):
+        sequence += 1
+        await seed.append_event(
+            build_event(
+                task_id=task_id,
+                run_id=run_id,
+                sequence=sequence,
+                subagent_id=subagent_id,
+                parent_tool_call_id="call_recovery",
+                payload=SubagentQueuedPayload(
+                    subagent_id=subagent_id,
+                    request=SubagentRequest(
+                        agent_type=SubagentType.SOURCE_RESEARCH,
+                        objective=f"Recover {subagent_id}",
+                        domain="example.org",
+                        capability="dataset_search",
+                    ),
+                ),
+            )
+        )
+        sequence += 1
+        await seed.append_event(
+            build_event(
+                task_id=task_id,
+                run_id=run_id,
+                sequence=sequence,
+                subagent_id=subagent_id,
+                parent_tool_call_id="call_recovery",
+                payload=SubagentStartedPayload(subagent_id=subagent_id),
+            )
+        )
+    sequence += 1
+    await seed.append_event(
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=sequence,
+            payload=RunInterruptedPayload(reason="first startup stopped"),
+        )
+    )
+    await seed.close()
+
+    first_repository = TaskRepository(output_dir)
+    first_hub = EventHub()
+    first_sink = DurableSubagentEventSink(
+        repository=first_repository,
+        hub=first_hub,
+    )
+    real_emit = first_sink.emit
+    interruption_attempts = 0
+
+    async def fail_second_interruption(**kwargs) -> None:
+        nonlocal interruption_attempts
+        if isinstance(kwargs["payload"], SubagentInterruptedPayload):
+            interruption_attempts += 1
+            if interruption_attempts == 2:
+                raise OSError("second child interruption failed")
+        await real_emit(**kwargs)
+
+    first_sink.emit = fail_second_interruption
+    first_manager = manager_module.TaskManager(
+        first_repository,
+        run_executor=_do_nothing,
+        event_hub=first_hub,
+        subagent_event_sink=first_sink,
+    )
+    try:
+        with pytest.raises(OSError, match="second child interruption failed"):
+            await first_manager.start()
+    finally:
+        await first_manager.close()
+        await first_hub.close()
+
+    second_repository = TaskRepository(output_dir)
+    second_hub = EventHub()
+    second_manager = manager_module.TaskManager(
+        second_repository,
+        run_executor=_do_nothing,
+        event_hub=second_hub,
+    )
+    await second_manager.start()
+    try:
+        recovered = await second_repository.get_snapshot(task_id)
+        events = await second_repository.list_events(task_id)
+
+        assert recovered is not None
+        assert recovered.runs[0].status is RunStatus.INTERRUPTED
+        assert [child.status for child in recovered.subagents] == [
+            SubagentStatus.INTERRUPTED,
+            SubagentStatus.INTERRUPTED,
+        ]
+        for subagent_id in ("sub_recover_1", "sub_recover_2"):
+            assert (
+                sum(
+                    isinstance(event.payload, SubagentInterruptedPayload)
+                    and event.subagent_id == subagent_id
+                    for event in events
+                )
+                == 1
+            )
+    finally:
+        await second_manager.close()
+        await second_hub.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_terminal_waits_for_retryable_child_terminal_persistence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    broker = SubagentInputBroker()
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+    supervisor = SubagentSupervisor(input_broker=broker)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+        event_hub=hub,
+        subagent_supervisor=supervisor,
+        subagent_input_broker=broker,
+        subagent_event_sink=sink,
+    )
+    await repository.initialize()
+    await repository.save_snapshot(empty_snapshot("task_child_terminal_retry"))
+    accepted = TaskRunAccepted(
+        request_id="req_child_terminal_retry",
+        task_id="task_child_terminal_retry",
+        run_id="run_child_terminal_retry",
+    )
+    await repository.append_event_payload(
+        task_id=accepted.task_id,
+        run_id=accepted.run_id,
+        payload=RunQueuedPayload(
+            request_id=accepted.request_id,
+            input="wait for child terminal",
+        ),
+    )
+    await repository.append_event_payload(
+        task_id=accepted.task_id,
+        run_id=accepted.run_id,
+        payload=RunStartedPayload(),
+    )
+
+    class BlockingChildRunner:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
+        async def run(
+            self,
+            request: SubagentRequest,
+            *,
+            subagent_id: str,
+            task_id: str,
+            run_id: str,
+        ) -> SubagentResult:
+            del request, subagent_id, task_id, run_id
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    runner = BlockingChildRunner()
+    records = await supervisor.start_batch(
+        task_id=accepted.task_id,
+        run_id=accepted.run_id,
+        parent_tool_call_id="call_child_terminal_retry",
+        requests=[
+            SubagentRequest(
+                agent_type=SubagentType.SOURCE_RESEARCH,
+                objective="Block until parent cancellation",
+                domain="example.org",
+                capability="dataset_search",
+            )
+        ],
+        runner=runner,
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+    await asyncio.wait_for(runner.started.wait(), timeout=1)
+
+    real_append_payload = repository.append_event_payload
+    fail_cancelled_once = True
+
+    async def append_payload_with_terminal_failure(**kwargs):
+        nonlocal fail_cancelled_once
+        if (
+            isinstance(kwargs["payload"], SubagentCancelledPayload)
+            and fail_cancelled_once
+        ):
+            fail_cancelled_once = False
+            raise OSError("child terminal persistence failed")
+        return await real_append_payload(**kwargs)
+
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        append_payload_with_terminal_failure,
+    )
+    try:
+        with pytest.raises(
+            OSError,
+            match="child terminal persistence failed",
+        ):
+            await manager._append_status(
+                accepted,
+                RunFailedPayload(error="parent failed"),
+            )
+
+        blocked = await repository.get_snapshot(accepted.task_id)
+        assert blocked is not None
+        assert blocked.runs[0].status is RunStatus.RUNNING
+        assert blocked.subagents[0].status is SubagentStatus.CANCEL_REQUESTED
+        assert subagent_id in supervisor._entries
+
+        completed = await manager._append_status(
+            accepted,
+            RunFailedPayload(error="parent failed"),
+        )
+        events = await repository.list_events(accepted.task_id)
+
+        assert completed.runs[0].status is RunStatus.FAILED
+        assert completed.subagents[0].status is SubagentStatus.CANCELLED
+        assert (
+            sum(
+                isinstance(event.payload, SubagentCancelledPayload)
+                and event.subagent_id == subagent_id
+                for event in events
+            )
+            == 1
+        )
+        assert subagent_id not in supervisor._entries
+    finally:
+        await supervisor.shutdown()
         await manager.close()
         await hub.close()
 
@@ -3798,21 +4164,28 @@ async def test_cancel_retry_survives_drained_terminal_append_failure(
             StartRunRequest(request_id="req_cancel_append", input="cancel"),
         )
         await asyncio.wait_for(executor_started.wait(), timeout=1)
-        real_append_event = repository.append_event
+        real_append_payload = repository.append_event_payload
         terminal_append_entered = asyncio.Event()
         release_terminal_failure = asyncio.Event()
         failed_once = False
 
-        async def fail_first_terminal_append(event):
+        async def fail_first_terminal_append(**kwargs):
             nonlocal failed_once
-            if isinstance(event.payload, RunCancelledPayload) and not failed_once:
+            if (
+                isinstance(kwargs["payload"], RunCancelledPayload)
+                and not failed_once
+            ):
                 failed_once = True
                 terminal_append_entered.set()
                 await release_terminal_failure.wait()
                 raise OSError("simulated terminal append failure")
-            return await real_append_event(event)
+            return await real_append_payload(**kwargs)
 
-        monkeypatch.setattr(repository, "append_event", fail_first_terminal_append)
+        monkeypatch.setattr(
+            repository,
+            "append_event_payload",
+            fail_first_terminal_append,
+        )
         first_cancel = asyncio.create_task(
             manager.cancel_run("task_cancel_append", accepted.run_id)
         )
@@ -3965,21 +4338,25 @@ async def test_worker_survives_finalization_failure_and_runs_next_item(
     try:
         for task_id in ("task_worker_failure", "task_worker_next"):
             await repository.save_snapshot(empty_snapshot(task_id))
-        real_append_event = repository.append_event
+        real_append_payload = repository.append_event_payload
         failed_once = False
 
-        async def fail_first_finalizing_append(event):
+        async def fail_first_finalizing_append(**kwargs):
             nonlocal failed_once
             if (
-                event.task_id == "task_worker_failure"
-                and isinstance(event.payload, RunFinalizingPayload)
+                kwargs["task_id"] == "task_worker_failure"
+                and isinstance(kwargs["payload"], RunFinalizingPayload)
                 and not failed_once
             ):
                 failed_once = True
                 raise OSError("simulated finalization append failure")
-            return await real_append_event(event)
+            return await real_append_payload(**kwargs)
 
-        monkeypatch.setattr(repository, "append_event", fail_first_finalizing_append)
+        monkeypatch.setattr(
+            repository,
+            "append_event_payload",
+            fail_first_finalizing_append,
+        )
         caplog.set_level(logging.ERROR, logger="app.runtime.manager")
         await manager.submit_run(
             "task_worker_failure",
@@ -5080,18 +5457,18 @@ async def test_manager_suppresses_compaction_warning_when_cancel_wins_lock(
     release_warning = asyncio.Event()
     cancel_persisted = asyncio.Event()
     cancellation_seen = asyncio.Event()
-    real_append = repository.append_event
+    real_append = repository.append_event_payload
 
-    async def append_event(event):
-        snapshot = await real_append(event)
-        if isinstance(event.payload, RunCancelRequestedPayload):
+    async def append_event(**kwargs):
+        result = await real_append(**kwargs)
+        if isinstance(kwargs["payload"], RunCancelRequestedPayload):
             cancel_persisted.set()
-        return snapshot
+        return result
 
     async def fail_summary_load(task_id: str):
         raise ValueError("summary marker unavailable")
 
-    monkeypatch.setattr(repository, "append_event", append_event)
+    monkeypatch.setattr(repository, "append_event_payload", append_event)
     monkeypatch.setattr(
         repository,
         "load_conversation_summary",
@@ -5157,20 +5534,20 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
     warning_persisted = asyncio.Event()
     cancel_persisted = asyncio.Event()
     release_executor = asyncio.Event()
-    real_append = repository.append_event
+    real_append = repository.append_event_payload
 
-    async def append_event(event):
-        snapshot = await real_append(event)
-        if isinstance(event.payload, WarningPayload):
+    async def append_event(**kwargs):
+        result = await real_append(**kwargs)
+        if isinstance(kwargs["payload"], WarningPayload):
             warning_persisted.set()
-        if isinstance(event.payload, RunCancelRequestedPayload):
+        if isinstance(kwargs["payload"], RunCancelRequestedPayload):
             cancel_persisted.set()
-        return snapshot
+        return result
 
     async def fail_summary_load(task_id: str):
         raise ValueError("summary marker unavailable")
 
-    monkeypatch.setattr(repository, "append_event", append_event)
+    monkeypatch.setattr(repository, "append_event_payload", append_event)
     monkeypatch.setattr(
         repository,
         "load_conversation_summary",

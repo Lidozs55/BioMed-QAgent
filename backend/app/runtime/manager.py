@@ -39,7 +39,6 @@ from app.domain.contracts import (
     UserInputRequiredPayload,
     UserInputResumedPayload,
     WarningPayload,
-    build_event,
     generate_run_id,
     generate_task_id,
 )
@@ -729,7 +728,6 @@ class TaskManager:
                 )
                 return await self._shield_and_drain_locked(
                     self._admit_run_locked(
-                        snapshot,
                         accepted,
                         request.input,
                     )
@@ -851,24 +849,21 @@ class TaskManager:
                     f"{type(rollback_error).__name__}: {rollback_error}"
                 )
             raise
-        return await self._admit_run_locked(snapshot, accepted, input_value)
+        return await self._admit_run_locked(accepted, input_value)
 
     async def _admit_run_locked(
         self,
-        snapshot: TaskSnapshot,
         accepted: TaskRunAccepted,
         input_value: str,
     ) -> TaskRunAccepted:
-        event = build_event(
+        _, event = await self.repository.append_event_payload(
             task_id=accepted.task_id,
             run_id=accepted.run_id,
-            sequence=snapshot.task.latest_sequence + 1,
             payload=RunQueuedPayload(
                 request_id=accepted.request_id,
                 input=input_value,
             ),
         )
-        await self.repository.append_event(event)
         try:
             await self.repository.task_session(accepted.task_id).add_run_input_once(
                 accepted.run_id,
@@ -1150,7 +1145,20 @@ class TaskManager:
         await self._queue.join()
 
     async def _recover(self) -> None:
-        page = await self.repository.list_tasks(limit=1)
+        summaries: dict[str, TaskSummary] = {}
+        cursor: str | None = None
+        while True:
+            page = await self.repository.list_tasks(
+                limit=self.repository.settings.task_page_max_size,
+                cursor=cursor,
+            )
+            summaries.update(
+                (summary.task_id, summary) for summary in page.tasks
+            )
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
         queued: list[tuple[datetime, str, str, _QueuedRun]] = []
         recoverable = {
             RunStatus.QUEUED,
@@ -1159,75 +1167,95 @@ class TaskManager:
             RunStatus.CANCEL_REQUESTED,
             RunStatus.AWAITING_USER_INPUT,
         }
-        for summary in page.tasks:
-            if summary.status not in recoverable or summary.active_run_id is None:
-                continue
+        for summary in summaries.values():
             snapshot = await self.repository.get_snapshot(summary.task_id)
             if snapshot is None:
                 raise LookupError(summary.task_id)
-            run = next(
-                candidate
-                for candidate in snapshot.runs
-                if candidate.run_id == summary.active_run_id
-            )
-            accepted = TaskRunAccepted(
-                request_id=run.request_id,
-                task_id=summary.task_id,
-                run_id=run.run_id,
-            )
-            await self.repository.task_session(summary.task_id).add_run_input_once(
-                run.run_id,
-                run.input,
-            )
-            if run.status is RunStatus.QUEUED:
-                queued.append(
-                    (
-                        run.created_at,
+            if (
+                summary.status in recoverable
+                and summary.active_run_id is not None
+            ):
+                run = next(
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == summary.active_run_id
+                )
+                accepted = TaskRunAccepted(
+                    request_id=run.request_id,
+                    task_id=summary.task_id,
+                    run_id=run.run_id,
+                )
+                await self.repository.task_session(
+                    summary.task_id
+                ).add_run_input_once(
+                    run.run_id,
+                    run.input,
+                )
+                if run.status is RunStatus.QUEUED:
+                    queued.append(
+                        (
+                            run.created_at,
+                            summary.task_id,
+                            run.run_id,
+                            _QueuedRun(accepted=accepted, input=run.input),
+                        )
+                    )
+                else:
+                    lock = self._task_locks.setdefault(
                         summary.task_id,
-                        run.run_id,
-                        _QueuedRun(accepted=accepted, input=run.input),
+                        asyncio.Lock(),
                     )
-                )
-                continue
-            lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
-            async with lock:
-                await self._append_status(
-                    accepted,
-                    RunInterruptedPayload(reason="server restarted"),
-                )
-                for subagent in snapshot.subagents:
-                    if (
-                        subagent.run_id != run.run_id
-                        or subagent.status
-                        not in {
-                            SubagentStatus.QUEUED,
-                            SubagentStatus.RUNNING,
-                            SubagentStatus.CANCEL_REQUESTED,
-                        }
-                    ):
-                        continue
-                    await self._subagent_event_sink.emit(
-                        task_id=summary.task_id,
-                        run_id=run.run_id,
-                        subagent_id=subagent.subagent_id,
-                        parent_tool_call_id=subagent.parent_tool_call_id,
-                        payload=SubagentInterruptedPayload(
-                            subagent_id=subagent.subagent_id,
-                            result=SubagentResult(
-                                subagent_id=subagent.subagent_id,
-                                status=SubagentStatus.INTERRUPTED,
-                                summary="Subagent interrupted after server restart",
-                                error_code=SubagentErrorCode.INTERNAL_ERROR,
-                                error_message="server restarted",
-                            ),
-                        ),
-                    )
+                    async with lock:
+                        await self._append_status(
+                            accepted,
+                            RunInterruptedPayload(reason="server restarted"),
+                        )
+                    snapshot = await self._require_snapshot(summary.task_id)
+
+            await self._interrupt_terminal_parent_subagents(snapshot)
 
         for _, _, _, queued_run in sorted(queued):
             try:
                 self._queue.put_nowait(queued_run)
             except asyncio.QueueFull as error:
                 raise RunQueueFullError(self.max_queued_runs) from error
+
+    async def _interrupt_terminal_parent_subagents(
+        self,
+        snapshot: TaskSnapshot,
+    ) -> None:
+        terminal_run_ids = {
+            run.run_id
+            for run in snapshot.runs
+            if run.status in _TERMINAL_RUN_STATUSES
+        }
+        for subagent in snapshot.subagents:
+            if (
+                subagent.run_id not in terminal_run_ids
+                or subagent.status
+                not in {
+                    SubagentStatus.QUEUED,
+                    SubagentStatus.RUNNING,
+                    SubagentStatus.CANCEL_REQUESTED,
+                }
+            ):
+                continue
+            await self._subagent_event_sink.emit(
+                task_id=snapshot.task.task_id,
+                run_id=subagent.run_id,
+                subagent_id=subagent.subagent_id,
+                parent_tool_call_id=subagent.parent_tool_call_id,
+                payload=SubagentInterruptedPayload(
+                    subagent_id=subagent.subagent_id,
+                    result=SubagentResult(
+                        subagent_id=subagent.subagent_id,
+                        status=SubagentStatus.INTERRUPTED,
+                        summary="Subagent interrupted after server restart",
+                        error_code=SubagentErrorCode.INTERNAL_ERROR,
+                        error_message="server restarted",
+                    ),
+                ),
+            )
 
     async def _worker(self) -> None:
         while True:
@@ -1634,14 +1662,23 @@ class TaskManager:
                 )
                 return False
             event: EventEnvelope | None = None
+            baseline = await self.repository.get_snapshot(accepted.task_id)
+            if baseline is None:
+                raise LookupError(accepted.task_id)
             try:
-                event = await self._build_status_event(accepted, payload)
-                await self.repository.append_event(event)
-            except BaseException as error:
-                event_durable = event is not None and await self._event_is_durable(
-                    event
+                _, event = await self.repository.append_event_payload(
+                    task_id=accepted.task_id,
+                    run_id=accepted.run_id,
+                    payload=payload,
                 )
-                if not event_durable:
+            except BaseException as error:
+                event = await self.repository.find_matching_event(
+                    task_id=accepted.task_id,
+                    run_id=accepted.run_id,
+                    payload=payload,
+                    after_sequence=baseline.task.latest_sequence,
+                )
+                if event is None:
                     await self.repository.save_conversation_summary(
                         accepted.task_id,
                         previous,
@@ -1670,26 +1707,6 @@ class TaskManager:
                 )
             return True
 
-    async def _build_status_event(
-        self,
-        accepted: TaskRunAccepted,
-        payload: object,
-        *,
-        stage_attempt_id: str | None = None,
-        timestamp: datetime | None = None,
-    ) -> EventEnvelope:
-        snapshot = await self.repository.get_snapshot(accepted.task_id)
-        if snapshot is None:
-            raise LookupError(accepted.task_id)
-        return build_event(
-            task_id=accepted.task_id,
-            run_id=accepted.run_id,
-            sequence=snapshot.task.latest_sequence + 1,
-            payload=payload,
-            stage_attempt_id=stage_attempt_id,
-            timestamp=timestamp,
-        )
-
     async def _event_is_durable(self, expected: EventEnvelope) -> bool:
         events = await self.repository.list_events(
             expected.task_id,
@@ -1709,16 +1726,28 @@ class TaskManager:
         """Persist completion state and reconcile projection-only failures."""
 
         await self._terminate_owned_subagents(accepted, payload)
-        event = await self._build_status_event(
-            accepted,
-            payload,
-            stage_attempt_id=stage_attempt_id,
-            timestamp=timestamp,
-        )
+        baseline = await self.repository.get_snapshot(accepted.task_id)
+        if baseline is None:
+            raise LookupError(accepted.task_id)
+        event: EventEnvelope | None = None
         try:
-            updated = await self.repository.append_event(event)
+            updated, event = await self.repository.append_event_payload(
+                task_id=accepted.task_id,
+                run_id=accepted.run_id,
+                payload=payload,
+                stage_attempt_id=stage_attempt_id,
+                timestamp=timestamp,
+            )
         except BaseException as error:
-            if not await self._event_is_durable(event):
+            event = await self.repository.find_matching_event(
+                task_id=accepted.task_id,
+                run_id=accepted.run_id,
+                payload=payload,
+                after_sequence=baseline.task.latest_sequence,
+                stage_attempt_id=stage_attempt_id,
+                timestamp=timestamp,
+            )
+            if event is None:
                 raise
             current = asyncio.current_task()
             if (
@@ -1734,6 +1763,7 @@ class TaskManager:
                 exc_info=(type(error), error, error.__traceback__),
             )
             updated = await self._require_snapshot(accepted.task_id)
+        assert event is not None
         try:
             await self.event_hub.publish(event)
         except asyncio.CancelledError:
@@ -1760,13 +1790,13 @@ class TaskManager:
         timestamp: datetime | None = None,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
     ) -> tuple[TaskSnapshot, EventEnvelope]:
-        event = await self._build_status_event(
-            accepted,
-            payload,
+        updated, event = await self.repository.append_event_payload(
+            task_id=accepted.task_id,
+            run_id=accepted.run_id,
+            payload=payload,
             stage_attempt_id=stage_attempt_id,
             timestamp=timestamp,
         )
-        updated = await self.repository.append_event(event)
         if after_persist is not None:
             after_persist(updated)
         return updated, event

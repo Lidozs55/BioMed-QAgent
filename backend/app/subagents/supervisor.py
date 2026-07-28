@@ -58,6 +58,7 @@ class _SubagentEntry:
     terminal_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[SubagentResult] | None = None
     result: SubagentResult | None = None
+    pending_result: SubagentResult | None = None
     cancel_requested: bool = False
     forced_interruption: bool = False
     forced_interruption_reason: str | None = None
@@ -212,13 +213,26 @@ class SubagentSupervisor:
 
     async def wait(self, subagent_id: str) -> SubagentResult:
         entry = self._require_entry(subagent_id)
+        if entry.result is not None:
+            return entry.result
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
         if not entry.task.done():
             await asyncio.shield(entry.task)
-        if entry.result is None:
+        try:
             return entry.task.result()
-        return entry.result
+        except BaseException:
+            if entry.pending_result is None:
+                raise
+        async with entry.terminal_lock:
+            if entry.result is not None:
+                return entry.result
+            if entry.pending_result is None:
+                raise RuntimeError("subagent terminal result is unavailable")
+            return await self._persist_terminal_locked(
+                entry,
+                entry.pending_result,
+            )
 
     async def cancel(
         self,
@@ -230,6 +244,11 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
+            if entry.pending_result is not None:
+                return await self._persist_terminal_locked(
+                    entry,
+                    entry.pending_result,
+                )
             if not entry.cancel_requested:
                 await self._emit(
                     entry,
@@ -297,6 +316,11 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
+            if entry.pending_result is not None:
+                return await self._persist_terminal_locked(
+                    entry,
+                    entry.pending_result,
+                )
             try:
                 await self._emit(
                     entry,
@@ -494,6 +518,15 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
+            return await self._persist_terminal_locked(entry, result)
+
+    async def _persist_terminal_locked(
+        self,
+        entry: _SubagentEntry,
+        result: SubagentResult,
+    ) -> SubagentResult:
+        pending = entry.pending_result
+        if pending is None:
             if entry.forced_interruption:
                 result = self._task_cancelled_result(
                     entry,
@@ -504,18 +537,19 @@ class SubagentSupervisor:
                 and result.status is not SubagentStatus.CANCELLED
             ):
                 result = self._cancelled_result(result.subagent_id)
+            entry.pending_result = result
+        else:
+            result = pending
 
-            entry.result = result
-            payload = self._terminal_payload(result)
-            try:
-                await self._emit(entry, result.subagent_id, payload)
-            except BaseException as error:
-                entry.sink_error = entry.sink_error or error
-                if isinstance(error, asyncio.CancelledError):
-                    current_task = asyncio.current_task()
-                    if current_task is not None:
-                        current_task.uncancel()
-            return result
+        payload = self._terminal_payload(result)
+        try:
+            await self._emit(entry, result.subagent_id, payload)
+        except BaseException as error:
+            entry.sink_error = entry.sink_error or error
+            raise
+        entry.pending_result = None
+        entry.result = result
+        return result
 
     async def _emit(
         self,
