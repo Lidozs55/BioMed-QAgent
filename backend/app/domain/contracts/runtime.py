@@ -5,10 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.enums import MessageRole, RunStatus, TaskMode
+from app.domain.contracts.enums import (
+    MessageRole,
+    RunStatus,
+    SubagentErrorCode,
+    SubagentStatus,
+    SubagentType,
+    TaskMode,
+)
 
 
 class RunRecord(ContractModel):
@@ -60,10 +67,66 @@ class MessageRecord(ContractModel):
     created_at: datetime
 
 
+class SubagentRecord(ContractModel):
+    subagent_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    agent_type: SubagentType
+    objective: str = Field(min_length=1)
+    target_source: str | None = Field(default=None, min_length=1)
+    status: SubagentStatus
+    parent_tool_call_id: str = Field(min_length=1)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    progress_current: int = Field(ge=0)
+    progress_total: int | None = Field(default=None, ge=0)
+    progress_message: str | None = Field(default=None, min_length=1)
+    result_summary: str | None = Field(default=None, min_length=1)
+    source_asset_ids: list[str] = Field(default_factory=list)
+    recipe_id: str | None = Field(default=None, min_length=1)
+    error_code: SubagentErrorCode | None = None
+    error_message: str | None = Field(default=None, min_length=1)
+    pending_request_id: str | None = Field(default=None, min_length=1)
+
+
+class SubagentRequest(ContractModel):
+    agent_type: SubagentType
+    objective: str = Field(min_length=1)
+    target_source: str | None = Field(default=None, min_length=1)
+    domain: str = Field(min_length=1)
+    capability: str = Field(min_length=1)
+    inputs: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class SubagentResult(ContractModel):
+    subagent_id: str = Field(min_length=1)
+    status: SubagentStatus
+    summary: str = Field(min_length=1)
+    source_asset_ids: list[str] = Field(default_factory=list)
+    recipe_id: str | None = Field(default=None, min_length=1)
+    warnings: list[str] = Field(default_factory=list)
+    error_code: SubagentErrorCode | None = None
+    error_message: str | None = Field(default=None, min_length=1)
+
+    @field_validator("status")
+    @classmethod
+    def validate_terminal_status(cls, value: SubagentStatus) -> SubagentStatus:
+        if value not in {
+            SubagentStatus.COMPLETED,
+            SubagentStatus.FAILED,
+            SubagentStatus.CANCELLED,
+            SubagentStatus.INTERRUPTED,
+        }:
+            raise ValueError("status must be terminal")
+        return value
+
+
 class TaskSnapshot(ContractModel):
     task: TaskSummary
     runs: list[RunRecord] = Field(default_factory=list)
     messages: list[MessageRecord] = Field(default_factory=list)
+    subagents: list[SubagentRecord] = Field(default_factory=list)
     older_messages_cursor: str | None = None
 
 

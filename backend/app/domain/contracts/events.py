@@ -17,6 +17,7 @@ from app.domain.contracts.pipeline import (
     ValidationSummary,
     WarningRecord,
 )
+from app.domain.contracts.runtime import SubagentRequest, SubagentResult
 from app.domain.contracts.task import TaskSpecification
 
 
@@ -54,6 +55,16 @@ class RuntimeEventType(StrEnum):
     ASSISTANT_REASONING_DELTA = "assistant_reasoning_delta"
     TOOL_STARTED = "tool_started"
     CONVERSATION_COMPACTED = "conversation_compacted"
+    SUBAGENT_QUEUED = "subagent_queued"
+    SUBAGENT_STARTED = "subagent_started"
+    SUBAGENT_PROGRESS = "subagent_progress"
+    SUBAGENT_COMPLETED = "subagent_completed"
+    SUBAGENT_FAILED = "subagent_failed"
+    SUBAGENT_CANCEL_REQUESTED = "subagent_cancel_requested"
+    SUBAGENT_CANCELLED = "subagent_cancelled"
+    SUBAGENT_INTERRUPTED = "subagent_interrupted"
+    SUBAGENT_INPUT_REQUIRED = "subagent_input_required"
+    SUBAGENT_INPUT_RESUMED = "subagent_input_resumed"
 
 
 class TaskCreatedPayload(ContractModel):
@@ -311,6 +322,80 @@ class ConversationCompactedPayload(ContractModel):
     summary_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class SubagentQueuedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_QUEUED] = RuntimeEventType.SUBAGENT_QUEUED
+    subagent_id: str = Field(min_length=1)
+    request: SubagentRequest
+
+
+class SubagentStartedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_STARTED] = RuntimeEventType.SUBAGENT_STARTED
+    subagent_id: str = Field(min_length=1)
+
+
+class SubagentProgressPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_PROGRESS] = RuntimeEventType.SUBAGENT_PROGRESS
+    subagent_id: str = Field(min_length=1)
+    current: int = Field(ge=0)
+    total: int | None = Field(default=None, ge=0)
+    message: str | None = Field(default=None, min_length=1)
+
+
+class SubagentCompletedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_COMPLETED] = (
+        RuntimeEventType.SUBAGENT_COMPLETED
+    )
+    subagent_id: str = Field(min_length=1)
+    result: SubagentResult
+
+
+class SubagentFailedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_FAILED] = RuntimeEventType.SUBAGENT_FAILED
+    subagent_id: str = Field(min_length=1)
+    result: SubagentResult
+
+
+class SubagentCancelRequestedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_CANCEL_REQUESTED] = (
+        RuntimeEventType.SUBAGENT_CANCEL_REQUESTED
+    )
+    subagent_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, min_length=1)
+
+
+class SubagentCancelledPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_CANCELLED] = (
+        RuntimeEventType.SUBAGENT_CANCELLED
+    )
+    subagent_id: str = Field(min_length=1)
+    result: SubagentResult
+
+
+class SubagentInterruptedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_INTERRUPTED] = (
+        RuntimeEventType.SUBAGENT_INTERRUPTED
+    )
+    subagent_id: str = Field(min_length=1)
+    result: SubagentResult
+
+
+class SubagentInputRequiredPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_INPUT_REQUIRED] = (
+        RuntimeEventType.SUBAGENT_INPUT_REQUIRED
+    )
+    subagent_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+
+
+class SubagentInputResumedPayload(ContractModel):
+    type: Literal[RuntimeEventType.SUBAGENT_INPUT_RESUMED] = (
+        RuntimeEventType.SUBAGENT_INPUT_RESUMED
+    )
+    subagent_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+
+
 EventPayload = Annotated[
     TaskCreatedPayload
     | PlanReadyPayload
@@ -341,7 +426,17 @@ EventPayload = Annotated[
     | AssistantDeltaPayload
     | AssistantReasoningDeltaPayload
     | ToolStartedPayload
-    | ConversationCompactedPayload,
+    | ConversationCompactedPayload
+    | SubagentQueuedPayload
+    | SubagentStartedPayload
+    | SubagentProgressPayload
+    | SubagentCompletedPayload
+    | SubagentFailedPayload
+    | SubagentCancelRequestedPayload
+    | SubagentCancelledPayload
+    | SubagentInterruptedPayload
+    | SubagentInputRequiredPayload
+    | SubagentInputResumedPayload,
     Field(discriminator="type"),
 ]
 
@@ -353,6 +448,19 @@ _STAGE_EVENTS = {
     PipelineEventType.STAGE_SKIPPED,
 }
 
+_SUBAGENT_EVENTS = {
+    RuntimeEventType.SUBAGENT_QUEUED,
+    RuntimeEventType.SUBAGENT_STARTED,
+    RuntimeEventType.SUBAGENT_PROGRESS,
+    RuntimeEventType.SUBAGENT_COMPLETED,
+    RuntimeEventType.SUBAGENT_FAILED,
+    RuntimeEventType.SUBAGENT_CANCEL_REQUESTED,
+    RuntimeEventType.SUBAGENT_CANCELLED,
+    RuntimeEventType.SUBAGENT_INTERRUPTED,
+    RuntimeEventType.SUBAGENT_INPUT_REQUIRED,
+    RuntimeEventType.SUBAGENT_INPUT_RESUMED,
+}
+
 
 class EventEnvelope(ContractModel):
     schema_version: Literal["1.0", "2.0"] = "1.0"
@@ -361,6 +469,8 @@ class EventEnvelope(ContractModel):
     task_id: str = Field(min_length=1)
     run_id: str | None = Field(default=None, min_length=1)
     stage_attempt_id: str | None = None
+    subagent_id: str | None = Field(default=None, min_length=1)
+    parent_tool_call_id: str | None = Field(default=None, min_length=1)
     sequence: int = Field(ge=1)
     timestamp: datetime
     payload: EventPayload
@@ -371,6 +481,20 @@ class EventEnvelope(ContractModel):
             raise ValueError("event type must match payload type")
         if self.type in _STAGE_EVENTS and not self.stage_attempt_id:
             raise ValueError("stage events require stage_attempt_id")
+        has_subagent_linkage = (
+            self.subagent_id is not None or self.parent_tool_call_id is not None
+        )
+        if has_subagent_linkage and self.schema_version != "2.0":
+            raise ValueError("subagent linkage requires schema_version 2.0")
+        if has_subagent_linkage and not self.run_id:
+            raise ValueError("subagent linkage requires run_id")
+        if self.type in _SUBAGENT_EVENTS:
+            if not self.subagent_id or not self.parent_tool_call_id:
+                raise ValueError("subagent events require both envelope linkage fields")
+            if self.payload.subagent_id != self.subagent_id:
+                raise ValueError(
+                    "payload.subagent_id must match envelope.subagent_id"
+                )
         runtime_scoped = (
             isinstance(self.type, RuntimeEventType)
             or (
@@ -398,18 +522,23 @@ def build_event(
     payload: EventPayload,
     run_id: str | None = None,
     stage_attempt_id: str | None = None,
+    subagent_id: str | None = None,
+    parent_tool_call_id: str | None = None,
     timestamp: datetime | None = None,
     schema_version: Literal["1.0", "2.0"] | None = None,
 ) -> EventEnvelope:
     """Build a validated event; persistence assigns task-local sequence."""
 
     return EventEnvelope(
-        schema_version=schema_version or ("2.0" if run_id else "1.0"),
+        schema_version=schema_version
+        or ("2.0" if run_id or subagent_id or parent_tool_call_id else "1.0"),
         event_id=generate_prefixed_uuid("event"),
         type=payload.type,
         task_id=task_id,
         run_id=run_id,
         stage_attempt_id=stage_attempt_id,
+        subagent_id=subagent_id,
+        parent_tool_call_id=parent_tool_call_id,
         sequence=sequence,
         timestamp=timestamp or datetime.now(UTC),
         payload=payload,
