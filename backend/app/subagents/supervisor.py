@@ -239,19 +239,53 @@ class SubagentSupervisor:
                         reason=reason,
                     ),
                 )
-                entry.cancel_requested = True
-                if self._input_broker is not None:
-                    await self._input_broker.cancel_subagent(
-                        task_id=entry.task_id,
-                        run_id=entry.run_id,
-                        subagent_id=subagent_id,
-                    )
-                if entry.task is not None:
-                    entry.task.cancel()
+                await self._complete_cancel_finalization(entry, subagent_id)
 
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
         return await asyncio.shield(entry.task)
+
+    async def _complete_cancel_finalization(
+        self,
+        entry: _SubagentEntry,
+        subagent_id: str,
+    ) -> None:
+        finalization = asyncio.create_task(
+            self._finalize_cancel(entry, subagent_id),
+            name=f"subagent-cancel-finalize:{subagent_id}",
+        )
+        try:
+            await asyncio.shield(finalization)
+        except asyncio.CancelledError:
+            while not finalization.done():
+                try:
+                    await asyncio.shield(finalization)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not finalization.cancelled():
+                finalization.exception()
+            raise
+
+    async def _finalize_cancel(
+        self,
+        entry: _SubagentEntry,
+        subagent_id: str,
+    ) -> None:
+        entry.cancel_requested = True
+        try:
+            if self._input_broker is not None:
+                await self._input_broker.cancel_subagent(
+                    task_id=entry.task_id,
+                    run_id=entry.run_id,
+                    subagent_id=subagent_id,
+                )
+        except BaseException as error:
+            entry.sink_error = entry.sink_error or error
+        finally:
+            if entry.task is not None:
+                entry.task.cancel()
 
     async def _cancel_for_shutdown(
         self,

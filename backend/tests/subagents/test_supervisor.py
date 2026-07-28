@@ -13,6 +13,7 @@ from app.domain.contracts import (
     SubagentCompletedPayload,
     SubagentErrorCode,
     SubagentFailedPayload,
+    SubagentInputRequiredPayload,
     SubagentInterruptedPayload,
     SubagentQueuedPayload,
     SubagentRequest,
@@ -27,6 +28,7 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.events import EventPayload
 from app.runtime.state import reduce_task_event
+from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.supervisor import SubagentSupervisor
 
 Owner = tuple[str, str]
@@ -442,6 +444,70 @@ class SelectiveCancelFailureSink(RecordingSink):
         )
 
 
+class BrokerWaitingRunner:
+    def __init__(self, broker: SubagentInputBroker) -> None:
+        self.broker = broker
+        self.waiting = asyncio.Event()
+
+    async def run(
+        self,
+        request: SubagentRequest,
+        *,
+        subagent_id: str,
+        task_id: str,
+        run_id: str,
+    ) -> SubagentResult:
+        del request
+        self.waiting.set()
+        await self.broker.request(
+            task_id=task_id,
+            run_id=run_id,
+            payload=SubagentInputRequiredPayload(
+                subagent_id=subagent_id,
+                request_id=f"input_{subagent_id}",
+                summary="Confirm access",
+                prompt_kind="confirmation",
+            ),
+        )
+        raise AssertionError("cancelled input request must not resume")
+
+
+class BlockingCleanupBroker(SubagentInputBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cleanup_entered = asyncio.Event()
+        self.release_cleanup = asyncio.Event()
+        self.cleanup_completed = asyncio.Event()
+
+    async def cancel_subagent(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+    ) -> None:
+        self.cleanup_entered.set()
+        await self.release_cleanup.wait()
+        await super().cancel_subagent(
+            task_id=task_id,
+            run_id=run_id,
+            subagent_id=subagent_id,
+        )
+        self.cleanup_completed.set()
+
+
+class FailingCleanupBroker(SubagentInputBroker):
+    async def cancel_subagent(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+    ) -> None:
+        del task_id, run_id, subagent_id
+        raise RuntimeError("broker cleanup failed")
+
+
 class FinishRaceRunner:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -743,6 +809,121 @@ async def test_cancel_emits_request_then_one_cancelled_terminal_event() -> None:
     )
     assert await supervisor.cancel(subagent_id, reason="duplicate") is result
     await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cancel_caller_waits_for_local_finalization() -> None:
+    broker = BlockingCleanupBroker()
+    runner = BrokerWaitingRunner(broker)
+    sink = RecordingSink()
+    supervisor = SubagentSupervisor(input_broker=broker)
+    records = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=runner,
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+    request_id = f"input_{subagent_id}"
+    await asyncio.wait_for(runner.waiting.wait(), timeout=1)
+    cancellation = asyncio.create_task(
+        supervisor.cancel(subagent_id, reason="user stopped it")
+    )
+    await asyncio.wait_for(broker.cleanup_entered.wait(), timeout=1)
+    try:
+        cancellation.cancel()
+        await _event_loop_barrier()
+        assert not cancellation.done()
+
+        broker.release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancellation, timeout=1)
+
+        assert broker.cleanup_completed.is_set()
+        with pytest.raises(LookupError):
+            await broker.resume(
+                task_id="task_1",
+                run_id="run_1",
+                request_id=request_id,
+                decision="approve",
+                detail={},
+            )
+        result = await asyncio.wait_for(supervisor.wait(subagent_id), timeout=1)
+        assert result.status is SubagentStatus.CANCELLED
+        assert await supervisor.cancel(subagent_id, reason="retry") is result
+        lifecycle = sink.payloads_for(subagent_id)
+        assert (
+            sum(
+                isinstance(payload, SubagentCancelRequestedPayload)
+                for payload in lifecycle
+            )
+            == 1
+        )
+        assert (
+            sum(
+                isinstance(payload, SubagentCancelledPayload)
+                for payload in lifecycle
+            )
+            == 1
+        )
+    finally:
+        broker.release_cleanup.set()
+        await broker.cancel_subagent(
+            task_id="task_1",
+            run_id="run_1",
+            subagent_id=subagent_id,
+        )
+        await asyncio.gather(cancellation, return_exceptions=True)
+        await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_broker_cleanup_failure_still_cancels_child_once() -> None:
+    broker = FailingCleanupBroker()
+    runner = BrokerWaitingRunner(broker)
+    sink = RecordingSink()
+    supervisor = SubagentSupervisor(input_broker=broker)
+    records = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=runner,
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+    await asyncio.wait_for(runner.waiting.wait(), timeout=1)
+    try:
+        result = await asyncio.wait_for(
+            supervisor.cancel(subagent_id, reason="user stopped it"),
+            timeout=1,
+        )
+
+        assert result.status is SubagentStatus.CANCELLED
+        assert await supervisor.cancel(subagent_id, reason="retry") is result
+        assert (
+            str(supervisor._entries[subagent_id].sink_error)
+            == "broker cleanup failed"
+        )
+        lifecycle = sink.payloads_for(subagent_id)
+        assert (
+            sum(
+                isinstance(payload, SubagentCancelRequestedPayload)
+                for payload in lifecycle
+            )
+            == 1
+        )
+        assert (
+            sum(
+                isinstance(payload, SubagentCancelledPayload)
+                for payload in lifecycle
+            )
+            == 1
+        )
+    finally:
+        await supervisor.shutdown()
 
 
 @pytest.mark.asyncio
