@@ -420,6 +420,15 @@ class TerminalProblemSink(RecordingSink):
         )
 
 
+class LifecycleTerminalProblemSink(TerminalProblemSink):
+    def __init__(self, mode: str) -> None:
+        super().__init__(mode)
+        self.released_owners: list[Owner] = []
+
+    async def release_run_attempts(self, task_id: str, run_id: str) -> None:
+        self.released_owners.append((task_id, run_id))
+
+
 class SelectiveCancelFailureSink(RecordingSink):
     def __init__(self) -> None:
         super().__init__()
@@ -1333,6 +1342,156 @@ async def test_wait_reconciles_same_durable_terminal_after_two_failures(
         await supervisor.shutdown()
         await hub.close()
         await repository.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["cancel", "shutdown"])
+async def test_precedence_first_reconciles_uncertain_durable_terminal(
+    tmp_path,
+    monkeypatch,
+    action: str,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id="task_1",
+                mode=TaskMode.AGENT,
+                title="Uncertain durable terminal",
+                status=RunStatus.RUNNING,
+                active_run_id="run_1",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+            runs=[
+                RunRecord(
+                    run_id="run_1",
+                    task_id="task_1",
+                    request_id="request_1",
+                    status=RunStatus.RUNNING,
+                    input="Uncertain durable terminal",
+                    created_at=NOW,
+                    updated_at=NOW,
+                    started_at=NOW,
+                )
+            ],
+        )
+    )
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+    supervisor = SubagentSupervisor()
+    real_append_payload = repository.append_event_payload
+    real_find_matching = repository.find_matching_event
+    terminal_appends = 0
+    terminal_lookups = 0
+
+    async def persist_terminal_then_raise(**kwargs):
+        nonlocal terminal_appends
+        if isinstance(kwargs["payload"], SubagentCompletedPayload):
+            terminal_appends += 1
+            await real_append_payload(**kwargs)
+            raise OSError("terminal projection failed after persistence")
+        return await real_append_payload(**kwargs)
+
+    async def fail_first_terminal_lookup(**kwargs):
+        nonlocal terminal_lookups
+        if isinstance(kwargs["payload"], SubagentCompletedPayload):
+            terminal_lookups += 1
+            if terminal_lookups == 1:
+                raise RuntimeError("terminal lookup temporarily unavailable")
+        return await real_find_matching(**kwargs)
+
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        persist_terminal_then_raise,
+    )
+    monkeypatch.setattr(
+        repository,
+        "find_matching_event",
+        fail_first_terminal_lookup,
+    )
+    records = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=ImmediateRunner(),
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+    try:
+        with pytest.raises(
+            OSError,
+            match="terminal projection failed after persistence",
+        ):
+            await supervisor.wait(subagent_id)
+
+        if action == "cancel":
+            result = await supervisor.cancel(
+                subagent_id,
+                reason="user stopped it",
+            )
+        else:
+            await supervisor.shutdown()
+            result = await supervisor.wait(subagent_id)
+        events = await repository.list_events("task_1")
+
+        assert result.status is SubagentStatus.COMPLETED
+        assert terminal_appends == 1
+        assert terminal_lookups == 2
+        assert not any(
+            isinstance(
+                event.payload,
+                (
+                    SubagentCancelRequestedPayload,
+                    SubagentCancelledPayload,
+                    SubagentInterruptedPayload,
+                ),
+            )
+            for event in events
+        )
+        assert (
+            sum(
+                isinstance(event.payload, SubagentCompletedPayload)
+                and event.subagent_id == subagent_id
+                for event in events
+            )
+            == 1
+        )
+    finally:
+        await supervisor.shutdown()
+        await hub.close()
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_release_run_cleans_attempts_only_after_terminal_is_durable() -> None:
+    sink = LifecycleTerminalProblemSink("fail")
+    supervisor = SubagentSupervisor()
+    records = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=ImmediateRunner(),
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+
+    with pytest.raises(RuntimeError, match="terminal event failed"):
+        await supervisor.wait(subagent_id)
+    with pytest.raises(RuntimeError, match="nonterminal"):
+        await supervisor.release_run("task_1", "run_1")
+    assert sink.released_owners == []
+
+    sink.mode = "ok"
+    await supervisor.wait(subagent_id)
+    await supervisor.release_run("task_1", "run_1")
+
+    assert sink.released_owners == [("task_1", "run_1")]
+    await supervisor.shutdown()
 
 
 @pytest.mark.asyncio

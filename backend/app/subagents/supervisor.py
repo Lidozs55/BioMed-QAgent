@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.domain.contracts import (
     SubagentCancelledPayload,
@@ -36,6 +36,24 @@ class SubagentEventSink(Protocol):
         parent_tool_call_id: str,
         payload: EventPayload,
     ) -> None: ...
+
+
+@runtime_checkable
+class SubagentTerminalReconciler(Protocol):
+    async def reconcile_terminal(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+        parent_tool_call_id: str,
+        payload: EventPayload,
+    ) -> bool: ...
+
+
+@runtime_checkable
+class SubagentAttemptLifecycle(Protocol):
+    async def release_run_attempts(self, task_id: str, run_id: str) -> None: ...
 
 
 class SubagentRunner(Protocol):
@@ -244,6 +262,15 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
+            if (
+                entry.pending_result is not None
+                and await self._promote_reconciled_terminal_locked(
+                    entry,
+                    subagent_id,
+                )
+            ):
+                assert entry.result is not None
+                return entry.result
             if not entry.cancel_requested:
                 await self._emit(
                     entry,
@@ -315,6 +342,15 @@ class SubagentSupervisor:
         entry = self._require_entry(subagent_id)
         async with entry.terminal_lock:
             if entry.result is not None:
+                return entry.result
+            if (
+                entry.pending_result is not None
+                and await self._promote_reconciled_terminal_locked(
+                    entry,
+                    subagent_id,
+                )
+            ):
+                assert entry.result is not None
                 return entry.result
             terminal_was_pending = entry.pending_result is not None
             if terminal_was_pending:
@@ -392,6 +428,14 @@ class SubagentSupervisor:
                 for _, entry in entries
             ):
                 raise RuntimeError("cannot release run with nonterminal subagents")
+            sinks = {
+                id(entry.sink): entry.sink
+                for _, entry in entries
+                if isinstance(entry.sink, SubagentAttemptLifecycle)
+            }
+            for sink in sinks.values():
+                assert isinstance(sink, SubagentAttemptLifecycle)
+                await sink.release_run_attempts(task_id, run_id)
             for subagent_id, _ in entries:
                 self._entries.pop(subagent_id, None)
             if (
@@ -555,6 +599,32 @@ class SubagentSupervisor:
         entry.pending_result = None
         entry.result = result
         return result
+
+    async def _promote_reconciled_terminal_locked(
+        self,
+        entry: _SubagentEntry,
+        subagent_id: str,
+    ) -> bool:
+        pending = entry.pending_result
+        if pending is None or not isinstance(
+            entry.sink,
+            SubagentTerminalReconciler,
+        ):
+            return False
+        payload = self._terminal_payload(pending)
+        async with asyncio.timeout(self._event_timeout_seconds):
+            durable = await entry.sink.reconcile_terminal(
+                task_id=entry.task_id,
+                run_id=entry.run_id,
+                subagent_id=subagent_id,
+                parent_tool_call_id=entry.parent_tool_call_id,
+                payload=payload,
+            )
+        if not durable:
+            return False
+        entry.pending_result = None
+        entry.result = pending
+        return True
 
     async def _emit(
         self,

@@ -50,6 +50,41 @@ def _queued_payload(subagent_id: str = "sub_1") -> SubagentQueuedPayload:
     )
 
 
+def _cancelled_payload(subagent_id: str = "sub_1") -> SubagentCancelledPayload:
+    return SubagentCancelledPayload(
+        subagent_id=subagent_id,
+        result=SubagentResult(
+            subagent_id=subagent_id,
+            status=SubagentStatus.CANCELLED,
+            summary="Cancelled",
+        ),
+    )
+
+
+async def _prepared_sink(tmp_path):
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(_empty_snapshot())
+    await repository.append_event(
+        build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=1,
+            payload=RunQueuedPayload(request_id="req_1", input="research"),
+        )
+    )
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+    await sink.emit(
+        task_id="task_1",
+        run_id="run_1",
+        subagent_id="sub_1",
+        parent_tool_call_id="call_1",
+        payload=_queued_payload(),
+    )
+    return repository, hub, sink
+
+
 @pytest.mark.asyncio
 async def test_durable_sink_appends_projects_and_publishes_one_event(
     tmp_path,
@@ -89,6 +124,269 @@ async def test_durable_sink_appends_projects_and_publishes_one_event(
         assert len(events) == 2
     finally:
         await subscription.close()
+        await hub.close()
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_same_key_callers_share_one_journal_and_live_execution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository, hub, sink = await _prepared_sink(tmp_path)
+    real_append = repository.append_event_payload
+    real_publish = hub.publish
+    append_entered = asyncio.Event()
+    release_append = asyncio.Event()
+    append_calls = 0
+    publish_calls = 0
+
+    async def block_terminal_append(**kwargs):
+        nonlocal append_calls
+        if isinstance(kwargs["payload"], SubagentCancelledPayload):
+            append_calls += 1
+            append_entered.set()
+            await release_append.wait()
+        return await real_append(**kwargs)
+
+    async def count_terminal_publish(event) -> None:
+        nonlocal publish_calls
+        if isinstance(event.payload, SubagentCancelledPayload):
+            publish_calls += 1
+        await real_publish(event)
+
+    monkeypatch.setattr(repository, "append_event_payload", block_terminal_append)
+    monkeypatch.setattr(hub, "publish", count_terminal_publish)
+    emit_kwargs = {
+        "task_id": "task_1",
+        "run_id": "run_1",
+        "subagent_id": "sub_1",
+        "parent_tool_call_id": "call_1",
+        "payload": _cancelled_payload(),
+    }
+    first = asyncio.create_task(sink.emit(**emit_kwargs))
+    try:
+        await asyncio.wait_for(append_entered.wait(), timeout=1)
+        second = asyncio.create_task(sink.emit(**emit_kwargs))
+        await asyncio.sleep(0)
+        release_append.set()
+        await asyncio.gather(first, second)
+
+        events = await repository.list_events("task_1")
+        assert append_calls == 1
+        assert publish_calls == 1
+        assert (
+            sum(
+                isinstance(event.payload, SubagentCancelledPayload)
+                for event in events
+            )
+            == 1
+        )
+    finally:
+        release_append.set()
+        await asyncio.gather(first, return_exceptions=True)
+        await hub.close()
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_does_not_cancel_shared_emit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository, hub, sink = await _prepared_sink(tmp_path)
+    real_append = repository.append_event_payload
+    real_publish = hub.publish
+    publish_entered = asyncio.Event()
+    release_publish = asyncio.Event()
+    append_calls = 0
+    publish_calls = 0
+
+    async def count_terminal_append(**kwargs):
+        nonlocal append_calls
+        if isinstance(kwargs["payload"], SubagentCancelledPayload):
+            append_calls += 1
+        return await real_append(**kwargs)
+
+    async def block_terminal_publish(event) -> None:
+        nonlocal publish_calls
+        if isinstance(event.payload, SubagentCancelledPayload):
+            publish_calls += 1
+            publish_entered.set()
+            await release_publish.wait()
+        await real_publish(event)
+
+    monkeypatch.setattr(repository, "append_event_payload", count_terminal_append)
+    monkeypatch.setattr(hub, "publish", block_terminal_publish)
+    emit_kwargs = {
+        "task_id": "task_1",
+        "run_id": "run_1",
+        "subagent_id": "sub_1",
+        "parent_tool_call_id": "call_1",
+        "payload": _cancelled_payload(),
+    }
+    first = asyncio.create_task(sink.emit(**emit_kwargs))
+    try:
+        await asyncio.wait_for(publish_entered.wait(), timeout=1)
+        second = asyncio.create_task(sink.emit(**emit_kwargs))
+        await asyncio.sleep(0)
+        first.cancel()
+        release_publish.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+
+        events = await repository.list_events("task_1")
+        assert append_calls == 1
+        assert publish_calls == 1
+        assert (
+            sum(
+                isinstance(event.payload, SubagentCancelledPayload)
+                for event in events
+            )
+            == 1
+        )
+    finally:
+        release_publish.set()
+        await asyncio.gather(first, return_exceptions=True)
+        await hub.close()
+        await repository.close()
+
+
+class _CleanupBoundarySink(DurableSubagentEventSink):
+    def __init__(self, *, repository: TaskRepository, hub: EventHub) -> None:
+        super().__init__(repository=repository, hub=hub)
+        self.second_waiter_leaving = asyncio.Event()
+        self.release_second_waiter = asyncio.Event()
+
+    async def _leave_attempt(self, **kwargs) -> None:
+        current = asyncio.current_task()
+        if current is not None and current.get_name() == "same-key-second":
+            self.second_waiter_leaving.set()
+            await self.release_second_waiter.wait()
+        await super()._leave_attempt(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_three_callers_do_not_cross_attempt_cleanup_generations(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(_empty_snapshot())
+    await repository.append_event(
+        build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=1,
+            payload=RunQueuedPayload(request_id="req_1", input="research"),
+        )
+    )
+    sink = _CleanupBoundarySink(repository=repository, hub=hub)
+    await sink.emit(
+        task_id="task_1",
+        run_id="run_1",
+        subagent_id="sub_1",
+        parent_tool_call_id="call_1",
+        payload=_queued_payload(),
+    )
+    real_publish = hub.publish
+    publish_entered = asyncio.Event()
+    release_publish = asyncio.Event()
+    publish_calls = 0
+
+    async def block_first_terminal_publish(event) -> None:
+        nonlocal publish_calls
+        if isinstance(event.payload, SubagentCancelledPayload):
+            publish_calls += 1
+            if publish_calls == 1:
+                publish_entered.set()
+                await release_publish.wait()
+        await real_publish(event)
+
+    monkeypatch.setattr(hub, "publish", block_first_terminal_publish)
+    emit_kwargs = {
+        "task_id": "task_1",
+        "run_id": "run_1",
+        "subagent_id": "sub_1",
+        "parent_tool_call_id": "call_1",
+        "payload": _cancelled_payload(),
+    }
+    first = asyncio.create_task(sink.emit(**emit_kwargs), name="same-key-first")
+    try:
+        await asyncio.wait_for(publish_entered.wait(), timeout=1)
+        second = asyncio.create_task(
+            sink.emit(**emit_kwargs),
+            name="same-key-second",
+        )
+        await asyncio.sleep(0)
+        release_publish.set()
+        await asyncio.wait_for(sink.second_waiter_leaving.wait(), timeout=1)
+        await first
+
+        third = asyncio.create_task(
+            sink.emit(**emit_kwargs),
+            name="same-key-third",
+        )
+        await third
+        sink.release_second_waiter.set()
+        await second
+
+        events = await repository.list_events("task_1")
+        assert publish_calls == 1
+        assert (
+            sum(
+                isinstance(event.payload, SubagentCancelledPayload)
+                for event in events
+            )
+            == 1
+        )
+        assert sink._attempts == {}
+    finally:
+        release_publish.set()
+        sink.release_second_waiter.set()
+        await asyncio.gather(first, return_exceptions=True)
+        await hub.close()
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_release_run_attempts_removes_abandoned_failures(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository, hub, sink = await _prepared_sink(tmp_path)
+    real_append = repository.append_event_payload
+
+    async def fail_terminal_before_persistence(**kwargs):
+        if isinstance(kwargs["payload"], SubagentCancelledPayload):
+            raise OSError("terminal storage unavailable")
+        return await real_append(**kwargs)
+
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        fail_terminal_before_persistence,
+    )
+    try:
+        with pytest.raises(OSError, match="terminal storage unavailable"):
+            await sink.emit(
+                task_id="task_1",
+                run_id="run_1",
+                subagent_id="sub_1",
+                parent_tool_call_id="call_1",
+                payload=_cancelled_payload(),
+            )
+        assert sink._attempts
+
+        await sink.release_run_attempts("task_1", "run_1")
+
+        assert sink._attempts == {}
+        assert sink._completed_keys == set()
+    finally:
         await hub.close()
         await repository.close()
 
