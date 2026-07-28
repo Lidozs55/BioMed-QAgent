@@ -278,3 +278,36 @@
 - [ ] **P2** `config.py` 扩展配置项（`crawler_ua` / `crawler_rate_limit_seconds` / `compaction_*` / `stage_timeouts` / `max_download_bytes`）
 - [ ] **P2** 启动时校验 `DASHSCOPE_API_KEY` 非空（fail fast）
 - [ ] **P2** `OUTPUT_DIR` 改为绝对路径默认值（当前相对路径 cwd 依赖）
+
+---
+
+## 6. 托管式 Subagent 与自主数据源探索（P0）
+
+> 对应 Commonly TASK-030。完整设计见
+> `docs/superpowers/specs/2026-07-28-managed-subagent-research-design.md`。
+
+### 6.1 运行时与事件契约
+
+- [ ] **P0** 新增 `SubagentSupervisor`、子 Agent 状态机和父 Task durable event 投影
+- [ ] **P0** 支持单 Run 3 路、全局 4 路子 Agent 并发，以及父子取消和重启中断
+- [ ] **P0** 新增独立 `subagent_input_required` HIL 路由，兄弟任务保持运行
+
+### 6.2 WorkflowRecipe 与采集
+
+- [ ] **P0** 用户数据源选择改为偏好，公开免登录来源允许自动探索
+- [ ] **P0** 新增不可执行 WorkflowRecipe Store 与内部 `create_skill` Skill
+- [ ] **P0** 强制 API → HTML → Browser 三级回退，并记录可审计尝试
+- [ ] **P0** 子 Agent 仅提交已验证 SourceAsset，Validation Gate 继续独占产物发布
+- [ ] **P1** Crawler 接入 lifespan-owned BrowserPool 和 per-host limiter
+- [ ] **P1** 封闭旧 `self_evolution` 任意 Python 写入 `learned/` 的路径
+
+### 6.3 前端
+
+- [ ] **P0** 右侧 `ResizablePanel` 改为 subagent 工作区，移动端使用 Sheet
+- [ ] **P0** 产物入口迁移到聊天输入区左下角 FAB，并支持预览/保存全部
+- [ ] **P0** reducer 支持 subagent snapshot/event 投影及旧事件回放
+
+### 6.4 验证
+
+- [ ] **P0** 覆盖并发、取消、重启、HIL、Recipe、安全边界和三级回退测试
+- [ ] **P0** 完成多子 Agent → SourceAsset → Pipeline → Validation Gate 端到端测试
