@@ -97,6 +97,8 @@ interface AgentComposerProps {
   contextWindow?: number;
   /** Estimated tokens currently used in the conversation */
   contextTokensUsed?: number;
+  /** Called when the user requests context compaction */
+  onCompact?: () => void;
 }
 
 export function AgentComposer({
@@ -123,6 +125,7 @@ export function AgentComposer({
   selectedModelId,
   contextWindow,
   contextTokensUsed,
+  onCompact,
 }: AgentComposerProps) {
   // Attachment state (legacy, always applicable)
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -350,6 +353,7 @@ export function AgentComposer({
           <ContextUsageInline
             usedTokens={contextTokensUsed ?? 0}
             totalTokens={contextWindow}
+            onCompact={onCompact}
           />
         )}
         <input

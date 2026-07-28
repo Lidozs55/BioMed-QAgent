@@ -41,13 +41,13 @@ function formatTokens(n: number): string {
 function barColor(pct: number): string {
   if (pct >= 90) return "bg-destructive";
   if (pct >= 70) return "bg-amber-500";
-  return "bg-emerald-500";
+  return "bg-primary";
 }
 
 function textColor(pct: number): string {
   if (pct >= 90) return "text-destructive";
   if (pct >= 70) return "text-amber-600";
-  return "text-emerald-600";
+  return "text-muted-foreground";
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,7 +66,6 @@ export function ContextUsageInline({
 
   const handleCompact = useCallback(() => {
     onCompact?.();
-    setOpen(false);
   }, [onCompact]);
 
   // Hide if no meaningful capacity data
@@ -94,36 +93,45 @@ export function ContextUsageInline({
           </button>
         }
       />
-      <PopoverContent align="start" side="top" className="w-52">
+      <PopoverContent align="start" side="top" className="w-64">
         <PopoverHeader>
-          <PopoverTitle className="text-xs">上下文窗口</PopoverTitle>
-          <PopoverDescription className="text-[11px]">
-            {formatTokens(usedTokens)} / {formatTokens(totalTokens)} tokens
+          <div className="flex items-center justify-between">
+            <PopoverTitle className="text-sm">上下文窗口</PopoverTitle>
+            <span className={cn("font-mono text-sm font-semibold tabular-nums", textColor(pct))}>
+              {pct}%
+            </span>
+          </div>
+          <PopoverDescription className="text-xs leading-relaxed">
+            展示当前对话的上下文占用情况；压缩会摘要早期内容，需等待片刻并消耗少量积分。
           </PopoverDescription>
         </PopoverHeader>
-        <div className="flex flex-col gap-1.5">
-          <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="flex flex-col gap-2.5">
+          {/* Progress bar */}
+          <div className="relative h-2 overflow-hidden rounded-full bg-muted">
             <div
-              className={cn("h-full rounded-full", barColor(pct))}
+              className={cn("h-full rounded-full transition-all duration-300", barColor(pct))}
               style={{ width: `${pct}%` }}
             />
           </div>
-          {onCompact && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-0.5 h-7 w-full gap-1 text-xs"
-              disabled={compacting || pct < 10}
-              onClick={handleCompact}
-            >
-              {compacting ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <ArrowsInIcon data-icon="inline-start" />
-              )}
-              {compacting ? "压缩中..." : "压缩上下文"}
-            </Button>
-          )}
+          {/* Token count detail */}
+          <p className="text-[11px] text-muted-foreground">
+            {formatTokens(usedTokens)} / {formatTokens(totalTokens)} tokens
+          </p>
+          {/* Compact button */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 w-full gap-1.5 text-xs"
+            disabled={compacting || pct < 10}
+            onClick={handleCompact}
+          >
+            {compacting ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <ArrowsInIcon data-icon="inline-start" />
+            )}
+            {compacting ? "压缩中..." : "压缩上下文"}
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

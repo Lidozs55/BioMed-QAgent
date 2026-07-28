@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
@@ -51,6 +52,8 @@ interface ChatPanelProps {
     input: ResumeRunInput,
   ) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
+  /** Trigger context compaction on a task */
+  compactTask?: (taskId: string) => Promise<void>;
   /** Available models from settings */
   models?: ModelInfo[];
   /** Whether the user has configured an API key */
@@ -123,6 +126,7 @@ export function ChatPanel({
   continueTask,
   resumeRun,
   loadOlderMessages,
+  compactTask,
   models,
   hasApiKey,
   onOpenSettings,
@@ -145,6 +149,21 @@ export function ChatPanel({
 
   // Estimate context token usage from conversation items
   const estimatedTokens = useMemo(() => estimateContextTokens(items), [items]);
+
+  // Context compaction handler
+  const [compacting, setCompacting] = useState(false);
+  const handleCompact = useCallback(async () => {
+    if (activeTaskId === null || compactTask === undefined) return;
+    setCompacting(true);
+    try {
+      await compactTask(activeTaskId);
+      toast.success("上下文压缩已触发", { description: "早期内容将被摘要以释放上下文空间" });
+    } catch (e) {
+      toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+    } finally {
+      setCompacting(false);
+    }
+  }, [activeTaskId, compactTask]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
@@ -480,6 +499,7 @@ export function ChatPanel({
                 selectedModelId={selectedModelId}
                 contextWindow={contextWindow}
                 contextTokensUsed={estimatedTokens}
+                onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
             </div>
