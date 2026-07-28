@@ -1021,6 +1021,55 @@ async def test_shutdown_drains_all_children_when_one_cancel_event_fails() -> Non
 
 
 @pytest.mark.asyncio
+async def test_shutdown_forces_interruption_when_runner_ignores_cancellation() -> None:
+    runner = CancellationIgnoringRunner()
+    sink = SelectiveCancelFailureSink()
+    supervisor = SubagentSupervisor()
+    records = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=runner,
+        sink=sink,
+    )
+    subagent_id = records[0].subagent_id
+    sink.fail_for = subagent_id
+    await runner.started.wait()
+
+    await supervisor.shutdown()
+    result = await supervisor.wait(subagent_id)
+
+    assert result.status is SubagentStatus.INTERRUPTED
+    assert result.error_message == "subagent supervisor shutdown"
+    payloads = sink.payloads_for(subagent_id)
+    assert not any(
+        isinstance(payload, SubagentCancelRequestedPayload)
+        for payload in payloads
+    )
+    terminal = [
+        payload for payload in payloads if isinstance(payload, TerminalPayload)
+    ]
+    assert len(terminal) == 1
+    assert isinstance(terminal[0], SubagentInterruptedPayload)
+    assert not any(
+        isinstance(
+            payload,
+            (SubagentCompletedPayload, SubagentCancelledPayload),
+        )
+        for payload in payloads
+    )
+    assert (
+        str(supervisor._entries[subagent_id].sink_error)
+        == "selected cancel event failed"
+    )
+    assert not any(
+        task.get_name().startswith("subagent:") and not task.done()
+        for task in asyncio.all_tasks()
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("persist_before_raise", [False, True])
 async def test_admission_cleanup_uses_reducer_legal_interruption(
     persist_before_raise: bool,

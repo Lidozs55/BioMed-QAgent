@@ -59,6 +59,7 @@ class _SubagentEntry:
     result: SubagentResult | None = None
     cancel_requested: bool = False
     forced_interruption: bool = False
+    forced_interruption_reason: str | None = None
     sink_error: BaseException | None = None
 
 
@@ -265,6 +266,7 @@ class SubagentSupervisor:
             except BaseException as error:
                 entry.sink_error = error
                 entry.forced_interruption = True
+                entry.forced_interruption_reason = reason
                 if entry.task is not None:
                     entry.task.cancel()
                 raise
@@ -359,6 +361,10 @@ class SubagentSupervisor:
                         if entry is not None and entry.task is not None:
                             entry.sink_error = entry.sink_error or outcome
                             entry.forced_interruption = True
+                            entry.forced_interruption_reason = (
+                                entry.forced_interruption_reason
+                                or "subagent supervisor shutdown"
+                            )
                             entry.task.cancel()
 
             tasks = [
@@ -439,7 +445,15 @@ class SubagentSupervisor:
         async with entry.terminal_lock:
             if entry.result is not None:
                 return entry.result
-            if entry.cancel_requested and result.status is not SubagentStatus.CANCELLED:
+            if entry.forced_interruption:
+                result = self._task_cancelled_result(
+                    entry,
+                    result.subagent_id,
+                )
+            elif (
+                entry.cancel_requested
+                and result.status is not SubagentStatus.CANCELLED
+            ):
                 result = self._cancelled_result(result.subagent_id)
 
             entry.result = result
@@ -611,7 +625,10 @@ class SubagentSupervisor:
             return cls._interrupted_result(
                 subagent_id,
                 summary="Subagent interrupted during shutdown",
-                reason="Cancellation request could not be persisted",
+                reason=(
+                    entry.forced_interruption_reason
+                    or "Cancellation request could not be persisted"
+                ),
             )
         return cls._cancelled_result(subagent_id)
 
