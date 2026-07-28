@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.domain.contracts import (
+    RunRecord,
+    RunStatus,
     SubagentCancelledPayload,
     SubagentCancelRequestedPayload,
     SubagentCompletedPayload,
@@ -17,8 +20,13 @@ from app.domain.contracts import (
     SubagentStartedPayload,
     SubagentStatus,
     SubagentType,
+    TaskMode,
+    TaskSnapshot,
+    TaskSummary,
+    build_event,
 )
 from app.domain.contracts.events import EventPayload
+from app.runtime.state import reduce_task_event
 from app.subagents.supervisor import SubagentSupervisor
 
 Owner = tuple[str, str]
@@ -28,6 +36,7 @@ TerminalPayload = (
     | SubagentCancelledPayload
     | SubagentInterruptedPayload
 )
+NOW = datetime(2026, 7, 28, tzinfo=UTC)
 
 
 def _request(index: int) -> SubagentRequest:
@@ -280,6 +289,69 @@ class PartialQueuedFailureSink(RecordingSink):
             parent_tool_call_id=parent_tool_call_id,
             payload=payload,
         )
+
+
+class ReducerBackedQueuedFailureSink:
+    def __init__(self, *, persist_before_raise: bool) -> None:
+        self.persist_before_raise = persist_before_raise
+        self.queued_count = 0
+        self.attempted_payloads: list[EventPayload] = []
+        self.sequence = 1
+        self.snapshot = TaskSnapshot(
+            task=TaskSummary(
+                task_id="task_1",
+                mode=TaskMode.AGENT,
+                title="Reducer-backed supervisor test",
+                status=RunStatus.RUNNING,
+                active_run_id="run_1",
+                created_at=NOW,
+                updated_at=NOW,
+                latest_sequence=self.sequence,
+            ),
+            runs=[
+                RunRecord(
+                    run_id="run_1",
+                    task_id="task_1",
+                    request_id="request_1",
+                    status=RunStatus.RUNNING,
+                    input="Reducer-backed supervisor test",
+                    created_at=NOW,
+                    updated_at=NOW,
+                    started_at=NOW,
+                )
+            ],
+        )
+
+    async def emit(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+        parent_tool_call_id: str,
+        payload: EventPayload,
+    ) -> None:
+        self.attempted_payloads.append(payload)
+        should_fail = False
+        if isinstance(payload, SubagentQueuedPayload):
+            self.queued_count += 1
+            should_fail = self.queued_count == 2
+            if should_fail and not self.persist_before_raise:
+                raise RuntimeError("queued event failed before persistence")
+
+        self.sequence += 1
+        event = build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=self.sequence,
+            timestamp=NOW + timedelta(seconds=self.sequence),
+            subagent_id=subagent_id,
+            parent_tool_call_id=parent_tool_call_id,
+            payload=payload,
+        )
+        self.snapshot = reduce_task_event(self.snapshot, event)
+        if should_fail:
+            raise RuntimeError("queued event failed after persistence")
 
 
 class CancelRequestProblemSink(RecordingSink):
@@ -823,7 +895,7 @@ async def test_partial_queued_failure_cleans_up_before_raising_original_error() 
     ]
     assert len(queued_ids) == 1
     assert any(
-        isinstance(payload, SubagentFailedPayload)
+        isinstance(payload, SubagentInterruptedPayload)
         for payload in sink.payloads_for(queued_ids[0])
     )
     assert await supervisor.cancel_run("task_1", "run_1") == []
@@ -912,13 +984,85 @@ async def test_shutdown_drains_all_children_when_one_cancel_event_fails() -> Non
 
     await supervisor.shutdown()
 
+    results = [
+        await supervisor.wait(record.subagent_id) for record in records
+    ]
+    assert [result.status for result in results] == [
+        SubagentStatus.INTERRUPTED,
+        SubagentStatus.CANCELLED,
+    ]
+    failed_cancel_payloads = sink.payloads_for(records[0].subagent_id)
+    assert not any(
+        isinstance(payload, SubagentCancelRequestedPayload)
+        for payload in failed_cancel_payloads
+    )
     assert [
-        (await supervisor.wait(record.subagent_id)).status for record in records
-    ] == [SubagentStatus.CANCELLED, SubagentStatus.CANCELLED]
+        type(payload)
+        for payload in failed_cancel_payloads
+        if isinstance(payload, TerminalPayload)
+    ] == [SubagentInterruptedPayload]
+    healthy_cancel_payloads = sink.payloads_for(records[1].subagent_id)
+    assert [
+        type(payload)
+        for payload in healthy_cancel_payloads
+        if isinstance(
+            payload,
+            (SubagentCancelRequestedPayload, TerminalPayload),
+        )
+    ] == [SubagentCancelRequestedPayload, SubagentCancelledPayload]
+    assert isinstance(
+        supervisor._entries[records[0].subagent_id].sink_error,
+        RuntimeError,
+    )
     assert not any(
         task.get_name().startswith("subagent:") and not task.done()
         for task in asyncio.all_tasks()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persist_before_raise", [False, True])
+async def test_admission_cleanup_uses_reducer_legal_interruption(
+    persist_before_raise: bool,
+) -> None:
+    sink = ReducerBackedQueuedFailureSink(
+        persist_before_raise=persist_before_raise
+    )
+    supervisor = SubagentSupervisor()
+
+    with pytest.raises(RuntimeError, match="queued event failed"):
+        await supervisor.start_batch(
+            task_id="task_1",
+            run_id="run_1",
+            parent_tool_call_id="call_1",
+            requests=[_request(0), _request(1), _request(2)],
+            runner=ImmediateRunner(),
+            sink=sink,
+        )
+
+    assert sink.queued_count == 2
+    assert all(
+        record.status is SubagentStatus.INTERRUPTED
+        for record in sink.snapshot.subagents
+    )
+    assert len(sink.snapshot.subagents) == (
+        2 if persist_before_raise else 1
+    )
+    cleanup_attempts = [
+        payload
+        for payload in sink.attempted_payloads
+        if isinstance(payload, SubagentInterruptedPayload)
+    ]
+    assert len(cleanup_attempts) == 2
+    assert not any(
+        isinstance(payload, SubagentFailedPayload)
+        for payload in sink.attempted_payloads
+    )
+    assert not any(
+        task.get_name().startswith("subagent:") and not task.done()
+        for task in asyncio.all_tasks()
+    )
+    await supervisor.shutdown()
 
 
 @pytest.mark.asyncio

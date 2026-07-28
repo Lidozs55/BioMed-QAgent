@@ -58,6 +58,7 @@ class _SubagentEntry:
     task: asyncio.Task[SubagentResult] | None = None
     result: SubagentResult | None = None
     cancel_requested: bool = False
+    forced_interruption: bool = False
     sink_error: BaseException | None = None
 
 
@@ -157,12 +158,13 @@ class SubagentSupervisor:
                 )
             )
 
-        queued: list[
+        attempted: list[
             tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
         ] = []
         admission_finished = False
         try:
             for record, request, entry in pending:
+                attempted.append((record, request, entry))
                 await self._emit_to_sink(
                     sink=sink,
                     task_id=task_id,
@@ -174,7 +176,6 @@ class SubagentSupervisor:
                         request=request,
                     ),
                 )
-                queued.append((record, request, entry))
 
             async with self._lifecycle_lock:
                 for record, request, entry in pending:
@@ -196,7 +197,7 @@ class SubagentSupervisor:
                 current_task = asyncio.current_task()
                 if current_task is not None:
                     current_task.uncancel()
-            await self._cleanup_failed_admission(queued, error)
+            await self._cleanup_failed_admission(attempted, error)
             raise
         finally:
             if not admission_finished:
@@ -237,6 +238,39 @@ class SubagentSupervisor:
                 entry.cancel_requested = True
                 if entry.task is not None:
                     entry.task.cancel()
+
+        if entry.task is None:
+            raise RuntimeError("subagent was not scheduled")
+        return await asyncio.shield(entry.task)
+
+    async def _cancel_for_shutdown(
+        self,
+        subagent_id: str,
+        *,
+        reason: str,
+    ) -> SubagentResult:
+        entry = self._require_entry(subagent_id)
+        async with entry.terminal_lock:
+            if entry.result is not None:
+                return entry.result
+            try:
+                await self._emit(
+                    entry,
+                    subagent_id,
+                    SubagentCancelRequestedPayload(
+                        subagent_id=subagent_id,
+                        reason=reason,
+                    ),
+                )
+            except BaseException as error:
+                entry.sink_error = error
+                entry.forced_interruption = True
+                if entry.task is not None:
+                    entry.task.cancel()
+                raise
+            entry.cancel_requested = True
+            if entry.task is not None:
+                entry.task.cancel()
 
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
@@ -311,7 +345,7 @@ class SubagentSupervisor:
             if active_ids:
                 outcomes = await asyncio.gather(
                     *(
-                        self.cancel(
+                        self._cancel_for_shutdown(
                             subagent_id,
                             reason="subagent supervisor shutdown",
                         )
@@ -323,6 +357,8 @@ class SubagentSupervisor:
                     if isinstance(outcome, BaseException):
                         entry = self._entries.get(subagent_id)
                         if entry is not None and entry.task is not None:
+                            entry.sink_error = entry.sink_error or outcome
+                            entry.forced_interruption = True
                             entry.task.cancel()
 
             tasks = [
@@ -374,7 +410,7 @@ class SubagentSupervisor:
             current_task = asyncio.current_task()
             if current_task is not None:
                 current_task.uncancel()
-            result = self._cancelled_result(subagent_id)
+            result = self._task_cancelled_result(entry, subagent_id)
         except Exception as error:
             result = SubagentResult(
                 subagent_id=subagent_id,
@@ -392,7 +428,7 @@ class SubagentSupervisor:
                 current_task.uncancel()
             return await self._publish_terminal(
                 entry,
-                self._cancelled_result(subagent_id),
+                self._task_cancelled_result(entry, subagent_id),
             )
 
     async def _publish_terminal(
@@ -411,7 +447,7 @@ class SubagentSupervisor:
             try:
                 await self._emit(entry, result.subagent_id, payload)
             except BaseException as error:
-                entry.sink_error = error
+                entry.sink_error = entry.sink_error or error
                 if isinstance(error, asyncio.CancelledError):
                     current_task = asyncio.current_task()
                     if current_task is not None:
@@ -454,28 +490,20 @@ class SubagentSupervisor:
 
     async def _cleanup_failed_admission(
         self,
-        queued: list[
+        attempted: list[
             tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
         ],
         error: BaseException,
     ) -> None:
-        if isinstance(error, asyncio.CancelledError):
-            results = [
-                self._cancelled_result(record.subagent_id)
-                for record, _, _ in queued
-            ]
-        else:
-            error_message = str(error) or type(error).__name__
-            results = [
-                SubagentResult(
-                    subagent_id=record.subagent_id,
-                    status=SubagentStatus.FAILED,
-                    summary="Subagent admission failed",
-                    error_code=SubagentErrorCode.INTERNAL_ERROR,
-                    error_message=error_message,
-                )
-                for record, _, _ in queued
-            ]
+        error_message = str(error) or type(error).__name__
+        results = [
+            self._interrupted_result(
+                record.subagent_id,
+                summary="Subagent admission interrupted",
+                reason=f"Admission failed: {error_message}",
+            )
+            for record, _, _ in attempted
+        ]
         await asyncio.gather(
             *(
                 self._emit_to_sink(
@@ -488,7 +516,7 @@ class SubagentSupervisor:
                 )
                 for result, (_, _, entry) in zip(
                     results,
-                    queued,
+                    attempted,
                     strict=True,
                 )
             ),
@@ -572,6 +600,35 @@ class SubagentSupervisor:
                 result=result,
             )
         raise ValueError("runner returned a non-terminal result")
+
+    @classmethod
+    def _task_cancelled_result(
+        cls,
+        entry: _SubagentEntry,
+        subagent_id: str,
+    ) -> SubagentResult:
+        if entry.forced_interruption:
+            return cls._interrupted_result(
+                subagent_id,
+                summary="Subagent interrupted during shutdown",
+                reason="Cancellation request could not be persisted",
+            )
+        return cls._cancelled_result(subagent_id)
+
+    @staticmethod
+    def _interrupted_result(
+        subagent_id: str,
+        *,
+        summary: str,
+        reason: str,
+    ) -> SubagentResult:
+        return SubagentResult(
+            subagent_id=subagent_id,
+            status=SubagentStatus.INTERRUPTED,
+            summary=summary,
+            error_code=SubagentErrorCode.INTERNAL_ERROR,
+            error_message=reason,
+        )
 
     @staticmethod
     def _cancelled_result(subagent_id: str) -> SubagentResult:
