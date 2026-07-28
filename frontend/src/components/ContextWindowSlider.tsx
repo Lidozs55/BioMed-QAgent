@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -98,6 +99,9 @@ export function ContextWindowSlider({
       setLocalIndex(clamped);
       const selected = PRESETS[clamped].value;
       if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
+        toast.warning("超出该模型最大上下文限制", {
+          description: `该模型最大上下文为 ${formatTokens(maxCatalogWindow)} tokens，已自动调整为最大值`,
+        });
         onChange(maxCatalogWindow);
       } else {
         onChange(selected);
