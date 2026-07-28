@@ -1,0 +1,131 @@
+import { useCallback, useState } from "react";
+import { ArrowsInIcon } from "@phosphor-icons/react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverDescription,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
+
+/* ------------------------------------------------------------------ */
+/*  Props                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ContextUsageInlineProps {
+  /** Estimated tokens currently used. */
+  usedTokens: number;
+  /** Total context window capacity in tokens. */
+  totalTokens: number;
+  /** Whether compaction is in progress. */
+  compacting?: boolean;
+  /** Called when the user requests context compaction. */
+  onCompact?: () => void;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+function formatTokens(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)}M`;
+  if (n >= 1_024) return `${(n / 1_024).toFixed(1)}K`;
+  return String(n);
+}
+
+function barColor(pct: number): string {
+  if (pct >= 90) return "bg-destructive";
+  if (pct >= 70) return "bg-amber-500";
+  return "bg-emerald-500";
+}
+
+function textColor(pct: number): string {
+  if (pct >= 90) return "text-destructive";
+  if (pct >= 70) return "text-amber-600";
+  return "text-emerald-600";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Component — compact inline indicator for the composer toolbar      */
+/* ------------------------------------------------------------------ */
+
+export function ContextUsageInline({
+  usedTokens,
+  totalTokens,
+  compacting = false,
+  onCompact,
+}: ContextUsageInlineProps) {
+  const [open, setOpen] = useState(false);
+
+  const pct = totalTokens > 0 ? Math.min(100, Math.round((usedTokens / totalTokens) * 100)) : 0;
+
+  const handleCompact = useCallback(() => {
+    onCompact?.();
+    setOpen(false);
+  }, [onCompact]);
+
+  // Hide if no meaningful capacity data
+  if (totalTokens <= 0) return null;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted/60"
+            aria-label={`上下文窗口已使用 ${pct}%`}
+          >
+            {/* Mini progress bar */}
+            <div className="relative h-1 w-10 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn("h-full rounded-full transition-all duration-300", barColor(pct))}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className={cn("font-mono text-[9px] tabular-nums", textColor(pct))}>
+              {pct}%
+            </span>
+          </button>
+        }
+      />
+      <PopoverContent align="start" side="top" className="w-52">
+        <PopoverHeader>
+          <PopoverTitle className="text-xs">上下文窗口</PopoverTitle>
+          <PopoverDescription className="text-[11px]">
+            {formatTokens(usedTokens)} / {formatTokens(totalTokens)} tokens
+          </PopoverDescription>
+        </PopoverHeader>
+        <div className="flex flex-col gap-1.5">
+          <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn("h-full rounded-full", barColor(pct))}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {onCompact && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-0.5 h-7 w-full gap-1 text-xs"
+              disabled={compacting || pct < 10}
+              onClick={handleCompact}
+            >
+              {compacting ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <ArrowsInIcon data-icon="inline-start" />
+              )}
+              {compacting ? "压缩中..." : "压缩上下文"}
+            </Button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}

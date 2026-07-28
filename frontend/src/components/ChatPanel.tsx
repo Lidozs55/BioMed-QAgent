@@ -6,7 +6,6 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentComposer } from "@/components/AgentComposer";
-import { ContextUsageBar } from "@/components/ContextUsageBar";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { TaskStatusIcon } from "@/components/taskStatus";
@@ -29,6 +28,7 @@ import type {
   TaskRunAccepted,
 } from "@/runtime/contracts";
 import type { ConversationItem } from "@/runtime/types";
+import { estimateContextTokens } from "@/lib/tokenEstimate";
 import {
   selectActiveItem,
   selectActiveItems,
@@ -142,6 +142,9 @@ export function ChatPanel({
   const draftError = useAgentStore((state) => state.draft.error);
   const setDraftInput = useAgentStore((state) => state.setDraftInput);
   const setDraftError = useAgentStore((state) => state.setDraftError);
+
+  // Estimate context token usage from conversation items
+  const estimatedTokens = useMemo(() => estimateContextTokens(items), [items]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
@@ -386,13 +389,6 @@ export function ChatPanel({
                 : STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
           </Marker>
-          <div className="border-b px-5 py-1">
-            <ContextUsageBar
-              usedTokens={activeTask.contextTokensUsed ?? 0}
-              totalTokens={contextWindow ?? activeTask.contextWindow ?? 0}
-              compacting={activeTask.summary.status === "running" && activeTask.compacting === true}
-            />
-          </div>
         </div>
       )}
 
@@ -482,6 +478,8 @@ export function ChatPanel({
                 onOpenSettings={onOpenSettings}
                 onModelChange={onModelChange}
                 selectedModelId={selectedModelId}
+                contextWindow={contextWindow}
+                contextTokensUsed={estimatedTokens}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
             </div>

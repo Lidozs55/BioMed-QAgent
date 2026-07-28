@@ -9,6 +9,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 
+import { ContextUsageInline } from "@/components/ContextUsageInline";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
 import { Button } from "@/components/ui/button";
 import {
@@ -92,6 +93,10 @@ interface AgentComposerProps {
   onModelChange?: (modelId: string) => void;
   /** Currently selected model ID */
   selectedModelId?: string;
+  /** Context window capacity in tokens (for inline usage indicator) */
+  contextWindow?: number;
+  /** Estimated tokens currently used in the conversation */
+  contextTokensUsed?: number;
 }
 
 export function AgentComposer({
@@ -116,6 +121,8 @@ export function AgentComposer({
   onOpenSettings,
   onModelChange,
   selectedModelId,
+  contextWindow,
+  contextTokensUsed,
 }: AgentComposerProps) {
   // Attachment state (legacy, always applicable)
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -339,6 +346,12 @@ export function AgentComposer({
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        {contextWindow !== undefined && contextWindow > 0 && (
+          <ContextUsageInline
+            usedTokens={contextTokensUsed ?? 0}
+            totalTokens={contextWindow}
+          />
+        )}
         <input
           ref={fileInputRef}
           type="file"
