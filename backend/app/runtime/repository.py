@@ -26,7 +26,9 @@ from app.domain.contracts import (
     TaskPage,
     TaskRunAccepted,
     TaskSnapshot,
+    build_event,
 )
+from app.domain.contracts.events import EventPayload
 from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
@@ -259,6 +261,39 @@ class TaskRepository:
                         return snapshot
 
                 return await self._shield_and_drain(append_and_index())
+
+    async def append_event_payload(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        payload: EventPayload,
+        subagent_id: str | None = None,
+        parent_tool_call_id: str | None = None,
+    ) -> tuple[TaskSnapshot, EventEnvelope]:
+        """Allocate a Task-local sequence and append one event atomically."""
+
+        async with self._operation():
+            lock = self._task_locks.setdefault(task_id, asyncio.Lock())
+            async with lock:
+
+                async def build_append_and_index() -> tuple[
+                    TaskSnapshot,
+                    EventEnvelope,
+                ]:
+                    async with self._index_gate:
+                        snapshot, event = await self._run_storage(
+                            self._append_event_payload_sync,
+                            task_id,
+                            run_id,
+                            payload,
+                            subagent_id,
+                            parent_tool_call_id,
+                        )
+                        await self._project_snapshot_locked(snapshot)
+                        return snapshot, event
+
+                return await self._shield_and_drain(build_append_and_index())
 
     async def list_events(
         self,
@@ -539,6 +574,31 @@ class TaskRepository:
         persisted = self._snapshot_without_messages(updated)
         atomic_write_json(self._snapshot_path(event.task_id), persisted)
         return persisted
+
+    def _append_event_payload_sync(
+        self,
+        task_id: str,
+        run_id: str,
+        payload: EventPayload,
+        subagent_id: str | None,
+        parent_tool_call_id: str | None,
+    ) -> tuple[TaskSnapshot, EventEnvelope]:
+        current = self._load_snapshot_sync(task_id)
+        if current is None:
+            raise TaskNotFoundError(task_id)
+        event = build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=current.task.latest_sequence + 1,
+            payload=payload,
+            subagent_id=subagent_id,
+            parent_tool_call_id=parent_tool_call_id,
+        )
+        updated = reduce_task_event(current, event)
+        self.events.append(event)
+        persisted = self._snapshot_without_messages(updated)
+        atomic_write_json(self._snapshot_path(task_id), persisted)
+        return persisted, event
 
     def _delete_task_tree_sync(self, task_id: str) -> None:
         task_dir = self._validated_task_dir(task_id)

@@ -28,6 +28,9 @@ from app.domain.contracts import (
     RunStatus,
     StartRunRequest,
     StartTaskRequest,
+    SubagentErrorCode,
+    SubagentInterruptedPayload,
+    SubagentResult,
     SubagentStatus,
     TaskMode,
     TaskRunAccepted,
@@ -43,6 +46,7 @@ from app.domain.contracts import (
 from app.domain.contracts.runtime import validate_task_databases
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
+from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.supervisor import SubagentSupervisor
 
@@ -590,6 +594,7 @@ class TaskManager:
         assistant_stream_hub: AssistantStreamHub | None = None,
         subagent_supervisor: SubagentSupervisor | None = None,
         subagent_input_broker: SubagentInputBroker | None = None,
+        subagent_event_sink: DurableSubagentEventSink | None = None,
     ) -> None:
         if max_active_runs < 1:
             raise ValueError("max_active_runs must be positive")
@@ -603,6 +608,10 @@ class TaskManager:
         self.assistant_stream_hub = assistant_stream_hub
         self._subagent_supervisor = subagent_supervisor
         self._subagent_input_broker = subagent_input_broker
+        self._subagent_event_sink = subagent_event_sink or DurableSubagentEventSink(
+            repository=repository,
+            hub=self.event_hub,
+        )
         if context_factory is None:
             self._context_factory = lambda task_id: RunContext(
                 task_id=task_id,
@@ -624,6 +633,21 @@ class TaskManager:
         self._started = False
         self._closing = False
         self._closed = False
+
+    def attach_subagent_runtime(
+        self,
+        *,
+        supervisor: SubagentSupervisor,
+        input_broker: SubagentInputBroker,
+        event_sink: DurableSubagentEventSink,
+    ) -> None:
+        """Attach lifespan-owned child runtime services before startup."""
+
+        if self._started or self._closing or self._closed:
+            raise RuntimeError("subagent runtime must be attached before manager start")
+        self._subagent_supervisor = supervisor
+        self._subagent_input_broker = input_broker
+        self._subagent_event_sink = event_sink
 
     async def start(self) -> None:
         if self._started:
@@ -1171,6 +1195,33 @@ class TaskManager:
                     accepted,
                     RunInterruptedPayload(reason="server restarted"),
                 )
+                for subagent in snapshot.subagents:
+                    if (
+                        subagent.run_id != run.run_id
+                        or subagent.status
+                        not in {
+                            SubagentStatus.QUEUED,
+                            SubagentStatus.RUNNING,
+                            SubagentStatus.CANCEL_REQUESTED,
+                        }
+                    ):
+                        continue
+                    await self._subagent_event_sink.emit(
+                        task_id=summary.task_id,
+                        run_id=run.run_id,
+                        subagent_id=subagent.subagent_id,
+                        parent_tool_call_id=subagent.parent_tool_call_id,
+                        payload=SubagentInterruptedPayload(
+                            subagent_id=subagent.subagent_id,
+                            result=SubagentResult(
+                                subagent_id=subagent.subagent_id,
+                                status=SubagentStatus.INTERRUPTED,
+                                summary="Subagent interrupted after server restart",
+                                error_code=SubagentErrorCode.INTERNAL_ERROR,
+                                error_message="server restarted",
+                            ),
+                        ),
+                    )
 
         for _, _, _, queued_run in sorted(queued):
             try:
@@ -1657,6 +1708,7 @@ class TaskManager:
     ) -> TaskSnapshot:
         """Persist completion state and reconcile projection-only failures."""
 
+        await self._terminate_owned_subagents(accepted, payload)
         event = await self._build_status_event(
             accepted,
             payload,
@@ -1728,6 +1780,7 @@ class TaskManager:
         timestamp: datetime | None = None,
         after_persist: Callable[[TaskSnapshot], None] | None = None,
     ) -> TaskSnapshot:
+        await self._terminate_owned_subagents(accepted, payload)
         updated, event = await self._persist_status(
             accepted,
             payload,
@@ -1737,6 +1790,44 @@ class TaskManager:
         )
         await self.event_hub.publish(event)
         return updated
+
+    async def _terminate_owned_subagents(
+        self,
+        accepted: TaskRunAccepted,
+        payload: object,
+    ) -> None:
+        reason_by_type = {
+            RunCompletedPayload: "parent run completed",
+            RunFailedPayload: "parent run failed",
+            RunCancelledPayload: "parent run cancelled",
+            RunInterruptedPayload: "parent run interrupted",
+        }
+        reason = next(
+            (
+                message
+                for payload_type, message in reason_by_type.items()
+                if isinstance(payload, payload_type)
+            ),
+            None,
+        )
+        if reason is None:
+            return
+        if self._subagent_supervisor is not None:
+            await self._subagent_supervisor.cancel_run(
+                accepted.task_id,
+                accepted.run_id,
+                reason=reason,
+            )
+        if self._subagent_input_broker is not None:
+            await self._subagent_input_broker.cancel_run(
+                task_id=accepted.task_id,
+                run_id=accepted.run_id,
+            )
+        if self._subagent_supervisor is not None:
+            await self._subagent_supervisor.release_run(
+                accepted.task_id,
+                accepted.run_id,
+            )
 
 
 __all__ = [

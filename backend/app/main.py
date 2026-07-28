@@ -34,6 +34,9 @@ from app.runtime.repository import TaskRepository
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
 from app.skills.store import UserSkillStore
+from app.subagents.event_sink import DurableSubagentEventSink
+from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.supervisor import SubagentSupervisor
 from app.tools.cache_store import init_cache_store
 
 logging.basicConfig(
@@ -132,6 +135,19 @@ def create_app(configured: Settings = settings) -> FastAPI:
             event_hub=event_hub,
             assistant_stream_hub=assistant_stream_hub,
         )
+        subagent_input_broker = SubagentInputBroker()
+        subagent_event_sink = DurableSubagentEventSink(
+            repository=repository,
+            hub=event_hub,
+        )
+        subagent_supervisor = SubagentSupervisor(
+            input_broker=subagent_input_broker,
+        )
+        manager.attach_subagent_runtime(
+            supervisor=subagent_supervisor,
+            input_broker=subagent_input_broker,
+            event_sink=subagent_event_sink,
+        )
         application.state.sync_executor = sync_executor
         application.state.storage_executor = storage_executor
         application.state.index_executor = index_executor
@@ -139,6 +155,9 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.event_hub = event_hub
         application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
+        application.state.subagent_input_broker = subagent_input_broker
+        application.state.subagent_event_sink = subagent_event_sink
+        application.state.subagent_supervisor = subagent_supervisor
         # Initialize the local queryable cache (D1/D3) — stores user-imported
         # and previously-cleaned datasets under data/cache/records/.
         application.state.cache_store = init_cache_store(
@@ -156,21 +175,24 @@ def create_app(configured: Settings = settings) -> FastAPI:
                 await model_preview_client.aclose()
             finally:
                 try:
-                    await manager.close()
+                    await subagent_supervisor.shutdown()
                 finally:
                     try:
-                        await assistant_stream_hub.close()
+                        await manager.close()
                     finally:
                         try:
-                            await event_hub.close()
+                            await assistant_stream_hub.close()
                         finally:
                             try:
-                                await index_executor.close()
+                                await event_hub.close()
                             finally:
                                 try:
-                                    storage_executor.shutdown(wait=True)
+                                    await index_executor.close()
                                 finally:
-                                    sync_executor.shutdown(wait=True)
+                                    try:
+                                        storage_executor.shutdown(wait=True)
+                                    finally:
+                                        sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",

@@ -32,6 +32,7 @@ from app.domain.contracts import (
     StartRunRequest,
     StartTaskRequest,
     SubagentInputRequiredPayload,
+    SubagentInterruptedPayload,
     SubagentRecord,
     SubagentStatus,
     SubagentType,
@@ -46,6 +47,7 @@ from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskRepository
+from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
 from compaction_support import budgeted_request
 
@@ -194,6 +196,29 @@ class _RecordingSubagentSupervisor:
         await self.repository.save_snapshot(
             snapshot.model_copy(update={"subagents": updated})
         )
+
+
+class _RecordingRunSupervisor:
+    def __init__(self) -> None:
+        self.cancel_started = asyncio.Event()
+        self.allow_cancel = asyncio.Event()
+        self.calls: list[tuple[str, str, str | None]] = []
+        self.released: list[tuple[str, str]] = []
+
+    async def cancel_run(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        reason: str | None = None,
+    ) -> list[object]:
+        self.calls.append((task_id, run_id, reason))
+        self.cancel_started.set()
+        await self.allow_cancel.wait()
+        return []
+
+    async def release_run(self, task_id: str, run_id: str) -> None:
+        self.released.append((task_id, run_id))
 
 
 @pytest.mark.asyncio
@@ -3084,6 +3109,167 @@ async def test_startup_recovers_queued_and_interrupts_in_flight_runs_once(
             )
     finally:
         await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_interrupts_children_after_parent_run_event(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(snapshot_with_subagent("task_child_recovery"))
+    await seed.close()
+
+    repository = TaskRepository(output_dir)
+    hub = EventHub()
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        event_hub=hub,
+        subagent_event_sink=sink,
+    )
+    await manager.start()
+    try:
+        snapshot = await repository.get_snapshot("task_child_recovery")
+        events = await repository.list_events("task_child_recovery")
+
+        assert snapshot is not None
+        assert snapshot.runs[0].status is RunStatus.INTERRUPTED
+        assert snapshot.subagents[0].status is SubagentStatus.INTERRUPTED
+        assert isinstance(events[-2].payload, RunInterruptedPayload)
+        assert isinstance(events[-1].payload, SubagentInterruptedPayload)
+        assert [event.sequence for event in events] == [1, 2]
+    finally:
+        await manager.close()
+        await hub.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_completion_waits_for_owned_children_to_cancel(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    supervisor = _RecordingRunSupervisor()
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        subagent_supervisor=supervisor,
+    )
+    await manager.start()
+    await repository.save_snapshot(empty_snapshot("task_parent_completion"))
+    try:
+        accepted = await manager.submit_run(
+            "task_parent_completion",
+            StartRunRequest(
+                request_id="req_parent_completion",
+                input="finish only after children",
+            ),
+        )
+        await asyncio.wait_for(supervisor.cancel_started.wait(), timeout=1)
+
+        before_cancel_finishes = await repository.get_snapshot(accepted.task_id)
+        assert before_cancel_finishes is not None
+        assert before_cancel_finishes.runs[-1].status not in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.INTERRUPTED,
+        }
+
+        supervisor.allow_cancel.set()
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status is RunStatus.COMPLETED
+        assert supervisor.calls == [
+            (
+                accepted.task_id,
+                accepted.run_id,
+                "parent run completed",
+            )
+        ]
+        assert supervisor.released == [(accepted.task_id, accepted.run_id)]
+    finally:
+        supervisor.allow_cancel.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_cancellation_waits_for_owned_children_to_cancel(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    supervisor = _RecordingRunSupervisor()
+    executor_ready = asyncio.Event()
+    release_executor = asyncio.Event()
+
+    async def run(_execution) -> None:
+        executor_ready.set()
+        await release_executor.wait()
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        subagent_supervisor=supervisor,
+    )
+    await manager.start()
+    await repository.save_snapshot(empty_snapshot("task_parent_cancel"))
+    cancellation = None
+    try:
+        accepted = await manager.submit_run(
+            "task_parent_cancel",
+            StartRunRequest(
+                request_id="req_parent_cancel",
+                input="cancel parent and children",
+            ),
+        )
+        await asyncio.wait_for(executor_ready.wait(), timeout=1)
+        cancellation = asyncio.create_task(
+            manager.cancel_run(
+                accepted.task_id,
+                accepted.run_id,
+                reason="user requested",
+            )
+        )
+        execution = manager._running[(accepted.task_id, accepted.run_id)]
+        await asyncio.wait_for(
+            execution.context.cancellation_requested.wait(),
+            timeout=1,
+        )
+        release_executor.set()
+        await asyncio.wait_for(supervisor.cancel_started.wait(), timeout=1)
+
+        cancelling = await repository.get_snapshot(accepted.task_id)
+        assert cancelling is not None
+        assert cancelling.runs[-1].status is RunStatus.CANCEL_REQUESTED
+        assert not cancellation.done()
+
+        supervisor.allow_cancel.set()
+        cancelled = await asyncio.wait_for(cancellation, timeout=1)
+
+        assert cancelled.runs[-1].status is RunStatus.CANCELLED
+        assert supervisor.calls == [
+            (
+                accepted.task_id,
+                accepted.run_id,
+                "parent run cancelled",
+            )
+        ]
+        assert supervisor.released == [(accepted.task_id, accepted.run_id)]
+    finally:
+        release_executor.set()
+        supervisor.allow_cancel.set()
+        if cancellation is not None:
+            await asyncio.gather(cancellation, return_exceptions=True)
+        await manager.close()
 
 
 @pytest.mark.asyncio
