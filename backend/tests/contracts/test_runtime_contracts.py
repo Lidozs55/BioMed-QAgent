@@ -165,7 +165,7 @@ def test_start_requests_trim_input_and_acceptance_is_queued() -> None:
         StartRunRequest(request_id="req_blank", input="   ")
 
 
-def test_fixture_start_request_requires_exact_pubmed_geo_selection() -> None:
+def test_fixture_start_request_preserves_database_selection() -> None:
     request = StartTaskRequest(
         request_id="req_fixture",
         input="fixture topic",
@@ -187,16 +187,17 @@ def test_fixture_start_request_requires_exact_pubmed_geo_selection() -> None:
         ["PubMed", "geo"],
     ],
 )
-def test_fixture_start_request_rejects_inexact_database_selection(
+def test_fixture_start_request_accepts_and_preserves_database_selection(
     databases: list[str],
 ) -> None:
-    with pytest.raises(ValidationError, match="exactly pubmed and geo"):
-        StartTaskRequest(
-            request_id="req_fixture_invalid",
-            input="fixture topic",
-            databases=databases,
-            mode=TaskMode.FIXTURE,
-        )
+    request = StartTaskRequest(
+        request_id="req_fixture",
+        input="fixture topic",
+        databases=databases,
+        mode=TaskMode.FIXTURE,
+    )
+
+    assert request.databases == databases
 
 
 def test_task_summary_defaults_databases_for_legacy_snapshots() -> None:

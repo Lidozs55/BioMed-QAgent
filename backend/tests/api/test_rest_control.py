@@ -456,7 +456,7 @@ async def test_create_returns_stable_503_when_manager_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_create_validation_rejects_blank_fixture_and_extra_fields_without_admission(
+async def test_create_validation_rejects_invalid_boundaries_without_admission(
     tmp_path: Path,
 ) -> None:
     executor = BlockingExecutor()
@@ -476,38 +476,27 @@ async def test_create_validation_rejects_blank_fixture_and_extra_fields_without_
         ),
         (
             {
-                "request_id": "req_fixture_missing",
-                "input": "question",
-                "databases": ["pubmed"],
-                "mode": "fixture",
-            },
-            "body",
-        ),
-        (
-            {
-                "request_id": "req_fixture_duplicate",
-                "input": "question",
-                "databases": ["pubmed", "pubmed", "geo"],
-                "mode": "fixture",
-            },
-            "body",
-        ),
-        (
-            {
-                "request_id": "req_fixture_extra_database",
-                "input": "question",
-                "databases": ["pubmed", "geo", "gdc"],
-                "mode": "fixture",
-            },
-            "body",
-        ),
-        (
-            {
                 "request_id": "req_invalid_mode",
                 "input": "question",
                 "mode": "unsupported",
             },
             "mode",
+        ),
+        (
+            {
+                "request_id": "req_databases_string",
+                "input": "question",
+                "databases": "pubmed",
+            },
+            "databases",
+        ),
+        (
+            {
+                "request_id": "req_databases_non_string_item",
+                "input": "question",
+                "databases": ["pubmed", 1],
+            },
+            "databases",
         ),
         (
             {
@@ -526,13 +515,45 @@ async def test_create_validation_rejects_blank_fixture_and_extra_fields_without_
             for body, expected_location in cases:
                 response = await client.post("/api/v1/tasks", json=body)
                 assert response.status_code == 422
-                locations = [item["loc"][-1] for item in response.json()["detail"]]
-                assert expected_location in locations
+                locations = [item["loc"] for item in response.json()["detail"]]
+                assert any(expected_location in location for location in locations)
 
             page = await repository.list_tasks()
             assert page.active_items == page.items == []
             for body, _ in cases:
                 assert await repository.find_request(body["request_id"]) is None
+        finally:
+            executor.release.set()
+            await manager.wait_until_idle()
+
+
+@pytest.mark.asyncio
+async def test_fixture_create_accepts_and_preserves_arbitrary_database_selection(
+    tmp_path: Path,
+) -> None:
+    databases = ["pubmed", "geo", "gdc"]
+    executor = BlockingExecutor()
+    async with api_client(tmp_path) as (application, client):
+        manager = application.state.task_manager
+        manager.run_executor = executor
+        try:
+            response = await client.post(
+                "/api/v1/tasks",
+                json={
+                    "request_id": "req_fixture_arbitrary_databases",
+                    "input": "fixture database preservation",
+                    "databases": databases,
+                    "mode": "fixture",
+                },
+            )
+
+            assert response.status_code == 202
+            accepted = TaskRunAccepted.model_validate(response.json())
+            detail_response = await client.get(f"/api/v1/tasks/{accepted.task_id}")
+            assert detail_response.status_code == 200
+            detail = TaskSnapshot.model_validate(detail_response.json())
+            assert detail.task.mode is TaskMode.FIXTURE
+            assert detail.task.databases == databases
         finally:
             executor.release.set()
             await manager.wait_until_idle()
@@ -839,7 +860,7 @@ async def test_cancel_running_run_drains_and_retry_is_idempotent(
             for event in events
             if isinstance(
                 event.payload,
-                (RunCancelRequestedPayload, RunCancelledPayload),
+                RunCancelRequestedPayload | RunCancelledPayload,
             )
         ] == ["run_cancel_requested", "run_cancelled"]
 
