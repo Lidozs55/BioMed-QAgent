@@ -394,20 +394,30 @@ Empty；使用 Phosphor 图标和语义化主题 token，不引入第二套设�
 前端 `TaskProjection` 增加 `subagentsById` 和 `subagentOrder`，由 reducer 从 durable
 事件和 snapshot 重建。旧任务默认空集合，现有消息投影不受影响。
 
-## 14. 迁移策略
+## 14. 实施与主分支同步策略
 
-采用增量接入，不进行 big-bang rewrite：
+项目仍处于快速开发阶段，没有生产服务依赖当前行为，因此不设置功能开关、不保留
+新旧执行路径双轨运行，也不为旧 `self_evolution` 提供兼容入口。实现完成后，
+Main Agent 直接注册新的委派工具，Skill Gateway 直接采用 preferred sources
+语义，前端右侧工作区直接切换为 subagent 视图。
 
-1. 先增加向后兼容的契约、reducer 和功能开关。
-2. 实现使用 fake child runner 的 Supervisor，验证事件、并发、取消和重启。
-3. 接入真实 SourceResearchAgent、SkillBuilderAgent 和 Main Agent 委派工具。
-4. 实现 Recipe Store、受控执行器和 `create_skill`。
-5. 改造异步 Crawler、per-host limiter 和 BrowserPool。
-6. 接入前端 subagent 工作区和产物 FAB。
-7. 端到端验证通过后，删除或封闭旧 `self_evolution` 的任意 Python 写入路径。
+实施顺序只用于建立可测试的依赖关系，不代表灰度发布：
 
-功能开关关闭时，Main Agent 不注册委派工具，现有行为保持不变。历史
-`events.jsonl`、TaskSnapshot 和前端回放必须继续工作。
+1. 增加事件、snapshot、reducer 和 Supervisor 契约，以 fake child runner
+   验证事件、并发、取消、HIL 和重启。
+2. 接入真实 SourceResearchAgent、SkillBuilderAgent、Main Agent 委派工具、
+   Recipe Store、受控执行器和 `create_skill`。
+3. 在同一阶段封闭旧 `self_evolution` 的任意 Python 写入路径，不保留回退开关。
+4. 改造异步 Crawler、per-host limiter 和 BrowserPool。
+5. 前端右侧直接替换为 subagent 工作区，产物入口直接迁移到 FAB。
+6. 完成跨层端到端验证。
+
+仅保留数据兼容：历史 `events.jsonl`、TaskSnapshot 和前端回放必须继续工作，
+但不会保留旧工具注册、旧提示词或旧自进化执行路径。
+
+为避免长期分支积累大规模冲突，每完成一个独立可评审任务并形成干净提交后，都要
+获取最新 `origin/main` 并把它 rebase 到当前功能分支；如有冲突立即解决并重跑受影响
+测试，不把冲突推迟到整个功能结束时统一处理。
 
 ## 15. 测试策略
 
@@ -462,8 +472,10 @@ Empty；使用 Phosphor 图标和语义化主题 token，不引入第二套设�
 6. 父子取消、超时、重启和事件回放满足本设计契约。
 7. 子 Agent 不能绕过 SourceAsset 校验或 Validation Gate 发布产物。
 8. 桌面和移动前端沿用现有 UI，并能实时显示子 Agent。
-9. 旧任务、旧事件和功能开关关闭场景无回归。
+9. 旧任务和旧事件回放无回归，旧工具和旧自进化路径已被替换。
 10. 全部项目质量门禁通过。
+
+最后你需要直接通过浏览器（内置或调用我的chrome）完整运行一次测试，确保一切无误
 
 ## 17. 实施计划拆分
 
