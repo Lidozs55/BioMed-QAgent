@@ -2,13 +2,28 @@
  * Frontend-side token usage estimation from conversation items.
  *
  * The backend does not currently emit per-turn token usage events,
- * so we estimate based on character count of conversation content.
- * Heuristic: ~4 characters per token for mixed CJK/English text.
+ * so we estimate based on character count of conversation content
+ * plus fixed overhead (system prompt + tool schemas).
+ *
+ * Key heuristics:
+ * - Mixed CJK/English text: ~2 characters per token (Chinese chars are
+ *   typically 1-2 tokens each, English ~4 chars/token; blended ~2)
+ * - Fixed overhead per request: system prompt (~1500 tokens) +
+ *   8 tool JSON schemas (~3500 tokens) ≈ 5000 tokens baseline
+ * - Message wrapper overhead: ~20% on top of content tokens
  */
 
 import type { ConversationItem } from "@/runtime/types";
 
-const CHARS_PER_TOKEN = 4;
+/** Blended chars-per-token for mixed CJK/English biomedical text. */
+const CHARS_PER_TOKEN = 2;
+
+/**
+ * Fixed token overhead sent with every API request regardless of
+ * conversation length: system prompt (INSTRUCTIONS ~2870 chars) +
+ * serialized tool schemas for 8 tools (~14KB source → ~3500 tokens).
+ */
+const FIXED_OVERHEAD_TOKENS = 5_000;
 
 /** Estimate total tokens consumed by a list of conversation items. */
 export function estimateContextTokens(items: ConversationItem[]): number {
@@ -38,6 +53,7 @@ export function estimateContextTokens(items: ConversationItem[]): number {
         break;
     }
   }
-  // Add ~15% overhead for message wrappers, system prompt, tool schemas
-  return Math.ceil((chars / CHARS_PER_TOKEN) * 1.15);
+  // Content tokens with 20% message-wrapper overhead + fixed baseline
+  const contentTokens = Math.ceil((chars / CHARS_PER_TOKEN) * 1.2);
+  return FIXED_OVERHEAD_TOKENS + contentTokens;
 }
