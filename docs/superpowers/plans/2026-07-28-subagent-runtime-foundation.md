@@ -139,9 +139,10 @@ def test_reducer_projects_subagent_lifecycle() -> None:
 
 def test_reducer_rejects_completed_to_running_transition() -> None:
     snapshot = reduce_task_event(_snapshot(), _queued_event(sequence=2))
-    snapshot = reduce_task_event(snapshot, _completed_event(sequence=3))
+    snapshot = reduce_task_event(snapshot, _started_event(sequence=3))
+    snapshot = reduce_task_event(snapshot, _completed_event(sequence=4))
     with pytest.raises(ValueError, match="invalid subagent transition"):
-        reduce_task_event(snapshot, _started_event(sequence=4))
+        reduce_task_event(snapshot, _started_event(sequence=5))
 ```
 
 - [ ] **Step 2: Verify RED**
