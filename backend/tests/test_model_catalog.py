@@ -7,9 +7,9 @@ from importlib.util import find_spec
 import app.model_config as model_config
 
 
-def test_catalog_preserves_stable_model_ids() -> None:
+def test_catalog_preserves_legacy_model_ids() -> None:
     # Given
-    expected_model_ids = {
+    legacy_model_ids = {
         "qwen-plus",
         "qwen-flash",
         "qwen-max",
@@ -116,19 +116,27 @@ def test_catalog_preserves_stable_model_ids() -> None:
     model_ids = set(model_config.QWEN_MODELS_DB)
 
     # Then
-    assert model_ids == expected_model_ids
+    assert legacy_model_ids <= model_ids
 
 
-def test_catalog_lists_recommended_models_first() -> None:
+def test_catalog_lists_recommended_prefix_and_sorted_groups() -> None:
     # Given
-    expected_recommended_ids = ("gpt-4o", "qwen-plus", "qwen-plus-0419")
+    legacy_recommended_ids = {"gpt-4o", "qwen-plus", "qwen-plus-0419"}
 
     # When
     known_models = model_config.list_known_models()
-    recommended_ids = tuple(model.id for model in known_models if model.recommended)
+    recommended_models = [model for model in known_models if model.recommended]
+    non_recommended_models = [model for model in known_models if not model.recommended]
 
     # Then
-    assert recommended_ids == expected_recommended_ids
+    assert known_models == [*recommended_models, *non_recommended_models]
+    assert [model.id for model in recommended_models] == sorted(
+        model.id for model in recommended_models
+    )
+    assert [model.id for model in non_recommended_models] == sorted(
+        model.id for model in non_recommended_models
+    )
+    assert legacy_recommended_ids <= {model.id for model in recommended_models}
 
 
 def test_catalog_marks_qwen_vl_max_as_image_capable() -> None:

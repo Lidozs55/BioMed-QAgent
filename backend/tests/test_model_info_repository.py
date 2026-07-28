@@ -10,7 +10,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-
 from app.model_info import (
     ModelCapabilities,
     ModelDetail,
@@ -20,6 +19,7 @@ from app.model_info import (
     format_pricing,
     get_repository,
 )
+from pydantic import ValidationError
 
 
 class TestModelCapabilities:
@@ -93,7 +93,7 @@ class TestModelDetail:
         assert detail.model_family == "qwen"
 
     def test_negative_input_window_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError) as error:
             ModelDetail(
                 id="bad",
                 name="Bad",
@@ -103,6 +103,10 @@ class TestModelDetail:
                 max_output_tokens=100,
                 suggested_max_tokens=50,
             )
+        validation_error = error.value.errors()[0]
+        assert validation_error["loc"] == ("input_context_window",)
+        assert validation_error["type"] == "greater_than_equal"
+        assert validation_error["ctx"] == {"ge": 1}
 
 
 class TestFormatHelpers:

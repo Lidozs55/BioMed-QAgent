@@ -334,7 +334,7 @@ def _build_field_mapping_rows(
                 "canonical_field": norm_name,
                 "conversion": "identity",
                 "confidence": "1.0" if raw == norm_name else "0.9",
-                "notes": f"alignment:normalize_field_names",
+                "notes": "alignment:normalize_field_names",
             })
         return rows
 

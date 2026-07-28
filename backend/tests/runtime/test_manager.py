@@ -1242,7 +1242,7 @@ async def test_create_task_request_projection_and_rebuild_failure_keeps_one_run(
 
 
 @pytest.mark.asyncio
-async def test_create_task_revalidates_constructed_fixture_request(
+async def test_create_task_revalidates_constructed_request_mode(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1251,27 +1251,33 @@ async def test_create_task_revalidates_constructed_fixture_request(
     monkeypatch.setattr(
         manager_module,
         "generate_task_id",
-        lambda: "task_fixture_bypass",
+        lambda: "task_mode_bypass",
     )
+    executor_calls = 0
 
     async def run(execution) -> None:
-        raise AssertionError("invalid fixture request must not execute")
+        nonlocal executor_calls
+        executor_calls += 1
+        raise AssertionError("invalid mode request must not execute")
 
     manager = manager_module.TaskManager(repository, run_executor=run)
     await manager.start()
     request = StartTaskRequest.model_construct(
-        request_id="req_fixture_bypass",
-        input="fixture bypass",
-        databases=["pubmed"],
-        mode="fixture",
+        request_id="req_mode_bypass",
+        input="mode bypass",
+        databases=["pdb"],
+        mode="unsupported",
     )
     try:
-        with pytest.raises(ValueError, match="exactly pubmed and geo"):
+        with pytest.raises(ValueError) as exc_info:
             await manager.create_task(request)
 
+        assert type(exc_info.value) is ValueError
+        assert exc_info.value.args == ("'unsupported' is not a valid TaskMode",)
+        assert executor_calls == 0
         assert (await repository.list_tasks()).tasks == []
         assert await repository.find_request(request.request_id) is None
-        assert not (repository.tasks_dir / "task_fixture_bypass").exists()
+        assert not (repository.tasks_dir / "task_mode_bypass").exists()
     finally:
         await manager.close()
 
