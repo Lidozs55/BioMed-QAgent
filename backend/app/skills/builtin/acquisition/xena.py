@@ -216,7 +216,15 @@ def _decompress_gz(path: Path) -> Path:
     return out
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Search UCSC Xena public hub datasets by keyword. "
+        "Parameters: ``term`` (required, search keyword like 'breast cancer' "
+        "or 'TCGA'), ``max_results`` (optional, default 20). "
+        "Returns JSON with dataset name, type, cohort, and dataset_id. "
+        "Use ``download_xena`` to fetch data files for a specific dataset_id."
+    ),
+)
 def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
     """Search UCSC Xena public hub datasets by term.
 

@@ -106,23 +106,6 @@ class PipelineState(ContractModel):
                 return attempt
         return None
 
-    def find_failed(
-        self,
-        stage: StageName,
-        input_digest: str,
-        parameter_digest: str,
-    ) -> StageAttempt | None:
-        """Find a FAILED attempt with the same digests (prevents repeat failures)."""
-        for attempt in reversed(self.stage_attempts):
-            if (
-                attempt.stage == stage
-                and attempt.status is AttemptStatus.FAILED
-                and attempt.input_digest == input_digest
-                and attempt.parameter_digest == parameter_digest
-            ):
-                return attempt
-        return None
-
     def append_attempt(self, attempt: StageAttempt) -> None:
         """Append a new stage attempt (append-only, never mutate existing)."""
         self.stage_attempts.append(attempt)

@@ -152,7 +152,15 @@ def _fetch_entry_detail(pdb_id: str) -> dict[str, Any]:
     }
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Search RCSB PDB by keyword (protein name, gene, organism, etc.). "
+        "Parameters: ``term`` (required, search keyword like 'TP53' or "
+        "'hemoglobin'), ``max_results`` (optional, default 20). "
+        "Returns JSON with PDB IDs, titles, organism, and method metadata. "
+        "Use ``describe_pdb`` to get full metadata for a specific PDB ID."
+    ),
+)
 def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
     """Search RCSB PDB by keyword (protein name, gene, organism, etc.).
 

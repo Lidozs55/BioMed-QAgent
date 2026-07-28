@@ -63,7 +63,15 @@ def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
     }, ensure_ascii=False)
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Search PubChem for chemical compounds matching a name or keyword. "
+        "Parameters: ``term`` (required, search keyword like 'aspirin' or "
+        "'caffeine'), ``max_results`` (optional, default 20). "
+        "Returns JSON with compound records (CID, name, formula, MW, etc.). "
+        "Use ``get_compound`` to get full details for a specific CID."
+    ),
+)
 def search_pubchem(
     ctx: RunContextWrapper[Any],
     term: str,
