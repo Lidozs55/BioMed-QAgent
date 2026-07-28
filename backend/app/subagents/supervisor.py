@@ -58,6 +58,7 @@ class _SubagentEntry:
     task: asyncio.Task[SubagentResult] | None = None
     result: SubagentResult | None = None
     cancel_requested: bool = False
+    sink_error: BaseException | None = None
 
 
 class SubagentSupervisor:
@@ -68,6 +69,7 @@ class SubagentSupervisor:
         per_run_limit: int = 3,
         batch_limit: int = 8,
         timeout_seconds: float = 900,
+        event_timeout_seconds: float = 30,
     ) -> None:
         if global_limit < 1:
             raise ValueError("global_limit must be at least 1")
@@ -77,13 +79,20 @@ class SubagentSupervisor:
             raise ValueError("batch_limit must be between 1 and 8")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than 0")
+        if event_timeout_seconds <= 0:
+            raise ValueError("event_timeout_seconds must be greater than 0")
 
         self._global_semaphore = asyncio.Semaphore(global_limit)
         self._per_run_limit = per_run_limit
         self._batch_limit = batch_limit
         self._timeout_seconds = timeout_seconds
+        self._event_timeout_seconds = event_timeout_seconds
         self._run_semaphores: dict[tuple[str, str], asyncio.Semaphore] = {}
         self._entries: dict[str, _SubagentEntry] = {}
+        self._admissions: dict[
+            tuple[str, str],
+            set[asyncio.Future[None]],
+        ] = {}
         self._lifecycle_lock = asyncio.Lock()
         self._shutdown_lock = asyncio.Lock()
         self._closed = False
@@ -106,46 +115,56 @@ class SubagentSupervisor:
                 f"batch may contain at most {self._batch_limit} requests"
             )
 
+        owner = (task_id, run_id)
         async with self._lifecycle_lock:
             if self._closed:
                 raise RuntimeError("subagent supervisor has shut down")
 
             run_semaphore = self._run_semaphores.setdefault(
-                (task_id, run_id),
+                owner,
                 asyncio.Semaphore(self._per_run_limit),
             )
-            pending: list[
-                tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
-            ] = []
-            for request in requests:
-                subagent_id = generate_prefixed_uuid("subagent")
-                record = SubagentRecord(
-                    subagent_id=subagent_id,
-                    task_id=task_id,
-                    run_id=run_id,
-                    agent_type=request.agent_type,
-                    objective=request.objective,
-                    target_source=request.target_source,
-                    status=SubagentStatus.QUEUED,
-                    parent_tool_call_id=parent_tool_call_id,
-                    created_at=datetime.now(UTC),
-                    progress_current=0,
-                )
-                pending.append(
-                    (
-                        record,
-                        request,
-                        _SubagentEntry(
-                            task_id=task_id,
-                            run_id=run_id,
-                            parent_tool_call_id=parent_tool_call_id,
-                            sink=sink,
-                        ),
-                    )
-                )
+            admission = asyncio.get_running_loop().create_future()
+            self._admissions.setdefault(owner, set()).add(admission)
 
-            for record, request, _ in pending:
-                await sink.emit(
+        pending: list[
+            tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
+        ] = []
+        for request in requests:
+            subagent_id = generate_prefixed_uuid("subagent")
+            record = SubagentRecord(
+                subagent_id=subagent_id,
+                task_id=task_id,
+                run_id=run_id,
+                agent_type=request.agent_type,
+                objective=request.objective,
+                target_source=request.target_source,
+                status=SubagentStatus.QUEUED,
+                parent_tool_call_id=parent_tool_call_id,
+                created_at=datetime.now(UTC),
+                progress_current=0,
+            )
+            pending.append(
+                (
+                    record,
+                    request,
+                    _SubagentEntry(
+                        task_id=task_id,
+                        run_id=run_id,
+                        parent_tool_call_id=parent_tool_call_id,
+                        sink=sink,
+                    ),
+                )
+            )
+
+        queued: list[
+            tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
+        ] = []
+        admission_finished = False
+        try:
+            for record, request, entry in pending:
+                await self._emit_to_sink(
+                    sink=sink,
                     task_id=task_id,
                     run_id=run_id,
                     subagent_id=record.subagent_id,
@@ -155,29 +174,46 @@ class SubagentSupervisor:
                         request=request,
                     ),
                 )
+                queued.append((record, request, entry))
 
-            for record, request, entry in pending:
-                self._entries[record.subagent_id] = entry
-                entry.task = asyncio.create_task(
-                    self._run_child(
-                        entry=entry,
-                        request=request,
-                        runner=runner,
-                        run_semaphore=run_semaphore,
-                        subagent_id=record.subagent_id,
-                    ),
-                    name=f"subagent:{record.subagent_id}",
-                )
+            async with self._lifecycle_lock:
+                for record, request, entry in pending:
+                    self._entries[record.subagent_id] = entry
+                    entry.task = asyncio.create_task(
+                        self._run_child(
+                            entry=entry,
+                            request=request,
+                            runner=runner,
+                            run_semaphore=run_semaphore,
+                            subagent_id=record.subagent_id,
+                        ),
+                        name=f"subagent:{record.subagent_id}",
+                    )
+                self._finish_admission(owner, admission)
+                admission_finished = True
+        except BaseException as error:
+            if isinstance(error, asyncio.CancelledError):
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    current_task.uncancel()
+            await self._cleanup_failed_admission(queued, error)
+            raise
+        finally:
+            if not admission_finished:
+                async with self._lifecycle_lock:
+                    self._finish_admission(owner, admission)
 
         return [record for record, _, _ in pending]
 
     async def wait(self, subagent_id: str) -> SubagentResult:
         entry = self._require_entry(subagent_id)
-        if entry.result is not None:
-            return entry.result
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
-        return await asyncio.shield(entry.task)
+        if not entry.task.done():
+            await asyncio.shield(entry.task)
+        if entry.result is None:
+            return entry.task.result()
+        return entry.result
 
     async def cancel(
         self,
@@ -190,19 +226,17 @@ class SubagentSupervisor:
             if entry.result is not None:
                 return entry.result
             if not entry.cancel_requested:
+                await self._emit(
+                    entry,
+                    subagent_id,
+                    SubagentCancelRequestedPayload(
+                        subagent_id=subagent_id,
+                        reason=reason,
+                    ),
+                )
                 entry.cancel_requested = True
-                try:
-                    await self._emit(
-                        entry,
-                        subagent_id,
-                        SubagentCancelRequestedPayload(
-                            subagent_id=subagent_id,
-                            reason=reason,
-                        ),
-                    )
-                finally:
-                    if entry.task is not None:
-                        entry.task.cancel()
+                if entry.task is not None:
+                    entry.task.cancel()
 
         if entry.task is None:
             raise RuntimeError("subagent was not scheduled")
@@ -215,13 +249,7 @@ class SubagentSupervisor:
         *,
         reason: str | None = None,
     ) -> list[SubagentResult]:
-        subagent_ids = [
-            subagent_id
-            for subagent_id, entry in self._entries.items()
-            if entry.task_id == task_id
-            and entry.run_id == run_id
-            and entry.result is None
-        ]
+        subagent_ids = await self._owner_active_ids((task_id, run_id))
         if not subagent_ids:
             return []
         return list(
@@ -233,10 +261,47 @@ class SubagentSupervisor:
             )
         )
 
+    async def release_run(self, task_id: str, run_id: str) -> None:
+        owner = (task_id, run_id)
+        await self._wait_for_owner_admissions(owner)
+        async with self._lifecycle_lock:
+            entries = [
+                (subagent_id, entry)
+                for subagent_id, entry in self._entries.items()
+                if (entry.task_id, entry.run_id) == owner
+            ]
+            if any(
+                entry.result is None
+                or entry.task is None
+                or not entry.task.done()
+                for _, entry in entries
+            ):
+                raise RuntimeError("cannot release run with nonterminal subagents")
+            for subagent_id, _ in entries:
+                self._entries.pop(subagent_id, None)
+            if (
+                not self._owner_has_entries(owner)
+                and owner not in self._admissions
+            ):
+                self._run_semaphores.pop(owner, None)
+
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
             async with self._lifecycle_lock:
                 self._closed = True
+                admissions = [
+                    admission
+                    for owner_admissions in self._admissions.values()
+                    for admission in owner_admissions
+                ]
+
+            if admissions:
+                await asyncio.gather(
+                    *(asyncio.shield(admission) for admission in admissions),
+                    return_exceptions=True,
+                )
+
+            async with self._lifecycle_lock:
                 active_ids = [
                     subagent_id
                     for subagent_id, entry in self._entries.items()
@@ -244,15 +309,21 @@ class SubagentSupervisor:
                 ]
 
             if active_ids:
-                await asyncio.gather(
+                outcomes = await asyncio.gather(
                     *(
                         self.cancel(
                             subagent_id,
                             reason="subagent supervisor shutdown",
                         )
                         for subagent_id in active_ids
-                    )
+                    ),
+                    return_exceptions=True,
                 )
+                for subagent_id, outcome in zip(active_ids, outcomes, strict=True):
+                    if isinstance(outcome, BaseException):
+                        entry = self._entries.get(subagent_id)
+                        if entry is not None and entry.task is not None:
+                            entry.task.cancel()
 
             tasks = [
                 entry.task
@@ -260,7 +331,7 @@ class SubagentSupervisor:
                 if entry.task is not None and not entry.task.done()
             ]
             if tasks:
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_child(
         self,
@@ -335,32 +406,16 @@ class SubagentSupervisor:
             if entry.cancel_requested and result.status is not SubagentStatus.CANCELLED:
                 result = self._cancelled_result(result.subagent_id)
 
-            payload: EventPayload
-            if result.status is SubagentStatus.COMPLETED:
-                payload = SubagentCompletedPayload(
-                    subagent_id=result.subagent_id,
-                    result=result,
-                )
-            elif result.status is SubagentStatus.FAILED:
-                payload = SubagentFailedPayload(
-                    subagent_id=result.subagent_id,
-                    result=result,
-                )
-            elif result.status is SubagentStatus.CANCELLED:
-                payload = SubagentCancelledPayload(
-                    subagent_id=result.subagent_id,
-                    result=result,
-                )
-            elif result.status is SubagentStatus.INTERRUPTED:
-                payload = SubagentInterruptedPayload(
-                    subagent_id=result.subagent_id,
-                    result=result,
-                )
-            else:
-                raise ValueError("runner returned a non-terminal result")
-
-            await self._emit(entry, result.subagent_id, payload)
             entry.result = result
+            payload = self._terminal_payload(result)
+            try:
+                await self._emit(entry, result.subagent_id, payload)
+            except BaseException as error:
+                entry.sink_error = error
+                if isinstance(error, asyncio.CancelledError):
+                    current_task = asyncio.current_task()
+                    if current_task is not None:
+                        current_task.uncancel()
             return result
 
     async def _emit(
@@ -369,7 +424,8 @@ class SubagentSupervisor:
         subagent_id: str,
         payload: EventPayload,
     ) -> None:
-        await entry.sink.emit(
+        await self._emit_to_sink(
+            sink=entry.sink,
             task_id=entry.task_id,
             run_id=entry.run_id,
             subagent_id=subagent_id,
@@ -377,11 +433,145 @@ class SubagentSupervisor:
             payload=payload,
         )
 
+    async def _emit_to_sink(
+        self,
+        *,
+        sink: SubagentEventSink,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+        parent_tool_call_id: str,
+        payload: EventPayload,
+    ) -> None:
+        async with asyncio.timeout(self._event_timeout_seconds):
+            await sink.emit(
+                task_id=task_id,
+                run_id=run_id,
+                subagent_id=subagent_id,
+                parent_tool_call_id=parent_tool_call_id,
+                payload=payload,
+            )
+
+    async def _cleanup_failed_admission(
+        self,
+        queued: list[
+            tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
+        ],
+        error: BaseException,
+    ) -> None:
+        if isinstance(error, asyncio.CancelledError):
+            results = [
+                self._cancelled_result(record.subagent_id)
+                for record, _, _ in queued
+            ]
+        else:
+            error_message = str(error) or type(error).__name__
+            results = [
+                SubagentResult(
+                    subagent_id=record.subagent_id,
+                    status=SubagentStatus.FAILED,
+                    summary="Subagent admission failed",
+                    error_code=SubagentErrorCode.INTERNAL_ERROR,
+                    error_message=error_message,
+                )
+                for record, _, _ in queued
+            ]
+        await asyncio.gather(
+            *(
+                self._emit_to_sink(
+                    sink=entry.sink,
+                    task_id=entry.task_id,
+                    run_id=entry.run_id,
+                    subagent_id=result.subagent_id,
+                    parent_tool_call_id=entry.parent_tool_call_id,
+                    payload=self._terminal_payload(result),
+                )
+                for result, (_, _, entry) in zip(
+                    results,
+                    queued,
+                    strict=True,
+                )
+            ),
+            return_exceptions=True,
+        )
+
+    async def _owner_active_ids(
+        self,
+        owner: tuple[str, str],
+    ) -> list[str]:
+        await self._wait_for_owner_admissions(owner)
+        async with self._lifecycle_lock:
+            return [
+                subagent_id
+                for subagent_id, entry in self._entries.items()
+                if (entry.task_id, entry.run_id) == owner
+                and entry.result is None
+            ]
+
+    async def _wait_for_owner_admissions(
+        self,
+        owner: tuple[str, str],
+    ) -> None:
+        while True:
+            async with self._lifecycle_lock:
+                admissions = tuple(self._admissions.get(owner, ()))
+                if not admissions:
+                    return
+            await asyncio.gather(
+                *(asyncio.shield(admission) for admission in admissions),
+                return_exceptions=True,
+            )
+
+    def _owner_has_entries(self, owner: tuple[str, str]) -> bool:
+        return any(
+            (entry.task_id, entry.run_id) == owner
+            for entry in self._entries.values()
+        )
+
+    def _finish_admission(
+        self,
+        owner: tuple[str, str],
+        admission: asyncio.Future[None],
+    ) -> None:
+        owner_admissions = self._admissions.get(owner)
+        if owner_admissions is not None:
+            owner_admissions.discard(admission)
+            if not owner_admissions:
+                self._admissions.pop(owner, None)
+        if not admission.done():
+            admission.set_result(None)
+        if not self._owner_has_entries(owner) and owner not in self._admissions:
+            self._run_semaphores.pop(owner, None)
+
     def _require_entry(self, subagent_id: str) -> _SubagentEntry:
         try:
             return self._entries[subagent_id]
         except KeyError as error:
             raise LookupError(f"unknown subagent: {subagent_id}") from error
+
+    @staticmethod
+    def _terminal_payload(result: SubagentResult) -> EventPayload:
+        if result.status is SubagentStatus.COMPLETED:
+            return SubagentCompletedPayload(
+                subagent_id=result.subagent_id,
+                result=result,
+            )
+        if result.status is SubagentStatus.FAILED:
+            return SubagentFailedPayload(
+                subagent_id=result.subagent_id,
+                result=result,
+            )
+        if result.status is SubagentStatus.CANCELLED:
+            return SubagentCancelledPayload(
+                subagent_id=result.subagent_id,
+                result=result,
+            )
+        if result.status is SubagentStatus.INTERRUPTED:
+            return SubagentInterruptedPayload(
+                subagent_id=result.subagent_id,
+                result=result,
+            )
+        raise ValueError("runner returned a non-terminal result")
 
     @staticmethod
     def _cancelled_result(subagent_id: str) -> SubagentResult:
