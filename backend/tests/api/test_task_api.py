@@ -26,6 +26,7 @@ async def test_database_api_lists_only_user_selectable_data_sources(
         {
             "analysis",
             "browser_fallback",
+            "create_skill",
             "self_evolution",
             "literature_understanding",
             "pdf_extraction",

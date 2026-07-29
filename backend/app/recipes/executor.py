@@ -190,7 +190,28 @@ class RecipeExecutor:
         inputs: Mapping[str, object],
         workspace: SubagentStagingWorkspace,
     ) -> RecipeExecutionResult:
-        recipe = self._load_verified(recipe_id, version)
+        recipe = self._load(recipe_id, version, required_status=RecipeStatus.VERIFIED)
+        return await self._execute(recipe, inputs, workspace)
+
+    async def execute_for_validation(
+        self,
+        *,
+        recipe_id: str,
+        version: int,
+        inputs: Mapping[str, object],
+        workspace: SubagentStagingWorkspace,
+    ) -> RecipeExecutionResult:
+        """Execute one trusted DRAFT for validation without enabling replay."""
+
+        recipe = self._load(recipe_id, version, required_status=RecipeStatus.DRAFT)
+        return await self._execute(recipe, inputs, workspace)
+
+    async def _execute(
+        self,
+        recipe: WorkflowRecipe,
+        inputs: Mapping[str, object],
+        workspace: SubagentStagingWorkspace,
+    ) -> RecipeExecutionResult:
         declared_inputs = self._validate_inputs(recipe, inputs)
         self._validate_step_order(recipe)
         try:
@@ -458,13 +479,21 @@ class RecipeExecutor:
             attempts=tuple(attempts),
         )
 
-    def _load_verified(self, recipe_id: str, version: int) -> WorkflowRecipe:
+    def _load(
+        self,
+        recipe_id: str,
+        version: int,
+        *,
+        required_status: RecipeStatus,
+    ) -> WorkflowRecipe:
         recipe = self._store.get(recipe_id, version)
         validated = WorkflowRecipe.model_validate(recipe.model_dump(mode="json"))
         if validated.recipe_id != recipe_id or validated.version != version:
             raise ValueError("stored Recipe identity does not match requested version")
-        if validated.status is not RecipeStatus.VERIFIED:
-            raise ValueError("only verified Recipes may be executed")
+        if validated.status is not required_status:
+            if required_status is RecipeStatus.VERIFIED:
+                raise ValueError("only verified Recipes may be executed")
+            raise ValueError("only draft Recipes may be executed for validation")
         if not validated.digest or validated.digest != compute_recipe_digest(validated):
             raise ValueError("Recipe digest does not match its stored content")
         return validated

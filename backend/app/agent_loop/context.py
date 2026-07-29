@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,7 @@ from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
+    from app.skills.builtin.processing.create_skill import CreateSkillRuntime
 
 
 ProgressEmitter = Callable[
@@ -126,6 +128,21 @@ class RunContext:
         repr=False,
     )
     _model_settings_bound: bool = field(default=False, init=False, repr=False)
+    _create_skill_runtime: CreateSkillRuntime | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _create_skill_keys: set[tuple[str, str]] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+    )
+    _create_skill_guard: object = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -142,6 +159,32 @@ class RunContext:
             raise RuntimeError("run model settings are already bound")
         self.model_settings = model_settings
         self._model_settings_bound = True
+
+    def bind_create_skill_runtime(self, runtime: CreateSkillRuntime) -> None:
+        """Bind the trusted Recipe services available to this Run exactly once."""
+
+        if self._create_skill_runtime is not None:
+            raise RuntimeError("create_skill runtime is already bound")
+        self._create_skill_runtime = runtime
+
+    @property
+    def create_skill_runtime(self) -> CreateSkillRuntime:
+        """Return trusted Recipe services without accepting model-provided paths."""
+
+        if self._create_skill_runtime is None:
+            raise RuntimeError("create_skill runtime is not available")
+        return self._create_skill_runtime
+
+    def reserve_create_skill(self, domain: str, capability: str) -> None:
+        """Enforce one Recipe development attempt per Run and capability."""
+
+        key = (domain.strip().casefold(), capability.strip().casefold())
+        with self._create_skill_guard:
+            if key in self._create_skill_keys:
+                raise ValueError(
+                    "create_skill already developed this domain and capability in the current Run"
+                )
+            self._create_skill_keys.add(key)
 
     @property
     def work_dir(self) -> TaskWorkDir:

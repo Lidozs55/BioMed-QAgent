@@ -136,7 +136,6 @@ _SKILL_DISPLAY_NAMES: dict[str, str] = {
     "literature_understanding": "Literature Understanding",
     "pdf_extraction": "PDF Extraction",
     "browser_fallback": "Browser Fallback",
-    "self_evolution": "Self Evolution",
     "analysis": "Analysis",
     "pubchem": "PubChem",
     "reactome": "Reactome",

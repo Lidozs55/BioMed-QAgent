@@ -16,3 +16,5 @@ def test_builtin_skill_catalog_has_one_complete_truthful_projection() -> None:
     assert {
         name for name, item in by_name.items() if item.user_selectable
     } == {"pubmed", "geo", "gdc", "pdb", "xena", "pubchem", "reactome"}
+    assert "create_skill" in by_name
+    assert "self_evolution" not in by_name

@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from app.domain.contracts.recipe import RecipeStatus, WorkflowRecipe
+from app.domain.contracts.recipe import RecipeAttempt, RecipeStatus, WorkflowRecipe
 from app.recipes.redaction import redact_secrets
 from app.runtime.repository import atomic_write_json, atomic_write_text
 
@@ -119,6 +119,8 @@ class WorkflowRecipeStore:
         self,
         recipe_id: str,
         *,
+        expected_version: int | None = None,
+        attempts: list[RecipeAttempt] | None = None,
         verification_evidence: list[str] | None = None,
         last_succeeded_at: datetime | None = None,
         verified_at: datetime | None = None,
@@ -130,7 +132,14 @@ class WorkflowRecipeStore:
         }
         if verification_evidence is not None:
             updates["verification_evidence"] = verification_evidence
-        return self._transition(recipe_id, RecipeStatus.VERIFIED, updates)
+        if attempts is not None:
+            updates["attempts"] = attempts
+        return self._transition(
+            recipe_id,
+            RecipeStatus.VERIFIED,
+            updates,
+            expected_version=expected_version,
+        )
 
     def reject(
         self,
@@ -199,9 +208,13 @@ class WorkflowRecipeStore:
         recipe_id: str,
         target: RecipeStatus,
         updates: Mapping[str, object],
+        *,
+        expected_version: int | None = None,
     ) -> WorkflowRecipe:
         with self._lock:
             current = self.get(recipe_id)
+            if expected_version is not None and current.version != expected_version:
+                raise ValueError("stored recipe version changed before transition")
             allowed = _TRANSITIONS.get(current.status, set())
             if target not in allowed:
                 raise ValueError(

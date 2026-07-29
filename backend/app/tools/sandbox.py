@@ -1,7 +1,7 @@
 """LLM 脚本沙箱 — 让 Agent 自行编写数据处理脚本并安全执行。
 
 设计目标（D4 决策）：
-  - 复用 ``app.skills.evolution.validate_skill_code`` 的 AST 安全模型
+  - 使用本模块的 AST 安全模型校验用户脚本
   - 扩展白名单：``csv``/``json``/``re``/``math``/``itertools``/``collections``/
     ``sqlite3``/``statistics``/``datetime``（数据处理常用）
   - 子进程隔离：用 ``subprocess.run`` 在独立 Python 解释器中执行
@@ -41,9 +41,26 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.skills.evolution import _FORBIDDEN_CALL_NAMES
 
 logger = logging.getLogger(__name__)
+
+_FORBIDDEN_CALL_NAMES = frozenset(
+    {
+        "exec",
+        "eval",
+        "compile",
+        "open",
+        "__import__",
+        "globals",
+        "locals",
+        "vars",
+        "input",
+        "breakpoint",
+        "exit",
+        "quit",
+        "help",
+    }
+)
 
 #: 沙箱脚本允许 import 的模块白名单（数据处理常用）。
 #: 比 ``_ALLOWED_IMPORT_MODULES`` 更宽松：覆盖 CSV/JSON/正则/数学/统计/迭代器等
@@ -165,7 +182,7 @@ class SandboxResult:
 
 
 def validate_sandbox_code(code: str) -> None:
-    """校验沙箱脚本代码，复用 ``validate_skill_code`` 的 AST 模型。
+    """使用本模块的 AST 安全模型校验沙箱脚本代码。
 
     与 ``validate_skill_code`` 的差异：白名单模块为 ``SANDBOX_ALLOWED_MODULES``，
     允许 ``import X`` 形式（因为沙箱脚本不会通过 importlib 加载到主进程）。
