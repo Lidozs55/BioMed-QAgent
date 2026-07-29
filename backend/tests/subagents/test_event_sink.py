@@ -262,10 +262,120 @@ class _CleanupBoundarySink(DurableSubagentEventSink):
 
     async def _leave_attempt(self, **kwargs) -> None:
         current = asyncio.current_task()
-        if current is not None and current.get_name() == "same-key-second":
+        if (
+            current is not None
+            and "same-key-second" in current.get_name()
+        ):
             self.second_waiter_leaving.set()
             await self.release_second_waiter.wait()
         await super()._leave_attempt(**kwargs)
+
+
+class _DoubleCancelLeaveSink(DurableSubagentEventSink):
+    def __init__(self, *, repository: TaskRepository, hub: EventHub) -> None:
+        super().__init__(repository=repository, hub=hub)
+        self.block_leave = False
+        self.leave_entered = asyncio.Event()
+        self.release_leave = asyncio.Event()
+
+    async def _leave_attempt(self, **kwargs) -> None:
+        if self.block_leave:
+            self.leave_entered.set()
+            await self.release_leave.wait()
+        await super()._leave_attempt(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_double_cancel_drains_attempt_leave_without_duplicates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(_empty_snapshot())
+    await repository.append_event(
+        build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=1,
+            payload=RunQueuedPayload(request_id="req_1", input="research"),
+        )
+    )
+    sink = _DoubleCancelLeaveSink(repository=repository, hub=hub)
+    await sink.emit(
+        task_id="task_1",
+        run_id="run_1",
+        subagent_id="sub_1",
+        parent_tool_call_id="call_1",
+        payload=_queued_payload(),
+    )
+    real_append = repository.append_event_payload
+    real_publish = hub.publish
+    publish_entered = asyncio.Event()
+    release_publish = asyncio.Event()
+    publish_finished = asyncio.Event()
+    append_calls = 0
+    publish_calls = 0
+
+    async def count_terminal_append(**kwargs):
+        nonlocal append_calls
+        if isinstance(kwargs["payload"], SubagentCancelledPayload):
+            append_calls += 1
+        return await real_append(**kwargs)
+
+    async def block_terminal_publish(event) -> None:
+        nonlocal publish_calls
+        if isinstance(event.payload, SubagentCancelledPayload):
+            publish_calls += 1
+            publish_entered.set()
+            await release_publish.wait()
+        await real_publish(event)
+        if isinstance(event.payload, SubagentCancelledPayload):
+            publish_finished.set()
+
+    monkeypatch.setattr(repository, "append_event_payload", count_terminal_append)
+    monkeypatch.setattr(hub, "publish", block_terminal_publish)
+    sink.block_leave = True
+    emitter = asyncio.create_task(
+        sink.emit(
+            task_id="task_1",
+            run_id="run_1",
+            subagent_id="sub_1",
+            parent_tool_call_id="call_1",
+            payload=_cancelled_payload(),
+        )
+    )
+    try:
+        await asyncio.wait_for(publish_entered.wait(), timeout=1)
+        emitter.cancel()
+        await asyncio.wait_for(sink.leave_entered.wait(), timeout=1)
+        emitter.cancel()
+        release_publish.set()
+        sink.release_leave.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await emitter
+        await asyncio.wait_for(publish_finished.wait(), timeout=1)
+        async with asyncio.timeout(1):
+            while any(
+                attempt.execution is not None
+                and not attempt.execution.done()
+                for attempt in sink._attempts.values()
+            ):
+                await asyncio.sleep(0)
+
+        assert append_calls == 1
+        assert publish_calls == 1
+        assert sink._attempts == {}
+        await sink.release_run_attempts("task_1", "run_1")
+        assert sink._completed_keys == set()
+    finally:
+        release_publish.set()
+        sink.release_leave.set()
+        await asyncio.gather(emitter, return_exceptions=True)
+        await hub.close()
+        await repository.close()
 
 
 @pytest.mark.asyncio

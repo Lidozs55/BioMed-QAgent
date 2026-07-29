@@ -117,6 +117,10 @@ class SubagentSupervisor:
             tuple[str, str],
             set[asyncio.Future[None]],
         ] = {}
+        self._owner_lifecycle_sinks: dict[
+            tuple[str, str],
+            dict[int, SubagentAttemptLifecycle],
+        ] = {}
         self._lifecycle_lock = asyncio.Lock()
         self._shutdown_lock = asyncio.Lock()
         self._closed = False
@@ -150,6 +154,10 @@ class SubagentSupervisor:
             )
             admission = asyncio.get_running_loop().create_future()
             self._admissions.setdefault(owner, set()).add(admission)
+            if isinstance(sink, SubagentAttemptLifecycle):
+                self._owner_lifecycle_sinks.setdefault(owner, {})[
+                    id(sink)
+                ] = sink
 
         pending: list[
             tuple[SubagentRecord, SubagentRequest, _SubagentEntry]
@@ -414,35 +422,44 @@ class SubagentSupervisor:
 
     async def release_run(self, task_id: str, run_id: str) -> None:
         owner = (task_id, run_id)
-        await self._wait_for_owner_admissions(owner)
-        async with self._lifecycle_lock:
-            entries = [
-                (subagent_id, entry)
-                for subagent_id, entry in self._entries.items()
-                if (entry.task_id, entry.run_id) == owner
-            ]
-            if any(
-                entry.result is None
-                or entry.task is None
-                or not entry.task.done()
-                for _, entry in entries
-            ):
-                raise RuntimeError("cannot release run with nonterminal subagents")
-            sinks = {
-                id(entry.sink): entry.sink
-                for _, entry in entries
-                if isinstance(entry.sink, SubagentAttemptLifecycle)
-            }
-            for sink in sinks.values():
-                assert isinstance(sink, SubagentAttemptLifecycle)
-                await sink.release_run_attempts(task_id, run_id)
-            for subagent_id, _ in entries:
-                self._entries.pop(subagent_id, None)
-            if (
-                not self._owner_has_entries(owner)
-                and owner not in self._admissions
-            ):
-                self._run_semaphores.pop(owner, None)
+        while True:
+            await self._wait_for_owner_admissions(owner)
+            async with self._lifecycle_lock:
+                if owner in self._admissions:
+                    continue
+                entries = [
+                    (subagent_id, entry)
+                    for subagent_id, entry in self._entries.items()
+                    if (entry.task_id, entry.run_id) == owner
+                ]
+                if any(
+                    entry.result is None
+                    or entry.task is None
+                    or not entry.task.done()
+                    for _, entry in entries
+                ):
+                    raise RuntimeError(
+                        "cannot release run with nonterminal subagents"
+                    )
+                sinks = self._owner_lifecycle_sinks.setdefault(owner, {})
+                for _, entry in entries:
+                    if isinstance(entry.sink, SubagentAttemptLifecycle):
+                        sinks.setdefault(id(entry.sink), entry.sink)
+                for sink_id, sink in tuple(sinks.items()):
+                    await sink.release_run_attempts(task_id, run_id)
+                    current = self._owner_lifecycle_sinks.get(owner)
+                    if current is not None and current.get(sink_id) is sink:
+                        current.pop(sink_id, None)
+                if not sinks:
+                    self._owner_lifecycle_sinks.pop(owner, None)
+                for subagent_id, _ in entries:
+                    self._entries.pop(subagent_id, None)
+                if (
+                    not self._owner_has_entries(owner)
+                    and owner not in self._admissions
+                ):
+                    self._run_semaphores.pop(owner, None)
+                return
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:

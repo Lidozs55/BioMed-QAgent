@@ -69,12 +69,45 @@ class DurableSubagentEventSink:
         try:
             await asyncio.shield(execution)
         finally:
-            await self._leave_attempt(
+            await self._shield_and_drain_leave(
                 key=key,
                 attempt=attempt,
                 execution=execution,
                 generation=generation,
             )
+
+    async def _shield_and_drain_leave(
+        self,
+        *,
+        key: _AttemptKey,
+        attempt: _EmitAttempt,
+        execution: asyncio.Task[None],
+        generation: int,
+    ) -> None:
+        caller = asyncio.current_task()
+        caller_name = caller.get_name() if caller is not None else "unknown"
+        leave_task = asyncio.create_task(
+            self._leave_attempt(
+                key=key,
+                attempt=attempt,
+                execution=execution,
+                generation=generation,
+            ),
+            name=f"subagent-event-leave:{caller_name}:{generation}",
+        )
+        try:
+            await asyncio.shield(leave_task)
+        except asyncio.CancelledError:
+            while not leave_task.done():
+                try:
+                    await asyncio.shield(leave_task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not leave_task.cancelled():
+                leave_task.exception()
+            raise
 
     async def reconcile_terminal(
         self,

@@ -429,6 +429,36 @@ class LifecycleTerminalProblemSink(TerminalProblemSink):
         self.released_owners.append((task_id, run_id))
 
 
+class FailedAdmissionLifecycleSink(RecordingSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cleanup_calls = 0
+
+    async def emit(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        subagent_id: str,
+        parent_tool_call_id: str,
+        payload: EventPayload,
+    ) -> None:
+        if isinstance(payload, SubagentQueuedPayload):
+            raise RuntimeError("queued admission failed")
+        await super().emit(
+            task_id=task_id,
+            run_id=run_id,
+            subagent_id=subagent_id,
+            parent_tool_call_id=parent_tool_call_id,
+            payload=payload,
+        )
+
+    async def release_run_attempts(self, task_id: str, run_id: str) -> None:
+        self.cleanup_calls += 1
+        if self.cleanup_calls == 1:
+            raise OSError("attempt cleanup unavailable")
+
+
 class SelectiveCancelFailureSink(RecordingSink):
     def __init__(self) -> None:
         super().__init__()
@@ -1491,6 +1521,141 @@ async def test_release_run_cleans_attempts_only_after_terminal_is_durable() -> N
     await supervisor.release_run("task_1", "run_1")
 
     assert sink.released_owners == [("task_1", "run_1")]
+    await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ["timeout", "cancel"])
+async def test_failed_admission_releases_real_sink_attempts(
+    tmp_path,
+    monkeypatch,
+    failure_mode: str,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    await repository.initialize()
+    await repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id="task_1",
+                mode=TaskMode.AGENT,
+                title="Admission cleanup",
+                status=RunStatus.RUNNING,
+                active_run_id="run_1",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+            runs=[
+                RunRecord(
+                    run_id="run_1",
+                    task_id="task_1",
+                    request_id="request_1",
+                    status=RunStatus.RUNNING,
+                    input="Admission cleanup",
+                    created_at=NOW,
+                    updated_at=NOW,
+                    started_at=NOW,
+                )
+            ],
+        )
+    )
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+    supervisor = SubagentSupervisor(event_timeout_seconds=1)
+    real_publish = hub.publish
+    queued_publish_entered = asyncio.Event()
+    release_queued_publish = asyncio.Event()
+    queued_publish_finished = asyncio.Event()
+
+    async def block_queued_publish(event) -> None:
+        if isinstance(event.payload, SubagentQueuedPayload):
+            queued_publish_entered.set()
+            await release_queued_publish.wait()
+        await real_publish(event)
+        if isinstance(event.payload, SubagentQueuedPayload):
+            queued_publish_finished.set()
+
+    monkeypatch.setattr(hub, "publish", block_queued_publish)
+    admission = asyncio.create_task(
+        supervisor.start_batch(
+            task_id="task_1",
+            run_id="run_1",
+            parent_tool_call_id="call_1",
+            requests=[_request(0)],
+            runner=ImmediateRunner(),
+            sink=sink,
+        )
+    )
+    try:
+        await asyncio.wait_for(queued_publish_entered.wait(), timeout=2)
+        if failure_mode == "cancel":
+            admission.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await admission
+        else:
+            with pytest.raises(TimeoutError):
+                await admission
+
+        release_queued_publish.set()
+        await asyncio.wait_for(queued_publish_finished.wait(), timeout=1)
+        async with asyncio.timeout(1):
+            while any(
+                attempt.execution is not None
+                and not attempt.execution.done()
+                for attempt in sink._attempts.values()
+            ):
+                await asyncio.sleep(0)
+
+        assert not supervisor._entries
+        assert any(key[:2] == ("task_1", "run_1") for key in sink._completed_keys)
+        await supervisor.release_run("task_1", "run_1")
+
+        assert not any(
+            key[:2] == ("task_1", "run_1") for key in sink._attempts
+        )
+        assert not any(
+            key[:2] == ("task_1", "run_1") for key in sink._completed_keys
+        )
+        events = await repository.list_events("task_1")
+        assert (
+            sum(isinstance(event.payload, SubagentQueuedPayload) for event in events)
+            == 1
+        )
+        assert (
+            sum(
+                isinstance(event.payload, SubagentInterruptedPayload)
+                for event in events
+            )
+            == 1
+        )
+    finally:
+        release_queued_publish.set()
+        await asyncio.gather(admission, return_exceptions=True)
+        await supervisor.shutdown()
+        await hub.close()
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_admission_cleanup_is_exact_once_and_retryable() -> None:
+    sink = FailedAdmissionLifecycleSink()
+    supervisor = SubagentSupervisor()
+
+    with pytest.raises(RuntimeError, match="queued admission failed"):
+        await supervisor.start_batch(
+            task_id="task_1",
+            run_id="run_1",
+            parent_tool_call_id="call_1",
+            requests=[_request(0)],
+            runner=ImmediateRunner(),
+            sink=sink,
+        )
+
+    with pytest.raises(OSError, match="attempt cleanup unavailable"):
+        await supervisor.release_run("task_1", "run_1")
+    await supervisor.release_run("task_1", "run_1")
+    await supervisor.release_run("task_1", "run_1")
+
+    assert sink.cleanup_calls == 2
     await supervisor.shutdown()
 
 
