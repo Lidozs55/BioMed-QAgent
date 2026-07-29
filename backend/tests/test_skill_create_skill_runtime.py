@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
@@ -22,6 +23,7 @@ from app.skills.builtin.processing.create_skill import (
     create_skill_tool,
 )
 from app.subagents.staging import SubagentStagingWorkspace
+from app.tools.network_safety import PublicHttpTarget
 
 NOW = datetime(2026, 7, 29, tzinfo=UTC)
 
@@ -47,62 +49,91 @@ class UnusedRecipeClient:
 
 
 @pytest.mark.asyncio
-async def test_lifespan_context_factory_binds_shared_recipe_store(
+async def test_lifespan_context_factory_develops_and_validates_recipe(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"accession": "GSE100"},
+            headers={"content-type": "application/json"},
+        )
+
+    def resolve_target(_url: str, *, require_https: bool) -> PublicHttpTarget:
+        assert require_https
+        return PublicHttpTarget(
+            connect_url="https://93.184.216.34/GSE100",
+            host_header="api.example.org",
+            sni_hostname="api.example.org",
+        )
+
     configured = Settings(
         output_dir=str(tmp_path / "output"),
         skill_data_dir=str(tmp_path / "skills"),
     )
-    application = create_app(configured)
+    monkeypatch.setattr(
+        "app.integrations.acquisition.resolve_public_http_target",
+        resolve_target,
+    )
+    application = create_app(
+        configured,
+        recipe_http_transport=httpx.MockTransport(handler),
+    )
 
     async with application.router.lifespan_context(application):
         factory = application.state.task_context_factory
         context = factory("task_production_recipe")
         runtime = context.create_skill_runtime
-        draft = application.state.workflow_recipe_store.save_draft(_draft_recipe())
-        application.state.workflow_recipe_store.mark_verified(draft.recipe_id)
-
-        result = await _invoke(
+        recipe = _production_recipe()
+        developed = await _invoke(
             _tool_context(context),
             {
-                "operation": "find_recipe",
-                "domain": draft.domain,
-                "capability": draft.capability,
+                "operation": "develop_workflow",
+                "recipe": recipe.model_dump(mode="json"),
             },
         )
-
-        assert application.state.task_manager._context_factory is factory
-        assert runtime.store is application.state.workflow_recipe_store
-        assert runtime.executor is None
-        assert runtime.workspace.root.is_relative_to(context.work_dir.root)
-        assert [item["recipe_id"] for item in result["recipes"]] == [draft.recipe_id]
-
-
-@pytest.mark.asyncio
-async def test_production_validate_reports_executor_unavailable(
-    tmp_path: Path,
-) -> None:
-    configured = Settings(
-        output_dir=str(tmp_path / "output"),
-        skill_data_dir=str(tmp_path / "skills"),
-    )
-    application = create_app(configured)
-
-    async with application.router.lifespan_context(application):
-        context = application.state.task_context_factory("task_validation_unavailable")
+        draft = runtime.store.get(
+            developed["recipe"]["recipe_id"],
+            developed["recipe"]["version"],
+        )
         result = await _invoke(
             _tool_context(context),
             {
                 "operation": "validate_recipe",
-                "recipe_id": "recipe_missing",
-                "version": 1,
-                "inputs": {},
+                "recipe_id": draft.recipe_id,
+                "version": draft.version,
+                "inputs": {"accession": "GSE100"},
             },
         )
+        verified = runtime.store.get(draft.recipe_id)
 
-    assert result["status"] == "error"
-    assert result["error"]["code"] == "recipe_validation_unavailable"
+        assert application.state.task_manager._context_factory is factory
+        assert runtime.store is application.state.workflow_recipe_store
+        assert runtime.executor is not None
+        assert runtime.workspace.root.is_relative_to(context.work_dir.root)
+        assert result["status"] == "ok", result
+        assert verified.status.value == "verified"
+        assert verified.attempts[-1].status == "succeeded"
+        assert any(
+            result["source_asset"]["asset_id"] in item for item in verified.verification_evidence
+        )
+        assert (
+            runtime.workspace.task_root.joinpath(
+                result["source_asset"]["relative_path"]
+            ).read_bytes()
+            == b'{"accession":"GSE100"}'
+        )
+        assert len(requests) == 1
+        assert str(requests[0].url) == "https://93.184.216.34/GSE100"
+        assert requests[0].headers["host"] == "api.example.org"
+        assert requests[0].extensions["sni_hostname"] == "api.example.org"
+        recipe_http_client = application.state.recipe_http_client
+
+    assert recipe_http_client.is_closed
 
 
 @pytest.mark.asyncio
@@ -307,6 +338,20 @@ def _draft_recipe() -> WorkflowRecipe:
             "data_level": "metadata",
             "filename": "result.json",
         },
+    )
+
+
+def _production_recipe() -> WorkflowRecipe:
+    return _draft_recipe().model_copy(
+        update={
+            "steps": [
+                ApiRequestStep(
+                    url_template="https://api.example.org/{accession}",
+                    request_headers={"Host": "attacker.example"},
+                    output_name="result.json",
+                )
+            ],
+        }
     )
 
 

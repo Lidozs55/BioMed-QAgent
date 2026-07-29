@@ -28,6 +28,8 @@ from app.model_config.context_budget import (
     resolve_context_budget,
 )
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+from app.recipes.client import ControlledRecipeClient
+from app.recipes.executor import RecipeExecutor
 from app.recipes.store import WorkflowRecipeStore
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
@@ -67,7 +69,11 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": "1.0.0", "arch": "agent_loop"}
 
 
-def create_app(configured: Settings = settings) -> FastAPI:
+def create_app(
+    configured: Settings = settings,
+    *,
+    recipe_http_transport: httpx.AsyncBaseTransport | None = None,
+) -> FastAPI:
     """Build an application whose lifespan owns all runtime resources."""
 
     @asynccontextmanager
@@ -121,6 +127,17 @@ def create_app(configured: Settings = settings) -> FastAPI:
         workflow_recipe_store = WorkflowRecipeStore(
             configured.skill_data_path / "recipes"
         )
+        recipe_http_client = httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=False,
+            trust_env=False,
+            transport=recipe_http_transport,
+        )
+        recipe_client = ControlledRecipeClient(recipe_http_client)
+        recipe_executor = RecipeExecutor(
+            client=recipe_client,
+            store=workflow_recipe_store,
+        )
 
         def task_context_factory(task_id: str) -> RunContext:
             context = RunContext(
@@ -130,6 +147,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             context.bind_create_skill_runtime(
                 CreateSkillRuntime(
                     store=workflow_recipe_store,
+                    executor=recipe_executor,
                     workspace=SubagentStagingWorkspace(
                         context.work_dir.root,
                         generate_prefixed_uuid("create_skill"),
@@ -181,6 +199,9 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.task_manager = manager
         application.state.task_context_factory = task_context_factory
         application.state.workflow_recipe_store = workflow_recipe_store
+        application.state.recipe_http_client = recipe_http_client
+        application.state.recipe_client = recipe_client
+        application.state.recipe_executor = recipe_executor
         application.state.subagent_input_broker = subagent_input_broker
         application.state.subagent_event_sink = subagent_event_sink
         application.state.subagent_supervisor = subagent_supervisor
@@ -207,18 +228,21 @@ def create_app(configured: Settings = settings) -> FastAPI:
                         await manager.close()
                     finally:
                         try:
-                            await assistant_stream_hub.close()
+                            await recipe_http_client.aclose()
                         finally:
                             try:
-                                await event_hub.close()
+                                await assistant_stream_hub.close()
                             finally:
                                 try:
-                                    await index_executor.close()
+                                    await event_hub.close()
                                 finally:
                                     try:
-                                        storage_executor.shutdown(wait=True)
+                                        await index_executor.close()
                                     finally:
-                                        sync_executor.shutdown(wait=True)
+                                        try:
+                                            storage_executor.shutdown(wait=True)
+                                        finally:
+                                            sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",
