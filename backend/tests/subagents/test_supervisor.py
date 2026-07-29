@@ -459,6 +459,18 @@ class FailedAdmissionLifecycleSink(RecordingSink):
             raise OSError("attempt cleanup unavailable")
 
 
+class RecordingLifecycleSink(RecordingSink):
+    def __init__(self, *, fail_first_cleanup: bool = False) -> None:
+        super().__init__()
+        self.cleanup_calls = 0
+        self._fail_first_cleanup = fail_first_cleanup
+
+    async def release_run_attempts(self, task_id: str, run_id: str) -> None:
+        self.cleanup_calls += 1
+        if self._fail_first_cleanup and self.cleanup_calls == 1:
+            raise OSError("attempt cleanup unavailable")
+
+
 class SelectiveCancelFailureSink(RecordingSink):
     def __init__(self) -> None:
         super().__init__()
@@ -1656,6 +1668,42 @@ async def test_failed_admission_cleanup_is_exact_once_and_retryable() -> None:
     await supervisor.release_run("task_1", "run_1")
 
     assert sink.cleanup_calls == 2
+    await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_multi_sink_cleanup_retry_is_exact_once() -> None:
+    first_sink = RecordingLifecycleSink()
+    second_sink = RecordingLifecycleSink(fail_first_cleanup=True)
+    supervisor = SubagentSupervisor()
+    first = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_1",
+        requests=[_request(0)],
+        runner=ImmediateRunner(),
+        sink=first_sink,
+    )
+    second = await supervisor.start_batch(
+        task_id="task_1",
+        run_id="run_1",
+        parent_tool_call_id="call_2",
+        requests=[_request(1)],
+        runner=ImmediateRunner(),
+        sink=second_sink,
+    )
+    await supervisor.wait(first[0].subagent_id)
+    await supervisor.wait(second[0].subagent_id)
+
+    with pytest.raises(OSError, match="attempt cleanup unavailable"):
+        await supervisor.release_run("task_1", "run_1")
+    await supervisor.release_run("task_1", "run_1")
+    await supervisor.release_run("task_1", "run_1")
+
+    assert first_sink.cleanup_calls == 1
+    assert second_sink.cleanup_calls == 2
+    assert first[0].subagent_id not in supervisor._entries
+    assert second[0].subagent_id not in supervisor._entries
     await supervisor.shutdown()
 
 

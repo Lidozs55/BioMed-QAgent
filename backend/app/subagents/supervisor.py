@@ -442,9 +442,6 @@ class SubagentSupervisor:
                         "cannot release run with nonterminal subagents"
                     )
                 sinks = self._owner_lifecycle_sinks.setdefault(owner, {})
-                for _, entry in entries:
-                    if isinstance(entry.sink, SubagentAttemptLifecycle):
-                        sinks.setdefault(id(entry.sink), entry.sink)
                 for sink_id, sink in tuple(sinks.items()):
                     await sink.release_run_attempts(task_id, run_id)
                     current = self._owner_lifecycle_sinks.get(owner)
