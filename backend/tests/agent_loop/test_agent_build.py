@@ -6,7 +6,12 @@ from dataclasses import FrozenInstanceError
 import pytest
 from agents import RunContextWrapper, function_tool
 from agents.tool_context import ToolContext
-from app.agent_loop.agent import INSTRUCTIONS, AgentBuild, build_agent
+from app.agent_loop.agent import (
+    INSTRUCTIONS,
+    AgentBuild,
+    build_agent,
+    resolve_agent_instructions,
+)
 from app.agent_loop.context import RunContext
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.registry import SkillCategory, SkillDef
@@ -25,9 +30,7 @@ def test_agent_build_owns_immutable_skill_and_model_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_agent_builds_keep_skill_and_model_ownership_isolated() -> (
-    None
-):
+async def test_concurrent_agent_builds_keep_skill_and_model_ownership_isolated() -> None:
     catalog = SkillCatalog()
     geo_build, pdb_build = await asyncio.gather(
         asyncio.to_thread(build_agent, catalog, ["geo"]),
@@ -66,6 +69,21 @@ def test_agent_instructions_require_dynamic_skill_discovery_protocol() -> None:
     assert "缩短查询" in INSTRUCTIONS
     assert "优先传 `source`" in INSTRUCTIONS
     assert "每个被选中的数据库必须至少调用一次" not in INSTRUCTIONS
+
+
+def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
+    instructions = resolve_agent_instructions(
+        INSTRUCTIONS,
+        RunContext(preferred_sources=["pubmed"]),
+    )
+
+    assert "not_found 不得触发 create_skill" in instructions
+    assert "capability_gap" in instructions
+    assert "同一 domain + capability 最多调用一次" in instructions
+    assert "优先检索用户选择的 preferred_sources" in instructions
+    assert "公开、免登录" in instructions
+    assert "SkillBuilderAgent" in instructions
+    assert "HIL" in instructions
 
 
 @pytest.mark.asyncio

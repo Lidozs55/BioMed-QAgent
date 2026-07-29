@@ -19,15 +19,15 @@ from app.skills.search import (
 )
 
 
-def _is_allowed(descriptor: SkillDescriptor, context: RunContext) -> bool:
-    allowlist = context.preferred_sources
-    if not allowlist:
-        return True
-    if descriptor.origin != "package" and not descriptor.user_selectable:
-        return True
-    if not descriptor.supported_sources:
-        return False
-    return bool(set(allowlist).intersection(descriptor.supported_sources))
+def _matches_preferred_source(
+    descriptor: SkillDescriptor,
+    preferred_sources: set[str],
+) -> bool:
+    return bool(
+        preferred_sources.intersection(
+            normalize_skill_search_text(source) for source in descriptor.supported_sources
+        )
+    )
 
 
 def _error(
@@ -56,9 +56,7 @@ def build_skill_gateway(
 ) -> tuple[FunctionTool, FunctionTool]:
     """Build stable SDK gateway tools bound to a catalog object."""
     resolved_search_strategy = (
-        search_strategy
-        if search_strategy is not None
-        else LexicalSkillSearchStrategy()
+        search_strategy if search_strategy is not None else LexicalSkillSearchStrategy()
     )
 
     @function_tool(name_override="find_skill")
@@ -75,34 +73,43 @@ def build_skill_gateway(
         source filter.
         """
         snapshot = catalog.snapshot()
-        normalized_source = (
-            normalize_skill_search_text(source)
-            if source is not None
-            else None
-        )
+        normalized_source = normalize_skill_search_text(source) if source is not None else None
         candidates: list[SkillDescriptor] = []
         for descriptor in snapshot.skills.values():
-            if not descriptor.enabled or not _is_allowed(descriptor, ctx.context):
+            if not descriptor.enabled:
                 continue
             if category is not None and descriptor.category != category:
                 continue
             if normalized_source is not None:
                 normalized_supported_sources = {
-                    normalize_skill_search_text(item)
-                    for item in descriptor.supported_sources
+                    normalize_skill_search_text(item) for item in descriptor.supported_sources
                 }
                 if normalized_source not in normalized_supported_sources:
                     continue
             candidates.append(descriptor)
         matches = resolved_search_strategy.search(candidates, text)
+        if normalized_source is None:
+            preferred_sources = {
+                normalize_skill_search_text(item) for item in ctx.context.preferred_sources
+            }
+            if preferred_sources:
+                matches = tuple(
+                    descriptor
+                    for descriptor in matches
+                    if _matches_preferred_source(descriptor, preferred_sources)
+                ) + tuple(
+                    descriptor
+                    for descriptor in matches
+                    if not _matches_preferred_source(
+                        descriptor,
+                        preferred_sources,
+                    )
+                )
         return json.dumps(
             {
                 "status": "ok",
                 "generation": snapshot.generation,
-                "skills": [
-                    descriptor.manifest.model_dump(mode="json")
-                    for descriptor in matches
-                ],
+                "skills": [descriptor.manifest.model_dump(mode="json") for descriptor in matches],
             },
             ensure_ascii=False,
         )
@@ -137,14 +144,6 @@ def build_skill_gateway(
             return _error(
                 "operation_not_found",
                 f"Operation '{operation}' was not found for skill '{skill}'.",
-                skill=skill,
-                version=descriptor.version,
-                operation=operation,
-            )
-        if not _is_allowed(descriptor, ctx.context):
-            return _error(
-                "source_not_allowed",
-                f"Skill '{skill}' is outside the task database allowlist.",
                 skill=skill,
                 version=descriptor.version,
                 operation=operation,

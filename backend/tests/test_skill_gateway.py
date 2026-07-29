@@ -20,7 +20,9 @@ from jsonschema.validators import validator_for as jsonschema_validator_for
 
 @function_tool
 async def fetch_record(
-    ctx: RunContextWrapper[RunContext], accession: str, limit: int = 1,
+    ctx: RunContextWrapper[RunContext],
+    accession: str,
+    limit: int = 1,
 ) -> dict[str, Any]:
     """Fetch a test record."""
     return {
@@ -32,18 +34,17 @@ async def fetch_record(
 
 def _skill(
     *,
+    name: str = "geo_fetch",
     enabled: bool = True,
     version: str = "2.1.0",
     supported_sources: list[str] | None = None,
 ) -> SkillDescriptor:
     return SkillDescriptor.from_skill_def(
         SkillDef(
-            name="geo_fetch",
+            name=name,
             category=SkillCategory.ACQUISITION,
             description="Download GEO expression records.",
-            supported_sources=(
-                ["geo"] if supported_sources is None else supported_sources
-            ),
+            supported_sources=(["geo"] if supported_sources is None else supported_sources),
             version=version,
             enabled=enabled,
             tools=[fetch_record],
@@ -81,7 +82,7 @@ class RecordingSearchStrategy:
 
 
 @pytest.mark.asyncio
-async def test_find_skill_filters_text_category_source_and_allowlist() -> None:
+async def test_find_skill_filters_text_category_and_source() -> None:
     catalog = SkillCatalog([_skill()])
     find_skill, _ = build_skill_gateway(catalog)
 
@@ -92,7 +93,7 @@ async def test_find_skill_filters_text_category_source_and_allowlist() -> None:
         category="acquisition",
         source="geo",
     )
-    blocked = await _call(
+    public_alternative = await _call(
         find_skill,
         _context(sources=["pubmed"]),
         source="geo",
@@ -101,7 +102,7 @@ async def test_find_skill_filters_text_category_source_and_allowlist() -> None:
     assert find_skill.name == "find_skill"
     assert found["status"] == "ok"
     assert [item["name"] for item in found["skills"]] == ["geo_fetch"]
-    assert blocked["skills"] == []
+    assert [item["name"] for item in public_alternative["skills"]] == ["geo_fetch"]
 
 
 @pytest.mark.asyncio
@@ -118,9 +119,28 @@ async def test_find_skill_source_filter_is_case_insensitive() -> None:
 
 
 @pytest.mark.asyncio
-async def test_find_skill_strategy_receives_only_hard_filtered_candidates() -> None:
-    allowed = _skill()
-    blocked = SkillDescriptor.from_skill_def(
+async def test_explicit_source_filter_excludes_preferred_alternatives() -> None:
+    find_skill, _ = build_skill_gateway(
+        SkillCatalog(
+            [
+                _skill(),
+                _skill(name="pdb_fetch", supported_sources=["pdb"]),
+            ]
+        )
+    )
+
+    result = await _call(
+        find_skill,
+        _context(sources=["geo"]),
+        source="pdb",
+    )
+
+    assert [item["name"] for item in result["skills"]] == ["pdb_fetch"]
+
+
+@pytest.mark.asyncio
+async def test_find_skill_prefers_selected_sources_after_strategy_ranking() -> None:
+    alternative_first = SkillDescriptor.from_skill_def(
         SkillDef(
             name="pubmed",
             category=SkillCategory.DISCOVERY,
@@ -130,26 +150,35 @@ async def test_find_skill_strategy_receives_only_hard_filtered_candidates() -> N
         ),
         user_selectable=True,
     )
+    preferred_second = _skill()
+    alternative_third = _skill(
+        name="pdb_fetch",
+        supported_sources=["pdb"],
+    )
     strategy = RecordingSearchStrategy()
     search_strategy: SkillSearchStrategy = strategy
     find_skill, _ = build_skill_gateway(
-        SkillCatalog([allowed, blocked]),
+        SkillCatalog([alternative_first, preferred_second, alternative_third]),
         search_strategy=search_strategy,
     )
 
     result = await _call(
         find_skill,
-        _context(sources=["geo"]),
+        _context(sources=["GEO"]),
         text="anything",
     )
 
-    assert strategy.candidate_names == ("geo_fetch",)
-    assert [item["name"] for item in result["skills"]] == ["geo_fetch"]
+    assert strategy.candidate_names == ("pubmed", "geo_fetch", "pdb_fetch")
+    assert [item["name"] for item in result["skills"]] == [
+        "geo_fetch",
+        "pubmed",
+        "pdb_fetch",
+    ]
     assert set(result) == {"status", "generation", "skills"}
 
 
 @pytest.mark.asyncio
-async def test_geo_only_allowlist_blocks_pubmed_discovery_skill() -> None:
+async def test_public_unselected_source_is_discoverable_and_invocable() -> None:
     pubmed = SkillDescriptor.from_skill_def(
         SkillDef(
             name="pubmed",
@@ -169,12 +198,12 @@ async def test_geo_only_allowlist_blocks_pubmed_discovery_skill() -> None:
         context,
         skill="pubmed",
         operation="fetch_record",
-        arguments={"accession": "PMID1"},
+        arguments={"accession": "PMID1", "limit": 1},
     )
 
-    assert found["skills"] == []
-    assert invoked["status"] == "error"
-    assert invoked["error"]["code"] == "source_not_allowed"
+    assert [item["name"] for item in found["skills"]] == ["pubmed"]
+    assert invoked["status"] == "ok", json.dumps(invoked)
+    assert invoked["result"]["accession"] == "PMID1"
 
 
 @pytest.mark.asyncio
@@ -232,7 +261,7 @@ async def test_invoke_skill_uses_handle_pinned_to_one_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_source_less_acquisition_skill_is_denied_by_non_empty_allowlist() -> None:
+async def test_source_less_public_skill_is_allowed_with_preferred_sources() -> None:
     catalog = SkillCatalog([_skill(supported_sources=[])])
     find_skill, invoke_skill = build_skill_gateway(catalog)
     context = _context(sources=["geo"])
@@ -243,12 +272,11 @@ async def test_source_less_acquisition_skill_is_denied_by_non_empty_allowlist() 
         context,
         skill="geo_fetch",
         operation="fetch_record",
-        arguments={"accession": "GSE1"},
+        arguments={"accession": "GSE1", "limit": 1},
     )
 
-    assert found["skills"] == []
-    assert invoked["status"] == "error"
-    assert invoked["error"]["code"] == "source_not_allowed"
+    assert [item["name"] for item in found["skills"]] == ["geo_fetch"]
+    assert invoked["status"] == "ok", json.dumps(invoked)
 
 
 @pytest.mark.asyncio
@@ -256,9 +284,14 @@ async def test_source_less_acquisition_skill_is_denied_by_non_empty_allowlist() 
     ("catalog", "skill", "operation", "sources", "error_code"),
     [
         (SkillCatalog(), "missing", "fetch_record", ["geo"], "skill_not_found"),
-        (SkillCatalog([_skill(enabled=False)]), "geo_fetch", "fetch_record", ["geo"], "skill_disabled"),
+        (
+            SkillCatalog([_skill(enabled=False)]),
+            "geo_fetch",
+            "fetch_record",
+            ["geo"],
+            "skill_disabled",
+        ),
         (SkillCatalog([_skill()]), "geo_fetch", "missing", ["geo"], "operation_not_found"),
-        (SkillCatalog([_skill()]), "geo_fetch", "fetch_record", ["pubmed"], "source_not_allowed"),
     ],
 )
 async def test_invoke_skill_returns_structured_resolution_errors(

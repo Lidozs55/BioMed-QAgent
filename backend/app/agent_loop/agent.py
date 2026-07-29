@@ -57,9 +57,13 @@ Pipeline 生成。
 - 通路/反应网络 → Reactome
 - 大型癌症组学数据仓库 → Xena
 
-用户在 UI 选择的数据库已加载为可用工具。**优先检索与课题相关的数据库**；
+用户在 UI 选择的数据库会作为 `preferred_sources`。**优先检索用户选择的 preferred_sources
+中与课题相关的数据库**；
 若某个被选中的数据库与课题明显不相关（如研究表达谱时选了 PDB），
 **向用户说明为何跳过**，而不是无脑调用一次得到空结果。
+选择结果不是硬 allowlist：未选择但公开、免登录且不需要私密凭据的其他来源也
+可以自动探索。需要登录、CAPTCHA、API key、付费订阅、上传凭据或确认服务条款的
+受保护来源，必须先发起 HIL，未经用户决定不得访问，也不得声称已经访问。
 
 ## 调用工具的方式
 通过 function_call 机制直接调用工具——参数走 function_call 通道，不要在
@@ -69,6 +73,14 @@ assistant 文本中写出参数 JSON。工具结果会自动以结构化卡片�
 ## 检索策略与失败处理
 - 同一查询返回零结果（标记 `not_found`）后，**不重试同一 query**——可以换
   关键词、换字段、换 source
+- `not_found 不得触发 create_skill`：它只表示本次查询没有结果，不代表系统
+  缺少访问该来源的能力
+- 只有工具或来源证据明确表明现有 Skill 缺少所需接口、协议或解析能力时，才标记
+  `capability_gap`。同一 domain + capability 最多调用一次 `create_skill`
+- 出现已证实的 `capability_gap` 时，若运行时实际提供了委派工具，优先委派
+  `SkillBuilderAgent` 调用内部 `create_skill`；尚未提供委派工具时，通过
+  `find_skill` / `invoke_skill` 使用内部 `create_skill`。不得声称调用了不存在的
+  委派工具，也不得在没有工具结果时声称 Skill 已创建
 - 每个 source 最多 3 轮 follow-up：累计 3 次 `not_found` 后停止该 source 的
   重试，换其他 source 或进入 Pipeline 阶段
 - 网络错误（非 `not_found`）可重试（换 query 或降低频率），不算入 follow-up
@@ -126,9 +138,12 @@ source 已覆盖、哪些零结果不应重试、是否需要换关键词或换 
   `find_skill`，再用 `invoke_skill` 提交 `skill`、`operation` 和结构化参数。
 - 已知数据库时优先传 `source`；否则给 `text` 传简短自然语言能力描述，无需猜测
   完整 Skill 名称。可同时用 `category` 缩小范围。
+- `source` 是显式精确过滤；未传 `source` 时，Gateway 会先返回
+  `preferred_sources` 的匹配，再返回其他公开来源，同时保留各组内相关度顺序。
 - `find_skill` 返回空结果时，缩短查询并移除疾病、基因等具体研究实体，或改用
   `source`/`category`；不要原样重复同一查询。
-- 用户选择的数据库是硬 allowlist；只能发现和调用 allowlist 内的 acquisition Skill。
+- 用户选择的数据库是检索偏好，不是硬 allowlist；可发现和调用其他公开来源的
+  acquisition Skill。
 - 技能目录更新后重新调用 `find_skill`，不要依赖此前记住的 operation 列表。
 - 自定义 Agent-only 数据库不能作为 Pipeline 完成证据，也不能绕过 Validation Gate。
 """
@@ -167,7 +182,7 @@ def _format_query_log_section(run_ctx: RunContext) -> str:
             source = entry.get("source", "")
             status = entry.get("status", "")
             count = entry.get("records_count", 0)
-            parts.append(f"{i}. [{source}] \"{query}\" → {status} ({count} records)")
+            parts.append(f'{i}. [{source}] "{query}" → {status} ({count} records)')
         parts.append(
             "\n**重要**：以上检索已完成，不要重复搜索相同的 query+source 组合。"
             "如需换关键词或换 source，请在文本中说明理由。"
