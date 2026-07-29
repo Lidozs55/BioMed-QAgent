@@ -14,10 +14,12 @@ def test_recipe_source_url_requires_exact_allowed_https_host(
 ) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", _public_dns)
 
-    assert (
-        validate_recipe_source_url("https://api.example.org/data", ["api.example.org"])
-        == "api.example.org"
+    target = validate_recipe_source_url(
+        "https://api.example.org/data",
+        ["api.example.org"],
     )
+    assert target.host == "api.example.org"
+    assert target.public_target.connect_url == "https://93.184.216.34/data"
     with pytest.raises(AcquisitionFailure, match="HTTPS"):
         validate_recipe_source_url("http://api.example.org/data", ["api.example.org"])
     with pytest.raises(AcquisitionFailure, match="not allowed"):

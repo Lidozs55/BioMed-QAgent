@@ -5,13 +5,17 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import tempfile
+import threading
 from pathlib import Path, PurePosixPath
 
 from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SAFE_MEDIA_TYPE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+_WORKSPACE_LOCKS: dict[str, threading.RLock] = {}
+_WORKSPACE_LOCKS_GUARD = threading.Lock()
 
 
 class SubagentStagingWorkspace:
@@ -20,30 +24,42 @@ class SubagentStagingWorkspace:
     def __init__(self, task_root: str | Path, subagent_id: str) -> None:
         if not _SAFE_ID.fullmatch(subagent_id):
             raise ValueError("subagent_id must be a safe path identifier")
-        task_path = Path(task_root)
-        task_path.mkdir(parents=True, exist_ok=True)
-        self.task_root = task_path.resolve()
-        self.source_assets_root = self.task_root / "source_assets"
-        self.root = self.task_root / "staging" / "subagents" / subagent_id
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.root = self.root.resolve()
+        task_path = Path(task_root).absolute()
+        self._lock = _workspace_lock(task_path)
+        with self._lock:
+            if task_path.exists() or task_path.is_symlink():
+                _reject_link_or_reparse(task_path)
+            task_path.mkdir(parents=True, exist_ok=True)
+            resolved_task = task_path.resolve(strict=True)
+            if not _same_path(task_path, resolved_task):
+                raise ValueError("task root must be a trusted non-link directory")
+            _reject_link_or_reparse(resolved_task)
+            self.task_root = resolved_task
+            self.source_assets_root = self.task_root / "source_assets"
+            self.root = self.task_root / "staging" / "subagents" / subagent_id
+            self._create_trusted_directory(self.root)
+            self._assert_workspace_roots()
 
     def validate_path(self, path: str | Path, *, require_file: bool = True) -> Path:
         """Resolve and validate a path without accepting links or escapes."""
 
-        candidate = Path(path)
-        if not candidate.is_absolute():
-            candidate = self.root / candidate
-        try:
-            resolved = candidate.resolve(strict=require_file)
-        except (OSError, RuntimeError) as error:
-            raise ValueError("path must remain inside the staging workspace") from error
-        if not resolved.is_relative_to(self.root):
-            raise ValueError("path must remain inside the staging workspace")
-        self._reject_symlink_components(candidate, boundary=self.root)
-        if require_file and not resolved.is_file():
-            raise ValueError("staging workspace path must be an existing file")
-        return resolved
+        with self._lock:
+            self._assert_workspace_roots()
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = self.root / candidate
+            candidate = candidate.absolute()
+            self._assert_trusted_path(candidate, boundary=self.root)
+            try:
+                resolved = candidate.resolve(strict=require_file)
+            except (OSError, RuntimeError) as error:
+                raise ValueError("path must remain inside the staging workspace") from error
+            if not resolved.is_relative_to(self.root):
+                raise ValueError("path must remain inside the staging workspace")
+            self._assert_trusted_path(candidate, boundary=self.root)
+            if require_file and not resolved.is_file():
+                raise ValueError("staging workspace path must be an existing file")
+            return resolved
 
     def stage_bytes(
         self,
@@ -57,43 +73,49 @@ class SubagentStagingWorkspace:
     ) -> SourceAsset:
         """Write candidate bytes atomically and return their future task path."""
 
-        if not content:
-            raise ValueError("source asset content must not be empty")
-        self._validate_filename(filename)
-        self._validate_media_type(media_type)
-        checksum = hashlib.sha256(content).hexdigest()
-        asset_id = asset_id_from_sha256(checksum)
-        relative_path = PurePosixPath("source_assets", asset_id, filename).as_posix()
-        destination = self.root / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="xb",
-                dir=destination.parent,
-                prefix=f".{filename}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(destination)
-            temporary = None
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-        return SourceAsset(
-            asset_id=asset_id,
-            relative_path=relative_path,
-            sha256=checksum,
-            size_bytes=len(content),
-            media_type=media_type,
-            source_id=source_id,
-            successful_attempt_id=successful_attempt_id,
-            data_level=data_level,
-        )
+        with self._lock:
+            self._assert_workspace_roots()
+            if not content:
+                raise ValueError("source asset content must not be empty")
+            self._validate_filename(filename)
+            self._validate_media_type(media_type)
+            checksum = hashlib.sha256(content).hexdigest()
+            asset_id = asset_id_from_sha256(checksum)
+            relative_path = PurePosixPath("source_assets", asset_id, filename).as_posix()
+            destination = self.root / relative_path
+            self._create_trusted_directory(destination.parent)
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="xb",
+                    dir=destination.parent,
+                    prefix=f".{filename}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._replace_checked(
+                    temporary,
+                    destination,
+                    boundary=self.root,
+                )
+                temporary = None
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            return SourceAsset(
+                asset_id=asset_id,
+                relative_path=relative_path,
+                sha256=checksum,
+                size_bytes=len(content),
+                media_type=media_type,
+                source_id=source_id,
+                successful_attempt_id=successful_attempt_id,
+                data_level=data_level,
+            )
 
     def staged_path(self, asset: SourceAsset) -> Path:
         """Return and validate the physical candidate path for an asset."""
@@ -120,47 +142,52 @@ class SubagentStagingWorkspace:
     def commit_source_asset(self, asset: SourceAsset) -> SourceAsset:
         """Atomically move a validated candidate into task ``source_assets``."""
 
-        staged = self.validate_source_asset(asset)
-        relative = self._validate_asset_relative_path(asset)
-        destination = self.task_root / relative
-        if not destination.is_relative_to(self.source_assets_root):
-            raise ValueError("SourceAsset destination must remain inside source_assets")
-        self.source_assets_root.mkdir(parents=True, exist_ok=True)
-        self._reject_symlink_components(
-            self.source_assets_root,
-            boundary=self.task_root,
-        )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        self._reject_symlink_components(
-            destination.parent,
-            boundary=self.task_root,
-        )
-        if staged.stat().st_dev != destination.parent.stat().st_dev:
-            raise ValueError("SourceAsset commit requires the same filesystem")
-        if destination.exists():
+        with self._lock:
+            self._assert_workspace_roots()
+            staged = self.validate_source_asset(asset)
+            relative = self._validate_asset_relative_path(asset)
+            destination = self.task_root / relative
+            if not destination.is_relative_to(self.source_assets_root):
+                raise ValueError("SourceAsset destination must remain inside source_assets")
+            self._create_trusted_directory(self.source_assets_root)
+            self._create_trusted_directory(destination.parent)
+            if staged.stat().st_dev != destination.parent.stat().st_dev:
+                raise ValueError("SourceAsset commit requires the same filesystem")
+            if destination.exists() or destination.is_symlink():
+                self._assert_trusted_path(
+                    destination,
+                    boundary=self.source_assets_root,
+                )
+                destination_stat = destination.lstat()
+                if (
+                    _is_link_or_reparse_stat(destination_stat)
+                    or not destination.is_file()
+                    or destination_stat.st_nlink != 1
+                    or destination_stat.st_size != asset.size_bytes
+                    or self._sha256_file(destination) != asset.sha256
+                ):
+                    raise ValueError("existing SourceAsset destination does not match")
+                staged.unlink()
+                return asset
+            self._replace_checked(
+                staged,
+                destination,
+                boundary=self.source_assets_root,
+            )
+            destination_stat = destination.lstat()
             if (
-                destination.is_symlink()
-                or not destination.is_file()
-                or destination.stat().st_size != asset.size_bytes
+                _is_link_or_reparse_stat(destination_stat)
+                or destination_stat.st_nlink != 1
+                or destination_stat.st_size != asset.size_bytes
                 or self._sha256_file(destination) != asset.sha256
             ):
-                raise ValueError("existing SourceAsset destination does not match")
-            staged.unlink()
-            return asset
-        moved = False
-        try:
-            staged.replace(destination)
-            moved = True
-            if (
-                destination.stat().st_size != asset.size_bytes
-                or self._sha256_file(destination) != asset.sha256
-            ):
+                self._unlink_if_identity(
+                    destination,
+                    _file_identity(destination_stat),
+                )
                 raise ValueError("committed SourceAsset failed validation")
-        except BaseException:
-            if moved:
-                destination.unlink(missing_ok=True)
-            raise
-        return asset
+            self._assert_workspace_roots()
+            return asset
 
     def _validate_asset_relative_path(self, asset: SourceAsset) -> Path:
         relative = PurePosixPath(asset.relative_path)
@@ -172,18 +199,87 @@ class SubagentStagingWorkspace:
             raise ValueError("SourceAsset path does not match its checksum-derived asset identity")
         return Path(*relative.parts)
 
-    @staticmethod
-    def _reject_symlink_components(path: Path, *, boundary: Path) -> None:
+    def _assert_trusted_path(self, path: Path, *, boundary: Path) -> None:
         current = path.absolute()
         limit = boundary.absolute()
         if not current.is_relative_to(limit):
             raise ValueError("path must remain inside the staging workspace")
         while True:
-            if current.is_symlink():
-                raise ValueError("symlinks are forbidden in the staging workspace")
+            if current.exists() or current.is_symlink():
+                _reject_link_or_reparse(current)
             if current == limit:
                 break
             current = current.parent
+        resolved = path.resolve(strict=False)
+        if not resolved.is_relative_to(limit):
+            raise ValueError("path must remain inside the staging workspace")
+
+    def _assert_workspace_roots(self) -> None:
+        self._assert_trusted_path(self.task_root, boundary=self.task_root)
+        self._assert_trusted_path(self.root, boundary=self.task_root)
+        if not self.root.is_dir():
+            raise ValueError("staging workspace must be a trusted directory")
+
+    def _create_trusted_directory(self, path: Path) -> None:
+        if not path.absolute().is_relative_to(self.task_root):
+            raise ValueError("directory must remain inside the trusted task root")
+        missing: list[Path] = []
+        current = path.absolute()
+        while not current.exists() and not current.is_symlink():
+            missing.append(current)
+            current = current.parent
+        self._assert_trusted_path(current, boundary=self.task_root)
+        for directory in reversed(missing):
+            directory.mkdir()
+            _reject_link_or_reparse(directory)
+        self._assert_trusted_path(path, boundary=self.task_root)
+
+    def _replace_checked(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        boundary: Path,
+    ) -> None:
+        self._assert_trusted_path(source, boundary=self.root)
+        self._assert_trusted_path(destination.parent, boundary=boundary)
+        source_stat = source.lstat()
+        if _is_link_or_reparse_stat(source_stat) or source_stat.st_nlink != 1:
+            raise ValueError("SourceAsset move source must be an unlinked file")
+        source_identity = _file_identity(source_stat)
+        parent_identity = _file_identity(destination.parent.lstat())
+        moved = False
+        try:
+            source.replace(destination)
+            moved = True
+            self._assert_trusted_path(destination.parent, boundary=boundary)
+            if _file_identity(destination.parent.lstat()) != parent_identity:
+                raise ValueError("destination parent changed during SourceAsset commit")
+            destination_stat = destination.lstat()
+            if (
+                _is_link_or_reparse_stat(destination_stat)
+                or destination_stat.st_nlink != 1
+                or _file_identity(destination_stat) != source_identity
+            ):
+                raise ValueError("destination changed during SourceAsset commit")
+            self._assert_trusted_path(destination, boundary=boundary)
+        except BaseException:
+            if moved:
+                self._unlink_if_identity(destination, source_identity)
+            raise
+
+    @staticmethod
+    def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
+        try:
+            path_stat = path.lstat()
+        except OSError:
+            return
+        if (
+            not _is_link_or_reparse_stat(path_stat)
+            and _file_identity(path_stat) == identity
+            and stat.S_ISREG(path_stat.st_mode)
+        ):
+            path.unlink(missing_ok=True)
 
     @staticmethod
     def _validate_filename(filename: str) -> None:
@@ -208,3 +304,34 @@ class SubagentStagingWorkspace:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+
+def _workspace_lock(task_root: Path) -> threading.RLock:
+    key = os.path.normcase(os.path.normpath(str(task_root)))
+    with _WORKSPACE_LOCKS_GUARD:
+        return _WORKSPACE_LOCKS.setdefault(key, threading.RLock())
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.normpath(str(left))) == os.path.normcase(
+        os.path.normpath(str(right))
+    )
+
+
+def _file_identity(path_stat: os.stat_result) -> tuple[int, int]:
+    return path_stat.st_dev, path_stat.st_ino
+
+
+def _is_link_or_reparse_stat(path_stat: os.stat_result) -> bool:
+    file_attributes = getattr(path_stat, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(path_stat.st_mode) or bool(file_attributes & reparse_flag)
+
+
+def _reject_link_or_reparse(path: Path) -> None:
+    try:
+        path_stat = path.lstat()
+    except OSError as error:
+        raise ValueError("trusted path could not be inspected") from error
+    if _is_link_or_reparse_stat(path_stat):
+        raise ValueError("symlink or reparse point is forbidden in trusted staging workspace paths")

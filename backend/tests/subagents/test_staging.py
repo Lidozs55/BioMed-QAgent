@@ -36,6 +36,82 @@ def test_staging_rejects_unsafe_subagent_id(tmp_path: Path) -> None:
         SubagentStagingWorkspace(tmp_path / "task", "../outside")
 
 
+def test_staging_constructor_rejects_preexisting_workspace_symlink(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "task"
+    workspace_parent = task_root / "staging" / "subagents"
+    workspace_parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked_root = workspace_parent / "sub_1"
+    try:
+        linked_root.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this platform")
+
+    with pytest.raises(ValueError, match="symlink|reparse|trusted"):
+        SubagentStagingWorkspace(task_root, "sub_1")
+
+    assert list(outside.iterdir()) == []
+
+
+def test_staging_rejects_preexisting_source_assets_symlink(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (task_root / "source_assets").symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this platform")
+    workspace = SubagentStagingWorkspace(task_root, "sub_1")
+    asset = workspace.stage_bytes(
+        content=b"candidate",
+        filename="data.bin",
+        source_id="src_1",
+        successful_attempt_id="download_attempt_1",
+        data_level=DataLevel.METADATA,
+        media_type="application/octet-stream",
+    )
+
+    with pytest.raises(ValueError, match="symlink|reparse|trusted"):
+        workspace.commit_source_asset(asset)
+
+    assert list(outside.iterdir()) == []
+    assert workspace.staged_path(asset).is_file()
+
+
+def test_stage_bytes_rejects_preexisting_staging_source_assets_symlink(
+    tmp_path: Path,
+) -> None:
+    workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    staging_source_assets = workspace.root / "source_assets"
+    try:
+        staging_source_assets.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this platform")
+
+    with pytest.raises(ValueError, match="symlink|reparse|trusted"):
+        workspace.stage_bytes(
+            content=b"candidate",
+            filename="data.bin",
+            source_id="src_1",
+            successful_attempt_id="download_attempt_1",
+            data_level=DataLevel.METADATA,
+            media_type="application/octet-stream",
+        )
+
+    assert list(outside.iterdir()) == []
+
+
 def test_staging_rejects_path_traversal(tmp_path: Path) -> None:
     workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
 
@@ -129,3 +205,33 @@ def test_failed_commit_leaves_no_partial_destination(
 
     assert not (tmp_path / "task" / asset.relative_path).exists()
     assert workspace.staged_path(asset).exists()
+
+
+def test_commit_detects_destination_parent_swap_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
+    asset = workspace.stage_bytes(
+        content=b"candidate",
+        filename="data.bin",
+        source_id="src_1",
+        successful_attempt_id="download_attempt_1",
+        data_level=DataLevel.METADATA,
+        media_type="application/octet-stream",
+    )
+    original_replace = Path.replace
+    detached_parent = tmp_path / "detached-parent"
+
+    def swap_parent_then_replace(self: Path, target: Path) -> Path:
+        original_replace(target.parent, detached_parent)
+        target.parent.mkdir(parents=True)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", swap_parent_then_replace)
+
+    with pytest.raises(ValueError, match="changed during SourceAsset commit"):
+        workspace.commit_source_asset(asset)
+
+    assert not (tmp_path / "task" / asset.relative_path).exists()
+    assert not (detached_parent / asset.relative_path).exists()

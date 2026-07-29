@@ -8,6 +8,7 @@ import ipaddress
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -26,7 +27,11 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.tools.content_cache import ContentCache, canonical_request_hash
-from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
+from app.tools.network_safety import (
+    PublicHttpTarget,
+    UnsafeUrlError,
+    resolve_public_http_target,
+)
 from app.tools.workdir import TaskWorkDir
 
 _ALLOWED_HOSTS = frozenset(
@@ -63,6 +68,15 @@ class AcquisitionFailure(RuntimeError):
         self.code = code
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedRecipeTarget:
+    """Original Recipe URL plus its one-time public, address-pinned target."""
+
+    url: str
+    host: str
+    public_target: PublicHttpTarget
+
+
 def _validate_source_url(url: str) -> str:
     return _validate_https_source_url(
         url,
@@ -71,13 +85,25 @@ def _validate_source_url(url: str) -> str:
     )
 
 
-def validate_recipe_source_url(url: str, allowed_hosts: list[str]) -> str:
+def validate_recipe_source_url(
+    url: str,
+    allowed_hosts: list[str],
+) -> ValidatedRecipeTarget:
     """Validate one Recipe URL against its exact dynamic host boundary."""
 
-    return _validate_https_source_url(
+    hostname = _validate_https_source_url(
         url,
         allowed_hosts=frozenset(allowed_hosts),
-        resolve_public=True,
+        resolve_public=False,
+    )
+    try:
+        public_target = resolve_public_http_target(url, require_https=True)
+    except UnsafeUrlError as error:
+        raise AcquisitionFailure(ErrorCode.VALIDATION_ERROR, str(error)) from error
+    return ValidatedRecipeTarget(
+        url=url,
+        host=hostname,
+        public_target=public_target,
     )
 
 

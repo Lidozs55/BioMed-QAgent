@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,11 +11,20 @@ from app.domain.contracts import (
     BrowserActionStep,
     DataLevel,
     HtmlExtractStep,
+    RecipeAttempt,
     WorkflowRecipe,
 )
-from app.recipes.executor import RecipeExecutor, RecipeStepResponse
+from app.integrations.acquisition import ValidatedRecipeTarget
+from app.recipes.executor import (
+    RecipeExecutor,
+    RecipeRouteGuard,
+    RecipeStepResponse,
+)
 from app.recipes.store import WorkflowRecipeStore
 from app.subagents.staging import SubagentStagingWorkspace
+from app.tools.network_safety import PublicHttpTarget
+
+NOW = datetime(2026, 7, 29, tzinfo=UTC)
 
 
 class FakeRecipeClient:
@@ -32,6 +42,9 @@ class FakeRecipeClient:
 
     async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
         self.calls.append(("browser", kwargs))
+        guard = kwargs["route_guard"]
+        assert isinstance(guard, RecipeRouteGuard)
+        guard.validate_request(str(kwargs["current_url"]))
         return self.responses.pop(0)
 
 
@@ -40,16 +53,12 @@ async def test_verified_recipe_produces_staged_source_asset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.recipes.executor.validate_recipe_source_url",
-        lambda url, allowed_hosts: "api.example.org",
-    )
-    recipe = _stored_verified_recipe(tmp_path / "recipes")
+    _patch_target_validator(monkeypatch)
+    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
                 content=b'{"accession":"GSE100"}',
-                final_url="https://api.example.org/GSE100",
                 status_code=200,
                 media_type="application/json",
             )
@@ -57,8 +66,9 @@ async def test_verified_recipe_produces_staged_source_asset(
     )
     workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
 
-    result = await RecipeExecutor(client=client).execute(
-        recipe,
+    result = await RecipeExecutor(client=client, store=store).execute(
+        recipe_id=recipe.recipe_id,
+        version=recipe.version,
         inputs={"accession": "GSE100"},
         workspace=workspace,
     )
@@ -69,7 +79,9 @@ async def test_verified_recipe_produces_staged_source_asset(
     assert result.attempts[0].method == "api"
     assert result.attempts[0].status == "succeeded"
     assert workspace.staged_path(result.source_asset).read_bytes().startswith(b"{")
-    assert client.calls[0][1]["url"] == "https://api.example.org/GSE100"
+    target = client.calls[0][1]["target"]
+    assert isinstance(target, ValidatedRecipeTarget)
+    assert target.url == "https://api.example.org/GSE100"
 
 
 @pytest.mark.asyncio
@@ -77,29 +89,28 @@ async def test_executor_percent_encodes_declared_template_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.recipes.executor.validate_recipe_source_url",
-        lambda url, allowed_hosts: "api.example.org",
-    )
-    recipe = _stored_verified_recipe(tmp_path / "recipes")
+    _patch_target_validator(monkeypatch)
+    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
                 content=b"ok",
-                final_url="https://api.example.org/a%2Fb%40evil.example",
                 status_code=200,
                 media_type="text/plain",
             )
         ]
     )
 
-    await RecipeExecutor(client=client).execute(
-        recipe,
+    await RecipeExecutor(client=client, store=store).execute(
+        recipe_id=recipe.recipe_id,
+        version=recipe.version,
         inputs={"accession": "a/b@evil.example"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
 
-    assert client.calls[0][1]["url"] == ("https://api.example.org/a%2Fb%40evil.example")
+    target = client.calls[0][1]["target"]
+    assert isinstance(target, ValidatedRecipeTarget)
+    assert target.url == "https://api.example.org/a%2Fb%40evil.example"
 
 
 @pytest.mark.asyncio
@@ -107,34 +118,44 @@ async def test_executor_percent_encodes_browser_navigation_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.recipes.executor.validate_recipe_source_url",
-        lambda url, allowed_hosts: "api.example.org",
-    )
+    _patch_target_validator(monkeypatch)
     draft = _draft_recipe().model_copy(
         update={
+            "attempts": _fallback_evidence(),
             "steps": [
                 BrowserActionStep(
                     action="navigate",
                     value="https://api.example.org/{accession}",
+                ),
+                BrowserActionStep(
+                    action="extract",
+                    target="body",
                     output_name="page.html",
-                )
-            ]
+                ),
+            ],
         }
     )
+    store, recipe = _store_verified(tmp_path / "recipes", draft)
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
-                content=b"<html></html>",
-                final_url="https://api.example.org/a%2Fb",
+                content=b"",
                 status_code=200,
                 media_type="text/html",
-            )
+                browser_guard_enforced=True,
+            ),
+            RecipeStepResponse(
+                content=b"<html></html>",
+                status_code=200,
+                media_type="text/html",
+                browser_guard_enforced=True,
+            ),
         ]
     )
 
-    await RecipeExecutor(client=client).execute(
-        _store_verified(tmp_path / "recipes", draft),
+    await RecipeExecutor(client=client, store=store).execute(
+        recipe_id=recipe.recipe_id,
+        version=recipe.version,
         inputs={"accession": "a/b"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -156,11 +177,13 @@ async def test_executor_rejects_missing_or_extra_inputs_before_client_call(
     inputs: dict[str, str],
     message: str,
 ) -> None:
+    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
     client = FakeRecipeClient([])
 
     with pytest.raises(ValueError, match=message):
-        await RecipeExecutor(client=client).execute(
-            _stored_verified_recipe(tmp_path / "recipes"),
+        await RecipeExecutor(client=client, store=store).execute(
+            recipe_id=recipe.recipe_id,
+            version=recipe.version,
             inputs=inputs,
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -169,21 +192,37 @@ async def test_executor_rejects_missing_or_extra_inputs_before_client_call(
 
 
 @pytest.mark.asyncio
-async def test_executor_rejects_tampered_or_unverified_recipe(
+async def test_executor_rejects_tampered_or_unverified_stored_recipe(
     tmp_path: Path,
 ) -> None:
-    verified = _stored_verified_recipe(tmp_path / "recipes")
-    tampered = verified.model_copy(update={"capability": "different"})
+    root = tmp_path / "recipes"
+    store, verified = _stored_verified_recipe(root)
+    recipe_path = root / verified.recipe_id / str(verified.version) / "recipe.json"
+    serialized = json.loads(recipe_path.read_text(encoding="utf-8"))
+    serialized["capability"] = "tampered"
+    recipe_path.write_text(json.dumps(serialized), encoding="utf-8")
     client = FakeRecipeClient([])
+    executor = RecipeExecutor(client=client, store=store)
     workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
 
     with pytest.raises(ValueError, match="digest"):
-        await RecipeExecutor(client=client).execute(
-            tampered, inputs={"accession": "GSE100"}, workspace=workspace
+        await executor.execute(
+            recipe_id=verified.recipe_id,
+            version=verified.version,
+            inputs={"accession": "GSE100"},
+            workspace=workspace,
         )
+
+    draft_store = WorkflowRecipeStore(tmp_path / "draft-recipes")
+    draft = draft_store.save_draft(
+        _draft_recipe().model_copy(update={"recipe_id": "recipe_unverified"})
+    )
     with pytest.raises(ValueError, match="verified"):
-        await RecipeExecutor(client=client).execute(
-            _draft_recipe(), inputs={"accession": "GSE100"}, workspace=workspace
+        await RecipeExecutor(client=client, store=draft_store).execute(
+            recipe_id=draft.recipe_id,
+            version=draft.version,
+            inputs={"accession": "GSE100"},
+            workspace=workspace,
         )
 
 
@@ -192,42 +231,42 @@ async def test_executor_records_failed_fallback_before_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.recipes.executor.validate_recipe_source_url",
-        lambda url, allowed_hosts: "api.example.org",
-    )
+    _patch_target_validator(monkeypatch)
     draft = _draft_recipe().model_copy(
         update={
             "steps": [
-                ApiRequestStep(url_template="https://api.example.org/{accession}"),
+                ApiRequestStep(
+                    url_template="https://api.example.org/{accession}",
+                    output_name="result.json",
+                ),
                 HtmlExtractStep(
                     url_template="https://api.example.org/{accession}",
                     selectors={"download": "a.download"},
+                    output_name="result.csv",
                 ),
             ]
         }
     )
-    recipe = _store_verified(tmp_path / "recipes", draft)
+    store, recipe = _store_verified(tmp_path / "recipes", draft)
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
                 content=b"",
-                final_url="https://api.example.org/GSE100",
                 status_code=503,
                 media_type="application/json",
                 error="service unavailable",
             ),
             RecipeStepResponse(
                 content=b"csv-data",
-                final_url="https://api.example.org/GSE100",
                 status_code=200,
                 media_type="text/csv",
             ),
         ]
     )
 
-    result = await RecipeExecutor(client=client).execute(
-        recipe,
+    result = await RecipeExecutor(client=client, store=store).execute(
+        recipe_id=recipe.recipe_id,
+        version=recipe.version,
         inputs={"accession": "GSE100"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -245,10 +284,7 @@ async def test_executor_enforces_step_and_total_timeouts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.recipes.executor.validate_recipe_source_url",
-        lambda url, allowed_hosts: "api.example.org",
-    )
+    _patch_target_validator(monkeypatch)
 
     class SlowClient(FakeRecipeClient):
         async def api_request(self, **kwargs: object) -> RecipeStepResponse:
@@ -262,53 +298,61 @@ async def test_executor_enforces_step_and_total_timeouts(
                 ApiRequestStep(
                     url_template="https://api.example.org/{accession}",
                     timeout_seconds=0.01,
+                    output_name="result.json",
                 )
             ],
         }
     )
+    store, recipe = _store_verified(tmp_path / "recipes", draft)
 
     with pytest.raises(TimeoutError, match="recipe execution timed out"):
-        await RecipeExecutor(client=SlowClient([])).execute(
-            _store_verified(tmp_path / "recipes", draft),
+        await RecipeExecutor(client=SlowClient([]), store=store).execute(
+            recipe_id=recipe.recipe_id,
+            version=recipe.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
 
 
 @pytest.mark.asyncio
-async def test_executor_revalidates_redirect_chain_and_final_url(
+async def test_executor_revalidates_redirect_before_following(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checked: list[str] = []
 
-    def validate(url: str, allowed_hosts: list[str]) -> str:
+    def validate(
+        url: str,
+        allowed_hosts: list[str],
+    ) -> ValidatedRecipeTarget:
         checked.append(url)
         if "evil.example" in url:
             raise ValueError("host is not allowed")
-        return "api.example.org"
+        return _target(url)
 
     monkeypatch.setattr("app.recipes.executor.validate_recipe_source_url", validate)
+    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
-                content=b"secret",
-                final_url="https://evil.example/result",
-                redirect_chain=("https://api.example.org/start",),
-                status_code=200,
+                content=b"",
+                status_code=302,
                 media_type="text/plain",
+                redirect_url="https://evil.example/result",
             )
         ]
     )
 
     with pytest.raises(ValueError, match="not allowed"):
-        await RecipeExecutor(client=client).execute(
-            _stored_verified_recipe(tmp_path / "recipes"),
+        await RecipeExecutor(client=client, store=store).execute(
+            recipe_id=recipe.recipe_id,
+            version=recipe.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
 
     assert checked[-1] == "https://evil.example/result"
+    assert len(client.calls) == 1
 
 
 def test_recipe_contract_rejects_unknown_browser_action() -> None:
@@ -319,7 +363,7 @@ def test_recipe_contract_rejects_unknown_browser_action() -> None:
 def _draft_recipe() -> WorkflowRecipe:
     return WorkflowRecipe(
         recipe_id="recipe_geo",
-        created_at=datetime(2026, 7, 29, tzinfo=UTC),
+        created_at=NOW,
         generated_by_model="qwen-plus",
         domain="gene-expression",
         capability="download-series-matrix",
@@ -344,11 +388,62 @@ def _draft_recipe() -> WorkflowRecipe:
     )
 
 
-def _stored_verified_recipe(root: Path) -> WorkflowRecipe:
+def _stored_verified_recipe(
+    root: Path,
+) -> tuple[WorkflowRecipeStore, WorkflowRecipe]:
     return _store_verified(root, _draft_recipe())
 
 
-def _store_verified(root: Path, draft: WorkflowRecipe) -> WorkflowRecipe:
+def _store_verified(
+    root: Path,
+    draft: WorkflowRecipe,
+) -> tuple[WorkflowRecipeStore, WorkflowRecipe]:
     store = WorkflowRecipeStore(root)
     stored = store.save_draft(draft)
-    return store.mark_verified(stored.recipe_id, verification_evidence=["fixture"])
+    verified = store.mark_verified(
+        stored.recipe_id,
+        verification_evidence=["fixture"],
+    )
+    return store, verified
+
+
+def _fallback_evidence() -> list[RecipeAttempt]:
+    return [
+        RecipeAttempt(
+            method="api",
+            url="https://api.example.org/data",
+            status="failed",
+            reason="API unavailable",
+            fallback_reason="falling back to html",
+            started_at=NOW,
+            finished_at=NOW,
+        ),
+        RecipeAttempt(
+            method="html",
+            url="https://api.example.org/data",
+            status="failed",
+            reason="HTML unavailable",
+            fallback_reason="falling back to browser",
+            started_at=NOW,
+            finished_at=NOW,
+        ),
+    ]
+
+
+def _patch_target_validator(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.recipes.executor.validate_recipe_source_url",
+        lambda url, allowed_hosts: _target(url),
+    )
+
+
+def _target(url: str) -> ValidatedRecipeTarget:
+    return ValidatedRecipeTarget(
+        url=url,
+        host="api.example.org",
+        public_target=PublicHttpTarget(
+            connect_url=url.replace("api.example.org", "93.184.216.34"),
+            host_header="api.example.org",
+            sni_hostname="api.example.org",
+        ),
+    )
