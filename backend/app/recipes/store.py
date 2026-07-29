@@ -43,6 +43,7 @@ class WorkflowRecipeStore:
                     "version": version,
                     "digest": "",
                     "verified_at": None,
+                    "promotion_requested_at": None,
                     "promoted_at": None,
                     "rejected_at": None,
                     "rejection_reason": None,
@@ -139,13 +140,45 @@ class WorkflowRecipeStore:
         self,
         recipe_id: str,
         *,
+        requested_at: datetime | None = None,
+    ) -> WorkflowRecipe:
+        with self._lock:
+            current = self.get(recipe_id)
+            if current.status is not RecipeStatus.VERIFIED:
+                raise ValueError(
+                    f"recipe status transition {current.status.value} -> "
+                    "promotion_requested is not allowed"
+                )
+            if current.promotion_requested_at is not None:
+                raise ValueError("promotion was already requested")
+            candidate = current.model_copy(
+                update={
+                    "version": current.version + 1,
+                    "digest": "",
+                    "promotion_requested_at": requested_at or datetime.now(UTC),
+                }
+            )
+            return self._persist(candidate)
+
+    def approve_promotion(
+        self,
+        recipe_id: str,
+        *,
         promoted_at: datetime | None = None,
     ) -> WorkflowRecipe:
-        return self._transition(
-            recipe_id,
-            RecipeStatus.PROMOTED,
-            {"promoted_at": promoted_at or datetime.now(UTC)},
-        )
+        with self._lock:
+            current = self.get(recipe_id)
+            if current.status is not RecipeStatus.VERIFIED:
+                raise ValueError(
+                    f"recipe status transition {current.status.value} -> promoted is not allowed"
+                )
+            if current.promotion_requested_at is None:
+                raise ValueError("promotion approval requires a prior request")
+            return self._transition(
+                recipe_id,
+                RecipeStatus.PROMOTED,
+                {"promoted_at": promoted_at or datetime.now(UTC)},
+            )
 
     def _transition(
         self,
@@ -228,7 +261,7 @@ class WorkflowRecipeStore:
         resolved = path.resolve(strict=False)
         if not resolved.is_relative_to(self.root):
             raise ValueError("recipe path must remain inside the store")
-        return path
+        return resolved
 
     @staticmethod
     def _validate_recipe_id(recipe_id: str) -> None:
@@ -267,9 +300,10 @@ class WorkflowRecipeStore:
             "",
         ]
         for index, step in enumerate(recipe.steps, start=1):
+            step_data = redact_secrets(step.model_dump(mode="json"))
             lines.append(
                 f"{index}. `{step.type}` — "
-                f"`{json.dumps(step.model_dump(mode='json'), ensure_ascii=False, sort_keys=True)}`"
+                f"`{json.dumps(step_data, ensure_ascii=False, sort_keys=True)}`"
             )
         lines.extend(["", "## Attempts", ""])
         if recipe.attempts:
@@ -281,4 +315,6 @@ class WorkflowRecipeStore:
         else:
             lines.append("- No attempts recorded.")
         lines.append("")
-        return "\n".join(lines)
+        markdown = redact_secrets("\n".join(lines))
+        assert isinstance(markdown, str)
+        return markdown

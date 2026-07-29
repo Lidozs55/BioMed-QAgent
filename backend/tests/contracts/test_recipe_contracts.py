@@ -90,6 +90,150 @@ def test_recipe_contract_rejects_nested_executable_fields() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "python_code",
+        "script_body",
+        "javascript_payload",
+        "shell_command",
+        "generatedSourceCode",
+    ],
+)
+def test_recipe_contract_rejects_executable_alias_fields(field_name: str) -> None:
+    data = _recipe().model_dump(mode="json")
+    data["input_schema"] = {
+        "type": "object",
+        "properties": {
+            "outer": {
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        field_name: "malicious instructions",
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValidationError, match="executable"):
+        WorkflowRecipe.model_validate(data)
+
+
+def test_recipe_contract_preserves_legitimate_status_code_field() -> None:
+    recipe = _recipe().model_copy(
+        update={
+            "attempts": [
+                RecipeAttempt(
+                    method="api",
+                    url="https://api.example.org/data",
+                    status="failed",
+                    started_at=NOW,
+                    finished_at=NOW,
+                    status_code=503,
+                    reason="service unavailable",
+                )
+            ]
+        }
+    )
+
+    validated = WorkflowRecipe.model_validate(recipe.model_dump(mode="json"))
+
+    assert validated.attempts[0].status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("status", "updates"),
+    [
+        ("draft", {"verified_at": NOW}),
+        ("draft", {"promotion_requested_at": NOW}),
+        ("draft", {"last_succeeded_at": NOW}),
+        ("verified", {"verified_at": NOW, "promoted_at": NOW}),
+        ("verified", {"verified_at": NOW, "rejected_at": NOW}),
+        (
+            "promoted",
+            {
+                "verified_at": NOW,
+                "promotion_requested_at": NOW,
+                "promoted_at": NOW,
+                "rejected_at": NOW,
+            },
+        ),
+        (
+            "rejected",
+            {
+                "rejected_at": NOW,
+                "rejection_reason": "rejected",
+                "promoted_at": NOW,
+            },
+        ),
+    ],
+)
+def test_recipe_contract_rejects_lifecycle_fields_for_wrong_status(
+    status: str,
+    updates: dict[str, object],
+) -> None:
+    data = _recipe().model_dump(mode="json")
+    data.update({"status": status, **updates})
+
+    with pytest.raises(ValidationError, match="lifecycle|timestamp"):
+        WorkflowRecipe.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("status", "updates"),
+    [
+        ("verified", {"verified_at": NOW - timedelta(seconds=1)}),
+        (
+            "verified",
+            {
+                "verified_at": NOW,
+                "promotion_requested_at": NOW - timedelta(seconds=1),
+            },
+        ),
+        (
+            "promoted",
+            {
+                "verified_at": NOW,
+                "promotion_requested_at": NOW + timedelta(seconds=2),
+                "promoted_at": NOW + timedelta(seconds=1),
+            },
+        ),
+        (
+            "rejected",
+            {
+                "verified_at": NOW,
+                "rejected_at": NOW - timedelta(seconds=1),
+                "rejection_reason": "rejected",
+            },
+        ),
+        (
+            "verified",
+            {
+                "verified_at": NOW,
+                "last_succeeded_at": NOW - timedelta(seconds=1),
+            },
+        ),
+        (
+            "verified",
+            {
+                "verified_at": NOW,
+                "last_succeeded_at": NOW + timedelta(seconds=1),
+            },
+        ),
+    ],
+)
+def test_recipe_contract_rejects_out_of_order_lifecycle_timestamps(
+    status: str,
+    updates: dict[str, object],
+) -> None:
+    data = _recipe().model_dump(mode="json")
+    data.update({"status": status, **updates})
+
+    with pytest.raises(ValidationError, match="precede|ordering"):
+        WorkflowRecipe.model_validate(data)
+
+
 def test_recipe_attempt_rejects_reversed_timestamps() -> None:
     with pytest.raises(ValidationError, match="finished_at"):
         RecipeAttempt(

@@ -13,7 +13,8 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from app.domain.contracts.base import ContractModel
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_EXECUTABLE_FIELD_NAMES = {"code", "javascript", "python", "script", "shell"}
+_EXECUTABLE_FIELD_TOKENS = {"code", "javascript", "python", "script", "shell"}
+_ALLOWED_CODE_FIELD_NAMES = {"statuscode"}
 
 
 class RecipeStatus(StrEnum):
@@ -80,6 +81,7 @@ class WorkflowRecipe(ContractModel):
     status: RecipeStatus = RecipeStatus.DRAFT
     created_at: datetime
     verified_at: datetime | None = None
+    promotion_requested_at: datetime | None = None
     promoted_at: datetime | None = None
     rejected_at: datetime | None = None
     generated_by_model: str = Field(min_length=1)
@@ -127,29 +129,107 @@ class WorkflowRecipe(ContractModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
-        if self.status is RecipeStatus.DRAFT and any(
-            value is not None for value in (self.verified_at, self.promoted_at, self.rejected_at)
-        ):
-            raise ValueError("draft recipe cannot contain terminal lifecycle timestamps")
-        if self.status is RecipeStatus.VERIFIED and self.verified_at is None:
-            raise ValueError("verified recipe requires verified_at")
-        if self.status is RecipeStatus.PROMOTED and (
-            self.verified_at is None or self.promoted_at is None
-        ):
-            raise ValueError("promoted recipe requires verified_at and promoted_at")
-        if self.status is RecipeStatus.REJECTED and (
-            self.rejected_at is None or self.rejection_reason is None
-        ):
-            raise ValueError("rejected recipe requires rejected_at and rejection_reason")
+        lifecycle = (
+            self.verified_at,
+            self.promotion_requested_at,
+            self.promoted_at,
+            self.rejected_at,
+            self.last_succeeded_at,
+            self.rejection_reason,
+        )
+        if self.status is RecipeStatus.DRAFT:
+            if any(value is not None for value in lifecycle):
+                raise ValueError("draft recipe cannot contain lifecycle timestamps or reasons")
+        elif self.status is RecipeStatus.VERIFIED:
+            if self.verified_at is None:
+                raise ValueError("verified recipe requires verified_at")
+            if any(
+                value is not None
+                for value in (self.promoted_at, self.rejected_at, self.rejection_reason)
+            ):
+                raise ValueError("verified recipe contains forbidden lifecycle fields")
+        elif self.status is RecipeStatus.PROMOTED:
+            if any(
+                value is None
+                for value in (
+                    self.verified_at,
+                    self.promotion_requested_at,
+                    self.promoted_at,
+                )
+            ):
+                raise ValueError(
+                    "promoted recipe requires verification, request, and promotion timestamps"
+                )
+            if self.rejected_at is not None or self.rejection_reason is not None:
+                raise ValueError("promoted recipe contains forbidden lifecycle fields")
+        elif self.status is RecipeStatus.REJECTED:
+            if self.rejected_at is None or self.rejection_reason is None:
+                raise ValueError("rejected recipe requires rejected_at and rejection_reason")
+            if self.promoted_at is not None:
+                raise ValueError("rejected recipe contains forbidden lifecycle fields")
+            if self.promotion_requested_at is not None and self.verified_at is None:
+                raise ValueError("promotion request requires verified_at")
+        self._validate_lifecycle_ordering()
         return self
+
+    def _validate_lifecycle_ordering(self) -> None:
+        for field_name in (
+            "verified_at",
+            "promotion_requested_at",
+            "promoted_at",
+            "rejected_at",
+            "last_succeeded_at",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value < self.created_at:
+                raise ValueError(f"{field_name} must not precede created_at")
+        if (
+            self.promotion_requested_at is not None
+            and self.verified_at is not None
+            and self.promotion_requested_at < self.verified_at
+        ):
+            raise ValueError("promotion_requested_at must not precede verified_at")
+        if (
+            self.promoted_at is not None
+            and self.promotion_requested_at is not None
+            and self.promoted_at < self.promotion_requested_at
+        ):
+            raise ValueError("promoted_at must not precede promotion_requested_at")
+        rejection_floor = self.promotion_requested_at or self.verified_at
+        if (
+            self.rejected_at is not None
+            and rejection_floor is not None
+            and self.rejected_at < rejection_floor
+        ):
+            raise ValueError("rejected_at must not precede the prior lifecycle event")
+        success_ceiling = {
+            RecipeStatus.VERIFIED: self.verified_at,
+            RecipeStatus.PROMOTED: self.promoted_at,
+            RecipeStatus.REJECTED: self.rejected_at,
+        }.get(self.status)
+        if (
+            self.last_succeeded_at is not None
+            and success_ceiling is not None
+            and success_ceiling < self.last_succeeded_at
+        ):
+            raise ValueError("lifecycle terminal timestamp must not precede last_succeeded_at")
 
 
 def _contains_executable_field(value: object) -> bool:
     if isinstance(value, Mapping):
         return any(
-            str(key).lower() in _EXECUTABLE_FIELD_NAMES or _contains_executable_field(item)
+            _is_executable_field_name(str(key)) or _contains_executable_field(item)
             for key, item in value.items()
         )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_executable_field(item) for item in value)
     return False
+
+
+def _is_executable_field_name(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", value.lower())
+    if normalized in _ALLOWED_CODE_FIELD_NAMES:
+        return False
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    tokens = {token.lower() for token in re.split(r"[^A-Za-z0-9]+", separated) if token}
+    return bool(tokens & _EXECUTABLE_FIELD_TOKENS)
