@@ -64,6 +64,8 @@ Pipeline 生成。
 选择结果不是硬 allowlist：未选择但公开、免登录且不需要私密凭据的其他来源也
 可以自动探索。需要登录、CAPTCHA、API key、付费订阅、上传凭据或确认服务条款的
 受保护来源，必须先发起 HIL，未经用户决定不得访问，也不得声称已经访问。
+Gateway 返回 `credential_required` 时不得重试调用；`credential_required` 必须转 HIL，
+并等待后续运行时提供受控的批准与恢复机制。
 
 ## 调用工具的方式
 通过 function_call 机制直接调用工具——参数走 function_call 通道，不要在

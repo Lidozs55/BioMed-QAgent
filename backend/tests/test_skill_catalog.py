@@ -12,6 +12,7 @@ from app.skills.catalog import (
     SkillCatalog,
     SkillDescriptor,
     SkillManifest,
+    SkillOperation,
 )
 from app.skills.registry import SkillCategory, SkillDef
 from pydantic import ValidationError
@@ -19,7 +20,8 @@ from pydantic import ValidationError
 
 @function_tool
 async def echo_operation(
-    ctx: RunContextWrapper[RunContext], value: str,
+    ctx: RunContextWrapper[RunContext],
+    value: str,
 ) -> dict[str, str]:
     """Echo a value."""
     return {"task_id": ctx.context.task_id, "value": value}
@@ -67,6 +69,7 @@ def test_skilldef_adapter_preserves_builtin_metadata_and_tools() -> None:
     assert descriptor.supported_sources == ("geo",)
     assert descriptor.operation_names == ("echo_operation",)
     assert descriptor.resolve_operation("echo_operation") is echo_operation
+    assert descriptor.operations[0].access_requirement == "public"
 
 
 def test_catalog_rejects_duplicate_registration() -> None:
@@ -95,7 +98,18 @@ def test_catalog_generation_is_monotonic_for_atomic_replacements() -> None:
 
 @pytest.mark.asyncio
 async def test_resolved_handle_survives_later_update_and_delete() -> None:
-    catalog = SkillCatalog([_descriptor(version="1.0.0")])
+    protected = _descriptor(version="1.0.0").model_copy(
+        update={
+            "operations": (
+                SkillOperation(
+                    name="echo_operation",
+                    tool=echo_operation,
+                    access_requirement="credential_required",
+                ),
+            )
+        }
+    )
+    catalog = SkillCatalog([protected])
     handle = catalog.resolve("echo", "echo_operation")
     assert handle is not None
 
@@ -107,6 +121,8 @@ async def test_resolved_handle_survives_later_update_and_delete() -> None:
     result: Any = await handle.invoke(context, {"value": "kept"})
 
     assert handle.version == "1.0.0"
+    assert handle.access_requirement == "credential_required"
     assert latest is not None and latest.version == "2.0.0"
+    assert latest.access_requirement == "public"
     assert result == {"task_id": "stable_handle", "value": "kept"}
     assert catalog.resolve("echo", "echo_operation") is None

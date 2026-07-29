@@ -84,6 +84,7 @@ def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
     assert "公开、免登录" in instructions
     assert "SkillBuilderAgent" in instructions
     assert "HIL" in instructions
+    assert "`credential_required` 必须转 HIL" in instructions
 
 
 @pytest.mark.asyncio

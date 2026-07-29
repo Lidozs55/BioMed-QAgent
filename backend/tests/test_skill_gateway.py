@@ -6,6 +6,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+import httpx
 import pytest
 from agents import RunContextWrapper, function_tool
 from agents.tool_context import ToolContext
@@ -13,6 +14,7 @@ from app.agent_loop.context import RunContext
 from app.skills import gateway as gateway_module
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.gateway import build_skill_gateway
+from app.skills.packages import SkillPackageLoader
 from app.skills.registry import SkillCategory, SkillDef
 from app.skills.search import SkillSearchStrategy
 from jsonschema.validators import validator_for as jsonschema_validator_for
@@ -79,6 +81,39 @@ class RecordingSearchStrategy:
     ) -> tuple[SkillDescriptor, ...]:
         self.candidate_names = tuple(item.name for item in candidates)
         return tuple(candidates)
+
+
+def _protected_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "name": "protected_db",
+        "display_name": "Protected DB",
+        "version": "1.0.0",
+        "category": "acquisition",
+        "description": "Fetch protected and public records.",
+        "supported_sources": ["protected_db"],
+        "operations": [
+            {
+                "name": "fetch_protected",
+                "description": "Fetch a protected record.",
+                "method": "GET",
+                "url": "https://api.example.test/protected",
+                "auth": {
+                    "source": "env",
+                    "reference": "DEMO_TOKEN",
+                    "location": "header",
+                    "name": "Authorization",
+                    "prefix": "Bearer ",
+                },
+            },
+            {
+                "name": "fetch_public",
+                "description": "Fetch a public record.",
+                "method": "GET",
+                "url": "https://api.example.test/public",
+            },
+        ],
+    }
 
 
 @pytest.mark.asyncio
@@ -204,6 +239,57 @@ async def test_public_unselected_source_is_discoverable_and_invocable() -> None:
     assert [item["name"] for item in found["skills"]] == ["pubmed"]
     assert invoked["status"] == "ok", json.dumps(invoked)
     assert invoked["result"]["accession"] == "PMID1"
+
+
+@pytest.mark.asyncio
+async def test_protected_package_operation_requires_hil_before_tool_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(
+        "app.skills.packages.validate_public_http_url",
+        lambda url: url,
+    )
+    descriptor = SkillPackageLoader(
+        secrets={"DEMO_TOKEN": "top-secret"},
+        http_transport=httpx.MockTransport(handler),
+    ).load_manifest(_protected_manifest())
+    find_skill, invoke_skill = build_skill_gateway(SkillCatalog([descriptor]))
+    context = _context(sources=["geo"])
+
+    found = await _call(find_skill, context)
+    protected = await _call(
+        invoke_skill,
+        context,
+        skill="protected_db",
+        operation="fetch_protected",
+        arguments={},
+    )
+
+    assert [item["name"] for item in found["skills"]] == ["protected_db"]
+    assert protected["status"] == "error"
+    assert protected["error"]["code"] == "credential_required"
+    assert "HIL" in protected["error"]["message"]
+    assert requests == []
+
+    public = await _call(
+        invoke_skill,
+        context,
+        skill="protected_db",
+        operation="fetch_public",
+        arguments={},
+    )
+
+    assert public["status"] == "ok"
+    assert len(requests) == 1
+    assert requests[0].url.path == "/public"
+    assert "Authorization" not in requests[0].headers
+    assert "top-secret" not in repr(requests[0])
 
 
 @pytest.mark.asyncio

@@ -13,8 +13,17 @@ def test_builtin_skill_catalog_has_one_complete_truthful_projection() -> None:
         "pubmed",
         "geo",
     }
-    assert {
-        name for name, item in by_name.items() if item.user_selectable
-    } == {"pubmed", "geo", "gdc", "pdb", "xena", "pubchem", "reactome"}
+    assert {name for name, item in by_name.items() if item.user_selectable} == {
+        "pubmed",
+        "geo",
+        "gdc",
+        "pdb",
+        "xena",
+        "pubchem",
+        "reactome",
+    }
     assert "create_skill" in by_name
+    assert {operation.access_requirement for operation in by_name["create_skill"].operations} == {
+        "public"
+    }
     assert "self_evolution" not in by_name

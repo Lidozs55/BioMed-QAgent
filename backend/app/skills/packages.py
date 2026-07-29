@@ -177,7 +177,13 @@ class SkillPackageLoader:
         except ValueError as error:
             raise PackageValidationError(str(error)) from error
         operations = tuple(
-            SkillOperation(name=operation.name, tool=self._build_http_tool(operation))
+            SkillOperation(
+                name=operation.name,
+                tool=self._build_http_tool(operation),
+                access_requirement=(
+                    "credential_required" if operation.auth is not None else "public"
+                ),
+            )
             for operation in manifest.operations
         )
         return SkillDescriptor(
@@ -320,18 +326,21 @@ class SkillPackageLoader:
                     value = f"{operation.auth.prefix}{secret}"
                     target = headers if operation.auth.location == "header" else query
                     target[operation.auth.name] = value
-                async with httpx.AsyncClient(
-                    transport=self._http_transport,
-                    follow_redirects=True,
-                    timeout=operation.timeout_seconds,
-                    event_hooks={"request": [_validate_request_url]},
-                ) as client, client.stream(
+                async with (
+                    httpx.AsyncClient(
+                        transport=self._http_transport,
+                        follow_redirects=True,
+                        timeout=operation.timeout_seconds,
+                        event_hooks={"request": [_validate_request_url]},
+                    ) as client,
+                    client.stream(
                         operation.method,
                         url,
                         params=query,
                         headers=headers,
                         json=body,
-                    ) as response:
+                    ) as response,
+                ):
                     response.raise_for_status()
                     chunks: list[bytes] = []
                     received = 0
@@ -373,9 +382,7 @@ class SkillPackageLoader:
                 requirement = Requirement(raw)
                 installed = metadata.version(requirement.name)
             except (InvalidRequirement, metadata.PackageNotFoundError) as error:
-                raise PackageValidationError(
-                    f"unavailable requirement: {raw}"
-                ) from error
+                raise PackageValidationError(f"unavailable requirement: {raw}") from error
             if requirement.specifier and installed not in requirement.specifier:
                 raise PackageValidationError(
                     f"unavailable requirement: {raw} (installed {installed})"

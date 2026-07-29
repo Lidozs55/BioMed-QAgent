@@ -148,6 +148,14 @@ def build_skill_gateway(
                 version=descriptor.version,
                 operation=operation,
             )
+        if handle.access_requirement == "credential_required":
+            return _error(
+                "credential_required",
+                (f"Operation '{operation}' requires HIL approval before credentials can be used."),
+                skill=skill,
+                version=handle.version,
+                operation=operation,
+            )
         try:
             validator_class = validator_for(handle.tool.params_json_schema)
             validator_class.check_schema(handle.tool.params_json_schema)
