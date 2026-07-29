@@ -62,6 +62,37 @@ def test_browser_action_rejects_executable_script_action() -> None:
         )
 
 
+def test_recipe_contract_rejects_url_userinfo_in_step() -> None:
+    with pytest.raises(ValidationError, match="userinfo"):
+        ApiRequestStep(
+            type="api_request",
+            url_template="https://alice:supersecret@example.org/data",
+        )
+
+
+def test_recipe_contract_rejects_url_userinfo_in_attempt() -> None:
+    with pytest.raises(ValidationError, match="userinfo"):
+        RecipeAttempt(
+            method="api",
+            url="https://alice:supersecret@example.org/data",
+            status="failed",
+            started_at=NOW,
+            finished_at=NOW,
+            reason="request failed",
+        )
+
+
+def test_recipe_contract_rejects_url_userinfo_in_generic_fields() -> None:
+    data = _recipe().model_dump(mode="json")
+    data["input_schema"] = {
+        "type": "object",
+        "examples": ["https://alice:supersecret@example.org/data"],
+    }
+
+    with pytest.raises(ValidationError, match="userinfo"):
+        WorkflowRecipe.model_validate(data)
+
+
 def test_recipe_contract_rejects_arbitrary_code_fields() -> None:
     with pytest.raises(ValidationError):
         WorkflowRecipe.model_validate(
@@ -98,6 +129,11 @@ def test_recipe_contract_rejects_nested_executable_fields() -> None:
         "javascript_payload",
         "shell_command",
         "generatedSourceCode",
+        "pythoncode",
+        "scriptbody",
+        "javascriptpayload",
+        "shellcommand",
+        "generatedsourcecode",
     ],
 )
 def test_recipe_contract_rejects_executable_alias_fields(field_name: str) -> None:
@@ -118,6 +154,21 @@ def test_recipe_contract_rejects_executable_alias_fields(field_name: str) -> Non
 
     with pytest.raises(ValidationError, match="executable"):
         WorkflowRecipe.model_validate(data)
+
+
+@pytest.mark.parametrize("field_name", ["status_code", "statuscode", "transcript"])
+def test_recipe_contract_allows_non_executable_compact_fields(
+    field_name: str,
+) -> None:
+    data = _recipe().model_dump(mode="json")
+    data["input_schema"] = {
+        "type": "object",
+        "metadata": {field_name: "plain metadata"},
+    }
+
+    validated = WorkflowRecipe.model_validate(data)
+
+    assert validated.input_schema["metadata"][field_name] == "plain metadata"
 
 
 def test_recipe_contract_preserves_legitimate_status_code_field() -> None:
@@ -231,6 +282,21 @@ def test_recipe_contract_rejects_out_of_order_lifecycle_timestamps(
     data.update({"status": status, **updates})
 
     with pytest.raises(ValidationError, match="precede|ordering"):
+        WorkflowRecipe.model_validate(data)
+
+
+def test_last_succeeded_at_requires_verified_at_for_rejected_recipe() -> None:
+    data = _recipe().model_dump(mode="json")
+    data.update(
+        {
+            "status": "rejected",
+            "rejected_at": NOW,
+            "rejection_reason": "validation rejected",
+            "last_succeeded_at": NOW,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="last_succeeded_at.*verified_at"):
         WorkflowRecipe.model_validate(data)
 
 

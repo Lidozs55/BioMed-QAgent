@@ -46,6 +46,7 @@ _PRIVATE_KEY_PATTERN = re.compile(
     r"-----END [A-Z ]*PRIVATE KEY-----",
     flags=re.DOTALL,
 )
+_URL_USERINFO_PATTERN = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@")
 
 
 def redact_secrets(value: object, *, field_name: str = "") -> object:
@@ -58,7 +59,8 @@ def redact_secrets(value: object, *, field_name: str = "") -> object:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [redact_secrets(item) for item in value]
     if isinstance(value, str):
-        redacted = _PRIVATE_KEY_PATTERN.sub(REDACTED, value)
+        redacted = _URL_USERINFO_PATTERN.sub(r"\1", value)
+        redacted = _PRIVATE_KEY_PATTERN.sub(REDACTED, redacted)
         redacted = _HEADER_PATTERN.sub(REDACTED, redacted)
         redacted = _BEARER_PATTERN.sub(REDACTED, redacted)
         return _ASSIGNMENT_PATTERN.sub(

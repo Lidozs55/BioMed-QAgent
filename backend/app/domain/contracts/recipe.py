@@ -13,8 +13,32 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from app.domain.contracts.base import ContractModel
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_URL_USERINFO_PATTERN = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s@]+@")
 _EXECUTABLE_FIELD_TOKENS = {"code", "javascript", "python", "script", "shell"}
 _ALLOWED_CODE_FIELD_NAMES = {"statuscode"}
+_COMPACT_EXECUTABLE_FIELD_NAMES = {
+    "executablecode",
+    "generatedsourcecode",
+    "javascriptbody",
+    "javascriptcode",
+    "javascriptcommand",
+    "javascriptpayload",
+    "pythonbody",
+    "pythoncode",
+    "pythoncommand",
+    "pythonpayload",
+    "pythonscript",
+    "scriptbody",
+    "scriptcode",
+    "scriptcommand",
+    "scriptpayload",
+    "shellbody",
+    "shellcode",
+    "shellcommand",
+    "shellpayload",
+    "shellscript",
+    "sourcecode",
+}
 
 
 class RecipeStatus(StrEnum):
@@ -33,6 +57,11 @@ class ApiRequestStep(ContractModel):
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     output_name: str | None = Field(default=None, min_length=1)
 
+    @field_validator("url_template")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
+
 
 class HtmlExtractStep(ContractModel):
     type: Literal["html_extract"] = "html_extract"
@@ -40,6 +69,11 @@ class HtmlExtractStep(ContractModel):
     selectors: dict[str, str] = Field(min_length=1)
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     output_name: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url_template")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
 
 
 class BrowserActionStep(ContractModel):
@@ -49,6 +83,11 @@ class BrowserActionStep(ContractModel):
     value: str | None = Field(default=None, min_length=1)
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     output_name: str | None = Field(default=None, min_length=1)
+
+    @field_validator("target", "value")
+    @classmethod
+    def reject_url_userinfo(cls, value: str | None) -> str | None:
+        return _reject_url_userinfo(value) if value is not None else None
 
 
 RecipeStep = Annotated[
@@ -66,6 +105,11 @@ class RecipeAttempt(ContractModel):
     status_code: int | None = Field(default=None, ge=100, le=599)
     reason: str | None = Field(default=None, min_length=1)
     fallback_reason: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> Self:
@@ -107,6 +151,8 @@ class WorkflowRecipe(ContractModel):
     def reject_executable_fields(cls, value: Any) -> Any:
         if _contains_executable_field(value):
             raise ValueError("WorkflowRecipe cannot contain executable fields")
+        if _contains_url_userinfo(value):
+            raise ValueError("WorkflowRecipe cannot contain URL userinfo credentials")
         return value
 
     @field_validator("digest")
@@ -129,6 +175,8 @@ class WorkflowRecipe(ContractModel):
 
     @model_validator(mode="after")
     def validate_lifecycle_fields(self) -> Self:
+        if self.last_succeeded_at is not None and self.verified_at is None:
+            raise ValueError("lifecycle last_succeeded_at requires verified_at")
         lifecycle = (
             self.verified_at,
             self.promotion_requested_at,
@@ -230,6 +278,22 @@ def _is_executable_field_name(value: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]", "", value.lower())
     if normalized in _ALLOWED_CODE_FIELD_NAMES:
         return False
+    if normalized in _COMPACT_EXECUTABLE_FIELD_NAMES:
+        return True
     separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
     tokens = {token.lower() for token in re.split(r"[^A-Za-z0-9]+", separated) if token}
     return bool(tokens & _EXECUTABLE_FIELD_TOKENS)
+
+
+def _contains_url_userinfo(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_url_userinfo(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_url_userinfo(item) for item in value)
+    return isinstance(value, str) and _URL_USERINFO_PATTERN.search(value) is not None
+
+
+def _reject_url_userinfo(value: str) -> str:
+    if _URL_USERINFO_PATTERN.search(value):
+        raise ValueError("URL userinfo credentials are forbidden")
+    return value

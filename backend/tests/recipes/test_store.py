@@ -124,6 +124,39 @@ def test_workflow_markdown_applies_independent_secret_redaction() -> None:
     assert "[REDACTED]" in markdown
 
 
+def test_store_redacts_url_userinfo_from_json_and_markdown(tmp_path: Path) -> None:
+    credential_url = "https://alice:supersecret@example.org/data"
+    attempt = RecipeAttempt(
+        method="api",
+        url="https://example.org/data",
+        status="failed",
+        started_at=NOW,
+        finished_at=NOW,
+        reason="request failed",
+    ).model_copy(update={"url": credential_url})
+    step = ApiRequestStep(
+        type="api_request",
+        url_template="https://example.org/data",
+    ).model_copy(update={"url_template": credential_url})
+    recipe = _recipe().model_copy(
+        update={
+            "attempts": [attempt],
+            "steps": [step],
+            "input_schema": {"type": "string", "default": credential_url},
+        }
+    )
+
+    stored = WorkflowRecipeStore(tmp_path).save_draft(recipe)
+
+    recipe_dir = tmp_path / stored.recipe_id / "1"
+    json_text = (recipe_dir / "recipe.json").read_text("utf-8")
+    markdown_text = (recipe_dir / "WORKFLOW.md").read_text("utf-8")
+    for persisted in (json_text, markdown_text):
+        assert "alice" not in persisted
+        assert "supersecret" not in persisted
+        assert "example.org" in persisted
+
+
 def test_store_creates_immutable_monotonic_versions(tmp_path: Path) -> None:
     store = WorkflowRecipeStore(tmp_path)
     first = store.save_draft(_recipe())
@@ -268,6 +301,26 @@ def test_store_rejects_tampered_lifecycle_with_recomputed_digest(
 
     with pytest.raises(ValueError, match="stored recipe is invalid"):
         store.get(stored.recipe_id)
+
+
+def test_store_rejects_rejected_success_without_verification_after_recomputed_digest(
+    tmp_path: Path,
+) -> None:
+    store = WorkflowRecipeStore(tmp_path)
+    draft = store.save_draft(_recipe())
+    rejected = store.reject(
+        draft.recipe_id,
+        reason="validation rejected",
+        rejected_at=NOW,
+    )
+    path = tmp_path / rejected.recipe_id / str(rejected.version) / "recipe.json"
+    raw = json.loads(path.read_text("utf-8"))
+    raw["last_succeeded_at"] = NOW.isoformat().replace("+00:00", "Z")
+    raw["digest"] = _digest_raw_recipe(raw)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stored recipe is invalid"):
+        store.get(rejected.recipe_id)
 
 
 def test_find_verified_requires_exact_domain_and_capability(tmp_path: Path) -> None:
