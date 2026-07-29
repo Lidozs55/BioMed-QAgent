@@ -24,6 +24,20 @@ _TRANSITIONS = {
 }
 
 
+def compute_recipe_digest(recipe: WorkflowRecipe) -> str:
+    """Compute the canonical digest used for persisted and executed Recipes."""
+
+    data: dict[str, Any] = recipe.model_dump(mode="json")
+    data.pop("digest", None)
+    canonical = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 class WorkflowRecipeStore:
     """Persist append-only Recipe versions below one trusted root."""
 
@@ -270,15 +284,7 @@ class WorkflowRecipeStore:
 
     @staticmethod
     def _digest(recipe: WorkflowRecipe) -> str:
-        data: dict[str, Any] = recipe.model_dump(mode="json")
-        data.pop("digest", None)
-        canonical = json.dumps(
-            data,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(canonical).hexdigest()
+        return compute_recipe_digest(recipe)
 
     @staticmethod
     def _render_workflow(recipe: WorkflowRecipe) -> str:

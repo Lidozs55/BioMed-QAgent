@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import os
 import shutil
 import tempfile
@@ -25,6 +26,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.tools.content_cache import ContentCache, canonical_request_hash
+from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 from app.tools.workdir import TaskWorkDir
 
 _ALLOWED_HOSTS = frozenset(
@@ -62,24 +64,69 @@ class AcquisitionFailure(RuntimeError):
 
 
 def _validate_source_url(url: str) -> str:
-    parsed = urlsplit(url)
+    return _validate_https_source_url(
+        url,
+        allowed_hosts=_ALLOWED_HOSTS,
+        resolve_public=False,
+    )
+
+
+def validate_recipe_source_url(url: str, allowed_hosts: list[str]) -> str:
+    """Validate one Recipe URL against its exact dynamic host boundary."""
+
+    return _validate_https_source_url(
+        url,
+        allowed_hosts=frozenset(allowed_hosts),
+        resolve_public=True,
+    )
+
+
+def _validate_https_source_url(
+    url: str,
+    *,
+    allowed_hosts: frozenset[str],
+    resolve_public: bool,
+) -> str:
+    try:
+        parsed = urlsplit(url)
+        username = parsed.username
+        password = parsed.password
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError as error:
+        raise AcquisitionFailure(
+            ErrorCode.VALIDATION_ERROR, "source URL is malformed"
+        ) from error
     if parsed.scheme != "https":
         raise AcquisitionFailure(
             ErrorCode.VALIDATION_ERROR, "source URL must use HTTPS"
         )
-    if parsed.username or parsed.password:
+    if username is not None or password is not None:
         raise AcquisitionFailure(
             ErrorCode.VALIDATION_ERROR, "source URL credentials are forbidden"
         )
-    if parsed.hostname not in _ALLOWED_HOSTS:
+    if hostname not in allowed_hosts:
         raise AcquisitionFailure(
             ErrorCode.VALIDATION_ERROR, "source URL host is not allowed"
         )
-    if parsed.port not in (None, 443):
+    if port not in (None, 443):
         raise AcquisitionFailure(
             ErrorCode.VALIDATION_ERROR, "source URL port is not allowed"
         )
-    return parsed.hostname
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        raise AcquisitionFailure(
+            ErrorCode.VALIDATION_ERROR, "source URL IP literals are forbidden"
+        )
+    if resolve_public:
+        try:
+            resolve_public_http_target(url, require_https=True)
+        except UnsafeUrlError as error:
+            raise AcquisitionFailure(ErrorCode.VALIDATION_ERROR, str(error)) from error
+    return hostname
 
 
 def _sha256_file(path: Path) -> str:
