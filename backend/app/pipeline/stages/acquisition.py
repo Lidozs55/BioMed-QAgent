@@ -156,11 +156,101 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
     In live mode, streams the real GEO counts file from NCBI FTP via
     ``acquire_source``, with content-addressed caching.
     """
+    specification = ctx.specification
+    if specification and any(
+        dataset.database == Database.UCSC_XENA for dataset in specification.datasets
+    ):
+        dataset = next(
+            dataset for dataset in specification.datasets
+            if dataset.database == Database.UCSC_XENA
+        )
+        if ctx.mode == "live":
+            return asyncio.run(_run_xena_acquisition_live(ctx, retrieved_at, dataset))
+        return _run_xena_acquisition_fixture(ctx, retrieved_at, dataset)
+
     dataset = _resolve_geo_dataset(ctx)
     gse = _extract_gse_accession(dataset.accession) or _DEFAULT_GSE
     if ctx.mode == "live":
         return _run_acquisition_live(ctx, retrieved_at, gse)
     return _run_acquisition_fixture(ctx, retrieved_at, gse)
+
+
+async def _run_xena_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    url = (
+        "https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/"
+        f"{dataset.accession.removesuffix('.gz')}.gz"
+    )
+    source = SourceRecord(
+        source_id=make_source_id(Database.UCSC_XENA, dataset.accession, url),
+        database=Database.UCSC_XENA,
+        accession=dataset.accession,
+        url=url,
+        title=f"UCSC Xena dataset {dataset.accession}",
+        retrieved_at=retrieved_at,
+    )
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "xena")
+    filename = dataset.accession.replace("/", "_") + ".gz"
+    async with httpx.AsyncClient() as http:
+        result = await _try_acquire(source, filename, ctx, cache, http, dataset.accession)
+    if result is None or result.asset is None:
+        raise RuntimeError(f"live Xena download failed for {dataset.accession}")
+    ctx.emit_progress_sync(
+        stage=StageName.ACQUISITION,
+        kind="downloaded_bytes",
+        current=result.asset.size_bytes,
+        total=None,
+        detail={
+            "source": "ucsc_xena",
+            "dataset_id": dataset.accession,
+            "filename": filename,
+            "records": 1,
+        },
+    )
+    return StageResult(
+        output_digest=result.asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / result.asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _run_xena_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    payload = (ctx.fixture_dir / "xena_matrix.tsv").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_path = ctx.workdir.source_assets / "xena_matrix.fixture.tsv"
+    if source_path.exists() and hashlib.sha256(source_path.read_bytes()).hexdigest() != checksum:
+        raise FileExistsError("fixture Xena source asset already exists with different content")
+    if not source_path.exists():
+        source_path.write_bytes(payload)
+    url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
+    source_id = make_source_id(Database.UCSC_XENA, dataset.accession, url)
+    attempt_id = f"download_attempt_fixture_xena_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum), kind="source",
+        relative_path=source_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum, size_bytes=len(payload), media_type="text/tab-separated-values",
+        source_id=source_id, successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id, source_id=source_id, url=url,
+        status=DownloadStatus.SUCCEEDED, bytes_received=len(payload),
+        started_at=retrieved_at, finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset], download_attempts=[attempt],
+            source_path=source_path, retrieved_at=retrieved_at,
+        ),
+    )
 
 
 def _run_acquisition_fixture(

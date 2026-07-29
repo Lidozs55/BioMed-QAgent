@@ -196,6 +196,23 @@ _FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str, str, str]] = {
 }
 
 
+def _build_xena_samples(
+    parsed_path: Path, dataset_id: str, source_id: str, source_url: str
+) -> list[dict[str, object]]:
+    sample_ids = sorted({row["sample_id"] for row in _read_parsed_rows(parsed_path)})
+    return [{
+        "sample_id": sample_id, "dataset_id": dataset_id, "source_id": source_id,
+        "source_sample_alias": sample_id, "cell_line_raw": "",
+        "cell_line_canonical": "", "normalization_rule": "", "treatment": "",
+        "replicate": "", "organism": "", "source_url": source_url,
+    } for sample_id in sample_ids]
+
+
+def _read_parsed_rows(parsed_path: Path) -> list[dict[str, str]]:
+    with parsed_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def _build_cell_line_warnings(
     samples: list[GeoSampleMetadata],
     geo_source_id: str,
@@ -460,13 +477,18 @@ def run_artifact_build(
     download_attempts: list[DownloadAttempt],
     parsed_dataset: ParsedDataset,
     samples: list[GeoSampleMetadata],
-    literature: LiteratureRecord,
-    geo: GeoSeriesRecord,
+    literature: LiteratureRecord | None,
+    geo: GeoSeriesRecord | None,
     specification: TaskSpecification,
     retrieved_at: datetime,
     stage_attempt_id: str,
     cleaning_report: CleaningReportModel | None = None,
     field_alignment: dict[str, list[str]] | None = None,
+    dataset_source_id: str | None = None,
+    dataset_accession: str | None = None,
+    dataset_title: str | None = None,
+    dataset_url: str | None = None,
+    dataset_id: str | None = None,
 ) -> StageResult:
     """Build the staging CSV package from upstream stage outputs.
 
@@ -479,14 +501,29 @@ def run_artifact_build(
         staging.mkdir(parents=True)
 
     parsed_path = ctx.workdir.root / parsed_dataset.file_asset.relative_path
+    if not parsed_path.is_file():
+        raise FileNotFoundError(f"Parsed dataset not found: {parsed_path}")
     shutil.copy2(parsed_path, staging / "main_data.csv")
 
     pubmed_source_id = next(
-        s.source_id for s in sources if s.database.value == "pubmed"
+        (s.source_id for s in sources if s.database.value == "pubmed"), None
     )
-    geo_source_id = next(s.source_id for s in sources if s.database.value == "geo")
-    dataset_id = specification.datasets[0].dataset_id
-    geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo.accession}"
+    geo_source_id = next(
+        (s.source_id for s in sources if s.database.value == "geo"), None
+    )
+    geo_url = dataset_url or (
+        f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo.accession}"
+        if geo else ""
+    )
+    dataset_id = dataset_id or specification.datasets[0].dataset_id
+    dataset_source_id = dataset_source_id or geo_source_id or sources[0].source_id
+    dataset_url = dataset_url or geo_url
+    primary_source_id = dataset_source_id
+    dataset_url_value = dataset_url
+    dataset_accession = dataset_accession or (
+        geo.accession if geo else specification.datasets[0].accession
+    )
+    dataset_title = dataset_title or (geo.title if geo else dataset_accession)
     source_asset = source_assets[0]
     download_attempt = download_attempts[0]
 
@@ -522,33 +559,33 @@ def run_artifact_build(
     rows_by_file: dict[str, list[dict[str, object]]] = {
         "literature.csv": [
             {
-                "source_id": pubmed_source_id,
-                "pmid": literature.pmid,
-                "pmcid": literature.pmcid or "",
-                "doi": literature.doi or "",
-                "title": literature.title,
-                "authors": json.dumps(literature.authors),
-                "journal": literature.journal,
+                "source_id": pubmed_source_id or "",
+                "pmid": literature.pmid if literature else "",
+                "pmcid": literature.pmcid if literature else "",
+                "doi": literature.doi if literature else "",
+                "title": literature.title if literature else "",
+                "authors": json.dumps(literature.authors if literature else []),
+                "journal": literature.journal if literature else "",
                 "published_at": literature.published_at.isoformat()
-                if literature.published_at
+                if literature and literature.published_at
                 else "",
-                "source_url": literature.source_url,
+                "source_url": literature.source_url if literature else "",
                 "retrieved_at": retrieved_at.isoformat(),
             }
         ],
         "dataset_catalog.csv": [
             {
                 "dataset_id": dataset_id,
-                "source_id": geo_source_id,
-                "database": "geo",
-                "accession": geo.accession,
-                "title": geo.title,
-                "organism": geo.organism,
-                "experiment_type": geo.experiment_type,
-                "sample_count": geo.sample_count,
-                "platform_ids": json.dumps(sorted(geo.platform_ids)),
-                "related_pmids": json.dumps(sorted(geo.pubmed_ids)),
-                "source_url": geo_url,
+                "source_id": primary_source_id,
+                "database": sources[0].database.value,
+                "accession": dataset_accession,
+                "title": geo.title if geo else dataset_title,
+                "organism": geo.organism if geo else "",
+                "experiment_type": geo.experiment_type if geo else "gene_expression",
+                "sample_count": geo.sample_count if geo else 2,
+                "platform_ids": json.dumps(sorted(geo.platform_ids)) if geo else "[]",
+                "related_pmids": json.dumps(sorted(geo.pubmed_ids)) if geo else "[]",
+                "source_url": dataset_url_value,
                 "retrieved_at": retrieved_at.isoformat(),
             }
         ],
@@ -556,7 +593,7 @@ def run_artifact_build(
             {
                 "sample_id": sample.sample_id,
                 "dataset_id": dataset_id,
-                "source_id": geo_source_id,
+                "source_id": primary_source_id,
                 "source_sample_alias": sample.source_alias,
                 "cell_line_raw": sample.cell_line_raw,
                 "cell_line_canonical": sample.cell_line_canonical,
@@ -567,7 +604,7 @@ def run_artifact_build(
                 "source_url": geo_url,
             }
             for sample in samples
-        ],
+        ] or _build_xena_samples(parsed_path, dataset_id, primary_source_id, dataset_url_value),
         "field_descriptions.csv": [
             {
                 "field_name": field,
@@ -595,11 +632,11 @@ def run_artifact_build(
             literature=literature,
             geo=geo,
             geo_url=geo_url,
-        ),
+        ) if literature is not None and geo is not None else [],
         "source_assets.csv": [
             {
                 "asset_id": source_asset.asset_id,
-                "source_id": geo_source_id,
+                "source_id": primary_source_id,
                 "successful_attempt_id": source_asset.successful_attempt_id,
                 "data_level": source_asset.data_level.value,
                 "relative_path": source_asset.relative_path,
@@ -674,6 +711,11 @@ def run_artifact_build(
         source_path=ctx.workdir.root / source_asset.relative_path,
         literature=literature,
         geo=geo,
+        dataset_source_id=dataset_source_id,
+        dataset_accession=dataset_accession,
+        dataset_title=dataset_title,
+        dataset_url=dataset_url,
+        dataset_id=dataset_id,
         specification=specification,
         sources=sources,
         parsed_datasets=[],

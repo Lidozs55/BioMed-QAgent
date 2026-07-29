@@ -121,6 +121,14 @@ def run_discovery(ctx: StageContext) -> StageResult:
             len(specification.datasets),
         )
 
+    xena_dataset = next(
+        (dataset for dataset in specification.datasets
+         if dataset.database == Database.UCSC_XENA),
+        None,
+    )
+    if xena_dataset is not None:
+        return _run_xena_discovery(ctx, specification, xena_dataset)
+
     pmid = _resolve_pmid(specification)
     gse = _resolve_gse(specification)
     logger.info(
@@ -339,6 +347,45 @@ def _run_discovery_live(
     return literature, geo, retrieved_at
 
 
+def _run_xena_discovery(
+    ctx: StageContext,
+    specification: TaskSpecification,
+    dataset: DatasetSelection,
+) -> StageResult:
+    retrieved_at = datetime.fromtimestamp(
+        (ctx.fixture_dir / "xena_matrix.tsv").stat().st_mtime, UTC
+    ) if ctx.mode != "live" else datetime.now(UTC)
+    if ctx.mode == "live" and not dataset.accession:
+        raise ValueError("live Xena discovery requires an explicit dataset accession")
+    url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
+    source_id = make_source_id(Database.UCSC_XENA, dataset.accession, url)
+    resolved = dataset.model_copy(update={"source_id": source_id})
+    output_specification = specification.model_copy(update={"datasets": [resolved]})
+    source = SourceRecord(
+        source_id=source_id,
+        database=Database.UCSC_XENA,
+        accession=dataset.accession,
+        url=url,
+        title=dataset.accession,
+        retrieved_at=retrieved_at,
+    )
+    output = DiscoveryOutput(
+        sources=[source], literature=None, geo=None,
+        specification=output_specification,
+        dataset_source_id=source_id,
+        dataset_accession=dataset.accession,
+        dataset_title=dataset.accession,
+        dataset_url=url,
+        dataset_id=resolved.dataset_id,
+        retrieved_at=retrieved_at,
+    )
+    ctx.emit_progress_sync(
+        stage=StageName.DISCOVERY, kind="discovered_records", current=1,
+        total=1, detail={"source": "ucsc_xena", "accession": dataset.accession},
+    )
+    return StageResult(output_digest=_digest_discovery(output), output=output)
+
+
 def _build_output(
     ctx: StageContext,
     literature: LiteratureRecord,
@@ -390,6 +437,10 @@ def _build_output(
         specification=output_specification,
         pubmed_source_id=pubmed_source_id,
         geo_source_id=geo_source_id,
+        dataset_source_id=geo_source_id,
+        dataset_accession=geo.accession,
+        dataset_title=geo.title,
+        dataset_url=geo_url,
         dataset_id=dataset_id,
         retrieved_at=retrieved_at,
     )
@@ -404,8 +455,10 @@ def _digest_discovery(output: DiscoveryOutput) -> str:
         "pubmed_source_id": output.pubmed_source_id,
         "geo_source_id": output.geo_source_id,
         "dataset_id": output.dataset_id,
-        "literature_pmid": output.literature.pmid,
-        "geo_accession": output.geo.accession,
+        "literature_pmid": output.literature.pmid if output.literature else None,
+        "geo_accession": output.geo.accession if output.geo else None,
+        "dataset_source_id": output.dataset_source_id,
+        "dataset_accession": output.dataset_accession,
         "topic": output.specification.topic,
     }
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

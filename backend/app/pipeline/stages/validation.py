@@ -532,8 +532,13 @@ def _validate_package(
         }
     )
 
-    with gzip.open(source_path, "rt", encoding="utf-8", newline="") as handle:
-        source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    opener = gzip.open if source_path.suffix.lower() == ".gz" else Path.open
+    if source_path.suffix.lower() == ".gz":
+        with opener(source_path, "rt", encoding="utf-8", newline="") as handle:
+            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    else:
+        with source_path.open("r", encoding="utf-8", newline="") as handle:
+            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
     sampled_rows = _deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
     sampled_skipped = 0

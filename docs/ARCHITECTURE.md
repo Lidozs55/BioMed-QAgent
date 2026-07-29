@@ -337,7 +337,9 @@ schema version 和生成步骤。
 负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
 候选、实际查询式、结果顺序和来源 URL。
 
-Discovery 不生成最终科研数据行。
+Discovery 不生成最终科研数据行。对于显式的 UCSC Xena gene-expression 数据集，Discovery
+输出统一的 `SourceRecord` 和数据集选择；GDC/Reactome 等未完成来源仍保持 Agent-only，
+不得伪装成 Pipeline 支持。
 
 PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
 请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
@@ -354,6 +356,9 @@ PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局
 - 计算 SHA-256 和字节数；
 - 完整成功后创建 SourceAsset；
 - 部分或失败文件永不交给 Parser。
+- Xena gene-expression live acquisition 将显式数据集 accession 映射到 Xena hub
+  `download/{dataset_id}.gz`，复用同一 `acquire_source()`、内容寻址缓存和
+  `SourceAsset`/`DownloadAttempt` 契约；临床、突变、CNV 等 Xena 类型尚未纳入该闭环。
 
 成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
 参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。

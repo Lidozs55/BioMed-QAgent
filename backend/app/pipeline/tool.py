@@ -27,6 +27,7 @@ def _build_tool_specification(
     databases: list[str],
     pmid: str | None,
     gse: str | None,
+    xena_dataset_id: str | None = None,
 ) -> TaskSpecification | None:
     """Build a TaskSpecification when the Agent supplied explicit accessions.
 
@@ -36,7 +37,7 @@ def _build_tool_specification(
     discovery stage uses direct NCBI lookups instead of topic search (which
     fails for non-English topics).
     """
-    if not pmid and not gse:
+    if not pmid and not gse and not xena_dataset_id:
         return None
     selected = {value.lower() for value in databases}
     queries: list[QuerySpecification] = []
@@ -66,6 +67,26 @@ def _build_tool_specification(
                 accession=gse,
                 source_id="",
                 reason="agent-identified GEO series",
+            )
+        )
+    if xena_dataset_id and ({"xena", "ucsc_xena"} & selected):
+        queries.append(
+            QuerySpecification(
+                query_id="query_xena_1",
+                database=Database.UCSC_XENA,
+                query=xena_dataset_id,
+                generated_by="agent",
+                purpose="explicit Xena dataset from agent discovery",
+                order=_next_order(),
+            )
+        )
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_ucsc_xena_{xena_dataset_id.lower().replace('/', '_')}",
+                database=Database.UCSC_XENA,
+                accession=xena_dataset_id,
+                source_id="",
+                reason="agent-identified Xena dataset",
             )
         )
     if pmid and "pubmed" in selected:
@@ -130,12 +151,13 @@ async def run_research_pipeline(
     databases: list[str],
     pmid: str | None = None,
     gse: str | None = None,
+    xena_dataset_id: str | None = None,
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
     normalized_databases = [value.lower() for value in databases]
     if not normalized_databases:
         raise ValueError("databases must be a non-empty list of database identifiers")
-    supported_databases = {"pubmed", "geo"}
+    supported_databases = {"pubmed", "geo", "xena", "ucsc_xena"}
     unsupported_databases = sorted(
         {value for value in normalized_databases if value not in supported_databases}
     )
@@ -171,7 +193,9 @@ async def run_research_pipeline(
     fixture_dir = (
         Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     )
-    specification = _build_tool_specification(topic, normalized_databases, pmid, gse)
+    specification = _build_tool_specification(
+        topic, normalized_databases, pmid, gse, xena_dataset_id
+    )
     runner: PipelineRunner | None = None
     transferred = False
     reservation_released = False

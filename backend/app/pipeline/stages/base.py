@@ -140,11 +140,15 @@ class DiscoveryOutput(ContractModel):
     """Output of the discovery stage: parsed fixture sources + specification."""
 
     sources: list[SourceRecord]
-    literature: LiteratureRecord
-    geo: GeoSeriesRecord
+    literature: LiteratureRecord | None = None
+    geo: GeoSeriesRecord | None = None
     specification: TaskSpecification
-    pubmed_source_id: str
-    geo_source_id: str
+    pubmed_source_id: str | None = None
+    geo_source_id: str | None = None
+    dataset_source_id: str
+    dataset_accession: str
+    dataset_title: str
+    dataset_url: str
     dataset_id: str
     retrieved_at: datetime
 
@@ -189,8 +193,8 @@ class ArtifactBuildOutput(ContractModel):
     artifact_paths: list[Path]
     source_assets: list[SourceAsset]
     source_path: Path
-    literature: LiteratureRecord
-    geo: GeoSeriesRecord
+    literature: LiteratureRecord | None
+    geo: GeoSeriesRecord | None
     specification: TaskSpecification
     sources: list[SourceRecord]
     parsed_datasets: list[ParsedDataset]
@@ -198,6 +202,11 @@ class ArtifactBuildOutput(ContractModel):
     download_attempts: list[DownloadAttempt]
     retrieved_at: datetime
     started_at: datetime
+    dataset_source_id: str = ""
+    dataset_accession: str = ""
+    dataset_title: str = ""
+    dataset_url: str = ""
+    dataset_id: str = ""
 
 
 class ValidationOutput(ContractModel):

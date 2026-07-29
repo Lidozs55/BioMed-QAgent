@@ -13,6 +13,7 @@ from app.pipeline.processing.geo_tximport import (
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )
+from app.pipeline.processing.xena_matrix import parse_xena_matrix
 from app.pipeline.stages.base import (
     CleaningReportModel,
     ProcessingOutput,
@@ -363,6 +364,33 @@ def run_processing(
     recovers sample metadata from that asset instead.
     """
     assets = source_assets if isinstance(source_assets, list) else [source_assets]
+    if ctx.databases and any(
+        database.lower() in {"xena", "ucsc_xena"} for database in ctx.databases
+    ):
+        if len(assets) != 1:
+            raise ValueError("Xena gene-expression processing requires one source asset")
+        parsed = parse_xena_matrix(assets[0], dataset_id, ctx.workdir)
+        cleaning_report = _clean_parsed_dataset(ctx, parsed)
+        field_alignment = _build_field_alignment([parsed], ctx)
+        output = ProcessingOutput(
+            parsed_datasets=[parsed],
+            samples=[],
+            cleaning_report=cleaning_report,
+            field_alignment=field_alignment,
+        )
+        ctx.emit_progress_sync(
+            stage=StageName.PROCESSING,
+            kind="cleaned_rows",
+            current=parsed.row_count,
+            total=None,
+            detail={
+                "dataset_id": parsed.dataset_id,
+                "file_asset": parsed.file_asset.relative_path,
+            },
+        )
+        digest = hashlib.sha256(parsed.file_asset.sha256.encode("utf-8")).hexdigest()
+        return StageResult(output_digest=digest, output=output)
+
     source_asset = next(
         (asset for asset in assets if "tximportCounts" in asset.relative_path),
         assets[0],
