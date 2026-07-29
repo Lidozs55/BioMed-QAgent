@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import app.recipes.client as client_module
 import httpx
@@ -10,6 +10,20 @@ import pytest
 from app.integrations.acquisition import ValidatedRecipeTarget
 from app.recipes.client import ControlledRecipeClient
 from app.tools.network_safety import PublicHttpTarget
+
+
+class RecordingTransport(httpx.MockTransport):
+    def __init__(
+        self,
+        handler: Callable[[httpx.Request], httpx.Response]
+        | Callable[[httpx.Request], Awaitable[httpx.Response]],
+    ) -> None:
+        super().__init__(handler)
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+        await super().aclose()
 
 
 def _target(host: str = "api.example.org") -> ValidatedRecipeTarget:
@@ -64,19 +78,19 @@ async def test_api_request_uses_pinned_target_and_returns_redirect_without_follo
 
 
 @pytest.mark.asyncio
-async def test_same_ip_different_sni_uses_distinct_transport_pools() -> None:
-    transports: dict[str, httpx.MockTransport] = {}
+async def test_every_request_uses_and_closes_a_distinct_transport() -> None:
+    transports: dict[str, list[RecordingTransport]] = {}
     observed_sni: dict[str, list[str]] = {}
 
     def transport_factory(sni_hostname: str) -> httpx.AsyncBaseTransport:
-        observed_sni[sni_hostname] = []
+        observed_sni.setdefault(sni_hostname, [])
 
         def handler(request: httpx.Request) -> httpx.Response:
             observed_sni[sni_hostname].append(request.extensions["sni_hostname"])
             return httpx.Response(200, content=sni_hostname.encode())
 
-        transport = httpx.MockTransport(handler)
-        transports[sni_hostname] = transport
+        transport = RecordingTransport(handler)
+        transports.setdefault(sni_hostname, []).append(transport)
         return transport
 
     client = ControlledRecipeClient(transport_factory=transport_factory)
@@ -108,12 +122,86 @@ async def test_same_ip_different_sni_uses_distinct_transport_pools() -> None:
     assert first_a.content == b"host-a.example"
     assert first_b.content == b"host-b.example"
     assert second_a.content == b"host-a.example"
-    assert transports["host-a.example"] is not transports["host-b.example"]
+    assert len(transports["host-a.example"]) == 2
+    assert transports["host-a.example"][0] is not transports["host-a.example"][1]
+    assert transports["host-a.example"][0] is not transports["host-b.example"][0]
+    assert all(transport.closed for values in transports.values() for transport in values)
     assert observed_sni == {
         "host-a.example": ["host-a.example", "host-a.example"],
         "host-b.example": ["host-b.example"],
     }
     assert client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_many_one_off_hosts_leave_no_persistent_clients() -> None:
+    transports: list[RecordingTransport] = []
+
+    def transport_factory(_sni: str) -> httpx.AsyncBaseTransport:
+        transport = RecordingTransport(lambda _request: httpx.Response(200, content=b"ok"))
+        transports.append(transport)
+        return transport
+
+    client = ControlledRecipeClient(transport_factory=transport_factory)
+    for index in range(25):
+        response = await client.api_request(
+            method="GET",
+            target=_target(f"host-{index}.example"),
+            headers={},
+            query_params={},
+            timeout_seconds=5,
+        )
+        assert response.content == b"ok"
+
+    assert len(transports) == 25
+    assert all(transport.closed for transport in transports)
+    assert not client._active_clients
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_waits_for_in_flight_request_then_rejects_new_requests() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    transports: list[RecordingTransport] = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return httpx.Response(200, content=b"ok")
+
+    def transport_factory(_sni: str) -> httpx.AsyncBaseTransport:
+        transport = RecordingTransport(handler)
+        transports.append(transport)
+        return transport
+
+    client = ControlledRecipeClient(transport_factory=transport_factory)
+    request_task = asyncio.create_task(
+        client.api_request(
+            method="GET",
+            target=_target(),
+            headers={},
+            query_params={},
+            timeout_seconds=5,
+        )
+    )
+    await started.wait()
+    close_task = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not close_task.done()
+    release.set()
+    assert (await request_task).content == b"ok"
+    await close_task
+    assert transports[0].closed
+    with pytest.raises(RuntimeError, match="closed"):
+        await client.api_request(
+            method="GET",
+            target=_target(),
+            headers={},
+            query_params={},
+            timeout_seconds=5,
+        )
 
 
 @pytest.mark.asyncio
@@ -128,7 +216,7 @@ async def test_transport_factory_cannot_share_pool_between_sni_partitions() -> N
         timeout_seconds=5,
     )
 
-    with pytest.raises(ValueError, match="distinct transport"):
+    with pytest.raises(ValueError, match="fresh transport"):
         await client.api_request(
             method="GET",
             target=_target("host-b.example"),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 
@@ -31,9 +32,11 @@ class ControlledRecipeClient:
         transport_factory: RecipeTransportFactory | None = None,
     ) -> None:
         self._transport_factory = transport_factory
-        self._clients: dict[str, httpx.AsyncClient] = {}
-        self._transport_ids: set[int] = set()
-        self._lock = asyncio.Lock()
+        self._active_clients: set[httpx.AsyncClient] = set()
+        self._issued_transports: weakref.WeakValueDictionary[int, httpx.AsyncBaseTransport] = (
+            weakref.WeakValueDictionary()
+        )
+        self._condition = asyncio.Condition()
         self._closed = False
 
     @property
@@ -41,13 +44,9 @@ class ControlledRecipeClient:
         return self._closed
 
     async def aclose(self) -> None:
-        async with self._lock:
-            if self._closed:
-                return
+        async with self._condition:
             self._closed = True
-            clients = tuple(self._clients.values())
-            self._clients.clear()
-        await asyncio.gather(*(client.aclose() for client in clients))
+            await self._condition.wait_for(lambda: not self._active_clients)
 
     async def api_request(
         self,
@@ -154,19 +153,19 @@ class ControlledRecipeClient:
         sni_hostname = pinned.sni_hostname.strip().lower().rstrip(".")
         if not partition or partition != sni_hostname:
             raise ValueError("validated Recipe target host and SNI must match")
-        http = await self._client_for(partition)
+        http = await self._open_client(partition)
         request_headers = {name: value for name, value in headers.items() if name.lower() != "host"}
         request_headers["Host"] = pinned.host_header
-        request = http.build_request(
-            method,
-            pinned.connect_url,
-            headers=request_headers,
-            params=query_params,
-            timeout=timeout_seconds,
-            extensions={"sni_hostname": pinned.sni_hostname},
-        )
         response: httpx.Response | None = None
         try:
+            request = http.build_request(
+                method,
+                pinned.connect_url,
+                headers=request_headers,
+                params=query_params,
+                timeout=timeout_seconds,
+                extensions={"sni_hostname": pinned.sni_hostname},
+            )
             response = await http.send(
                 request,
                 follow_redirects=False,
@@ -210,8 +209,11 @@ class ControlledRecipeClient:
                 error=f"{type(error).__name__}: {error}",
             )
         finally:
-            if response is not None:
-                await response.aclose()
+            try:
+                if response is not None:
+                    await response.aclose()
+            finally:
+                await self._release_client(http)
 
     @staticmethod
     def _oversized_response(
@@ -225,29 +227,33 @@ class ControlledRecipeClient:
             error=(f"Recipe response exceeded {MAX_RECIPE_RESPONSE_BYTES} byte limit"),
         )
 
-    async def _client_for(self, partition: str) -> httpx.AsyncClient:
-        async with self._lock:
+    async def _open_client(self, partition: str) -> httpx.AsyncClient:
+        async with self._condition:
             if self._closed:
                 raise RuntimeError("controlled Recipe client is closed")
-            existing = self._clients.get(partition)
-            if existing is not None:
-                return existing
             transport = (
                 self._transport_factory(partition) if self._transport_factory is not None else None
             )
             if transport is not None:
                 transport_id = id(transport)
-                if transport_id in self._transport_ids:
+                if self._issued_transports.get(transport_id) is transport:
                     raise ValueError(
-                        "Recipe transport factory must return a distinct "
-                        "transport for each SNI partition"
+                        "Recipe transport factory must return a fresh transport for every request"
                     )
-                self._transport_ids.add(transport_id)
+                self._issued_transports[transport_id] = transport
             client = httpx.AsyncClient(
                 timeout=30.0,
                 follow_redirects=False,
                 trust_env=False,
                 transport=transport,
             )
-            self._clients[partition] = client
+            self._active_clients.add(client)
             return client
+
+    async def _release_client(self, client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        finally:
+            async with self._condition:
+                self._active_clients.discard(client)
+                self._condition.notify_all()
