@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import app.tools.browser_pool as browser_pool_module
 import pytest
 from app.domain.contracts import DataLevel
 from app.subagents.staging import SubagentStagingWorkspace
@@ -74,7 +75,11 @@ class FakePage:
             route = FakeRoute(request)
             self._context.routes.append(route)
             assert self._context.route_handler is not None
-            await self._context.route_handler(route)
+            try:
+                await self._context.route_handler(route)
+            except BaseException:
+                if not self._context.tracker.swallow_route_errors:
+                    raise
         if self._context.tracker.block_operations:
             self._context.tracker.operations_started += 1
             self._context.tracker.operation_started.set()
@@ -82,7 +87,10 @@ class FakePage:
         return FakeResponse()
 
     async def content(self) -> str:
-        return "<html>rendered</html>"
+        return self._context.tracker.content
+
+    async def evaluate(self, _expression: str) -> dict[str, int]:
+        return self._context.tracker.document_size
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self._context.tracker, selector)
@@ -102,7 +110,7 @@ class FakePage:
     ) -> bytes:
         if path is not None:
             Path(path).write_bytes(b"png")
-        return b"png"
+        return self._context.tracker.screenshot
 
     async def close(self) -> None:
         self.closed = True
@@ -126,6 +134,13 @@ class FakeLocator:
     async def inner_text(self, **_kwargs: object) -> str:
         self._tracker.actions.append(("extract", self._selector, None))
         return "extracted data"
+
+    async def screenshot(self, **_kwargs: object) -> bytes:
+        self._tracker.actions.append(("screenshot", self._selector, None))
+        return self._tracker.screenshot
+
+    async def bounding_box(self) -> dict[str, float]:
+        return self._tracker.selector_box
 
 
 class FakeContext:
@@ -158,6 +173,7 @@ class FakeBrowser:
 
     async def new_context(self, **kwargs: object) -> FakeContext:
         assert kwargs["accept_downloads"] is False
+        self.tracker.context_options.append(kwargs)
         self.tracker.active_contexts += 1
         self.tracker.max_active_contexts = max(
             self.tracker.max_active_contexts,
@@ -191,7 +207,12 @@ class FakeManager:
 
 
 class FakePlaywright:
-    def __init__(self, *, block_operations: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        block_operations: bool = False,
+        swallow_route_errors: bool = False,
+    ) -> None:
         self.chromium = FakeChromium(self)
         self.browser: FakeBrowser | None = None
         self.browser_launches = 0
@@ -202,7 +223,18 @@ class FakePlaywright:
         self.closed_contexts = 0
         self.closed_pages = 0
         self.contexts: list[FakeContext] = []
+        self.context_options: list[dict[str, object]] = []
         self.actions: list[tuple[str, str, str | None]] = []
+        self.content = "<html>rendered</html>"
+        self.screenshot = b"png"
+        self.document_size = {"width": 1920, "height": 1080}
+        self.selector_box = {
+            "x": 0.0,
+            "y": 0.0,
+            "width": 640.0,
+            "height": 480.0,
+        }
+        self.swallow_route_errors = swallow_route_errors
         self.block_operations = block_operations
         self.operations_started = 0
         self.operation_started = asyncio.Event()
@@ -269,6 +301,12 @@ async def test_route_authorizes_main_frames_redirects_and_subresources_before_tr
         ("https://cdn.example.org/app.js", "script"),
     ]
     assert all(route.continued for route in fake.contexts[0].routes)
+    assert fake.context_options[0]["service_workers"] == "block"
+    proxy = fake.context_options[0]["proxy"]
+    assert isinstance(proxy, dict)
+    assert proxy["server"].startswith("http://127.0.0.1:")
+    assert proxy["username"]
+    assert proxy["password"]
 
 
 @pytest.mark.asyncio
@@ -293,6 +331,26 @@ async def test_route_aborts_denied_request_without_continuing_transport() -> Non
     denied = fake.contexts[0].routes[-1]
     assert denied.aborted
     assert not denied.continued
+
+
+@pytest.mark.asyncio
+async def test_route_denial_propagates_when_playwright_dispatcher_swallows_callback_error() -> None:
+    fake = FakePlaywright(swallow_route_errors=True)
+    pool = BrowserPool(playwright_factory=fake.factory)
+
+    def authorize(url: str, *, resource_type: str) -> object:
+        del resource_type
+        if "cdn.example.org" in url:
+            raise ValueError("denied subresource")
+        return object()
+
+    await pool.start()
+    with pytest.raises(ValueError, match="denied subresource"):
+        await pool.fetch(
+            "https://example.org/page",
+            authorize_request=authorize,
+        )
+    await pool.close()
 
 
 @pytest.mark.asyncio
@@ -338,6 +396,86 @@ async def test_screenshot_is_atomically_staged_as_source_asset(
     )
     assert result.path == workspace.staged_path(result.source_asset)
     assert result.path.read_bytes() == b"png"
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_outputs_enforce_exact_byte_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    fake.content = "12345678"
+    fake.screenshot = b"12345678"
+    pool = BrowserPool(playwright_factory=fake.factory)
+    workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_CONTENT_BYTES", 8)
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_SCREENSHOT_BYTES", 8)
+    await pool.start()
+
+    assert (
+        await pool.fetch(
+            "https://example.org/page",
+            authorize_request=_allow_request,
+        )
+    ).content == "12345678"
+    screenshot = await pool.screenshot(
+        "https://example.org/page",
+        workspace=workspace,
+        filename="exact.png",
+        source_id="source_1",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.METADATA,
+        authorize_request=_allow_request,
+    )
+    assert screenshot.path.read_bytes() == b"12345678"
+
+    fake.content = "123456789"
+    fake.screenshot = b"123456789"
+    with pytest.raises(ValueError, match="browser content exceeded 8 byte limit"):
+        await pool.fetch(
+            "https://example.org/page",
+            authorize_request=_allow_request,
+        )
+    with pytest.raises(ValueError, match="browser screenshot exceeded 8 byte limit"):
+        await pool.screenshot(
+            "https://example.org/page",
+            workspace=workspace,
+            filename="oversized.png",
+            source_id="source_2",
+            successful_attempt_id="attempt_2",
+            data_level=DataLevel.METADATA,
+            authorize_request=_allow_request,
+        )
+    assert not (workspace.root / "source_assets" / "oversized.png").exists()
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_full_page_screenshot_rejects_unbounded_document_before_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    fake.document_size = {"width": 10_000, "height": 10_000}
+    pool = BrowserPool(playwright_factory=fake.factory)
+    workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_SCREENSHOT_PIXELS", 1_000)
+    await pool.start()
+
+    with pytest.raises(ValueError, match="screenshot exceeded 1000 pixel limit"):
+        await pool.screenshot(
+            "https://example.org/page",
+            workspace=workspace,
+            filename="oversized.png",
+            source_id="source_1",
+            successful_attempt_id="attempt_1",
+            data_level=DataLevel.METADATA,
+            authorize_request=_allow_request,
+        )
+
+    assert fake.screenshot == b"png"
+    assert not (workspace.root / "source_assets").exists()
     await pool.close()
 
 
@@ -432,4 +570,27 @@ async def test_browser_session_supports_all_declared_recipe_actions() -> None:
     ]
     await session.close()
     assert fake.active_contexts == 0
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_session_rejects_oversized_extract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    pool = BrowserPool(playwright_factory=fake.factory)
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_EXTRACT_BYTES", 4)
+    await pool.start()
+    session = await pool.open_session(authorize_request=_allow_request)
+
+    with pytest.raises(ValueError, match="browser extract exceeded 4 byte limit"):
+        await session.action(
+            action="extract",
+            target="#results",
+            value=None,
+            current_url="https://example.org/page",
+            timeout_seconds=5,
+        )
+
+    await session.close()
     await pool.close()

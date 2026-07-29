@@ -45,10 +45,7 @@ from app.subagents.staging import SubagentStagingWorkspace
 from app.subagents.supervisor import SubagentSupervisor
 from app.tools.browser_pool import BrowserPool
 from app.tools.cache_store import init_cache_store
-from app.tools.crawler import (
-    CrawlerFacade,
-    set_default_crawler_facade,
-)
+from app.tools.crawler import CrawlerFacade
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -82,6 +79,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         loop = asyncio.get_running_loop()
+        previous_default_executor = getattr(loop, "_default_executor", None)
         sync_executor = ThreadPoolExecutor(
             max_workers=configured.runtime_sync_worker_threads,
             thread_name_prefix="task-sync",
@@ -140,6 +138,7 @@ def create_app(
                 task_id=task_id,
                 base_dir=repository.tasks_dir,
             )
+            context.bind_crawler_facade(crawler_facade)
             context.bind_create_skill_runtime(
                 CreateSkillRuntime(
                     store=workflow_recipe_store,
@@ -213,45 +212,46 @@ def create_app(
         application.state.model_preview_client = model_preview_client
         try:
             await browser_pool.start()
-            set_default_crawler_facade(crawler_facade)
             await manager.start()
             yield
         finally:
-            set_default_crawler_facade(None)
             try:
+                await model_preview_client.aclose()
+            finally:
                 try:
-                    await model_preview_client.aclose()
+                    await subagent_supervisor.shutdown()
                 finally:
                     try:
-                        await subagent_supervisor.shutdown()
+                        await manager.close()
                     finally:
                         try:
-                            await manager.close()
+                            await recipe_client.aclose()
                         finally:
                             try:
-                                await recipe_client.aclose()
+                                await crawler_facade.aclose()
                             finally:
                                 try:
-                                    await crawler_facade.aclose()
+                                    await browser_pool.close()
                                 finally:
                                     try:
-                                        await browser_pool.close()
+                                        await assistant_stream_hub.close()
                                     finally:
                                         try:
-                                            await assistant_stream_hub.close()
+                                            await event_hub.close()
                                         finally:
                                             try:
-                                                await event_hub.close()
+                                                await index_executor.close()
                                             finally:
                                                 try:
-                                                    await index_executor.close()
+                                                    storage_executor.shutdown(wait=True)
                                                 finally:
-                                                    try:
-                                                        storage_executor.shutdown(wait=True)
-                                                    finally:
-                                                        sync_executor.shutdown(wait=True)
-            finally:
-                set_default_crawler_facade(None)
+                                                    if previous_default_executor is None:
+                                                        loop._default_executor = None
+                                                    else:
+                                                        loop.set_default_executor(
+                                                            previous_default_executor
+                                                        )
+                                                    sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",

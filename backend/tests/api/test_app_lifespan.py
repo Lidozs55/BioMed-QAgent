@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import app.tools.crawler as crawler_module
+from contextlib import AsyncExitStack
+
 import pytest
 from app.config import Settings
 from app.main import create_app
@@ -54,9 +55,27 @@ async def test_lifespan_owns_browser_pool_and_crawler_facade(tmp_path) -> None:
 
         assert isinstance(pool, BrowserPool)
         assert pool.is_started
-        assert crawler_module._default_crawler_facade is facade
         assert recipe_client._browser_pool is pool
+        context = application.state.task_context_factory("task_crawler")
+        assert context.crawler_facade is facade
 
     assert pool.is_closed
     assert facade._closed
-    assert crawler_module._default_crawler_facade is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_app_lifespans_keep_crawler_ownership_isolated(
+    tmp_path,
+) -> None:
+    first = create_app(Settings(output_dir=str(tmp_path / "first")))
+    second = create_app(Settings(output_dir=str(tmp_path / "second")))
+
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(first.router.lifespan_context(first))
+        await stack.enter_async_context(second.router.lifespan_context(second))
+        first_context = first.state.task_context_factory("task_first")
+        second_context = second.state.task_context_factory("task_second")
+
+        assert first.state.crawler_facade is not second.state.crawler_facade
+        assert first_context.crawler_facade is first.state.crawler_facade
+        assert second_context.crawler_facade is second.state.crawler_facade

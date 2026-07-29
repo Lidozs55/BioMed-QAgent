@@ -5,9 +5,9 @@ This skill delegates HTTP concerns (browser UA, Referer, rate limiting) to the
 unified crawler layer in ``app.tools.crawler``, ensuring consistent anti-crawler
 behavior across all acquisition skills (project_memory L11).
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -16,15 +16,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
 from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawler import BROWSER_HEADERS, _rate_limiter, playwright_fetch
-from app.tools.network_safety import async_validate_public_http_request
 
 logger = logging.getLogger(__name__)
 
@@ -73,22 +70,28 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
     """
     run_ctx: RunContext = ctx.context
     try:
-        result = await asyncio.to_thread(playwright_fetch, url)
+        result = await run_ctx.crawler_facade.browser(url)
         if not result.ok:
             run_ctx.log_query(url, "browser_fallback", QueryStatus.FAILED, 0)
-            return json.dumps({
-                "url": url,
-                "status_code": result.status_code,
-                "method_used": result.method_used,
-                "error": result.error or f"HTTP {result.status_code}",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "url": url,
+                    "status_code": result.status_code,
+                    "method_used": result.method_used,
+                    "error": result.error or f"HTTP {result.status_code}",
+                },
+                ensure_ascii=False,
+            )
 
         status_code = result.status_code
         content_type = result.headers.get("content-type", "")
 
         logger.info(
             "navigate_page url=%s status=%d content_type=%s bytes=%d",
-            url, status_code, content_type, len(result.content),
+            url,
+            status_code,
+            content_type,
+            len(result.content),
         )
 
         html = result.content
@@ -96,25 +99,33 @@ async def navigate_page(ctx: RunContextWrapper[Any], url: str) -> str:
         body_text = _extract_body_text(html)
 
         run_ctx.log_query(url, "browser_fallback", QueryStatus.SUCCESS, 1)
-        return json.dumps({
-            "url": url,
-            "status_code": status_code,
-            "method_used": result.method_used,
-            "title": title,
-            "body_text_preview": body_text[:_MAX_BODY_CHARS],
-            "content_type": content_type,
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "url": url,
+                "status_code": status_code,
+                "method_used": result.method_used,
+                "title": title,
+                "body_text_preview": body_text[:_MAX_BODY_CHARS],
+                "content_type": content_type,
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         run_ctx.log_query(url, "browser_fallback", QueryStatus.FAILED, 0)
-        return json.dumps({
-            "url": url,
-            "error": str(exc),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "url": url,
+                "error": str(exc),
+            },
+            ensure_ascii=False,
+        )
 
 
 @function_tool
 async def download_from_page(
-    ctx: RunContextWrapper[Any], url: str, filename: str,
+    ctx: RunContextWrapper[Any],
+    url: str,
+    filename: str,
 ) -> str:
     """Download a file through task-local temporary storage into source assets.
 
@@ -125,50 +136,43 @@ async def download_from_page(
     Use this as a last-resort download tool when API endpoints fail.
     """
     run_ctx: RunContext = ctx.context
-    await asyncio.to_thread(_rate_limiter.wait)
     temp_path = None
     try:
         temp_target = run_ctx.work_dir.download_temp_file(f"{uuid4().hex}.part")
         dest = run_ctx.work_dir.source_asset_file(filename)
         if dest.exists():
             raise FileExistsError(f"source asset already exists: {filename}")
-        async with (
-            httpx.AsyncClient(
-                timeout=120.0,
-                follow_redirects=True,
-                event_hooks={"request": [async_validate_public_http_request]},
-            ) as client,
-            client.stream(
-                "GET", url, headers=BROWSER_HEADERS,
-            ) as resp,
-        ):
-            status_code = resp.status_code
-            content_type = resp.headers.get("content-type", "")
-            mime_type = content_type.split(";")[0].strip() if content_type else None
-
-            if status_code >= 400:
-                run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
-                return json.dumps({
+        result = await run_ctx.crawler_facade.download(url)
+        status_code = result.status_code
+        content_type = result.headers.get("content-type", "")
+        mime_type = content_type.split(";")[0].strip() if content_type else None
+        if not result.ok:
+            run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
+            return json.dumps(
+                {
                     "source": "browser_fallback",
                     "accession": filename,
                     "source_url": url,
                     "local_files": [],
-                    "error": f"HTTP {status_code}",
-                }, ensure_ascii=False)
-
-            bytes_received = 0
-            temp_path = temp_target
-            with temp_path.open("wb") as f:
-                async for chunk in resp.aiter_bytes():
-                    f.write(chunk)
-                    bytes_received += len(chunk)
+                    "error": result.error or f"HTTP {status_code}",
+                },
+                ensure_ascii=False,
+            )
+        bytes_received = len(result.content)
+        temp_path = temp_target
+        with temp_path.open("xb") as handle:
+            handle.write(result.content)
 
         _publish_no_clobber(temp_path, dest)
         temp_path = None
 
         logger.info(
             "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
-            url, status_code, content_type, bytes_received, dest,
+            url,
+            status_code,
+            content_type,
+            bytes_received,
+            dest,
         )
 
         local_path = str(dest)
@@ -186,22 +190,28 @@ async def download_from_page(
         run_ctx.add_source(source_record)
         run_ctx.log_query(filename, "browser_fallback", QueryStatus.SUCCESS, 1)
 
-        return json.dumps({
-            "source": "browser_fallback",
-            "source_url": url,
-            "local_files": [local_path],
-            "mime_type": mime_type,
-            "bytes_received": bytes_received,
-            "retrieved_at": retrieved_at.isoformat(),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "source": "browser_fallback",
+                "source_url": url,
+                "local_files": [local_path],
+                "mime_type": mime_type,
+                "bytes_received": bytes_received,
+                "retrieved_at": retrieved_at.isoformat(),
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:
         run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
-        return json.dumps({
-            "source": "browser_fallback",
-            "accession": filename,
-            "source_url": url,
-            "error": str(exc),
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "source": "browser_fallback",
+                "accession": filename,
+                "source_url": url,
+                "error": str(exc),
+            },
+            ensure_ascii=False,
+        )
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)

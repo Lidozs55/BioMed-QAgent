@@ -27,6 +27,7 @@ from app.tools.workdir import TaskWorkDir, create_task_workdir
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
+    from app.tools.crawler import CrawlerFacade
 
 
 ProgressEmitter = Callable[
@@ -106,9 +107,7 @@ class RunContext:
         init=False,
         repr=False,
     )
-    _pending_publication: (
-        PendingPublication | PendingPublicationCleanup | None
-    ) = field(
+    _pending_publication: PendingPublication | PendingPublicationCleanup | None = field(
         default=None,
         init=False,
         repr=False,
@@ -130,6 +129,11 @@ class RunContext:
     )
     _model_settings_bound: bool = field(default=False, init=False, repr=False)
     _create_skill_runtime: CreateSkillRuntime | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _crawler_facade: CrawlerFacade | None = field(
         default=None,
         init=False,
         repr=False,
@@ -167,6 +171,21 @@ class RunContext:
         if self._create_skill_runtime is not None:
             raise RuntimeError("create_skill runtime is already bound")
         self._create_skill_runtime = runtime
+
+    def bind_crawler_facade(self, facade: CrawlerFacade) -> None:
+        """Bind the lifespan-owned crawler transport exactly once."""
+
+        if self._crawler_facade is not None:
+            raise RuntimeError("crawler facade is already bound")
+        self._crawler_facade = facade
+
+    @property
+    def crawler_facade(self) -> CrawlerFacade:
+        """Return the trusted crawler transport for this Run."""
+
+        if self._crawler_facade is None:
+            raise RuntimeError("crawler facade is not available")
+        return self._crawler_facade
 
     @property
     def create_skill_runtime(self) -> CreateSkillRuntime:
@@ -341,9 +360,7 @@ class RunContext:
         """记录 raw 目录下的本地文件路径。"""
         self.raw_assets.append(path)
 
-    def add_warning(
-        self, severity: str, message: str, source: str | None = None
-    ) -> None:
+    def add_warning(self, severity: str, message: str, source: str | None = None) -> None:
         """记录一条警告。"""
         self.warnings.append(
             {
@@ -382,9 +399,7 @@ class RunContext:
         )
         # TODO §8.4: per-source follow-up counter.
         if status_value == QueryStatus.NOT_FOUND.value:
-            self._followup_counts[source] = (
-                self._followup_counts.get(source, 0) + 1
-            )
+            self._followup_counts[source] = self._followup_counts.get(source, 0) + 1
 
     @property
     def followup_search_count(self) -> int:
@@ -411,9 +426,7 @@ class RunContext:
             return 0
         compressed = total - keep_recent
         if self.query_log_summary:
-            self.query_log_summary = (
-                f"{self.query_log_summary}\n\n[后续摘要]\n{summary}"
-            )
+            self.query_log_summary = f"{self.query_log_summary}\n\n[后续摘要]\n{summary}"
         else:
             self.query_log_summary = summary
         self.query_log = self.query_log[-keep_recent:]

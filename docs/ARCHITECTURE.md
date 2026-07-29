@@ -118,16 +118,20 @@ Main Agent 不再直接装载全部业务 Tool 或拼接每个 Skill 的 instruc
 
 **视觉证据采集（web_visual_capture）**：
 `acquisition/web_visual_capture.py` 提供 `capture_web_page` 与
-`capture_page_section` 两个 function_tool，使用 Playwright Chromium 截图，
-产物为内容寻址的 PNG（`source_assets/figures/fig_<sha256[:12]>.png`）并附
-`_meta.json` sidecar。该 skill **不** 走 `acquire_source()` 的 HTTPS 白名单
-+ httpx 下载链路（因为白名单仅含 NCBI/GDC/PDB/PubChem/Reactome/Xena，且
-httpx 不支持截图），而是复用 `browser_fallback` 的轻量 provenance 模式
-（`SourceRecord(database=BROWSER)` + `add_raw_asset()`）。HTTP 行为（真实
-浏览器 UA、Referer、stealth、2s 限速、route guard）由统一的
-`app/tools/crawler.py:playwright_screenshot` 提供，确保与其它 acquisition
-skill 的反爬行为一致。该 skill 不出现在 `GET /databases` 列表中，由 Agent
-按需调用。详见 `docs/separateweb_capture_integration_plan.md`。
+`capture_page_section` 两个 function_tool。它只调用 RunContext 中由 lifespan
+注入的 `CrawlerFacade`，由共享 `BrowserPool` 完成 Chromium 截图；PNG 和 metadata
+sidecar 均先进入 `SubagentStagingWorkspace`，通过大小、摘要、路径和链接检查后再
+commit 到任务 `source_assets/<asset_id>/`。该 Skill 不允许自行启动 Chromium、
+创建 HTTP client 或直接写最终截图路径。
+
+BrowserPool 只保有一个 Chromium，最多同时打开 4 个隔离 BrowserContext。每个
+Context 强制 `service_workers="block"`，并使用独立凭据访问 loopback-only HTTPS
+CONNECT 代理。代理在实际 CONNECT 层仅解析一次目标域名、拒绝非公网地址并直连该
+固定 IP；Playwright route 继续负责 Recipe/source host allowlist。HTTP API/HTML
+请求同样逐跳固定 IP、保留原始 Host/SNI、禁用自动重定向并为每次请求使用独立
+transport，避免 DNS rebinding、跨 SNI 连接池复用和私网重定向。浏览器 HTML、
+Recipe extract、截图像素和 PNG，以及普通下载均有硬上限。该 Skill 不出现在
+`GET /databases` 列表中，由 Agent 按需调用。
 
 **视觉模型图表数据提取（extract_chart_data_vlm）**：
 `processing/extract_chart_data_vlm.py` 是 TODO §5.2 视觉模型降级方案的实现。

@@ -17,21 +17,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Protocol
-from urllib.parse import urlsplit
+from typing import Protocol
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from app.tools.browser_pool import BrowserPool
+from app.domain.contracts import DataLevel
+from app.subagents.staging import SubagentStagingWorkspace
+from app.tools.browser_pool import (
+    BrowserPool,
+    BrowserRequestAuthorizer,
+    BrowserScreenshotResult,
+)
 from app.tools.network_safety import (
-    validate_public_http_request,
-    validate_public_http_url,
+    PublicHttpTarget,
+    resolve_public_http_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,17 +55,11 @@ BROWSER_HEADERS: dict[str, str] = {
     "Referer": "https://www.google.com/",
 }
 
-# Stealth JS to hide webdriver flag (project_memory L12: stealth scripts required)
-STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-window.chrome = {runtime: {}};
-"""
-
 # Rate limiting: 2s between requests (project_memory L11)
 _RATE_LIMIT_SECONDS = 2.0
 MAX_CRAWLER_RESPONSE_BYTES = 10 * 1024 * 1024
+MAX_CRAWLER_DOWNLOAD_BYTES = 100 * 1024 * 1024
+MAX_CRAWLER_REDIRECTS = 10
 
 
 @dataclass
@@ -76,6 +74,22 @@ class FetchResult:
     error: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     attempts: tuple[CrawlAttempt, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300 and self.error is None
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadResult:
+    """Bounded binary response downloaded through the pinned crawler transport."""
+
+    url: str
+    content: bytes
+    status_code: int
+    elapsed_ms: float
+    headers: dict[str, str] = field(default_factory=dict)
+    error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -106,30 +120,6 @@ class CrawlError(Exception):
     ) -> None:
         super().__init__(message)
         self.attempts = attempts
-
-
-class RateLimiter:
-    """Simple rate limiter ensuring >= 2s between requests (project_memory L11)."""
-
-    def __init__(self, min_interval: float = _RATE_LIMIT_SECONDS) -> None:
-        self._min_interval = min_interval
-        self._last_request_time: float = 0.0
-        self._lock = threading.Lock()
-
-    def wait(self) -> None:
-        """Block until the minimum interval has elapsed since the last request."""
-        with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last_request_time
-            if elapsed < self._min_interval:
-                sleep_time = self._min_interval - elapsed
-                logger.debug("RateLimiter sleeping %.2fs", sleep_time)
-                time.sleep(sleep_time)
-            self._last_request_time = time.monotonic()
-
-
-# Module-level rate limiter instance for shared use
-_rate_limiter = RateLimiter()
 
 
 @dataclass(slots=True)
@@ -221,16 +211,12 @@ class CrawlerFacade:
         browser_pool: BrowserPool | None = None,
         min_interval: float = _RATE_LIMIT_SECONDS,
         http_transport: httpx.AsyncBaseTransport | None = None,
+        target_resolver: Callable[[str], Awaitable[PublicHttpTarget]] | None = None,
     ) -> None:
         self._browser_pool = browser_pool
         self._limiter = AsyncHostRateLimiter(min_interval=min_interval)
-        self._http = httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=True,
-            trust_env=False,
-            transport=http_transport,
-            event_hooks={"request": [self._before_request]},
-        )
+        self._target_resolver = target_resolver or _resolve_public_target
+        self._http_transport = http_transport
         self._closed = False
 
     async def api(self, url: str) -> FetchResult:
@@ -254,6 +240,15 @@ class CrawlerFacade:
 
     async def browser(self, url: str) -> FetchResult:
         """Render content through the lifespan-owned BrowserPool."""
+        if self._closed:
+            return FetchResult(
+                url=url,
+                content="",
+                status_code=0,
+                elapsed_ms=0,
+                method_used="crawl",
+                error="crawler facade is closed",
+            )
         if self._browser_pool is None:
             return FetchResult(
                 url=url,
@@ -265,6 +260,7 @@ class CrawlerFacade:
             )
         started_at = time.monotonic()
         try:
+            await self._limiter.wait(url)
             result = await self._browser_pool.fetch(
                 url,
                 extra_headers=BROWSER_HEADERS,
@@ -287,16 +283,156 @@ class CrawlerFacade:
                 error=f"{type(error).__name__}: {error}",
             )
 
+    async def download(self, url: str) -> DownloadResult:
+        """Download bounded binary content through the pinned HTTP path."""
+
+        started_at = time.monotonic()
+        current_url = url
+        try:
+            for redirect_count in range(MAX_CRAWLER_REDIRECTS + 1):
+                pinned = await self._target_resolver(current_url)
+                await self._limiter.wait(current_url)
+                async with self._open_http_client() as http:
+                    request = http.build_request(
+                        "GET",
+                        pinned.connect_url,
+                        headers={
+                            **BROWSER_HEADERS,
+                            "Host": pinned.host_header,
+                        },
+                        extensions={"sni_hostname": pinned.sni_hostname},
+                    )
+                    response = await http.send(
+                        request,
+                        follow_redirects=False,
+                        stream=True,
+                    )
+                    try:
+                        result = await self._download_response(
+                            response=response,
+                            current_url=current_url,
+                            started_at=started_at,
+                            redirect_count=redirect_count,
+                        )
+                    finally:
+                        await response.aclose()
+                if isinstance(result, str):
+                    current_url = urljoin(current_url, result)
+                    continue
+                return result
+            raise AssertionError("redirect loop must return before exhaustion")
+        except Exception as error:
+            return DownloadResult(
+                url=current_url,
+                content=b"",
+                status_code=0,
+                elapsed_ms=(time.monotonic() - started_at) * 1000,
+                error=f"{type(error).__name__}: {error}",
+            )
+
+    async def _download_response(
+        self,
+        *,
+        response: httpx.Response,
+        current_url: str,
+        started_at: float,
+        redirect_count: int,
+    ) -> DownloadResult | str:
+        if 300 <= response.status_code < 400:
+            location = response.headers.get("location")
+            if not location:
+                return DownloadResult(
+                    url=current_url,
+                    content=b"",
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    headers=dict(response.headers),
+                    error="redirect response missing Location header",
+                )
+            if redirect_count >= MAX_CRAWLER_REDIRECTS:
+                return DownloadResult(
+                    url=current_url,
+                    content=b"",
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    headers=dict(response.headers),
+                    error=f"crawler exceeded {MAX_CRAWLER_REDIRECTS} redirects",
+                )
+            return location
+        declared_length = response.headers.get("content-length", "").strip()
+        if declared_length.isdigit() and int(declared_length) > MAX_CRAWLER_DOWNLOAD_BYTES:
+            return self._oversized_download_result(
+                url=current_url,
+                status_code=response.status_code,
+                elapsed_ms=(time.monotonic() - started_at) * 1000,
+                headers=dict(response.headers),
+            )
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in response.aiter_bytes():
+            received += len(chunk)
+            if received > MAX_CRAWLER_DOWNLOAD_BYTES:
+                return self._oversized_download_result(
+                    url=current_url,
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    headers=dict(response.headers),
+                )
+            chunks.append(chunk)
+        return DownloadResult(
+            url=current_url,
+            content=b"".join(chunks),
+            status_code=response.status_code,
+            elapsed_ms=(time.monotonic() - started_at) * 1000,
+            headers=dict(response.headers),
+        )
+
+    async def screenshot(
+        self,
+        url: str,
+        *,
+        workspace: SubagentStagingWorkspace,
+        filename: str,
+        source_id: str,
+        successful_attempt_id: str,
+        data_level: DataLevel,
+        authorize_request: BrowserRequestAuthorizer | None = None,
+        full_page: bool = True,
+        selector: str | None = None,
+        viewport_width: int = 1920,
+        viewport_height: int = 1080,
+        wait_until: str = "networkidle",
+        timeout: float = 60.0,
+        extra_headers: dict[str, str] | None = None,
+    ) -> BrowserScreenshotResult:
+        """Capture through the shared limiter and lifespan-owned BrowserPool."""
+
+        if self._closed:
+            raise RuntimeError("crawler facade is closed")
+        if self._browser_pool is None:
+            raise RuntimeError("lifespan-owned browser pool is unavailable")
+        await self._limiter.wait(url)
+        return await self._browser_pool.screenshot(
+            url,
+            workspace=workspace,
+            filename=filename,
+            source_id=source_id,
+            successful_attempt_id=successful_attempt_id,
+            data_level=data_level,
+            authorize_request=authorize_request,
+            full_page=full_page,
+            selector=selector,
+            viewport_width=viewport_width,
+            viewport_height=viewport_height,
+            wait_until=wait_until,
+            timeout=timeout,
+            extra_headers=extra_headers,
+        )
+
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
-        await self._http.aclose()
-
-    async def _before_request(self, request: httpx.Request) -> None:
-        url = str(request.url)
-        await asyncio.to_thread(validate_public_http_url, url)
-        await self._limiter.wait(url)
 
     async def _request(
         self,
@@ -306,59 +442,133 @@ class CrawlerFacade:
         method_used: str,
     ) -> FetchResult:
         started_at = time.monotonic()
+        current_url = url
         try:
-            async with self._http.stream(
-                "GET",
-                url,
-                headers=headers,
-            ) as response:
-                declared_length = response.headers.get(
-                    "content-length",
-                    "",
-                ).strip()
-                if declared_length.isdigit() and int(declared_length) > MAX_CRAWLER_RESPONSE_BYTES:
-                    return self._oversized_result(
-                        url=str(response.url),
-                        status_code=response.status_code,
-                        elapsed_ms=(time.monotonic() - started_at) * 1000,
-                        method_used=method_used,
-                        headers=dict(response.headers),
+            for redirect_count in range(MAX_CRAWLER_REDIRECTS + 1):
+                pinned = await self._target_resolver(current_url)
+                await self._limiter.wait(current_url)
+                request_headers = {
+                    name: value for name, value in headers.items() if name.lower() != "host"
+                }
+                request_headers["Host"] = pinned.host_header
+                async with self._open_http_client() as http:
+                    request = http.build_request(
+                        "GET",
+                        pinned.connect_url,
+                        headers=request_headers,
+                        extensions={"sni_hostname": pinned.sni_hostname},
                     )
-                chunks: list[bytes] = []
-                received = 0
-                async for chunk in response.aiter_bytes():
-                    received += len(chunk)
-                    if received > MAX_CRAWLER_RESPONSE_BYTES:
-                        return self._oversized_result(
-                            url=str(response.url),
-                            status_code=response.status_code,
-                            elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    response = await http.send(
+                        request,
+                        follow_redirects=False,
+                        stream=True,
+                    )
+                    try:
+                        result = await self._text_response(
+                            response=response,
+                            current_url=current_url,
+                            started_at=started_at,
+                            redirect_count=redirect_count,
                             method_used=method_used,
-                            headers=dict(response.headers),
                         )
-                    chunks.append(chunk)
-                encoding = response.encoding or "utf-8"
-                content = b"".join(chunks).decode(
-                    encoding,
-                    errors="replace",
-                )
-                return FetchResult(
-                    url=str(response.url),
-                    content=content,
-                    status_code=response.status_code,
-                    elapsed_ms=(time.monotonic() - started_at) * 1000,
-                    method_used=method_used,
-                    headers=dict(response.headers),
-                )
+                    finally:
+                        await response.aclose()
+                if isinstance(result, str):
+                    current_url = urljoin(current_url, result)
+                    continue
+                return result
+            raise AssertionError("redirect loop must return before exhaustion")
         except Exception as error:
             return FetchResult(
-                url=url,
+                url=current_url,
                 content="",
                 status_code=0,
                 elapsed_ms=(time.monotonic() - started_at) * 1000,
                 method_used=method_used,
                 error=f"{type(error).__name__}: {error}",
             )
+
+    async def _text_response(
+        self,
+        *,
+        response: httpx.Response,
+        current_url: str,
+        started_at: float,
+        redirect_count: int,
+        method_used: str,
+    ) -> FetchResult | str:
+        if 300 <= response.status_code < 400:
+            location = response.headers.get("location")
+            if not location:
+                return FetchResult(
+                    url=current_url,
+                    content="",
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    method_used=method_used,
+                    headers=dict(response.headers),
+                    error="redirect response missing Location header",
+                )
+            if redirect_count >= MAX_CRAWLER_REDIRECTS:
+                return FetchResult(
+                    url=current_url,
+                    content="",
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    method_used=method_used,
+                    headers=dict(response.headers),
+                    error=f"crawler exceeded {MAX_CRAWLER_REDIRECTS} redirects",
+                )
+            return location
+
+        declared_length = response.headers.get(
+            "content-length",
+            "",
+        ).strip()
+        if declared_length.isdigit() and int(declared_length) > MAX_CRAWLER_RESPONSE_BYTES:
+            return self._oversized_result(
+                url=current_url,
+                status_code=response.status_code,
+                elapsed_ms=(time.monotonic() - started_at) * 1000,
+                method_used=method_used,
+                headers=dict(response.headers),
+            )
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in response.aiter_bytes():
+            received += len(chunk)
+            if received > MAX_CRAWLER_RESPONSE_BYTES:
+                return self._oversized_result(
+                    url=current_url,
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    method_used=method_used,
+                    headers=dict(response.headers),
+                )
+            chunks.append(chunk)
+        encoding = response.encoding or "utf-8"
+        content = b"".join(chunks).decode(
+            encoding,
+            errors="replace",
+        )
+        return FetchResult(
+            url=current_url,
+            content=content,
+            status_code=response.status_code,
+            elapsed_ms=(time.monotonic() - started_at) * 1000,
+            method_used=method_used,
+            headers=dict(response.headers),
+        )
+
+    def _open_http_client(self) -> httpx.AsyncClient:
+        if self._closed:
+            raise RuntimeError("crawler facade is closed")
+        return httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=False,
+            trust_env=False,
+            transport=self._http_transport,
+        )
 
     @staticmethod
     def _oversized_result(
@@ -379,372 +589,30 @@ class CrawlerFacade:
             error=(f"crawler response exceeded {MAX_CRAWLER_RESPONSE_BYTES} byte limit"),
         )
 
-
-_default_crawler_facade: CrawlerFacade | None = None
-
-
-def set_default_crawler_facade(facade: CrawlerFacade | None) -> None:
-    """Configure the facade owned by the application lifespan."""
-    global _default_crawler_facade
-    _default_crawler_facade = facade
-
-
-def _guard_playwright_route(route: Any) -> None:
-    validate_public_http_url(route.request.url)
-    route.continue_()
-
-
-def httpx_fetch(
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-    follow_redirects: bool = True,
-) -> FetchResult:
-    """Fetch a URL using httpx with browser UA + Referer + Accept headers.
-
-    This is the second tier in the fallback chain (after API attempts fail).
-    Suitable for non-JS pages that return static HTML.
-
-    Args:
-        url: Target URL.
-        headers: Optional extra headers merged on top of BROWSER_HEADERS.
-        timeout: Request timeout in seconds.
-        follow_redirects: Whether to follow HTTP redirects.
-
-    Returns:
-        FetchResult with the page content.
-    """
-    _rate_limiter.wait()
-
-    merged_headers = {**BROWSER_HEADERS, **(headers or {})}
-    start = time.monotonic()
-
-    try:
-        with httpx.Client(
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-            event_hooks={"request": [validate_public_http_request]},
-        ) as client:
-            response = client.get(url, headers=merged_headers)
-            elapsed_ms = (time.monotonic() - start) * 1000
-            return FetchResult(
-                url=url,
-                content=response.text,
-                status_code=response.status_code,
-                elapsed_ms=elapsed_ms,
-                method_used="httpx",
-                headers=dict(response.headers),
-            )
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.warning("httpx_fetch failed for %s: %s", url, exc)
-        return FetchResult(
+    @staticmethod
+    def _oversized_download_result(
+        *,
+        url: str,
+        status_code: int,
+        elapsed_ms: float,
+        headers: dict[str, str],
+    ) -> DownloadResult:
+        return DownloadResult(
             url=url,
-            content="",
-            status_code=0,
+            content=b"",
+            status_code=status_code,
             elapsed_ms=elapsed_ms,
-            method_used="httpx",
-            error=str(exc),
+            headers=headers,
+            error=f"crawler download exceeded {MAX_CRAWLER_DOWNLOAD_BYTES} byte limit",
         )
 
 
-def playwright_fetch(
-    url: str,
-    *,
-    wait_until: str = "networkidle",
-    timeout: float = 60.0,
-    extra_headers: dict[str, str] | None = None,
-) -> FetchResult:
-    """Fetch a URL using Playwright Chromium with stealth scripts.
-
-    This is the third tier (crawl fallback) for JS-heavy sites that cannot be
-    fetched with httpx alone. Injects stealth scripts to hide the webdriver
-    flag and waits for networkidle to ensure JS rendering completes.
-
-    Args:
-        url: Target URL.
-        wait_until: Playwright wait strategy ("networkidle", "domcontentloaded",
-            "load", "commit").
-        timeout: Navigation timeout in seconds.
-        extra_headers: Optional extra headers.
-
-    Returns:
-        FetchResult with the fully rendered page content.
-
-    Raises:
-        CrawlError: If Playwright is not installed or browser launch fails.
-    """
-    _rate_limiter.wait()
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise CrawlError(
-            "Playwright is not installed. Run: uv add playwright && "
-            "uv run playwright install chromium"
-        ) from exc
-
-    merged_headers = {**BROWSER_HEADERS, **(extra_headers or {})}
-    start = time.monotonic()
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=BROWSER_UA,
-                extra_http_headers=merged_headers,
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US",
-            )
-            # Inject stealth script before any page script runs
-            context.add_init_script(STEALTH_JS)
-            context.route("**/*", _guard_playwright_route)
-            page = context.new_page()
-            response = page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
-            content = page.content()
-            status_code = response.status if response is not None else 0
-            response_headers = dict(response.headers) if response is not None else {}
-            context.close()
-            browser.close()
-
-            elapsed_ms = (time.monotonic() - start) * 1000
-            return FetchResult(
-                url=url,
-                content=content,
-                status_code=status_code,
-                elapsed_ms=elapsed_ms,
-                method_used="crawl",
-                headers=response_headers,
-            )
-    except CrawlError:
-        raise
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.warning("playwright_fetch failed for %s: %s", url, exc)
-        return FetchResult(
-            url=url,
-            content="",
-            status_code=0,
-            elapsed_ms=elapsed_ms,
-            method_used="crawl",
-            error=str(exc),
-        )
-
-
-def api_fetch(
-    url: str,
-    *,
-    headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-) -> FetchResult:
-    """Fetch a REST API endpoint using httpx (first tier: API).
-
-    Unlike ``httpx_fetch``, this is for structured JSON API endpoints where
-    we expect a JSON response. Headers default to a minimal API-style set
-    (no Referer needed for API calls).
-
-    Args:
-        url: API endpoint URL.
-        headers: Optional extra headers.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        FetchResult with the JSON response body as text.
-    """
-    _rate_limiter.wait()
-
-    api_headers = {
-        "User-Agent": BROWSER_UA,
-        "Accept": "application/json",
-    }
-    if headers:
-        api_headers.update(headers)
-
-    start = time.monotonic()
-    try:
-        with httpx.Client(
-            timeout=timeout,
-            follow_redirects=True,
-            event_hooks={"request": [validate_public_http_request]},
-        ) as client:
-            response = client.get(url, headers=api_headers)
-            elapsed_ms = (time.monotonic() - start) * 1000
-            return FetchResult(
-                url=url,
-                content=response.text,
-                status_code=response.status_code,
-                elapsed_ms=elapsed_ms,
-                method_used="api",
-                headers=dict(response.headers),
-            )
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.warning("api_fetch failed for %s: %s", url, exc)
-        return FetchResult(
-            url=url,
-            content="",
-            status_code=0,
-            elapsed_ms=elapsed_ms,
-            method_used="api",
-            error=str(exc),
-        )
-
-
-@dataclass
-class ScreenshotResult:
-    """Result of a screenshot capture operation."""
-
-    url: str
-    path: Path
-    status_code: int
-    elapsed_ms: float
-    viewport_width: int
-    viewport_height: int
-    full_page: bool
-    selector: str | None
-    error: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return 200 <= self.status_code < 300 and self.error is None
-
-
-def playwright_screenshot(
-    url: str,
-    *,
-    dest_path: Path,
-    full_page: bool = True,
-    viewport_width: int = 1920,
-    viewport_height: int = 1080,
-    wait_until: str = "networkidle",
-    timeout: float = 60.0,
-    selector: str | None = None,
-    extra_headers: dict[str, str] | None = None,
-) -> ScreenshotResult:
-    """Capture a web page screenshot using Playwright Chromium with stealth.
-
-    Mirrors ``playwright_fetch`` stealth/UA/rate-limit behavior but captures a
-    PNG screenshot instead of returning HTML. Saves to ``dest_path`` (which
-    must be inside the task workdir for path safety).
-
-    Args:
-        url: Target URL.
-        dest_path: Destination PNG path (caller is responsible for path safety).
-        full_page: Whether to capture the full scrollable page.
-        viewport_width: Browser viewport width in pixels (max 1920).
-        viewport_height: Browser viewport height in pixels (max 1080).
-        wait_until: Playwright wait strategy.
-        timeout: Navigation timeout in seconds.
-        selector: Optional CSS selector; if given, captures only that element.
-        extra_headers: Optional extra headers.
-
-    Returns:
-        ScreenshotResult with capture metadata.
-
-    Raises:
-        CrawlError: If Playwright is not installed or browser launch fails.
-    """
-    _rate_limiter.wait()
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise CrawlError(
-            "Playwright is not installed. Run: uv add playwright && "
-            "uv run playwright install chromium"
-        ) from exc
-
-    # Clamp viewport to hard上限 (project_memory: 避免内存爆炸)
-    vw = min(viewport_width, 1920)
-    vh = min(viewport_height, 1080)
-
-    merged_headers = {**BROWSER_HEADERS, **(extra_headers or {})}
-    start = time.monotonic()
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=BROWSER_UA,
-                extra_http_headers=merged_headers,
-                viewport={"width": vw, "height": vh},
-                locale="en-US",
-            )
-            context.add_init_script(STEALTH_JS)
-            context.route("**/*", _guard_playwright_route)
-            page = context.new_page()
-            response = page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
-            status_code = response.status if response is not None else 0
-
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            if selector:
-                # Wait for the element to be visible before截图; otherwise
-                # bounding_box() may return None on pages with slow layout
-                # (images/fonts loading, ads shifting the viewport).
-                page.wait_for_selector(selector, state="visible", timeout=int(timeout * 1000))
-                locator = page.locator(selector).first
-                # Use JS scrollIntoView to bypass Playwright's "waiting for
-                # element to be stable" check, which hangs on pages with
-                # sticky elements (Wikipedia's sticky header) or continuous
-                # layout shifts (BMC's lazy-loaded figures). The built-in
-                # locator.scroll_into_view_if_needed() and locator.screenshot()
-                # both internally wait for stability and can time out.
-                locator.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
-                # Allow layout to settle briefly after the JS scroll
-                page.wait_for_timeout(300)
-                bbox = locator.bounding_box()
-                if bbox is None:
-                    raise CrawlError(f"Element '{selector}' has no bounding box on {url}")
-                # Clip the page screenshot to the element's bounding box.
-                # page.screenshot(clip=...) does NOT do element stability
-                # checks, so it won't hang on continuous layout shifts.
-                page.screenshot(
-                    path=str(dest_path),
-                    clip={
-                        "x": max(0.0, bbox["x"]),
-                        "y": max(0.0, bbox["y"]),
-                        "width": bbox["width"],
-                        "height": bbox["height"],
-                    },
-                    timeout=int(timeout * 1000),
-                )
-            else:
-                page.screenshot(
-                    path=str(dest_path),
-                    full_page=full_page,
-                    timeout=int(timeout * 1000),
-                )
-            context.close()
-            browser.close()
-
-            elapsed_ms = (time.monotonic() - start) * 1000
-            return ScreenshotResult(
-                url=url,
-                path=dest_path,
-                status_code=status_code,
-                elapsed_ms=elapsed_ms,
-                viewport_width=vw,
-                viewport_height=vh,
-                full_page=full_page,
-                selector=selector,
-            )
-    except CrawlError:
-        raise
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - start) * 1000
-        logger.warning("playwright_screenshot failed for %s: %s", url, exc)
-        return ScreenshotResult(
-            url=url,
-            path=dest_path,
-            status_code=0,
-            elapsed_ms=elapsed_ms,
-            viewport_width=vw,
-            viewport_height=vh,
-            full_page=full_page,
-            selector=selector,
-            error=str(exc),
-        )
+async def _resolve_public_target(url: str) -> PublicHttpTarget:
+    return await asyncio.to_thread(
+        resolve_public_http_target,
+        url,
+        require_https=False,
+    )
 
 
 async def fetch_with_fallback(
@@ -779,10 +647,9 @@ async def fetch_with_fallback(
             raise ValueError("api_url or page_url is required")
         page_url = api_url
 
-    active_facade = facade or _default_crawler_facade
-    owns_facade = active_facade is None
-    if active_facade is None:
-        active_facade = CrawlerFacade()
+    if facade is None:
+        raise CrawlError("crawler facade is not bound to the current Run")
+    active_facade = facade
 
     attempts: list[CrawlAttempt] = []
     tiers: list[
@@ -798,63 +665,57 @@ async def fetch_with_fallback(
     if use_crawl_fallback:
         tiers.append(("browser", page_url, active_facade.browser))
 
-    try:
-        for tier_index, (method, url, operation) in enumerate(tiers):
-            logger.info(
-                "[%s] %s tier: fetching %s",
-                source_name,
-                method,
-                url,
+    for tier_index, (method, url, operation) in enumerate(tiers):
+        logger.info(
+            "[%s] %s tier: fetching %s",
+            source_name,
+            method,
+            url,
+        )
+        started_at = datetime.now(UTC)
+        try:
+            result = await operation(url)
+        except Exception as error:
+            result = FetchResult(
+                url=url,
+                content="",
+                status_code=0,
+                elapsed_ms=0,
+                method_used=_legacy_method_name(method),
+                error=f"{type(error).__name__}: {error}",
             )
-            started_at = datetime.now(UTC)
-            try:
-                result = await operation(url)
-            except Exception as error:
-                result = FetchResult(
-                    url=url,
-                    content="",
-                    status_code=0,
-                    elapsed_ms=0,
-                    method_used=_legacy_method_name(method),
-                    error=f"{type(error).__name__}: {error}",
-                )
 
-            accepted = result.ok
-            if accepted and accept_result is not None:
-                accepted = await asyncio.to_thread(
-                    accept_result,
-                    result,
-                )
-            reason = _attempt_reason(result, accepted=accepted)
-            attempts.append(
-                CrawlAttempt(
-                    method=method,
-                    url=url,
-                    started_at=started_at,
-                    status="succeeded" if accepted else "failed",
-                    status_code=(result.status_code if result.status_code > 0 else None),
-                    reason=reason,
-                    fallback_reason=(
-                        f"falling back to {tiers[tier_index + 1][0]}"
-                        if not accepted and tier_index + 1 < len(tiers)
-                        else None
-                    ),
-                )
+        accepted = result.ok
+        if accepted and accept_result is not None:
+            accepted = await asyncio.to_thread(
+                accept_result,
+                result,
             )
-            if accepted:
-                result.attempts = tuple(attempts)
-                return result
-            logger.warning(
-                "[%s] %s tier failed: %s",
-                source_name,
-                method,
-                reason,
+        reason = _attempt_reason(result, accepted=accepted)
+        attempts.append(
+            CrawlAttempt(
+                method=method,
+                url=url,
+                started_at=started_at,
+                status="succeeded" if accepted else "failed",
+                status_code=(result.status_code if result.status_code > 0 else None),
+                reason=reason,
+                fallback_reason=(
+                    f"falling back to {tiers[tier_index + 1][0]}"
+                    if not accepted and tier_index + 1 < len(tiers)
+                    else None
+                ),
             )
-    finally:
-        if owns_facade:
-            assert isinstance(active_facade, CrawlerFacade)
-            await active_facade.aclose()
-
+        )
+        if accepted:
+            result.attempts = tuple(attempts)
+            return result
+        logger.warning(
+            "[%s] %s tier failed: %s",
+            source_name,
+            method,
+            reason,
+        )
     raise CrawlError(
         f"All fetch tiers failed for {source_name}. "
         f"Tried: {', '.join(attempt.method for attempt in attempts)}",

@@ -12,9 +12,14 @@ from typing import Any, Protocol
 
 from app.domain.contracts import DataLevel, SourceAsset
 from app.subagents.staging import SubagentStagingWorkspace
+from app.tools.egress_proxy import ControlledEgressProxy, EgressProxyLease
 from app.tools.network_safety import validate_public_http_url
 
 _DEFAULT_VIEWPORT = {"width": 1920, "height": 1080}
+MAX_BROWSER_CONTENT_BYTES = 10 * 1024 * 1024
+MAX_BROWSER_SCREENSHOT_BYTES = 25 * 1024 * 1024
+MAX_BROWSER_EXTRACT_BYTES = 10 * 1024 * 1024
+MAX_BROWSER_SCREENSHOT_PIXELS = 25_000_000
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -77,10 +82,14 @@ class BrowserSession:
         pool: BrowserPool,
         context: Any,
         page: Any,
+        proxy_lease: EgressProxyLease,
+        route_errors: list[BaseException],
     ) -> None:
         self._pool = pool
         self._context = context
         self._page = page
+        self._proxy_lease = proxy_lease
+        self._route_errors = route_errors
         self._status_code = 0
         self._navigated = False
         self._closed = False
@@ -111,6 +120,7 @@ class BrowserSession:
                 wait_until="networkidle",
                 timeout=timeout_ms,
             )
+            self._raise_route_error()
             self._status_code = response.status if response is not None else 0
             self._navigated = True
             return BrowserActionResult(
@@ -125,6 +135,7 @@ class BrowserSession:
                 wait_until="networkidle",
                 timeout=timeout_ms,
             )
+            self._raise_route_error()
             self._status_code = response.status if response is not None else 0
             self._navigated = True
 
@@ -168,6 +179,9 @@ class BrowserSession:
         else:
             raise ValueError(f"unsupported browser action: {action}")
 
+        self._raise_route_error()
+        if len(content) > MAX_BROWSER_EXTRACT_BYTES:
+            raise ValueError(f"browser extract exceeded {MAX_BROWSER_EXTRACT_BYTES} byte limit")
         return BrowserActionResult(
             content=content,
             status_code=self._status_code,
@@ -184,12 +198,17 @@ class BrowserSession:
             try:
                 await self._context.close()
             finally:
+                self._proxy_lease.revoke()
                 await self._pool._end_operation()
 
     def _require_locator(self, target: str | None, action: str) -> Any:
         if target is None:
             raise ValueError(f"browser {action} requires a target")
         return self._page.locator(target)
+
+    def _raise_route_error(self) -> None:
+        if self._route_errors:
+            raise self._route_errors[0]
 
 
 class BrowserPool:
@@ -200,11 +219,13 @@ class BrowserPool:
         *,
         max_contexts: int = 4,
         playwright_factory: PlaywrightFactory | None = None,
+        egress_proxy: ControlledEgressProxy | None = None,
     ) -> None:
         if max_contexts <= 0:
             raise ValueError("max_contexts must be positive")
         self._max_contexts = max_contexts
         self._playwright_factory = playwright_factory
+        self._egress_proxy = egress_proxy or ControlledEgressProxy()
         self._semaphore = asyncio.Semaphore(max_contexts)
         self._launch_lock = asyncio.Lock()
         self._condition = asyncio.Condition()
@@ -228,6 +249,7 @@ class BrowserPool:
         async with self._launch_lock:
             if self._closed:
                 raise RuntimeError("browser pool is closed")
+            await self._egress_proxy.start()
             self._started = True
 
     async def fetch(
@@ -245,13 +267,16 @@ class BrowserPool:
         async with self._page(
             authorizer=authorizer,
             extra_headers=extra_headers,
-        ) as page:
-            response = await page.goto(
+        ) as session:
+            response = await session.page.goto(
                 url,
                 wait_until=wait_until,
                 timeout=int(timeout * 1000),
             )
-            content = await page.content()
+            session._raise_route_error()
+            content = await session.page.content()
+            if len(content.encode("utf-8")) > MAX_BROWSER_CONTENT_BYTES:
+                raise ValueError(f"browser content exceeded {MAX_BROWSER_CONTENT_BYTES} byte limit")
             status_code = response.status if response is not None else 0
             headers = dict(response.headers) if response is not None else {}
         return BrowserFetchResult(
@@ -273,26 +298,58 @@ class BrowserPool:
         data_level: DataLevel,
         authorize_request: BrowserRequestAuthorizer | None = None,
         full_page: bool = True,
+        selector: str | None = None,
+        viewport_width: int = _DEFAULT_VIEWPORT["width"],
+        viewport_height: int = _DEFAULT_VIEWPORT["height"],
         wait_until: str = "networkidle",
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
     ) -> BrowserScreenshotResult:
         """Capture a PNG and atomically stage it through the trusted workspace."""
+        if not 1 <= viewport_width <= _DEFAULT_VIEWPORT["width"]:
+            raise ValueError(
+                f"browser viewport width must be between 1 and {_DEFAULT_VIEWPORT['width']}"
+            )
+        if not 1 <= viewport_height <= _DEFAULT_VIEWPORT["height"]:
+            raise ValueError(
+                f"browser viewport height must be between 1 and {_DEFAULT_VIEWPORT['height']}"
+            )
         started_at = time.monotonic()
         authorizer = authorize_request or _authorize_public_request
         async with self._page(
             authorizer=authorizer,
             extra_headers=extra_headers,
-        ) as page:
-            response = await page.goto(
+            viewport={
+                "width": viewport_width,
+                "height": viewport_height,
+            },
+        ) as session:
+            response = await session.page.goto(
                 url,
                 wait_until=wait_until,
                 timeout=int(timeout * 1000),
             )
-            content = await page.screenshot(
+            session._raise_route_error()
+            await _enforce_screenshot_dimensions(
+                session.page,
                 full_page=full_page,
-                timeout=int(timeout * 1000),
+                selector=selector,
+                viewport_width=viewport_width,
+                viewport_height=viewport_height,
             )
+            if selector is None:
+                content = await session.page.screenshot(
+                    full_page=full_page,
+                    timeout=int(timeout * 1000),
+                )
+            else:
+                content = await session.page.locator(selector).screenshot(
+                    timeout=int(timeout * 1000),
+                )
+            if len(content) > MAX_BROWSER_SCREENSHOT_BYTES:
+                raise ValueError(
+                    f"browser screenshot exceeded {MAX_BROWSER_SCREENSHOT_BYTES} byte limit"
+                )
             status_code = response.status if response is not None else 0
         source_asset = await asyncio.to_thread(
             workspace.stage_bytes,
@@ -320,30 +377,42 @@ class BrowserPool:
         *,
         authorize_request: BrowserRequestAuthorizer,
         extra_headers: dict[str, str] | None = None,
+        viewport: dict[str, int] | None = None,
     ) -> BrowserSession:
         """Acquire one isolated context for a declaration-only action sequence."""
         await self._begin_operation()
         context: Any | None = None
         page: Any | None = None
+        proxy_lease: EgressProxyLease | None = None
         try:
             browser = await self._ensure_browser()
+            proxy_lease = self._egress_proxy.create_lease()
+            route_errors: list[BaseException] = []
             context = await browser.new_context(
                 user_agent=_DEFAULT_USER_AGENT,
                 extra_http_headers=extra_headers or {},
-                viewport=_DEFAULT_VIEWPORT,
+                viewport=viewport or _DEFAULT_VIEWPORT,
                 locale="en-US",
                 accept_downloads=False,
+                service_workers="block",
+                proxy=proxy_lease.playwright_proxy,
             )
             await context.add_init_script(_STEALTH_SCRIPT)
             await context.route(
                 "**/*",
-                _route_handler(authorize_request),
+                _route_handler(
+                    authorize_request,
+                    proxy_lease=proxy_lease,
+                    route_errors=route_errors,
+                ),
             )
             page = await context.new_page()
             return BrowserSession(
                 pool=self,
                 context=context,
                 page=page,
+                proxy_lease=proxy_lease,
+                route_errors=route_errors,
             )
         except BaseException:
             try:
@@ -354,6 +423,8 @@ class BrowserPool:
                     if context is not None:
                         await context.close()
                 finally:
+                    if proxy_lease is not None:
+                        proxy_lease.revoke()
                     await self._end_operation()
             raise
 
@@ -373,6 +444,7 @@ class BrowserPool:
                 await self._playwright.stop()
                 self._playwright = None
             self._playwright_manager = None
+        await self._egress_proxy.close()
 
     @asynccontextmanager
     async def _page(
@@ -380,13 +452,15 @@ class BrowserPool:
         *,
         authorizer: BrowserRequestAuthorizer,
         extra_headers: dict[str, str] | None,
-    ) -> AsyncIterator[Any]:
+        viewport: dict[str, int] | None = None,
+    ) -> AsyncIterator[BrowserSession]:
         session = await self.open_session(
             authorize_request=authorizer,
             extra_headers=extra_headers,
+            viewport=viewport,
         )
         try:
-            yield session.page
+            yield session
         finally:
             await session.close()
 
@@ -428,6 +502,9 @@ class BrowserPool:
 
 def _route_handler(
     authorizer: BrowserRequestAuthorizer,
+    *,
+    proxy_lease: EgressProxyLease,
+    route_errors: list[BaseException],
 ) -> Callable[[Any], Any]:
     async def handle(route: Any) -> None:
         request = route.request
@@ -438,7 +515,9 @@ def _route_handler(
                 request.url,
                 resource_type=resource_type,
             )
-        except BaseException:
+            await proxy_lease.authorize_url(request.url)
+        except BaseException as error:
+            route_errors.append(error)
             await route.abort()
             raise
         await route.continue_()
@@ -455,3 +534,41 @@ def _resource_type(request: Any) -> str:
 def _authorize_public_request(url: str, *, resource_type: str) -> str:
     del resource_type
     return validate_public_http_url(url)
+
+
+async def _enforce_screenshot_dimensions(
+    page: Any,
+    *,
+    full_page: bool,
+    selector: str | None,
+    viewport_width: int,
+    viewport_height: int,
+) -> None:
+    if selector is not None:
+        box = await page.locator(selector).bounding_box()
+        if box is None:
+            raise ValueError(f"browser screenshot selector is not visible: {selector}")
+        width = float(box["width"])
+        height = float(box["height"])
+    elif full_page:
+        dimensions = await page.evaluate(
+            """
+            () => ({
+              width: Math.max(
+                document.documentElement.scrollWidth,
+                document.body ? document.body.scrollWidth : 0
+              ),
+              height: Math.max(
+                document.documentElement.scrollHeight,
+                document.body ? document.body.scrollHeight : 0
+              )
+            })
+            """
+        )
+        width = float(dimensions["width"])
+        height = float(dimensions["height"])
+    else:
+        width = float(viewport_width)
+        height = float(viewport_height)
+    if width <= 0 or height <= 0 or width * height > MAX_BROWSER_SCREENSHOT_PIXELS:
+        raise ValueError(f"browser screenshot exceeded {MAX_BROWSER_SCREENSHOT_PIXELS} pixel limit")

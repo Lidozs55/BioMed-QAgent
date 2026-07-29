@@ -225,6 +225,13 @@ Crawler 从“每次调用启动一个 Chromium”改为 lifespan-owned BrowserP
 - 同一 host 使用独立限速器，不能由一个站点的等待串行化所有站点。
 - 父 Run/子 Agent 取消时关闭对应页面和 Context。
 - 浏览器下载仍必须进入子 Agent staging 目录。
+- BrowserContext 阻止 Service Worker，并使用带独立凭据的 loopback HTTPS
+  CONNECT 代理；代理在真实连接层解析一次、验证公网地址并固定 IP。
+- Playwright route 只承担 host/resource allowlist，不单独充当 SSRF 安全边界。
+- API/HTML 每个重定向 hop 都重新解析并固定公网 IP，保留原 Host/SNI，禁止
+  自动重定向和跨请求 transport 复用。
+- rendered HTML、Recipe extract、截图像素/PNG 和普通下载都必须在进入 staging
+  前执行硬上限。
 
 ## 9. SourceAsset 隔离与发布
 

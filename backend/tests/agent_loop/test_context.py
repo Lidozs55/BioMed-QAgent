@@ -1,8 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from app.agent_loop.context import RunContext
+from app.tools.crawler import CrawlerFacade
 
 
 def test_run_context_preserves_positional_task_id_and_topic(
@@ -54,3 +56,17 @@ def test_managed_run_context_transfers_pending_publication_once(
         context.reserve_pipeline_publication()
     assert context.take_pending_publication() is handle
     assert context.take_pending_publication() is None
+
+
+def test_crawler_facade_binding_is_trusted_and_exactly_once(tmp_path: Path) -> None:
+    context = RunContext(task_id="task_crawler", base_dir=tmp_path)
+    facade = Mock(spec=CrawlerFacade)
+
+    with pytest.raises(RuntimeError, match="not available"):
+        _ = context.crawler_facade
+
+    context.bind_crawler_facade(facade)
+
+    assert context.crawler_facade is facade
+    with pytest.raises(RuntimeError, match="already bound"):
+        context.bind_crawler_facade(Mock(spec=CrawlerFacade))

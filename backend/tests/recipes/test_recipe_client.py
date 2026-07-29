@@ -400,6 +400,26 @@ class FakeBrowserPool:
         return session
 
 
+class BlockingBrowserPool(FakeBrowserPool):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_started = asyncio.Event()
+        self.release_open = asyncio.Event()
+
+    async def open_session(
+        self,
+        *,
+        authorize_request: Callable[..., object],
+        extra_headers: dict[str, str] | None = None,
+    ) -> FakeBrowserSession:
+        self.open_started.set()
+        await self.release_open.wait()
+        return await super().open_session(
+            authorize_request=authorize_request,
+            extra_headers=extra_headers,
+        )
+
+
 @pytest.mark.asyncio
 async def test_browser_adapter_reuses_isolated_session_for_all_declared_actions() -> None:
     pool = FakeBrowserPool()
@@ -479,3 +499,48 @@ async def test_browser_authorization_exit_closes_sequence_without_extract() -> N
     assert len(pool.sessions) == 1
     assert pool.sessions[0].closed
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_waits_for_in_flight_browser_session_creation_and_blocks_new_sessions() -> (
+    None
+):
+    pool = BlockingBrowserPool()
+    client = ControlledRecipeClient(browser_pool=pool)
+
+    async def run_action() -> None:
+        async with client.browser_authorization(
+            authorize_request=lambda *_args, **_kwargs: _target(),
+        ):
+            await client.browser_action(
+                action="navigate",
+                target=None,
+                value="https://api.example.org/data",
+                current_url="https://api.example.org/data",
+                timeout_seconds=5,
+            )
+
+    action_task = asyncio.create_task(run_action())
+    await pool.open_started.wait()
+    close_task = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+
+    assert not close_task.done()
+    pool.release_open.set()
+    await action_task
+    await close_task
+
+    assert len(pool.sessions) == 1
+    assert pool.sessions[0].closed
+    async with client.browser_authorization(
+        authorize_request=lambda *_args, **_kwargs: _target(),
+    ):
+        with pytest.raises(RuntimeError, match="closed"):
+            await client.browser_action(
+                action="navigate",
+                target=None,
+                value="https://api.example.org/data",
+                current_url="https://api.example.org/data",
+                timeout_seconds=5,
+            )
+    assert len(pool.sessions) == 1

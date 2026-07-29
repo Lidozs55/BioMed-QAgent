@@ -288,17 +288,17 @@
 
 ### 6.1 运行时与事件契约
 
-- [ ] **P0** 新增 `SubagentSupervisor`、子 Agent 状态机和父 Task durable event 投影
-- [ ] **P0** 支持单 Run 3 路、全局 4 路子 Agent 并发，以及父子取消和重启中断
-- [ ] **P0** 新增独立 `subagent_input_required` HIL 路由，兄弟任务保持运行
+- [x] **P0** 新增 `SubagentSupervisor`、子 Agent 状态机和父 Task durable event 投影
+- [x] **P0** 支持单 Run 3 路、全局 4 路子 Agent 并发，以及父子取消和重启中断
+- [x] **P0** 新增独立 `subagent_input_required` HIL 路由，兄弟任务保持运行
 
 ### 6.2 WorkflowRecipe 与采集
 
-- [ ] **P0** 用户数据源选择改为偏好，公开免登录来源允许自动探索
-- [ ] **P0** 新增不可执行 WorkflowRecipe Store 与内部 `create_skill` Skill
-- [ ] **P0** 强制 API → HTML → Browser 三级回退，并记录可审计尝试
-- [ ] **P0** 子 Agent 仅提交已验证 SourceAsset，Validation Gate 继续独占产物发布
-- [ ] **P1** Crawler 接入 lifespan-owned BrowserPool 和 per-host limiter
+- [x] **P0** 用户数据源选择改为偏好，公开免登录来源允许自动探索
+- [x] **P0** 新增不可执行 WorkflowRecipe Store 与内部 `create_skill` Skill
+- [x] **P0** 强制 API → HTML → Browser 三级回退，并记录可审计尝试
+- [x] **P0** 子 Agent 仅提交已验证 SourceAsset，Validation Gate 继续独占产物发布
+- [x] **P1** Crawler 接入 lifespan-owned BrowserPool 和 per-host limiter
 - [ ] **P1** 封闭旧 `self_evolution` 任意 Python 写入 `learned/` 的路径
 
 ### 6.3 前端

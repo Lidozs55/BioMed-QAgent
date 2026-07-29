@@ -44,6 +44,7 @@ class ControlledRecipeClient:
         self._condition = asyncio.Condition()
         self._browser_session_lock = asyncio.Lock()
         self._browser_sessions: dict[asyncio.Task[Any], BrowserSession] = {}
+        self._active_browser_operations = 0
         self._browser_authorizer: ContextVar[BrowserRequestAuthorizer | None] = ContextVar(
             f"recipe_browser_authorizer_{id(self)}",
             default=None,
@@ -57,7 +58,9 @@ class ControlledRecipeClient:
     async def aclose(self) -> None:
         async with self._condition:
             self._closed = True
-            await self._condition.wait_for(lambda: not self._active_clients)
+            await self._condition.wait_for(
+                lambda: not self._active_clients and self._active_browser_operations == 0
+            )
         await self._close_all_browser_sessions()
 
     async def api_request(
@@ -156,34 +159,47 @@ class ControlledRecipeClient:
     ) -> RecipeStepResponse:
         if self._browser_pool is None:
             raise RuntimeError("browser Recipe execution is unavailable")
-        if self._closed:
-            raise RuntimeError("controlled Recipe client is closed")
         authorizer = self._browser_authorizer.get()
         if authorizer is None:
             raise RuntimeError("browser Recipe action used outside authorization scope")
         task = asyncio.current_task()
         if task is None:  # pragma: no cover - asyncio always owns awaited work
             raise RuntimeError("browser Recipe action requires an asyncio task")
-        session = await self._browser_session(
-            task=task,
-            authorize_request=authorizer,
-        )
+        await self._begin_browser_operation()
         try:
-            result = await session.action(
-                action=action,
-                target=target,
-                value=value,
-                current_url=current_url,
-                timeout_seconds=timeout_seconds,
+            session = await self._browser_session(
+                task=task,
+                authorize_request=authorizer,
             )
-        except BaseException:
-            await self._close_browser_session(task)
-            raise
+            try:
+                result = await session.action(
+                    action=action,
+                    target=target,
+                    value=value,
+                    current_url=current_url,
+                    timeout_seconds=timeout_seconds,
+                )
+            except BaseException:
+                await self._close_browser_session(task)
+                raise
+        finally:
+            await self._end_browser_operation()
         return RecipeStepResponse(
             content=result.content,
             status_code=result.status_code,
             media_type=result.media_type,
         )
+
+    async def _begin_browser_operation(self) -> None:
+        async with self._condition:
+            if self._closed:
+                raise RuntimeError("controlled Recipe client is closed")
+            self._active_browser_operations += 1
+
+    async def _end_browser_operation(self) -> None:
+        async with self._condition:
+            self._active_browser_operations -= 1
+            self._condition.notify_all()
 
     async def _browser_session(
         self,

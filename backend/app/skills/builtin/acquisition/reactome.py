@@ -12,7 +12,6 @@ Reactome REST API docs: https://reactome.org/ContentService
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -26,7 +25,7 @@ from bs4 import BeautifulSoup
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
+from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +48,42 @@ def _visible_text(html: str) -> str:
     return " ".join(soup.get_text(separator=" ", strip=True).split())
 
 
-def _accept_reactome_page(result: FetchResult) -> bool:
+def _reactome_api_document(result: FetchResult) -> dict[str, object] | None:
+    if result.method_used == "api":
+        try:
+            document = json.loads(result.content)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return document if isinstance(document, dict) else None
+    return None
+
+
+def _accept_reactome_search_result(result: FetchResult) -> bool:
+    document = _reactome_api_document(result)
+    if document is not None:
+        return isinstance(document.get("results"), list)
     return bool(_visible_text(result.content))
+
+
+def _accept_reactome_pathway_result(result: FetchResult) -> bool:
+    document = _reactome_api_document(result)
+    if document is not None:
+        return isinstance(document.get("stId"), str)
+    return bool(_visible_text(result.content))
+
+
+def _attempt_audit(attempts: tuple[CrawlAttempt, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "method": attempt.method,
+            "url": attempt.url,
+            "status": attempt.status,
+            "status_code": attempt.status_code,
+            "reason": attempt.reason,
+            "fallback_reason": attempt.fallback_reason,
+        }
+        for attempt in attempts
+    ]
 
 
 def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
@@ -61,6 +94,7 @@ def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
             "method_used": result.method_used,
             "page_url": page_url,
             "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+            "attempts": _attempt_audit(result.attempts),
         },
         ensure_ascii=False,
     )
@@ -73,6 +107,7 @@ def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
             "source": source,
             "page_url": page_url,
             "attempted_methods": ["api", "httpx", "crawl"],
+            "attempts": _attempt_audit(error.attempts),
             "error": str(error),
         },
         ensure_ascii=False,
@@ -91,7 +126,10 @@ def _strip_html(text: str) -> str:
     return _HIGHLIGHT_RE.sub("", text).strip()
 
 
-def _fetch_pathway_summation(pathway_id: str) -> str:
+async def _fetch_pathway_summation(
+    run_ctx: RunContext,
+    pathway_id: str,
+) -> str:
     """Fetch the summation text for a single pathway.
 
     Reactome ContentService ``/data/pathways/{stId}/summation`` 端点返回
@@ -104,7 +142,7 @@ def _fetch_pathway_summation(pathway_id: str) -> str:
     if not pathway_id:
         return ""
     url = f"{_REACTOME_API_BASE}/data/pathways/{pathway_id}/summation"
-    result = api_fetch(url)
+    result = await run_ctx.crawler_facade.api(url)
     if not result.ok:
         return ""
     try:
@@ -160,9 +198,19 @@ async def search_reactome(
         f"&species=Homo+sapiens&startIndex=0&pageSize={max_results}"
     )
 
-    # Tier 1: API
-    result = await asyncio.to_thread(api_fetch, api_url)
-    if result.ok:
+    page_url = f"https://reactome.org/content/query?q={encoded_term}"
+    try:
+        result = await fetch_with_fallback(
+            api_url,
+            page_url,
+            source_name="reactome",
+            accept_result=_accept_reactome_search_result,
+            facade=run_ctx.crawler_facade,
+        )
+    except CrawlError as exc:
+        run_ctx.log_query(term, "reactome", QueryStatus.FAILED, 0)
+        return _fallback_error("reactome", page_url, exc)
+    if result.method_used == "api":
         try:
             data = json.loads(result.content)
             # 响应结构: {results: [{entries: [...], typeName, ...}], numberOfMatches, ...}
@@ -180,8 +228,8 @@ async def search_reactome(
                 # 前 N 条:若 search API 未返回非空 summation,调用
                 # /data/pathways/{stId}/summation 端点补全
                 if not summary and index < enrich_limit:
-                    summary = await asyncio.to_thread(
-                        _fetch_pathway_summation,
+                    summary = await _fetch_pathway_summation(
+                        run_ctx,
                         e.get("stId", ""),
                     )
                 record = {
@@ -207,29 +255,14 @@ async def search_reactome(
                     "records": records,
                     "enriched_count": enrich_limit,
                     "method_used": "api",
+                    "attempts": _attempt_audit(result.attempts),
                 },
                 ensure_ascii=False,
             )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome API response: %s", exc)
-
-    # Direct page fallback: useful static HTML is accepted before Playwright.
-    page_url = f"https://reactome.org/content/query?q={encoded_term}"
-    try:
-        page_result = await fetch_with_fallback(
-            None,
-            page_url,
-            source_name="reactome",
-            accept_result=_accept_reactome_page,
-        )
-        # Page fallback returns only a visible-text preview, not structured
-        # pathway records — log honestly so query_log/metrics don't overstate
-        # success. See docs/REVIEW_2026-07-18.md §17.3 item 3.
-        run_ctx.log_query(term, "reactome", QueryStatus.PAGE_FALLBACK, 0)
-        return _page_fallback("reactome", page_url, page_result)
-    except CrawlError as exc:
-        run_ctx.log_query(term, "reactome", QueryStatus.FAILED, 0)
-        return _fallback_error("reactome", page_url, exc)
+    run_ctx.log_query(term, "reactome", QueryStatus.PAGE_FALLBACK, 0)
+    return _page_fallback("reactome", page_url, result)
 
 
 @function_tool
@@ -256,9 +289,19 @@ async def get_pathway(
     # Reactome ContentService 详情端点:/data/query/{stId}(不是 /data/pathway/)
     api_url = f"{_REACTOME_API_BASE}/data/query/{pathway_id}"
 
-    # Tier 1: API
-    result = await asyncio.to_thread(api_fetch, api_url)
-    if result.ok:
+    page_url = f"{_REACTOME_PAGE_BASE}/{pathway_id}"
+    try:
+        result = await fetch_with_fallback(
+            api_url,
+            page_url,
+            source_name="reactome",
+            accept_result=_accept_reactome_pathway_result,
+            facade=run_ctx.crawler_facade,
+        )
+    except CrawlError as exc:
+        run_ctx.log_query(pathway_id, "reactome", QueryStatus.FAILED, 0)
+        return _fallback_error("reactome", page_url, exc)
+    if result.method_used == "api":
         try:
             data = json.loads(result.content)
             # name 字段在某些端点返回数组(如 ['Hemostasis', 'Blood coagulation']),
@@ -295,28 +338,14 @@ async def get_pathway(
                     "pathway_id": pathway_id,
                     "record": record,
                     "method_used": "api",
+                    "attempts": _attempt_audit(result.attempts),
                 },
                 ensure_ascii=False,
             )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome pathway response: %s", exc)
-
-    # Direct page fallback.
-    page_url = f"{_REACTOME_PAGE_BASE}/{pathway_id}"
-    try:
-        page_result = await fetch_with_fallback(
-            None,
-            page_url,
-            source_name="reactome",
-            accept_result=_accept_reactome_page,
-        )
-        # Page fallback returns only a visible-text preview, not structured
-        # pathway details — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
-        run_ctx.log_query(pathway_id, "reactome", QueryStatus.PAGE_FALLBACK, 0)
-        return _page_fallback("reactome", page_url, page_result)
-    except CrawlError as exc:
-        run_ctx.log_query(pathway_id, "reactome", QueryStatus.FAILED, 0)
-        return _fallback_error("reactome", page_url, exc)
+    run_ctx.log_query(pathway_id, "reactome", QueryStatus.PAGE_FALLBACK, 0)
+    return _page_fallback("reactome", page_url, result)
 
 
 reactome_skill = SkillDef(
