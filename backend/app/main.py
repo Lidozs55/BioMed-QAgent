@@ -28,7 +28,7 @@ from app.model_config.context_budget import (
     resolve_context_budget,
 )
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
-from app.recipes.client import ControlledRecipeClient
+from app.recipes.client import ControlledRecipeClient, RecipeTransportFactory
 from app.recipes.executor import RecipeExecutor
 from app.recipes.store import WorkflowRecipeStore
 from app.runtime.hub import AssistantStreamHub, EventHub
@@ -72,7 +72,7 @@ async def health() -> dict[str, str]:
 def create_app(
     configured: Settings = settings,
     *,
-    recipe_http_transport: httpx.AsyncBaseTransport | None = None,
+    recipe_http_transport_factory: RecipeTransportFactory | None = None,
 ) -> FastAPI:
     """Build an application whose lifespan owns all runtime resources."""
 
@@ -127,13 +127,9 @@ def create_app(
         workflow_recipe_store = WorkflowRecipeStore(
             configured.skill_data_path / "recipes"
         )
-        recipe_http_client = httpx.AsyncClient(
-            timeout=30.0,
-            follow_redirects=False,
-            trust_env=False,
-            transport=recipe_http_transport,
+        recipe_client = ControlledRecipeClient(
+            transport_factory=recipe_http_transport_factory
         )
-        recipe_client = ControlledRecipeClient(recipe_http_client)
         recipe_executor = RecipeExecutor(
             client=recipe_client,
             store=workflow_recipe_store,
@@ -199,7 +195,6 @@ def create_app(
         application.state.task_manager = manager
         application.state.task_context_factory = task_context_factory
         application.state.workflow_recipe_store = workflow_recipe_store
-        application.state.recipe_http_client = recipe_http_client
         application.state.recipe_client = recipe_client
         application.state.recipe_executor = recipe_executor
         application.state.subagent_input_broker = subagent_input_broker
@@ -228,7 +223,7 @@ def create_app(
                         await manager.close()
                     finally:
                         try:
-                            await recipe_http_client.aclose()
+                            await recipe_client.aclose()
                         finally:
                             try:
                                 await assistant_stream_hub.close()

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 
 import httpx
 from bs4 import BeautifulSoup
@@ -19,13 +19,35 @@ from app.recipes.executor import (
 
 _DEFAULT_MEDIA_TYPE = "application/octet-stream"
 MAX_RECIPE_RESPONSE_BYTES = 100 * 1024 * 1024
+RecipeTransportFactory = Callable[[str], httpx.AsyncBaseTransport]
 
 
-@dataclass(slots=True)
 class ControlledRecipeClient:
     """Execute only address-pinned, no-follow Recipe HTTP requests."""
 
-    http: httpx.AsyncClient
+    def __init__(
+        self,
+        *,
+        transport_factory: RecipeTransportFactory | None = None,
+    ) -> None:
+        self._transport_factory = transport_factory
+        self._clients: dict[str, httpx.AsyncClient] = {}
+        self._transport_ids: set[int] = set()
+        self._lock = asyncio.Lock()
+        self._closed = False
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    async def aclose(self) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            clients = tuple(self._clients.values())
+            self._clients.clear()
+        await asyncio.gather(*(client.aclose() for client in clients))
 
     async def api_request(
         self,
@@ -128,9 +150,14 @@ class ControlledRecipeClient:
         timeout_seconds: float,
     ) -> RecipeStepResponse:
         pinned = target.public_target
+        partition = target.host.strip().lower().rstrip(".")
+        sni_hostname = pinned.sni_hostname.strip().lower().rstrip(".")
+        if not partition or partition != sni_hostname:
+            raise ValueError("validated Recipe target host and SNI must match")
+        http = await self._client_for(partition)
         request_headers = {name: value for name, value in headers.items() if name.lower() != "host"}
         request_headers["Host"] = pinned.host_header
-        request = self.http.build_request(
+        request = http.build_request(
             method,
             pinned.connect_url,
             headers=request_headers,
@@ -140,7 +167,7 @@ class ControlledRecipeClient:
         )
         response: httpx.Response | None = None
         try:
-            response = await self.http.send(
+            response = await http.send(
                 request,
                 follow_redirects=False,
                 stream=True,
@@ -197,3 +224,30 @@ class ControlledRecipeClient:
             media_type=media_type,
             error=(f"Recipe response exceeded {MAX_RECIPE_RESPONSE_BYTES} byte limit"),
         )
+
+    async def _client_for(self, partition: str) -> httpx.AsyncClient:
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("controlled Recipe client is closed")
+            existing = self._clients.get(partition)
+            if existing is not None:
+                return existing
+            transport = (
+                self._transport_factory(partition) if self._transport_factory is not None else None
+            )
+            if transport is not None:
+                transport_id = id(transport)
+                if transport_id in self._transport_ids:
+                    raise ValueError(
+                        "Recipe transport factory must return a distinct "
+                        "transport for each SNI partition"
+                    )
+                self._transport_ids.add(transport_id)
+            client = httpx.AsyncClient(
+                timeout=30.0,
+                follow_redirects=False,
+                trust_env=False,
+                transport=transport,
+            )
+            self._clients[partition] = client
+            return client

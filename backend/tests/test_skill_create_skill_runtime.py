@@ -81,7 +81,7 @@ async def test_lifespan_context_factory_develops_and_validates_recipe(
     )
     application = create_app(
         configured,
-        recipe_http_transport=httpx.MockTransport(handler),
+        recipe_http_transport_factory=lambda _sni: httpx.MockTransport(handler),
     )
 
     async with application.router.lifespan_context(application):
@@ -131,9 +131,9 @@ async def test_lifespan_context_factory_develops_and_validates_recipe(
         assert str(requests[0].url) == "https://93.184.216.34/GSE100"
         assert requests[0].headers["host"] == "api.example.org"
         assert requests[0].extensions["sni_hostname"] == "api.example.org"
-        recipe_http_client = application.state.recipe_http_client
+        recipe_client = application.state.recipe_client
 
-    assert recipe_http_client.is_closed
+    assert recipe_client.is_closed
 
 
 @pytest.mark.asyncio
