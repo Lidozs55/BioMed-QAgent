@@ -105,6 +105,10 @@ Gate。
   原地覆盖。
 - Agent-only 数据源不自动等同于 Pipeline 支持；`pipeline_supported` 只表示该
   来源已经完成相应的搜索、元数据、下载、解析和验证闭环。
+- GDC Pipeline 首期仅接受显式 `project_id` + `data_type`（`gene-expression` 或
+  `clinical`），Discovery 生成 GDC `SourceRecord`，Acquisition 通过 `/files` 选择
+  稳定 TSV/TSV.GZ 文件并使用 `acquire_source()` 下载，Processing 严格拒绝不符合
+  fixture 表布局的输入；mutation、CNV 和多源合并不在此支持边界内。
 
 ### 2.5 Skill 和 Tool 的职责
 

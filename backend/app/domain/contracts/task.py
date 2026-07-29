@@ -12,9 +12,7 @@ from app.domain.contracts.enums import Database, RequestedOutput
 
 class TaskRequest(ContractModel):
     topic: str
-    databases: list[Database] = Field(
-        default_factory=lambda: [Database.PUBMED, Database.GEO]
-    )
+    databases: list[Database] = Field(default_factory=lambda: [Database.PUBMED, Database.GEO])
     keywords: list[str] = Field(default_factory=list)
     target_fields: list[str] = Field(default_factory=list)
     time_range: tuple[str, str] | None = None
@@ -46,6 +44,7 @@ class DatasetSelection(ContractModel):
     accession: str = Field(min_length=1)
     source_id: str | None = None
     reason: str = Field(min_length=1)
+    data_type: str | None = None
 
 
 class TaskSpecification(ContractModel):

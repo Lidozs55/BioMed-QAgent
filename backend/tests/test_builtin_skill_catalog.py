@@ -12,6 +12,7 @@ def test_builtin_skill_catalog_has_one_complete_truthful_projection() -> None:
     assert {name for name, item in by_name.items() if item.pipeline_supported} == {
         "pubmed",
         "geo",
+        "gdc",
         "xena",
     }
     assert {

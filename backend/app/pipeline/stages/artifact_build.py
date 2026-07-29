@@ -17,7 +17,7 @@ from app.domain.contracts import (
     TaskSpecification,
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
-from app.pipeline.processing.geo_tximport import _OUTPUT_COLUMNS, GeoSampleMetadata
+from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
     CleaningReportModel,
@@ -556,6 +556,54 @@ def run_artifact_build(
         sort_keys=True,
     )
 
+    sample_rows = [
+        {
+            "sample_id": sample.sample_id,
+            "dataset_id": dataset_id,
+            "source_id": primary_source_id,
+            "source_sample_alias": sample.source_alias,
+            "cell_line_raw": sample.cell_line_raw,
+            "cell_line_canonical": sample.cell_line_canonical,
+            "normalization_rule": sample.normalization_rule,
+            "treatment": sample.treatment,
+            "replicate": sample.replicate,
+            "organism": sample.organism,
+            "source_url": geo_url,
+        }
+        for sample in samples
+    ]
+    if not sample_rows:
+        sample_ids = sorted({row["sample_id"] for row in _read_parsed_rows(parsed_path)})
+        sample_rows = [
+            {
+                "sample_id": sample_id,
+                "dataset_id": dataset_id,
+                "source_id": primary_source_id,
+                "source_sample_alias": sample_id,
+                "cell_line_raw": "",
+                "cell_line_canonical": "",
+                "normalization_rule": "",
+                "treatment": "",
+                "replicate": "",
+                "organism": "",
+                "source_url": dataset_url_value,
+            }
+            for sample_id in sample_ids
+        ]
+
+    field_descriptions = []
+    for field in parsed_dataset.columns:
+        metadata = _FIELD_DESCRIPTIONS.get(field, ("string", "Source column", "", "true", ""))
+        field_descriptions.append({
+            "field_name": field,
+            "data_type": metadata[0],
+            "description": metadata[1],
+            "unit": metadata[2],
+            "nullable": metadata[3],
+            "source": parsed_dataset.parser_name,
+            "example": metadata[4],
+        })
+
     rows_by_file: dict[str, list[dict[str, object]]] = {
         "literature.csv": [
             {
@@ -589,34 +637,8 @@ def run_artifact_build(
                 "retrieved_at": retrieved_at.isoformat(),
             }
         ],
-        "sample_metadata.csv": [
-            {
-                "sample_id": sample.sample_id,
-                "dataset_id": dataset_id,
-                "source_id": primary_source_id,
-                "source_sample_alias": sample.source_alias,
-                "cell_line_raw": sample.cell_line_raw,
-                "cell_line_canonical": sample.cell_line_canonical,
-                "normalization_rule": sample.normalization_rule,
-                "treatment": sample.treatment,
-                "replicate": sample.replicate,
-                "organism": sample.organism,
-                "source_url": geo_url,
-            }
-            for sample in samples
-        ] or _build_xena_samples(parsed_path, dataset_id, primary_source_id, dataset_url_value),
-        "field_descriptions.csv": [
-            {
-                "field_name": field,
-                "data_type": _FIELD_DESCRIPTIONS[field][0],
-                "description": _FIELD_DESCRIPTIONS[field][1],
-                "unit": _FIELD_DESCRIPTIONS[field][2],
-                "nullable": _FIELD_DESCRIPTIONS[field][3],
-                "source": "GSE178352_tximportCounts.txt",
-                "example": _FIELD_DESCRIPTIONS[field][4],
-            }
-            for field in _OUTPUT_COLUMNS
-        ],
+        "sample_metadata.csv": sample_rows,
+        "field_descriptions.csv": field_descriptions,
         "field_mapping.csv": _build_field_mapping_rows(
             dataset_id=dataset_id,
             field_alignment=field_alignment,

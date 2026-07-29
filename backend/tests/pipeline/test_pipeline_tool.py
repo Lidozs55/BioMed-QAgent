@@ -270,7 +270,7 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
         json.dumps(
             {
                 "topic": "unsupported",
-                "databases": ["pubmed", "geo", "gdc"],
+                "databases": ["pubmed", "geo", "pdb"],
                 "mode": "fixture",
             }
         ),
@@ -278,7 +278,7 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
 
     payload = json.loads(result)
     assert payload["status"] == "unsupported_databases"
-    assert payload["unsupported_databases"] == ["gdc"]
+    assert payload["unsupported_databases"] == ["pdb"]
     assert payload["retryable"] is False
     assert not (
         tmp_path / "tasks" / "task_tool_extra_dbs" / "artifacts" / "run_manifest.json"

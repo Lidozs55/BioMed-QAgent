@@ -141,8 +141,8 @@ class DiscoveryOutput(ContractModel):
 
     sources: list[SourceRecord]
     literature: LiteratureRecord | None = None
-    geo: GeoSeriesRecord | None = None
     specification: TaskSpecification
+    geo: GeoSeriesRecord | None = None
     pubmed_source_id: str | None = None
     geo_source_id: str | None = None
     dataset_source_id: str

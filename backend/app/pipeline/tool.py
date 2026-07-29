@@ -28,6 +28,8 @@ def _build_tool_specification(
     pmid: str | None,
     gse: str | None,
     xena_dataset_id: str | None = None,
+    gdc_project_id: str | None = None,
+    gdc_data_type: str | None = None,
 ) -> TaskSpecification | None:
     """Build a TaskSpecification when the Agent supplied explicit accessions.
 
@@ -37,7 +39,7 @@ def _build_tool_specification(
     discovery stage uses direct NCBI lookups instead of topic search (which
     fails for non-English topics).
     """
-    if not pmid and not gse and not xena_dataset_id:
+    if not pmid and not gse and not xena_dataset_id and not gdc_project_id:
         return None
     selected = {value.lower() for value in databases}
     queries: list[QuerySpecification] = []
@@ -67,6 +69,28 @@ def _build_tool_specification(
                 accession=gse,
                 source_id="",
                 reason="agent-identified GEO series",
+            )
+        )
+    if gdc_project_id and "gdc" in selected:
+        if not gdc_data_type:
+            raise ValueError("gdc_data_type is required with gdc_project_id")
+        queries.append(
+            QuerySpecification(
+                query_id="query_gdc_1",
+                database=Database.GDC,
+                query=gdc_project_id,
+                generated_by="agent",
+                purpose="explicit GDC project",
+                order=_next_order(),
+            )
+        )
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_gdc_{gdc_project_id.lower()}",
+                database=Database.GDC,
+                accession=gdc_project_id,
+                reason="agent-identified GDC project",
+                data_type=gdc_data_type,
             )
         )
     if xena_dataset_id and ({"xena", "ucsc_xena"} & selected):
@@ -152,12 +176,14 @@ async def run_research_pipeline(
     pmid: str | None = None,
     gse: str | None = None,
     xena_dataset_id: str | None = None,
+    gdc_project_id: str | None = None,
+    gdc_data_type: str | None = None,
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
     normalized_databases = [value.lower() for value in databases]
     if not normalized_databases:
         raise ValueError("databases must be a non-empty list of database identifiers")
-    supported_databases = {"pubmed", "geo", "xena", "ucsc_xena"}
+    supported_databases = {"pubmed", "geo", "gdc", "xena", "ucsc_xena"}
     unsupported_databases = sorted(
         {value for value in normalized_databases if value not in supported_databases}
     )
@@ -190,11 +216,9 @@ async def run_research_pipeline(
             },
             ensure_ascii=False,
         )
-    fixture_dir = (
-        Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
-    )
+    fixture_dir = Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
     specification = _build_tool_specification(
-        topic, normalized_databases, pmid, gse, xena_dataset_id
+        topic, normalized_databases, pmid, gse, xena_dataset_id, gdc_project_id, gdc_data_type
     )
     runner: PipelineRunner | None = None
     transferred = False
@@ -255,11 +279,7 @@ async def run_research_pipeline(
                 if terminal_error is not None:
                     run_context.set_managed_terminal_error(terminal_error)
     except BaseException:
-        if (
-            managed_run_id is not None
-            and not transferred
-            and not reservation_released
-        ):
+        if managed_run_id is not None and not transferred and not reservation_released:
             await abort_reserved_runner()
         raise
     finally:
@@ -269,7 +289,8 @@ async def run_research_pipeline(
     # Extract error details from failed stage attempts so the Agent can
     # understand the specific reason and avoid repeating the same mistake.
     failed_attempts = [
-        attempt for attempt in runner.state.stage_attempts
+        attempt
+        for attempt in runner.state.stage_attempts
         if attempt.status.value == "failed" and attempt.error is not None
     ]
     last_error = failed_attempts[-1] if failed_attempts else None

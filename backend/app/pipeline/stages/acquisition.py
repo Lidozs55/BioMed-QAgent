@@ -1,13 +1,16 @@
 """Acquisition stage: fixture gzip or live download of GEO counts."""
+
 from __future__ import annotations
 
 import asyncio
 import gzip
 import hashlib
+import json
 import logging
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
@@ -99,10 +102,7 @@ def _counts_download_url(gse: str) -> str:
 
 def _family_soft_url(gse: str) -> str:
     prefix = gse[:6].upper()
-    return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
-        f"{gse}/soft/{gse}_family.soft.gz"
-    )
+    return f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/{gse}/soft/{gse}_family.soft.gz"
 
 
 def _series_matrix_url(gse: str) -> str:
@@ -147,22 +147,33 @@ async def _try_acquire(
 
 
 def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
-    """Download (live) or gzip (fixture) the GEO counts and publish as SourceAsset.
+    """Download (live) or fixture data and publish as SourceAsset.
 
-    In fixture mode, reads ``tximport_counts_slice.tsv`` from the fixture,
-    compresses it with ``mtime=0`` for reproducibility, and writes to
-    ``source_assets/``.
+    GDC uses its files API to select one deterministic file for the explicit
+    project and data type, then downloads it through acquire_source().
 
-    In live mode, streams the real GEO counts file from NCBI FTP via
-    ``acquire_source``, with content-addressed caching.
+    In fixture mode, reads the fixture table and writes to source_assets.
+    In live mode, streams the source through acquire_source with caching.
     """
     specification = ctx.specification
+    gdc_dataset = next(
+        (
+            d
+            for d in (specification.datasets if specification else [])
+            if d.database == Database.GDC
+        ),
+        None,
+    )
+    if gdc_dataset is not None:
+        if ctx.mode == "fixture":
+            return _run_gdc_acquisition_fixture(ctx, retrieved_at, gdc_dataset)
+        return asyncio.run(_run_gdc_acquisition_live(ctx, retrieved_at, gdc_dataset))
+
     if specification and any(
         dataset.database == Database.UCSC_XENA for dataset in specification.datasets
     ):
         dataset = next(
-            dataset for dataset in specification.datasets
-            if dataset.database == Database.UCSC_XENA
+            dataset for dataset in specification.datasets if dataset.database == Database.UCSC_XENA
         )
         if ctx.mode == "live":
             return asyncio.run(_run_xena_acquisition_live(ctx, retrieved_at, dataset))
@@ -173,6 +184,128 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
     if ctx.mode == "live":
         return _run_acquisition_live(ctx, retrieved_at, gse)
     return _run_acquisition_fixture(ctx, retrieved_at, gse)
+
+
+def _gdc_fixture_file(ctx: StageContext, data_type: str) -> Path:
+    name = "gdc_expression.tsv" if data_type.startswith("gene") else "gdc_clinical.tsv"
+    path = ctx.fixture_dir / name
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path
+
+
+def _run_gdc_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    payload = _gdc_fixture_file(ctx, dataset.data_type or "").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_id = dataset.source_id or make_source_id(
+        Database.GDC, dataset.accession, f"https://api.gdc.cancer.gov/projects/{dataset.accession}"
+    )
+    path = ctx.workdir.source_assets / _gdc_fixture_file(ctx, dataset.data_type or "").name
+    path.write_bytes(payload)
+    attempt_id = f"download_attempt_fixture_gdc_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="application/gzip" if path.suffix == ".gz" else "text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=f"https://api.gdc.cancer.gov/data/{dataset.accession}",
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+async def _run_gdc_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.data_type:
+        raise ValueError("GDC acquisition requires data_type")
+    params = {
+        "filters": json.dumps(
+            {
+                "op": "and",
+                "content": [
+                    {
+                        "op": "=",
+                        "content": {
+                            "field": "cases.project.project_id",
+                            "value": dataset.accession,
+                        },
+                    },
+                    {"op": "=", "content": {"field": "data_type", "value": dataset.data_type}},
+                ],
+            }
+        ),
+        "fields": "file_id,file_name,md5sum,data_format",
+        "format": "json",
+        "size": "10",
+    }
+    async with httpx.AsyncClient() as http:
+        response = await http.get("https://api.gdc.cancer.gov/files", params=params, timeout=30)
+        response.raise_for_status()
+        hits = response.json().get("data", {}).get("hits", [])
+        if not hits:
+            raise ValueError(f"no GDC file for {dataset.accession}/{dataset.data_type}")
+        hit = sorted(hits, key=lambda item: (item.get("file_name", ""), item.get("file_id", "")))[0]
+        file_id = hit.get("file_id")
+        filename = hit.get("file_name")
+        if (
+            not file_id
+            or not filename
+            or hit.get("data_format") not in {"TSV", "tsv", "TSV.GZ", "tsv.gz"}
+        ):
+            raise ValueError("GDC file metadata lacks supported id/name/data_format")
+        url = f"https://api.gdc.cancer.gov/data/{file_id}"
+        source = SourceRecord(
+            source_id=dataset.source_id or make_source_id(Database.GDC, dataset.accession, url),
+            database=Database.GDC,
+            accession=dataset.accession,
+            url=url,
+            title=filename,
+            retrieved_at=retrieved_at,
+        )
+        result = await acquire_source(
+            source=source,
+            filename=filename,
+            workdir=ctx.workdir,
+            cache=ContentCache(ctx.workdir.root.parent.parent / "cache" / "gdc"),
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=_MAX_BYTES,
+            expected_sha256=hit.get("md5sum") if len(hit.get("md5sum", "")) == 64 else None,
+        )
+    if result.asset is None:
+        raise RuntimeError(f"GDC download failed: {result.attempt.error_message}")
+    return StageResult(
+        output_digest=result.asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / result.asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
 
 
 async def _run_xena_acquisition_live(
@@ -233,33 +366,39 @@ def _run_xena_acquisition_fixture(
     source_id = make_source_id(Database.UCSC_XENA, dataset.accession, url)
     attempt_id = f"download_attempt_fixture_xena_{dataset.accession.lower()}"
     asset = SourceAsset(
-        asset_id=asset_id_from_sha256(checksum), kind="source",
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
         relative_path=source_path.relative_to(ctx.workdir.root).as_posix(),
-        sha256=checksum, size_bytes=len(payload), media_type="text/tab-separated-values",
-        source_id=source_id, successful_attempt_id=attempt_id,
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
         data_level=DataLevel.REPOSITORY_PROCESSED,
     )
     attempt = DownloadAttempt(
-        attempt_id=attempt_id, source_id=source_id, url=url,
-        status=DownloadStatus.SUCCEEDED, bytes_received=len(payload),
-        started_at=retrieved_at, finished_at=retrieved_at,
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=url,
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
     )
     return StageResult(
         output_digest=checksum,
         output=AcquisitionOutput(
-            source_assets=[asset], download_attempts=[attempt],
-            source_path=source_path, retrieved_at=retrieved_at,
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=source_path,
+            retrieved_at=retrieved_at,
         ),
     )
 
 
-def _run_acquisition_fixture(
-    ctx: StageContext, retrieved_at: datetime, gse: str
-) -> StageResult:
+def _run_acquisition_fixture(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
     if gse.upper() != _DEFAULT_GSE:
-        raise ValueError(
-            f"fixture mode only supports the pinned dataset {_DEFAULT_GSE}, got {gse}"
-        )
+        raise ValueError(f"fixture mode only supports the pinned dataset {_DEFAULT_GSE}, got {gse}")
     compressed = gzip.compress(
         (ctx.fixture_dir / "tximport_counts_slice.tsv").read_bytes(), mtime=0
     )
@@ -267,9 +406,7 @@ def _run_acquisition_fixture(
     source_path = ctx.workdir.source_assets / f"{gse}_tximportCounts.fixture.txt.gz"
     if source_path.exists():
         if hashlib.sha256(source_path.read_bytes()).hexdigest() != checksum:
-            raise FileExistsError(
-                "fixture source asset already exists with different content"
-            )
+            raise FileExistsError("fixture source asset already exists with different content")
     else:
         with source_path.open("xb") as handle:
             handle.write(compressed)
@@ -322,15 +459,14 @@ def _run_acquisition_fixture(
     return StageResult(output_digest=checksum, output=output)
 
 
-def _run_acquisition_live(
-    ctx: StageContext, retrieved_at: datetime, gse: str
-) -> StageResult:
+def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
     """Download the real GEO counts file for ``gse`` from NCBI FTP.
 
     Tries the tximport counts URL first; if that 404s (many GEO series don't
     ship tximport counts), falls back to the universally-available series
     matrix file. The processing stage handles both formats.
     """
+
     async def _download() -> StageResult:
         geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gse}"
         source_id = make_source_id(Database.GEO, gse, geo_url)
@@ -354,18 +490,14 @@ def _run_acquisition_live(
                     title=title,
                     retrieved_at=retrieved_at,
                 )
-                result = await _try_acquire(
-                    source, filename, ctx, cache, http, gse
-                )
+                result = await _try_acquire(source, filename, ctx, cache, http, gse)
                 if result is not None:
                     used_filename = filename
                     logger.info("acquisition: success via %s", download_url)
                     break
 
         if result is None or result.asset is None:
-            raise RuntimeError(
-                f"live download failed for {gse}: all candidate URLs failed"
-            )
+            raise RuntimeError(f"live download failed for {gse}: all candidate URLs failed")
 
         assets = [result.asset]
         attempts = [result.attempt]

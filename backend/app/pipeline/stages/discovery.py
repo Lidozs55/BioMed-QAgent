@@ -1,4 +1,5 @@
 """Discovery stage: parse fixture or live NCBI data into SourceRecords."""
+
 from __future__ import annotations
 
 import asyncio
@@ -87,8 +88,8 @@ async def _search_geo_with_fallback(
     gene_matches = re.findall(r"\b([A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*\d+)\b", topic)
     if gene_matches and gene_matches[0] != simplified:
         logger.info(
-            "GEO: simplified query yielded 0 results, "
-            "retrying gene-only %r", gene_matches[0],
+            "GEO: simplified query yielded 0 results, retrying gene-only %r",
+            gene_matches[0],
         )
         result = await search_geo_series(client, query=gene_matches[0], max_results=max_results)
         gse_records = [r for r in result.records if r.accession.startswith("GSE")]
@@ -121,9 +122,14 @@ def run_discovery(ctx: StageContext) -> StageResult:
             len(specification.datasets),
         )
 
+    gdc_dataset = next(
+        (dataset for dataset in specification.datasets if dataset.database == Database.GDC),
+        None,
+    )
+    if gdc_dataset is not None:
+        return _run_gdc_discovery(ctx, specification, gdc_dataset)
     xena_dataset = next(
-        (dataset for dataset in specification.datasets
-         if dataset.database == Database.UCSC_XENA),
+        (dataset for dataset in specification.datasets if dataset.database == Database.UCSC_XENA),
         None,
     )
     if xena_dataset is not None:
@@ -140,9 +146,7 @@ def run_discovery(ctx: StageContext) -> StageResult:
     )
 
     if ctx.mode == "live":
-        literature, geo, retrieved_at = _run_discovery_live(
-            pmid, gse, topic=ctx.topic
-        )
+        literature, geo, retrieved_at = _run_discovery_live(pmid, gse, topic=ctx.topic)
     else:
         literature, geo, retrieved_at = _run_discovery_fixture(
             ctx.fixture_dir, pmid or _DEFAULT_PMID, gse or _DEFAULT_GSE
@@ -281,9 +285,7 @@ def _run_discovery_fixture(
     literature: LiteratureRecord = parse_pubmed_xml(
         (fixture_dir / f"pubmed_{pmid}.xml").read_bytes()
     )[0]
-    geo: GeoSeriesRecord = parse_geo_esummary(
-        (fixture_dir / "geo_esummary.json").read_bytes()
-    )[0]
+    geo: GeoSeriesRecord = parse_geo_esummary((fixture_dir / "geo_esummary.json").read_bytes())[0]
     return literature, geo, retrieved_at
 
 
@@ -309,9 +311,7 @@ def _run_discovery_live(
     async def _fetch() -> tuple[LiteratureRecord, GeoSeriesRecord]:
         async with open_ncbi_services() as svc:
             if pmid is not None:
-                pubmed_xml = await svc.eutils.efetch(
-                    db="pubmed", ids=[pmid], retmode="xml"
-                )
+                pubmed_xml = await svc.eutils.efetch(db="pubmed", ids=[pmid], retmode="xml")
                 pubmed_records = parse_pubmed_xml(pubmed_xml)
                 if not pubmed_records:
                     raise LookupError(f"PubMed article not found: PMID {pmid}")
@@ -347,14 +347,51 @@ def _run_discovery_live(
     return literature, geo, retrieved_at
 
 
+def _run_gdc_discovery(
+    ctx: StageContext,
+    specification: TaskSpecification,
+    dataset: DatasetSelection,
+) -> StageResult:
+    if not dataset.accession or not dataset.data_type:
+        raise ValueError("GDC discovery requires project_id and data_type")
+    retrieved_at = datetime.now(UTC)
+    url = f"https://api.gdc.cancer.gov/projects/{dataset.accession}"
+    source_id = make_source_id(Database.GDC, dataset.accession, url)
+    resolved = dataset.model_copy(update={"source_id": source_id})
+    output = DiscoveryOutput(
+        sources=[
+            SourceRecord(
+                source_id=source_id,
+                database=Database.GDC,
+                accession=dataset.accession,
+                url=url,
+                title=f"GDC {dataset.accession}",
+                retrieved_at=retrieved_at,
+            )
+        ],
+        literature=None,
+        geo=None,
+        specification=specification.model_copy(update={"datasets": [resolved]}),
+        dataset_source_id=source_id,
+        dataset_accession=dataset.accession,
+        dataset_title=f"GDC {dataset.accession}",
+        dataset_url=url,
+        dataset_id=resolved.dataset_id,
+        retrieved_at=retrieved_at,
+    )
+    return StageResult(output_digest=_digest_discovery(output), output=output)
+
+
 def _run_xena_discovery(
     ctx: StageContext,
     specification: TaskSpecification,
     dataset: DatasetSelection,
 ) -> StageResult:
-    retrieved_at = datetime.fromtimestamp(
-        (ctx.fixture_dir / "xena_matrix.tsv").stat().st_mtime, UTC
-    ) if ctx.mode != "live" else datetime.now(UTC)
+    retrieved_at = (
+        datetime.fromtimestamp((ctx.fixture_dir / "xena_matrix.tsv").stat().st_mtime, UTC)
+        if ctx.mode != "live"
+        else datetime.now(UTC)
+    )
     if ctx.mode == "live" and not dataset.accession:
         raise ValueError("live Xena discovery requires an explicit dataset accession")
     url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
@@ -370,7 +407,9 @@ def _run_xena_discovery(
         retrieved_at=retrieved_at,
     )
     output = DiscoveryOutput(
-        sources=[source], literature=None, geo=None,
+        sources=[source],
+        literature=None,
+        geo=None,
         specification=output_specification,
         dataset_source_id=source_id,
         dataset_accession=dataset.accession,
@@ -380,8 +419,11 @@ def _run_xena_discovery(
         retrieved_at=retrieved_at,
     )
     ctx.emit_progress_sync(
-        stage=StageName.DISCOVERY, kind="discovered_records", current=1,
-        total=1, detail={"source": "ucsc_xena", "accession": dataset.accession},
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=1,
+        total=1,
+        detail={"source": "ucsc_xena", "accession": dataset.accession},
     )
     return StageResult(output_digest=_digest_discovery(output), output=output)
 

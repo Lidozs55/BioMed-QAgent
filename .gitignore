@@ -56,6 +56,11 @@ secrets.json
 # ===== 运行时数据（保留目录结构 .gitkeep）=====
 data/uploads/*
 !data/uploads/.gitkeep
+backend/data/output/*
+!backend/data/output/.gitkeep
+backend/data/cache/*
+!backend/data/cache/.gitkeep
+backend/tmp-*/
 data/parsed/*
 !data/parsed/.gitkeep
 data/output/*
@@ -71,6 +76,12 @@ data/test_*.json
 # ===== 日志 =====
 *.log
 logs/
+
+# ===== Pipeline 运行产物 =====
+backend/tmp-*/
+backend/data/output/
+backend/data/cache/
+backend/data/examples/**/*.csv
 
 # ===== 测试与覆盖率 =====
 .pytest_cache/

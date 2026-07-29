@@ -58,8 +58,8 @@
 > 但 DiscoveryOutput 和 `run_discovery()` 实现仍固定要求 PubMed + GEO 的
 > `LiteratureRecord` / `GeoSeriesRecord`，不会按任意数据库查询路由。
 
-- [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression 数据集查询（GDC/Reactome 仍未接入）
-- [x] **P0** Discovery 阶段对 Xena gene-expression fixture/显式选择产出 `ucsc_xena` `SourceRecord`；GDC/Reactome 仍保持 Agent-only
+- [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression 与 GDC project/data_type 查询（Reactome 仍未接入）
+- [x] **P0** Discovery 阶段对 Xena gene-expression 与 GDC fixture/显式选择产出统一 `SourceRecord`；Reactome 仍保持 Agent-only
 - [ ] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库
 - [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
 
@@ -68,7 +68,7 @@
 > 当前 Pipeline Acquisition 只解析 GEO accession 并下载 GEO counts/series matrix；其它
 > 数据库 Skill 的下载结果尚未成为 Pipeline 的 `AcquisitionOutput`。
 
-- [ ] **P0** Acquisition 阶段支持 GDC 数据下载（API → `source_assets/`，产出 `SourceAsset`）
+- [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/data_type 下载（files API → `acquire_source()` → `source_assets/`；首期 TSV/TSV.GZ）
 - [x] **P0** Acquisition 阶段支持 Xena fixture 与 live hub 下载适配（TSV/TSV.GZ → `source_assets/`，统一产出 `SourceAsset`/`DownloadAttempt`）；live 输入契约测试已覆盖
 - [ ] **P1** Acquisition 阶段支持 Reactome 通路参与者导出（ContentService → `source_assets/`）
 - [ ] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果
@@ -79,8 +79,8 @@
 > 当前 `run_processing()` 只接收一个 `SourceAsset`，并在 live 模式跳过 tximport
 > 表达解析；Runner 和 Artifact Build 也只消费第一个资产/解析数据集。
 
-- [ ] **P0** Processing 阶段按资产类型路由解析器（已增加 Xena gene-expression 分支；仍需抽象通用路由并补齐 GDC/Reactome）
-- [ ] **P0** 新增 GDC 数据解析器（TCGA 表达矩阵 / 临床数据 → 长格式 CSV）
+- [ ] **P0** Processing 阶段按资产类型路由解析器（已增加 Xena 与 GDC gene-expression/clinical 分支；仍需抽象通用路由并补齐 Reactome）
+- [x] **P0** 新增 GDC 数据解析器（首期严格支持 fixture 契约的 gene-expression/clinical TSV/TSV.GZ；mutation/CNV/多源合并未实现）
 - [x] **P0** 新增 Xena gene-expression 解析器（TSV/TSV.GZ 表达矩阵 → 带 source locator 的长格式 CSV）；clinical/mutation/CNV 等类型仍未支持
 - [ ] **P1** 新增 Reactome 通路数据解析器（participants → `pathway_members.csv` artifact）
 - [ ] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）

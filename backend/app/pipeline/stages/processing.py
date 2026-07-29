@@ -1,4 +1,5 @@
 """Processing stage: parse GEO tximport counts into ParsedDataset."""
+
 from __future__ import annotations
 
 import csv
@@ -6,6 +7,7 @@ import hashlib
 import logging
 
 from app.domain.contracts import ParsedDataset, SourceAsset, StageName
+from app.pipeline.processing.gdc import parse_gdc_table
 from app.pipeline.processing.geo_tximport import (
     _OUTPUT_COLUMNS,
     GeoSampleMetadata,
@@ -58,32 +60,34 @@ def _build_minimal_parsed_dataset(
         writer.writeheader()
         if samples:
             for sample in samples:
-                writer.writerow({
-                    "record_id": make_record_id(
-                        dataset_id, "sample_metadata", sample.sample_id
-                    ),
-                    "dataset_id": dataset_id,
-                    "source_id": source_asset.source_id,
-                    "asset_id": source_asset.asset_id,
-                    "gene_id_raw": "",
-                    "gene_id": "",
-                    "gene_id_namespace": "",
-                    "gene_id_version": "",
-                    "sample_id": sample.sample_id,
-                    "source_sample_alias": sample.source_alias,
-                    "measurement_type": "sample_metadata",
-                    "value_semantics": "metadata_only",
-                    "value_scale": "na",
-                    "is_normalized": "false",
-                    "is_integer_expected": "false",
-                    "expression_value": "",
-                    "expression_unit": "na",
-                    "source_logical_file": "series_matrix_metadata",
-                    "source_line_number": 0,
-                    "source_column_index": 0,
-                    "source_column_name": "sample_metadata",
-                    "source_raw_value": "",
-                })
+                writer.writerow(
+                    {
+                        "record_id": make_record_id(
+                            dataset_id, "sample_metadata", sample.sample_id
+                        ),
+                        "dataset_id": dataset_id,
+                        "source_id": source_asset.source_id,
+                        "asset_id": source_asset.asset_id,
+                        "gene_id_raw": "",
+                        "gene_id": "",
+                        "gene_id_namespace": "",
+                        "gene_id_version": "",
+                        "sample_id": sample.sample_id,
+                        "source_sample_alias": sample.source_alias,
+                        "measurement_type": "sample_metadata",
+                        "value_semantics": "metadata_only",
+                        "value_scale": "na",
+                        "is_normalized": "false",
+                        "is_integer_expected": "false",
+                        "expression_value": "",
+                        "expression_unit": "na",
+                        "source_logical_file": "series_matrix_metadata",
+                        "source_line_number": 0,
+                        "source_column_index": 0,
+                        "source_column_name": "sample_metadata",
+                        "source_raw_value": "",
+                    }
+                )
                 row_count += 1
     file_bytes = output_path.read_bytes()
     checksum = hashlib.sha256(file_bytes).hexdigest()
@@ -150,10 +154,7 @@ def _clean_parsed_dataset(
     # --- missing value stats ---
     missing_stats: dict[str, int] = {}
     for col in columns:
-        count = sum(
-            1 for row in all_rows
-            if row.get(col) is None or row.get(col, "").strip() == ""
-        )
+        count = sum(1 for row in all_rows if row.get(col) is None or row.get(col, "").strip() == "")
         if count > 0:
             missing_stats[col] = count
 
@@ -175,7 +176,8 @@ def _clean_parsed_dataset(
         mismatch = 0
         # Collect non-empty values for type inference
         values = [
-            row.get(col, "") for row in all_rows
+            row.get(col, "")
+            for row in all_rows
             if row.get(col) is not None and row.get(col, "").strip() != ""
         ]
         if not values:
@@ -222,23 +224,13 @@ def _clean_parsed_dataset(
     # --- anomaly flags ---
     anomaly_flags: list[str] = []
     for col, count in missing_stats.items():
-        anomaly_flags.append(
-            f"字段 '{col}' 有 {count} 个缺失值"
-        )
+        anomaly_flags.append(f"字段 '{col}' 有 {count} 个缺失值")
     if duplicate_count > 0:
-        anomaly_flags.append(
-            f"检测到 {duplicate_count} 个精确重复行"
-        )
+        anomaly_flags.append(f"检测到 {duplicate_count} 个精确重复行")
     for col, count in type_issues.items():
-        anomaly_flags.append(
-            f"字段 '{col}' 有 {count} 个类型不匹配值"
-        )
+        anomaly_flags.append(f"字段 '{col}' 有 {count} 个类型不匹配值")
 
-    total_anomalies = (
-        sum(missing_stats.values())
-        + duplicate_count
-        + sum(type_issues.values())
-    )
+    total_anomalies = sum(missing_stats.values()) + duplicate_count + sum(type_issues.values())
 
     return CleaningReportModel(
         missing_stats=missing_stats,
@@ -344,9 +336,7 @@ def _recover_samples_from_series_matrix(
     try:
         return parse_geo_series_matrix_samples(compressed)
     except (ValueError, OSError) as exc:
-        logger.warning(
-            "processing: series_matrix sample recovery failed: %s", exc
-        )
+        logger.warning("processing: series_matrix sample recovery failed: %s", exc)
         return []
 
 
@@ -364,6 +354,30 @@ def run_processing(
     recovers sample metadata from that asset instead.
     """
     assets = source_assets if isinstance(source_assets, list) else [source_assets]
+    if ctx.databases and any(database.lower() == "gdc" for database in ctx.databases):
+        if len(assets) != 1:
+            raise ValueError("GDC processing requires one source asset")
+        dataset_type = next(
+            (
+                d.data_type
+                for d in (ctx.specification.datasets if ctx.specification else [])
+                if d.database.value == "gdc"
+            ),
+            None,
+        )
+        if not dataset_type:
+            raise ValueError("GDC processing requires data_type")
+        parsed = parse_gdc_table(assets[0], dataset_id, ctx.workdir, dataset_type)
+        output = ProcessingOutput(
+            parsed_datasets=[parsed],
+            samples=[],
+            cleaning_report=_clean_parsed_dataset(ctx, parsed),
+            field_alignment=_build_field_alignment([parsed], ctx),
+        )
+        return StageResult(
+            output_digest=hashlib.sha256(parsed.file_asset.sha256.encode()).hexdigest(),
+            output=output,
+        )
     if ctx.databases and any(
         database.lower() in {"xena", "ucsc_xena"} for database in ctx.databases
     ):
@@ -395,9 +409,7 @@ def run_processing(
         (asset for asset in assets if "tximportCounts" in asset.relative_path),
         assets[0],
     )
-    soft_asset = next(
-        (asset for asset in assets if "family.soft" in asset.relative_path), None
-    )
+    soft_asset = next((asset for asset in assets if "family.soft" in asset.relative_path), None)
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset
     if ctx.mode == "fixture":
@@ -421,14 +433,11 @@ def run_processing(
             # Fixture-mode fallback: series_matrix recovery for fixture
             # series whose expression block is empty.
             logger.warning(
-                "processing: tximport parse failed (%s); attempting "
-                "series_matrix sample recovery",
+                "processing: tximport parse failed (%s); attempting series_matrix sample recovery",
                 exc,
             )
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            parsed = _build_minimal_parsed_dataset(
-                source_asset, dataset_id, ctx, samples=samples
-            )
+            parsed = _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
             if samples:
                 logger.info(
                     "processing: recovered %d samples from series_matrix; "
@@ -455,13 +464,10 @@ def run_processing(
             samples = parse_geo_soft_samples(soft_bytes)
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            parsed = _build_minimal_parsed_dataset(
-                source_asset, dataset_id, ctx, samples=samples
-            )
+            parsed = _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
             logger.info(
-                "processing: live mode parsed %d expression rows from "
-                "downloaded tximport counts",
+                "processing: live mode parsed %d expression rows from downloaded tximport counts",
                 parsed.row_count,
             )
         elif samples:
