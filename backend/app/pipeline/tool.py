@@ -135,6 +135,19 @@ async def run_research_pipeline(
     normalized_databases = [value.lower() for value in databases]
     if not normalized_databases:
         raise ValueError("databases must be a non-empty list of database identifiers")
+    supported_databases = {"pubmed", "geo"}
+    unsupported_databases = sorted(
+        {value for value in normalized_databases if value not in supported_databases}
+    )
+    if unsupported_databases:
+        return json.dumps(
+            {
+                "status": "unsupported_databases",
+                "unsupported_databases": unsupported_databases,
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
 
     run_context = ctx.context
     try:

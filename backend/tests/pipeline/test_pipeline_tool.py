@@ -251,7 +251,7 @@ async def test_pipeline_function_tool_rejects_parallel_managed_invocation(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_function_tool_ignores_extra_databases_in_fixture_mode(
+async def test_pipeline_function_tool_rejects_unsupported_databases(
     tmp_path: Path,
 ) -> None:
     context = RunContext(task_id="task_tool_extra_dbs")
@@ -276,12 +276,11 @@ async def test_pipeline_function_tool_ignores_extra_databases_in_fixture_mode(
         ),
     )
 
-    # Fixture mode always runs the pinned Phase 1 case; extra selected databases
-    # are ignored rather than rejected.
     payload = json.loads(result)
-    assert payload["status"] == "completed"
-    assert payload["mode"] == "fixture"
-    assert (
+    assert payload["status"] == "unsupported_databases"
+    assert payload["unsupported_databases"] == ["gdc"]
+    assert payload["retryable"] is False
+    assert not (
         tmp_path / "tasks" / "task_tool_extra_dbs" / "artifacts" / "run_manifest.json"
     ).exists()
 

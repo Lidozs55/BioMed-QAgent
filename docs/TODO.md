@@ -38,7 +38,7 @@
 > Pipeline 支持。
 
 - [x] **P0** `/databases` 已返回 `pipeline_supported`；仍需补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源只能作为调研或待接入来源
-- [ ] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；需对不支持或未实现的来源返回结构化、可重试性明确的错误，不产生伪成功 Artifact
+- [x] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；`run_research_pipeline` 现在对未支持来源返回 `status=unsupported_databases`、`retryable=false`，不产生伪成功 Artifact
 - [ ] **P1** `pipeline/stages/acquisition.py` 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
 - [ ] **P2** 按验收标准新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力；未通过 search、metadata、download 测试前不得标记为 Pipeline 支持
 
