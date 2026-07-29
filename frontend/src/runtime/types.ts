@@ -253,6 +253,12 @@ export interface TaskProjection {
   items: ConversationItem[];
   itemSequences: Record<string, number>;
   currentReasoningSegmentByRun: Record<string, number>;
+  /** Total context window capacity in tokens (from model settings). */
+  contextWindow?: number;
+  /** Estimated tokens currently used in the conversation. */
+  contextTokensUsed?: number;
+  /** Whether a context compaction is currently in progress. */
+  compacting?: boolean;
 }
 
 export interface AgentRuntimeData {

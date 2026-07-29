@@ -1747,6 +1747,7 @@ export function reduceRuntimeEvent(
         code: null,
         message: null,
       });
+      task = { ...task, compacting: false };
       break;
     }
     case "artifact_produced": {
