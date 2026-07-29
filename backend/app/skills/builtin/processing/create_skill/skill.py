@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 from agents import FunctionTool, RunContextWrapper
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import RecipeStatus, WorkflowRecipe
 from app.domain.contracts.base import ContractModel
 from app.recipes.executor import RecipeExecutor
+from app.recipes.redaction import redact_secrets
 from app.recipes.store import WorkflowRecipeStore
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.subagents.staging import SubagentStagingWorkspace
@@ -21,6 +22,13 @@ from app.subagents.staging import SubagentStagingWorkspace
 class DevelopWorkflowRequest(ContractModel):
     operation: Literal["develop_workflow"]
     recipe: WorkflowRecipe
+
+    @model_validator(mode="after")
+    def reject_credentials(self) -> Self:
+        serialized = self.recipe.model_dump(mode="json")
+        if redact_secrets(serialized) != serialized:
+            raise ValueError("develop_workflow cannot contain credentials or secrets")
+        return self
 
 
 class ValidateRecipeRequest(ContractModel):
@@ -54,8 +62,8 @@ class CreateSkillRuntime:
     """Run-bound trusted services that model arguments cannot replace."""
 
     store: WorkflowRecipeStore
-    executor: RecipeExecutor
     workspace: SubagentStagingWorkspace
+    executor: RecipeExecutor | None = None
 
 
 async def _invoke_create_skill(
@@ -76,6 +84,11 @@ async def _invoke_create_skill(
         if isinstance(request, DevelopWorkflowRequest):
             result = _develop(run_context, runtime, request)
         elif isinstance(request, ValidateRecipeRequest):
+            if runtime.executor is None:
+                return _error(
+                    "recipe_validation_unavailable",
+                    "controlled Recipe validation is not available in this runtime",
+                )
             result = await _validate(runtime, request)
         elif isinstance(request, FindRecipeRequest):
             result = _find(runtime, request)
@@ -83,7 +96,7 @@ async def _invoke_create_skill(
             result = _request_promotion(runtime, request)
     except KeyError:
         return _error("recipe_not_found", "the requested WorkflowRecipe was not found")
-    except (RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError) as error:
         return _error("create_skill_failed", str(error))
     return json.dumps(result, ensure_ascii=False)
 
@@ -96,8 +109,8 @@ def _develop(
     recipe = request.recipe
     if recipe.status is not RecipeStatus.DRAFT:
         raise ValueError("develop_workflow accepts draft WorkflowRecipes only")
-    run_context.reserve_create_skill(recipe.domain, recipe.capability)
-    stored = runtime.store.save_draft(recipe)
+    with run_context.reserve_create_skill(recipe.domain, recipe.capability):
+        stored = runtime.store.save_draft(recipe)
     return _success(request.operation, recipe=_recipe_metadata(stored))
 
 
@@ -105,7 +118,9 @@ async def _validate(
     runtime: CreateSkillRuntime,
     request: ValidateRecipeRequest,
 ) -> dict[str, object]:
-    result = await runtime.executor.execute_for_validation(
+    executor = runtime.executor
+    assert executor is not None
+    result = await executor.execute_for_validation(
         recipe_id=request.recipe_id,
         version=request.version,
         inputs=request.inputs,

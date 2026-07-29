@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -175,8 +176,13 @@ class RunContext:
             raise RuntimeError("create_skill runtime is not available")
         return self._create_skill_runtime
 
-    def reserve_create_skill(self, domain: str, capability: str) -> None:
-        """Enforce one Recipe development attempt per Run and capability."""
+    @contextmanager
+    def reserve_create_skill(
+        self,
+        domain: str,
+        capability: str,
+    ) -> Iterator[None]:
+        """Reserve one capability, releasing it only when development fails."""
 
         key = (domain.strip().casefold(), capability.strip().casefold())
         with self._create_skill_guard:
@@ -185,6 +191,12 @@ class RunContext:
                     "create_skill already developed this domain and capability in the current Run"
                 )
             self._create_skill_keys.add(key)
+        try:
+            yield
+        except BaseException:
+            with self._create_skill_guard:
+                self._create_skill_keys.discard(key)
+            raise
 
     @property
     def work_dir(self) -> TaskWorkDir:

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.agent_loop.context import RunContext
 from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.model_info_router import router as model_info_router
 from app.api.routes import router as routes_router
@@ -21,21 +22,24 @@ from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
-from app.domain.contracts import TaskMode
+from app.domain.contracts import TaskMode, generate_prefixed_uuid
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
 )
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+from app.recipes.store import WorkflowRecipeStore
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import RunAdmissionRejectedError, TaskManager
 from app.runtime.repository import TaskRepository
 from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.builtin.processing.create_skill import CreateSkillRuntime
 from app.skills.catalog import SkillCatalog
 from app.skills.store import UserSkillStore
 from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.staging import SubagentStagingWorkspace
 from app.subagents.supervisor import SubagentSupervisor
 from app.tools.cache_store import init_cache_store
 
@@ -114,6 +118,25 @@ def create_app(configured: Settings = settings) -> FastAPI:
             catalog=skill_catalog,
             builtins=load_builtin_skill_descriptors(),
         )
+        workflow_recipe_store = WorkflowRecipeStore(
+            configured.skill_data_path / "recipes"
+        )
+
+        def task_context_factory(task_id: str) -> RunContext:
+            context = RunContext(
+                task_id=task_id,
+                base_dir=repository.tasks_dir,
+            )
+            context.bind_create_skill_runtime(
+                CreateSkillRuntime(
+                    store=workflow_recipe_store,
+                    workspace=SubagentStagingWorkspace(
+                        context.work_dir.root,
+                        generate_prefixed_uuid("create_skill"),
+                    ),
+                )
+            )
+            return context
 
         def admit_model_backed_run(_mode: TaskMode) -> None:
             """Reject model-backed admission when active settings lack a budget."""
@@ -131,6 +154,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
             ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
+            context_factory=task_context_factory,
             run_admission=admit_model_backed_run,
             event_hub=event_hub,
             assistant_stream_hub=assistant_stream_hub,
@@ -155,6 +179,8 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.event_hub = event_hub
         application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
+        application.state.task_context_factory = task_context_factory
+        application.state.workflow_recipe_store = workflow_recipe_store
         application.state.subagent_input_broker = subagent_input_broker
         application.state.subagent_event_sink = subagent_event_sink
         application.state.subagent_supervisor = subagent_supervisor
