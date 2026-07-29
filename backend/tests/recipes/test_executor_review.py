@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from app.domain.contracts import (
@@ -13,7 +16,6 @@ from app.domain.contracts import (
 from app.integrations.acquisition import AcquisitionFailure, ValidatedRecipeTarget
 from app.recipes.executor import (
     RecipeExecutor,
-    RecipeRouteGuard,
     RecipeStepResponse,
 )
 from app.recipes.store import WorkflowRecipeStore
@@ -27,6 +29,8 @@ class ControlledClient:
     def __init__(self, responses: list[RecipeStepResponse]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.browser_contacts: list[str] = []
+        self._authorize_request: Callable[..., ValidatedRecipeTarget] | None = None
 
     async def api_request(self, **kwargs: object) -> RecipeStepResponse:
         self.calls.append(("api", kwargs))
@@ -36,12 +40,36 @@ class ControlledClient:
         self.calls.append(("html", kwargs))
         return self.responses.pop(0)
 
+    @asynccontextmanager
+    async def browser_authorization(
+        self,
+        *,
+        authorize_request: Callable[..., ValidatedRecipeTarget],
+    ) -> AsyncIterator[None]:
+        assert self._authorize_request is None
+        self._authorize_request = authorize_request
+        try:
+            yield
+        finally:
+            self._authorize_request = None
+
     async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
         self.calls.append(("browser", kwargs))
-        guard = kwargs["route_guard"]
-        assert isinstance(guard, RecipeRouteGuard)
-        guard.validate_request(str(kwargs["current_url"]))
+        if kwargs["action"] == "navigate":
+            self._contact_browser(str(kwargs["current_url"]), resource_type="main_frame")
         return self.responses.pop(0)
+
+    def _contact_browser(
+        self,
+        url: str,
+        *,
+        resource_type: str,
+    ) -> ValidatedRecipeTarget:
+        if self._authorize_request is None:
+            raise RuntimeError("browser transport used outside authorization scope")
+        target = self._authorize_request(url, resource_type=resource_type)
+        self.browser_contacts.append(url)
+        return target
 
 
 @pytest.mark.asyncio
@@ -198,12 +226,10 @@ async def test_private_redirect_is_rejected_before_second_client_call(
 
 
 @pytest.mark.asyncio
-async def test_browser_route_guard_blocks_private_request_before_contact(
+async def test_browser_authorization_blocks_private_subresource_before_transport(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    contacted: list[str] = []
-
     def resolve(url: str, *, require_https: bool) -> PublicHttpTarget:
         if "private.example" in url:
             raise UnsafeUrlError("URL resolved to a non-public address")
@@ -218,12 +244,17 @@ async def test_browser_route_guard_blocks_private_request_before_contact(
         resolve,
     )
 
-    class GuardClient(ControlledClient):
+    class InterceptingClient(ControlledClient):
         async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
-            guard = kwargs["route_guard"]
-            assert isinstance(guard, RecipeRouteGuard)
-            guard.validate_request("https://private.example/collect")
-            contacted.append("https://private.example/collect")
+            self.calls.append(("browser", kwargs))
+            self._contact_browser(
+                "https://api.example.org/GSE100",
+                resource_type="main_frame",
+            )
+            self._contact_browser(
+                "https://private.example/collect",
+                resource_type="image",
+            )
             raise AssertionError("private browser request was contacted")
 
     store = WorkflowRecipeStore(tmp_path / "recipes")
@@ -233,46 +264,26 @@ async def test_browser_route_guard_blocks_private_request_before_contact(
             update={"allowed_hosts": ["api.example.org", "private.example"]}
         ),
     )
+    client = InterceptingClient([])
 
     with pytest.raises(AcquisitionFailure, match="non-public"):
-        await RecipeExecutor(client=GuardClient([]), store=store).execute(
+        await RecipeExecutor(client=client, store=store).execute(
             recipe_id=verified.recipe_id,
             version=verified.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
 
-    assert contacted == []
+    assert client.browser_contacts == ["https://api.example.org/GSE100"]
 
 
-@pytest.mark.asyncio
-async def test_browser_client_cannot_claim_enforcement_without_using_guard(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.integrations.acquisition.resolve_public_http_target",
-        _public_target,
-    )
-
-    class LyingClient(ControlledClient):
-        async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
-            return RecipeStepResponse(
-                content=b"claimed",
-                status_code=200,
-                media_type="text/plain",
-                browser_guard_enforced=True,
-            )
-
-    store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, _browser_recipe())
-
-    with pytest.raises(ValueError, match="did not use.*route guard"):
-        await RecipeExecutor(client=LyingClient([]), store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
-            inputs={"accession": "GSE100"},
-            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+def test_browser_response_cannot_self_report_guard_enforcement() -> None:
+    with pytest.raises(TypeError, match="browser_guard_enforced"):
+        RecipeStepResponse(
+            content=b"claimed",
+            status_code=200,
+            media_type="text/plain",
+            browser_guard_enforced=True,
         )
 
 
@@ -400,19 +411,16 @@ async def test_browser_actions_continue_until_extract_with_exact_evidence(
                 content=b"",
                 status_code=200,
                 media_type="text/html",
-                browser_guard_enforced=True,
             ),
             RecipeStepResponse(
                 content=b"<html>intermediate</html>",
                 status_code=200,
                 media_type="text/html",
-                browser_guard_enforced=True,
             ),
             RecipeStepResponse(
                 content=b"final-data",
                 status_code=200,
                 media_type="text/plain",
-                browser_guard_enforced=True,
             ),
         ]
     )
@@ -435,6 +443,93 @@ async def test_browser_actions_continue_until_extract_with_exact_evidence(
         "browser action extract succeeded",
     ]
     assert result.source_asset.size_bytes == len(b"final-data")
+
+
+@pytest.mark.asyncio
+async def test_browser_subresources_do_not_replace_canonical_document_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def resolve(url: str, *, require_https: bool) -> PublicHttpTarget:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        return PublicHttpTarget(
+            connect_url=f"https://93.184.216.34{parsed.path or '/'}",
+            host_header=host,
+            sni_hostname=host,
+        )
+
+    monkeypatch.setattr(
+        "app.integrations.acquisition.resolve_public_http_target",
+        resolve,
+    )
+
+    class DocumentClient(ControlledClient):
+        async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
+            self.calls.append(("browser", kwargs))
+            if kwargs["action"] == "navigate":
+                self._contact_browser(
+                    str(kwargs["current_url"]),
+                    resource_type="main_frame",
+                )
+                self._contact_browser(
+                    "https://cdn.example.org/site.css",
+                    resource_type="stylesheet",
+                )
+                self._contact_browser(
+                    "https://cdn.example.org/logo.png",
+                    resource_type="image",
+                )
+                self._contact_browser(
+                    "https://analytics.example.org/collect",
+                    resource_type="fetch",
+                )
+            return self.responses.pop(0)
+
+    store = WorkflowRecipeStore(tmp_path / "recipes")
+    verified = _store_verified(
+        store,
+        _browser_recipe().model_copy(
+            update={
+                "allowed_hosts": [
+                    "api.example.org",
+                    "cdn.example.org",
+                    "analytics.example.org",
+                ]
+            }
+        ),
+    )
+    client = DocumentClient(
+        [
+            RecipeStepResponse(content=b"", status_code=200, media_type="text/html"),
+            RecipeStepResponse(content=b"", status_code=200, media_type="text/html"),
+            RecipeStepResponse(
+                content=b"final-data",
+                status_code=200,
+                media_type="text/plain",
+            ),
+        ]
+    )
+
+    result = await RecipeExecutor(client=client, store=store).execute(
+        recipe_id=verified.recipe_id,
+        version=verified.version,
+        inputs={"accession": "GSE100"},
+        workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+    )
+
+    document_url = "https://api.example.org/GSE100"
+    assert [call[1]["current_url"] for call in client.calls] == [
+        document_url,
+        document_url,
+        document_url,
+    ]
+    assert result.download_attempt.url == document_url
+    assert [attempt.url for attempt in result.attempts] == [
+        document_url,
+        document_url,
+        document_url,
+    ]
 
 
 @pytest.mark.asyncio

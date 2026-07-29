@@ -221,17 +221,80 @@ def test_commit_detects_destination_parent_swap_and_rolls_back(
         media_type="application/octet-stream",
     )
     original_replace = Path.replace
+    original_validation = SubagentStagingWorkspace._validate_replaced_destination
     detached_parent = tmp_path / "detached-parent"
+    parent_was_swapped = False
 
-    def swap_parent_then_replace(self: Path, target: Path) -> Path:
-        original_replace(target.parent, detached_parent)
-        target.parent.mkdir(parents=True)
-        return original_replace(self, target)
+    def swap_parent_before_validation(
+        self: SubagentStagingWorkspace,
+        destination: Path,
+        **kwargs: object,
+    ) -> None:
+        nonlocal parent_was_swapped
+        try:
+            original_replace(destination.parent, detached_parent)
+        except PermissionError:
+            # A Windows delete-share file handle can prevent the directory
+            # rename entirely; retaining the handle closes the race.
+            return original_validation(self, destination, **kwargs)
+        parent_was_swapped = True
+        destination.parent.mkdir(parents=True)
+        original_validation(self, destination, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", swap_parent_then_replace)
+    monkeypatch.setattr(
+        SubagentStagingWorkspace,
+        "_validate_replaced_destination",
+        swap_parent_before_validation,
+    )
 
-    with pytest.raises(ValueError, match="changed during SourceAsset commit"):
+    if os.name == "nt":
+        workspace.commit_source_asset(asset)
+        assert not parent_was_swapped
+    else:
+        with pytest.raises(ValueError, match="changed during SourceAsset commit"):
+            workspace.commit_source_asset(asset)
+        assert parent_was_swapped
+
+    assert not (detached_parent / Path(asset.relative_path).name).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows file-handle rollback contract")
+def test_windows_rollback_handle_deletes_exact_moved_file_object(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = SubagentStagingWorkspace(tmp_path / "task", "sub_1")
+    asset = workspace.stage_bytes(
+        content=b"candidate",
+        filename="data.bin",
+        source_id="src_1",
+        successful_attempt_id="download_attempt_1",
+        data_level=DataLevel.METADATA,
+        media_type="application/octet-stream",
+    )
+    original_replace = Path.replace
+    original_validation = SubagentStagingWorkspace._validate_replaced_destination
+    detached_file = tmp_path / "detached-parent" / "data.bin"
+    detached_file.parent.mkdir()
+
+    def move_file_before_validation(
+        self: SubagentStagingWorkspace,
+        destination: Path,
+        **kwargs: object,
+    ) -> None:
+        original_replace(destination, detached_file)
+        destination.write_bytes(b"unrelated replacement")
+        original_validation(self, destination, **kwargs)
+
+    monkeypatch.setattr(
+        SubagentStagingWorkspace,
+        "_validate_replaced_destination",
+        move_file_before_validation,
+    )
+
+    with pytest.raises(ValueError, match="destination changed"):
         workspace.commit_source_asset(asset)
 
-    assert not (tmp_path / "task" / asset.relative_path).exists()
-    assert not (detached_parent / asset.relative_path).exists()
+    assert not detached_file.exists()
+    destination = tmp_path / "task" / asset.relative_path
+    assert destination.read_bytes() == b"unrelated replacement"

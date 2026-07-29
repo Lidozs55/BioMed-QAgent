@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,7 +19,6 @@ from app.domain.contracts import (
 from app.integrations.acquisition import ValidatedRecipeTarget
 from app.recipes.executor import (
     RecipeExecutor,
-    RecipeRouteGuard,
     RecipeStepResponse,
 )
 from app.recipes.store import WorkflowRecipeStore
@@ -31,6 +32,8 @@ class FakeRecipeClient:
     def __init__(self, responses: list[RecipeStepResponse]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.browser_contacts: list[str] = []
+        self._authorize_request: Callable[..., ValidatedRecipeTarget] | None = None
 
     async def api_request(self, **kwargs: object) -> RecipeStepResponse:
         self.calls.append(("api", kwargs))
@@ -40,12 +43,36 @@ class FakeRecipeClient:
         self.calls.append(("html", kwargs))
         return self.responses.pop(0)
 
+    @asynccontextmanager
+    async def browser_authorization(
+        self,
+        *,
+        authorize_request: Callable[..., ValidatedRecipeTarget],
+    ) -> AsyncIterator[None]:
+        assert self._authorize_request is None
+        self._authorize_request = authorize_request
+        try:
+            yield
+        finally:
+            self._authorize_request = None
+
     async def browser_action(self, **kwargs: object) -> RecipeStepResponse:
         self.calls.append(("browser", kwargs))
-        guard = kwargs["route_guard"]
-        assert isinstance(guard, RecipeRouteGuard)
-        guard.validate_request(str(kwargs["current_url"]))
+        if kwargs["action"] == "navigate":
+            self._contact_browser(str(kwargs["current_url"]), resource_type="main_frame")
         return self.responses.pop(0)
+
+    def _contact_browser(
+        self,
+        url: str,
+        *,
+        resource_type: str,
+    ) -> ValidatedRecipeTarget:
+        if self._authorize_request is None:
+            raise RuntimeError("browser transport used outside authorization scope")
+        target = self._authorize_request(url, resource_type=resource_type)
+        self.browser_contacts.append(url)
+        return target
 
 
 @pytest.mark.asyncio
@@ -142,13 +169,11 @@ async def test_executor_percent_encodes_browser_navigation_values(
                 content=b"",
                 status_code=200,
                 media_type="text/html",
-                browser_guard_enforced=True,
             ),
             RecipeStepResponse(
                 content=b"<html></html>",
                 status_code=200,
                 media_type="text/html",
-                browser_guard_enforced=True,
             ),
         ]
     )

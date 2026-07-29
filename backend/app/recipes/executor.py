@@ -6,10 +6,12 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from string import Formatter
-from typing import Protocol
+from types import TracebackType
+from typing import Protocol, Self
 from urllib.parse import quote, urljoin
 
 from app.domain.contracts import (
@@ -58,7 +60,6 @@ class RecipeStepResponse:
     media_type: str
     redirect_url: str | None = None
     error: str | None = None
-    browser_guard_enforced: bool = False
 
     @property
     def transport_ok(self) -> bool:
@@ -66,22 +67,66 @@ class RecipeStepResponse:
 
 
 @dataclass(slots=True)
-class RecipeRouteGuard:
-    """Mandatory browser interception policy for every outbound route."""
+class RecipeBrowserAuthorizationScope:
+    """Executor-owned browser authorization state for one Recipe execution."""
 
     allowed_hosts: tuple[str, ...]
-    last_target: ValidatedRecipeTarget | None = None
-    validation_count: int = 0
+    document_target: ValidatedRecipeTarget | None = None
+    authorizations: list[tuple[str, ValidatedRecipeTarget]] = field(default_factory=list)
+    _active: bool = False
 
-    def validate_request(self, url: str) -> ValidatedRecipeTarget:
+    async def __aenter__(self) -> Self:
+        if self._active:
+            raise RuntimeError("browser authorization scope is already active")
+        self._active = True
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._active = False
+
+    def validate_request(
+        self,
+        url: str,
+        *,
+        resource_type: str,
+    ) -> ValidatedRecipeTarget:
+        if not self._active:
+            raise RuntimeError("browser request authorization used outside its scope")
+        if not resource_type.strip():
+            raise ValueError("browser resource_type is required")
         target = validate_recipe_source_url(url, list(self.allowed_hosts))
-        self.last_target = target
-        self.validation_count += 1
+        self.authorizations.append((resource_type, target))
+        if resource_type == "main_frame":
+            self.document_target = target
         return target
 
 
+class BrowserRequestAuthorizer(Protocol):
+    """Authorize one adapter-declared browser request before transport."""
+
+    def __call__(
+        self,
+        url: str,
+        *,
+        resource_type: str,
+    ) -> ValidatedRecipeTarget: ...
+
+
 class RecipeClient(Protocol):
-    """I/O boundary: callers receive pinned targets and never follow redirects."""
+    """Trusted I/O boundary for pinned HTTP and intercepted browser transport.
+
+    A browser adapter must install ``authorize_request`` as its route
+    interception callback before yielding from ``browser_authorization`` and
+    must keep it installed for the full action. Every main-frame, redirect, and
+    subresource request must call the callback before transport. The Task 6
+    Playwright adapter owns that installation; the executor does not trust a
+    response-side boolean assertion.
+    """
 
     async def api_request(
         self,
@@ -101,6 +146,12 @@ class RecipeClient(Protocol):
         timeout_seconds: float,
     ) -> RecipeStepResponse: ...
 
+    def browser_authorization(
+        self,
+        *,
+        authorize_request: BrowserRequestAuthorizer,
+    ) -> AbstractAsyncContextManager[None]: ...
+
     async def browser_action(
         self,
         *,
@@ -108,8 +159,6 @@ class RecipeClient(Protocol):
         target: str | None,
         value: str | None,
         current_url: str,
-        navigation_target: ValidatedRecipeTarget | None,
-        route_guard: RecipeRouteGuard,
         timeout_seconds: float,
     ) -> RecipeStepResponse: ...
 
@@ -164,6 +213,7 @@ class RecipeExecutor:
         current_target: ValidatedRecipeTarget | None = None
         last_timed_out = False
         browser_started = False
+        browser_authorization: RecipeBrowserAuthorizationScope | None = None
         for index, step in enumerate(recipe.steps):
             method = self._method_for_step(step)
             started_at = datetime.now(UTC)
@@ -190,44 +240,52 @@ class RecipeExecutor:
                     if not browser_started:
                         self._require_browser_evidence(recipe, attempts)
                         browser_started = True
-                    navigation_target: ValidatedRecipeTarget | None = None
+                        browser_authorization = RecipeBrowserAuthorizationScope(
+                            tuple(recipe.allowed_hosts)
+                        )
+                    assert browser_authorization is not None
                     if step.action == "navigate":
                         url_template = step.value or step.target
                         if not url_template:
                             raise ValueError("browser navigate requires a URL")
-                        navigation_target = self._render_target(
+                        navigation_url = self._render_template(
                             url_template,
                             inputs,
-                            recipe,
+                            encoded=True,
                         )
-                        current_target = navigation_target
-                        request_url = navigation_target.url
+                        request_url = navigation_url
                         target = request_url if step.target is not None else None
                         value = request_url if step.value is not None else None
+                        action_current_url = navigation_url
                     else:
                         target = self._render_optional(step.target, inputs)
                         value = self._render_optional(step.value, inputs)
-                    if current_target is None:
-                        raise ValueError("browser actions require a prior validated navigation URL")
-                    route_guard = RecipeRouteGuard(tuple(recipe.allowed_hosts))
-                    response = await asyncio.wait_for(
-                        self._client.browser_action(
-                            action=step.action,
-                            target=target,
-                            value=value,
-                            current_url=current_target.url,
-                            navigation_target=navigation_target,
-                            route_guard=route_guard,
-                            timeout_seconds=step.timeout_seconds,
+                        if browser_authorization.document_target is None:
+                            raise ValueError(
+                                "browser actions require an authorized main-frame document"
+                            )
+                        action_current_url = browser_authorization.document_target.url
+                    async with (
+                        browser_authorization,
+                        self._client.browser_authorization(
+                            authorize_request=browser_authorization.validate_request
                         ),
-                        timeout=step.timeout_seconds,
-                    )
-                    if not response.browser_guard_enforced:
-                        raise ValueError("browser client did not enforce the Recipe route guard")
-                    if route_guard.validation_count == 0:
-                        raise ValueError("browser client did not use the Recipe route guard")
-                    if route_guard.last_target is not None:
-                        current_target = route_guard.last_target
+                    ):
+                        response = await asyncio.wait_for(
+                            self._client.browser_action(
+                                action=step.action,
+                                target=target,
+                                value=value,
+                                current_url=action_current_url,
+                                timeout_seconds=step.timeout_seconds,
+                            ),
+                            timeout=step.timeout_seconds,
+                        )
+                    if browser_authorization.document_target is None:
+                        raise ValueError(
+                            "browser navigation did not authorize a main-frame document"
+                        )
+                    current_target = browser_authorization.document_target
                     terminal = step.action == "extract"
                 else:  # pragma: no cover - discriminated validation is exhaustive
                     raise ValueError("unsupported Recipe step type")

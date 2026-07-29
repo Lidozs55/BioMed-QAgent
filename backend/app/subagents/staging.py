@@ -8,7 +8,9 @@ import re
 import stat
 import tempfile
 import threading
+from contextlib import AbstractContextManager
 from pathlib import Path, PurePosixPath
+from types import TracebackType
 
 from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
 
@@ -16,6 +18,71 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SAFE_MEDIA_TYPE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 _WORKSPACE_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_LOCKS_GUARD = threading.Lock()
+
+
+class _MovedFileRollbackGuard(AbstractContextManager["_MovedFileRollbackGuard"]):
+    """Keep an OS handle that can delete the exact file object after a move."""
+
+    def __init__(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        source_identity: tuple[int, int],
+        parent_identity: tuple[int, int],
+    ) -> None:
+        self._destination_name = destination.name
+        self._source_identity = source_identity
+        self._parent_fd: int | None = None
+        self._windows_handle: int | None = None
+        if os.name == "nt":
+            self._windows_handle = _open_windows_delete_handle(source)
+        else:
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            self._parent_fd = os.open(destination.parent, flags)
+            if _file_identity(os.fstat(self._parent_fd)) != parent_identity:
+                self.close()
+                raise ValueError("destination parent changed before SourceAsset move")
+
+    def rollback(self) -> None:
+        """Delete the moved file by its retained object/directory handle."""
+
+        if self._windows_handle is not None:
+            _mark_windows_handle_for_deletion(self._windows_handle)
+            return
+        assert self._parent_fd is not None
+        try:
+            path_stat = os.stat(
+                self._destination_name,
+                dir_fd=self._parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError:
+            return
+        if (
+            not _is_link_or_reparse_stat(path_stat)
+            and _file_identity(path_stat) == self._source_identity
+            and stat.S_ISREG(path_stat.st_mode)
+        ):
+            os.unlink(self._destination_name, dir_fd=self._parent_fd)
+
+    def close(self) -> None:
+        if self._windows_handle is not None:
+            _close_windows_handle(self._windows_handle)
+            self._windows_handle = None
+        if self._parent_fd is not None:
+            os.close(self._parent_fd)
+            self._parent_fd = None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
 
 class SubagentStagingWorkspace:
@@ -249,24 +316,45 @@ class SubagentStagingWorkspace:
         source_identity = _file_identity(source_stat)
         parent_identity = _file_identity(destination.parent.lstat())
         moved = False
-        try:
-            source.replace(destination)
-            moved = True
-            self._assert_trusted_path(destination.parent, boundary=boundary)
-            if _file_identity(destination.parent.lstat()) != parent_identity:
-                raise ValueError("destination parent changed during SourceAsset commit")
-            destination_stat = destination.lstat()
-            if (
-                _is_link_or_reparse_stat(destination_stat)
-                or destination_stat.st_nlink != 1
-                or _file_identity(destination_stat) != source_identity
-            ):
-                raise ValueError("destination changed during SourceAsset commit")
-            self._assert_trusted_path(destination, boundary=boundary)
-        except BaseException:
-            if moved:
-                self._unlink_if_identity(destination, source_identity)
-            raise
+        with _MovedFileRollbackGuard(
+            source,
+            destination,
+            source_identity=source_identity,
+            parent_identity=parent_identity,
+        ) as rollback_guard:
+            try:
+                source.replace(destination)
+                moved = True
+                self._validate_replaced_destination(
+                    destination,
+                    boundary=boundary,
+                    parent_identity=parent_identity,
+                    source_identity=source_identity,
+                )
+            except BaseException:
+                if moved:
+                    rollback_guard.rollback()
+                raise
+
+    def _validate_replaced_destination(
+        self,
+        destination: Path,
+        *,
+        boundary: Path,
+        parent_identity: tuple[int, int],
+        source_identity: tuple[int, int],
+    ) -> None:
+        self._assert_trusted_path(destination.parent, boundary=boundary)
+        if _file_identity(destination.parent.lstat()) != parent_identity:
+            raise ValueError("destination parent changed during SourceAsset commit")
+        destination_stat = destination.lstat()
+        if (
+            _is_link_or_reparse_stat(destination_stat)
+            or destination_stat.st_nlink != 1
+            or _file_identity(destination_stat) != source_identity
+        ):
+            raise ValueError("destination changed during SourceAsset commit")
+        self._assert_trusted_path(destination, boundary=boundary)
 
     @staticmethod
     def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
@@ -335,3 +423,79 @@ def _reject_link_or_reparse(path: Path) -> None:
         raise ValueError("trusted path could not be inspected") from error
     if _is_link_or_reparse_stat(path_stat):
         raise ValueError("symlink or reparse point is forbidden in trusted staging workspace paths")
+
+
+def _open_windows_delete_handle(path: Path) -> int:
+    if os.name != "nt":  # pragma: no cover - guarded by the caller
+        raise OSError("Windows file handles are unavailable on this platform")
+    import ctypes
+    from ctypes import wintypes
+
+    create_file = ctypes.windll.kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    delete_access = 0x00010000
+    generic_read = 0x80000000
+    share_read_write_delete = 0x00000001 | 0x00000002 | 0x00000004
+    open_existing = 3
+    file_attribute_normal = 0x00000080
+    file_flag_open_reparse_point = 0x00200000
+    handle = create_file(
+        str(path),
+        generic_read | delete_access,
+        share_read_write_delete,
+        None,
+        open_existing,
+        file_attribute_normal | file_flag_open_reparse_point,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(handle)
+
+
+def _mark_windows_handle_for_deletion(handle: int) -> None:
+    if os.name != "nt":  # pragma: no cover - guarded by the caller
+        raise OSError("Windows file handles are unavailable on this platform")
+    import ctypes
+    from ctypes import wintypes
+
+    class FileDispositionInfo(ctypes.Structure):
+        _fields_ = [("delete_file", wintypes.BOOL)]
+
+    set_file_information = ctypes.windll.kernel32.SetFileInformationByHandle
+    set_file_information.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    set_file_information.restype = wintypes.BOOL
+    disposition = FileDispositionInfo(True)
+    if not set_file_information(
+        wintypes.HANDLE(handle),
+        4,
+        ctypes.byref(disposition),
+        ctypes.sizeof(disposition),
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _close_windows_handle(handle: int) -> None:
+    if os.name != "nt":  # pragma: no cover - guarded by the caller
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    close_handle = ctypes.windll.kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    close_handle(wintypes.HANDLE(handle))
