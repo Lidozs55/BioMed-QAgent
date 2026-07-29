@@ -7,6 +7,8 @@ import json
 import weakref
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,6 +19,7 @@ from app.recipes.executor import (
     BrowserRequestAuthorizer,
     RecipeStepResponse,
 )
+from app.tools.browser_pool import BrowserPool, BrowserSession
 
 _DEFAULT_MEDIA_TYPE = "application/octet-stream"
 MAX_RECIPE_RESPONSE_BYTES = 100 * 1024 * 1024
@@ -30,13 +33,21 @@ class ControlledRecipeClient:
         self,
         *,
         transport_factory: RecipeTransportFactory | None = None,
+        browser_pool: BrowserPool | None = None,
     ) -> None:
         self._transport_factory = transport_factory
+        self._browser_pool = browser_pool
         self._active_clients: set[httpx.AsyncClient] = set()
         self._issued_transports: weakref.WeakValueDictionary[int, httpx.AsyncBaseTransport] = (
             weakref.WeakValueDictionary()
         )
         self._condition = asyncio.Condition()
+        self._browser_session_lock = asyncio.Lock()
+        self._browser_sessions: dict[asyncio.Task[Any], BrowserSession] = {}
+        self._browser_authorizer: ContextVar[BrowserRequestAuthorizer | None] = ContextVar(
+            f"recipe_browser_authorizer_{id(self)}",
+            default=None,
+        )
         self._closed = False
 
     @property
@@ -47,6 +58,7 @@ class ControlledRecipeClient:
         async with self._condition:
             self._closed = True
             await self._condition.wait_for(lambda: not self._active_clients)
+        await self._close_all_browser_sessions()
 
     async def api_request(
         self,
@@ -124,8 +136,14 @@ class ControlledRecipeClient:
         *,
         authorize_request: BrowserRequestAuthorizer,
     ) -> AsyncIterator[None]:
-        del authorize_request
-        yield
+        token = self._browser_authorizer.set(authorize_request)
+        try:
+            yield
+        finally:
+            try:
+                await self._close_current_browser_session()
+            finally:
+                self._browser_authorizer.reset(token)
 
     async def browser_action(
         self,
@@ -136,8 +154,76 @@ class ControlledRecipeClient:
         current_url: str,
         timeout_seconds: float,
     ) -> RecipeStepResponse:
-        del action, target, value, current_url, timeout_seconds
-        raise RuntimeError("browser Recipe execution is unavailable")
+        if self._browser_pool is None:
+            raise RuntimeError("browser Recipe execution is unavailable")
+        if self._closed:
+            raise RuntimeError("controlled Recipe client is closed")
+        authorizer = self._browser_authorizer.get()
+        if authorizer is None:
+            raise RuntimeError("browser Recipe action used outside authorization scope")
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - asyncio always owns awaited work
+            raise RuntimeError("browser Recipe action requires an asyncio task")
+        session = await self._browser_session(
+            task=task,
+            authorize_request=authorizer,
+        )
+        try:
+            result = await session.action(
+                action=action,
+                target=target,
+                value=value,
+                current_url=current_url,
+                timeout_seconds=timeout_seconds,
+            )
+        except BaseException:
+            await self._close_browser_session(task)
+            raise
+        return RecipeStepResponse(
+            content=result.content,
+            status_code=result.status_code,
+            media_type=result.media_type,
+        )
+
+    async def _browser_session(
+        self,
+        *,
+        task: asyncio.Task[Any],
+        authorize_request: BrowserRequestAuthorizer,
+    ) -> BrowserSession:
+        async with self._browser_session_lock:
+            existing = self._browser_sessions.get(task)
+            if existing is not None:
+                return existing
+            assert self._browser_pool is not None
+            session = await self._browser_pool.open_session(
+                authorize_request=authorize_request,
+            )
+            self._browser_sessions[task] = session
+            return session
+
+    async def _close_current_browser_session(self) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            await self._close_browser_session(task)
+
+    async def _close_browser_session(
+        self,
+        task: asyncio.Task[Any],
+    ) -> None:
+        async with self._browser_session_lock:
+            session = self._browser_sessions.pop(task, None)
+        if session is not None:
+            await session.close()
+
+    async def _close_all_browser_sessions(self) -> None:
+        async with self._browser_session_lock:
+            sessions = tuple(self._browser_sessions.values())
+            self._browser_sessions.clear()
+        await asyncio.gather(
+            *(session.close() for session in sessions),
+            return_exceptions=True,
+        )
 
     async def _request(
         self,

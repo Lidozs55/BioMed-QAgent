@@ -12,18 +12,23 @@ Three-tier fallback chain:
     2. httpx second (httpx + browser UA, direct page fetch)
     3. crawl fallback (Playwright real browser, stealth + networkidle)
 """
+
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
+from app.tools.browser_pool import BrowserPool
 from app.tools.network_safety import (
     validate_public_http_request,
     validate_public_http_url,
@@ -56,6 +61,7 @@ window.chrome = {runtime: {}};
 
 # Rate limiting: 2s between requests (project_memory L11)
 _RATE_LIMIT_SECONDS = 2.0
+MAX_CRAWLER_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 @dataclass
@@ -69,14 +75,37 @@ class FetchResult:
     method_used: str  # "api" | "httpx" | "crawl"
     error: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    attempts: tuple[CrawlAttempt, ...] = ()
 
     @property
     def ok(self) -> bool:
         return 200 <= self.status_code < 300 and self.error is None
 
 
+@dataclass(frozen=True, slots=True)
+class CrawlAttempt:
+    """One auditable API, HTML, or browser acquisition attempt."""
+
+    method: str
+    url: str
+    started_at: datetime
+    status: str
+    status_code: int | None = None
+    reason: str | None = None
+    fallback_reason: str | None = None
+
+
 class CrawlError(Exception):
     """Raised when all fetch methods fail."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: tuple[CrawlAttempt, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
 
 
 class RateLimiter:
@@ -101,6 +130,263 @@ class RateLimiter:
 
 # Module-level rate limiter instance for shared use
 _rate_limiter = RateLimiter()
+
+
+@dataclass(slots=True)
+class _AsyncHostState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_request_time: float | None = None
+    last_used: float = 0.0
+    references: int = 0
+
+
+class AsyncHostRateLimiter:
+    """Apply request pacing independently for each normalized hostname."""
+
+    def __init__(
+        self,
+        *,
+        min_interval: float = _RATE_LIMIT_SECONDS,
+        max_hosts: int = 256,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if min_interval < 0:
+            raise ValueError("min_interval must be non-negative")
+        if max_hosts <= 0:
+            raise ValueError("max_hosts must be positive")
+        self._min_interval = min_interval
+        self._max_hosts = max_hosts
+        self._clock = clock
+        self._sleeper = sleeper
+        self._hosts: dict[str, _AsyncHostState] = {}
+        self._registry_lock = asyncio.Lock()
+
+    @property
+    def tracked_host_count(self) -> int:
+        return len(self._hosts)
+
+    async def wait(self, url: str) -> None:
+        """Wait for the limiter associated with *url*'s hostname."""
+        host = _normalized_host(url)
+        async with self._registry_lock:
+            state = self._hosts.get(host)
+            if state is None:
+                self._evict_idle_host()
+                state = _AsyncHostState()
+                self._hosts[host] = state
+            state.references += 1
+            state.last_used = self._clock()
+        try:
+            async with state.lock:
+                now = self._clock()
+                if state.last_request_time is not None:
+                    remaining = self._min_interval - (now - state.last_request_time)
+                    if remaining > 0:
+                        await self._sleeper(remaining)
+                state.last_request_time = self._clock()
+        finally:
+            async with self._registry_lock:
+                state.references -= 1
+                state.last_used = self._clock()
+
+    def _evict_idle_host(self) -> None:
+        if len(self._hosts) < self._max_hosts:
+            return
+        candidates = [
+            (state.last_used, host) for host, state in self._hosts.items() if state.references == 0
+        ]
+        if not candidates:
+            raise RuntimeError("host rate limiter capacity is exhausted")
+        _, oldest_host = min(candidates)
+        del self._hosts[oldest_host]
+
+
+class CrawlerFacadeProtocol(Protocol):
+    """I/O surface consumed by the deterministic fallback orchestrator."""
+
+    async def api(self, url: str) -> FetchResult: ...
+
+    async def html(self, url: str) -> FetchResult: ...
+
+    async def browser(self, url: str) -> FetchResult: ...
+
+
+class CrawlerFacade:
+    """Asynchronous API/HTML/browser transports with host-scoped limiting."""
+
+    def __init__(
+        self,
+        *,
+        browser_pool: BrowserPool | None = None,
+        min_interval: float = _RATE_LIMIT_SECONDS,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._browser_pool = browser_pool
+        self._limiter = AsyncHostRateLimiter(min_interval=min_interval)
+        self._http = httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            trust_env=False,
+            transport=http_transport,
+            event_hooks={"request": [self._before_request]},
+        )
+        self._closed = False
+
+    async def api(self, url: str) -> FetchResult:
+        """Fetch structured API content."""
+        return await self._request(
+            url,
+            headers={
+                "User-Agent": BROWSER_UA,
+                "Accept": "application/json",
+            },
+            method_used="api",
+        )
+
+    async def html(self, url: str) -> FetchResult:
+        """Fetch static HTML content."""
+        return await self._request(
+            url,
+            headers=BROWSER_HEADERS,
+            method_used="httpx",
+        )
+
+    async def browser(self, url: str) -> FetchResult:
+        """Render content through the lifespan-owned BrowserPool."""
+        if self._browser_pool is None:
+            return FetchResult(
+                url=url,
+                content="",
+                status_code=0,
+                elapsed_ms=0,
+                method_used="crawl",
+                error="lifespan-owned browser pool is unavailable",
+            )
+        started_at = time.monotonic()
+        try:
+            result = await self._browser_pool.fetch(
+                url,
+                extra_headers=BROWSER_HEADERS,
+            )
+            return FetchResult(
+                url=result.url,
+                content=result.content,
+                status_code=result.status_code,
+                elapsed_ms=result.elapsed_ms,
+                method_used="crawl",
+                headers=result.headers,
+            )
+        except Exception as error:
+            return FetchResult(
+                url=url,
+                content="",
+                status_code=0,
+                elapsed_ms=(time.monotonic() - started_at) * 1000,
+                method_used="crawl",
+                error=f"{type(error).__name__}: {error}",
+            )
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._http.aclose()
+
+    async def _before_request(self, request: httpx.Request) -> None:
+        url = str(request.url)
+        await asyncio.to_thread(validate_public_http_url, url)
+        await self._limiter.wait(url)
+
+    async def _request(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        method_used: str,
+    ) -> FetchResult:
+        started_at = time.monotonic()
+        try:
+            async with self._http.stream(
+                "GET",
+                url,
+                headers=headers,
+            ) as response:
+                declared_length = response.headers.get(
+                    "content-length",
+                    "",
+                ).strip()
+                if declared_length.isdigit() and int(declared_length) > MAX_CRAWLER_RESPONSE_BYTES:
+                    return self._oversized_result(
+                        url=str(response.url),
+                        status_code=response.status_code,
+                        elapsed_ms=(time.monotonic() - started_at) * 1000,
+                        method_used=method_used,
+                        headers=dict(response.headers),
+                    )
+                chunks: list[bytes] = []
+                received = 0
+                async for chunk in response.aiter_bytes():
+                    received += len(chunk)
+                    if received > MAX_CRAWLER_RESPONSE_BYTES:
+                        return self._oversized_result(
+                            url=str(response.url),
+                            status_code=response.status_code,
+                            elapsed_ms=(time.monotonic() - started_at) * 1000,
+                            method_used=method_used,
+                            headers=dict(response.headers),
+                        )
+                    chunks.append(chunk)
+                encoding = response.encoding or "utf-8"
+                content = b"".join(chunks).decode(
+                    encoding,
+                    errors="replace",
+                )
+                return FetchResult(
+                    url=str(response.url),
+                    content=content,
+                    status_code=response.status_code,
+                    elapsed_ms=(time.monotonic() - started_at) * 1000,
+                    method_used=method_used,
+                    headers=dict(response.headers),
+                )
+        except Exception as error:
+            return FetchResult(
+                url=url,
+                content="",
+                status_code=0,
+                elapsed_ms=(time.monotonic() - started_at) * 1000,
+                method_used=method_used,
+                error=f"{type(error).__name__}: {error}",
+            )
+
+    @staticmethod
+    def _oversized_result(
+        *,
+        url: str,
+        status_code: int,
+        elapsed_ms: float,
+        method_used: str,
+        headers: dict[str, str],
+    ) -> FetchResult:
+        return FetchResult(
+            url=url,
+            content="",
+            status_code=status_code,
+            elapsed_ms=elapsed_ms,
+            method_used=method_used,
+            headers=headers,
+            error=(f"crawler response exceeded {MAX_CRAWLER_RESPONSE_BYTES} byte limit"),
+        )
+
+
+_default_crawler_facade: CrawlerFacade | None = None
+
+
+def set_default_crawler_facade(facade: CrawlerFacade | None) -> None:
+    """Configure the facade owned by the application lifespan."""
+    global _default_crawler_facade
+    _default_crawler_facade = facade
 
 
 def _guard_playwright_route(route: Any) -> None:
@@ -215,9 +501,7 @@ def playwright_fetch(
             context.add_init_script(STEALTH_JS)
             context.route("**/*", _guard_playwright_route)
             page = context.new_page()
-            response = page.goto(
-                url, wait_until=wait_until, timeout=int(timeout * 1000)
-            )
+            response = page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
             content = page.content()
             status_code = response.status if response is not None else 0
             response_headers = dict(response.headers) if response is not None else {}
@@ -390,9 +674,7 @@ def playwright_screenshot(
             context.add_init_script(STEALTH_JS)
             context.route("**/*", _guard_playwright_route)
             page = context.new_page()
-            response = page.goto(
-                url, wait_until=wait_until, timeout=int(timeout * 1000)
-            )
+            response = page.goto(url, wait_until=wait_until, timeout=int(timeout * 1000))
             status_code = response.status if response is not None else 0
 
             dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -400,9 +682,7 @@ def playwright_screenshot(
                 # Wait for the element to be visible before截图; otherwise
                 # bounding_box() may return None on pages with slow layout
                 # (images/fonts loading, ads shifting the viewport).
-                page.wait_for_selector(
-                    selector, state="visible", timeout=int(timeout * 1000)
-                )
+                page.wait_for_selector(selector, state="visible", timeout=int(timeout * 1000))
                 locator = page.locator(selector).first
                 # Use JS scrollIntoView to bypass Playwright's "waiting for
                 # element to be stable" check, which hangs on pages with
@@ -410,16 +690,12 @@ def playwright_screenshot(
                 # layout shifts (BMC's lazy-loaded figures). The built-in
                 # locator.scroll_into_view_if_needed() and locator.screenshot()
                 # both internally wait for stability and can time out.
-                locator.evaluate(
-                    "el => el.scrollIntoView({block: 'center', inline: 'center'})"
-                )
+                locator.evaluate("el => el.scrollIntoView({block: 'center', inline: 'center'})")
                 # Allow layout to settle briefly after the JS scroll
                 page.wait_for_timeout(300)
                 bbox = locator.bounding_box()
                 if bbox is None:
-                    raise CrawlError(
-                        f"Element '{selector}' has no bounding box on {url}"
-                    )
+                    raise CrawlError(f"Element '{selector}' has no bounding box on {url}")
                 # Clip the page screenshot to the element's bounding box.
                 # page.screenshot(clip=...) does NOT do element stability
                 # checks, so it won't hang on continuous layout shifts.
@@ -471,69 +747,142 @@ def playwright_screenshot(
         )
 
 
-def fetch_with_fallback(
+async def fetch_with_fallback(
     api_url: str | None,
-    page_url: str,
+    page_url: str | None = None,
     *,
     source_name: str = "unknown",
     use_crawl_fallback: bool = True,
     accept_result: Callable[[FetchResult], bool] | None = None,
+    facade: CrawlerFacadeProtocol | None = None,
 ) -> FetchResult:
-    """Three-tier fallback fetch: api > httpx > crawl.
+    """Run the exact API → HTML → browser fallback sequence.
 
     Args:
         api_url: REST API endpoint URL (first tier). If None, skip API tier.
-        page_url: Page URL for httpx and crawl tiers.
+        page_url: Page URL for HTML and browser tiers. When omitted, ``api_url``
+            is used for all three tiers.
         source_name: Source name for logging.
         use_crawl_fallback: Whether to use Playwright as the final fallback.
         accept_result: Optional semantic acceptance predicate applied after a
             transport-successful result. Rejected results continue fallback.
+        facade: Optional injected asynchronous transports.
 
     Returns:
-        FetchResult from the first successful tier.
+        The first accepted FetchResult with its complete attempt audit.
 
     Raises:
         CrawlError: If all tiers fail.
     """
-    tried_methods: list[str] = []
+    if page_url is None:
+        if api_url is None:
+            raise ValueError("api_url or page_url is required")
+        page_url = api_url
 
-    # Tier 1: API
-    if api_url:
-        logger.info("[%s] Tier 1 (API): fetching %s", source_name, api_url)
-        result = api_fetch(api_url)
-        tried_methods.append("api")
-        if result.ok and (accept_result is None or accept_result(result)):
-            logger.info("[%s] API tier succeeded (%.0fms)", source_name, result.elapsed_ms)
-            return result
-        logger.warning("[%s] API tier failed: %s", source_name, result.error or result.status_code)
+    active_facade = facade or _default_crawler_facade
+    owns_facade = active_facade is None
+    if active_facade is None:
+        active_facade = CrawlerFacade()
 
-    # Tier 2: httpx
-    logger.info("[%s] Tier 2 (httpx): fetching %s", source_name, page_url)
-    result = httpx_fetch(page_url)
-    tried_methods.append("httpx")
-    if result.ok and (accept_result is None or accept_result(result)):
-        logger.info("[%s] httpx tier succeeded (%.0fms)", source_name, result.elapsed_ms)
-        return result
-    logger.warning("[%s] httpx tier failed: %s", source_name, result.error or result.status_code)
-
-    # Tier 3: crawl (Playwright)
+    attempts: list[CrawlAttempt] = []
+    tiers: list[
+        tuple[
+            str,
+            str,
+            Callable[[str], Awaitable[FetchResult]],
+        ]
+    ] = []
+    if api_url is not None:
+        tiers.append(("api", api_url, active_facade.api))
+    tiers.append(("html", page_url, active_facade.html))
     if use_crawl_fallback:
-        logger.info("[%s] Tier 3 (crawl): fetching %s", source_name, page_url)
-        try:
-            result = playwright_fetch(page_url)
-            tried_methods.append("crawl")
-            if result.ok and (accept_result is None or accept_result(result)):
-                logger.info("[%s] crawl tier succeeded (%.0fms)", source_name, result.elapsed_ms)
+        tiers.append(("browser", page_url, active_facade.browser))
+
+    try:
+        for tier_index, (method, url, operation) in enumerate(tiers):
+            logger.info(
+                "[%s] %s tier: fetching %s",
+                source_name,
+                method,
+                url,
+            )
+            started_at = datetime.now(UTC)
+            try:
+                result = await operation(url)
+            except Exception as error:
+                result = FetchResult(
+                    url=url,
+                    content="",
+                    status_code=0,
+                    elapsed_ms=0,
+                    method_used=_legacy_method_name(method),
+                    error=f"{type(error).__name__}: {error}",
+                )
+
+            accepted = result.ok
+            if accepted and accept_result is not None:
+                accepted = await asyncio.to_thread(
+                    accept_result,
+                    result,
+                )
+            reason = _attempt_reason(result, accepted=accepted)
+            attempts.append(
+                CrawlAttempt(
+                    method=method,
+                    url=url,
+                    started_at=started_at,
+                    status="succeeded" if accepted else "failed",
+                    status_code=(result.status_code if result.status_code > 0 else None),
+                    reason=reason,
+                    fallback_reason=(
+                        f"falling back to {tiers[tier_index + 1][0]}"
+                        if not accepted and tier_index + 1 < len(tiers)
+                        else None
+                    ),
+                )
+            )
+            if accepted:
+                result.attempts = tuple(attempts)
                 return result
             logger.warning(
-                "[%s] crawl tier failed: %s",
+                "[%s] %s tier failed: %s",
                 source_name,
-                result.error or result.status_code,
+                method,
+                reason,
             )
-        except CrawlError as exc:
-            logger.warning("[%s] crawl tier unavailable: %s", source_name, exc)
-            tried_methods.append("crawl_failed")
+    finally:
+        if owns_facade:
+            assert isinstance(active_facade, CrawlerFacade)
+            await active_facade.aclose()
 
     raise CrawlError(
-        f"All fetch tiers failed for {source_name}. Tried: {', '.join(tried_methods)}"
+        f"All fetch tiers failed for {source_name}. "
+        f"Tried: {', '.join(attempt.method for attempt in attempts)}",
+        attempts=tuple(attempts),
     )
+
+
+def _attempt_reason(result: FetchResult, *, accepted: bool) -> str | None:
+    if accepted:
+        return None
+    if result.error:
+        return result.error
+    if result.ok:
+        return "semantic acceptance predicate rejected result"
+    if result.status_code:
+        return f"HTTP {result.status_code}"
+    return "transport returned no successful response"
+
+
+def _legacy_method_name(method: str) -> str:
+    return {"html": "httpx", "browser": "crawl"}.get(method, method)
+
+
+def _normalized_host(url: str) -> str:
+    try:
+        host = urlsplit(url).hostname
+    except ValueError as error:
+        raise ValueError("rate-limited URL is malformed") from error
+    if not host:
+        raise ValueError("rate-limited URL requires a hostname")
+    return host.lower().rstrip(".")

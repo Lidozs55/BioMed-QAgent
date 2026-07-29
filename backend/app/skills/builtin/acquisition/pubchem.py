@@ -9,8 +9,10 @@ This skill uses the three-tier fallback chain (api > httpx > crawl):
 
 PUG-REST API docs: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
 """
+
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -44,23 +46,29 @@ def _accept_pubchem_page(result: FetchResult) -> bool:
 
 
 def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
-    return json.dumps({
-        "status": "page_fallback",
-        "source": source,
-        "method_used": result.method_used,
-        "page_url": page_url,
-        "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "page_fallback",
+            "source": source,
+            "method_used": result.method_used,
+            "page_url": page_url,
+            "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+        },
+        ensure_ascii=False,
+    )
 
 
 def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
-    return json.dumps({
-        "status": "error",
-        "source": source,
-        "page_url": page_url,
-        "attempted_methods": ["api", "httpx", "crawl"],
-        "error": str(error),
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "error",
+            "source": source,
+            "page_url": page_url,
+            "attempted_methods": ["api", "httpx", "crawl"],
+            "error": str(error),
+        },
+        ensure_ascii=False,
+    )
 
 
 @function_tool(
@@ -72,7 +80,7 @@ def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
         "Use ``get_compound`` to get full details for a specific CID."
     ),
 )
-def search_pubchem(
+async def search_pubchem(
     ctx: RunContextWrapper[Any],
     term: str,
     max_results: int = 20,
@@ -103,7 +111,7 @@ def search_pubchem(
     )
 
     # Tier 1: API
-    result = api_fetch(api_url)
+    result = await asyncio.to_thread(api_fetch, api_url)
     if result.ok:
         try:
             data = json.loads(result.content)
@@ -120,20 +128,23 @@ def search_pubchem(
                 for c in compounds
             ]
             run_ctx.log_query(term, "pubchem", QueryStatus.SUCCESS, len(records))
-            return json.dumps({
-                "source": "pubchem",
-                "term": term,
-                "count": len(records),
-                "records": records,
-                "method_used": "api",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "source": "pubchem",
+                    "term": term,
+                    "count": len(records),
+                    "records": records,
+                    "method_used": "api",
+                },
+                ensure_ascii=False,
+            )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem API response: %s", exc)
 
     # Direct page fallback: PubChem requires rendered browser content.
     page_url = f"https://pubchem.ncbi.nlm.nih.gov/#query={encoded_term}"
     try:
-        page_result = fetch_with_fallback(
+        page_result = await fetch_with_fallback(
             None,
             page_url,
             source_name="pubchem",
@@ -150,7 +161,7 @@ def search_pubchem(
 
 
 @function_tool
-def get_compound(
+async def get_compound(
     ctx: RunContextWrapper[Any],
     cid: int,
 ) -> str:
@@ -176,7 +187,7 @@ def get_compound(
     )
 
     # Tier 1: API
-    result = api_fetch(api_url)
+    result = await asyncio.to_thread(api_fetch, api_url)
     if result.ok:
         try:
             data = json.loads(result.content)
@@ -205,19 +216,22 @@ def get_compound(
                 )
                 run_ctx.add_source(source_record)
 
-                return json.dumps({
-                    "source": "pubchem",
-                    "cid": cid,
-                    "record": record,
-                    "method_used": "api",
-                }, ensure_ascii=False)
+                return json.dumps(
+                    {
+                        "source": "pubchem",
+                        "cid": cid,
+                        "record": record,
+                        "method_used": "api",
+                    },
+                    ensure_ascii=False,
+                )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem compound response: %s", exc)
 
     # Direct rendered page fallback.
     page_url = f"{_PUBCHEM_PAGE_BASE}/{cid}"
     try:
-        page_result = fetch_with_fallback(
+        page_result = await fetch_with_fallback(
             None,
             page_url,
             source_name="pubchem",

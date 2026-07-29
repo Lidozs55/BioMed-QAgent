@@ -3,6 +3,7 @@
 Tests the three-tier fallback chain (api > httpx > crawl) using
 mocked crawler functions.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,26 +47,28 @@ def _api_result(content: str, status_code: int = 200) -> FetchResult:
 
 def test_search_pubchem_api_success() -> None:
     """search_pubchem returns compounds when API succeeds."""
-    api_response = json.dumps({
-        "PropertyTable": {
-            "Properties": [
-                {
-                    "CID": 2244,
-                    "MolecularFormula": "C9H8O4",
-                    "MolecularWeight": 180.16,
-                    "IUPACName": "2-acetyloxybenzoic acid",
-                    "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
-                },
-                {
-                    "CID": 5281607,
-                    "MolecularFormula": "C21H20O6",
-                    "MolecularWeight": 368.38,
-                    "IUPACName": "(1E,6E)-1,7-bis(4-hydroxy-3-methoxyphenyl)hepta-1,6-diene-3,5-dione",
-                    "CanonicalSMILES": "COc1cc(/C=C/C(=O)CC(=O)/C=C/c2ccc(O)c(OC)c2)ccc1O",
-                },
-            ]
+    api_response = json.dumps(
+        {
+            "PropertyTable": {
+                "Properties": [
+                    {
+                        "CID": 2244,
+                        "MolecularFormula": "C9H8O4",
+                        "MolecularWeight": 180.16,
+                        "IUPACName": "2-acetyloxybenzoic acid",
+                        "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+                    },
+                    {
+                        "CID": 5281607,
+                        "MolecularFormula": "C21H20O6",
+                        "MolecularWeight": 368.38,
+                        "IUPACName": "(1E,6E)-1,7-bis(4-hydroxy-3-methoxyphenyl)hepta-1,6-diene-3,5-dione",
+                        "CanonicalSMILES": "COc1cc(/C=C/C(=O)CC(=O)/C=C/c2ccc(O)c(OC)c2)ccc1O",
+                    },
+                ]
+            }
         }
-    })
+    )
     api_result = _api_result(api_response)
 
     ctx = _make_ctx(task_id="test_pubchem_search")
@@ -91,13 +94,6 @@ def test_search_pubchem_api_success() -> None:
 def test_search_pubchem_parse_failure_rejects_shell_and_uses_playwright() -> None:
     """PubChem shell HTML is rejected until rendered content is available."""
     api_result = _api_result("[]")
-    httpx_result = FetchResult(
-        url="https://pubchem.ncbi.nlm.nih.gov",
-        content="<html><body><div id='root'></div></body></html>",
-        status_code=200,
-        elapsed_ms=100,
-        method_used="httpx",
-    )
     crawl_result = FetchResult(
         url="https://pubchem.ncbi.nlm.nih.gov",
         content="<html><body>Aspirin compound results</body></html>",
@@ -109,8 +105,10 @@ def test_search_pubchem_parse_failure_rejects_shell_and_uses_playwright() -> Non
     ctx = _make_ctx(task_id="test_pubchem_httpx")
     with (
         patch("app.skills.builtin.acquisition.pubchem.api_fetch", return_value=api_result),
-        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
-        patch("app.tools.crawler.playwright_fetch", return_value=crawl_result) as crawl,
+        patch(
+            "app.skills.builtin.acquisition.pubchem.fetch_with_fallback",
+            return_value=crawl_result,
+        ) as fallback,
     ):
         args = json.dumps({"term": "curcumin"})
         result = asyncio.run(search_pubchem.on_invoke_tool(ctx, args))
@@ -119,7 +117,7 @@ def test_search_pubchem_parse_failure_rejects_shell_and_uses_playwright() -> Non
     assert data["status"] == "page_fallback"
     assert data["method_used"] == "crawl"
     assert "Aspirin compound results" in data["body_text_preview"]
-    crawl.assert_called_once()
+    fallback.assert_awaited_once()
 
 
 def test_search_pubchem_all_fail_returns_structured_error() -> None:
@@ -154,21 +152,23 @@ def test_search_pubchem_all_fail_returns_structured_error() -> None:
 
 def test_get_compound_api_success() -> None:
     """get_compound returns compound details when API succeeds."""
-    api_response = json.dumps({
-        "PropertyTable": {
-            "Properties": [
-                {
-                    "CID": 2244,
-                    "MolecularFormula": "C9H8O4",
-                    "MolecularWeight": 180.16,
-                    "IUPACName": "2-acetyloxybenzoic acid",
-                    "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
-                    "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
-                    "InChI": "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)",
-                }
-            ]
+    api_response = json.dumps(
+        {
+            "PropertyTable": {
+                "Properties": [
+                    {
+                        "CID": 2244,
+                        "MolecularFormula": "C9H8O4",
+                        "MolecularWeight": 180.16,
+                        "IUPACName": "2-acetyloxybenzoic acid",
+                        "CanonicalSMILES": "CC(=O)OC1=CC=CC=C1C(=O)O",
+                        "InChIKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+                        "InChI": "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)",
+                    }
+                ]
+            }
         }
-    })
+    )
     api_result = _api_result(api_response)
 
     ctx = _make_ctx(task_id="test_pubchem_get")

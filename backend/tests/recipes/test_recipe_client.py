@@ -9,6 +9,7 @@ import httpx
 import pytest
 from app.integrations.acquisition import ValidatedRecipeTarget
 from app.recipes.client import ControlledRecipeClient
+from app.tools.browser_pool import BrowserActionResult
 from app.tools.network_safety import PublicHttpTarget
 
 
@@ -349,4 +350,132 @@ async def test_browser_interface_fails_closed() -> None:
                 current_url="https://api.example.org/data",
                 timeout_seconds=5,
             )
+    await client.aclose()
+
+
+class FakeBrowserSession:
+    def __init__(
+        self,
+        authorize_request: Callable[..., object],
+    ) -> None:
+        self.authorize_request = authorize_request
+        self.actions: list[str] = []
+        self.closed = False
+
+    async def action(self, **kwargs: object) -> BrowserActionResult:
+        action = str(kwargs["action"])
+        self.actions.append(action)
+        self.authorize_request(
+            str(kwargs["current_url"]),
+            resource_type="main_frame",
+        )
+        if action == "navigate":
+            self.authorize_request(
+                "https://cdn.example.org/app.js",
+                resource_type="script",
+            )
+        return BrowserActionResult(
+            content=b"final-data" if action == "extract" else b"",
+            status_code=200,
+            media_type="text/plain" if action == "extract" else "text/html",
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeBrowserPool:
+    def __init__(self) -> None:
+        self.sessions: list[FakeBrowserSession] = []
+
+    async def open_session(
+        self,
+        *,
+        authorize_request: Callable[..., object],
+        extra_headers: dict[str, str] | None = None,
+    ) -> FakeBrowserSession:
+        del extra_headers
+        session = FakeBrowserSession(authorize_request)
+        self.sessions.append(session)
+        return session
+
+
+@pytest.mark.asyncio
+async def test_browser_adapter_reuses_isolated_session_for_all_declared_actions() -> None:
+    pool = FakeBrowserPool()
+    client = ControlledRecipeClient(
+        transport_factory=lambda _sni: httpx.MockTransport(lambda _request: httpx.Response(200)),
+        browser_pool=pool,
+    )
+    authorized: list[tuple[str, str]] = []
+
+    def authorize(url: str, *, resource_type: str) -> ValidatedRecipeTarget:
+        authorized.append((url, resource_type))
+        return _target()
+
+    actions = [
+        ("navigate", None, "https://api.example.org/data"),
+        ("click", "button.open", None),
+        ("fill", "input.query", "GSE100"),
+        ("select", "select.species", "human"),
+        ("wait_for", "#results", None),
+        ("extract", "#results", None),
+    ]
+    responses = []
+    async with client.browser_authorization(
+        authorize_request=authorize,
+    ):
+        for action, target, value in actions:
+            responses.append(
+                await client.browser_action(
+                    action=action,
+                    target=target,
+                    value=value,
+                    current_url="https://api.example.org/data",
+                    timeout_seconds=5,
+                )
+            )
+
+    assert len(pool.sessions) == 1
+    assert pool.sessions[0].actions == [action[0] for action in actions]
+    assert pool.sessions[0].closed
+    assert responses[-1].content == b"final-data"
+    assert authorized[0] == (
+        "https://api.example.org/data",
+        "main_frame",
+    )
+    assert (
+        "https://cdn.example.org/app.js",
+        "script",
+    ) in authorized
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_browser_authorization_exit_closes_sequence_without_extract() -> None:
+    pool = FakeBrowserPool()
+    client = ControlledRecipeClient(
+        browser_pool=pool,
+    )
+
+    async with client.browser_authorization(
+        authorize_request=lambda *_args, **_kwargs: _target(),
+    ):
+        await client.browser_action(
+            action="navigate",
+            target=None,
+            value="https://api.example.org/data",
+            current_url="https://api.example.org/data",
+            timeout_seconds=5,
+        )
+        await client.browser_action(
+            action="click",
+            target="button.open",
+            value=None,
+            current_url="https://api.example.org/data",
+            timeout_seconds=5,
+        )
+
+    assert len(pool.sessions) == 1
+    assert pool.sessions[0].closed
     await client.aclose()

@@ -43,7 +43,12 @@ from app.subagents.event_sink import DurableSubagentEventSink
 from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.staging import SubagentStagingWorkspace
 from app.subagents.supervisor import SubagentSupervisor
+from app.tools.browser_pool import BrowserPool
 from app.tools.cache_store import init_cache_store
+from app.tools.crawler import (
+    CrawlerFacade,
+    set_default_crawler_facade,
+)
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -56,9 +61,7 @@ logging.basicConfig(
 # is the audit artifact for metrics analysis and ablation studies.
 _pipeline_log_dir = Path("logs")
 _pipeline_log_dir.mkdir(parents=True, exist_ok=True)
-_pipeline_log_handler = logging.FileHandler(
-    _pipeline_log_dir / "pipeline.jsonl", encoding="utf-8"
-)
+_pipeline_log_handler = logging.FileHandler(_pipeline_log_dir / "pipeline.jsonl", encoding="utf-8")
 _pipeline_log_handler.setFormatter(logging.Formatter("%(message)s"))
 logging.getLogger("app.pipeline").addHandler(_pipeline_log_handler)
 
@@ -100,17 +103,13 @@ def create_app(
             settings=configured,
             storage_executor=storage_executor,
         )
-        event_hub = EventHub(
-            subscriber_queue_size=configured.runtime_subscriber_queue_size
-        )
+        event_hub = EventHub(subscriber_queue_size=configured.runtime_subscriber_queue_size)
         assistant_stream_hub = AssistantStreamHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
         skill_catalog = SkillCatalog()
         model_settings_store = ModelSettingsStore(
-            Path(configured.output_dir).expanduser().resolve().parent
-            / "settings"
-            / "model.json",
+            Path(configured.output_dir).expanduser().resolve().parent / "settings" / "model.json",
             defaults=configured,
         )
         set_current_model_settings_store(model_settings_store)
@@ -124,11 +123,12 @@ def create_app(
             catalog=skill_catalog,
             builtins=load_builtin_skill_descriptors(),
         )
-        workflow_recipe_store = WorkflowRecipeStore(
-            configured.skill_data_path / "recipes"
-        )
+        workflow_recipe_store = WorkflowRecipeStore(configured.skill_data_path / "recipes")
+        browser_pool = BrowserPool(max_contexts=4)
+        crawler_facade = CrawlerFacade(browser_pool=browser_pool)
         recipe_client = ControlledRecipeClient(
-            transport_factory=recipe_http_transport_factory
+            transport_factory=recipe_http_transport_factory,
+            browser_pool=browser_pool,
         )
         recipe_executor = RecipeExecutor(
             client=recipe_client,
@@ -195,6 +195,8 @@ def create_app(
         application.state.task_manager = manager
         application.state.task_context_factory = task_context_factory
         application.state.workflow_recipe_store = workflow_recipe_store
+        application.state.browser_pool = browser_pool
+        application.state.crawler_facade = crawler_facade
         application.state.recipe_client = recipe_client
         application.state.recipe_executor = recipe_executor
         application.state.subagent_input_broker = subagent_input_broker
@@ -210,34 +212,46 @@ def create_app(
         application.state.model_settings_store = model_settings_store
         application.state.model_preview_client = model_preview_client
         try:
+            await browser_pool.start()
+            set_default_crawler_facade(crawler_facade)
             await manager.start()
             yield
         finally:
+            set_default_crawler_facade(None)
             try:
-                await model_preview_client.aclose()
-            finally:
                 try:
-                    await subagent_supervisor.shutdown()
+                    await model_preview_client.aclose()
                 finally:
                     try:
-                        await manager.close()
+                        await subagent_supervisor.shutdown()
                     finally:
                         try:
-                            await recipe_client.aclose()
+                            await manager.close()
                         finally:
                             try:
-                                await assistant_stream_hub.close()
+                                await recipe_client.aclose()
                             finally:
                                 try:
-                                    await event_hub.close()
+                                    await crawler_facade.aclose()
                                 finally:
                                     try:
-                                        await index_executor.close()
+                                        await browser_pool.close()
                                     finally:
                                         try:
-                                            storage_executor.shutdown(wait=True)
+                                            await assistant_stream_hub.close()
                                         finally:
-                                            sync_executor.shutdown(wait=True)
+                                            try:
+                                                await event_hub.close()
+                                            finally:
+                                                try:
+                                                    await index_executor.close()
+                                                finally:
+                                                    try:
+                                                        storage_executor.shutdown(wait=True)
+                                                    finally:
+                                                        sync_executor.shutdown(wait=True)
+            finally:
+                set_default_crawler_facade(None)
 
     application = FastAPI(
         title="BioMed QAgent v1",

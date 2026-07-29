@@ -6,7 +6,7 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from string import Formatter
@@ -230,6 +230,21 @@ class RecipeExecutor:
         inputs: Mapping[str, object],
         workspace: SubagentStagingWorkspace,
     ) -> RecipeExecutionResult:
+        async with AsyncExitStack() as browser_stack:
+            return await self._execute_steps_in_scope(
+                recipe,
+                inputs,
+                workspace,
+                browser_stack,
+            )
+
+    async def _execute_steps_in_scope(
+        self,
+        recipe: WorkflowRecipe,
+        inputs: Mapping[str, object],
+        workspace: SubagentStagingWorkspace,
+        browser_stack: AsyncExitStack,
+    ) -> RecipeExecutionResult:
         attempts: list[RecipeAttempt] = []
         current_target: ValidatedRecipeTarget | None = None
         last_timed_out = False
@@ -264,6 +279,12 @@ class RecipeExecutor:
                         browser_authorization = RecipeBrowserAuthorizationScope(
                             tuple(recipe.allowed_hosts)
                         )
+                        await browser_stack.enter_async_context(browser_authorization)
+                        await browser_stack.enter_async_context(
+                            self._client.browser_authorization(
+                                authorize_request=(browser_authorization.validate_request)
+                            )
+                        )
                     assert browser_authorization is not None
                     if step.action == "navigate":
                         url_template = step.value or step.target
@@ -286,22 +307,16 @@ class RecipeExecutor:
                                 "browser actions require an authorized main-frame document"
                             )
                         action_current_url = browser_authorization.document_target.url
-                    async with (
-                        browser_authorization,
-                        self._client.browser_authorization(
-                            authorize_request=browser_authorization.validate_request
+                    response = await asyncio.wait_for(
+                        self._client.browser_action(
+                            action=step.action,
+                            target=target,
+                            value=value,
+                            current_url=action_current_url,
+                            timeout_seconds=step.timeout_seconds,
                         ),
-                    ):
-                        response = await asyncio.wait_for(
-                            self._client.browser_action(
-                                action=step.action,
-                                target=target,
-                                value=value,
-                                current_url=action_current_url,
-                                timeout_seconds=step.timeout_seconds,
-                            ),
-                            timeout=step.timeout_seconds,
-                        )
+                        timeout=step.timeout_seconds,
+                    )
                     if browser_authorization.document_target is None:
                         raise ValueError(
                             "browser navigation did not authorize a main-frame document"

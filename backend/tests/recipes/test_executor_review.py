@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -443,6 +444,123 @@ async def test_browser_actions_continue_until_extract_with_exact_evidence(
         "browser action extract succeeded",
     ]
     assert result.source_asset.size_bytes == len(b"final-data")
+
+
+class ScopeTrackingClient(ControlledClient):
+    def __init__(self, responses: list[RecipeStepResponse]) -> None:
+        super().__init__(responses)
+        self.scope_exits = 0
+
+    @asynccontextmanager
+    async def browser_authorization(
+        self,
+        *,
+        authorize_request: Callable[..., ValidatedRecipeTarget],
+    ) -> AsyncIterator[None]:
+        try:
+            async with super().browser_authorization(
+                authorize_request=authorize_request,
+            ):
+                yield
+        finally:
+            self.scope_exits += 1
+
+
+@pytest.mark.asyncio
+async def test_browser_scope_closes_when_recipe_ends_without_extract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.integrations.acquisition.resolve_public_http_target",
+        _public_target,
+    )
+    store = WorkflowRecipeStore(tmp_path / "recipes")
+    recipe = _browser_recipe().model_copy(
+        update={
+            "steps": [
+                BrowserActionStep(
+                    action="navigate",
+                    value="https://api.example.org/{accession}",
+                ),
+                BrowserActionStep(action="click", target="button.download"),
+            ]
+        }
+    )
+    verified = _store_verified(store, recipe)
+    client = ScopeTrackingClient(
+        [
+            RecipeStepResponse(
+                content=b"",
+                status_code=200,
+                media_type="text/html",
+            ),
+            RecipeStepResponse(
+                content=b"",
+                status_code=200,
+                media_type="text/html",
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="all Recipe steps failed"):
+        await RecipeExecutor(client=client, store=store).execute(
+            recipe_id=verified.recipe_id,
+            version=verified.version,
+            inputs={"accession": "GSE100"},
+            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+        )
+
+    assert client.scope_exits == 1
+    assert client._authorize_request is None
+
+
+@pytest.mark.asyncio
+async def test_browser_scope_closes_when_recipe_is_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.integrations.acquisition.resolve_public_http_target",
+        _public_target,
+    )
+
+    class BlockingClient(ScopeTrackingClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.started = asyncio.Event()
+
+        async def browser_action(
+            self,
+            **kwargs: object,
+        ) -> RecipeStepResponse:
+            self._contact_browser(
+                str(kwargs["current_url"]),
+                resource_type="main_frame",
+            )
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    store = WorkflowRecipeStore(tmp_path / "recipes")
+    verified = _store_verified(store, _browser_recipe())
+    client = BlockingClient()
+    task = asyncio.create_task(
+        RecipeExecutor(client=client, store=store).execute(
+            recipe_id=verified.recipe_id,
+            version=verified.version,
+            inputs={"accession": "GSE100"},
+            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+        )
+    )
+    await client.started.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.scope_exits == 1
+    assert client._authorize_request is None
 
 
 @pytest.mark.asyncio

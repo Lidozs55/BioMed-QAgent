@@ -2,17 +2,23 @@
 
 Tests the three-tier fallback chain (api > httpx > crawl) and rate limiter.
 """
+
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import app.tools.crawler as crawler_module
+import httpx
 import pytest
 from app.tools.crawler import (
     BROWSER_HEADERS,
     BROWSER_UA,
     STEALTH_JS,
+    AsyncHostRateLimiter,
+    CrawlerFacade,
     CrawlError,
     FetchResult,
     RateLimiter,
@@ -123,6 +129,7 @@ def test_httpx_fetch_success() -> None:
     assert "Referer" in called_headers
     assert "Accept" in called_headers
 
+
 def test_httpx_fetch_configures_public_url_hook() -> None:
     response = _mock_httpx_response(text="ok", status_code=200)
     client = _mock_httpx_client(response)
@@ -130,9 +137,7 @@ def test_httpx_fetch_configures_public_url_hook() -> None:
     with patch("app.tools.crawler.httpx.Client", return_value=client) as client_cls:
         httpx_fetch("https://example.com")
 
-    assert client_cls.call_args.kwargs["event_hooks"] == {
-        "request": [validate_public_http_request]
-    }
+    assert client_cls.call_args.kwargs["event_hooks"] == {"request": [validate_public_http_request]}
 
 
 def test_httpx_fetch_failure_returns_error_result() -> None:
@@ -155,9 +160,7 @@ def test_httpx_fetch_failure_returns_error_result() -> None:
 
 def test_api_fetch_success() -> None:
     """api_fetch returns FetchResult with JSON content and API headers."""
-    response = _mock_httpx_response(
-        text='{"results": []}', status_code=200
-    )
+    response = _mock_httpx_response(text='{"results": []}', status_code=200)
     client = _mock_httpx_client(response)
 
     with patch("app.tools.crawler.httpx.Client", return_value=client):
@@ -182,9 +185,7 @@ def test_api_fetch_configures_public_url_hook() -> None:
     with patch("app.tools.crawler.httpx.Client", return_value=client) as client_cls:
         api_fetch("https://api.example.com/data")
 
-    assert client_cls.call_args.kwargs["event_hooks"] == {
-        "request": [validate_public_http_request]
-    }
+    assert client_cls.call_args.kwargs["event_hooks"] == {"request": [validate_public_http_request]}
 
 
 # ---------------------------------------------------------------------------
@@ -287,170 +288,336 @@ def test_playwright_fetch_failure_returns_error_result() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_with_fallback_api_succeeds() -> None:
-    """fetch_with_fallback returns API result when tier 1 succeeds."""
-    api_result = FetchResult(
-        url="https://api.example.com",
-        content='{"data": 1}',
-        status_code=200,
-        elapsed_ms=50,
-        method_used="api",
+class FakeCrawlerFacade:
+    def __init__(
+        self,
+        *,
+        api: FetchResult,
+        html: FetchResult,
+        browser: FetchResult,
+    ) -> None:
+        self.results = {
+            "api": api,
+            "html": html,
+            "browser": browser,
+        }
+        self.calls: list[str] = []
+
+    async def api(self, _url: str) -> FetchResult:
+        self.calls.append("api")
+        return self.results["api"]
+
+    async def html(self, _url: str) -> FetchResult:
+        self.calls.append("html")
+        return self.results["html"]
+
+    async def browser(self, _url: str) -> FetchResult:
+        self.calls.append("browser")
+        return self.results["browser"]
+
+
+def _result(
+    method: str,
+    *,
+    status_code: int = 200,
+    content: str = "ok",
+    error: str | None = None,
+) -> FetchResult:
+    return FetchResult(
+        url=f"https://{method}.example/data",
+        content=content,
+        status_code=status_code,
+        elapsed_ms=1,
+        method_used={"html": "httpx", "browser": "crawl"}.get(method, method),
+        error=error,
     )
 
-    with patch("app.tools.crawler.api_fetch", return_value=api_result):
-        result = fetch_with_fallback(
-            api_url="https://api.example.com",
-            page_url="https://example.com",
-            source_name="test",
-        )
+
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_api_succeeds() -> None:
+    """fetch_with_fallback returns API result when tier 1 succeeds."""
+    facade = FakeCrawlerFacade(
+        api=_result("api", content='{"data": 1}'),
+        html=_result("html"),
+        browser=_result("browser"),
+    )
+
+    result = await fetch_with_fallback(
+        "https://api.example.com",
+        facade=facade,
+        source_name="test",
+    )
 
     assert result.method_used == "api"
     assert result.ok is True
+    assert facade.calls == ["api"]
+    assert [attempt.method for attempt in result.attempts] == ["api"]
+    assert result.attempts[0].status == "succeeded"
 
 
-def test_fetch_with_fallback_httpx_fallback() -> None:
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_httpx_fallback() -> None:
     """fetch_with_fallback falls back to httpx when API fails."""
-    api_result = FetchResult(
-        url="https://api.example.com",
-        content="",
-        status_code=500,
-        elapsed_ms=50,
-        method_used="api",
-        error="server error",
-    )
-    httpx_result = FetchResult(
-        url="https://example.com",
-        content="<html>page</html>",
-        status_code=200,
-        elapsed_ms=100,
-        method_used="httpx",
+    facade = FakeCrawlerFacade(
+        api=_result("api", status_code=500, error="server error"),
+        html=_result("html", content="<html>page</html>"),
+        browser=_result("browser"),
     )
 
-    with patch("app.tools.crawler.api_fetch", return_value=api_result), \
-         patch("app.tools.crawler.httpx_fetch", return_value=httpx_result):
-        result = fetch_with_fallback(
-            api_url="https://api.example.com",
-            page_url="https://example.com",
-            source_name="test",
-        )
+    result = await fetch_with_fallback(
+        api_url="https://api.example.com",
+        page_url="https://example.com",
+        source_name="test",
+        facade=facade,
+    )
 
     assert result.method_used == "httpx"
     assert result.ok is True
+    assert facade.calls == ["api", "html"]
+    assert [attempt.status for attempt in result.attempts] == [
+        "failed",
+        "succeeded",
+    ]
+    assert result.attempts[0].reason == "server error"
+    assert result.attempts[0].fallback_reason == "falling back to html"
 
 
-def test_fetch_with_fallback_crawl_fallback() -> None:
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_crawl_fallback() -> None:
     """fetch_with_fallback falls back to crawl (Playwright) when api+httpx fail."""
-    api_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="api", error="api failed"
-    )
-    httpx_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="httpx", error="httpx failed"
-    )
-    crawl_result = FetchResult(
-        url="https://example.com",
-        content="<html>rendered</html>",
-        status_code=200,
-        elapsed_ms=500,
-        method_used="crawl",
+    facade = FakeCrawlerFacade(
+        api=_result("api", status_code=0, error="api failed"),
+        html=_result("html", status_code=0, error="httpx failed"),
+        browser=_result("browser", content="<html>rendered</html>"),
     )
 
-    with patch("app.tools.crawler.api_fetch", return_value=api_result), \
-         patch("app.tools.crawler.httpx_fetch", return_value=httpx_result), \
-         patch("app.tools.crawler.playwright_fetch", return_value=crawl_result):
-        result = fetch_with_fallback(
-            api_url="https://api.example.com",
-            page_url="https://example.com",
-            source_name="test",
-        )
+    result = await fetch_with_fallback(
+        api_url="https://api.example.com",
+        page_url="https://example.com",
+        source_name="test",
+        facade=facade,
+    )
 
     assert result.method_used == "crawl"
     assert result.ok is True
+    assert facade.calls == ["api", "html", "browser"]
+    assert [attempt.method for attempt in result.attempts] == [
+        "api",
+        "html",
+        "browser",
+    ]
 
 
-def test_fetch_with_fallback_rejects_static_success_and_uses_crawl() -> None:
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_rejects_static_success_and_uses_crawl() -> None:
     """A semantic predicate can reject an HTTP 200 shell page."""
-    httpx_result = FetchResult(
-        url="https://example.com",
-        content="<html><div id='app'></div></html>",
-        status_code=200,
-        elapsed_ms=100,
-        method_used="httpx",
-    )
-    crawl_result = FetchResult(
-        url="https://example.com",
+    crawl_result = _result(
+        "browser",
         content="<html><body>Rendered biomedical record</body></html>",
-        status_code=200,
-        elapsed_ms=500,
-        method_used="crawl",
+    )
+    facade = FakeCrawlerFacade(
+        api=_result("api"),
+        html=_result("html", content="<html><div id='app'></div></html>"),
+        browser=crawl_result,
     )
 
-    with (
-        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
-        patch("app.tools.crawler.playwright_fetch", return_value=crawl_result) as crawl,
-    ):
-        result = fetch_with_fallback(
-            api_url=None,
-            page_url="https://example.com",
-            source_name="test",
-            accept_result=lambda candidate: (
-                candidate.method_used == "crawl" and "biomedical" in candidate.content
-            ),
-        )
+    result = await fetch_with_fallback(
+        api_url=None,
+        page_url="https://example.com",
+        source_name="test",
+        accept_result=lambda candidate: (
+            candidate.method_used == "crawl" and "biomedical" in candidate.content
+        ),
+        facade=facade,
+    )
 
     assert result is crawl_result
-    crawl.assert_called_once_with("https://example.com")
+    assert facade.calls == ["html", "browser"]
+    assert result.attempts[0].reason == "semantic acceptance predicate rejected result"
 
 
-def test_fetch_with_fallback_all_fail_raises() -> None:
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_all_fail_raises() -> None:
     """fetch_with_fallback raises CrawlError when all tiers fail."""
-    api_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="api", error="api failed"
-    )
-    httpx_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="httpx", error="httpx failed"
-    )
-    crawl_result = FetchResult(
-        url="", content="", status_code=0, elapsed_ms=0,
-        method_used="crawl", error="crawl failed"
+    facade = FakeCrawlerFacade(
+        api=_result("api", status_code=0, error="api failed"),
+        html=_result("html", status_code=0, error="httpx failed"),
+        browser=_result("browser", status_code=0, error="crawl failed"),
     )
 
-    with (
-        patch("app.tools.crawler.api_fetch", return_value=api_result),
-        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
-        patch("app.tools.crawler.playwright_fetch", return_value=crawl_result),
-        pytest.raises(CrawlError, match="All fetch tiers failed"),
-    ):
-        fetch_with_fallback(
+    with pytest.raises(CrawlError, match="All fetch tiers failed") as caught:
+        await fetch_with_fallback(
             api_url="https://api.example.com",
             page_url="https://example.com",
             source_name="test",
+            facade=facade,
         )
 
+    assert [attempt.method for attempt in caught.value.attempts] == [
+        "api",
+        "html",
+        "browser",
+    ]
 
-def test_fetch_with_fallback_no_api_url() -> None:
+
+@pytest.mark.asyncio
+async def test_fetch_with_fallback_no_api_url() -> None:
     """fetch_with_fallback skips API tier when api_url is None."""
-    httpx_result = FetchResult(
-        url="https://example.com",
-        content="<html>page</html>",
-        status_code=200,
-        elapsed_ms=100,
-        method_used="httpx",
+    facade = FakeCrawlerFacade(
+        api=_result("api"),
+        html=_result("html", content="<html>page</html>"),
+        browser=_result("browser"),
     )
 
-    with patch("app.tools.crawler.api_fetch") as mock_api, \
-         patch("app.tools.crawler.httpx_fetch", return_value=httpx_result):
-        result = fetch_with_fallback(
-            api_url=None,
-            page_url="https://example.com",
-            source_name="test",
+    result = await fetch_with_fallback(
+        api_url=None,
+        page_url="https://example.com",
+        source_name="test",
+        facade=facade,
+    )
+
+    assert facade.calls == ["html"]
+    assert result.method_used == "httpx"
+
+
+@pytest.mark.asyncio
+async def test_host_limiter_does_not_serialize_different_hosts() -> None:
+    def clock() -> float:
+        return 0.0
+
+    sleeping = asyncio.Event()
+    release = asyncio.Event()
+
+    async def sleep(_delay: float) -> None:
+        sleeping.set()
+        await release.wait()
+
+    limiter = AsyncHostRateLimiter(
+        min_interval=1.0,
+        clock=clock,
+        sleeper=sleep,
+    )
+    await limiter.wait("https://host-a.example/first")
+    blocked_same_host = asyncio.create_task(limiter.wait("https://HOST-A.example/second"))
+    await sleeping.wait()
+    different_host = asyncio.create_task(limiter.wait("https://host-b.example/first"))
+    await asyncio.sleep(0)
+
+    assert different_host.done()
+    assert not blocked_same_host.done()
+
+    release.set()
+    await blocked_same_host
+    await different_host
+
+
+@pytest.mark.asyncio
+async def test_host_limiter_bounds_one_off_host_state() -> None:
+    limiter = AsyncHostRateLimiter(
+        min_interval=0,
+        max_hosts=4,
+    )
+
+    for index in range(20):
+        await limiter.wait(f"https://host-{index}.example/data")
+
+    assert limiter.tracked_host_count == 4
+
+
+@pytest.mark.asyncio
+async def test_crawler_revalidates_redirect_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validated: list[str] = []
+    transported: list[str] = []
+
+    def validate(url: str) -> str:
+        validated.append(url)
+        if "private.example" in url:
+            raise ValueError("private redirect denied")
+        return url
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        transported.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"location": "https://private.example/secret"},
         )
 
-    mock_api.assert_not_called()
-    assert result.method_used == "httpx"
+    monkeypatch.setattr(
+        "app.tools.crawler.validate_public_http_url",
+        validate,
+    )
+    facade = CrawlerFacade(
+        min_interval=0,
+        http_transport=httpx.MockTransport(handler),
+    )
+    result = await facade.api("https://public.example/data")
+    await facade.aclose()
+
+    assert not result.ok
+    assert "private redirect denied" in (result.error or "")
+    assert validated == [
+        "https://public.example/data",
+        "https://private.example/secret",
+    ]
+    assert transported == ["https://public.example/data"]
+
+
+@pytest.mark.asyncio
+async def test_crawler_rejects_declared_oversized_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crawler_module, "MAX_CRAWLER_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(
+        crawler_module,
+        "validate_public_http_url",
+        lambda url: url,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"123456789",
+            headers={"content-length": "9"},
+        )
+
+    facade = CrawlerFacade(
+        min_interval=0,
+        http_transport=httpx.MockTransport(handler),
+    )
+    result = await facade.api("https://public.example/data")
+    await facade.aclose()
+
+    assert not result.ok
+    assert result.content == ""
+    assert result.error == "crawler response exceeded 8 byte limit"
+
+
+@pytest.mark.asyncio
+async def test_crawler_rejects_stream_that_exceeds_fixed_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crawler_module, "MAX_CRAWLER_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(
+        crawler_module,
+        "validate_public_http_url",
+        lambda url: url,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"123456789")
+
+    facade = CrawlerFacade(
+        min_interval=0,
+        http_transport=httpx.MockTransport(handler),
+    )
+    result = await facade.html("https://public.example/data")
+    await facade.aclose()
+
+    assert not result.ok
+    assert result.content == ""
+    assert result.error == "crawler response exceeded 8 byte limit"
 
 
 def test_browser_headers_contain_required_fields() -> None:

@@ -3,6 +3,7 @@
 Tests the three-tier fallback chain (api > httpx > crawl) using
 mocked crawler functions.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,31 +48,33 @@ def _api_result(content: str, status_code: int = 200) -> FetchResult:
 def test_search_reactome_api_success() -> None:
     """search_reactome returns records when API succeeds."""
     # 真实 Reactome API 结构:results 分组,每组含 entries;name/summation 含高亮 span
-    api_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 2,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": '<span class="highlighting">Apoptosis</span>',
-                        "species": ["Homo sapiens"],
-                        "summation": '<span class="highlighting">Apoptosis</span> is programmed cell death',
-                        "exactType": "Pathway",
-                    },
-                    {
-                        "stId": "R-HSA-109582",
-                        "name": "Hemostasis",
-                        "species": ["Homo sapiens"],
-                        "summation": "Blood clotting",
-                        "exactType": "Pathway",
-                    },
-                ],
-            }
-        ],
-        "numberOfMatches": 894,
-    })
+    api_response = json.dumps(
+        {
+            "results": [
+                {
+                    "typeName": "Pathway",
+                    "entriesCount": 2,
+                    "entries": [
+                        {
+                            "stId": "R-HSA-169893",
+                            "name": '<span class="highlighting">Apoptosis</span>',
+                            "species": ["Homo sapiens"],
+                            "summation": '<span class="highlighting">Apoptosis</span> is programmed cell death',
+                            "exactType": "Pathway",
+                        },
+                        {
+                            "stId": "R-HSA-109582",
+                            "name": "Hemostasis",
+                            "species": ["Homo sapiens"],
+                            "summation": "Blood clotting",
+                            "exactType": "Pathway",
+                        },
+                    ],
+                }
+            ],
+            "numberOfMatches": 894,
+        }
+    )
     api_result = _api_result(api_response)
 
     ctx = _make_ctx(task_id="test_reactome_search")
@@ -106,27 +109,31 @@ def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> N
     ``/data/pathways/{stId}/summation`` 端点补全。
     """
     # search/query 返回的 entries 没有 summation 字段
-    search_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 1,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": "Apoptosis",
-                        "species": ["Homo sapiens"],
-                        "exactType": "Pathway",
-                    }
-                ],
-            }
-        ],
-        "numberOfMatches": 1,
-    })
-    summation_response = json.dumps([
-        {"text": "Programmed cell death pathway.", "releaseDate": "2024-01-01"},
-        {"text": "Regulated by caspases and Bcl-2 family."},
-    ])
+    search_response = json.dumps(
+        {
+            "results": [
+                {
+                    "typeName": "Pathway",
+                    "entriesCount": 1,
+                    "entries": [
+                        {
+                            "stId": "R-HSA-169893",
+                            "name": "Apoptosis",
+                            "species": ["Homo sapiens"],
+                            "exactType": "Pathway",
+                        }
+                    ],
+                }
+            ],
+            "numberOfMatches": 1,
+        }
+    )
+    summation_response = json.dumps(
+        [
+            {"text": "Programmed cell death pathway.", "releaseDate": "2024-01-01"},
+            {"text": "Regulated by caspases and Bcl-2 family."},
+        ]
+    )
 
     search_result = _api_result(search_response)
     summation_result = _api_result(summation_response)
@@ -157,23 +164,25 @@ def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> N
 
 def test_search_reactome_summation_fetch_failure_keeps_empty_summary() -> None:
     """search_reactome 在 summation 端点失败时保留空 summary,不抛异常。"""
-    search_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 1,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": "Apoptosis",
-                        "species": ["Homo sapiens"],
-                        "exactType": "Pathway",
-                    }
-                ],
-            }
-        ],
-        "numberOfMatches": 1,
-    })
+    search_response = json.dumps(
+        {
+            "results": [
+                {
+                    "typeName": "Pathway",
+                    "entriesCount": 1,
+                    "entries": [
+                        {
+                            "stId": "R-HSA-169893",
+                            "name": "Apoptosis",
+                            "species": ["Homo sapiens"],
+                            "exactType": "Pathway",
+                        }
+                    ],
+                }
+            ],
+            "numberOfMatches": 1,
+        }
+    )
     search_result = _api_result(search_response)
     # summation 端点返回 500
     summation_failed = _api_result("", status_code=500)
@@ -205,8 +214,10 @@ def test_search_reactome_parse_failure_accepts_useful_static_html() -> None:
     ctx = _make_ctx(task_id="test_reactome_httpx")
     with (
         patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
-        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
-        patch("app.tools.crawler.playwright_fetch") as crawl,
+        patch(
+            "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+            return_value=httpx_result,
+        ) as fallback,
     ):
         args = json.dumps({"term": "BRCA"})
         result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
@@ -216,7 +227,7 @@ def test_search_reactome_parse_failure_accepts_useful_static_html() -> None:
     assert data["status"] == "page_fallback"
     assert data["method_used"] == "httpx"
     assert data["body_text_preview"] == "Apoptosis pathway details"
-    crawl.assert_not_called()
+    fallback.assert_awaited_once()
 
 
 def test_search_reactome_all_fail_returns_structured_error() -> None:
@@ -251,14 +262,16 @@ def test_search_reactome_all_fail_returns_structured_error() -> None:
 def test_get_pathway_api_success() -> None:
     """get_pathway returns pathway details when API succeeds."""
     # 真实 Reactome /data/query/{stId} 端点返回 name 可为数组
-    api_response = json.dumps({
-        "stId": "R-HSA-169893",
-        "name": ["Apoptosis"],
-        "speciesName": "Homo sapiens",
-        "hasDiagram": True,
-        "summation": "Programmed cell death pathway",
-        "releaseDate": "2024-01-01",
-    })
+    api_response = json.dumps(
+        {
+            "stId": "R-HSA-169893",
+            "name": ["Apoptosis"],
+            "speciesName": "Homo sapiens",
+            "hasDiagram": True,
+            "summation": "Programmed cell death pathway",
+            "releaseDate": "2024-01-01",
+        }
+    )
     api_result = _api_result(api_response)
 
     ctx = _make_ctx(task_id="test_reactome_get")
@@ -284,12 +297,14 @@ def test_get_pathway_api_success() -> None:
 
 def test_get_pathway_name_as_string() -> None:
     """get_pathway handles name field as plain string (not array)."""
-    api_response = json.dumps({
-        "stId": "R-HSA-109582",
-        "name": "Hemostasis",
-        "speciesName": "Homo sapiens",
-        "hasDiagram": True,
-    })
+    api_response = json.dumps(
+        {
+            "stId": "R-HSA-109582",
+            "name": "Hemostasis",
+            "speciesName": "Homo sapiens",
+            "hasDiagram": True,
+        }
+    )
     api_result = _api_result(api_response)
 
     ctx = _make_ctx(task_id="test_reactome_get_str")

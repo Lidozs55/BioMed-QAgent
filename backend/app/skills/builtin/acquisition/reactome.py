@@ -9,8 +9,10 @@ This skill uses the three-tier fallback chain (api > httpx > crawl):
 
 Reactome REST API docs: https://reactome.org/ContentService
 """
+
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -52,23 +54,29 @@ def _accept_reactome_page(result: FetchResult) -> bool:
 
 
 def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
-    return json.dumps({
-        "status": "page_fallback",
-        "source": source,
-        "method_used": result.method_used,
-        "page_url": page_url,
-        "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "page_fallback",
+            "source": source,
+            "method_used": result.method_used,
+            "page_url": page_url,
+            "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+        },
+        ensure_ascii=False,
+    )
 
 
 def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
-    return json.dumps({
-        "status": "error",
-        "source": source,
-        "page_url": page_url,
-        "attempted_methods": ["api", "httpx", "crawl"],
-        "error": str(error),
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "error",
+            "source": source,
+            "page_url": page_url,
+            "attempted_methods": ["api", "httpx", "crawl"],
+            "error": str(error),
+        },
+        ensure_ascii=False,
+    )
 
 
 def _strip_html(text: str) -> str:
@@ -124,7 +132,7 @@ def _fetch_pathway_summation(pathway_id: str) -> str:
         "fetch detailed molecule lists for a specific pathway_id."
     ),
 )
-def search_reactome(
+async def search_reactome(
     ctx: RunContextWrapper[Any],
     term: str,
     max_results: int = 20,
@@ -153,7 +161,7 @@ def search_reactome(
     )
 
     # Tier 1: API
-    result = api_fetch(api_url)
+    result = await asyncio.to_thread(api_fetch, api_url)
     if result.ok:
         try:
             data = json.loads(result.content)
@@ -172,7 +180,10 @@ def search_reactome(
                 # 前 N 条:若 search API 未返回非空 summation,调用
                 # /data/pathways/{stId}/summation 端点补全
                 if not summary and index < enrich_limit:
-                    summary = _fetch_pathway_summation(e.get("stId", ""))
+                    summary = await asyncio.to_thread(
+                        _fetch_pathway_summation,
+                        e.get("stId", ""),
+                    )
                 record = {
                     "pathway_id": e.get("stId", ""),
                     "name": _strip_html(e.get("name", "")),
@@ -187,22 +198,25 @@ def search_reactome(
                 }
                 records.append(record)
             run_ctx.log_query(term, "reactome", QueryStatus.SUCCESS, len(records))
-            return json.dumps({
-                "source": "reactome",
-                "term": term,
-                "count": len(records),
-                "total_matches": data.get("numberOfMatches", len(records)),
-                "records": records,
-                "enriched_count": enrich_limit,
-                "method_used": "api",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "source": "reactome",
+                    "term": term,
+                    "count": len(records),
+                    "total_matches": data.get("numberOfMatches", len(records)),
+                    "records": records,
+                    "enriched_count": enrich_limit,
+                    "method_used": "api",
+                },
+                ensure_ascii=False,
+            )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome API response: %s", exc)
 
     # Direct page fallback: useful static HTML is accepted before Playwright.
     page_url = f"https://reactome.org/content/query?q={encoded_term}"
     try:
-        page_result = fetch_with_fallback(
+        page_result = await fetch_with_fallback(
             None,
             page_url,
             source_name="reactome",
@@ -219,7 +233,7 @@ def search_reactome(
 
 
 @function_tool
-def get_pathway(
+async def get_pathway(
     ctx: RunContextWrapper[Any],
     pathway_id: str,
 ) -> str:
@@ -243,7 +257,7 @@ def get_pathway(
     api_url = f"{_REACTOME_API_BASE}/data/query/{pathway_id}"
 
     # Tier 1: API
-    result = api_fetch(api_url)
+    result = await asyncio.to_thread(api_fetch, api_url)
     if result.ok:
         try:
             data = json.loads(result.content)
@@ -275,19 +289,22 @@ def get_pathway(
             )
             run_ctx.add_source(source_record)
 
-            return json.dumps({
-                "source": "reactome",
-                "pathway_id": pathway_id,
-                "record": record,
-                "method_used": "api",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "source": "reactome",
+                    "pathway_id": pathway_id,
+                    "record": record,
+                    "method_used": "api",
+                },
+                ensure_ascii=False,
+            )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse Reactome pathway response: %s", exc)
 
     # Direct page fallback.
     page_url = f"{_REACTOME_PAGE_BASE}/{pathway_id}"
     try:
-        page_result = fetch_with_fallback(
+        page_result = await fetch_with_fallback(
             None,
             page_url,
             source_name="reactome",
