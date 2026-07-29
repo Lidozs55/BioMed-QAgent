@@ -93,7 +93,7 @@ export function ContextUsageInline({
           </button>
         }
       />
-      <PopoverContent align="start" side="top" className="w-64">
+      <PopoverContent align="start" side="top" className="w-80">
         <PopoverHeader>
           <div className="flex items-center justify-between">
             <PopoverTitle className="text-sm">上下文窗口</PopoverTitle>
@@ -102,7 +102,7 @@ export function ContextUsageInline({
             </span>
           </div>
           <PopoverDescription className="text-xs leading-relaxed">
-            展示当前对话的上下文占用情况；压缩会摘要早期内容，需等待片刻并消耗少量 tokens。
+            压缩会摘要早期内容以释放上下文空间，需等待片刻。
           </PopoverDescription>
         </PopoverHeader>
         <div className="flex flex-col gap-2.5">
