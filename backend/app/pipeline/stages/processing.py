@@ -351,28 +351,25 @@ def _recover_samples_from_series_matrix(
 
 def run_processing(
     ctx: StageContext,
-    source_asset: SourceAsset,
+    source_assets: SourceAsset | list[SourceAsset],
     dataset_id: str,
 ) -> StageResult:
     """Parse the GEO tximport counts file into a long-form ParsedDataset.
 
     In fixture mode, reads the fixture SOFT file for sample metadata. In live
-    mode, ``process_geo_tximport_counts`` is skipped because acquisition does
-    not download a SOFT file (it downloads ``tximportCounts.txt.gz`` or
-    ``series_matrix.txt.gz``); the live path goes straight to
-    ``_recover_samples_from_series_matrix`` so per-sample metadata is
-    recovered from the downloaded series_matrix and ``main_data.csv``
-    contains one ``measurement_type="sample_metadata"`` row per sample.
-
-    Architectural note (TODO §1.1): live mode cannot currently produce a
-    real expression matrix because ``process_geo_tximport_counts`` requires
-    a SOFT file for sample metadata that acquisition does not fetch. A
-    future iteration could either (a) make ``soft_gzip`` optional and
-    derive minimal samples from the counts header, or (b) extend
-    acquisition to also download ``family.soft.gz``. For now, live mode
-    intentionally skips the tximport parser to avoid contaminating live
-    data with fixture SOFT bytes.
+    mode, when acquisition returns both tximport counts and the corresponding
+    family SOFT asset, the actual downloaded SOFT is used to parse real
+    expression rows. If acquisition falls back to a series matrix, processing
+    recovers sample metadata from that asset instead.
     """
+    assets = source_assets if isinstance(source_assets, list) else [source_assets]
+    source_asset = next(
+        (asset for asset in assets if "tximportCounts" in asset.relative_path),
+        assets[0],
+    )
+    soft_asset = next(
+        (asset for asset in assets if "family.soft" in asset.relative_path), None
+    )
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset
     if ctx.mode == "fixture":
@@ -418,14 +415,28 @@ def run_processing(
                     "main_data.csv will be schema-only (0 rows)"
                 )
     else:
-        # Live mode: acquisition does not download a SOFT file, so skip the
-        # tximport parser entirely and recover sample metadata from the
-        # downloaded series_matrix (TODO §1.1).
-        samples = _recover_samples_from_series_matrix(source_asset, ctx)
-        parsed = _build_minimal_parsed_dataset(
-            source_asset, dataset_id, ctx, samples=samples
-        )
-        if samples:
+        if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
+            soft_bytes = (ctx.workdir.root / soft_asset.relative_path).read_bytes()
+            parsed = process_geo_tximport_counts(
+                source_asset=source_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                soft_gzip=soft_bytes,
+                logical_file=source_asset.relative_path.rsplit("/", 1)[-1],
+            )
+            samples = parse_geo_soft_samples(soft_bytes)
+        else:
+            samples = _recover_samples_from_series_matrix(source_asset, ctx)
+            parsed = _build_minimal_parsed_dataset(
+                source_asset, dataset_id, ctx, samples=samples
+            )
+        if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
+            logger.info(
+                "processing: live mode parsed %d expression rows from "
+                "downloaded tximport counts",
+                parsed.row_count,
+            )
+        elif samples:
             logger.info(
                 "processing: live mode recovered %d samples from "
                 "series_matrix; main_data.csv will contain %d "

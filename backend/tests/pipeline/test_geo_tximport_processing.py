@@ -5,7 +5,7 @@ import gzip
 import hashlib
 from pathlib import Path
 
-from app.domain.contracts import DataLevel, SourceAsset
+from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
 from app.pipeline.processing.geo_tximport import (
     parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
@@ -547,8 +547,68 @@ def test_parse_geo_soft_samples_rejects_duplicate_aliases() -> None:
         parse_geo_soft_samples(soft)
 
 
-# --- §1.1 run_processing live mode skips fixture SOFT ----------------------
+# --- live mode uses acquired SOFT for tximport counts -----------------------
 
+
+def test_run_processing_live_mode_uses_acquired_soft_for_tximport_counts(
+    tmp_path: Path,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+    from app.pipeline.stages.processing import run_processing
+
+    workdir = create_task_workdir("task_live_counts", base_dir=str(tmp_path))
+    counts_bytes = gzip.compress(
+        (FIXTURE_DIR / "tximport_counts_slice.tsv").read_bytes(), mtime=0
+    )
+    counts_path = workdir.source_assets / "GSE178352_tximportCounts.txt.gz"
+    counts_path.write_bytes(counts_bytes)
+    soft_path = workdir.source_assets / "GSE178352_family.soft.gz"
+    soft_bytes = (FIXTURE_DIR / "gse178352_family.soft.gz").read_bytes()
+    soft_path.write_bytes(soft_bytes)
+    counts_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(hashlib.sha256(counts_bytes).hexdigest()),
+        kind="source",
+        relative_path="source_assets/GSE178352_tximportCounts.txt.gz",
+        sha256=hashlib.sha256(counts_bytes).hexdigest(),
+        size_bytes=len(counts_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse178352",
+        successful_attempt_id="attempt_counts",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    soft_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(hashlib.sha256(soft_bytes).hexdigest()),
+        kind="source",
+        relative_path="source_assets/GSE178352_family.soft.gz",
+        sha256=hashlib.sha256(soft_bytes).hexdigest(),
+        size_bytes=len(soft_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse178352",
+        successful_attempt_id="attempt_soft",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    ctx = StageContext(
+        task_id="task_live_counts", workdir=workdir, fixture_dir=tmp_path,
+        topic="live", started_at=datetime.now(tz=UTC), mode="live",
+    )
+
+    result = run_processing(ctx, [counts_asset, soft_asset], "ds_geo_gse178352")
+
+    parsed = result.output.parsed_datasets[0]
+    assert parsed.row_count == 48
+    assert parsed.processing_parameters["measurement_type"] == "tximport_estimated_count"
+    output_path = workdir.root / parsed.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows
+    assert {row["measurement_type"] for row in rows} == {"tximport_estimated_count"}
+
+
+# --- §1.1 run_processing live mode skips fixture SOFT ----------------------
+#
+#
 
 def test_run_processing_live_mode_does_not_read_fixture_soft(
     tmp_path: Path,

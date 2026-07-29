@@ -19,7 +19,11 @@
 
 ### 1.2 字段对齐能力接入
 
-- [ ] **P0** Pipeline 中调用 `alignment.align_fields`（多源数据合并时）
+> 当前 Processing 对单数据集只生成字段规范化映射；多数据集分支虽然调用
+> `alignment.align_fields`，但 Runner 尚未传入多个 ParsedDataset，且未调用
+> `alignment.merge_datasets`，所以尚未形成真实多源合并。
+
+- [ ] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`
 - [ ] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）
 - [ ] **P0** 生成 `field_mapping.csv` 的真实映射关系（当前部分硬编码）
 
@@ -27,13 +31,16 @@
 
 - [x] **P0** 新增 `tests/pipeline/test_processing_cleaning.py`，验证缺失/重复/类型异常被正确标记到 warnings.csv
 
-### 1.4 数据源硬门控解除
+### 1.4 数据源能力边界
 
-> Pipeline 当前通过两道硬门控强制只用 PubMed+GEO。
+> Agent 可使用的数据库不等于 Pipeline 已验收支持的数据源。必须显式区分
+> `pipeline_supported` 与 Agent-only 能力，不能通过解除硬门控把未完成的来源伪装成
+> Pipeline 支持。
 
-- [ ] **P0** `pipeline/tool.py:30-31` + `domain/contracts/runtime.py:112-119` 解除硬门控（或 `/databases` 响应加 `pipeline_supported: bool` 区分 Pipeline / Agent 直调）
-- [ ] **P1** `pipeline/stages/acquisition.py:113-207` 为 PubMed 新增 SourceAsset 产出分支
-- [ ] **P2** 新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等 skill（需先核对 PROBLEM.md 确认必选）
+- [x] **P0** `/databases` 已返回 `pipeline_supported`；仍需补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源只能作为调研或待接入来源
+- [ ] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；需对不支持或未实现的来源返回结构化、可重试性明确的错误，不产生伪成功 Artifact
+- [ ] **P1** `pipeline/stages/acquisition.py` 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
+- [ ] **P2** 按验收标准新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力；未通过 search、metadata、download 测试前不得标记为 Pipeline 支持
 
 ### 1.5 Pipeline 数据库完整性
 
@@ -47,12 +54,19 @@
 
 #### 1.5.1 Discovery 扩展（P0）
 
+> 当前 `TaskSpecification` 虽然能表达通用 `QuerySpecification` / `DatasetSelection`，
+> 但 DiscoveryOutput 和 `run_discovery()` 实现仍固定要求 PubMed + GEO 的
+> `LiteratureRecord` / `GeoSeriesRecord`，不会按任意数据库查询路由。
+
 - [ ] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析非 PubMed/GEO 的数据库查询
 - [ ] **P0** Discovery 阶段对 GDC / Xena / Reactome 等数据库产出对应的 `SourceRecord`
 - [ ] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库
 - [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
 
 #### 1.5.2 Acquisition 扩展（P0）
+
+> 当前 Pipeline Acquisition 只解析 GEO accession 并下载 GEO counts/series matrix；其它
+> 数据库 Skill 的下载结果尚未成为 Pipeline 的 `AcquisitionOutput`。
 
 - [ ] **P0** Acquisition 阶段支持 GDC 数据下载（API → `source_assets/`，产出 `SourceAsset`）
 - [ ] **P0** Acquisition 阶段支持 Xena 数据下载（hub API → `source_assets/`，产出 `SourceAsset`）
@@ -61,6 +75,9 @@
 - [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
 
 #### 1.5.3 Processing 扩展（P0）
+
+> 当前 `run_processing()` 只接收一个 `SourceAsset`，并在 live 模式跳过 tximport
+> 表达解析；Runner 和 Artifact Build 也只消费第一个资产/解析数据集。
 
 - [ ] **P0** Processing 阶段按资产类型路由解析器（当前硬编码为 `geo_tximport`，无分支）
 - [ ] **P0** 新增 GDC 数据解析器（TCGA 表达矩阵 / 临床数据 → 长格式 CSV）
@@ -73,17 +90,37 @@
 - [ ] **P1** `artifact_build` 按传入的 `SourceAsset` 类型决定产出哪些 artifact（当前固定 13 个 GEO 侧写）
 - [ ] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）
 - [ ] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）
+- [ ] **P1** 中间结果与最终结果使用独立的 run/version 标识，旧版已验证 Artifact 不被新 Run 覆盖
+- [ ] **P1** 合并结果必须重新经过 Artifact Build + Validation Gate，不能由 Agent 直接写入正式 `artifacts/`
 
-#### 1.5.5 Agent ↔ Pipeline 数据桥接（P2）
+#### 1.5.5 Agent ↔ Pipeline 数据桥接与确定性合并（P1）
 
-> 当前 Agent 工具输出仅在 LLM 对话上下文中（内存），Pipeline 无法消费。
-> 详见数据流调研报告。
+> Agent 负责发现、选择和补充数据；Pipeline 负责统一处理、合并、验证和发布。
+> Agent-only 工具输出不能直接等同于正式科研数据，也不能直接拼装最终 CSV。
 
-- [ ] **P2** 任务目录新增 `agent_results/`，持久化 Agent 工具的关键输出（搜索记录、通路 ID 等）
-- [ ] **P2** `artifact_build` 增加"合并窗格"，可选地把 Agent 工具输出并入 CSV
-- [ ] **P2** 与 §1.5.1 联动：Agent 发现的数据源（PMID/GSE/project_id）可自动注册为 Pipeline `SourceAsset`
+- [ ] **P1** 将 Agent 查询、选择理由、进度判定和提取记录持久化为可重放的任务记录；当前仅保存在 `RunContext.query_log` / `sources` / `raw_assets` 内存字段
+- [ ] **P1** Agent 获取的原始文件统一注册为 Pydantic `SourceRecord` / `SourceAsset`；当前多数 Skill 仅通过 `add_source` / `add_raw_asset` 记录路径，未统一生成 DownloadAttempt、checksum 和媒体类型契约
+- [ ] **P1** Agent 解析结果统一产出 `ParsedDataset`，不得绕过清洗、字段对齐和 Validation Gate；当前 chart extraction 等 Skill 直接写 parsed CSV 或 artifact，尚未接入 Pipeline Processing/Validation
+- [ ] **P1** 实现确定性多源合并：主键、去重、字段映射、单位和冲突策略均结构化记录
+- [ ] **P1** 每条合并后的 source-derived 记录保留 `SourceLocator`，冲突和未映射数据写入 warning/quality report
+- [ ] **P1** “Pipeline 无新进展”必须依据新增来源、资产、记录和质量指标等结构化证据，不由 LLM 主观结论单独决定
+- [ ] **P2** 任务目录可增加 `agent_results/` 保存 Agent 决策和查询日志；大型原始数据仍只进入 `source_assets/`
+- [ ] **P2** 与 §1.5.1 联动：Agent 发现的 accession 可生成新的 `TaskSpecification`，通过新的 durable Run 触发完整或受控重跑
 
-### 1.6 人在回路：数据修正闭环
+### 1.6 Agent 编排与 Pipeline 重跑闭环（P1/P2）
+
+> 反复调用通过新的 durable Run 实现，不在同一 Agent Run 内重复占用 Pipeline
+> publication slot。完整重跑可复用 digest 一致的已验证阶段输出；参数、来源或处理
+> 规则变化必须生成新的 run/version，不覆盖旧 Artifact。
+
+- [ ] **P1** 新 Run 支持携带版本化 `TaskSpecification`，并记录输入、来源和参数摘要；当前 `TaskSpecification` 已有基础模型，但新 Run API 仍只接收字符串 input，未接入该契约
+- [ ] **P1** 完整重跑完成新版本 Artifact 的原子发布和旧版本保留；当前 Pipeline 有新的 `run_id` staging 和原子发布，但 `artifacts/` 发布会替换当前目录，不提供历史版本保留/API 选择
+- [ ] **P2** 受控局部重跑增加 `rerun_from`，服务端按阶段依赖闭包决定实际重跑范围
+- [ ] **P2** 局部重跑覆盖 Discovery → Acquisition → Processing → Artifact Build → Validation 的依赖一致性测试
+- [ ] **P2** 禁止 Agent 任意指定 `skip_stages`，禁止下游阶段消费与输入 digest 不匹配的上游输出
+- [ ] **P2** 将 Pipeline 结果分类为 `validated_intermediate` / `validated_final`，避免第一轮结果被误认为最终结果；当前 `RunManifest` 只有 `task_state` 和 validation 状态，没有结果阶段语义
+
+### 1.7 人在回路：数据修正闭环
 
 > 依赖 §1.1 清洗能力接入。（共享暂停原语已在 §A.10 完成）
 
@@ -176,9 +213,7 @@
 > 解析，无法恢复样本时会生成零行占位数据。Validation Gate 已拒绝零行
 > `main_data.csv`，但真实表达数据恢复仍需修正 acquisition/processing 契约。
 
-- [ ] **P0** 保证 GEO Discovery accession、下载资产与 `dataset_id` 一致，并同时获取表达矩阵所需的权威样本元数据
-- [ ] **P0** Processing 按资产类型路由 tximport counts 解析器，产出真实表达记录而非 `geo_minimal_placeholder`
-- [ ] **P0** 新增 live fixture 回归：GEO counts + 样本元数据经 Pipeline 后 `main_data.csv` 至少包含一条表达记录
+- [x] **P0** Acquisition 在 live tximport counts 成功后同步获取对应 `family.soft.gz`；Processing 使用实际下载的 SOFT 解析样本并生成真实表达记录；已有 live 回归测试覆盖 counts + SOFT 路径
 
 ---
 

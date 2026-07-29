@@ -97,6 +97,14 @@ def _counts_download_url(gse: str) -> str:
     )
 
 
+def _family_soft_url(gse: str) -> str:
+    prefix = gse[:6].upper()
+    return (
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
+        f"{gse}/soft/{gse}_family.soft.gz"
+    )
+
+
 def _series_matrix_url(gse: str) -> str:
     """Build the NCBI GEO series matrix URL (universally available fallback)."""
     prefix = gse[:6].upper()
@@ -238,12 +246,9 @@ def _run_acquisition_live(
         source_id = make_source_id(Database.GEO, gse, geo_url)
         cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
 
-        # Build candidate (url, filename, title) tuples to try in order.
         candidates: list[tuple[str, str, str]] = [
-            (_counts_download_url(gse), f"{gse}_tximportCounts.txt.gz",
-             f"{gse} tximport counts"),
-            (_series_matrix_url(gse), f"{gse}_series_matrix.txt.gz",
-             f"{gse} series matrix"),
+            (_counts_download_url(gse), f"{gse}_tximportCounts.txt.gz", f"{gse} tximport counts"),
+            (_series_matrix_url(gse), f"{gse}_series_matrix.txt.gz", f"{gse} series matrix"),
         ]
 
         async with httpx.AsyncClient() as http:
@@ -272,6 +277,28 @@ def _run_acquisition_live(
                 f"live download failed for {gse}: all candidate URLs failed"
             )
 
+        assets = [result.asset]
+        attempts = [result.attempt]
+        if "tximportCounts" in used_filename:
+            soft_source = SourceRecord(
+                source_id=source_id,
+                database=Database.GEO,
+                accession=gse,
+                url=_family_soft_url(gse),
+                title=f"{gse} family SOFT",
+                retrieved_at=retrieved_at,
+            )
+            soft_result = await _try_acquire(
+                soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
+            )
+            if soft_result is None or soft_result.asset is None:
+                raise RuntimeError(
+                    f"live download failed for {gse}: family SOFT required "
+                    "when tximport counts are available"
+                )
+            assets.append(soft_result.asset)
+            attempts.append(soft_result.attempt)
+
         # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
         ctx.emit_progress_sync(
             stage=StageName.ACQUISITION,
@@ -286,8 +313,8 @@ def _run_acquisition_live(
             },
         )
         output = AcquisitionOutput(
-            source_assets=[result.asset],
-            download_attempts=[result.attempt],
+            source_assets=assets,
+            download_attempts=attempts,
             source_path=ctx.workdir.root / result.asset.relative_path,
             retrieved_at=retrieved_at,
         )
