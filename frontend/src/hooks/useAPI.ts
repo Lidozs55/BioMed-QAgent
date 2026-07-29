@@ -68,7 +68,18 @@ interface APIClientOptions {
 }
 
 function defaultRandomUUID(): string {
-  return globalThis.crypto.randomUUID();
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  // Fallback for environments where crypto.randomUUID is unavailable
+  // (e.g., insecure contexts, older browsers)
+  const seed = globalThis.crypto?.getRandomValues
+    ? () => globalThis.crypto.getRandomValues(new Uint8Array(1))[0]
+    : () => Math.floor(Math.random() * 256);
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (seed() & 15) >> (c === 'x' ? 0 : 3);
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
 function encodeId(value: string): string {

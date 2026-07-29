@@ -12,10 +12,10 @@
 
 ### 1.1 清洗能力接入 Pipeline
 
-- [ ] **P0** `pipeline/stages/processing.py` 调用 `cleaning.clean_dataset`，对 `ParsedDataset` 产出 `CleaningReport`
-- [ ] **P0** 生成 `cleaning_report.csv` artifact
-- [ ] **P0** 将 `CleaningReport.anomaly_flags` 写入 `warnings.csv`
-- [ ] **P0** `validation.py` 增加 cleaning_report 完整性校验
+- [x] **P0** `pipeline/stages/processing.py` 按当前文件型 `ParsedDataset` 契约执行清洗并产出 `CleaningReportModel`
+- [x] **P0** 生成 `cleaning_report.csv` artifact
+- [x] **P0** 将 `CleaningReportModel.anomaly_flags` 写入 `warnings.csv`
+- [x] **P0** `validation.py` 增加 cleaning_report 存在性与异常计数一致性校验
 
 ### 1.2 字段对齐能力接入
 
@@ -25,7 +25,7 @@
 
 ### 1.3 清洗测试
 
-- [ ] **P0** 新增 `tests/pipeline/test_processing_cleaning.py`，验证缺失/重复/类型异常被正确标记到 warnings.csv
+- [x] **P0** 新增 `tests/pipeline/test_processing_cleaning.py`，验证缺失/重复/类型异常被正确标记到 warnings.csv
 
 ### 1.4 数据源硬门控解除
 
@@ -35,7 +35,55 @@
 - [ ] **P1** `pipeline/stages/acquisition.py:113-207` 为 PubMed 新增 SourceAsset 产出分支
 - [ ] **P2** 新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等 skill（需先核对 PROBLEM.md 确认必选）
 
-### 1.5 人在回路：数据修正闭环
+### 1.5 Pipeline 数据库完整性
+
+> Pipeline 当前仅覆盖 PubMed + GEO（2/7+），而 LLM 工具层已支持 GDC、Xena、
+> Reactome、PubChem、PDB、Browser 等全部数据库。Pipeline 的 Discovery /
+> Acquisition / Processing 三层对非 GEO 数据库完全空白，导致以下问题：
+> 1. 用户选择非 PubMed/GEO 数据库时，Pipeline 无法产出任何 artifact
+> 2. Agent 通过工具获取的 GDC/Xena/Reactome 数据无法进入 CSV（数据孤岛）
+> 3. `source_list.csv` 和 `source_relations.csv` 不完整（缺失多源记录）
+> 4. `field_mapping.csv` 当前仅含 GEO tximport 字段映射，不支持其他数据类型
+
+#### 1.5.1 Discovery 扩展（P0）
+
+- [ ] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析非 PubMed/GEO 的数据库查询
+- [ ] **P0** Discovery 阶段对 GDC / Xena / Reactome 等数据库产出对应的 `SourceRecord`
+- [ ] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库
+- [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
+
+#### 1.5.2 Acquisition 扩展（P0）
+
+- [ ] **P0** Acquisition 阶段支持 GDC 数据下载（API → `source_assets/`，产出 `SourceAsset`）
+- [ ] **P0** Acquisition 阶段支持 Xena 数据下载（hub API → `source_assets/`，产出 `SourceAsset`）
+- [ ] **P1** Acquisition 阶段支持 Reactome 通路参与者导出（ContentService → `source_assets/`）
+- [ ] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果
+- [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
+
+#### 1.5.3 Processing 扩展（P0）
+
+- [ ] **P0** Processing 阶段按资产类型路由解析器（当前硬编码为 `geo_tximport`，无分支）
+- [ ] **P0** 新增 GDC 数据解析器（TCGA 表达矩阵 / 临床数据 → 长格式 CSV）
+- [ ] **P0** 新增 Xena 数据解析器（TSV / 表达矩阵 → 长格式 CSV）
+- [ ] **P1** 新增 Reactome 通路数据解析器（participants → `pathway_members.csv` artifact）
+- [ ] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）
+
+#### 1.5.4 Artifact 完整性（P1）
+
+- [ ] **P1** `artifact_build` 按传入的 `SourceAsset` 类型决定产出哪些 artifact（当前固定 13 个 GEO 侧写）
+- [ ] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）
+- [ ] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）
+
+#### 1.5.5 Agent ↔ Pipeline 数据桥接（P2）
+
+> 当前 Agent 工具输出仅在 LLM 对话上下文中（内存），Pipeline 无法消费。
+> 详见数据流调研报告。
+
+- [ ] **P2** 任务目录新增 `agent_results/`，持久化 Agent 工具的关键输出（搜索记录、通路 ID 等）
+- [ ] **P2** `artifact_build` 增加"合并窗格"，可选地把 Agent 工具输出并入 CSV
+- [ ] **P2** 与 §1.5.1 联动：Agent 发现的数据源（PMID/GSE/project_id）可自动注册为 Pipeline `SourceAsset`
+
+### 1.6 人在回路：数据修正闭环
 
 > 依赖 §1.1 清洗能力接入。（共享暂停原语已在 §A.10 完成）
 
@@ -121,6 +169,16 @@
 
 - [ ] **P2** `web_visual_capture` 与 `extract_chart_data_vlm` 联调（集成测试：capture → VLM → CSV）
 - [ ] **P2** BrowserPool 接入 `crawler.py`（切换为 `pool.acquire_context()`）
+
+### 2.8 GEO 主产物数据恢复
+
+> 现有 live Acquisition 可能下载 tximport counts，但 Processing 将其按 series matrix
+> 解析，无法恢复样本时会生成零行占位数据。Validation Gate 已拒绝零行
+> `main_data.csv`，但真实表达数据恢复仍需修正 acquisition/processing 契约。
+
+- [ ] **P0** 保证 GEO Discovery accession、下载资产与 `dataset_id` 一致，并同时获取表达矩阵所需的权威样本元数据
+- [ ] **P0** Processing 按资产类型路由 tximport counts 解析器，产出真实表达记录而非 `geo_minimal_placeholder`
+- [ ] **P0** 新增 live fixture 回归：GEO counts + 样本元数据经 Pipeline 后 `main_data.csv` 至少包含一条表达记录
 
 ---
 

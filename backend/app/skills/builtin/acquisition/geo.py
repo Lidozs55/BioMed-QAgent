@@ -302,7 +302,13 @@ async def download_geo_adapter(
 
 @function_tool(
     name_override="search_geo",
-    description_override="Search NCBI GEO and return typed GSE series records.",
+    description_override=(
+        "Search NCBI GEO for GSE series records. "
+        "Parameters: ``term`` (required, search keyword like 'METTL5' or "
+        "'pancreatic cancer'), ``max_results`` (optional, default 20). "
+        "Returns JSON with source, count, and structured GSE records "
+        "(accession, title, summary, sample_count, platform, etc.)."
+    ),
 )
 async def search_geo(
     ctx: RunContextWrapper[Any], term: str, max_results: int = 20

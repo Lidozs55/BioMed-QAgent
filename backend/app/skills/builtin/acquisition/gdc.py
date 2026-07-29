@@ -145,7 +145,15 @@ def _match_term(term: str, search_text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Search the NCI Genomic Data Commons for projects matching a keyword. "
+        "Parameters: ``term`` (required, search keyword like 'lung cancer' or "
+        "'TCGA-BRCA'), ``max_results`` (optional, default 20). "
+        "Returns JSON with project_id, name, disease_type, and primary_site. "
+        "Use ``describe_gdc`` to get detailed metadata for a project."
+    ),
+)
 def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
     """Search the NCI Genomic Data Commons for projects matching a keyword.
 

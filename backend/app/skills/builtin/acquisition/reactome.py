@@ -114,7 +114,16 @@ def _fetch_pathway_summation(pathway_id: str) -> str:
     return "\n".join(texts)
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Search Reactome for biological pathways matching a keyword. "
+        "Parameters: ``term`` (required, search keyword like 'apoptosis' "
+        "or 'Alzheimer'), ``max_results`` (optional, default 20). "
+        "Returns JSON with source, count, and pathway records "
+        "(pathway_id, name, species, etc.). Use ``get_pathway`` to "
+        "fetch detailed molecule lists for a specific pathway_id."
+    ),
+)
 def search_reactome(
     ctx: RunContextWrapper[Any],
     term: str,

@@ -73,6 +73,10 @@ _WARNINGS_COLUMNS = [
     "source_id", "asset_id", "record_id", "created_at",
 ]
 
+_CLEANING_REPORT_COLUMNS = [
+    "rule", "field_name", "affected_count", "message",
+]
+
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -218,6 +222,9 @@ def _build_valid_staging(
     # --- warnings.csv (empty by default) ---
     _write_csv(staging / "warnings.csv", _WARNINGS_COLUMNS, [])
 
+    # --- cleaning_report.csv (present with no anomalies by default) ---
+    _write_csv(staging / "cleaning_report.csv", _CLEANING_REPORT_COLUMNS, [])
+
 
 def _run_validation(staging: Path, source_path: Path, tmp_path: Path):
     """Call _validate_package and return (summary, checks)."""
@@ -250,6 +257,21 @@ def test_valid_package_passes_all_checks(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Rule 1: foreign_keys — main_data dataset/sample/source/asset must exist
 # ---------------------------------------------------------------------------
+
+
+def test_main_data_nonempty_rejects_header_only_artifact(tmp_path: Path) -> None:
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, [])
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+
+    assert summary.status == "invalid"
+    nonempty = _check_by_id(checks, "main_data_nonempty")
+    assert nonempty["status"] == "failed"
+    assert nonempty["checked_count"] == 0
+    assert nonempty["failed_count"] == 1
 
 
 def test_foreign_keys_detects_unknown_dataset_id(tmp_path: Path) -> None:
@@ -555,6 +577,20 @@ def test_warnings_consistency_passes_when_non_empty_and_matched(tmp_path: Path) 
     wc = _check_by_id(checks, "warnings_metrics_consistency")
     assert wc["status"] == "passed"
     assert wc["failed_count"] == 0
+
+
+def test_cleaning_report_consistency_rejects_missing_report(tmp_path: Path) -> None:
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+    (staging / "cleaning_report.csv").unlink()
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+
+    assert summary.status == "invalid"
+    cleaning = _check_by_id(checks, "cleaning_report_consistency")
+    assert cleaning["status"] == "failed"
+    assert cleaning["failed_count"] == 1
 
 
 # ---------------------------------------------------------------------------

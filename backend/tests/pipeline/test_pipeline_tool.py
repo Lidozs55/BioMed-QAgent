@@ -242,7 +242,8 @@ async def test_pipeline_function_tool_rejects_parallel_managed_invocation(
         arguments,
     )
 
-    assert "already reserved" in second
+    result = json.loads(second)
+    assert result["status"] == "already_run"
     assert constructed == 1
     release.set()
     await first

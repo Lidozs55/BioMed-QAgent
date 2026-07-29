@@ -38,6 +38,66 @@ def _extract_gse_accession(query: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
+async def _search_pubmed_with_fallback(
+    client,
+    topic: str,
+    max_results: int = 5,
+) -> LiteratureRecord:
+    """Search PubMed with fallback to a simplified query on empty results."""
+    from app.integrations.ncbi.discovery import search_pubmed
+    from app.integrations.ncbi.query_utils import simplify_ncbi_query
+
+    result = await search_pubmed(client, query=topic, max_results=max_results)
+    if result.records:
+        return result.records[0]
+
+    simplified = simplify_ncbi_query(topic)
+    if simplified != topic:
+        logger.info("PubMed: raw topic yielded 0 results, retrying with %r", simplified)
+        result = await search_pubmed(client, query=simplified, max_results=max_results)
+        if result.records:
+            return result.records[0]
+
+    raise LookupError(f"PubMed search returned no records for topic: {topic}")
+
+
+async def _search_geo_with_fallback(
+    client,
+    topic: str,
+    max_results: int = 20,
+) -> GeoSeriesRecord:
+    """Search GEO with fallback to simplified / gene-only queries."""
+    from app.integrations.ncbi.discovery import search_geo_series
+    from app.integrations.ncbi.query_utils import simplify_ncbi_query
+
+    result = await search_geo_series(client, query=topic, max_results=max_results)
+    gse_records = [r for r in result.records if r.accession.startswith("GSE")]
+    if gse_records:
+        return gse_records[0]
+
+    simplified = simplify_ncbi_query(topic)
+    if simplified != topic:
+        logger.info("GEO: raw topic yielded 0 GSE results, retrying with %r", simplified)
+        result = await search_geo_series(client, query=simplified, max_results=max_results)
+        gse_records = [r for r in result.records if r.accession.startswith("GSE")]
+        if gse_records:
+            return gse_records[0]
+
+    # Last resort: gene-only search
+    gene_matches = re.findall(r"\b([A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*\d+)\b", topic)
+    if gene_matches and gene_matches[0] != simplified:
+        logger.info(
+            "GEO: simplified query yielded 0 results, "
+            "retrying gene-only %r", gene_matches[0],
+        )
+        result = await search_geo_series(client, query=gene_matches[0], max_results=max_results)
+        gse_records = [r for r in result.records if r.accession.startswith("GSE")]
+        if gse_records:
+            return gse_records[0]
+
+    raise LookupError(f"GEO search returned no GSE series for topic: {topic}")
+
+
 def run_discovery(ctx: StageContext) -> StageResult:
     """Parse fixture or live NCBI data into SourceRecords and TaskSpecification.
 
@@ -228,13 +288,12 @@ def _run_discovery_live(
     """Fetch real PubMed and GEO metadata via NCBI E-utilities.
 
     When ``pmid``/``gse`` is None, searches NCBI by ``topic`` and uses the
-    first result. This lets the pipeline serve arbitrary user topics instead
-    of being pinned to the Phase 1 fixture case (GSE178352/PMID 34180400).
+    first result.  Natural-language topics (e.g. "METTL5 expression in
+    pancreatic cancer") are automatically simplified into structured queries
+    (e.g. "METTL5 AND pancreatic cancer") when the raw topic returns no
+    records — this avoids the NCBI MeSH expansion producing overly specific
+    queries with zero matches.
     """
-    from app.integrations.ncbi.discovery import (
-        search_geo_series,
-        search_pubmed,
-    )
     from app.integrations.ncbi.factory import open_ncbi_services
 
     retrieved_at = datetime.now(UTC)
@@ -250,13 +309,8 @@ def _run_discovery_live(
                     raise LookupError(f"PubMed article not found: PMID {pmid}")
                 literature = pubmed_records[0]
             else:
-                # Search PubMed by topic, use the first result.
-                result = await search_pubmed(svc.eutils, query=topic, max_results=5)
-                if not result.records:
-                    raise LookupError(
-                        f"PubMed search returned no records for topic: {topic}"
-                    )
-                literature = result.records[0]
+                # Search PubMed by topic, with fallback to simplified query.
+                literature = await _search_pubmed_with_fallback(svc.eutils, topic)
 
             if gse is not None:
                 # Fetch GEO series metadata by accession
@@ -277,16 +331,8 @@ def _run_discovery_live(
                 if geo is None:
                     raise LookupError(f"GEO series not found: {gse}")
             else:
-                # Search GEO by topic, use the first GSE result.
-                result = await search_geo_series(svc.eutils, query=topic, max_results=20)
-                geo_records = [
-                    r for r in result.records if r.accession.startswith("GSE")
-                ]
-                if not geo_records:
-                    raise LookupError(
-                        f"GEO search returned no GSE series for topic: {topic}"
-                    )
-                geo = geo_records[0]
+                # Search GEO by topic, with fallback to simplified query.
+                geo = await _search_geo_with_fallback(svc.eutils, topic)
             return literature, geo
 
     literature, geo = asyncio.run(_fetch())

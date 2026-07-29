@@ -1,5 +1,4 @@
-"""Task 5: Model preview catalog fidelity — known models use catalog
-metadata, unknown models show zero context window without fabricated values."""
+"""Model preview catalog fidelity for known and discovered models."""
 
 from __future__ import annotations
 
@@ -12,11 +11,10 @@ from app.main import create_app
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_preview_shows_zero_window(
+async def test_unknown_model_preview_uses_inferred_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scenario 4 (preview half): Unknown discovered model is visible with
-    ``context_window=0`` and no fabricated ``suggested_max_tokens``."""
+    """Unknown discovered models receive the generic inferred budget."""
     from app.api import settings as settings_api
     from app.tools.network_safety import PublicHttpTarget
 
@@ -53,16 +51,15 @@ async def test_unknown_model_preview_shows_zero_window(
     assert response.status_code == 200
     models = response.json()["models"]
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 0
-    assert unknown["suggested_max_tokens"] == 0
+    assert unknown["context_window"] == 128_000
+    assert unknown["suggested_max_tokens"] == 4_096
 
 
 @pytest.mark.asyncio
 async def test_known_model_preview_uses_catalog_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Scenario 8: Known preview values come from the active static
-    catalogs; unknown preview does not fabricate a window or recommendation."""
+    """Known previews use catalog values and unknown previews use inferred defaults."""
     from app.api import settings as settings_api
     from app.tools.network_safety import PublicHttpTarget
 
@@ -108,5 +105,5 @@ async def test_known_model_preview_uses_catalog_values(
     assert known["context_window"] == 32_768
     assert known["suggested_max_tokens"] == 8_192
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 0
-    assert unknown["suggested_max_tokens"] == 0
+    assert unknown["context_window"] == 128_000
+    assert unknown["suggested_max_tokens"] == 4_096

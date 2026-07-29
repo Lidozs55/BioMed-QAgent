@@ -48,6 +48,11 @@ async def search_pubmed_adapter(
     error state. Previously the adapter swallowed the exception and returned a
     JSON body with ``error``/``total_count=0``, which caused the SDK to report
     success while the LLM (and user) saw an empty result with no visible error.
+
+    When the original query returns 0 results and looks like a natural-language
+    sentence, the adapter automatically tries a simplified query (e.g.
+    "METTL5 expression in pancreatic cancer" → "(METTL5) AND pancreatic
+    cancer") as a fallback before giving up.
     """
 
     try:
@@ -56,6 +61,23 @@ async def search_pubmed_adapter(
         logger.exception("PubMed search failed for query=%r", query)
         run_ctx.log_query(query, "pubmed", QueryStatus.FAILED, 0)
         raise
+
+    # Auto-fallback: when the raw query returns 0 results and looks like a
+    # natural-language sentence, retry with a simplified structured query.
+    if not result.records and (
+        len(query) > 50 or len(query.split()) > 8
+    ):
+        from app.integrations.ncbi.query_utils import simplify_ncbi_query
+
+        simplified = simplify_ncbi_query(query)
+        if simplified != query:
+            logger.info(
+                "PubMed raw query yielded 0 results (%r), "
+                "retrying with simplified %r",
+                query, simplified,
+            )
+            result = await discover_pubmed(services.eutils, simplified, max_results)
+
     run_ctx.log_query(
         query=query,
         source="pubmed",

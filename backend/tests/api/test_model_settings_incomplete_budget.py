@@ -9,7 +9,6 @@ import pytest
 from app.config import Settings
 from app.main import create_app
 from app.model_config import RunModelSettings, UserSettings
-from app.model_config.context_budget import ContextBudgetConfigurationError
 from app.model_settings import ModelConfiguration
 
 
@@ -42,7 +41,7 @@ async def test_get_settings_exposes_inferred_budget_for_unknown_model(
     data = response.json()
     assert data["model_name"] == "unregistered-current-model"
     assert data["context_window"] == 128_000
-    assert data["context_window_source"] == "catalog"
+    assert data["context_window_source"] == "inferred"
     assert data["available_input_tokens"] > 0
     assert data["run_ready"] is True
     assert data["run_block_reason"] is None
