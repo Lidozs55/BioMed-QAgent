@@ -11,6 +11,11 @@ import type {
 } from "@/runtime/contracts";
 import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "./eventValidatorHelpers";
 
+export type SubagentEventPayload = Extract<
+  EventPayload,
+  { type: `subagent_${string}` }
+>;
+
 function assertRequiredString(value: unknown, path: string): string {
   return assertString(value, path, true);
 }
@@ -274,13 +279,24 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
 export function isValidSubagentEventPayload(
   payloadObj: Record<string, unknown>,
 ): boolean {
+  return parseSubagentEventPayload(payloadObj) !== null;
+}
+
+export function parseSubagentEventPayload(
+  payloadObj: Record<string, unknown>,
+): SubagentEventPayload | null {
   try {
-    return parseRuntimeEventPayload(payloadObj, "websocket.payload").type.startsWith(
-      "subagent_",
-    );
+    const payload = parseRuntimeEventPayload(payloadObj, "websocket.payload");
+    return isSubagentEventPayload(payload) ? payload : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isSubagentEventPayload(
+  payload: EventPayload,
+): payload is SubagentEventPayload {
+  return payload.type.startsWith("subagent_");
 }
 
 function typeToTerminalStatus(

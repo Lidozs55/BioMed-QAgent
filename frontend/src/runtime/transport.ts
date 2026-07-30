@@ -4,7 +4,10 @@ import type {
   WebSocketCommand,
   WebSocketControlFrame,
 } from "./contracts";
-import { isValidSubagentEventPayload } from "@/lib/eventParsersRuntime";
+import {
+  isValidSubagentEventPayload,
+  parseSubagentEventPayload,
+} from "@/lib/eventParsersRuntime";
 import type { ConnectionStatus } from "./types";
 
 const CONNECTING = 0;
@@ -198,7 +201,19 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isOptionalStringOrNull(value: unknown): boolean {
-  return value === undefined || value === null || typeof value === "string";
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function normalizeEventEnvelope(value: unknown): EventEnvelope | null {
+  if (!isEventEnvelope(value)) return null;
+  if (!value.type.startsWith("subagent_")) return value;
+  const payload = parseSubagentEventPayload(value.payload);
+  if (payload === null || payload.type !== value.type) return null;
+  return { ...value, payload };
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -668,13 +683,14 @@ export class AgentEventTransport {
       this.queueAssistantStreamFrame(frame);
       return;
     }
-    if (!isEventEnvelope(frame)) return;
-    if (!this.active.has(frame.task_id)) return;
-    this.confirmQueuedAssistantStreamFrames(frame);
-    if (isAssistantStreamBoundary(frame) && frame.run_id !== null) {
-      this.discardAssistantStreamFrames(frame.task_id, frame.run_id);
+    const envelope = normalizeEventEnvelope(frame);
+    if (envelope === null) return;
+    if (!this.active.has(envelope.task_id)) return;
+    this.confirmQueuedAssistantStreamFrames(envelope);
+    if (isAssistantStreamBoundary(envelope) && envelope.run_id !== null) {
+      this.discardAssistantStreamFrames(envelope.task_id, envelope.run_id);
     }
-    this.options.applyEvent(frame);
+    this.options.applyEvent(envelope);
   }
 
   private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {
