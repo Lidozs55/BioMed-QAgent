@@ -78,7 +78,7 @@ describe("ContextBudgetSummary", () => {
     expect(screen.getByText("Available Input")).toBeInTheDocument();
   });
 
-  it("renders zero values as 0 tokens", () => {
+  it("renders unknown available input as a question mark", () => {
     render(
       <ContextBudgetSummary
         contextWindow={0}
@@ -89,6 +89,7 @@ describe("ContextBudgetSummary", () => {
       />,
     );
 
-    expect(screen.getAllByText("0 tokens").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText("0 tokens")).toHaveLength(2);
+    expect(screen.getAllByText("?")).toHaveLength(2);
   });
 });

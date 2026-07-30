@@ -132,6 +132,7 @@ export function parseModelsEnvelope(body: unknown): { models: ModelInfo[] } {
       name: assertString(Reflect.get(itemObj, "name"), `models[${i}].name`),
       description: assertString(Reflect.get(itemObj, "description"), `models[${i}].description`),
       context_window: assertNumber(Reflect.get(itemObj, "context_window"), `models[${i}].context_window`),
+      max_output_tokens: optNumber(Reflect.get(itemObj, "max_output_tokens"), `models[${i}].max_output_tokens`),
       suggested_max_tokens: assertNumber(Reflect.get(itemObj, "suggested_max_tokens"), `models[${i}].suggested_max_tokens`),
       recommended: assertBoolean(Reflect.get(itemObj, "recommended"), `models[${i}].recommended`),
       api_available: assertBoolean(Reflect.get(itemObj, "api_available"), `models[${i}].api_available`),

@@ -1117,23 +1117,25 @@ async def test_manager_cooperative_cancel_flushes_text_before_end_and_terminal(
     repository = TaskRepository(tmp_path / "output")
     assistant_stream_hub = AssistantStreamHub()
     order: list[str] = []
-    real_append_event = repository.append_event
+    real_append_event_payload = repository.append_event_payload
     real_publish = assistant_stream_hub.publish
 
-    async def record_event(event: EventEnvelope) -> TaskSnapshot:
-        snapshot = await real_append_event(event)
+    async def record_event(
+        **kwargs: object,
+    ) -> tuple[TaskSnapshot, EventEnvelope]:
+        snapshot, event = await real_append_event_payload(**kwargs)
         if isinstance(event.payload, AssistantDeltaPayload):
             order.append("durable_delta")
         elif isinstance(event.payload, RunCancelledPayload):
             order.append("run_cancelled")
-        return snapshot
+        return snapshot, event
 
     async def record_frame(frame: AssistantStreamFrame) -> None:
         await real_publish(frame)
         if isinstance(frame, AssistantStreamEndFrame):
             order.append("stream_end")
 
-    monkeypatch.setattr(repository, "append_event", record_event)
+    monkeypatch.setattr(repository, "append_event_payload", record_event)
     monkeypatch.setattr(assistant_stream_hub, "publish", record_frame)
     model = SimpleNamespace(close=AsyncMock())
     build = SimpleNamespace(agent=object(), skill_names=(), model=model)
@@ -2364,17 +2366,24 @@ async def test_publish_success_with_nondurable_artifact_event_stays_hidden(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = TaskRepository(tmp_path / "output")
-    real_append_event = repository.append_event
+    real_append_event_payload = repository.append_event_payload
     failed_artifact_append = False
 
-    async def fail_first_artifact_append(event):
+    async def fail_first_artifact_append(
+        **kwargs: object,
+    ) -> tuple[TaskSnapshot, EventEnvelope]:
         nonlocal failed_artifact_append
-        if isinstance(event.payload, ArtifactProducedPayload) and not failed_artifact_append:
+        payload = kwargs["payload"]
+        if isinstance(payload, ArtifactProducedPayload) and not failed_artifact_append:
             failed_artifact_append = True
             raise OSError("artifact event was not durable")
-        return await real_append_event(event)
+        return await real_append_event_payload(**kwargs)
 
-    monkeypatch.setattr(repository, "append_event", fail_first_artifact_append)
+    monkeypatch.setattr(
+        repository,
+        "append_event_payload",
+        fail_first_artifact_append,
+    )
 
     async def run(execution) -> None:
         runner = PipelineRunner(

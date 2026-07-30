@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -65,6 +65,12 @@ export interface ContextWindowSliderProps {
 /* ------------------------------------------------------------------ */
 
 export function ContextWindowSlider({
+  ...props
+}: ContextWindowSliderProps) {
+  return <ContextWindowSliderControl key={props.value} {...props} />;
+}
+
+function ContextWindowSliderControl({
   value,
   maxCatalogWindow,
   source,
@@ -87,10 +93,6 @@ export function ContextWindowSlider({
   }, [value]);
 
   const [localIndex, setLocalIndex] = useState(committedIndex);
-
-  useEffect(() => {
-    setLocalIndex(committedIndex);
-  }, [committedIndex]);
 
   // Commit a preset index
   const commitIndex = useCallback(

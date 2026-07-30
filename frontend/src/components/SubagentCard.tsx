@@ -52,7 +52,7 @@ export function SubagentCard({
   cancelSubagent,
 }: SubagentCardProps) {
   const progress = subagent.progressTotal === null || subagent.progressTotal === 0
-    ? undefined
+    ? null
     : (subagent.progressCurrent / subagent.progressTotal) * 100;
   const isCancellable = subagent.status === "queued" || subagent.status === "running";
   const elapsed = duration(subagent);

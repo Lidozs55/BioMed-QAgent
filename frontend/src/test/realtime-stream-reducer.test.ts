@@ -100,9 +100,14 @@ describe("realtime assistant projection", () => {
 
     const task = state.tasksById.task_a;
     expect(task.items).toEqual([]);
-    expect(task.activitiesById["tool:run_a:child_tool_1"]).toMatchObject({
+    expect(
+      task.activitiesById[
+        "subagent_tool:subagent_1:run_a:child_tool_1"
+      ],
+    ).toMatchObject({
       kind: "tool",
       name: "search_sources",
+      subagentId: "subagent_1",
     });
   });
 

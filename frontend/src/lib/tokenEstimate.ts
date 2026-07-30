@@ -26,7 +26,7 @@ const CHARS_PER_TOKEN = 2;
 const FIXED_OVERHEAD_TOKENS = 5_000;
 
 /** Estimate total tokens consumed by a list of conversation items. */
-export function estimateContextTokens(items: ConversationItem[]): number {
+export function estimateContextTokens(items: readonly ConversationItem[]): number {
   let chars = 0;
   for (const item of items) {
     switch (item.kind) {

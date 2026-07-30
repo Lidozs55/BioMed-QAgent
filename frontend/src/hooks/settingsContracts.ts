@@ -73,7 +73,15 @@ export interface ModelInfo {
   name: string;
   description: string;
   context_window: number;
+  max_output_tokens?: number;
   suggested_max_tokens: number;
+  vendor_id?: string | null;
+  knowledge_cutoff?: string | null;
+  pricing_input_per_1m?: number | null;
+  pricing_output_per_1m?: number | null;
+  model_family?: string | null;
+  function_calling?: boolean;
+  supports_streaming?: boolean;
   capabilities: { text: boolean; image: boolean; video: boolean; audio: boolean };
   recommended: boolean;
   api_available: boolean;

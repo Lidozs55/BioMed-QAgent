@@ -4,7 +4,14 @@
 /* ------------------------------------------------------------------ */
 
 import { APIError } from "@/hooks/settingsContracts";
-import type { EventPage, MessagePage, TaskPage, TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
+import type {
+  EventPage,
+  MessagePage,
+  SubagentErrorCode,
+  TaskPage,
+  TaskRunAccepted,
+  TaskSnapshot,
+} from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import {
   assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion,
@@ -160,8 +167,14 @@ function parseSubagentRecord(
   };
 }
 
-function assertFiniteOrNull(value: unknown, path: string): NonNullable<TaskSnapshot["subagents"]>[number]["error_code"] {
+function assertFiniteOrNull(
+  value: unknown,
+  path: string,
+): SubagentErrorCode | null {
   if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new APIError(502, `Invalid subagent error code at ${path}`);
+  }
   switch (value) {
     case "not_found":
     case "capability_gap":
