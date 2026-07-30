@@ -90,9 +90,25 @@ class FakePage:
         self._context.tracker.content_calls += 1
         return self._context.tracker.content
 
-    async def evaluate(self, expression: str) -> object:
+    async def evaluate(
+        self,
+        expression: str,
+        argument: object | None = None,
+    ) -> object:
         if "TextEncoder" in expression:
-            return len(self._context.tracker.content.encode("utf-8"))
+            content = self._context.tracker.content
+            size_bytes = len(content.encode("utf-8"))
+            if self._context.tracker.content_after_measurement is not None:
+                self._context.tracker.content = (
+                    self._context.tracker.content_after_measurement
+                )
+            if isinstance(argument, int):
+                return {
+                    "over_limit": size_bytes > argument,
+                    "size_bytes": size_bytes,
+                    **({"content": content} if size_bytes <= argument else {}),
+                }
+            return size_bytes
         return self._context.tracker.document_size
 
     def locator(self, selector: str) -> FakeLocator:
@@ -137,11 +153,26 @@ class FakeLocator:
     async def inner_text(self, **_kwargs: object) -> str:
         self._tracker.inner_text_calls += 1
         self._tracker.actions.append(("extract", self._selector, None))
-        return "extracted data"
+        return self._tracker.extract_text
 
-    async def evaluate(self, expression: str) -> object:
+    async def evaluate(
+        self,
+        expression: str,
+        argument: object | None = None,
+    ) -> object:
         assert "TextEncoder" in expression
-        return len(b"extracted data")
+        content = self._tracker.extract_text
+        size_bytes = len(content.encode("utf-8"))
+        if self._tracker.extract_text_after_measurement is not None:
+            self._tracker.extract_text = self._tracker.extract_text_after_measurement
+        if isinstance(argument, int):
+            self._tracker.actions.append(("extract", self._selector, None))
+            return {
+                "over_limit": size_bytes > argument,
+                "size_bytes": size_bytes,
+                **({"content": content} if size_bytes <= argument else {}),
+            }
+        return size_bytes
 
     async def screenshot(self, **_kwargs: object) -> bytes:
         self._tracker.actions.append(("screenshot", self._selector, None))
@@ -238,6 +269,9 @@ class FakePlaywright:
         self.context_options: list[dict[str, object]] = []
         self.actions: list[tuple[str, str, str | None]] = []
         self.content = "<html>rendered</html>"
+        self.content_after_measurement: str | None = None
+        self.extract_text = "extracted data"
+        self.extract_text_after_measurement: str | None = None
         self.content_calls = 0
         self.inner_text_calls = 0
         self.screenshot = b"png"
@@ -486,6 +520,28 @@ async def test_fetch_rejects_oversized_dom_before_materializing_content(
 
 
 @pytest.mark.asyncio
+async def test_fetch_serializes_before_dom_expands_without_second_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    fake.content = "1234"
+    fake.content_after_measurement = "12345"
+    pool = BrowserPool(playwright_factory=fake.factory)
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_CONTENT_BYTES", 4)
+    await pool.start()
+
+    result = await pool.fetch(
+        "https://example.org/page",
+        authorize_request=_allow_request,
+    )
+
+    assert result.content == "1234"
+    assert fake.content == "12345"
+    assert fake.content_calls == 0
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_full_page_screenshot_rejects_unbounded_document_before_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -626,6 +682,33 @@ async def test_browser_session_rejects_oversized_extract(
             timeout_seconds=5,
         )
 
+    assert fake.inner_text_calls == 0
+    await session.close()
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_extract_serializes_before_dom_expands_without_inner_text_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    fake.extract_text = "1234"
+    fake.extract_text_after_measurement = "12345"
+    pool = BrowserPool(playwright_factory=fake.factory)
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_EXTRACT_BYTES", 4)
+    await pool.start()
+    session = await pool.open_session(authorize_request=_allow_request)
+
+    result = await session.action(
+        action="extract",
+        target="#results",
+        value=None,
+        current_url="https://example.org/page",
+        timeout_seconds=5,
+    )
+
+    assert result.content == b"1234"
+    assert fake.extract_text == "12345"
     assert fake.inner_text_calls == 0
     await session.close()
     await pool.close()

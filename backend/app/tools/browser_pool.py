@@ -31,6 +31,26 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 window.chrome = {runtime: {}};
 """
+_SERIALIZE_DOCUMENT_BOUNDED = """
+limit => {
+    const content = document.documentElement.outerHTML;
+    const size_bytes = new TextEncoder().encode(content).byteLength;
+    if (size_bytes > limit) {
+        return {over_limit: true, size_bytes};
+    }
+    return {over_limit: false, size_bytes, content};
+}
+"""
+_SERIALIZE_ELEMENT_BOUNDED = """
+(element, limit) => {
+    const content = element.innerText;
+    const size_bytes = new TextEncoder().encode(content).byteLength;
+    if (size_bytes > limit) {
+        return {over_limit: true, size_bytes};
+    }
+    return {over_limit: false, size_bytes, content};
+}
+"""
 
 
 class BrowserRequestAuthorizer(Protocol):
@@ -170,29 +190,28 @@ class BrowserSession:
             media_type = "text/html"
         elif action == "extract":
             if target is None:
-                size_bytes = await self._page.evaluate(
-                    "() => new TextEncoder().encode("
-                    "document.documentElement.outerHTML"
-                    ").byteLength"
+                serialized = await self._page.evaluate(
+                    _SERIALIZE_DOCUMENT_BOUNDED,
+                    MAX_BROWSER_EXTRACT_BYTES,
                 )
-                _enforce_materialization_limit(
-                    size_bytes,
+                text = _bounded_serialized_text(
+                    serialized,
                     limit=MAX_BROWSER_EXTRACT_BYTES,
                     label="browser extract",
                 )
-                content = (await self._page.content()).encode("utf-8")
+                content = text.encode("utf-8")
                 media_type = "text/html"
             else:
                 locator = self._page.locator(target)
-                size_bytes = await locator.evaluate(
-                    "element => new TextEncoder().encode(element.innerText).byteLength"
+                serialized = await locator.evaluate(
+                    _SERIALIZE_ELEMENT_BOUNDED,
+                    MAX_BROWSER_EXTRACT_BYTES,
                 )
-                _enforce_materialization_limit(
-                    size_bytes,
+                text = _bounded_serialized_text(
+                    serialized,
                     limit=MAX_BROWSER_EXTRACT_BYTES,
                     label="browser extract",
                 )
-                text = await locator.inner_text(timeout=timeout_ms)
                 content = text.encode("utf-8")
                 media_type = "text/plain"
         else:
@@ -293,19 +312,15 @@ class BrowserPool:
                 timeout=int(timeout * 1000),
             )
             session._raise_route_error()
-            size_bytes = await session.page.evaluate(
-                "() => new TextEncoder().encode("
-                "document.documentElement.outerHTML"
-                ").byteLength"
+            serialized = await session.page.evaluate(
+                _SERIALIZE_DOCUMENT_BOUNDED,
+                MAX_BROWSER_CONTENT_BYTES,
             )
-            _enforce_materialization_limit(
-                size_bytes,
+            content = _bounded_serialized_text(
+                serialized,
                 limit=MAX_BROWSER_CONTENT_BYTES,
                 label="browser content",
             )
-            content = await session.page.content()
-            if len(content.encode("utf-8")) > MAX_BROWSER_CONTENT_BYTES:
-                raise ValueError(f"browser content exceeded {MAX_BROWSER_CONTENT_BYTES} byte limit")
             status_code = response.status if response is not None else 0
             headers = dict(response.headers) if response is not None else {}
         return BrowserFetchResult(
@@ -570,12 +585,15 @@ def _route_handler(
     return handle
 
 
-def _enforce_materialization_limit(
-    size_bytes: object,
+def _bounded_serialized_text(
+    serialized: object,
     *,
     limit: int,
     label: str,
-) -> None:
+) -> str:
+    if not isinstance(serialized, dict):
+        raise ValueError(f"{label} serialization is invalid")
+    size_bytes = serialized.get("size_bytes")
     if (
         isinstance(size_bytes, bool)
         or not isinstance(size_bytes, int | float)
@@ -584,6 +602,14 @@ def _enforce_materialization_limit(
         raise ValueError(f"{label} size measurement is invalid")
     if size_bytes > limit:
         raise ValueError(f"{label} exceeded {limit} byte limit")
+    if serialized.get("over_limit") is not False:
+        raise ValueError(f"{label} serialization is invalid")
+    content = serialized.get("content")
+    if not isinstance(content, str):
+        raise ValueError(f"{label} serialization is invalid")
+    if len(content.encode("utf-8")) != size_bytes:
+        raise ValueError(f"{label} size measurement is invalid")
+    return content
 
 
 def _resource_type(request: Any) -> str:
