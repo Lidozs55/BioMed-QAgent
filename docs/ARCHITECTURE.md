@@ -107,14 +107,45 @@ backend/app/skills/
 固定此共享实例和启动不变量，防止跨分支合并再次拆断调用方与实现方。
 
 Main Agent 不再直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
-持有稳定的 `find_skill` / `invoke_skill` 网关，以及 Pipeline、文件、压缩和 Reviewer
-等核心 Tool。用户选择的数据库是网关硬 allowlist；`pipeline_supported` 只表示该
-来源能够进入确定性 Pipeline，普通 Agent-only Skill 不能充当完成证据。
+持有稳定的 `find_skill` / `invoke_skill` 网关、托管子 Agent 的
+`delegate_research` / `get_subagent_results` / `cancel_subagent`，以及 Pipeline、
+文件、压缩和 Reviewer 等核心 Tool。用户选择的数据库是 `preferred_sources`：
+Main Agent 优先使用这些来源，但也可以探索公开、免登录且不需要私密凭据的其他
+来源。登录、CAPTCHA、付费、凭据和服务条款边界仍必须进入 HIL。
+`pipeline_supported` 只表示该来源能够进入确定性 Pipeline，普通 Agent-only Skill
+和子 Agent 的自然语言结果都不能充当完成证据。
 
 用户扩展支持声明式 JSON/YAML HTTP 数据库包和 Python ZIP Skill 包。用户包保存在
 单文件程序之外的可写目录，支持校验、上传、启停、版本回滚和删除。坏包保持
 `unavailable/load_error` 管理可见性，不阻断应用启动。设置页的 Model、Databases
 和 Skills 三个区段使用对应 REST API 管理这些状态。
+
+### 2.5 托管式 Subagent、WorkflowRecipe 与 Pipeline 边界
+
+`SubagentSupervisor` 是 lifespan-owned 的运行时服务。Main Agent 可以在一个父
+Run 内并行委派 `SourceResearchAgent` 和 `SkillBuilderAgent`；子 Agent 使用独立
+SDK Session，不能递归委派、调用 Pipeline 或写入正式 `artifacts/`。Supervisor
+实施单 Run 3 路、进程全局 4 路并发限制，并把 queued、running、progress、HIL、
+cancel 和 terminal 状态写入父 Task 的同一 durable event log。单个子 Agent 的取消
+端点为：
+
+```text
+POST /api/v1/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel
+```
+
+子 Agent 的网络或 Recipe 采集只能写
+`staging/subagents/<subagent_id>/`。`SubagentStagingWorkspace` 校验路径、大小、
+摘要和元数据后，才把文件原子提交为不可变 `SourceAsset`，并通过
+`SubagentResult.source_asset_ids` 向 Main Agent 暴露轻量引用。新采集流程保存为
+声明式、不可执行的 `WorkflowRecipe`；受控执行器固定采用 API → HTML → Browser
+回退，记录每次尝试和回退理由。
+
+当前 Agent ↔ Pipeline 边界不是把子 Agent 文件直接注入 Pipeline。Main Agent 使用
+子 Agent 的结构化结果规划后续工作并提取 PMID、GSE 等 accession，随后调用
+`run_research_pipeline`；Pipeline 仍从权威来源执行自己的确定性 Acquisition。
+当两条路径获得相同字节时，内容寻址 `SourceAsset.asset_id` 相等，证明进入
+Processing 和 Validation Gate 的是同一验证输入。正式 Artifact 仍只由 Validation
+Gate 发布，子 Agent 的完成事件或 SourceAsset ID 本身不构成发布证据。
 
 **视觉证据采集（web_visual_capture）**：
 `acquisition/web_visual_capture.py` 提供 `capture_web_page` 与
@@ -710,7 +741,12 @@ history）和 WebSocket，但保持 `activeTaskId=null`，展示独立的新研�
 历史通过 cursor 加载并按不可变 `(created_at DESC, task_id DESC)` 排序去重。
 
 `tasksById` 中每个 Task 都有独立的 Run、message、activity、artifact、fixture
-stage 和 `lastSequence` 投影。HIL prompt 同时绑定 `task_id + run_id + request_id`；
+stage、`subagentsById`、`subagentOrder` 和 `lastSequence` 投影。桌面端右侧
+`ResizablePanel` 展示子 Agent 工作区，移动端复用 Sheet；产物入口位于聊天输入区
+FAB。单子 Agent 取消通过 controller 串行化到 Task handoff，先从当前
+`lastSequence` 回放到取消响应 snapshot 的 `latest_sequence`，再 hydrate snapshot，
+因此断线重连不会重复或丢失 `subagent_cancel_requested` 状态。HIL prompt 同时绑定
+`task_id + run_id + request_id`；
 `UserInputDialog` 使用该 Run 提交，并用 prompt key 与 submission attempt ID 隔离
 A → B → A 切换中的旧 Promise settlement。resume 事件只清理匹配 Run 与 request
 的 prompt，terminal 事件按所属 Run 清理，新 Run admission 则清理上一轮 prompt。
@@ -807,13 +843,13 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 
 - 替换 OpenAI Agents SDK；
 - 通用 Workflow Engine；
-- SiteRecipe DSL；
+- 可执行 Recipe 或由模型直接生成 Python Skill；
 - Agent 或 learned Skill 绕过 Validation Gate；
 - 将 mock 产物当作正式案例；
 - 自动生成缺乏数据依据的科研或临床结论；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
-## 12. 当前实现证据（2026-07-19）
+## 12. 当前实现证据（2026-07-30）
 
 - 默认离线后端测试以 `uv run pytest` 的当前结果为准；Ruff
   `app/ tests/ launcher.py` 为零告警门禁，默认测试不访问网络。
@@ -877,11 +913,11 @@ search、metadata、download 的 live 测试通过后才能标记为支持。
 - Compaction truncation 显式校验：`runtime/compaction.py` 在
   `finish_reason="length"` 时抛 `ConversationSummarizerTruncatedError` 短路
   `_fallback` 静默降级（project_memory 硬约束 "LLM 失败必须抛异常"）；2 项回归测试。
-- 安全模型：`save_learned_skill` / `load_learned_skill` 实施路径白名单
-  （`^[a-z][a-z0-9_]*$`）+ AST 白名单双重安全校验，拒绝
-  `exec/eval/compile/open/__import__/globals/locals/vars/breakpoint` 与 dunder
-  访问；`tests/test_skill_self_evolution.py` 11 项安全测试覆盖路径穿越、RCE、
-  篡改检测。
+- 托管式研究自学习：builtin Catalog 明确排除旧 `self_evolution`，模型不能生成
+  Python 或写入 `skills/learned/`。能力缺口只能通过内部 `create_skill` 生成
+  声明式 `WorkflowRecipe`，由受控执行器验证 API → HTML → Browser 流程；Recipe、
+  子 Agent staging、SSRF/重定向、BrowserContext 取消清理和 secret redaction
+  均有独立回归测试。
 - 浏览器 QA 已在当前分支重新执行：启动时保留新研究草稿并加载后端历史，fixture
   完整运行并展示 14 个产物；1440×900 与 390×844 下结果列表可滚动至最后产物，
   390×520 压缩高度下设置提交控件仍可达，长标题截断且不遮挡状态/删除控件。

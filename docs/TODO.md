@@ -299,15 +299,15 @@
 - [x] **P0** 强制 API → HTML → Browser 三级回退，并记录可审计尝试
 - [x] **P0** 子 Agent 仅提交已验证 SourceAsset，Validation Gate 继续独占产物发布
 - [x] **P1** Crawler 接入 lifespan-owned BrowserPool 和 per-host limiter
-- [ ] **P1** 封闭旧 `self_evolution` 任意 Python 写入 `learned/` 的路径
+- [x] **P1** 封闭旧 `self_evolution` 任意 Python 写入 `learned/` 的路径
 
 ### 6.3 前端
 
-- [ ] **P0** 右侧 `ResizablePanel` 改为 subagent 工作区，移动端使用 Sheet
-- [ ] **P0** 产物入口迁移到聊天输入区左下角 FAB，并支持预览/保存全部
-- [ ] **P0** reducer 支持 subagent snapshot/event 投影及旧事件回放
+- [x] **P0** 右侧 `ResizablePanel` 改为 subagent 工作区，移动端使用 Sheet
+- [x] **P0** 产物入口迁移到聊天输入区左下角 FAB，并支持预览/保存全部
+- [x] **P0** reducer 支持 subagent snapshot/event 投影及旧事件回放
 
 ### 6.4 验证
 
-- [ ] **P0** 覆盖并发、取消、重启、HIL、Recipe、安全边界和三级回退测试
-- [ ] **P0** 完成多子 Agent → SourceAsset → Pipeline → Validation Gate 端到端测试
+- [x] **P0** 覆盖并发、取消、重启、HIL、Recipe、安全边界和三级回退测试
+- [x] **P0** 完成多子 Agent → SourceAsset → Pipeline → Validation Gate 端到端测试
