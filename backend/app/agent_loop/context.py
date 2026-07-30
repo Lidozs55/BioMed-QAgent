@@ -59,6 +59,30 @@ class SubagentRuntime:
     event_sink: SubagentEventSink
 
 
+@dataclass(slots=True)
+class _CreateSkillReservations:
+    """One parent-Run dedupe guard, shared by its isolated child contexts."""
+
+    keys: set[tuple[str, str]] = field(default_factory=set)
+    guard: threading.Lock = field(default_factory=threading.Lock)
+
+    @contextmanager
+    def reserve(self, domain: str, capability: str) -> Iterator[None]:
+        key = (domain.strip().casefold(), capability.strip().casefold())
+        with self.guard:
+            if key in self.keys:
+                raise ValueError(
+                    "create_skill already developed this domain and capability in the current Run"
+                )
+            self.keys.add(key)
+        try:
+            yield
+        except BaseException:
+            with self.guard:
+                self.keys.discard(key)
+            raise
+
+
 @dataclass
 class RunContext:
     """任务级共享状态，通过 Runner.run(..., context=ctx) 注入。
@@ -152,13 +176,8 @@ class RunContext:
         init=False,
         repr=False,
     )
-    _create_skill_keys: set[tuple[str, str]] = field(
-        default_factory=set,
-        init=False,
-        repr=False,
-    )
-    _create_skill_guard: object = field(
-        default_factory=threading.Lock,
+    _create_skill_reservations: _CreateSkillReservations = field(
+        default_factory=_CreateSkillReservations,
         init=False,
         repr=False,
     )
@@ -242,6 +261,7 @@ class RunContext:
             model_settings=self.model_settings,
             preferred_sources=list(preferred_sources or self.preferred_sources),
         )
+        child._create_skill_reservations = self._create_skill_reservations
         if self._crawler_facade is not None:
             child.bind_crawler_facade(self._crawler_facade)
         if self._create_skill_runtime is not None:
@@ -293,19 +313,8 @@ class RunContext:
     ) -> Iterator[None]:
         """Reserve one capability, releasing it only when development fails."""
 
-        key = (domain.strip().casefold(), capability.strip().casefold())
-        with self._create_skill_guard:
-            if key in self._create_skill_keys:
-                raise ValueError(
-                    "create_skill already developed this domain and capability in the current Run"
-                )
-            self._create_skill_keys.add(key)
-        try:
+        with self._create_skill_reservations.reserve(domain, capability):
             yield
-        except BaseException:
-            with self._create_skill_guard:
-                self._create_skill_keys.discard(key)
-            raise
 
     @property
     def work_dir(self) -> TaskWorkDir:

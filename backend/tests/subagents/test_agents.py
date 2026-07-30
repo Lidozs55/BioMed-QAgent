@@ -92,3 +92,25 @@ def test_agent_executor_binds_children_after_parent_model_is_frozen(tmp_path) ->
     child_runner = context.subagent_runtime.runner
     assert child_runner._source._factory._model_settings is frozen_settings
     assert child_runner._source._factory._catalog is catalog
+
+
+def test_child_contexts_share_parent_create_skill_reservations(tmp_path) -> None:
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+    first = parent.create_child_context("child-one")
+    second = parent.create_child_context("child-two")
+
+    with (
+        first.reserve_create_skill("GEO", "source_research"),
+        pytest.raises(ValueError, match="already developed"),
+        second.reserve_create_skill("geo", "SOURCE_RESEARCH"),
+    ):
+        pass
+
+    with (
+        pytest.raises(RuntimeError, match="retry"),
+        first.reserve_create_skill("geo", "another_capability"),
+    ):
+        raise RuntimeError("retry")
+
+    with second.reserve_create_skill("geo", "another_capability"):
+        pass
