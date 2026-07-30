@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI, type ModelInfo, type ModelSettings } from "@/hooks/useAPI";
 import { RuntimeController } from "@/runtime/controller";
-import { useAgentStore } from "@/stores/agentStore";
 
 function errorDescription(reason: unknown): string {
   return reason instanceof Error ? reason.message : "未知错误";
@@ -163,12 +162,7 @@ export default function App() {
             <SubagentWorkspace
               cancelSubagent={async (taskId, runId, subagentId) => {
                 try {
-                  const snapshot = await api.cancelSubagent(
-                    taskId,
-                    runId,
-                    subagentId,
-                  );
-                  useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+                  await controller.cancelSubagent(taskId, runId, subagentId);
                 } catch (error) {
                   toast.error("取消子任务失败", {
                     description: errorDescription(error),

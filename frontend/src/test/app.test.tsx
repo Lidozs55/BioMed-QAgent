@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import App from "@/App";
 import type { TaskSnapshot } from "@/runtime/contracts";
+import { RuntimeController } from "@/runtime/controller";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -40,6 +41,65 @@ class FakeWebSocket {
     this.readyState = 1;
     this.onopen?.(new Event("open"));
   }
+}
+
+function childTaskSnapshot(
+  latestSequence: number,
+  status: "running" | "cancel_requested",
+): TaskSnapshot {
+  return {
+    task: {
+      task_id: "task_child",
+      mode: "agent",
+      databases: [],
+      title: "Child task",
+      status: "running",
+      active_run_id: "run_child",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      latest_sequence: latestSequence,
+    },
+    runs: [
+      {
+        run_id: "run_child",
+        task_id: "task_child",
+        request_id: "request_child",
+        status: "running",
+        input: "research",
+        created_at: "2026-07-14T00:00:00Z",
+        updated_at: "2026-07-14T00:00:00Z",
+        started_at: "2026-07-14T00:00:00Z",
+        finished_at: null,
+        error: null,
+      },
+    ],
+    messages: [],
+    subagents: [
+      {
+        subagent_id: "subagent_child",
+        task_id: "task_child",
+        run_id: "run_child",
+        agent_type: "source_research",
+        objective: "Find datasets",
+        target_source: "geo",
+        status,
+        parent_tool_call_id: "tool_child",
+        created_at: "2026-07-14T00:00:00Z",
+        started_at: "2026-07-14T00:00:00Z",
+        finished_at: null,
+        progress_current: 1,
+        progress_total: 2,
+        progress_message: "Searching",
+        result_summary: null,
+        source_asset_ids: [],
+        recipe_id: null,
+        error_code: null,
+        error_message: null,
+        pending_request_id: null,
+      },
+    ],
+    older_messages_cursor: null,
+  };
 }
 
 describe("App startup ownership", () => {
@@ -116,6 +176,7 @@ describe("App startup ownership", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -192,59 +253,7 @@ describe("App startup ownership", () => {
   });
 
   it("reports a failed subagent cancellation without an unhandled rejection", async () => {
-    const snapshot: TaskSnapshot = {
-      task: {
-        task_id: "task_child",
-        mode: "agent",
-        databases: [],
-        title: "Child task",
-        status: "running",
-        active_run_id: "run_child",
-        created_at: "2026-07-14T00:00:00Z",
-        updated_at: "2026-07-14T00:00:00Z",
-        latest_sequence: 1,
-      },
-      runs: [
-        {
-          run_id: "run_child",
-          task_id: "task_child",
-          request_id: "request_child",
-          status: "running",
-          input: "research",
-          created_at: "2026-07-14T00:00:00Z",
-          updated_at: "2026-07-14T00:00:00Z",
-          started_at: "2026-07-14T00:00:00Z",
-          finished_at: null,
-          error: null,
-        },
-      ],
-      messages: [],
-      subagents: [
-        {
-          subagent_id: "subagent_child",
-          task_id: "task_child",
-          run_id: "run_child",
-          agent_type: "source_research",
-          objective: "Find datasets",
-          target_source: "geo",
-          status: "running",
-          parent_tool_call_id: "tool_child",
-          created_at: "2026-07-14T00:00:00Z",
-          started_at: "2026-07-14T00:00:00Z",
-          finished_at: null,
-          progress_current: 1,
-          progress_total: 2,
-          progress_message: "Searching",
-          result_summary: null,
-          source_asset_ids: [],
-          recipe_id: null,
-          error_code: null,
-          error_message: null,
-          pending_request_id: null,
-        },
-      ],
-      older_messages_cursor: null,
-    };
+    const snapshot = childTaskSnapshot(1, "running");
     useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     useAgentStore.getState().setActiveTaskId("task_child");
     render(<App />);
@@ -266,5 +275,83 @@ describe("App startup ownership", () => {
         expect.objectContaining({ description: "cancel unavailable" }),
       ),
     );
+  });
+
+  it("routes subagent cancellation through the controller replay handoff", async () => {
+    const controllerCancellation = vi.spyOn(
+      RuntimeController.prototype,
+      "cancelSubagent",
+    );
+    useAgentStore
+      .getState()
+      .hydrateTaskSnapshot(childTaskSnapshot(1, "running"));
+    useAgentStore.getState().setActiveTaskId("task_child");
+    render(<App />);
+
+    const cancelButton = await screen.findByRole("button", {
+      name: "取消此子任务",
+    });
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/subagents/subagent_child/cancel")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(childTaskSnapshot(2, "cancel_requested")),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.endsWith("/events?after_sequence=1&limit=1000")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              events: [
+                {
+                  schema_version: "2.0",
+                  event_id: "event_child_cancel_requested",
+                  type: "subagent_cancel_requested",
+                  task_id: "task_child",
+                  run_id: "run_child",
+                  subagent_id: "subagent_child",
+                  parent_tool_call_id: "tool_child",
+                  stage_attempt_id: null,
+                  sequence: 2,
+                  timestamp: "2026-07-14T00:00:01Z",
+                  payload: {
+                    type: "subagent_cancel_requested",
+                    subagent_id: "subagent_child",
+                    reason: null,
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() =>
+      expect(
+        useAgentStore.getState().tasksById.task_child.subagentsById
+          .subagent_child.status,
+      ).toBe("cancel_requested"),
+    );
+    expect(controllerCancellation).toHaveBeenCalledWith(
+      "task_child",
+      "run_child",
+      "subagent_child",
+    );
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(
+          ([input]) =>
+            String(input) ===
+            "/api/v1/tasks/task_child/events?after_sequence=1&limit=1000",
+        ),
+    ).toBe(true);
   });
 });
