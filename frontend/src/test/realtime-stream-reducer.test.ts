@@ -74,6 +74,18 @@ function envelope(
   };
 }
 
+function subagentToolEnvelope(sequence: number): EventEnvelope {
+  return {
+    ...envelope(sequence, {
+      type: "tool_started",
+      tool_call_id: "child_tool_1",
+      tool_name: "search_sources",
+    }),
+    subagent_id: "subagent_1",
+    parent_tool_call_id: "call_parent_1",
+  } as EventEnvelope;
+}
+
 function assistantText(state: AgentRuntimeData, runId = "run_a"): string {
   return (
     state.tasksById.task_a.messages.find(
@@ -83,6 +95,17 @@ function assistantText(state: AgentRuntimeData, runId = "run_a"): string {
 }
 
 describe("realtime assistant projection", () => {
+  it("keeps child tool events out of the main conversation", () => {
+    const state = reduceRuntimeEvent(stateWithTask(), subagentToolEnvelope(1));
+
+    const task = state.tasksById.task_a;
+    expect(task.items).toEqual([]);
+    expect(task.activitiesById["tool:run_a:child_tool_1"]).toMatchObject({
+      kind: "tool",
+      name: "search_sources",
+    });
+  });
+
   it("keeps chunks after a gap pending until the missing index arrives", () => {
     let state = reduceAssistantStreamFrames(stateWithTask(), [delta(2, "C")]);
     expect(assistantText(state)).toBe("");

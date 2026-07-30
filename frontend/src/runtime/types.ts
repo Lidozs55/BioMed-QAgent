@@ -5,6 +5,9 @@ import type {
   MessageRole,
   RunStatus,
   StageName,
+  SubagentErrorCode,
+  SubagentStatus,
+  SubagentType,
   TaskMode,
   TaskSummary,
   UserInputPromptKind,
@@ -37,6 +40,29 @@ export interface RunProjection {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+}
+
+export interface SubagentProjection {
+  subagentId: string;
+  taskId: string;
+  runId: string;
+  agentType: SubagentType;
+  objective: string;
+  targetSource: string | null;
+  status: SubagentStatus;
+  parentToolCallId: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  progressCurrent: number;
+  progressTotal: number | null;
+  progressMessage: string | null;
+  resultSummary: string | null;
+  sourceAssetIds: string[];
+  recipeId: string | null;
+  errorCode: SubagentErrorCode | null;
+  errorMessage: string | null;
+  pendingRequestId: string | null;
 }
 
 export interface ProjectedMessage {
@@ -237,6 +263,8 @@ export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
   runOrder: string[];
+  subagentsById: Record<string, SubagentProjection>;
+  subagentOrder: string[];
   messages: ProjectedMessage[];
   olderMessagesCursor: string | null;
   activitiesById: Record<string, ActivityProjection>;

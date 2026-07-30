@@ -117,6 +117,61 @@ describe("parseEventPayload — runtime event family", () => {
   it("run_queued — validates input is non-empty", () => {
     expect(() => parseEventPayload(o({ type: "run_queued", request_id: "r1", input: "" }), "run_queued", "p")).toThrow(APIError);
   });
+
+  it("subagent_queued — validates required request fields and preserves forward-compatible fields", () => {
+    const r = parseEventPayload(
+      o({
+        type: "subagent_queued",
+        subagent_id: "subagent_1",
+        request: {
+          agent_type: "source_research",
+          objective: "Find datasets",
+          domain: "genomics",
+          capability: "dataset_search",
+          inputs: { gene: "TP53" },
+          future_detail: "kept by the backend",
+        },
+        future_payload_detail: { version: 3 },
+      }),
+      "subagent_queued",
+      "p",
+    );
+    if (r.type !== "subagent_queued") throw new Error();
+    expect(r.request.objective).toBe("Find datasets");
+  });
+
+  it("subagent_progress — rejects missing subagent_id", () => {
+    expect(() =>
+      parseEventPayload(
+        o({ type: "subagent_progress", current: 1, total: 2 }),
+        "subagent_progress",
+        "p",
+      ),
+    ).toThrow(APIError);
+  });
+
+  it("subagent_completed — validates terminal result fields", () => {
+    const r = parseEventPayload(
+      o({
+        type: "subagent_completed",
+        subagent_id: "subagent_1",
+        result: {
+          subagent_id: "subagent_1",
+          status: "completed",
+          summary: "Found source",
+          source_asset_ids: ["source_1"],
+          recipe_id: null,
+          warnings: [],
+          error_code: null,
+          error_message: null,
+        },
+      }),
+      "subagent_completed",
+      "p",
+    );
+    if (r.type !== "subagent_completed") throw new Error();
+    expect(r.result.source_asset_ids).toEqual(["source_1"]);
+  });
 });
 
 /* ---- finite union parsers ---- */

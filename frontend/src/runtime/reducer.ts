@@ -7,6 +7,7 @@ import type {
   RunRecord,
   RunStatus,
   StageName,
+  SubagentRecord,
   TaskPage,
   TaskSnapshot,
   TaskSummary,
@@ -21,6 +22,7 @@ import type {
   ProjectedMessage,
   RunProjection,
   StageProjection,
+  SubagentProjection,
   TaskProjection,
 } from "./types";
 
@@ -61,6 +63,8 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     summary: { ...summary, databases: [...summary.databases] },
     runsById: {},
     runOrder: [],
+    subagentsById: {},
+    subagentOrder: [],
     messages: [],
     olderMessagesCursor: null,
     activitiesById: {},
@@ -165,6 +169,31 @@ function projectRun(record: RunRecord): RunProjection {
     startedAt: record.started_at,
     finishedAt: record.finished_at,
     error: record.error,
+  };
+}
+
+function projectSubagent(record: SubagentRecord): SubagentProjection {
+  return {
+    subagentId: record.subagent_id,
+    taskId: record.task_id,
+    runId: record.run_id,
+    agentType: record.agent_type,
+    objective: record.objective,
+    targetSource: record.target_source,
+    status: record.status,
+    parentToolCallId: record.parent_tool_call_id,
+    createdAt: record.created_at,
+    startedAt: record.started_at,
+    finishedAt: record.finished_at,
+    progressCurrent: record.progress_current,
+    progressTotal: record.progress_total,
+    progressMessage: record.progress_message,
+    resultSummary: record.result_summary,
+    sourceAssetIds: [...record.source_asset_ids],
+    recipeId: record.recipe_id,
+    errorCode: record.error_code,
+    errorMessage: record.error_message,
+    pendingRequestId: record.pending_request_id,
   };
 }
 
@@ -319,6 +348,7 @@ export function hydrateTaskSnapshot(
   }
   const base = existing ?? createTaskProjection(snapshot.task);
   const runs = snapshot.runs.map(projectRun);
+  const subagents = (snapshot.subagents ?? []).map(projectSubagent);
   const pendingRun =
     base.pendingUserInput === null
       ? undefined
@@ -348,11 +378,28 @@ export function hydrateTaskSnapshot(
     ...base.runsById,
     ...Object.fromEntries(runs.map((run) => [run.runId, run])),
   };
+  const snapshotSubagentIds = new Set(
+    subagents.map((subagent) => subagent.subagentId),
+  );
+  const subagentOrder = [
+    ...subagents.map((subagent) => subagent.subagentId),
+    ...base.subagentOrder.filter(
+      (subagentId) => !snapshotSubagentIds.has(subagentId),
+    ),
+  ];
+  const subagentsById = {
+    ...base.subagentsById,
+    ...Object.fromEntries(
+      subagents.map((subagent) => [subagent.subagentId, subagent]),
+    ),
+  };
   const task: TaskProjection = mergeMessagesIntoItems({
     ...base,
     summary: { ...snapshot.task, databases: [...snapshot.task.databases] },
     runsById,
     runOrder,
+    subagentsById,
+    subagentOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
     assistantStreamsByRunId,
     pendingUserInput:
@@ -470,6 +517,62 @@ function upsertRun(
     runOrder: task.runOrder.includes(runId)
       ? task.runOrder
       : [...task.runOrder, runId],
+  };
+}
+
+function upsertSubagent(
+  task: TaskProjection,
+  subagentId: string,
+  updater: (subagent: SubagentProjection) => SubagentProjection,
+): TaskProjection {
+  const existing = task.subagentsById[subagentId];
+  if (existing === undefined) return task;
+  return {
+    ...task,
+    subagentsById: {
+      ...task.subagentsById,
+      [subagentId]: updater(existing),
+    },
+  };
+}
+
+function addQueuedSubagent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventEnvelope["payload"], { type: "subagent_queued" }>,
+): TaskProjection {
+  const runId = envelope.run_id;
+  const parentToolCallId = envelope.parent_tool_call_id;
+  if (runId === null || parentToolCallId == null) return task;
+  const existing = task.subagentsById[payload.subagent_id];
+  const subagent: SubagentProjection = {
+    subagentId: payload.subagent_id,
+    taskId: envelope.task_id,
+    runId,
+    agentType: payload.request.agent_type,
+    objective: payload.request.objective,
+    targetSource: payload.request.target_source,
+    status: "queued",
+    parentToolCallId,
+    createdAt: existing?.createdAt ?? envelope.timestamp,
+    startedAt: existing?.startedAt ?? null,
+    finishedAt: existing?.finishedAt ?? null,
+    progressCurrent: existing?.progressCurrent ?? 0,
+    progressTotal: existing?.progressTotal ?? null,
+    progressMessage: existing?.progressMessage ?? null,
+    resultSummary: existing?.resultSummary ?? null,
+    sourceAssetIds: existing?.sourceAssetIds ?? [],
+    recipeId: existing?.recipeId ?? null,
+    errorCode: existing?.errorCode ?? null,
+    errorMessage: existing?.errorMessage ?? null,
+    pendingRequestId: existing?.pendingRequestId ?? null,
+  };
+  return {
+    ...task,
+    subagentsById: { ...task.subagentsById, [subagent.subagentId]: subagent },
+    subagentOrder: task.subagentOrder.includes(subagent.subagentId)
+      ? task.subagentOrder
+      : [...task.subagentOrder, subagent.subagentId],
   };
 }
 
@@ -1280,6 +1383,67 @@ export function reduceRuntimeEvent(
   let task = current;
 
   switch (payload.type) {
+    case "subagent_queued": {
+      task = addQueuedSubagent(task, envelope, payload);
+      break;
+    }
+    case "subagent_started": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        status: "running",
+        startedAt: subagent.startedAt ?? envelope.timestamp,
+      }));
+      break;
+    }
+    case "subagent_progress": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        progressCurrent: payload.current,
+        progressTotal: payload.total,
+        progressMessage: payload.message,
+      }));
+      break;
+    }
+    case "subagent_completed":
+    case "subagent_failed":
+    case "subagent_cancelled":
+    case "subagent_interrupted": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        status: payload.result.status,
+        finishedAt: envelope.timestamp,
+        resultSummary: payload.result.summary,
+        sourceAssetIds: [...payload.result.source_asset_ids],
+        recipeId: payload.result.recipe_id,
+        errorCode: payload.result.error_code,
+        errorMessage: payload.result.error_message,
+        pendingRequestId: null,
+      }));
+      break;
+    }
+    case "subagent_cancel_requested": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        status: "cancel_requested",
+        errorMessage: payload.reason,
+      }));
+      break;
+    }
+    case "subagent_input_required": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        pendingRequestId: payload.request_id,
+      }));
+      break;
+    }
+    case "subagent_input_resumed": {
+      task = upsertSubagent(task, payload.subagent_id, (subagent) =>
+        subagent.pendingRequestId === payload.request_id
+          ? { ...subagent, pendingRequestId: null }
+          : subagent,
+      );
+      break;
+    }
     case "run_queued": {
       if (runId === null) break;
       task = upsertRun(
@@ -1575,16 +1739,18 @@ export function reduceRuntimeEvent(
     }
     case "tool_started": {
       if (runId === null) break;
-      task = deactivateRunAssistantStream(task, runId);
-      task = deactivateRunStreamingItems(task, runId);
-      // Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，
-      // 导致前一个 assistant_segment 尾部出现工具参数 JSON。此处剥离该 JSON，
-      // 避免前端对话流展示原始 JSON。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
       const toolArgs = (payload.arguments ?? null) as Record<
         string,
         unknown
       > | null;
-      task = stripLastAssistantSegmentToolArgs(task, runId, toolArgs);
+      if (envelope.subagent_id == null) {
+        task = deactivateRunAssistantStream(task, runId);
+        task = deactivateRunStreamingItems(task, runId);
+        // Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，
+        // 导致前一个 assistant_segment 尾部出现工具参数 JSON。此处剥离该 JSON，
+        // 避免前端对话流展示原始 JSON。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+        task = stripLastAssistantSegmentToolArgs(task, runId, toolArgs);
+      }
       task = upsertActivity(task, {
         activityId: `tool:${runId}:${payload.tool_call_id}`,
         taskId: envelope.task_id,
@@ -1600,28 +1766,32 @@ export function reduceRuntimeEvent(
         code: null,
         message: null,
       });
-      const toolItemId = `tool:${runId}:${payload.tool_call_id}`;
-      const existingToolItem = task.items.find((i) => i.itemId === toolItemId);
-      task = upsertItem(task, {
-        kind: "tool_call",
-        itemId: toolItemId,
-        runId,
-        sequence: envelope.sequence,
-        createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
-        toolCallId: payload.tool_call_id,
-        toolName: payload.tool_name,
-        arguments: toolArgs,
-        status: "running",
-        output: null,
-        completedSequence: null,
-      });
-      task = {
-        ...task,
-        currentReasoningSegmentByRun: {
-          ...task.currentReasoningSegmentByRun,
-          [runId]: (task.currentReasoningSegmentByRun[runId] ?? 0) + 1,
-        },
-      };
+      if (envelope.subagent_id == null) {
+        const toolItemId = `tool:${runId}:${payload.tool_call_id}`;
+        const existingToolItem = task.items.find(
+          (i) => i.itemId === toolItemId,
+        );
+        task = upsertItem(task, {
+          kind: "tool_call",
+          itemId: toolItemId,
+          runId,
+          sequence: envelope.sequence,
+          createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+          toolCallId: payload.tool_call_id,
+          toolName: payload.tool_name,
+          arguments: toolArgs,
+          status: "running",
+          output: null,
+          completedSequence: null,
+        });
+        task = {
+          ...task,
+          currentReasoningSegmentByRun: {
+            ...task.currentReasoningSegmentByRun,
+            [runId]: (task.currentReasoningSegmentByRun[runId] ?? 0) + 1,
+          },
+        };
+      }
       break;
     }
     case "tool_completed": {
@@ -1644,27 +1814,29 @@ export function reduceRuntimeEvent(
           code: null,
           message: null,
         });
-        const toolItemId = `tool:${runId}:${toolCallId}`;
-        const existingToolItem = task.items.find(
-          (i) => i.itemId === toolItemId,
-        );
-        const toolArguments =
-          existingToolItem?.kind === "tool_call"
-            ? existingToolItem.arguments
-            : null;
-        task = upsertItem(task, {
-          kind: "tool_call",
-          itemId: toolItemId,
-          runId,
-          sequence: envelope.sequence,
-          createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
-          toolCallId,
-          toolName: payload.tool_name,
-          arguments: toolArguments,
-          status: payload.is_error ? "error" : "completed",
-          output: payload.output ?? null,
-          completedSequence: envelope.sequence,
-        });
+        if (envelope.subagent_id == null) {
+          const toolItemId = `tool:${runId}:${toolCallId}`;
+          const existingToolItem = task.items.find(
+            (i) => i.itemId === toolItemId,
+          );
+          const toolArguments =
+            existingToolItem?.kind === "tool_call"
+              ? existingToolItem.arguments
+              : null;
+          task = upsertItem(task, {
+            kind: "tool_call",
+            itemId: toolItemId,
+            runId,
+            sequence: envelope.sequence,
+            createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+            toolCallId,
+            toolName: payload.tool_name,
+            arguments: toolArguments,
+            status: payload.is_error ? "error" : "completed",
+            output: payload.output ?? null,
+            completedSequence: envelope.sequence,
+          });
+        }
       } else {
         task = upsertActivity(task, {
           activityId: `event:${envelope.sequence}`,

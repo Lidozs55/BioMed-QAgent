@@ -40,6 +40,16 @@ const EVENT_TYPES = new Set([
   "assistant_reasoning_delta",
   "tool_started",
   "conversation_compacted",
+  "subagent_queued",
+  "subagent_started",
+  "subagent_progress",
+  "subagent_completed",
+  "subagent_failed",
+  "subagent_cancel_requested",
+  "subagent_cancelled",
+  "subagent_interrupted",
+  "subagent_input_required",
+  "subagent_input_resumed",
 ]);
 
 export interface WebSocketLike {
@@ -124,9 +134,15 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
     value.type === "conversation_compacted" ||
+    value.type.startsWith("subagent_") ||
     (value.type === "tool_completed" &&
       typeof value.payload.tool_call_id === "string") ||
     (value.type === "warning" && value.payload.warning == null);
+  const hasSubagentLinkage =
+    value.subagent_id != null || value.parent_tool_call_id != null;
+  const subagentEvent = value.type.startsWith("subagent_");
+  const subagentId = value.subagent_id;
+  const parentToolCallId = value.parent_tool_call_id;
   return (
     (value.schema_version === "1.0" || value.schema_version === "2.0") &&
     typeof value.event_id === "string" &&
@@ -138,6 +154,12 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     Number(value.sequence) >= 1 &&
     typeof value.timestamp === "string" &&
     value.payload.type === value.type &&
+    (!hasSubagentLinkage ||
+      (value.schema_version === "2.0" && typeof value.run_id === "string")) &&
+    (!subagentEvent ||
+      (typeof subagentId === "string" &&
+        typeof parentToolCallId === "string" &&
+        value.payload.subagent_id === subagentId)) &&
     (!runtimeScoped ||
       (value.schema_version === "2.0" && typeof value.run_id === "string"))
   );
@@ -278,6 +300,58 @@ function payloadShapeMatches(
       return (
         typeof payload.covered_through_run_id === "string" &&
         typeof payload.summary_digest === "string"
+      );
+    case "subagent_queued":
+      return (
+        typeof payload.subagent_id === "string" &&
+        isRecord(payload.request) &&
+        typeof payload.request.agent_type === "string" &&
+        typeof payload.request.objective === "string" &&
+        typeof payload.request.domain === "string" &&
+        typeof payload.request.capability === "string" &&
+        isRecord(payload.request.inputs)
+      );
+    case "subagent_started":
+      return typeof payload.subagent_id === "string";
+    case "subagent_progress":
+      return (
+        typeof payload.subagent_id === "string" &&
+        isNonNegativeInteger(payload.current) &&
+        (payload.total === null || isNonNegativeInteger(payload.total)) &&
+        (payload.message === null || typeof payload.message === "string")
+      );
+    case "subagent_completed":
+    case "subagent_failed":
+    case "subagent_cancelled":
+    case "subagent_interrupted":
+      return (
+        typeof payload.subagent_id === "string" &&
+        isRecord(payload.result) &&
+        typeof payload.result.subagent_id === "string" &&
+        typeof payload.result.status === "string" &&
+        typeof payload.result.summary === "string" &&
+        Array.isArray(payload.result.source_asset_ids)
+      );
+    case "subagent_cancel_requested":
+      return (
+        typeof payload.subagent_id === "string" &&
+        (payload.reason === null || typeof payload.reason === "string")
+      );
+    case "subagent_input_required":
+      return (
+        typeof payload.subagent_id === "string" &&
+        typeof payload.request_id === "string" &&
+        typeof payload.summary === "string" &&
+        typeof payload.prompt_kind === "string" &&
+        (payload.expires_at === null || typeof payload.expires_at === "string") &&
+        isRecord(payload.detail)
+      );
+    case "subagent_input_resumed":
+      return (
+        typeof payload.subagent_id === "string" &&
+        typeof payload.request_id === "string" &&
+        (payload.decision === "approve" || payload.decision === "reject") &&
+        isRecord(payload.detail)
       );
     default:
       return true;

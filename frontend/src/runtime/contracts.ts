@@ -28,6 +28,39 @@ export type AttemptStatus =
   | "cancelled"
   | "skipped";
 
+export type SubagentType = "source_research" | "skill_builder";
+
+export type SubagentStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancel_requested"
+  | "cancelled"
+  | "interrupted";
+
+export type SubagentErrorCode =
+  | "not_found"
+  | "capability_gap"
+  | "extraction_failed"
+  | "auth_required"
+  | "captcha_required"
+  | "credential_required"
+  | "payment_required"
+  | "policy_denied"
+  | "rate_limited"
+  | "timed_out"
+  | "cancelled"
+  | "internal_error";
+
+export type SubagentPromptKind =
+  | "authentication"
+  | "captcha"
+  | "api_key_or_credential"
+  | "payment"
+  | "terms_approval"
+  | "confirmation";
+
 export type JsonValue =
   | string
   | number
@@ -85,11 +118,55 @@ export interface MessageRecord {
   created_at: string;
 }
 
+export interface SubagentRequest {
+  agent_type: SubagentType;
+  objective: string;
+  target_source: string | null;
+  domain: string;
+  capability: string;
+  inputs: Record<string, JsonValue>;
+}
+
+export interface SubagentResult {
+  subagent_id: string;
+  status: "completed" | "failed" | "cancelled" | "interrupted";
+  summary: string;
+  source_asset_ids: string[];
+  recipe_id: string | null;
+  warnings: string[];
+  error_code: SubagentErrorCode | null;
+  error_message: string | null;
+}
+
+export interface SubagentRecord {
+  subagent_id: string;
+  task_id: string;
+  run_id: string;
+  agent_type: SubagentType;
+  objective: string;
+  target_source: string | null;
+  status: SubagentStatus;
+  parent_tool_call_id: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  progress_current: number;
+  progress_total: number | null;
+  progress_message: string | null;
+  result_summary: string | null;
+  source_asset_ids: string[];
+  recipe_id: string | null;
+  error_code: SubagentErrorCode | null;
+  error_message: string | null;
+  pending_request_id: string | null;
+}
+
 export interface TaskSnapshot {
   schema_version?: "1.0";
   task: TaskSummary;
   runs: RunRecord[];
   messages: MessageRecord[];
+  subagents?: SubagentRecord[];
   older_messages_cursor: string | null;
 }
 
@@ -302,6 +379,52 @@ export type EventPayload =
       type: "conversation_compacted";
       covered_through_run_id: string;
       summary_digest: string;
+    }
+  | { type: "subagent_queued"; subagent_id: string; request: SubagentRequest }
+  | { type: "subagent_started"; subagent_id: string }
+  | {
+      type: "subagent_progress";
+      subagent_id: string;
+      current: number;
+      total: number | null;
+      message: string | null;
+    }
+  | {
+      type: "subagent_completed";
+      subagent_id: string;
+      result: SubagentResult;
+    }
+  | { type: "subagent_failed"; subagent_id: string; result: SubagentResult }
+  | {
+      type: "subagent_cancel_requested";
+      subagent_id: string;
+      reason: string | null;
+    }
+  | {
+      type: "subagent_cancelled";
+      subagent_id: string;
+      result: SubagentResult;
+    }
+  | {
+      type: "subagent_interrupted";
+      subagent_id: string;
+      result: SubagentResult;
+    }
+  | {
+      type: "subagent_input_required";
+      subagent_id: string;
+      request_id: string;
+      summary: string;
+      prompt_kind: SubagentPromptKind;
+      expires_at: string | null;
+      detail: Record<string, JsonValue>;
+    }
+  | {
+      type: "subagent_input_resumed";
+      subagent_id: string;
+      request_id: string;
+      decision: UserInputDecision;
+      detail: Record<string, JsonValue>;
     };
 
 export interface EventEnvelope {
@@ -311,6 +434,8 @@ export interface EventEnvelope {
   task_id: string;
   run_id: string | null;
   stage_attempt_id: string | null;
+  subagent_id?: string | null;
+  parent_tool_call_id?: string | null;
   sequence: number;
   timestamp: string;
   payload: EventPayload;
