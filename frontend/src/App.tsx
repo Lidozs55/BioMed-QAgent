@@ -3,9 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
-  ArtifactPanelToggle,
-  ArtifactWorkspace,
-} from "@/components/ArtifactWorkspace";
+  SubagentPanelToggle,
+  SubagentWorkspace,
+} from "@/components/SubagentWorkspace";
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI, type ModelInfo, type ModelSettings } from "@/hooks/useAPI";
 import { RuntimeController } from "@/runtime/controller";
+import { useAgentStore } from "@/stores/agentStore";
 
 function errorDescription(reason: unknown): string {
   return reason instanceof Error ? reason.message : "未知错误";
@@ -153,13 +154,28 @@ export default function App() {
             <Button variant="ghost" size="icon-sm" aria-label="打开设置" onClick={() => setSettingsOpen(true)}>
               <GearIcon />
             </Button>
-            <ArtifactPanelToggle />
+            <SubagentPanelToggle />
             <ThemeToggle />
           </div>
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            <ArtifactWorkspace>
+            <SubagentWorkspace
+              cancelSubagent={async (taskId, runId, subagentId) => {
+                try {
+                  const snapshot = await api.cancelSubagent(
+                    taskId,
+                    runId,
+                    subagentId,
+                  );
+                  useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+                } catch (error) {
+                  toast.error("取消子任务失败", {
+                    description: errorDescription(error),
+                  });
+                }
+              }}
+            >
               <ChatPanel
                 startTask={(input) => controller.startTask(input)}
                 uploadFiles={(files, note) =>
@@ -182,7 +198,7 @@ export default function App() {
                 onOpenSettings={() => setSettingsOpen(true)}
                 contextWindow={settings?.context_window}
               />
-            </ArtifactWorkspace>
+            </SubagentWorkspace>
           </div>
         </main>
       </SidebarInset>

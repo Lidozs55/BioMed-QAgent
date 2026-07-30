@@ -58,6 +58,7 @@ export interface SubagentProjection {
   progressTotal: number | null;
   progressMessage: string | null;
   resultSummary: string | null;
+  warnings: string[];
   sourceAssetIds: string[];
   recipeId: string | null;
   errorCode: SubagentErrorCode | null;
@@ -89,6 +90,7 @@ export interface ActivityProjection {
   activityId: string;
   taskId: string;
   runId: string | null;
+  subagentId: string | null;
   sequence: number;
   timestamp: string;
   kind: ActivityKind;

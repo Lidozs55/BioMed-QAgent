@@ -172,7 +172,7 @@ describe("runtime event projection", () => {
           summary: "Found a source",
           source_asset_ids: ["source_1"],
           recipe_id: null,
-          warnings: [],
+          warnings: ["Search results were rate limited"],
           error_code: null,
           error_message: null,
         },
@@ -186,6 +186,7 @@ describe("runtime event projection", () => {
       progressCurrent: 1,
       progressTotal: 2,
       sourceAssetIds: ["source_1"],
+      warnings: ["Search results were rate limited"],
       parentToolCallId: "call_parent_1",
     });
     expect(task.items).toHaveLength(0);
@@ -256,6 +257,78 @@ describe("runtime event projection", () => {
       status: "running",
       progressCurrent: 1,
     });
+  });
+
+  it("preserves terminal subagent warnings through snapshot hydration", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_items")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      subagentEnvelope(1, {
+        type: "subagent_queued",
+        subagent_id: "subagent_1",
+        request: {
+          agent_type: "source_research",
+          objective: "Find datasets",
+          target_source: null,
+          domain: "genomics",
+          capability: "dataset_search",
+          inputs: {},
+        },
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      subagentEnvelope(2, {
+        type: "subagent_completed",
+        subagent_id: "subagent_1",
+        result: {
+          subagent_id: "subagent_1",
+          status: "completed",
+          summary: "Found datasets",
+          source_asset_ids: [],
+          recipe_id: null,
+          warnings: ["Fallback used"],
+          error_code: null,
+          error_message: null,
+        },
+      }),
+    );
+
+    state = hydrateTaskSnapshot(state, {
+      ...taskSnapshot("task_items", [], null, 2),
+      subagents: [
+        {
+          subagent_id: "subagent_1",
+          task_id: "task_items",
+          run_id: "run_items",
+          agent_type: "source_research",
+          objective: "Find datasets",
+          target_source: null,
+          status: "completed",
+          parent_tool_call_id: "call_parent_1",
+          created_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: CREATED_AT,
+          progress_current: 1,
+          progress_total: 1,
+          progress_message: null,
+          result_summary: "Found datasets",
+          source_asset_ids: [],
+          recipe_id: null,
+          error_code: null,
+          error_message: null,
+          pending_request_id: null,
+        },
+      ],
+    });
+
+    expect(state.tasksById.task_items.subagentsById.subagent_1.warnings).toEqual([
+      "Fallback used",
+    ]);
   });
 
   it("deduplicates and sorts merged task groups by immutable creation order", () => {
@@ -1485,11 +1558,49 @@ describe("conversation items projection", () => {
     expect(state.tasksById.task_items.activitiesById["subagent_reasoning:subagent_1:run_items"])
       .toMatchObject({
         kind: "reasoning",
+        subagentId: "subagent_1",
         output: "Inspecting GEOFound a candidate",
       });
     expect(reduceRuntimeEvent(afterFirstDelivery, childReasoning)).toBe(
       afterFirstDelivery,
     );
+  });
+
+  it("projects child tool activity for the subagent timeline only", () => {
+    let state = setup();
+    const childToolStarted = {
+      ...envelope("task_items", "run_items", 1, {
+        type: "tool_started",
+        tool_call_id: "call_child_1",
+        tool_name: "search_pubmed",
+      }),
+      subagent_id: "subagent_1",
+      parent_tool_call_id: "call_parent_1",
+    } as EventEnvelope;
+
+    state = reduceRuntimeEvent(state, childToolStarted);
+    state = reduceRuntimeEvent(state, {
+      ...childToolStarted,
+      event_id: "event_task_items_2",
+      sequence: 2,
+      type: "tool_completed",
+      payload: {
+        type: "tool_completed",
+        tool_name: "search_pubmed",
+        tool_call_id: "call_child_1",
+        output: "Found 4 records",
+        is_error: false,
+      },
+    });
+
+    expect(state.tasksById.task_items.items).toEqual([]);
+    expect(state.tasksById.task_items.activitiesById[
+      "subagent_tool:subagent_1:run_items:call_child_1"
+    ]).toMatchObject({
+      subagentId: "subagent_1",
+      name: "search_pubmed",
+      output: "Found 4 records",
+    });
   });
 
   it("splits reasoning into a new segment after tool_started", () => {

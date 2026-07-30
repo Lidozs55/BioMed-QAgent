@@ -53,6 +53,11 @@ export interface APIClient {
   startImportTask: (input: { files: File[]; note?: string }, options?: AdmissionOptions) => Promise<TaskRunAccepted>;
   continueTask: (taskId: string, input: ContinueTaskInput, options?: AdmissionOptions) => Promise<TaskRunAccepted>;
   cancelRun: (taskId: string, runId: string) => Promise<TaskSnapshot>;
+  cancelSubagent: (
+    taskId: string,
+    runId: string,
+    subagentId: string,
+  ) => Promise<TaskSnapshot>;
   compactTask: (taskId: string) => Promise<void>;
   resumeRun: (taskId: string, runId: string, input: ResumeRunInput) => Promise<TaskSnapshot>;
   deleteTask: (taskId: string) => Promise<void>;
@@ -168,6 +173,8 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       })).then((b) => parseTaskRunAccepted(b)),
     cancelRun: (taskId, runId) =>
       request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/cancel`, { method: "POST" }).then((b) => parseTaskSnapshot(b)),
+    cancelSubagent: (taskId, runId, subagentId) =>
+      request(`${baseUrl}/tasks/${encodeId(taskId)}/runs/${encodeId(runId)}/subagents/${encodeId(subagentId)}/cancel`, { method: "POST" }).then((b) => parseTaskSnapshot(b)),
     compactTask: (taskId) =>
       requestVoid(`${baseUrl}/tasks/${encodeId(taskId)}/compact`, { method: "POST" }),
     resumeRun: (taskId, runId, input) =>

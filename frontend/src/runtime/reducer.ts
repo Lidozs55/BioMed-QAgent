@@ -189,6 +189,7 @@ function projectSubagent(record: SubagentRecord): SubagentProjection {
     progressTotal: record.progress_total,
     progressMessage: record.progress_message,
     resultSummary: record.result_summary,
+    warnings: [],
     sourceAssetIds: [...record.source_asset_ids],
     recipeId: record.recipe_id,
     errorCode: record.error_code,
@@ -390,7 +391,16 @@ export function hydrateTaskSnapshot(
   const subagentsById = {
     ...base.subagentsById,
     ...Object.fromEntries(
-      subagents.map((subagent) => [subagent.subagentId, subagent]),
+      subagents.map((subagent) => [
+        subagent.subagentId,
+        {
+          ...subagent,
+          warnings:
+            subagent.warnings.length > 0
+              ? subagent.warnings
+              : (base.subagentsById[subagent.subagentId]?.warnings ?? []),
+        },
+      ]),
     ),
   };
   const task: TaskProjection = mergeMessagesIntoItems({
@@ -561,6 +571,7 @@ function addQueuedSubagent(
     progressTotal: existing?.progressTotal ?? null,
     progressMessage: existing?.progressMessage ?? null,
     resultSummary: existing?.resultSummary ?? null,
+    warnings: existing?.warnings ?? [],
     sourceAssetIds: existing?.sourceAssetIds ?? [],
     recipeId: existing?.recipeId ?? null,
     errorCode: existing?.errorCode ?? null,
@@ -1318,17 +1329,23 @@ function withoutHydratedAssistantItems(
 
 function upsertActivity(
   task: TaskProjection,
-  activity: ActivityProjection,
+  activity: Omit<ActivityProjection, "subagentId"> & {
+    subagentId?: string | null;
+  },
 ): TaskProjection {
+  const projectedActivity: ActivityProjection = {
+    ...activity,
+    subagentId: activity.subagentId ?? null,
+  };
   return {
     ...task,
     activitiesById: {
       ...task.activitiesById,
-      [activity.activityId]: activity,
+      [projectedActivity.activityId]: projectedActivity,
     },
-    activityOrder: task.activityOrder.includes(activity.activityId)
+    activityOrder: task.activityOrder.includes(projectedActivity.activityId)
       ? task.activityOrder
-      : [...task.activityOrder, activity.activityId],
+      : [...task.activityOrder, projectedActivity.activityId],
   };
 }
 
@@ -1413,6 +1430,7 @@ export function reduceRuntimeEvent(
         status: payload.result.status,
         finishedAt: envelope.timestamp,
         resultSummary: payload.result.summary,
+        warnings: [...payload.result.warnings],
         sourceAssetIds: [...payload.result.source_asset_ids],
         recipeId: payload.result.recipe_id,
         errorCode: payload.result.error_code,
@@ -1702,6 +1720,7 @@ export function reduceRuntimeEvent(
         sequence: envelope.sequence,
         timestamp: envelope.timestamp,
         kind: "reasoning",
+        subagentId: envelope.subagent_id ?? null,
         status: "started",
         name: null,
         input: null,
@@ -1755,9 +1774,12 @@ export function reduceRuntimeEvent(
         task = stripLastAssistantSegmentToolArgs(task, runId, toolArgs);
       }
       task = upsertActivity(task, {
-        activityId: `tool:${runId}:${payload.tool_call_id}`,
+        activityId: envelope.subagent_id === null || envelope.subagent_id === undefined
+          ? `tool:${runId}:${payload.tool_call_id}`
+          : `subagent_tool:${envelope.subagent_id}:${runId}:${payload.tool_call_id}`,
         taskId: envelope.task_id,
         runId,
+        subagentId: envelope.subagent_id ?? null,
         sequence: envelope.sequence,
         timestamp: envelope.timestamp,
         kind: "tool",
@@ -1800,12 +1822,15 @@ export function reduceRuntimeEvent(
     case "tool_completed": {
       const toolCallId = payload.tool_call_id ?? null;
       if (runId !== null && toolCallId !== null) {
-        const activityId = `tool:${runId}:${toolCallId}`;
+        const activityId = envelope.subagent_id === null || envelope.subagent_id === undefined
+          ? `tool:${runId}:${toolCallId}`
+          : `subagent_tool:${envelope.subagent_id}:${runId}:${toolCallId}`;
         const existing = task.activitiesById[activityId];
         task = upsertActivity(task, {
           activityId,
           taskId: envelope.task_id,
           runId,
+          subagentId: envelope.subagent_id ?? null,
           sequence: envelope.sequence,
           timestamp: envelope.timestamp,
           kind: "tool",

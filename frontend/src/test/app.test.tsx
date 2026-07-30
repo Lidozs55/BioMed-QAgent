@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { toast } from "sonner";
 
 import App from "@/App";
+import type { TaskSnapshot } from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -188,5 +189,82 @@ describe("App startup ownership", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
+  });
+
+  it("reports a failed subagent cancellation without an unhandled rejection", async () => {
+    const snapshot: TaskSnapshot = {
+      task: {
+        task_id: "task_child",
+        mode: "agent",
+        databases: [],
+        title: "Child task",
+        status: "running",
+        active_run_id: "run_child",
+        created_at: "2026-07-14T00:00:00Z",
+        updated_at: "2026-07-14T00:00:00Z",
+        latest_sequence: 1,
+      },
+      runs: [
+        {
+          run_id: "run_child",
+          task_id: "task_child",
+          request_id: "request_child",
+          status: "running",
+          input: "research",
+          created_at: "2026-07-14T00:00:00Z",
+          updated_at: "2026-07-14T00:00:00Z",
+          started_at: "2026-07-14T00:00:00Z",
+          finished_at: null,
+          error: null,
+        },
+      ],
+      messages: [],
+      subagents: [
+        {
+          subagent_id: "subagent_child",
+          task_id: "task_child",
+          run_id: "run_child",
+          agent_type: "source_research",
+          objective: "Find datasets",
+          target_source: "geo",
+          status: "running",
+          parent_tool_call_id: "tool_child",
+          created_at: "2026-07-14T00:00:00Z",
+          started_at: "2026-07-14T00:00:00Z",
+          finished_at: null,
+          progress_current: 1,
+          progress_total: 2,
+          progress_message: "Searching",
+          result_summary: null,
+          source_asset_ids: [],
+          recipe_id: null,
+          error_code: null,
+          error_message: null,
+          pending_request_id: null,
+        },
+      ],
+      older_messages_cursor: null,
+    };
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    useAgentStore.getState().setActiveTaskId("task_child");
+    render(<App />);
+
+    const cancelButton = await screen.findByRole("button", {
+      name: "取消此子任务",
+    });
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      if (String(input).endsWith("/subagents/subagent_child/cancel")) {
+        return Promise.reject(new Error("cancel unavailable"));
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${String(input)}`));
+    });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "取消子任务失败",
+        expect.objectContaining({ description: "cancel unavailable" }),
+      ),
+    );
   });
 });

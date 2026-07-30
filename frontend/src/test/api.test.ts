@@ -162,26 +162,40 @@ describe("runtime REST client", () => {
       timestamp: "2026-07-14T00:00:00Z",
       payload: { type: "run_completed" },
     };
+    const normalizedSnapshot: TaskSnapshot = {
+      ...snapshot,
+      task: { ...snapshot.task, schema_version: undefined },
+      subagents: snapshot.subagents ?? [],
+    };
+    const normalizedEvent: EventEnvelope = {
+      ...event,
+      subagent_id: null,
+      parent_tool_call_id: null,
+    };
     const fetcher = vi
       .fn<FetchLike>()
       .mockResolvedValueOnce(jsonResponse(taskPage))
       .mockResolvedValueOnce(jsonResponse(snapshot))
       .mockResolvedValueOnce(jsonResponse(messagePage))
       .mockResolvedValueOnce(jsonResponse({ events: [event] }))
+      .mockResolvedValueOnce(jsonResponse(snapshot, 202))
       .mockResolvedValueOnce(jsonResponse(snapshot, 202));
     const api = createAPIClient({ fetcher });
 
     await expect(
       api.fetchTasks({ limit: 10, cursor: "next cursor" }),
     ).resolves.toEqual(taskPage);
-    await expect(api.fetchTask("task/1")).resolves.toEqual(snapshot);
+    await expect(api.fetchTask("task/1")).resolves.toEqual(normalizedSnapshot);
     await expect(
       api.fetchMessages("task/1", { limit: 10, cursor: "older cursor" }),
     ).resolves.toEqual(messagePage);
     await expect(
       api.fetchEvents("task/1", { afterSequence: 3, limit: 20 }),
-    ).resolves.toEqual([event]);
-    await expect(api.cancelRun("task/1", "run/1")).resolves.toEqual(snapshot);
+    ).resolves.toEqual([normalizedEvent]);
+    await expect(api.cancelRun("task/1", "run/1")).resolves.toEqual(normalizedSnapshot);
+    await expect(
+      api.cancelSubagent("task/1", "run/1", "subagent/1"),
+    ).resolves.toEqual(normalizedSnapshot);
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/tasks?limit=10&cursor=next+cursor",
@@ -189,6 +203,7 @@ describe("runtime REST client", () => {
       "/api/v1/tasks/task%2F1/messages?limit=10&cursor=older+cursor",
       "/api/v1/tasks/task%2F1/events?after_sequence=3&limit=20",
       "/api/v1/tasks/task%2F1/runs/run%2F1/cancel",
+      "/api/v1/tasks/task%2F1/runs/run%2F1/subagents/subagent%2F1/cancel",
     ]);
   });
 
