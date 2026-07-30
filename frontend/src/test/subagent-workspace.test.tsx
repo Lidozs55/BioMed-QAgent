@@ -234,8 +234,28 @@ describe("SubagentWorkspace", () => {
                 code: null,
                 message: null,
               },
+              child_tool_error: {
+                activityId: "child_tool_error",
+                taskId: "task_1",
+                runId: "run_1",
+                subagentId: "subagent_1",
+                sequence: 3,
+                timestamp: CREATED_AT,
+                kind: "tool",
+                status: "completed",
+                name: "download_geo",
+                input: null,
+                output: null,
+                isError: true,
+                code: "RATE_LIMITED",
+                message: "Request failed",
+              },
             },
-            activityOrder: [...task.activityOrder, "child_tool"],
+            activityOrder: [
+              ...task.activityOrder,
+              "child_tool",
+              "child_tool_error",
+            ],
           },
         },
       };
@@ -251,7 +271,44 @@ describe("SubagentWorkspace", () => {
 
     expect(screen.getByText("执行记录")).toBeVisible();
     expect(screen.getByText("search_pubmed")).toBeVisible();
+    expect(screen.getByText("Found 4 records")).toBeVisible();
+    expect(screen.getByText("download_geo")).toBeVisible();
+    expect(screen.getByText("Request failed")).toBeVisible();
+    expect(screen.getByText("RATE_LIMITED")).toBeVisible();
     expect(screen.getByText("警告")).toBeVisible();
     expect(screen.getByText("已使用备用网页抓取")).toBeVisible();
+  });
+
+  it("renders a structured failure when only the error code is available", async () => {
+    seedTask("failed");
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_1;
+      return {
+        tasksById: {
+          ...state.tasksById,
+          task_1: {
+            ...task,
+            subagentsById: {
+              ...task.subagentsById,
+              subagent_1: {
+                ...task.subagentsById.subagent_1,
+                errorCode: "timed_out",
+                errorMessage: null,
+              },
+            },
+          },
+        },
+      };
+    });
+
+    render(
+      <SubagentWorkspace>
+        <div>Conversation</div>
+      </SubagentWorkspace>,
+    );
+
+    fireEvent.click(await screen.findByText("SourceResearchAgent"));
+
+    expect(screen.getByText("timed_out")).toBeVisible();
   });
 });

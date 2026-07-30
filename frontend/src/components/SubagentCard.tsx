@@ -56,6 +56,7 @@ export function SubagentCard({
     : (subagent.progressCurrent / subagent.progressTotal) * 100;
   const isCancellable = subagent.status === "queued" || subagent.status === "running";
   const elapsed = duration(subagent);
+  const errorDetail = subagent.errorMessage ?? subagent.errorCode;
 
   return (
     <AccordionItem value={subagent.subagentId}>
@@ -94,8 +95,11 @@ export function SubagentCard({
             <div className="flex flex-col gap-1 text-muted-foreground">
               <span className="font-medium text-foreground">执行记录</span>
               {activities.map((activity) => (
-                <span key={activity.activityId}>
-                  {activity.name ?? activity.message ?? activity.output ?? activity.kind}
+                <span key={activity.activityId} className="flex flex-col gap-0.5">
+                  <span>{activity.name ?? activity.kind}</span>
+                  {activity.message === null ? null : <span>{activity.message}</span>}
+                  {activity.output === null ? null : <span>{activity.output}</span>}
+                  {!activity.isError || activity.code === null ? null : <span>{activity.code}</span>}
                 </span>
               ))}
             </div>
@@ -106,8 +110,8 @@ export function SubagentCard({
               {subagent.warnings.map((warning) => <span key={warning}>{warning}</span>)}
             </div>
           )}
-          {subagent.errorMessage === null ? null : (
-            <p className="flex items-start gap-2 text-destructive"><WarningCircleIcon data-icon="inline-start" />{subagent.errorMessage}</p>
+          {errorDetail === null ? null : (
+            <p className="flex items-start gap-2 text-destructive"><WarningCircleIcon data-icon="inline-start" />{errorDetail}</p>
           )}
           {subagent.sourceAssetIds.length === 0 ? null : <p className="text-muted-foreground">SourceAsset: {subagent.sourceAssetIds.join(", ")}</p>}
           {subagent.recipeId === null ? null : <p className="text-muted-foreground">Recipe: {subagent.recipeId}</p>}
