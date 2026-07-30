@@ -9,6 +9,13 @@ import { useAgentStore } from "@/stores/agentStore";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
 function seedBackgroundTask(): void {
   useAgentStore.getState().mergeTaskPage(
     {
@@ -113,6 +120,7 @@ describe("ChatPanel", () => {
   });
 
   beforeEach(() => {
+    setViewportWidth(1024);
     useAgentStore.setState({
       ...createInitialRuntimeState(),
       connectionStatus: "connected",
@@ -938,5 +946,63 @@ describe("ChatPanel", () => {
 
     // The model selector should show the selected model name
     expect(screen.getByText("Qwen Plus")).toBeVisible();
+  });
+
+  it("shows the active subagent count in the mobile task header", () => {
+    setViewportWidth(390);
+    seedBackgroundTask();
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: {
+        task_id: "task_background",
+        mode: "agent",
+        databases: ["pubmed"],
+        title: "Background research",
+        status: "running",
+        active_run_id: "run_background",
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        latest_sequence: 2,
+      },
+      runs: [],
+      messages: [],
+      subagents: [
+        {
+          subagent_id: "subagent_1",
+          task_id: "task_background",
+          run_id: "run_background",
+          agent_type: "source_research",
+          objective: "Explore a public source",
+          target_source: "example",
+          status: "running",
+          parent_tool_call_id: "tool_1",
+          created_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: null,
+          progress_current: 1,
+          progress_total: 3,
+          progress_message: "正在解析公开页面",
+          result_summary: null,
+          source_asset_ids: [],
+          recipe_id: null,
+          error_code: null,
+          error_message: null,
+          pending_request_id: null,
+        },
+      ],
+      older_messages_cursor: null,
+    });
+    useAgentStore.getState().setActiveTaskId("task_background");
+
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: "查看 1 个子任务" });
+    expect(button).toBeVisible();
+    expect(button).toHaveTextContent("1 个运行中");
+    expect(
+      button.querySelector('[data-slot="spinner"]'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="resizable-panel-group"]'),
+    ).not.toBeInTheDocument();
   });
 });

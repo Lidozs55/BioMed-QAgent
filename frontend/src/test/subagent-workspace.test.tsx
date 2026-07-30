@@ -1,6 +1,13 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ChatPanel } from "@/components/ChatPanel";
 import { SubagentWorkspace } from "@/components/SubagentWorkspace";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import type {
@@ -12,6 +19,13 @@ import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
 const CREATED_AT = "2026-07-30T00:00:00Z";
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
 
 function subagentRecord(
   status: SubagentStatus,
@@ -33,7 +47,7 @@ function subagentRecord(
     finished_at: null,
     progress_current: status === "running" ? 1 : 0,
     progress_total: 3,
-    progress_message: status === "running" ? "正在检索" : null,
+    progress_message: status === "running" ? "正在解析公开页面" : null,
     result_summary: null,
     source_asset_ids: [],
     recipe_id: null,
@@ -96,6 +110,17 @@ function seedTask(
 
 describe("SubagentWorkspace", () => {
   beforeEach(() => {
+    setViewportWidth(1024);
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("767") && window.innerWidth < 768,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     useAgentStore.setState(createInitialRuntimeState());
   });
 
@@ -310,5 +335,37 @@ describe("SubagentWorkspace", () => {
     fireEvent.click(await screen.findByText("SourceResearchAgent"));
 
     expect(screen.getByText("timed_out")).toBeVisible();
+  });
+
+  it("opens the same subagent detail in an accessible mobile sheet", async () => {
+    setViewportWidth(390);
+    seedTask("running");
+
+    const { container } = render(
+      <SubagentWorkspace>
+        <ChatPanel startTask={vi.fn()} />
+      </SubagentWorkspace>,
+    );
+
+    expect(
+      container.querySelector('[data-slot="resizable-panel-group"]'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "查看 1 个子任务" }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "子任务运行状态" }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByText("SourceResearchAgent"));
+    expect(screen.getByText("正在解析公开页面")).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "子任务运行状态" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 });

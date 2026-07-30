@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { selectActiveTask } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
 import { subagentPanelEvents, toggleSubagentPanel } from "@/components/subagentPanelControl";
@@ -18,7 +25,15 @@ interface SubagentWorkspaceProps {
   cancelSubagent?: CancelSubagent;
 }
 
-function SubagentList({ cancelSubagent, onClose }: { cancelSubagent?: CancelSubagent; onClose: () => void }) {
+function SubagentList({
+  cancelSubagent,
+  onClose,
+  showHeader = true,
+}: {
+  cancelSubagent?: CancelSubagent;
+  onClose: () => void;
+  showHeader?: boolean;
+}) {
   const task = useAgentStore(selectActiveTask);
   const subagents = task?.subagentOrder.map((id) => task.subagentsById[id]) ?? [];
   const activitiesBySubagent = new Map<string, ActivityProjection[]>();
@@ -34,15 +49,17 @@ function SubagentList({ cancelSubagent, onClose }: { cancelSubagent?: CancelSuba
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/20">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold">子任务</h2>
-          <Badge variant="secondary">{subagents.length}</Badge>
+      {showHeader ? (
+        <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold">子任务</h2>
+            <Badge variant="secondary">{subagents.length}</Badge>
+          </div>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭子任务面板">
+            <XIcon />
+          </Button>
         </div>
-        <Button type="button" variant="ghost" size="icon-sm" onClick={onClose} aria-label="关闭子任务面板">
-          <XIcon />
-        </Button>
-      </div>
+      ) : null}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3">
           {subagents.length === 0 ? (
@@ -66,13 +83,14 @@ function SubagentList({ cancelSubagent, onClose }: { cancelSubagent?: CancelSuba
 
 export function SubagentPanelToggle() {
   return (
-    <Button type="button" variant="ghost" size="icon-sm" onClick={toggleSubagentPanel} aria-label="切换子任务面板">
+    <Button type="button" variant="ghost" size="icon-sm" className="hidden md:inline-flex" onClick={toggleSubagentPanel} aria-label="切换子任务面板">
       <SidebarSimpleIcon />
     </Button>
   );
 }
 
 export function SubagentWorkspace({ children, cancelSubagent }: SubagentWorkspaceProps) {
+  const isMobile = useIsMobile();
   const task = useAgentStore(selectActiveTask);
   const taskId = task?.summary.task_id ?? null;
   const subagentCount = task?.subagentOrder.length ?? 0;
@@ -84,6 +102,7 @@ export function SubagentWorkspace({ children, cancelSubagent }: SubagentWorkspac
 
   useEffect(() => {
     if (
+      !isMobile &&
       taskId !== null &&
       subagentCount > 0 &&
       !seenSubagentTasks.current.has(taskId)
@@ -91,7 +110,7 @@ export function SubagentWorkspace({ children, cancelSubagent }: SubagentWorkspac
       seenSubagentTasks.current.add(taskId);
       open();
     }
-  }, [open, subagentCount, taskId]);
+  }, [isMobile, open, subagentCount, taskId]);
 
   useEffect(() => {
     window.addEventListener(subagentPanelEvents.open, open);
@@ -103,6 +122,28 @@ export function SubagentWorkspace({ children, cancelSubagent }: SubagentWorkspac
       window.removeEventListener(subagentPanelEvents.toggle, toggle);
     };
   }, [close, open, toggle]);
+
+  if (isMobile) {
+    return (
+      <div className="h-full min-h-0 min-w-0">
+        {children}
+        <Sheet open={isOpen} onOpenChange={setIsOpen}>
+          <SheetContent side="right" className="gap-0">
+            <SheetHeader className="border-b">
+              <SheetTitle>子任务运行状态</SheetTitle>
+            </SheetHeader>
+            <div className="min-h-0 flex-1">
+              <SubagentList
+                cancelSubagent={cancelSubagent}
+                onClose={close}
+                showHeader={false}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    );
+  }
 
   if (!isOpen) return <div className="h-full min-h-0 min-w-0">{children}</div>;
 
