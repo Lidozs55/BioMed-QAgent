@@ -87,9 +87,12 @@ class FakePage:
         return FakeResponse()
 
     async def content(self) -> str:
+        self._context.tracker.content_calls += 1
         return self._context.tracker.content
 
-    async def evaluate(self, _expression: str) -> dict[str, int]:
+    async def evaluate(self, expression: str) -> object:
+        if "TextEncoder" in expression:
+            return len(self._context.tracker.content.encode("utf-8"))
         return self._context.tracker.document_size
 
     def locator(self, selector: str) -> FakeLocator:
@@ -132,8 +135,13 @@ class FakeLocator:
         self._tracker.actions.append(("select", self._selector, value))
 
     async def inner_text(self, **_kwargs: object) -> str:
+        self._tracker.inner_text_calls += 1
         self._tracker.actions.append(("extract", self._selector, None))
         return "extracted data"
+
+    async def evaluate(self, expression: str) -> object:
+        assert "TextEncoder" in expression
+        return len(b"extracted data")
 
     async def screenshot(self, **_kwargs: object) -> bytes:
         self._tracker.actions.append(("screenshot", self._selector, None))
@@ -193,6 +201,9 @@ class FakeChromium:
 
     async def launch(self, **_kwargs: object) -> FakeBrowser:
         self.tracker.browser_launches += 1
+        if self.tracker.launch_failures:
+            self.tracker.launch_failures -= 1
+            raise RuntimeError("chromium launch failed")
         self.tracker.browser = FakeBrowser(self.tracker)
         return self.tracker.browser
 
@@ -216,6 +227,7 @@ class FakePlaywright:
         self.chromium = FakeChromium(self)
         self.browser: FakeBrowser | None = None
         self.browser_launches = 0
+        self.launch_failures = 0
         self.manager_starts = 0
         self.manager_stops = 0
         self.active_contexts = 0
@@ -226,6 +238,8 @@ class FakePlaywright:
         self.context_options: list[dict[str, object]] = []
         self.actions: list[tuple[str, str, str | None]] = []
         self.content = "<html>rendered</html>"
+        self.content_calls = 0
+        self.inner_text_calls = 0
         self.screenshot = b"png"
         self.document_size = {"width": 1920, "height": 1080}
         self.selector_box = {
@@ -452,6 +466,26 @@ async def test_browser_outputs_enforce_exact_byte_limits(
 
 
 @pytest.mark.asyncio
+async def test_fetch_rejects_oversized_dom_before_materializing_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePlaywright()
+    fake.content = "12345"
+    pool = BrowserPool(playwright_factory=fake.factory)
+    monkeypatch.setattr(browser_pool_module, "MAX_BROWSER_CONTENT_BYTES", 4)
+    await pool.start()
+
+    with pytest.raises(ValueError, match="browser content exceeded 4 byte limit"):
+        await pool.fetch(
+            "https://example.org/page",
+            authorize_request=_allow_request,
+        )
+
+    assert fake.content_calls == 0
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_full_page_screenshot_rejects_unbounded_document_before_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -592,5 +626,34 @@ async def test_browser_session_rejects_oversized_extract(
             timeout_seconds=5,
         )
 
+    assert fake.inner_text_calls == 0
     await session.close()
     await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_browser_launch_stops_manager_and_allows_clean_retry() -> None:
+    fake = FakePlaywright()
+    fake.launch_failures = 1
+    pool = BrowserPool(playwright_factory=fake.factory)
+    await pool.start()
+
+    with pytest.raises(RuntimeError, match="chromium launch failed"):
+        await pool.fetch(
+            "https://example.org/page",
+            authorize_request=_allow_request,
+        )
+
+    assert fake.manager_starts == 1
+    assert fake.manager_stops == 1
+
+    result = await pool.fetch(
+        "https://example.org/page",
+        authorize_request=_allow_request,
+    )
+    assert result.status_code == 200
+    assert fake.manager_starts == 2
+    assert fake.browser_launches == 2
+
+    await pool.close()
+    assert fake.manager_stops == 2

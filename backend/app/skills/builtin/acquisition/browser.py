@@ -8,32 +8,43 @@ behavior across all acquisition skills (project_memory L11).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    DownloadAttempt,
+    DownloadStatus,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.subagents.staging import SubagentStagingWorkspace
 
 logger = logging.getLogger(__name__)
 
 _MAX_BODY_CHARS = 5000
 
 
-def _publish_no_clobber(temp_path: Path, destination: Path) -> None:
-    """Publish complete bytes atomically without replacing an existing asset."""
-    try:
-        os.link(temp_path, destination)
-    finally:
-        temp_path.unlink(missing_ok=True)
+def _validate_download_filename(filename: str) -> None:
+    if (
+        not filename
+        or Path(filename).name != filename
+        or filename in {".", ".."}
+        or "\\" in filename
+    ):
+        raise ValueError("source asset filename is unsafe")
 
 
 def _extract_title(html: str) -> str:
@@ -127,25 +138,34 @@ async def download_from_page(
     url: str,
     filename: str,
 ) -> str:
-    """Download a file through task-local temporary storage into source assets.
+    """Download a file through isolated staging into immutable source assets.
 
-    Uses real browser User-Agent, Referer, and Accept headers with 2s rate
-    limiting (project_memory L11). Detects Content-Type, streams the response
-    to download_tmp before atomically moving it to source_assets, and creates a
-    SourceRecord for provenance tracking.
+    Uses the bounded Run-owned crawler facade, records a DownloadAttempt, then
+    stages, validates, and atomically commits a checksum-addressed SourceAsset.
     Use this as a last-resort download tool when API endpoints fail.
     """
     run_ctx: RunContext = ctx.context
-    temp_path = None
     try:
-        temp_target = run_ctx.work_dir.download_temp_file(f"{uuid4().hex}.part")
-        dest = run_ctx.work_dir.source_asset_file(filename)
-        if dest.exists():
+        _validate_download_filename(filename)
+        legacy_destination = run_ctx.work_dir.source_asset_file(filename)
+        if legacy_destination.exists():
             raise FileExistsError(f"source asset already exists: {filename}")
+        started_at = datetime.now(UTC)
+        source_id = make_source_id(Database.BROWSER, filename, url)
+        attempt_id = generate_prefixed_uuid("download_attempt")
+        workspace = SubagentStagingWorkspace(
+            run_ctx.work_dir.root,
+            generate_prefixed_uuid("browser_download"),
+        )
         result = await run_ctx.crawler_facade.download(url)
+        finished_at = datetime.now(UTC)
         status_code = result.status_code
         content_type = result.headers.get("content-type", "")
-        mime_type = content_type.split(";")[0].strip() if content_type else None
+        mime_type = (
+            content_type.split(";")[0].strip()
+            if content_type
+            else "application/octet-stream"
+        )
         if not result.ok:
             run_ctx.log_query(filename, "browser_fallback", QueryStatus.FAILED, 0)
             return json.dumps(
@@ -159,12 +179,33 @@ async def download_from_page(
                 ensure_ascii=False,
             )
         bytes_received = len(result.content)
-        temp_path = temp_target
-        with temp_path.open("xb") as handle:
-            handle.write(result.content)
-
-        _publish_no_clobber(temp_path, dest)
-        temp_path = None
+        download_attempt = DownloadAttempt(
+            attempt_id=attempt_id,
+            source_id=source_id,
+            url=url,
+            status=DownloadStatus.SUCCEEDED,
+            bytes_received=bytes_received,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        source_asset = await asyncio.to_thread(
+            workspace.stage_bytes,
+            content=result.content,
+            filename=filename,
+            source_id=source_id,
+            successful_attempt_id=attempt_id,
+            data_level=DataLevel.METADATA,
+            media_type=mime_type,
+        )
+        await asyncio.to_thread(
+            workspace.validate_source_asset,
+            source_asset,
+        )
+        committed = await asyncio.to_thread(
+            workspace.commit_source_asset,
+            source_asset,
+        )
+        destination = workspace.task_root / committed.relative_path
 
         logger.info(
             "download_from_page url=%s status=%d content_type=%s bytes=%d dest=%s",
@@ -172,20 +213,19 @@ async def download_from_page(
             status_code,
             content_type,
             bytes_received,
-            dest,
+            destination,
         )
 
-        local_path = str(dest)
+        local_path = str(destination)
         run_ctx.add_raw_asset(local_path)
 
-        retrieved_at = datetime.now(UTC)
         source_record = SourceRecord(
-            source_id=make_source_id(Database.BROWSER, filename, url),
+            source_id=source_id,
             database=Database.BROWSER,
             accession=filename,
             url=url,
             title=f"Browser download {filename}",
-            retrieved_at=retrieved_at,
+            retrieved_at=finished_at,
         )
         run_ctx.add_source(source_record)
         run_ctx.log_query(filename, "browser_fallback", QueryStatus.SUCCESS, 1)
@@ -197,7 +237,9 @@ async def download_from_page(
                 "local_files": [local_path],
                 "mime_type": mime_type,
                 "bytes_received": bytes_received,
-                "retrieved_at": retrieved_at.isoformat(),
+                "retrieved_at": finished_at.isoformat(),
+                "source_asset": committed.model_dump(mode="json"),
+                "download_attempt": download_attempt.model_dump(mode="json"),
             },
             ensure_ascii=False,
         )
@@ -212,9 +254,6 @@ async def download_from_page(
             },
             ensure_ascii=False,
         )
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 browser_fallback_skill = SkillDef(
@@ -230,8 +269,8 @@ browser_fallback_skill = SkillDef(
         "Use browser_fallback tools only when API endpoints (PubMed, GEO, PDB, "
         "etc.) are unavailable or return errors. navigate_page renders a page and "
         "extracts title and body text. download_from_page downloads files directly "
-        "via HTTP streaming to the task source_assets directory. "
-        "All downloads are tracked in provenance."
+        "through isolated staging, validates a checksum-addressed SourceAsset, "
+        "and records linked download provenance."
     ),
     tools=[navigate_page, download_from_page],
     supported_sources=["browser_fallback", "http", "web"],

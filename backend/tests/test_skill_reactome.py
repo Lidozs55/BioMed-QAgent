@@ -9,8 +9,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
-from app.skills.builtin.acquisition.reactome import get_pathway, search_reactome
-from app.tools.crawler import CrawlAttempt, FetchResult
+from app.skills.builtin.acquisition.reactome import (
+    _accept_reactome_pathway_result,
+    _accept_reactome_search_result,
+    get_pathway,
+    search_reactome,
+)
+from app.tools.crawler import CrawlAttempt, FetchResult, fetch_with_fallback
 
 
 def _context(task_id: str) -> tuple[ToolContext, Mock]:
@@ -37,6 +42,97 @@ def _attempt(method: str, *, status: str = "succeeded") -> CrawlAttempt:
         status=status,
         status_code=200 if status == "succeeded" else 500,
     )
+
+
+class _FallbackFacade:
+    def __init__(self, api_content: str, *, html_content: str) -> None:
+        self.api_content = api_content
+        self.html_content = html_content
+        self.calls: list[str] = []
+
+    async def api(self, url: str) -> FetchResult:
+        self.calls.append("api")
+        return FetchResult(
+            url=url,
+            content=self.api_content,
+            status_code=200,
+            elapsed_ms=1,
+            method_used="api",
+        )
+
+    async def html(self, url: str) -> FetchResult:
+        self.calls.append("html")
+        return FetchResult(
+            url=url,
+            content=self.html_content,
+            status_code=200,
+            elapsed_ms=1,
+            method_used="httpx",
+        )
+
+    async def browser(self, url: str) -> FetchResult:
+        self.calls.append("browser")
+        return FetchResult(
+            url=url,
+            content="<html><body>Rendered Reactome result</body></html>",
+            status_code=200,
+            elapsed_ms=1,
+            method_used="crawl",
+        )
+
+
+def test_search_fallback_rejects_api_json_list_before_html() -> None:
+    facade = _FallbackFacade("[]", html_content="<html><body>Static result</body></html>")
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_search_result,
+        )
+    )
+
+    assert result.method_used == "httpx"
+    assert facade.calls == ["api", "html"]
+
+
+def test_search_fallback_rejects_api_error_document_before_browser() -> None:
+    facade = _FallbackFacade(
+        '{"error": "temporarily unavailable"}',
+        html_content="<html><body><script>no static result</script></body></html>",
+    )
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_search_result,
+        )
+    )
+
+    assert result.method_used == "crawl"
+    assert facade.calls == ["api", "html", "browser"]
+
+
+def test_pathway_fallback_rejects_non_json_api_body_before_html() -> None:
+    facade = _FallbackFacade(
+        "Service temporarily unavailable",
+        html_content="<html><body>Static pathway</body></html>",
+    )
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_pathway_result,
+        )
+    )
+
+    assert result.method_used == "httpx"
+    assert facade.calls == ["api", "html"]
 
 
 def test_search_reactome_uses_one_audited_fallback_call() -> None:

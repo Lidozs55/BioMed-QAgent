@@ -59,16 +59,16 @@ def _reactome_api_document(result: FetchResult) -> dict[str, object] | None:
 
 
 def _accept_reactome_search_result(result: FetchResult) -> bool:
-    document = _reactome_api_document(result)
-    if document is not None:
-        return isinstance(document.get("results"), list)
+    if result.method_used == "api":
+        document = _reactome_api_document(result)
+        return document is not None and isinstance(document.get("results"), list)
     return bool(_visible_text(result.content))
 
 
 def _accept_reactome_pathway_result(result: FetchResult) -> bool:
-    document = _reactome_api_document(result)
-    if document is not None:
-        return isinstance(document.get("stId"), str)
+    if result.method_used == "api":
+        document = _reactome_api_document(result)
+        return document is not None and isinstance(document.get("stId"), str)
     return bool(_visible_text(result.content))
 
 

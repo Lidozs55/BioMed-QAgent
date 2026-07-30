@@ -170,10 +170,29 @@ class BrowserSession:
             media_type = "text/html"
         elif action == "extract":
             if target is None:
+                size_bytes = await self._page.evaluate(
+                    "() => new TextEncoder().encode("
+                    "document.documentElement.outerHTML"
+                    ").byteLength"
+                )
+                _enforce_materialization_limit(
+                    size_bytes,
+                    limit=MAX_BROWSER_EXTRACT_BYTES,
+                    label="browser extract",
+                )
                 content = (await self._page.content()).encode("utf-8")
                 media_type = "text/html"
             else:
-                text = await self._page.locator(target).inner_text(timeout=timeout_ms)
+                locator = self._page.locator(target)
+                size_bytes = await locator.evaluate(
+                    "element => new TextEncoder().encode(element.innerText).byteLength"
+                )
+                _enforce_materialization_limit(
+                    size_bytes,
+                    limit=MAX_BROWSER_EXTRACT_BYTES,
+                    label="browser extract",
+                )
+                text = await locator.inner_text(timeout=timeout_ms)
                 content = text.encode("utf-8")
                 media_type = "text/plain"
         else:
@@ -274,6 +293,16 @@ class BrowserPool:
                 timeout=int(timeout * 1000),
             )
             session._raise_route_error()
+            size_bytes = await session.page.evaluate(
+                "() => new TextEncoder().encode("
+                "document.documentElement.outerHTML"
+                ").byteLength"
+            )
+            _enforce_materialization_limit(
+                size_bytes,
+                limit=MAX_BROWSER_CONTENT_BYTES,
+                label="browser content",
+            )
             content = await session.page.content()
             if len(content.encode("utf-8")) > MAX_BROWSER_CONTENT_BYTES:
                 raise ValueError(f"browser content exceeded {MAX_BROWSER_CONTENT_BYTES} byte limit")
@@ -492,11 +521,27 @@ class BrowserPool:
             if self._playwright_factory is None:
                 from playwright.async_api import async_playwright
 
-                self._playwright_manager = async_playwright()
+                manager = async_playwright()
             else:
-                self._playwright_manager = self._playwright_factory()
-            self._playwright = await self._playwright_manager.start()
-            self._browser = await self._playwright.chromium.launch(headless=True)
+                manager = self._playwright_factory()
+            playwright: Any | None = None
+            try:
+                playwright = await manager.start()
+                browser = await playwright.chromium.launch(headless=True)
+            except BaseException as error:
+                try:
+                    if playwright is not None:
+                        await playwright.stop()
+                except BaseException as cleanup_error:
+                    error.add_note(f"Playwright cleanup failed: {cleanup_error}")
+                finally:
+                    self._playwright_manager = None
+                    self._playwright = None
+                    self._browser = None
+                raise
+            self._playwright_manager = manager
+            self._playwright = playwright
+            self._browser = browser
             return self._browser
 
 
@@ -523,6 +568,22 @@ def _route_handler(
         await route.continue_()
 
     return handle
+
+
+def _enforce_materialization_limit(
+    size_bytes: object,
+    *,
+    limit: int,
+    label: str,
+) -> None:
+    if (
+        isinstance(size_bytes, bool)
+        or not isinstance(size_bytes, int | float)
+        or size_bytes < 0
+    ):
+        raise ValueError(f"{label} size measurement is invalid")
+    if size_bytes > limit:
+        raise ValueError(f"{label} exceeded {limit} byte limit")
 
 
 def _resource_type(request: Any) -> str:

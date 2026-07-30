@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.skills.builtin.acquisition.browser import download_from_page, navigate_page
@@ -92,7 +94,21 @@ def test_navigate_page_returns_crawler_failure_as_error_json() -> None:
 
 def test_download_from_page_uses_bounded_facade_and_tracks_provenance(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    thread_calls: list[str] = []
+    original_to_thread = asyncio.to_thread
+
+    async def tracked_to_thread(
+        function: object,
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        thread_calls.append(getattr(function, "__name__", type(function).__name__))
+        return await original_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", tracked_to_thread)
     facade = _facade()
     facade.download.return_value = DownloadResult(
         url="https://example.com/data.pdf",
@@ -121,7 +137,23 @@ def test_download_from_page_uses_bounded_facade_and_tracks_provenance(
 
     data = json.loads(result)
     assert data["bytes_received"] == len(b"fake pdf")
-    assert context.context.work_dir.source_asset_file("test_data.pdf").read_bytes() == b"fake pdf"
+    expected_sha256 = hashlib.sha256(b"fake pdf").hexdigest()
+    source_asset = data["source_asset"]
+    download_attempt = data["download_attempt"]
+    committed_path = context.context.work_dir.root / source_asset["relative_path"]
+    assert committed_path.read_bytes() == b"fake pdf"
+    assert source_asset["sha256"] == expected_sha256
+    assert source_asset["asset_id"] == f"asset_{expected_sha256}"
+    assert source_asset["successful_attempt_id"] == download_attempt["attempt_id"]
+    assert download_attempt["source_id"] == source_asset["source_id"]
+    assert download_attempt["bytes_received"] == len(b"fake pdf")
+    assert download_attempt["status"] == "succeeded"
+    assert thread_calls == [
+        "stage_bytes",
+        "validate_source_asset",
+        "commit_source_asset",
+    ]
+    assert not any(context.context.work_dir.staging.rglob("*.pdf"))
     assert context.context.sources[0].database.value == "browser"
     assert context.context.query_log[0]["status"] == "success"
     facade.download.assert_awaited_once_with("https://example.com/data.pdf")
