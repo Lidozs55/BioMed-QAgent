@@ -45,7 +45,12 @@ import {
   selectActiveTask,
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
-import { formatSize, getExtension, fileType } from "@/lib/fileUtils";
+import {
+  fileType,
+  formatSize,
+  getExtension,
+  triggerArtifactDownload,
+} from "@/lib/fileUtils";
 import { isActiveStatus } from "@/runtime/reducer";
 
 function parseCSV(text: string): {
@@ -121,15 +126,6 @@ function parseSourceManifest(activities: readonly ActivityProjection[]): SourceE
       }];
     }
   });
-}
-
-function triggerDownload(url: string, filename: string) {
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
 }
 
 function CsvPreview({ artifactUrl }: { artifactUrl: string }) {
@@ -235,7 +231,7 @@ function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; task
         <Button
           variant="outline"
           size="sm"
-          onClick={() => triggerDownload(url, artifact.name)}
+          onClick={() => triggerArtifactDownload(url, artifact.name)}
         >
           <DownloadIcon data-icon="inline-start" />
           下载
@@ -245,13 +241,25 @@ function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; task
   );
 }
 
-export default function ResultsViewer() {
-  const task = useAgentStore(selectActiveTask);
-  const taskId = task?.summary.task_id ?? null;
-  const artifacts = useAgentStore(selectActiveArtifacts);
-  const activities = useAgentStore(selectActiveActivities);
+interface ResultsViewerProps {
+  taskId?: string | null;
+  artifacts?: readonly ArtifactProjection[];
+  activities?: readonly ActivityProjection[];
+}
 
-  if (task === undefined) {
+export default function ResultsViewer({
+  taskId: taskIdOverride,
+  artifacts: artifactOverride,
+  activities: activityOverride,
+}: ResultsViewerProps = {}) {
+  const task = useAgentStore(selectActiveTask);
+  const activeArtifacts = useAgentStore(selectActiveArtifacts);
+  const activeActivities = useAgentStore(selectActiveActivities);
+  const taskId = taskIdOverride ?? task?.summary.task_id ?? null;
+  const artifacts = artifactOverride ?? activeArtifacts;
+  const activities = activityOverride ?? activeActivities;
+
+  if (taskId === null) {
     return (
       <Empty className="min-h-48">
         <EmptyHeader>
@@ -262,7 +270,9 @@ export default function ResultsViewer() {
     );
   }
 
-  const isActive = isActiveStatus(task.summary.status);
+  const isActive = artifactOverride === undefined &&
+    task !== undefined &&
+    isActiveStatus(task.summary.status);
   if (artifacts.length === 0 && isActive) {
     return (
       <div className="flex min-w-0 items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
@@ -312,7 +322,7 @@ export default function ResultsViewer() {
       )}
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         <div className="flex min-w-0 flex-col gap-3">
-          {taskId !== null && artifacts.map((artifact) => (
+          {artifacts.map((artifact) => (
             <ArtifactCard key={artifact.artifact_id} artifact={artifact} taskId={taskId} />
           ))}
         </div>

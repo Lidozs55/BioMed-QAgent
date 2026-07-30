@@ -11,6 +11,7 @@ import {
 
 import { ContextUsageInline } from "@/components/ContextUsageInline";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
+import { ArtifactFab } from "@/components/ArtifactFab";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -315,6 +316,7 @@ export function AgentComposer({
         </AttachmentGroup>
       )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 pb-2">
+        <ArtifactFab />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={

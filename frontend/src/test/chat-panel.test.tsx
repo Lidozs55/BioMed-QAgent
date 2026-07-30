@@ -99,7 +99,7 @@ function deferred<T>() {
 
 function chooseFiles(container: HTMLElement, files: File[]): void {
   fireEvent.click(screen.getByRole("button", { name: "添加附件" }));
-  fireEvent.click(screen.getByText("上传文件到本地缓存"));
+  fireEvent.click(screen.getByText("上传文件（从本地缓存）"));
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   if (input === null) throw new Error("File picker was not rendered");
   fireEvent.change(input, { target: { files } });
@@ -150,6 +150,46 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
     expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
+  });
+
+  it("shows active task artifacts before the attachment control", () => {
+    seedTerminalTask();
+    const state = useAgentStore.getState();
+    const task = state.tasksById.task_terminal;
+    useAgentStore.setState({
+      tasksById: {
+        ...state.tasksById,
+        task_terminal: {
+          ...task,
+          artifactsById: {
+            artifact_main: {
+              artifact_id: "artifact_main",
+              name: "main_data.csv",
+              size: 128,
+              sha256: "a".repeat(64),
+              media_type: "text/csv",
+              taskId: "task_terminal",
+              generatedByStepId: null,
+            },
+          },
+          artifactOrder: ["artifact_main"],
+        },
+      },
+    });
+
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
+    const composer = container.querySelector('[data-slot="agent-composer"]');
+    const artifactButton = screen.getByRole("button", {
+      name: "查看 1 个产物",
+    });
+    const attachmentButton = screen.getByRole("button", { name: "添加附件" });
+
+    expect(artifactButton).toBeVisible();
+    expect(
+      artifactButton.compareDocumentPosition(attachmentButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(composer).toContainElement(artifactButton);
   });
 
   it("renders attachments, removes one, and submits the remaining file with its note", async () => {
