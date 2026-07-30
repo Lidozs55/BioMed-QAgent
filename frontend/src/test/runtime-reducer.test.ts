@@ -1456,6 +1456,42 @@ describe("conversation items projection", () => {
     });
   });
 
+  it("keeps replayed subagent reasoning out of the main conversation", () => {
+    let state = setup();
+    const childReasoning = {
+      ...envelope("task_items", "run_items", 1, {
+        type: "assistant_reasoning_delta",
+        delta: "Inspecting GEO",
+      }),
+      subagent_id: "subagent_1",
+      parent_tool_call_id: "call_parent_1",
+    } as EventEnvelope;
+
+    state = reduceRuntimeEvent(state, childReasoning);
+    const afterFirstDelivery = state;
+    state = reduceRuntimeEvent(state, childReasoning);
+    state = reduceRuntimeEvent(state, {
+      ...childReasoning,
+      event_id: "event_task_items_2",
+      sequence: 2,
+      payload: {
+        type: "assistant_reasoning_delta",
+        delta: "Found a candidate",
+      },
+    });
+
+    expect(afterFirstDelivery.tasksById.task_items.items).toEqual([]);
+    expect(state.tasksById.task_items.items).toEqual([]);
+    expect(state.tasksById.task_items.activitiesById["subagent_reasoning:subagent_1:run_items"])
+      .toMatchObject({
+        kind: "reasoning",
+        output: "Inspecting GEOFound a candidate",
+      });
+    expect(reduceRuntimeEvent(afterFirstDelivery, childReasoning)).toBe(
+      afterFirstDelivery,
+    );
+  });
+
   it("splits reasoning into a new segment after tool_started", () => {
     let state = setup();
     state = reduceRuntimeEvent(

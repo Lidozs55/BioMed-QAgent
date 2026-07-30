@@ -1691,7 +1691,9 @@ export function reduceRuntimeEvent(
     }
     case "assistant_reasoning_delta": {
       if (runId === null) break;
-      const activityId = `reasoning:${runId}`;
+      const activityId = envelope.subagent_id == null
+        ? `reasoning:${runId}`
+        : `subagent_reasoning:${envelope.subagent_id}:${runId}`;
       const existing = task.activitiesById[activityId];
       task = upsertActivity(task, {
         activityId,
@@ -1708,6 +1710,7 @@ export function reduceRuntimeEvent(
         code: null,
         message: null,
       });
+      if (envelope.subagent_id != null) break;
       const segmentIndex = task.currentReasoningSegmentByRun[runId] ?? 0;
       if (!(runId in task.currentReasoningSegmentByRun)) {
         task = {

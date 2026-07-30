@@ -4,6 +4,7 @@ import type {
   WebSocketCommand,
   WebSocketControlFrame,
 } from "./contracts";
+import { isValidSubagentEventPayload } from "@/lib/eventParsersRuntime";
 import type { ConnectionStatus } from "./types";
 
 const CONNECTING = 0;
@@ -150,6 +151,8 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     (value.run_id === null || typeof value.run_id === "string") &&
     (value.stage_attempt_id === null ||
       typeof value.stage_attempt_id === "string") &&
+    isOptionalStringOrNull(value.subagent_id) &&
+    isOptionalStringOrNull(value.parent_tool_call_id) &&
     Number.isInteger(value.sequence) &&
     Number(value.sequence) >= 1 &&
     typeof value.timestamp === "string" &&
@@ -192,6 +195,10 @@ const ASSISTANT_STREAM_END_KEYS = new Set([
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isOptionalStringOrNull(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -242,6 +249,9 @@ function payloadShapeMatches(
   payload: Record<string, unknown>,
 ): boolean {
   if (payload.type !== type) return false;
+  if (type.startsWith("subagent_")) {
+    return isValidSubagentEventPayload(payload);
+  }
   switch (type) {
     case "run_queued":
       return (
@@ -300,58 +310,6 @@ function payloadShapeMatches(
       return (
         typeof payload.covered_through_run_id === "string" &&
         typeof payload.summary_digest === "string"
-      );
-    case "subagent_queued":
-      return (
-        typeof payload.subagent_id === "string" &&
-        isRecord(payload.request) &&
-        typeof payload.request.agent_type === "string" &&
-        typeof payload.request.objective === "string" &&
-        typeof payload.request.domain === "string" &&
-        typeof payload.request.capability === "string" &&
-        isRecord(payload.request.inputs)
-      );
-    case "subagent_started":
-      return typeof payload.subagent_id === "string";
-    case "subagent_progress":
-      return (
-        typeof payload.subagent_id === "string" &&
-        isNonNegativeInteger(payload.current) &&
-        (payload.total === null || isNonNegativeInteger(payload.total)) &&
-        (payload.message === null || typeof payload.message === "string")
-      );
-    case "subagent_completed":
-    case "subagent_failed":
-    case "subagent_cancelled":
-    case "subagent_interrupted":
-      return (
-        typeof payload.subagent_id === "string" &&
-        isRecord(payload.result) &&
-        typeof payload.result.subagent_id === "string" &&
-        typeof payload.result.status === "string" &&
-        typeof payload.result.summary === "string" &&
-        Array.isArray(payload.result.source_asset_ids)
-      );
-    case "subagent_cancel_requested":
-      return (
-        typeof payload.subagent_id === "string" &&
-        (payload.reason === null || typeof payload.reason === "string")
-      );
-    case "subagent_input_required":
-      return (
-        typeof payload.subagent_id === "string" &&
-        typeof payload.request_id === "string" &&
-        typeof payload.summary === "string" &&
-        typeof payload.prompt_kind === "string" &&
-        (payload.expires_at === null || typeof payload.expires_at === "string") &&
-        isRecord(payload.detail)
-      );
-    case "subagent_input_resumed":
-      return (
-        typeof payload.subagent_id === "string" &&
-        typeof payload.request_id === "string" &&
-        (payload.decision === "approve" || payload.decision === "reject") &&
-        isRecord(payload.detail)
       );
     default:
       return true;

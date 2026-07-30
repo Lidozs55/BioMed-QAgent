@@ -11,6 +11,18 @@ import type {
 } from "@/runtime/contracts";
 import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "./eventValidatorHelpers";
 
+function assertRequiredString(value: unknown, path: string): string {
+  return assertString(value, path, true);
+}
+
+function assertNonNegativeInteger(value: unknown, path: string): number {
+  const number = assertNumber(value, path);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new APIError(502, `Expected non-negative integer at ${path}`);
+  }
+  return number;
+}
+
 function assertSubagentType(value: unknown, path: string): SubagentType {
   if (value === "source_research" || value === "skill_builder") return value;
   throw new APIError(502, `Invalid subagent type at ${path}`);
@@ -75,21 +87,23 @@ function assertStringArray(value: unknown, path: string): string[] {
   if (!Array.isArray(value)) {
     throw new APIError(502, `Expected string array at ${path}`);
   }
-  return value.map((entry, index) => assertString(entry, `${path}[${index}]`));
+  return value.map((entry, index) =>
+    assertRequiredString(entry, `${path}[${index}]`),
+  );
 }
 
 function parseSubagentRequest(value: unknown, path: string): SubagentRequest {
   const request = assertJsonRecord(value, path);
   return {
     agent_type: assertSubagentType(Reflect.get(request, "agent_type"), `${path}.agent_type`),
-    objective: assertString(Reflect.get(request, "objective"), `${path}.objective`),
+    objective: assertRequiredString(Reflect.get(request, "objective"), `${path}.objective`),
     target_source: assertOptionalNull(
       Reflect.get(request, "target_source"),
       `${path}.target_source`,
-      assertString,
+      assertRequiredString,
     ),
-    domain: assertString(Reflect.get(request, "domain"), `${path}.domain`),
-    capability: assertString(Reflect.get(request, "capability"), `${path}.capability`),
+    domain: assertRequiredString(Reflect.get(request, "domain"), `${path}.domain`),
+    capability: assertRequiredString(Reflect.get(request, "capability"), `${path}.capability`),
     inputs: assertJsonRecord(Reflect.get(request, "inputs"), `${path}.inputs`),
   };
 }
@@ -106,9 +120,9 @@ function parseSubagentResult(value: unknown, path: string): SubagentResult {
     throw new APIError(502, `Expected terminal subagent status at ${path}.status`);
   }
   return {
-    subagent_id: assertString(Reflect.get(result, "subagent_id"), `${path}.subagent_id`),
+    subagent_id: assertRequiredString(Reflect.get(result, "subagent_id"), `${path}.subagent_id`),
     status,
-    summary: assertString(Reflect.get(result, "summary"), `${path}.summary`),
+    summary: assertRequiredString(Reflect.get(result, "summary"), `${path}.summary`),
     source_asset_ids: assertStringArray(
       Reflect.get(result, "source_asset_ids"),
       `${path}.source_asset_ids`,
@@ -116,7 +130,7 @@ function parseSubagentResult(value: unknown, path: string): SubagentResult {
     recipe_id: assertOptionalNull(
       Reflect.get(result, "recipe_id"),
       `${path}.recipe_id`,
-      assertString,
+      assertRequiredString,
     ),
     warnings: assertStringArray(Reflect.get(result, "warnings"), `${path}.warnings`),
     error_code: assertOptionalNull(
@@ -127,7 +141,7 @@ function parseSubagentResult(value: unknown, path: string): SubagentResult {
     error_message: assertOptionalNull(
       Reflect.get(result, "error_message"),
       `${path}.error_message`,
-      assertString,
+      assertRequiredString,
     ),
   };
 }
@@ -195,27 +209,27 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
     case "subagent_queued":
       return {
         type: "subagent_queued",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
         request: parseSubagentRequest(Reflect.get(payloadObj, "request"), path + ".request"),
       };
     case "subagent_started":
       return {
         type: "subagent_started",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
       };
     case "subagent_progress":
       return {
         type: "subagent_progress",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
-        current: assertNumber(Reflect.get(payloadObj, "current"), path + ".current"),
-        total: assertOptionalNull(Reflect.get(payloadObj, "total"), path + ".total", assertNumber),
-        message: assertOptionalNull(Reflect.get(payloadObj, "message"), path + ".message", assertString),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        current: assertNonNegativeInteger(Reflect.get(payloadObj, "current"), path + ".current"),
+        total: assertOptionalNull(Reflect.get(payloadObj, "total"), path + ".total", assertNonNegativeInteger),
+        message: assertOptionalNull(Reflect.get(payloadObj, "message"), path + ".message", assertRequiredString),
       };
     case "subagent_completed":
     case "subagent_failed":
     case "subagent_cancelled":
     case "subagent_interrupted": {
-      const subagent_id = assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id");
+      const subagent_id = assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id");
       const result = parseSubagentResult(Reflect.get(payloadObj, "result"), path + ".result");
       const expectedStatus = typeToTerminalStatus(payloadType);
       if (result.subagent_id !== subagent_id || result.status !== expectedStatus) {
@@ -226,34 +240,46 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
     case "subagent_cancel_requested":
       return {
         type: "subagent_cancel_requested",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
-        reason: assertOptionalNull(Reflect.get(payloadObj, "reason"), path + ".reason", assertString),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        reason: assertOptionalNull(Reflect.get(payloadObj, "reason"), path + ".reason", assertRequiredString),
       };
     case "subagent_input_required":
       return {
         type: "subagent_input_required",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
-        request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
-        summary: assertString(Reflect.get(payloadObj, "summary"), path + ".summary"),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        summary: assertRequiredString(Reflect.get(payloadObj, "summary"), path + ".summary"),
         prompt_kind: assertSubagentPromptKind(Reflect.get(payloadObj, "prompt_kind"), path + ".prompt_kind"),
-        expires_at: assertOptionalNull(Reflect.get(payloadObj, "expires_at"), path + ".expires_at", assertString),
+        expires_at: assertOptionalNull(Reflect.get(payloadObj, "expires_at"), path + ".expires_at", assertRequiredString),
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
       };
     case "subagent_input_resumed": {
-      const decision = assertString(Reflect.get(payloadObj, "decision"), path + ".decision");
+      const decision = assertRequiredString(Reflect.get(payloadObj, "decision"), path + ".decision");
       if (decision !== "approve" && decision !== "reject") {
         throw new APIError(502, `Invalid subagent decision at ${path}.decision`);
       }
       return {
         type: "subagent_input_resumed",
-        subagent_id: assertString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
-        request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
         decision,
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
       };
     }
     default:
       throw new APIError(502, "Unknown runtime event payload type " + payloadType);
+  }
+}
+
+export function isValidSubagentEventPayload(
+  payloadObj: Record<string, unknown>,
+): boolean {
+  try {
+    return parseRuntimeEventPayload(payloadObj, "websocket.payload").type.startsWith(
+      "subagent_",
+    );
+  } catch {
+    return false;
   }
 }
 
