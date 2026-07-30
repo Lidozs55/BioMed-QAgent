@@ -27,6 +27,11 @@ from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
 from app.skills.registry import SkillCategory
+from app.subagents.tools import (
+    cancel_subagent,
+    delegate_research,
+    get_subagent_results,
+)
 from app.tools.io import list_files, read_file, write_file
 
 AGENT_MAX_TURNS: int = 15
@@ -256,6 +261,9 @@ def build_agent(
         list_files,
         build_compress_query_log_tool(model),
         build_review_query_strategy_tool(model),
+        delegate_research,
+        get_subagent_results,
+        cancel_subagent,
     ]
     prompt_shape = ChatCompletionsPromptShape(
         instructions=INSTRUCTIONS,

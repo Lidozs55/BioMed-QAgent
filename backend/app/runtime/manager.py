@@ -655,6 +655,9 @@ class TaskManager:
         self._subagent_supervisor = supervisor
         self._subagent_input_broker = input_broker
         self._subagent_event_sink = event_sink
+        attach = getattr(self.run_executor, "attach_subagent_runtime", None)
+        if callable(attach):
+            attach(supervisor=supervisor, event_sink=event_sink)
 
     async def start(self) -> None:
         if self._started:

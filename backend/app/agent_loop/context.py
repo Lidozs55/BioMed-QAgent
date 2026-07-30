@@ -27,6 +27,7 @@ from app.tools.workdir import TaskWorkDir, create_task_workdir
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
+    from app.subagents.supervisor import SubagentEventSink, SubagentRunner, SubagentSupervisor
     from app.tools.crawler import CrawlerFacade
 
 
@@ -47,6 +48,15 @@ class ManagedPipelineBridge:
     event_sink: Callable[[EventEnvelope], Awaitable[None]]
     install_user_input_submitter: Callable[[UserInputSubmitter], None]
     clear_user_input_submitter: Callable[[UserInputSubmitter], None]
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentRuntime:
+    """Run-owned handles for managed child-agent delegation."""
+
+    supervisor: SubagentSupervisor
+    runner: SubagentRunner
+    event_sink: SubagentEventSink
 
 
 @dataclass
@@ -152,6 +162,16 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _subagent_runtime: SubagentRuntime | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _delegated_subagent_ids: set[str] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         """初始化时自动创建任务工作目录。"""
@@ -182,6 +202,72 @@ class RunContext:
         if self._crawler_facade is not None:
             raise RuntimeError("crawler facade is already bound")
         self._crawler_facade = facade
+
+    def bind_subagent_runtime(
+        self,
+        *,
+        supervisor: SubagentSupervisor,
+        runner: SubagentRunner,
+        event_sink: SubagentEventSink,
+    ) -> None:
+        """Bind the manager-owned child runtime to this parent Run once."""
+
+        if self._subagent_runtime is not None:
+            raise RuntimeError("subagent runtime is already bound")
+        self._subagent_runtime = SubagentRuntime(
+            supervisor=supervisor,
+            runner=runner,
+            event_sink=event_sink,
+        )
+
+    @property
+    def subagent_runtime(self) -> SubagentRuntime:
+        """Return delegation services installed by the managed Run owner."""
+
+        if self._subagent_runtime is None:
+            raise RuntimeError("subagent runtime is not available")
+        return self._subagent_runtime
+
+    def create_child_context(
+        self,
+        subagent_id: str,
+        *,
+        preferred_sources: list[str] | None = None,
+    ) -> RunContext:
+        """Create an isolated child context while retaining trusted services."""
+
+        child = RunContext(
+            task_id=self.task_id,
+            base_dir=self._work_dir.root.parent,
+            model_settings=self.model_settings,
+            preferred_sources=list(preferred_sources or self.preferred_sources),
+        )
+        if self._crawler_facade is not None:
+            child.bind_crawler_facade(self._crawler_facade)
+        if self._create_skill_runtime is not None:
+            from app.skills.builtin.processing.create_skill import CreateSkillRuntime
+            from app.subagents.staging import SubagentStagingWorkspace
+
+            runtime = self._create_skill_runtime
+            child.bind_create_skill_runtime(
+                CreateSkillRuntime(
+                    store=runtime.store,
+                    executor=runtime.executor,
+                    workspace=SubagentStagingWorkspace(child.work_dir.root, subagent_id),
+                )
+            )
+        return child
+
+    def record_delegated_subagents(self, subagent_ids: list[str]) -> None:
+        """Record handles this parent Run may later retrieve or cancel."""
+
+        self._delegated_subagent_ids.update(subagent_ids)
+
+    def require_delegated_subagent(self, subagent_id: str) -> None:
+        """Fail closed for handles not created by this live parent Run."""
+
+        if subagent_id not in self._delegated_subagent_ids:
+            raise PermissionError("subagent handle does not belong to this run")
 
     @property
     def crawler_facade(self) -> CrawlerFacade:

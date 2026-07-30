@@ -60,6 +60,37 @@ from compaction_support import budgeted_request
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
 
+@pytest.mark.asyncio
+async def test_manager_binds_lifespan_subagent_runtime_to_execution_context(
+    tmp_path,
+) -> None:
+    repository = TaskRepository(tmp_path / "output")
+    supervisor = SubagentSupervisor()
+    sink = DurableSubagentEventSink(repository=repository, hub=EventHub())
+    broker = SubagentInputBroker()
+    attached: list[tuple[object, object]] = []
+
+    class Executor:
+        def attach_subagent_runtime(self, *, supervisor, event_sink) -> None:
+            attached.append((supervisor, event_sink))
+
+        async def __call__(self, _execution) -> None:
+            return None
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=Executor(),
+    )
+    manager.attach_subagent_runtime(
+        supervisor=supervisor,
+        input_broker=broker,
+        event_sink=sink,
+    )
+
+    assert attached == [(supervisor, sink)]
+
+
 def empty_snapshot(
     task_id: str,
     *,

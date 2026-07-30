@@ -56,6 +56,10 @@ from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.skills.catalog import SkillCatalog
+from app.subagents.agents import ManagedChildAgentRunner
+
+if TYPE_CHECKING:
+    from app.subagents.supervisor import SubagentEventSink, SubagentSupervisor
 
 if TYPE_CHECKING:
     from app.runtime.manager import RunExecution
@@ -468,10 +472,14 @@ class AgentRunExecutor:
         *,
         skill_catalog: SkillCatalog | None = None,
         compactor=None,
+        subagent_supervisor: SubagentSupervisor | None = None,
+        subagent_event_sink: SubagentEventSink | None = None,
     ) -> None:
         self._repository = repository
         self.skill_catalog = skill_catalog
         self._compactor = compactor or ConversationCompactor(repository)
+        self._subagent_supervisor = subagent_supervisor
+        self._subagent_event_sink = subagent_event_sink
 
     def _build(self, execution) -> AgentBuild:
         """Build the Agent for this executor (overridable by subclasses)."""
@@ -486,6 +494,39 @@ class AgentRunExecutor:
         need run-specific max_turns (e.g. ``ImportRunExecutor``) can read it.
         """
         return AGENT_MAX_TURNS
+
+    def attach_subagent_runtime(
+        self,
+        *,
+        supervisor: SubagentSupervisor,
+        event_sink: SubagentEventSink,
+    ) -> None:
+        """Receive the lifecycle-owned supervisor before any managed Run starts."""
+
+        self._subagent_supervisor = supervisor
+        self._subagent_event_sink = event_sink
+
+    def _bind_subagent_runtime(self, execution) -> None:
+        """Attach this Run's child dispatcher without sharing parent SDK state."""
+
+        context = execution.context
+        if (
+            not isinstance(context, RunContext)
+            or self._subagent_supervisor is None
+            or self._subagent_event_sink is None
+        ):
+            return
+        try:
+            _ = context.subagent_runtime
+        except RuntimeError:
+            pass
+        else:
+            return
+        context.bind_subagent_runtime(
+            supervisor=self._subagent_supervisor,
+            runner=ManagedChildAgentRunner(context, self.skill_catalog),
+            event_sink=self._subagent_event_sink,
+        )
 
     @staticmethod
     async def _consume_events(
@@ -606,6 +647,7 @@ class AgentRunExecutor:
         )
         if callable(bind_model_settings):
             bind_model_settings(model_settings)
+        self._bind_subagent_runtime(execution)
         task_session = self._repository.task_session(
             execution.task_id,
             run_id=execution.run_id,
@@ -1147,6 +1189,23 @@ class ModeDispatchRunExecutor:
             await self.import_executor(execution)
             return
         raise ValueError(f"unsupported task mode: {execution.mode}")
+
+    def attach_subagent_runtime(
+        self,
+        *,
+        supervisor: SubagentSupervisor,
+        event_sink: SubagentEventSink,
+    ) -> None:
+        """Forward lifecycle-owned child services to model-backed executors."""
+
+        self.agent_executor.attach_subagent_runtime(
+            supervisor=supervisor,
+            event_sink=event_sink,
+        )
+        self.import_executor.attach_subagent_runtime(
+            supervisor=supervisor,
+            event_sink=event_sink,
+        )
 
 
 class ImportRunExecutor(AgentRunExecutor):

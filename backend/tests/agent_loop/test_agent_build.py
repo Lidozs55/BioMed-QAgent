@@ -54,6 +54,9 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
         "list_files",
         "compress_query_log",
         "review_query_strategy",
+        "delegate_research",
+        "get_subagent_results",
+        "cancel_subagent",
     ]
 
 
