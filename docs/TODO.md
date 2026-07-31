@@ -3,6 +3,7 @@
 > 基于 PROBLEM.md 赛题要求（XH-202619 赛道二方向1 选题A）。
 > 目标：完成本 TODO 后可作为初步赛题成果提交。
 > 上一版本归档于 git history（2026-07-23 之前）。
+> 状态核对：2026-07-31 并行审计全部条目（对照 main 分支代码），已按审计结果更新勾选状态。
 
 ---
 
@@ -37,7 +38,8 @@
 > `pipeline_supported` 与 Agent-only 能力，不能通过解除硬门控把未完成的来源伪装成
 > Pipeline 支持。
 
-- [x] **P0** `/databases` 已返回 `pipeline_supported`；仍需补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源只能作为调研或待接入来源
+- [x] **P0** `/databases` 已返回 `pipeline_supported`
+- [ ] **P0** 补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源标记为 research-only/pending，只能作为调研或待接入来源
 - [x] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；`run_research_pipeline` 现在对未支持来源返回 `status=unsupported_databases`、`retryable=false`，不产生伪成功 Artifact
 - [ ] **P1** `pipeline/stages/acquisition.py` 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
 - [ ] **P2** 按验收标准新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力；未通过 search、metadata、download 测试前不得标记为 Pipeline 支持
@@ -61,7 +63,7 @@
 
 - [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression、GDC project/data_type 与 Reactome 显式单 pathway 查询；Reactome 不支持多 pathway 或混合来源
 - [x] **P0** Discovery 阶段对 Xena gene-expression、GDC fixture/显式选择及 Reactome 显式单 pathway 产出统一 `SourceRecord`；Reactome 与其它数据库或多个 pathway 选择明确拒绝
-- [ ] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库
+- [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库（artifact_build 写入全部 discovery.sources，含 Xena/GDC/Reactome 行）
 - [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
 
 #### 1.5.2 Acquisition 扩展（P0）
@@ -72,7 +74,7 @@
 - [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/data_type 下载（files API → `acquire_source()` → `source_assets/`；首期 TSV/TSV.GZ）
 - [x] **P0** Acquisition 阶段支持 Xena fixture 与 live hub 下载适配（TSV/TSV.GZ → `source_assets/`，统一产出 `SourceAsset`/`DownloadAttempt`）；live 输入契约测试已覆盖
 - [x] **P1** Acquisition 阶段支持 Reactome 单 pathway 参与者导出（ContentService JSON/fixture → `source_assets/`，fixture/live acquisition 已有协议测试）；多 pathway/多源下载仍未实现
-- [ ] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果
+- [x] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果（artifact_build 写入全部 download_attempts，status 含失败态；error 明细字段仍为空，见 §2.5）
 - [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
 
 #### 1.5.3 Processing 扩展（P0）
@@ -268,12 +270,12 @@
 
 ### 4.1 静默吞错修复
 
-- [ ] **P0** `runtime/manager.py:331-334` `_commit_task` 失败增加 logger.error（当前 `except Exception: pass`）
+- [x] **P0** `runtime/manager.py` `_commit_task` 失败已记录 `logger.error` 并传播为 `RunFailedPayload`（不再静默吞错）
 - [ ] **P0** `agent_loop/runner.py:324` 限制 `except BaseException` 范围到 `except Exception`
 
 ### 4.2 Pipeline artifact 降级路径
 
-- [ ] **P1** `agent_loop/runner.py:115` 指纹未变时仍发射 `artifact_produced`（或标记 `artifact_unchanged` 让前端走 HTTP 拉取）
+- [x] **P1** 指纹未变（digest 命中 checkpoint 复用）时仍发射 `artifact_produced`，前端 HTTP 拉取路径可用（原指纹逻辑已重构，见 `_finalize_completed`）
 - [ ] **P1** `routes.py:548-549` `.runtime-publication.json` 缺失时回退到 manifest 文件本身（加 `degraded=true` 标记）
 
 ### 4.3 错误日志增强
@@ -297,16 +299,16 @@
 
 ### 5.1 消除死代码与重复
 
-- [ ] **P1** 删除 `api/settings_router.py`（仅被 `test_settings_api.py` 引用，已迁移后可移除）
-- [ ] **P1** 前端删除 `agentSelectors.ts` 未使用导出（`selectActiveRuns` 等）
-- [ ] **P1** 提取共享 `_write_csv` 到 `tools/io.py`（`artifact_build.py` + `validation.py` 各一份）
-- [ ] **P2** 前端提取 `errorDescription` 到 `lib/utils.ts`（5 处重复）
-- [ ] **P2** 前端统一 `formatSize` 到 `fileUtils.ts`（3 份不一致的变体）
+- [x] **P1** 删除 `api/settings_router.py`（安全测试迁移至 `test_model_preview_security.py`）
+- [x] **P1** 前端删除 `agentSelectors.ts` 未使用导出（`selectActiveRuns` 等）
+- [x] **P1** 提取共享 `write_csv`（实际落在 `pipeline/stages/base.py`，`artifact_build.py` + `validation.py` 复用）
+- [x] **P2** 前端提取 `errorMessage` 到 `lib/utils.ts`（原 `errorDescription`，11+ 处复用）
+- [x] **P2** 前端统一 `formatSize` 到 `fileUtils.ts`（3 份不一致的变体）
 - [ ] **P2** 修正 `tools/io.py` → `agent_loop/context.py` 循环依赖
 
 ### 5.2 并发与资源管理
 
-- [ ] **P1** `crawler.py` 引入 BrowserPool（单例 Chromium + 多 context，4 并发共享）
+- [x] **P1** `crawler.py` 引入 BrowserPool（`tools/browser_pool.py`，lifespan 持有，单浏览器 ≤4 context 并发共享）
 - [ ] **P2** 监控并发 Chromium 实例数，超阈值时排队
 
 ### 5.3 配置硬编码治理
