@@ -86,7 +86,7 @@ backend/
 │   │   └── metrics.py                # MetricsTracker：阶段级指标追踪 + 消融报告导出
 │   ├── domain/                       # 领域模型（Pydantic v2）
 │   │   ├── contracts/                # 正式契约（base/ids/enums/events/runtime/task/source/pipeline/discovery）
-│   │   ├── events.py / task.py / output.py / processing.py
+│   │   ├── events.py / task.py / processing.py
 │   ├── integrations/                 # 外部服务集成
 │   │   ├── ncbi/                     # NcbiEutilsClient + parsers + discovery 工厂
 │   │   ├── europepmc.py              # EPMC fullTextXML 客户端（PDF fallback Tier 3）
@@ -111,7 +111,7 @@ backend/
 │   │   └── learned/                  # 后天 Skill（默认禁用；AST + 路径白名单安全校验）
 │   └── tools/                        # Function Tools
 │       ├── _registry.py / io.py / workdir.py / crawler.py
-│       ├── cleaning.py / alignment.py / processing.py / export.py
+│       ├── cleaning.py / alignment.py / processing.py
 │       ├── parse_geo.py / parse_pdb.py / parse_excel.py
 │       ├── content_cache.py / network_safety.py
 ├── tests/                            # pytest（86 文件 / 1025+ 测试，详见下方）
@@ -119,8 +119,7 @@ backend/
 │   ├── pipeline/ runtime/ fixtures/ncbi/gse178352/
 │   └── conftest.py + 24 个 root-level test_*.py
 ├── scripts/
-│   ├── build_gse178352_fixture.py    # 重新生成 pinned fixture
-│   └── demo_workflow.py              # 端到端冒烟演示
+│   └── build_gse178352_fixture.py    # 重新生成 pinned fixture
 ├── data/                             # 任务数据目录（gitignored）
 │   └── output/tasks/<task_id>/       # source_assets/ download_tmp/ parsed/ normalized/
 │                                     # staging/ artifacts/ state/ logs/

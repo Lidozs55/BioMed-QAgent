@@ -169,13 +169,13 @@
 
 ### 2.6 删除旧 domain 模型（dataclass）
 
-> 旧 `app.domain/output.py`、`processing.py` 仍被 `tools/` 引用。
+> 旧 `app.domain/output.py` 已删除；`processing.py` 的 `ParsedDataset` 仍被 `tools/` 引用（MVP 遗留，待后续清理）。
 
-- [ ] **P1** 迁移 `tools/export.py` 到新 Pydantic 契约
-- [ ] **P1** 迁移或删除 `scripts/demo_workflow.py` 旧 `SourceRecord(...)` 实例化
-- [ ] **P1** 删除 `app/domain/output.py` 的旧 `SourceRecord` dataclass
-- [ ] **P1** 清理 `app/domain/__init__.py` 顶层导出
-- [ ] **P1** 同步更新 `tests/test_output.py`
+- [x] **P1** 迁移 `tools/export.py` 到新 Pydantic 契约——2026-07-31 执行：`export.py` 生产零引用（仅被 `demo_workflow.py` 脚本与 `test_output.py` 引用），与 `app/domain/output.py` 旧 dataclass 整链删除
+- [x] **P1** 迁移或删除 `scripts/demo_workflow.py` 旧 `SourceRecord(...)` 实例化——2026-07-31 执行：删除 MVP 遗留端到端演示脚本（功能已被 durable Run + Pipeline 替代）
+- [x] **P1** 删除 `app/domain/output.py` 的旧 `SourceRecord` dataclass——2026-07-31 执行：整链删除（SourceRecord/DataRecord/OutputBundle 等 6 个 dataclass 全部移除）
+- [x] **P1** 清理 `app/domain/__init__.py` 顶层导出——2026-07-31 执行：移除 output 相关导出，docstring 同步更新
+- [x] **P1** 同步更新 `tests/test_output.py`——2026-07-31 执行：连同 `test_demo_workflow.py` 删除；后端 README 目录树同步
 
 ### 2.7 赛题加分项
 
@@ -304,7 +304,7 @@
 - [x] **P1** 提取共享 `_write_csv` 到 `tools/io.py`（`artifact_build.py` + `validation.py` 各一份）——2026-07-31 重构执行：合并为 `pipeline/stages/base.py:write_csv`（两文件均已导入 base，未引入新依赖）
 - [x] **P2** 前端提取 `errorDescription` 到 `lib/utils.ts`（5 处重复）——2026-07-31 重构执行：`utils.ts:errorMessage`，7 处调用点统一
 - [x] **P2** 前端统一 `formatSize` 到 `fileUtils.ts`（3 份不一致的变体）——2026-07-31 核对：`fileUtils.ts:formatSize` 已统一，`ArtifactSheet.tsx`/`ResultsViewer.tsx` 已迁移；本次将 `AgentComposer.tsx` 残留本地 `formatFileSize`（KiB/MiB 变体）一并迁移至 `formatSize`
-- [ ] **P2** 修正 `tools/io.py` → `agent_loop/context.py` 循环依赖
+- [x] **P2** 修正 `tools/io.py` → `agent_loop/context.py` 循环依赖——2026-07-31 核对：`context.py` 仅依赖 `tools/workdir`，与 `tools/io` 无反向引用，循环不存在；移除 `io.py` 末尾延迟导入 hack，`RunContext` 改顶部 import
 
 ### 5.2 并发与资源管理
 

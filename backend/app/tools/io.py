@@ -17,6 +17,8 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from app.agent_loop.context import RunContext
+
 
 def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
     """将用户提供的路径解析为任务目录内的安全路径。
@@ -111,7 +113,3 @@ def list_files(ctx: RunContextWrapper[Any], subdir: str = "") -> str:
     task_root = run_ctx.work_dir.root.resolve()
     files = [str(f.relative_to(task_root)) for f in d.rglob("*") if f.is_file()]
     return "\n".join(files) if files else "（空目录）"
-
-
-# 延迟导入避免循环引用
-from app.agent_loop.context import RunContext  # noqa: E402
