@@ -174,11 +174,13 @@ export default function App() {
                 loadOlderMessages={(taskId) =>
                   controller.loadOlderMessages(taskId)
                 }
+                compactTask={(taskId) => api.compactTask(taskId)}
                 models={models}
                 hasApiKey={settings?.api_key_configured ?? false}
                 selectedModelId={selectedModelId}
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}
+                contextWindow={settings?.context_window}
               />
             </ArtifactWorkspace>
           </div>

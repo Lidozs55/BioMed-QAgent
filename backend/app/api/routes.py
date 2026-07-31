@@ -662,6 +662,31 @@ async def resume_task_run(
         raise
 
 
+@router.post("/tasks/{task_id}/compact", status_code=202)
+async def request_compaction(
+    task_id: str,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> dict[str, str]:
+    """Request context compaction for a task's active run.
+
+    Compaction is performed by the agent during its next invocation preflight.
+    This endpoint signals the running agent to compact at the earliest
+    opportunity.  Returns 409 if the task has no active run.
+    """
+
+    snapshot = await _require_snapshot(repository, task_id)
+    active_run_id = snapshot.task.active_run_id
+    if active_run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Task has no active run to compact",
+        )
+    # Signal compaction via the manager's event system
+    await manager.request_compaction(task_id, active_run_id)
+    return {"status": "compaction_requested", "task_id": task_id, "run_id": active_run_id}
+
+
 @router.get("/tasks/{task_id}/messages", response_model=MessagePage)
 async def list_task_messages(
     task_id: str,

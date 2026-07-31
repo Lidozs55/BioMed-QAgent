@@ -239,10 +239,13 @@ pnpm test:watch                            # Run unit tests in watch mode (vites
 
 **Merge steps**:
 
-- `git pull --rebase origin main` and resolve conflicts.
-- After resolving conflicts, **re-run the Quality Gates**.
-- Prefer `git merge --no-ff` to preserve branch history, or rebase then push.
-- Before pushing, confirm local `main` can start.
+- Choose the sync strategy based on branch scale:
+  - **≤5 commits** (single-digit): `git pull --rebase origin main`, keeping a linear history.
+  - **>5 commits**: `git fetch origin main && git merge origin/main`, resolving conflicts once instead of per-commit.
+  - **Heed conflict scope**: even a ≤5-commit branch that touches files heavily modified in `main`'s recent history may benefit from merge rather than rebase.
+- After resolving conflicts, **re-run all Quality Gates**.
+- `git merge --no-ff main` to merge the feature branch into local `main` (preserving branch topology), or rebase then push.
+- Before pushing, confirm local `main` starts cleanly.
 - After merging, post a `[DONE]` message in Commonly summarizing the result (if connected to Commonly).
 
 **Merge constraints**:

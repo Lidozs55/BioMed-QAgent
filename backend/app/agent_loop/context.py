@@ -89,6 +89,10 @@ class RunContext:
         default_factory=asyncio.Event,
         repr=False,
     )
+    compaction_requested: asyncio.Event = field(
+        default_factory=asyncio.Event,
+        repr=False,
+    )
     # TODO §8.4: per-source follow-up counter for LLM self-enforcement.
     # Each log_query(status=NOT_FOUND) increments the counter for that source.
     # LLM reads followup_search_count via RunContext to self-enforce the

@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
@@ -28,6 +29,7 @@ import type {
   TaskRunAccepted,
 } from "@/runtime/contracts";
 import type { ConversationItem } from "@/runtime/types";
+import { estimateContextTokens } from "@/lib/tokenEstimate";
 import {
   selectActiveItem,
   selectActiveItems,
@@ -50,6 +52,8 @@ interface ChatPanelProps {
     input: ResumeRunInput,
   ) => Promise<void>;
   loadOlderMessages?: (taskId: string) => Promise<void>;
+  /** Trigger context compaction on a task */
+  compactTask?: (taskId: string) => Promise<void>;
   /** Available models from settings */
   models?: ModelInfo[];
   /** Whether the user has configured an API key */
@@ -60,6 +64,8 @@ interface ChatPanelProps {
   onModelChange?: (modelId: string) => void;
   /** Currently selected model ID */
   selectedModelId?: string;
+  /** Context window capacity in tokens from model settings */
+  contextWindow?: number;
 }
 
 const TERMINAL_STATUSES = new Set([
@@ -120,11 +126,13 @@ export function ChatPanel({
   continueTask,
   resumeRun,
   loadOlderMessages,
+  compactTask,
   models,
   hasApiKey,
   onOpenSettings,
   onModelChange,
   selectedModelId,
+  contextWindow,
 }: ChatPanelProps) {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
@@ -138,6 +146,32 @@ export function ChatPanel({
   const draftError = useAgentStore((state) => state.draft.error);
   const setDraftInput = useAgentStore((state) => state.setDraftInput);
   const setDraftError = useAgentStore((state) => state.setDraftError);
+
+  // Estimate context token usage from conversation items
+  const estimatedTokens = useMemo(() => estimateContextTokens(items), [items]);
+
+  // Context compaction handler
+  const [compacting, setCompacting] = useState(false);
+  const handleCompact = useCallback(async () => {
+    if (activeTaskId === null || compactTask === undefined) return;
+    // Manual compaction threshold: only allow when usage > 65%
+    const pct = contextWindow && contextWindow > 0
+      ? Math.round((estimatedTokens / contextWindow) * 100)
+      : 0;
+    if (pct <= 65) {
+      toast.info("上下文占用较低，无需压缩", { description: `当前占用 ${pct}%，超过 65% 时才建议压缩` });
+      return;
+    }
+    setCompacting(true);
+    try {
+      await compactTask(activeTaskId);
+      toast.success("上下文压缩已触发", { description: "早期内容将被摘要以释放上下文空间" });
+    } catch (e) {
+      toast.error("压缩失败", { description: e instanceof Error ? e.message : "请求失败" });
+    } finally {
+      setCompacting(false);
+    }
+  }, [activeTaskId, compactTask, contextWindow, estimatedTokens]);
 
   const [submittingDraftKey, setSubmittingDraftKey] = useState<string | null>(null);
   const [importPending, setImportPending] = useState(false);
@@ -371,16 +405,18 @@ export function ChatPanel({
       )}
 
       {activeTask !== undefined && (
-        <Marker variant="border" className="shrink-0 px-5 py-2" role="status">
-          <MarkerIcon>
-            <TaskStatusIcon status={activeTask.summary.status} />
-          </MarkerIcon>
-          <MarkerContent>
-            {activeItem !== undefined && activeTask.summary.status === "running"
-              ? formatActiveItemStatus(activeItem)
-              : STATUS_LABELS[activeTask.summary.status]}
-          </MarkerContent>
-        </Marker>
+        <div className="flex shrink-0 flex-col">
+          <Marker variant="border" className="px-5 py-2" role="status">
+            <MarkerIcon>
+              <TaskStatusIcon status={activeTask.summary.status} />
+            </MarkerIcon>
+            <MarkerContent>
+              {activeItem !== undefined && activeTask.summary.status === "running"
+                ? formatActiveItemStatus(activeItem)
+                : STATUS_LABELS[activeTask.summary.status]}
+            </MarkerContent>
+          </Marker>
+        </div>
       )}
 
       <MessageScrollerProvider autoScroll>
@@ -469,6 +505,9 @@ export function ChatPanel({
                 onOpenSettings={onOpenSettings}
                 onModelChange={onModelChange}
                 selectedModelId={selectedModelId}
+                contextWindow={contextWindow}
+                contextTokensUsed={estimatedTokens}
+                onCompact={handleCompact}
               />
               {continuationError && <p role="alert" className="mt-2 px-2 text-xs text-destructive">{continuationError}</p>}
             </div>

@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Toggle } from "@/components/ui/toggle";
 import { RichModelInfo, ModelInfoCard } from "@/components/model-info-card";
+import { ContextWindowSlider } from "@/components/ContextWindowSlider";
 import { EMPTY_DATABASE, databaseManifest, hasDatabaseErrors, parseHttpMethod, parseJsonBody, parseJsonTemplate, validateDatabaseDraft, type DatabaseDraft } from "@/lib/databaseDraft";
 import { cn } from "@/lib/utils";
 import type { ModelSettings, ModelSettingsUpdate, SettingsAPIClient, SkillDetail, SkillManifest, SkillValidation, VendorInfo } from "@/hooks/useAPI";
@@ -243,7 +244,14 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
     setShowModelDropdown(false);
     markDirty();
     setModelError(null);
-  }, [markDirty]);
+    // Auto-set context window to the selected model's max supported size
+    const model = models.find((m) => m.id === id);
+    if (model && model.context_window > 0) {
+      void api.saveSettings({ model_name: id, context_window: model.context_window }).then((updated) => {
+        setSettings(updated);
+      }).catch(() => { /* save will be retried on explicit save click */ });
+    }
+  }, [markDirty, models, api]);
 
   /* ---- database / skill handlers ---- */
   const mutateSkill = async (action: () => Promise<void>, success: string) => {
@@ -550,6 +558,21 @@ export function SettingsPanel({ open, onOpenChange, api }: SettingsPanelProps) {
                           <p className="mt-2 text-xs text-destructive">{modelError}</p>
                         )}
                       </Field>
+
+                      {/* Context window slider */}
+                      <ContextWindowSlider
+                        value={settings?.context_window ?? 0}
+                        maxCatalogWindow={selectedModel?.context_window ?? 0}
+                        source={settings?.context_window_source ?? "unknown"}
+                        onChange={(tokens) => {
+                          void api.saveSettings({ context_window: tokens }).then((updated) => {
+                            setSettings(updated);
+                            toast.success(`上下文窗口已调整为 ${tokens.toLocaleString()} tokens`);
+                          }).catch((e) => {
+                            toast.error("调整失败", { description: e instanceof Error ? e.message : "请求失败" });
+                          });
+                        }}
+                      />
 
                       {/* Max tokens slider */}
                       <Field>
