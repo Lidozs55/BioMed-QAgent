@@ -2,6 +2,7 @@ import type {
   AssistantDeltaPayload,
   AssistantStreamFrame,
   EventEnvelope,
+  EventPayload,
   MessagePage,
   MessageRecord,
   RunRecord,

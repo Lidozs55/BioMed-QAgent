@@ -37,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { formatSize } from "@/lib/fileUtils";
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/hooks/useAPI";
 
@@ -55,12 +56,6 @@ function sanitizeUploadFilename(name: string): string {
   const parts = name.split(/[\\/]/);
   const baseName = parts[parts.length - 1] ?? "";
   return baseName.replace(/[^A-Za-z0-9._-]/g, "_");
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 interface AgentComposerProps {
@@ -299,7 +294,7 @@ export function AgentComposer({
               </AttachmentMedia>
               <AttachmentContent>
                 <AttachmentTitle>{file.name}</AttachmentTitle>
-                <AttachmentDescription>{formatFileSize(file.size)}</AttachmentDescription>
+                <AttachmentDescription>{formatSize(file.size)}</AttachmentDescription>
               </AttachmentContent>
               <AttachmentActions>
                 <AttachmentAction
