@@ -47,10 +47,7 @@ from app.pipeline.runner import PipelineRunner
 from app.pipeline.stages.artifact_build import (
     _build_source_relations as _build_source_relations_artifact,
 )
-from app.pipeline.stages.artifact_build import (
-    _write_csv as _write_csv_artifact,
-)
-from app.pipeline.stages.validation import _write_csv as _write_csv_validation
+from app.pipeline.stages.base import write_csv
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -301,9 +298,7 @@ def test_write_csv_rejects_extra_fields(tmp_path: Path) -> None:
     columns = ["a", "b"]
     rows = [{"a": "1", "b": "2", "typo_field": "3"}]
     with pytest.raises(ValueError, match="typo_field|extra"):
-        _write_csv_artifact(path, columns, rows)
-    with pytest.raises(ValueError, match="typo_field|extra"):
-        _write_csv_validation(path, columns, rows)
+        write_csv(path, columns, rows)
 
 
 # ---------------------------------------------------------------------------

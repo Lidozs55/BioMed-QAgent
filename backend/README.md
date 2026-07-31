@@ -78,7 +78,8 @@ backend/
 │   │   └── vl_model.py               # Qwen-VL (qwen-vl-max) AsyncOpenAI 客户端
 │   ├── api/                          # HTTP + WebSocket 接口
 │   │   ├── routes.py                 # REST 端点（11 个，详见下方表）
-│   │   ├── settings_router.py        # 模型设置 / 供应商 / 模型发现 REST（5 个端点）
+│   │   ├── settings.py               # 模型设置 / 供应商 / 模型预览 REST（GET/PUT /settings、/vendors、POST /models）
+│   │   ├── model_info_router.py      # 模型信息仓库 REST（GET /model-info、/model-info/{id}）
 │   │   ├── ws.py                     # WebSocket 入口（/api/v1/ws）
 │   │   └── ws_events.py              # durable event session（subscribe/replay/ping）
 │   ├── core/

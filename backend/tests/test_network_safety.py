@@ -91,6 +91,7 @@ def test_public_target_prefers_ipv4_when_both_families_are_available() -> None:
         "http://localhost/data",
         "http://127.0.0.1/data",
         "http://169.254.169.254/latest/meta",
+        "https://[invalid",
     ],
 )
 def test_unsafe_url_forms_are_rejected(url: str) -> None:

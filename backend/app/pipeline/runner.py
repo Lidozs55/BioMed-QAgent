@@ -564,10 +564,21 @@ class PipelineRunner:
         )
 
     async def _run_inner(self) -> RunManifest:
-        # A run is recovered after terminalizing persisted inflight work, or
-        # when prior completed-stage progress belongs to a non-fresh task.
-        # This covers process interruption, completed reruns, and failed-task
-        # retries without treating a truly fresh CREATED task as recovery.
+        await self._prepare_run_start()
+        stage_outputs: dict[StageName, Any] = {}
+        cancelled_manifest = await self._run_stages_loop(stage_outputs)
+        if cancelled_manifest is not None:
+            return cancelled_manifest
+        return await self._finalize_completed(stage_outputs)
+
+    async def _prepare_run_start(self) -> None:
+        """Emit recovery/creation events and confirm the plan before stages run.
+
+        A run is recovered after terminalizing persisted inflight work, or
+        when prior completed-stage progress belongs to a non-fresh task.
+        This covers process interruption, completed reruns, and failed-task
+        retries without treating a truly fresh CREATED task as recovery.
+        """
         recovered_inflight = self._recover_inflight_attempt()
         # Treat any non-CREATED task as recovered — covers crash recovery,
         # reruns, and failed-task retries (which must skip plan confirmation).
@@ -580,22 +591,31 @@ class PipelineRunner:
                     recovered_from_sequence=0
                 )
             )
-        else:
-            await self._emit_event(TaskCreatedPayload(topic=self.topic))
-            specification = _build_specification_for_plan(self.ctx)
-            await self._emit_event(PlanReadyPayload(specification=specification))
-            # Pause for plan confirmation (human-in-the-loop). In fixture mode
-            # this is informational only and the pipeline auto-approves.
-            decision = await self._await_user_input(
-                request_id=f"plan-{self.task_id}",
-                prompt_kind="plan_confirmation",
-                summary=f"Confirm research plan for topic: {self.topic}",
-                detail=specification.model_dump(),
-            )
-            if decision.decision == "reject":
-                raise PipelinePlanRejectedError("research plan was rejected by user")
+            return
+        await self._emit_event(TaskCreatedPayload(topic=self.topic))
+        specification = _build_specification_for_plan(self.ctx)
+        await self._emit_event(PlanReadyPayload(specification=specification))
+        # Pause for plan confirmation (human-in-the-loop). In fixture mode
+        # this is informational only and the pipeline auto-approves.
+        decision = await self._await_user_input(
+            request_id=f"plan-{self.task_id}",
+            prompt_kind="plan_confirmation",
+            summary=f"Confirm research plan for topic: {self.topic}",
+            detail=specification.model_dump(),
+        )
+        if decision.decision == "reject":
+            raise PipelinePlanRejectedError("research plan was rejected by user")
 
-        stage_outputs: dict[StageName, Any] = {}
+    async def _run_stages_loop(
+        self,
+        stage_outputs: dict[StageName, Any],
+    ) -> RunManifest | None:
+        """Execute each stage, reusing digest-matched outputs where allowed.
+
+        Returns a cancelled/failed manifest when a stage short-circuits the
+        run, or ``None`` when every stage completed so the caller can
+        finalize normally.
+        """
         reuse_allowed = True
         for stage in _STAGES:
             if self._is_cancelled():
@@ -755,7 +775,7 @@ class PipelineRunner:
             if stage is StageName.ARTIFACT_BUILD:
                 await self._emit_warning_events(stage_outputs, stage_attempt_id)
 
-        return await self._finalize_completed(stage_outputs)
+        return None
 
     async def _emit_warning_events(
         self,

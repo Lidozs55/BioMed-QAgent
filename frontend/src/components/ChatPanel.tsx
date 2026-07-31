@@ -31,6 +31,7 @@ import type {
   TaskRunAccepted,
 } from "@/runtime/contracts";
 import type { ConversationItem } from "@/runtime/types";
+import { errorMessage } from "@/lib/utils";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -277,7 +278,7 @@ export function ChatPanel({
     } catch (error) {
       const currentDraft = useAgentStore.getState().draft;
       if (draftKey(currentDraft.input, currentDraft.selectedDatabaseIds) === submissionKey) {
-        setDraftError(error instanceof Error ? error.message : "任务提交失败");
+        setDraftError(errorMessage(error, "任务提交失败"));
       }
     } finally {
       setSubmittingDraftKey((current) => current === submissionKey ? null : current);
@@ -295,7 +296,7 @@ export function ChatPanel({
         setDraftInput("");
       }
     } catch (error) {
-      setDraftError(error instanceof Error ? error.message : "文件导入失败");
+      setDraftError(errorMessage(error, "文件导入失败"));
       throw error;
     } finally {
       setImportPending(false);
@@ -321,7 +322,7 @@ export function ChatPanel({
     } catch (error) {
       setContinuationErrors((current) => ({
         ...current,
-        [taskId]: error instanceof Error ? error.message : "继续提问失败",
+        [taskId]: errorMessage(error, "继续提问失败"),
       }));
     } finally {
       setContinuationPendingByTask((current) => ({ ...current, [taskId]: false }));
@@ -342,7 +343,7 @@ export function ChatPanel({
     } catch (error) {
       setOlderMessagesErrors((current) => ({
         ...current,
-        [taskId]: error instanceof Error ? error.message : "更早消息加载失败",
+        [taskId]: errorMessage(error, "更早消息加载失败"),
       }));
     } finally {
       setOlderMessagesPendingByTask((current) => ({ ...current, [taskId]: false }));

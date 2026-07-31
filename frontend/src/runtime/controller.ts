@@ -7,6 +7,7 @@ import type {
   TaskRunAccepted,
   TaskSnapshot,
 } from "./contracts";
+import { errorMessage } from "@/lib/utils";
 import {
   addAcceptedTask,
   mergeTaskArtifacts,
@@ -29,10 +30,6 @@ interface RuntimeDependencies {
   api: APIClient;
   transport: EventTransport;
   signal?: AbortSignal;
-}
-
-function errorDescription(error: unknown): string {
-  return error instanceof Error ? error.message : "未知错误";
 }
 
 function excludeDeletedTasks(
@@ -125,7 +122,7 @@ export class RuntimeController {
       if (!signal?.aborted) {
         useAgentStore
           .getState()
-          .setHistoryState("error", errorDescription(error));
+          .setHistoryState("error", errorMessage(error));
       }
       throw error;
     }

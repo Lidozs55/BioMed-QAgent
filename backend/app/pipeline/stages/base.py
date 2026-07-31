@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,6 +28,20 @@ from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
 STANDALONE_RUN_ID = "run_standalone"
+
+
+def write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
+    """Write a CSV with a UTF-8 BOM and strict column keys.
+
+    utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
+    Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
+    row keys instead of silently dropping them (TODO §1.7).
+    """
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 # Progress emitter signature: (stage, kind, current, total, detail).
 # PipelineRunner installs one before running stages; in fixture mode without

@@ -27,6 +27,7 @@ from app.pipeline.stages.base import (
     StageContext,
     StageResult,
     ValidationOutput,
+    write_csv,
 )
 from app.pipeline.state import TaskLock
 
@@ -40,16 +41,6 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
     # utf-8-sig strips the BOM that artifact_build._write_csv adds (TODO §1.7).
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
-
-
-def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
-    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
-    # Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
-    # row keys instead of silently dropping them (TODO §1.7).
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def _sha256(path: Path) -> str:
@@ -834,7 +825,7 @@ def run_validation(
         build_output.source_path,
         ctx.workdir.logs / "validation_report.json",
     )
-    _write_csv(
+    write_csv(
         build_output.staging_dir / "quality_report.csv",
         _ARTIFACT_COLUMNS_QUALITY,
         checks,

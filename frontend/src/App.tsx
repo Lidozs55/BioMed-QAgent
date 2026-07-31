@@ -20,11 +20,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { useAPI, type ModelInfo, type ModelSettings } from "@/hooks/useAPI";
+import { errorMessage } from "@/lib/utils";
 import { RuntimeController } from "@/runtime/controller";
-
-function errorDescription(reason: unknown): string {
-  return reason instanceof Error ? reason.message : "未知错误";
-}
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -51,17 +48,17 @@ export default function App() {
         if (startup.signal.aborted) return;
         if (databases.status === "rejected") {
           toast.error("数据源加载失败", {
-            description: errorDescription(databases.reason),
+            description: errorMessage(databases.reason),
           });
         }
         if (history.status === "rejected") {
           toast.error("会话历史加载失败", {
-            description: errorDescription(history.reason),
+            description: errorMessage(history.reason),
           });
         }
         if (socket.status === "rejected") {
           toast.error("实时连接失败", {
-            description: errorDescription(socket.reason),
+            description: errorMessage(socket.reason),
           });
         }
       },
@@ -165,7 +162,7 @@ export default function App() {
                   await controller.cancelSubagent(taskId, runId, subagentId);
                 } catch (error) {
                   toast.error("取消子任务失败", {
-                    description: errorDescription(error),
+                    description: errorMessage(error),
                   });
                 }
               }}
