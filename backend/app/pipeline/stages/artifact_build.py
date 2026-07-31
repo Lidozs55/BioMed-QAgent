@@ -23,6 +23,7 @@ from app.pipeline.stages.base import (
     CleaningReportModel,
     StageContext,
     StageResult,
+    write_csv,
 )
 
 _ARTIFACT_COLUMNS: dict[str, list[str]] = {
@@ -357,16 +358,6 @@ def _build_source_relations(
             }
         )
     return relations
-
-
-def _write_csv(path: Path, columns: list[str], rows: list[dict[str, object]]) -> None:
-    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling
-    # Chinese characters (TODO §1.7). extrasaction="raise" surfaces typo'd
-    # row keys instead of silently dropping them (TODO §1.7).
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def _build_field_mapping_rows(
@@ -787,7 +778,7 @@ def run_artifact_build(
     }
 
     for name, columns in _ARTIFACT_COLUMNS.items():
-        _write_csv(staging / name, columns, rows_by_file.get(name, []))
+        write_csv(staging / name, columns, rows_by_file.get(name, []))
 
     artifact_paths = sorted(staging.iterdir(), key=lambda item: item.name)
     # Derive source_path from the actual SourceAsset relative_path so both

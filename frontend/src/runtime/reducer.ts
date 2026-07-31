@@ -1386,46 +1386,49 @@ function updateClassification(
   };
 }
 
-export function reduceRuntimeEvent(
-  state: AgentRuntimeData,
+function applySubagentEvent(
+  task: TaskProjection,
   envelope: EventEnvelope,
-): AgentRuntimeData {
-  const current = state.tasksById[envelope.task_id];
-  if (current === undefined || envelope.sequence <= current.lastSequence) {
-    return state;
-  }
+  payload: Extract<EventPayload, { type: "subagent_queued" }>,
+): TaskProjection {
+  return addQueuedSubagent(task, envelope, payload);
+}
 
-  const runId = envelope.run_id;
-  const payload = envelope.payload;
-  let task = current;
-
+function applySubagentStatusEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "subagent_started" }
+    | { type: "subagent_progress" }
+    | { type: "subagent_completed" }
+    | { type: "subagent_failed" }
+    | { type: "subagent_cancelled" }
+    | { type: "subagent_interrupted" }
+    | { type: "subagent_input_required" }
+    | { type: "subagent_input_resumed" }
+    | { type: "subagent_cancel_requested" }
+  >,
+): TaskProjection {
   switch (payload.type) {
-    case "subagent_queued": {
-      task = addQueuedSubagent(task, envelope, payload);
-      break;
-    }
-    case "subagent_started": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+    case "subagent_started":
+      return upsertSubagent(task, payload.subagent_id, (subagent) => ({
         ...subagent,
         status: "running",
         startedAt: subagent.startedAt ?? envelope.timestamp,
       }));
-      break;
-    }
-    case "subagent_progress": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+    case "subagent_progress":
+      return upsertSubagent(task, payload.subagent_id, (subagent) => ({
         ...subagent,
         progressCurrent: payload.current,
         progressTotal: payload.total,
         progressMessage: payload.message,
       }));
-      break;
-    }
     case "subagent_completed":
     case "subagent_failed":
     case "subagent_cancelled":
-    case "subagent_interrupted": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+    case "subagent_interrupted":
+      return upsertSubagent(task, payload.subagent_id, (subagent) => ({
         ...subagent,
         status: payload.result.status,
         finishedAt: envelope.timestamp,
@@ -1437,773 +1440,957 @@ export function reduceRuntimeEvent(
         errorMessage: payload.result.error_message,
         pendingRequestId: null,
       }));
-      break;
-    }
-    case "subagent_cancel_requested": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
-        ...subagent,
-        status: "cancel_requested",
-        errorMessage: payload.reason,
-      }));
-      break;
-    }
-    case "subagent_input_required": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) => ({
+    case "subagent_input_required":
+      return upsertSubagent(task, payload.subagent_id, (subagent) => ({
         ...subagent,
         pendingRequestId: payload.request_id,
       }));
-      break;
-    }
-    case "subagent_input_resumed": {
-      task = upsertSubagent(task, payload.subagent_id, (subagent) =>
+    case "subagent_input_resumed":
+      return upsertSubagent(task, payload.subagent_id, (subagent) =>
         subagent.pendingRequestId === payload.request_id
           ? { ...subagent, pendingRequestId: null }
           : subagent,
       );
+    case "subagent_cancel_requested":
+      return upsertSubagent(task, payload.subagent_id, (subagent) => ({
+        ...subagent,
+        status: "cancel_requested",
+        errorMessage: payload.reason,
+      }));
+  }
+}
+
+function applyRunQueuedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "run_queued" }>,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  let next = upsertRun(
+    task,
+    runId,
+    (run) => ({
+      ...run,
+      requestId: payload.request_id,
+      status: "queued",
+      input: payload.input,
+      createdAt: run.createdAt ?? envelope.timestamp,
+      updatedAt: envelope.timestamp,
+      finishedAt: null,
+      error: null,
+    }),
+    "queued",
+    envelope.timestamp,
+  );
+  next = upsertMessage(next, {
+    messageId: `live:${runId}:user`,
+    taskId: envelope.task_id,
+    runId,
+    ordinal: null,
+    role: "user",
+    content: payload.input,
+    createdAt: envelope.timestamp,
+    sequence: envelope.sequence,
+  });
+  // 同步投影到 items：用户输入后立即在对话区显示自己的消息，
+  // 避免在 LLM 思考期（尚无 assistant_delta）items 为空导致
+  // "该任务暂时没有消息" 与 "正在思考..." 同时出现。
+  // itemId=`user:${runId}` 与 hydrate 的真实 user message 一致，
+  // upsertItem 自动覆盖，不会重复。
+  next = upsertItem(next, {
+    kind: "user_message",
+    itemId: `user:${runId}`,
+    runId,
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    content: payload.input,
+  });
+  return {
+    ...next,
+    summary: {
+      ...next.summary,
+      status: "queued",
+      active_run_id: runId,
+    },
+    pendingUserInput: null,
+  };
+}
+
+function applyRunTransitionEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "run_started" }
+    | { type: "run_finalizing" }
+    | { type: "run_cancel_requested" }
+  >,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const status: RunStatus =
+    payload.type === "run_started"
+      ? "running"
+      : payload.type === "run_finalizing"
+        ? "finalizing"
+        : "cancel_requested";
+  let next = upsertRun(
+    task,
+    runId,
+    (run) => ({
+      ...run,
+      status,
+      updatedAt: envelope.timestamp,
+      startedAt:
+        payload.type === "run_started"
+          ? (run.startedAt ?? envelope.timestamp)
+          : run.startedAt,
+    }),
+    status,
+    envelope.timestamp,
+  );
+  next = {
+    ...next,
+    summary: { ...next.summary, status, active_run_id: runId },
+  };
+  if (
+    payload.type === "run_finalizing" ||
+    payload.type === "run_cancel_requested"
+  ) {
+    next = deactivateRunAssistantStream(next, runId);
+    next = deactivateRunStreamingItems(next, runId);
+  }
+  return next;
+}
+
+function applyRunTerminalEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "run_completed" }
+    | { type: "run_failed" }
+    | { type: "run_cancelled" }
+    | { type: "run_interrupted" }
+  >,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const status = terminalStatus(payload.type);
+  if (status === null) return task;
+  const error =
+    payload.type === "run_failed"
+      ? payload.error
+      : payload.type === "run_interrupted"
+        ? payload.reason
+        : payload.type === "run_cancelled"
+          ? payload.reason
+          : null;
+  let next = upsertRun(
+    task,
+    runId,
+    (run) => ({
+      ...run,
+      status,
+      updatedAt: envelope.timestamp,
+      finishedAt: envelope.timestamp,
+      error,
+    }),
+    status,
+    envelope.timestamp,
+  );
+  if (next.summary.active_run_id === runId) {
+    next = {
+      ...next,
+      summary: { ...next.summary, status, active_run_id: null },
+    };
+  }
+  if (next.pendingUserInput?.runId === runId) {
+    next = { ...next, pendingUserInput: null };
+  }
+  if (payload.type !== "run_completed") {
+    next = terminalizeRunningFixtureStages(
+      next,
+      payload.type === "run_failed" ? "failed" : "cancelled",
+      envelope.timestamp,
+      error,
+    );
+  }
+  next = deactivateRunAssistantStream(next, runId);
+  next = deactivateRunStreamingItems(next, runId);
+  return next;
+}
+
+function applyUserInputEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "user_input_required" }
+    | { type: "user_input_resumed" }
+  >,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  if (payload.type === "user_input_required") {
+    const next = upsertRun(
+      task,
+      runId,
+      (run) => ({
+        ...run,
+        status: "awaiting_user_input",
+        updatedAt: envelope.timestamp,
+      }),
+      "awaiting_user_input",
+      envelope.timestamp,
+    );
+    return {
+      ...next,
+      summary: {
+        ...next.summary,
+        status: "awaiting_user_input",
+        active_run_id: runId,
+      },
+      pendingUserInput: {
+        runId,
+        requestId: payload.request_id,
+        promptKind: payload.prompt_kind,
+        summary: payload.summary,
+        expiresAt: payload.expires_at,
+        fixtureExempt: payload.fixture_exempt,
+        detail: payload.detail,
+        sequence: envelope.sequence,
+        timestamp: envelope.timestamp,
+      },
+    };
+  }
+  const next = upsertRun(
+    task,
+    runId,
+    (run) => ({
+      ...run,
+      status: "running",
+      updatedAt: envelope.timestamp,
+    }),
+    "running",
+    envelope.timestamp,
+  );
+  return {
+    ...next,
+    summary: {
+      ...next.summary,
+      status: "running",
+      active_run_id: runId,
+    },
+    pendingUserInput:
+      next.pendingUserInput?.runId === runId &&
+      next.pendingUserInput.requestId === payload.request_id
+        ? null
+        : next.pendingUserInput,
+  };
+}
+
+function applyAssistantEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "assistant_delta" }
+    | { type: "assistant_reasoning_delta" }
+  >,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  if (payload.type === "assistant_delta") {
+    return applyDurableAssistantDelta(task, runId, payload, envelope);
+  }
+  const activityId = envelope.subagent_id == null
+    ? `reasoning:${runId}`
+    : `subagent_reasoning:${envelope.subagent_id}:${runId}`;
+  const existing = task.activitiesById[activityId];
+  let next = upsertActivity(task, {
+    activityId,
+    taskId: envelope.task_id,
+    runId,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "reasoning",
+    subagentId: envelope.subagent_id ?? null,
+    status: "started",
+    name: null,
+    input: null,
+    output: `${existing?.output ?? ""}${payload.delta}`,
+    isError: false,
+    code: null,
+    message: null,
+  });
+  if (envelope.subagent_id != null) return next;
+  const segmentIndex = next.currentReasoningSegmentByRun[runId] ?? 0;
+  if (!(runId in next.currentReasoningSegmentByRun)) {
+    next = {
+      ...next,
+      currentReasoningSegmentByRun: {
+        ...next.currentReasoningSegmentByRun,
+        [runId]: segmentIndex,
+      },
+    };
+  }
+  const reasoningItemId = `reasoning:${runId}:${segmentIndex}`;
+  const existingReasoningItem = next.items.find(
+    (i) => i.itemId === reasoningItemId,
+  );
+  const prevReasoningContent =
+    existingReasoningItem?.kind === "reasoning"
+      ? existingReasoningItem.content
+      : "";
+  return upsertItem(next, {
+    kind: "reasoning",
+    itemId: reasoningItemId,
+    runId,
+    sequence: envelope.sequence,
+    createdAt: existingReasoningItem?.createdAt ?? envelope.timestamp,
+    content: `${prevReasoningContent}${payload.delta}`,
+    isStreaming: true,
+  });
+}
+
+function applyToolStartedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "tool_started" }>,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const toolArgs = (payload.arguments ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  let next = task;
+  if (envelope.subagent_id == null) {
+    next = deactivateRunAssistantStream(next, runId);
+    next = deactivateRunStreamingItems(next, runId);
+    // Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，
+    // 导致前一个 assistant_segment 尾部出现工具参数 JSON。此处剥离该 JSON，
+    // 避免前端对话流展示原始 JSON。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+    next = stripLastAssistantSegmentToolArgs(next, runId, toolArgs);
+  }
+  next = upsertActivity(next, {
+    activityId: envelope.subagent_id === null || envelope.subagent_id === undefined
+      ? `tool:${runId}:${payload.tool_call_id}`
+      : `subagent_tool:${envelope.subagent_id}:${runId}:${payload.tool_call_id}`,
+    taskId: envelope.task_id,
+    runId,
+    subagentId: envelope.subagent_id ?? null,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "tool",
+    status: "started",
+    name: payload.tool_name,
+    input: null,
+    output: null,
+    isError: false,
+    code: null,
+    message: null,
+  });
+  if (envelope.subagent_id == null) {
+    const toolItemId = `tool:${runId}:${payload.tool_call_id}`;
+    const existingToolItem = next.items.find(
+      (i) => i.itemId === toolItemId,
+    );
+    next = upsertItem(next, {
+      kind: "tool_call",
+      itemId: toolItemId,
+      runId,
+      sequence: envelope.sequence,
+      createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+      toolCallId: payload.tool_call_id,
+      toolName: payload.tool_name,
+      arguments: toolArgs,
+      status: "running",
+      output: null,
+      completedSequence: null,
+    });
+    next = {
+      ...next,
+      currentReasoningSegmentByRun: {
+        ...next.currentReasoningSegmentByRun,
+        [runId]: (next.currentReasoningSegmentByRun[runId] ?? 0) + 1,
+      },
+    };
+  }
+  return next;
+}
+
+function applyToolCompletedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "tool_completed" }>,
+): TaskProjection {
+  const toolCallId = payload.tool_call_id ?? null;
+  const runId = envelope.run_id;
+  if (runId !== null && toolCallId !== null) {
+    const activityId = envelope.subagent_id === null || envelope.subagent_id === undefined
+      ? `tool:${runId}:${toolCallId}`
+      : `subagent_tool:${envelope.subagent_id}:${runId}:${toolCallId}`;
+    const existing = task.activitiesById[activityId];
+    let next = upsertActivity(task, {
+      activityId,
+      taskId: envelope.task_id,
+      runId,
+      subagentId: envelope.subagent_id ?? null,
+      sequence: envelope.sequence,
+      timestamp: envelope.timestamp,
+      kind: "tool",
+      status: "completed",
+      name: payload.tool_name,
+      input: existing?.input ?? null,
+      output: payload.output ?? null,
+      isError: payload.is_error,
+      code: null,
+      message: null,
+    });
+    if (envelope.subagent_id == null) {
+      const toolItemId = `tool:${runId}:${toolCallId}`;
+      const existingToolItem = next.items.find(
+        (i) => i.itemId === toolItemId,
+      );
+      const toolArguments =
+        existingToolItem?.kind === "tool_call"
+          ? existingToolItem.arguments
+          : null;
+      next = upsertItem(next, {
+        kind: "tool_call",
+        itemId: toolItemId,
+        runId,
+        sequence: envelope.sequence,
+        createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
+        toolCallId,
+        toolName: payload.tool_name,
+        arguments: toolArguments,
+        status: payload.is_error ? "error" : "completed",
+        output: payload.output ?? null,
+        completedSequence: envelope.sequence,
+      });
+    }
+    return next;
+  }
+  return upsertActivity(task, {
+    activityId: `event:${envelope.sequence}`,
+    taskId: envelope.task_id,
+    runId,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "fixture_event",
+    status: "completed",
+    name: payload.tool_name,
+    input: null,
+    output: payload.output_digest ?? null,
+    isError: payload.is_error,
+    code: null,
+    message: null,
+  });
+}
+
+function applyToolCalledEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "tool_called" }>,
+): TaskProjection {
+  return upsertActivity(task, {
+    activityId: `event:${envelope.sequence}`,
+    taskId: envelope.task_id,
+    runId: envelope.run_id,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "fixture_event",
+    status: "started",
+    name: payload.tool_name,
+    input: payload.arguments_digest,
+    output: null,
+    isError: false,
+    code: null,
+    message: null,
+  });
+}
+
+function applyWarningEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "warning" }>,
+): TaskProjection {
+  const warning = payload.warning ?? null;
+  const next = upsertActivity(task, {
+    activityId: `event:${envelope.sequence}`,
+    taskId: envelope.task_id,
+    runId: envelope.run_id,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "warning",
+    status: "warning",
+    name: null,
+    input: null,
+    output: null,
+    isError: warning?.severity === "error",
+    code: payload.code ?? warning?.code ?? null,
+    message: payload.message ?? warning?.message ?? null,
+  });
+  const warningItemId = `warning:${envelope.sequence}`;
+  return upsertItem(next, {
+    kind: "warning",
+    itemId: warningItemId,
+    runId: envelope.run_id ?? "",
+    sequence: envelope.sequence,
+    createdAt: envelope.timestamp,
+    code: payload.code ?? warning?.code ?? "",
+    message: payload.message ?? warning?.message ?? "",
+  });
+}
+
+function applyConversationCompactedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "conversation_compacted" }>,
+): TaskProjection {
+  const next = upsertActivity(task, {
+    activityId: `event:${envelope.sequence}`,
+    taskId: envelope.task_id,
+    runId: envelope.run_id,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "conversation_compacted",
+    status: "recorded",
+    name: null,
+    input: payload.covered_through_run_id,
+    output: payload.summary_digest,
+    isError: false,
+    code: null,
+    message: null,
+  });
+  return { ...next, compacting: false };
+}
+
+function applyArtifactProducedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "artifact_produced" }>,
+): TaskProjection {
+  const artifact: ArtifactProjection = {
+    artifact_id: payload.artifact.artifact_id,
+    name: payload.artifact.name,
+    size: payload.artifact.size_bytes,
+    sha256: payload.artifact.sha256,
+    media_type: payload.artifact.media_type,
+    taskId: envelope.task_id,
+    generatedByStepId: payload.artifact.generated_by_step_id,
+  };
+  const startsManifestGeneration = artifact.artifact_id === "run_manifest";
+  const artifactsById = startsManifestGeneration
+    ? { [artifact.artifact_id]: artifact }
+    : { ...task.artifactsById, [artifact.artifact_id]: artifact };
+  const artifactOrder = startsManifestGeneration
+    ? [artifact.artifact_id]
+    : task.artifactOrder.includes(artifact.artifact_id)
+      ? task.artifactOrder
+      : [...task.artifactOrder, artifact.artifact_id];
+  const runId = envelope.run_id;
+  const next: TaskProjection = {
+    ...task,
+    artifactsById,
+    artifactOrder,
+    artifactEventSequences: startsManifestGeneration
+      ? { [artifact.artifact_id]: envelope.sequence }
+      : {
+          ...task.artifactEventSequences,
+          [artifact.artifact_id]: envelope.sequence,
+        },
+    artifactManifestSequence: startsManifestGeneration
+      ? envelope.sequence
+      : task.artifactManifestSequence,
+  };
+  const artifactItemId = `artifact:${runId ?? "task"}:${artifact.artifact_id}`;
+  const existingArtifactItem = next.items.find(
+    (i) => i.itemId === artifactItemId,
+  );
+  return upsertItem(next, {
+    kind: "artifact",
+    itemId: artifactItemId,
+    runId: runId ?? "",
+    sequence: envelope.sequence,
+    createdAt: existingArtifactItem?.createdAt ?? envelope.timestamp,
+    artifactId: artifact.artifact_id,
+    name: artifact.name,
+    sizeBytes: artifact.size,
+    mediaType: artifact.media_type,
+  });
+}
+
+function applyStageTransitionEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "stage_started" }
+    | { type: "stage_completed" }
+    | { type: "stage_failed" }
+    | { type: "stage_skipped" }
+  >,
+): TaskProjection {
+  if (envelope.stage_attempt_id === null) return task;
+  const existing = task.stages[payload.stage];
+  if (
+    payload.type !== "stage_started" &&
+    existing !== undefined &&
+    existing.stageAttemptId !== envelope.stage_attempt_id
+  ) {
+    return task;
+  }
+  const status =
+    payload.type === "stage_started" ? "running" : payload.status;
+  const stage: StageProjection = {
+    stage: payload.stage,
+    stageAttemptId: envelope.stage_attempt_id,
+    attempt:
+      payload.type === "stage_started" ? payload.attempt : existing?.attempt ?? 1,
+    status,
+    startedAt:
+      payload.type === "stage_started"
+        ? envelope.timestamp
+        : existing?.startedAt ?? null,
+    finishedAt:
+      payload.type === "stage_started" ? null : envelope.timestamp,
+    outputDigest:
+      payload.type === "stage_completed" ? payload.output_digest : null,
+    error: payload.type === "stage_failed" ? payload.error.message : null,
+    skipReason: payload.type === "stage_skipped" ? payload.reason : null,
+    reusedStageAttemptId:
+      payload.type === "stage_skipped"
+        ? payload.reused_stage_attempt_id
+        : null,
+    progress: existing?.progress ?? null,
+  };
+  let next: TaskProjection = {
+    ...task,
+    stages: { ...task.stages, [payload.stage]: stage },
+  };
+  const runId = envelope.run_id;
+  if (runId !== null) {
+    next = upsertActivity(next, {
+      activityId: `stage:${runId}:${payload.stage}`,
+      taskId: envelope.task_id,
+      runId,
+      sequence: envelope.sequence,
+      timestamp: envelope.timestamp,
+      kind: "stage",
+      status:
+        payload.type === "stage_started"
+          ? "started"
+          : payload.type === "stage_completed"
+            ? "completed"
+            : payload.type === "stage_failed"
+              ? "failed"
+              : "skipped",
+      name: null,
+      input: null,
+      output: null,
+      isError: payload.type === "stage_failed",
+      code: null,
+      message: null,
+      stage: payload.stage,
+    });
+    const stageItemId = `stage:${runId}:${payload.stage}`;
+    const existingStageItem = next.items.find(
+      (i) => i.itemId === stageItemId,
+    );
+    next = upsertItem(next, {
+      kind: "stage",
+      itemId: stageItemId,
+      runId,
+      sequence: envelope.sequence,
+      createdAt: existingStageItem?.createdAt ?? envelope.timestamp,
+      stage: payload.stage,
+      status:
+        payload.type === "stage_started"
+          ? "running"
+          : payload.type === "stage_completed"
+            ? "completed"
+            : payload.type === "stage_failed"
+              ? "failed"
+              : "skipped",
+      attempt: stage.attempt,
+      error:
+        payload.type === "stage_failed" ? payload.error.message : null,
+    });
+  }
+  return next;
+}
+
+function applyStageProgressEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "stage_progress" }>,
+): TaskProjection {
+  // Agent 模式�?Skills 发射 progress（无 stage_attempt_id），
+  // Pipeline 模式�?stages 发射 progress（有 stage_attempt_id）�?
+  // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论�?等中间数字�?
+  // See docs/REVIEW_2026-07-18.md §4.
+  const existing = task.stages[payload.stage];
+  const stageAttemptId =
+    envelope.stage_attempt_id ?? existing?.stageAttemptId ?? `pending:${payload.stage}`;
+  if (
+    existing !== undefined &&
+    existing.stageAttemptId !== stageAttemptId &&
+    envelope.stage_attempt_id !== null
+  ) {
+    return task;
+  }
+  const progress = {
+    kind: payload.kind,
+    current: payload.current,
+    total: payload.total,
+    detail: payload.detail as Record<string, unknown>,
+    updatedAt: envelope.timestamp,
+  };
+  // `existing ?? {...}` 的右分支�?existing �?TS 收窄�?never,
+  // 导致 existing?.attempt 等访问报 TS2339。改为显�?if/else�?
+  const stage: StageProjection = existing !== undefined
+    ? existing
+    : {
+        stage: payload.stage,
+        stageAttemptId,
+        attempt: 1,
+        status: "running",
+        startedAt: envelope.timestamp,
+        finishedAt: null,
+        outputDigest: null,
+        error: null,
+        skipReason: null,
+        reusedStageAttemptId: null,
+        progress,
+      };
+  let next: TaskProjection = {
+    ...task,
+    stages: {
+      ...task.stages,
+      [payload.stage]: { ...stage, progress },
+    },
+  };
+  const runId = envelope.run_id;
+  if (runId !== null) {
+    next = upsertActivity(next, {
+      activityId: `progress:${runId}:${payload.stage}:${payload.kind}`,
+      taskId: envelope.task_id,
+      runId,
+      sequence: envelope.sequence,
+      timestamp: envelope.timestamp,
+      kind: "progress",
+      status: "recorded",
+      name: null,
+      input: null,
+      output: null,
+      isError: false,
+      code: null,
+      message: null,
+      progress: {
+        stage: payload.stage,
+        kind: payload.kind,
+        current: payload.current,
+        total: payload.total,
+      },
+    });
+    const progressItemId = `progress:${runId}:${payload.stage}:${payload.kind}`;
+    const existingProgressItem = next.items.find(
+      (i) => i.itemId === progressItemId,
+    );
+    next = upsertItem(next, {
+      kind: "progress",
+      itemId: progressItemId,
+      runId,
+      sequence: envelope.sequence,
+      createdAt: existingProgressItem?.createdAt ?? envelope.timestamp,
+      stage: payload.stage,
+      progressKind: payload.kind,
+      current: payload.current,
+      total: payload.total,
+    });
+  }
+  return next;
+}
+
+function applyFixtureEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<
+    EventPayload,
+    | { type: "plan_ready" }
+    | { type: "task_created" }
+    | { type: "task_recovered" }
+    | { type: "task_cancel_requested" }
+    | { type: "task_cancelled" }
+    | { type: "task_completed" }
+    | { type: "task_failed" }
+  >,
+): TaskProjection {
+  if (payload.type === "plan_ready") {
+    return upsertActivity(task, {
+      activityId: `event:${envelope.sequence}`,
+      taskId: envelope.task_id,
+      runId: envelope.run_id,
+      sequence: envelope.sequence,
+      timestamp: envelope.timestamp,
+      kind: "fixture_event",
+      status: "completed",
+      name: "plan_ready",
+      input: null,
+      output: JSON.stringify(payload.specification),
+      isError: false,
+      code: null,
+      message: null,
+    });
+  }
+  if (payload.type === "task_created" || payload.type === "task_recovered") {
+    if (task.summary.mode !== "fixture") return task;
+    return upsertActivity(task, {
+      activityId: `event:${envelope.sequence}`,
+      taskId: envelope.task_id,
+      runId: envelope.run_id,
+      sequence: envelope.sequence,
+      timestamp: envelope.timestamp,
+      kind: "fixture_event",
+      status: "completed",
+      name: payload.type,
+      input: null,
+      output:
+        payload.type === "task_created" ? payload.topic : null,
+      isError: false,
+      code: null,
+      message: null,
+    });
+  }
+  if (task.summary.mode !== "fixture") return task;
+  const output =
+    payload.type === "task_completed"
+      ? payload.validation.status
+      : payload.type === "task_failed"
+        ? payload.error.message
+        : payload.reason;
+  return upsertActivity(task, {
+    activityId: `event:${envelope.sequence}`,
+    taskId: envelope.task_id,
+    runId: envelope.run_id,
+    sequence: envelope.sequence,
+    timestamp: envelope.timestamp,
+    kind: "fixture_event",
+    status:
+      payload.type === "task_cancel_requested" ? "started" : "completed",
+    name: payload.type,
+    input: null,
+    output,
+    isError: payload.type === "task_failed",
+    code: payload.type === "task_failed" ? payload.error.code : null,
+    message: payload.type === "task_failed" ? payload.error.message : null,
+  });
+}
+
+export function reduceRuntimeEvent(
+  state: AgentRuntimeData,
+  envelope: EventEnvelope,
+): AgentRuntimeData {
+  const current = state.tasksById[envelope.task_id];
+  if (current === undefined || envelope.sequence <= current.lastSequence) {
+    return state;
+  }
+
+  const payload = envelope.payload;
+  let task = current;
+
+  switch (payload.type) {
+    case "subagent_queued": {
+      task = applySubagentEvent(task, envelope, payload);
+      break;
+    }
+    case "subagent_started":
+    case "subagent_progress":
+    case "subagent_completed":
+    case "subagent_failed":
+    case "subagent_cancelled":
+    case "subagent_interrupted":
+    case "subagent_cancel_requested":
+    case "subagent_input_required":
+    case "subagent_input_resumed": {
+      task = applySubagentStatusEvent(task, envelope, payload);
       break;
     }
     case "run_queued": {
-      if (runId === null) break;
-      task = upsertRun(
-        task,
-        runId,
-        (run) => ({
-          ...run,
-          requestId: payload.request_id,
-          status: "queued",
-          input: payload.input,
-          createdAt: run.createdAt ?? envelope.timestamp,
-          updatedAt: envelope.timestamp,
-          finishedAt: null,
-          error: null,
-        }),
-        "queued",
-        envelope.timestamp,
-      );
-      task = upsertMessage(task, {
-        messageId: `live:${runId}:user`,
-        taskId: envelope.task_id,
-        runId,
-        ordinal: null,
-        role: "user",
-        content: payload.input,
-        createdAt: envelope.timestamp,
-        sequence: envelope.sequence,
-      });
-      // 同步投影到 items：用户输入后立即在对话区显示自己的消息，
-      // 避免在 LLM 思考期（尚无 assistant_delta）items 为空导致
-      // "该任务暂时没有消息" 与 "正在思考..." 同时出现。
-      // itemId=`user:${runId}` 与 hydrate 的真实 user message 一致，
-      // upsertItem 自动覆盖，不会重复。
-      task = upsertItem(task, {
-        kind: "user_message",
-        itemId: `user:${runId}`,
-        runId,
-        sequence: envelope.sequence,
-        createdAt: envelope.timestamp,
-        content: payload.input,
-      });
-      task = {
-        ...task,
-        summary: {
-          ...task.summary,
-          status: "queued",
-          active_run_id: runId,
-        },
-        pendingUserInput: null,
-      };
+      task = applyRunQueuedEvent(task, envelope, payload);
       break;
     }
     case "run_started":
     case "run_finalizing":
     case "run_cancel_requested": {
-      if (runId === null) break;
-      const status: RunStatus =
-        payload.type === "run_started"
-          ? "running"
-          : payload.type === "run_finalizing"
-            ? "finalizing"
-            : "cancel_requested";
-      task = upsertRun(
-        task,
-        runId,
-        (run) => ({
-          ...run,
-          status,
-          updatedAt: envelope.timestamp,
-          startedAt:
-            payload.type === "run_started"
-              ? (run.startedAt ?? envelope.timestamp)
-              : run.startedAt,
-        }),
-        status,
-        envelope.timestamp,
-      );
-      task = {
-        ...task,
-        summary: { ...task.summary, status, active_run_id: runId },
-      };
-      if (
-        payload.type === "run_finalizing" ||
-        payload.type === "run_cancel_requested"
-      ) {
-        task = deactivateRunAssistantStream(task, runId);
-        task = deactivateRunStreamingItems(task, runId);
-      }
+      task = applyRunTransitionEvent(task, envelope, payload);
       break;
     }
     case "run_completed":
     case "run_failed":
     case "run_cancelled":
     case "run_interrupted": {
-      if (runId === null) break;
-      const status = terminalStatus(payload.type);
-      if (status === null) break;
-      const error =
-        payload.type === "run_failed"
-          ? payload.error
-          : payload.type === "run_interrupted"
-            ? payload.reason
-            : payload.type === "run_cancelled"
-              ? payload.reason
-              : null;
-      task = upsertRun(
-        task,
-        runId,
-        (run) => ({
-          ...run,
-          status,
-          updatedAt: envelope.timestamp,
-          finishedAt: envelope.timestamp,
-          error,
-        }),
-        status,
-        envelope.timestamp,
-      );
-      if (task.summary.active_run_id === runId) {
-        task = {
-          ...task,
-          summary: { ...task.summary, status, active_run_id: null },
-        };
-      }
-      if (task.pendingUserInput?.runId === runId) {
-        task = { ...task, pendingUserInput: null };
-      }
-      if (payload.type !== "run_completed") {
-        task = terminalizeRunningFixtureStages(
-          task,
-          payload.type === "run_failed" ? "failed" : "cancelled",
-          envelope.timestamp,
-          error,
-        );
-      }
-      task = deactivateRunAssistantStream(task, runId);
-      task = deactivateRunStreamingItems(task, runId);
+      task = applyRunTerminalEvent(task, envelope, payload);
       break;
     }
-    case "user_input_required": {
-      if (runId === null) break;
-      task = upsertRun(
-        task,
-        runId,
-        (run) => ({
-          ...run,
-          status: "awaiting_user_input",
-          updatedAt: envelope.timestamp,
-        }),
-        "awaiting_user_input",
-        envelope.timestamp,
-      );
-      task = {
-        ...task,
-        summary: {
-          ...task.summary,
-          status: "awaiting_user_input",
-          active_run_id: runId,
-        },
-        pendingUserInput: {
-          runId,
-          requestId: payload.request_id,
-          promptKind: payload.prompt_kind,
-          summary: payload.summary,
-          expiresAt: payload.expires_at,
-          fixtureExempt: payload.fixture_exempt,
-          detail: payload.detail,
-          sequence: envelope.sequence,
-          timestamp: envelope.timestamp,
-        },
-      };
-      break;
-    }
+    case "user_input_required":
     case "user_input_resumed": {
-      if (runId === null) break;
-      task = upsertRun(
-        task,
-        runId,
-        (run) => ({
-          ...run,
-          status: "running",
-          updatedAt: envelope.timestamp,
-        }),
-        "running",
-        envelope.timestamp,
-      );
-      task = {
-        ...task,
-        summary: {
-          ...task.summary,
-          status: "running",
-          active_run_id: runId,
-        },
-        pendingUserInput:
-          task.pendingUserInput?.runId === runId &&
-          task.pendingUserInput.requestId === payload.request_id
-            ? null
-            : task.pendingUserInput,
-      };
+      task = applyUserInputEvent(task, envelope, payload);
       break;
     }
-    case "plan_ready": {
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "fixture_event",
-        status: "completed",
-        name: "plan_ready",
-        input: null,
-        output: JSON.stringify(payload.specification),
-        isError: false,
-        code: null,
-        message: null,
-      });
-      break;
-    }
+    case "plan_ready":
     case "task_created":
-    case "task_recovered": {
-      if (task.summary.mode !== "fixture") break;
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "fixture_event",
-        status: "completed",
-        name: payload.type,
-        input: null,
-        output:
-          payload.type === "task_created" ? payload.topic : null,
-        isError: false,
-        code: null,
-        message: null,
-      });
+    case "task_recovered":
+    case "task_cancel_requested":
+    case "task_cancelled":
+    case "task_completed":
+    case "task_failed": {
+      task = applyFixtureEvent(task, envelope, payload);
       break;
     }
-    case "assistant_delta": {
-      if (runId === null) break;
-      task = applyDurableAssistantDelta(task, runId, payload, envelope);
-      break;
-    }
+    case "assistant_delta":
     case "assistant_reasoning_delta": {
-      if (runId === null) break;
-      const activityId = envelope.subagent_id == null
-        ? `reasoning:${runId}`
-        : `subagent_reasoning:${envelope.subagent_id}:${runId}`;
-      const existing = task.activitiesById[activityId];
-      task = upsertActivity(task, {
-        activityId,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "reasoning",
-        subagentId: envelope.subagent_id ?? null,
-        status: "started",
-        name: null,
-        input: null,
-        output: `${existing?.output ?? ""}${payload.delta}`,
-        isError: false,
-        code: null,
-        message: null,
-      });
-      if (envelope.subagent_id != null) break;
-      const segmentIndex = task.currentReasoningSegmentByRun[runId] ?? 0;
-      if (!(runId in task.currentReasoningSegmentByRun)) {
-        task = {
-          ...task,
-          currentReasoningSegmentByRun: {
-            ...task.currentReasoningSegmentByRun,
-            [runId]: segmentIndex,
-          },
-        };
-      }
-      const reasoningItemId = `reasoning:${runId}:${segmentIndex}`;
-      const existingReasoningItem = task.items.find(
-        (i) => i.itemId === reasoningItemId,
-      );
-      const prevReasoningContent =
-        existingReasoningItem?.kind === "reasoning"
-          ? existingReasoningItem.content
-          : "";
-      task = upsertItem(task, {
-        kind: "reasoning",
-        itemId: reasoningItemId,
-        runId,
-        sequence: envelope.sequence,
-        createdAt: existingReasoningItem?.createdAt ?? envelope.timestamp,
-        content: `${prevReasoningContent}${payload.delta}`,
-        isStreaming: true,
-      });
+      task = applyAssistantEvent(task, envelope, payload);
       break;
     }
     case "tool_started": {
-      if (runId === null) break;
-      const toolArgs = (payload.arguments ?? null) as Record<
-        string,
-        unknown
-      > | null;
-      if (envelope.subagent_id == null) {
-        task = deactivateRunAssistantStream(task, runId);
-        task = deactivateRunStreamingItems(task, runId);
-        // Qwen LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出，
-        // 导致前一个 assistant_segment 尾部出现工具参数 JSON。此处剥离该 JSON，
-        // 避免前端对话流展示原始 JSON。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
-        task = stripLastAssistantSegmentToolArgs(task, runId, toolArgs);
-      }
-      task = upsertActivity(task, {
-        activityId: envelope.subagent_id === null || envelope.subagent_id === undefined
-          ? `tool:${runId}:${payload.tool_call_id}`
-          : `subagent_tool:${envelope.subagent_id}:${runId}:${payload.tool_call_id}`,
-        taskId: envelope.task_id,
-        runId,
-        subagentId: envelope.subagent_id ?? null,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "tool",
-        status: "started",
-        name: payload.tool_name,
-        input: null,
-        output: null,
-        isError: false,
-        code: null,
-        message: null,
-      });
-      if (envelope.subagent_id == null) {
-        const toolItemId = `tool:${runId}:${payload.tool_call_id}`;
-        const existingToolItem = task.items.find(
-          (i) => i.itemId === toolItemId,
-        );
-        task = upsertItem(task, {
-          kind: "tool_call",
-          itemId: toolItemId,
-          runId,
-          sequence: envelope.sequence,
-          createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
-          toolCallId: payload.tool_call_id,
-          toolName: payload.tool_name,
-          arguments: toolArgs,
-          status: "running",
-          output: null,
-          completedSequence: null,
-        });
-        task = {
-          ...task,
-          currentReasoningSegmentByRun: {
-            ...task.currentReasoningSegmentByRun,
-            [runId]: (task.currentReasoningSegmentByRun[runId] ?? 0) + 1,
-          },
-        };
-      }
+      task = applyToolStartedEvent(task, envelope, payload);
       break;
     }
     case "tool_completed": {
-      const toolCallId = payload.tool_call_id ?? null;
-      if (runId !== null && toolCallId !== null) {
-        const activityId = envelope.subagent_id === null || envelope.subagent_id === undefined
-          ? `tool:${runId}:${toolCallId}`
-          : `subagent_tool:${envelope.subagent_id}:${runId}:${toolCallId}`;
-        const existing = task.activitiesById[activityId];
-        task = upsertActivity(task, {
-          activityId,
-          taskId: envelope.task_id,
-          runId,
-          subagentId: envelope.subagent_id ?? null,
-          sequence: envelope.sequence,
-          timestamp: envelope.timestamp,
-          kind: "tool",
-          status: "completed",
-          name: payload.tool_name,
-          input: existing?.input ?? null,
-          output: payload.output ?? null,
-          isError: payload.is_error,
-          code: null,
-          message: null,
-        });
-        if (envelope.subagent_id == null) {
-          const toolItemId = `tool:${runId}:${toolCallId}`;
-          const existingToolItem = task.items.find(
-            (i) => i.itemId === toolItemId,
-          );
-          const toolArguments =
-            existingToolItem?.kind === "tool_call"
-              ? existingToolItem.arguments
-              : null;
-          task = upsertItem(task, {
-            kind: "tool_call",
-            itemId: toolItemId,
-            runId,
-            sequence: envelope.sequence,
-            createdAt: existingToolItem?.createdAt ?? envelope.timestamp,
-            toolCallId,
-            toolName: payload.tool_name,
-            arguments: toolArguments,
-            status: payload.is_error ? "error" : "completed",
-            output: payload.output ?? null,
-            completedSequence: envelope.sequence,
-          });
-        }
-      } else {
-        task = upsertActivity(task, {
-          activityId: `event:${envelope.sequence}`,
-          taskId: envelope.task_id,
-          runId,
-          sequence: envelope.sequence,
-          timestamp: envelope.timestamp,
-          kind: "fixture_event",
-          status: "completed",
-          name: payload.tool_name,
-          input: null,
-          output: payload.output_digest ?? null,
-          isError: payload.is_error,
-          code: null,
-          message: null,
-        });
-      }
+      task = applyToolCompletedEvent(task, envelope, payload);
       break;
     }
     case "tool_called": {
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "fixture_event",
-        status: "started",
-        name: payload.tool_name,
-        input: payload.arguments_digest,
-        output: null,
-        isError: false,
-        code: null,
-        message: null,
-      });
+      task = applyToolCalledEvent(task, envelope, payload);
       break;
     }
     case "warning": {
-      const warning = payload.warning ?? null;
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "warning",
-        status: "warning",
-        name: null,
-        input: null,
-        output: null,
-        isError: warning?.severity === "error",
-        code: payload.code ?? warning?.code ?? null,
-        message: payload.message ?? warning?.message ?? null,
-      });
-      const warningItemId = `warning:${envelope.sequence}`;
-      task = upsertItem(task, {
-        kind: "warning",
-        itemId: warningItemId,
-        runId: runId ?? "",
-        sequence: envelope.sequence,
-        createdAt: envelope.timestamp,
-        code: payload.code ?? warning?.code ?? "",
-        message: payload.message ?? warning?.message ?? "",
-      });
+      task = applyWarningEvent(task, envelope, payload);
       break;
     }
     case "conversation_compacted": {
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "conversation_compacted",
-        status: "recorded",
-        name: null,
-        input: payload.covered_through_run_id,
-        output: payload.summary_digest,
-        isError: false,
-        code: null,
-        message: null,
-      });
-      task = { ...task, compacting: false };
+      task = applyConversationCompactedEvent(task, envelope, payload);
       break;
     }
     case "artifact_produced": {
-      const artifact: ArtifactProjection = {
-        artifact_id: payload.artifact.artifact_id,
-        name: payload.artifact.name,
-        size: payload.artifact.size_bytes,
-        sha256: payload.artifact.sha256,
-        media_type: payload.artifact.media_type,
-        taskId: envelope.task_id,
-        generatedByStepId: payload.artifact.generated_by_step_id,
-      };
-      const startsManifestGeneration = artifact.artifact_id === "run_manifest";
-      const artifactsById = startsManifestGeneration
-        ? { [artifact.artifact_id]: artifact }
-        : { ...task.artifactsById, [artifact.artifact_id]: artifact };
-      const artifactOrder = startsManifestGeneration
-        ? [artifact.artifact_id]
-        : task.artifactOrder.includes(artifact.artifact_id)
-          ? task.artifactOrder
-          : [...task.artifactOrder, artifact.artifact_id];
-      task = {
-        ...task,
-        artifactsById,
-        artifactOrder,
-        artifactEventSequences: startsManifestGeneration
-          ? { [artifact.artifact_id]: envelope.sequence }
-          : {
-              ...task.artifactEventSequences,
-              [artifact.artifact_id]: envelope.sequence,
-            },
-        artifactManifestSequence: startsManifestGeneration
-          ? envelope.sequence
-          : task.artifactManifestSequence,
-      };
-      const artifactItemId = `artifact:${runId ?? "task"}:${artifact.artifact_id}`;
-      const existingArtifactItem = task.items.find(
-        (i) => i.itemId === artifactItemId,
-      );
-      task = upsertItem(task, {
-        kind: "artifact",
-        itemId: artifactItemId,
-        runId: runId ?? "",
-        sequence: envelope.sequence,
-        createdAt: existingArtifactItem?.createdAt ?? envelope.timestamp,
-        artifactId: artifact.artifact_id,
-        name: artifact.name,
-        sizeBytes: artifact.size,
-        mediaType: artifact.media_type,
-      });
+      task = applyArtifactProducedEvent(task, envelope, payload);
       break;
     }
     case "stage_started":
     case "stage_completed":
     case "stage_failed":
     case "stage_skipped": {
-      if (envelope.stage_attempt_id === null) break;
-      const existing = task.stages[payload.stage];
-      if (
-        payload.type !== "stage_started" &&
-        existing !== undefined &&
-        existing.stageAttemptId !== envelope.stage_attempt_id
-      ) {
-        break;
-      }
-      const status =
-        payload.type === "stage_started" ? "running" : payload.status;
-      const stage: StageProjection = {
-        stage: payload.stage,
-        stageAttemptId: envelope.stage_attempt_id,
-        attempt:
-          payload.type === "stage_started" ? payload.attempt : existing?.attempt ?? 1,
-        status,
-        startedAt:
-          payload.type === "stage_started"
-            ? envelope.timestamp
-            : existing?.startedAt ?? null,
-        finishedAt:
-          payload.type === "stage_started" ? null : envelope.timestamp,
-        outputDigest:
-          payload.type === "stage_completed" ? payload.output_digest : null,
-        error: payload.type === "stage_failed" ? payload.error.message : null,
-        skipReason: payload.type === "stage_skipped" ? payload.reason : null,
-        reusedStageAttemptId:
-          payload.type === "stage_skipped"
-            ? payload.reused_stage_attempt_id
-            : null,
-        progress: existing?.progress ?? null,
-      };
-      task = {
-        ...task,
-        stages: { ...task.stages, [payload.stage]: stage },
-      };
-      if (runId !== null) {
-        task = upsertActivity(task, {
-          activityId: `stage:${runId}:${payload.stage}`,
-          taskId: envelope.task_id,
-          runId,
-          sequence: envelope.sequence,
-          timestamp: envelope.timestamp,
-          kind: "stage",
-          status:
-            payload.type === "stage_started"
-              ? "started"
-              : payload.type === "stage_completed"
-                ? "completed"
-                : payload.type === "stage_failed"
-                  ? "failed"
-                  : "skipped",
-          name: null,
-          input: null,
-          output: null,
-          isError: payload.type === "stage_failed",
-          code: null,
-          message: null,
-          stage: payload.stage,
-        });
-        const stageItemId = `stage:${runId}:${payload.stage}`;
-        const existingStageItem = task.items.find(
-          (i) => i.itemId === stageItemId,
-        );
-        task = upsertItem(task, {
-          kind: "stage",
-          itemId: stageItemId,
-          runId,
-          sequence: envelope.sequence,
-          createdAt: existingStageItem?.createdAt ?? envelope.timestamp,
-          stage: payload.stage,
-          status:
-            payload.type === "stage_started"
-              ? "running"
-              : payload.type === "stage_completed"
-                ? "completed"
-                : payload.type === "stage_failed"
-                  ? "failed"
-                  : "skipped",
-          attempt: stage.attempt,
-          error:
-            payload.type === "stage_failed" ? payload.error.message : null,
-        });
-      }
+      task = applyStageTransitionEvent(task, envelope, payload);
       break;
     }
     case "stage_progress": {
-      // Agent 模式�?Skills 发射 progress（无 stage_attempt_id），
-      // Pipeline 模式�?stages 发射 progress（有 stage_attempt_id）�?
-      // 两种模式都投射到 task.stages，让前端展示"找到 N 篇论�?等中间数字�?
-      // See docs/REVIEW_2026-07-18.md §4.
-      const existing = task.stages[payload.stage];
-      const stageAttemptId =
-        envelope.stage_attempt_id ?? existing?.stageAttemptId ?? `pending:${payload.stage}`;
-      if (
-        existing !== undefined &&
-        existing.stageAttemptId !== stageAttemptId &&
-        envelope.stage_attempt_id !== null
-      ) {
-        break;
-      }
-      const progress = {
-        kind: payload.kind,
-        current: payload.current,
-        total: payload.total,
-        detail: payload.detail as Record<string, unknown>,
-        updatedAt: envelope.timestamp,
-      };
-      // `existing ?? {...}` 的右分支�?existing �?TS 收窄�?never,
-      // 导致 existing?.attempt 等访问报 TS2339。改为显�?if/else�?
-      const stage: StageProjection = existing !== undefined
-        ? existing
-        : {
-            stage: payload.stage,
-            stageAttemptId,
-            attempt: 1,
-            status: "running",
-            startedAt: envelope.timestamp,
-            finishedAt: null,
-            outputDigest: null,
-            error: null,
-            skipReason: null,
-            reusedStageAttemptId: null,
-            progress,
-          };
-      task = {
-        ...task,
-        stages: {
-          ...task.stages,
-          [payload.stage]: { ...stage, progress },
-        },
-      };
-      if (runId !== null) {
-        task = upsertActivity(task, {
-          activityId: `progress:${runId}:${payload.stage}:${payload.kind}`,
-          taskId: envelope.task_id,
-          runId,
-          sequence: envelope.sequence,
-          timestamp: envelope.timestamp,
-          kind: "progress",
-          status: "recorded",
-          name: null,
-          input: null,
-          output: null,
-          isError: false,
-          code: null,
-          message: null,
-          progress: {
-            stage: payload.stage,
-            kind: payload.kind,
-            current: payload.current,
-            total: payload.total,
-          },
-        });
-        const progressItemId = `progress:${runId}:${payload.stage}:${payload.kind}`;
-        const existingProgressItem = task.items.find(
-          (i) => i.itemId === progressItemId,
-        );
-        task = upsertItem(task, {
-          kind: "progress",
-          itemId: progressItemId,
-          runId,
-          sequence: envelope.sequence,
-          createdAt: existingProgressItem?.createdAt ?? envelope.timestamp,
-          stage: payload.stage,
-          progressKind: payload.kind,
-          current: payload.current,
-          total: payload.total,
-        });
-      }
-      break;
-    }
-    case "task_cancel_requested":
-    case "task_cancelled":
-    case "task_completed":
-    case "task_failed": {
-      if (task.summary.mode !== "fixture") break;
-      const output =
-        payload.type === "task_completed"
-          ? payload.validation.status
-          : payload.type === "task_failed"
-            ? payload.error.message
-            : payload.reason;
-      task = upsertActivity(task, {
-        activityId: `event:${envelope.sequence}`,
-        taskId: envelope.task_id,
-        runId,
-        sequence: envelope.sequence,
-        timestamp: envelope.timestamp,
-        kind: "fixture_event",
-        status:
-          payload.type === "task_cancel_requested" ? "started" : "completed",
-        name: payload.type,
-        input: null,
-        output,
-        isError: payload.type === "task_failed",
-        code: payload.type === "task_failed" ? payload.error.code : null,
-        message: payload.type === "task_failed" ? payload.error.message : null,
-      });
+      task = applyStageProgressEvent(task, envelope, payload);
       break;
     }
     default:

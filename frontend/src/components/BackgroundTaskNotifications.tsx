@@ -1,12 +1,9 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
 
+import { errorMessage } from "@/lib/utils";
 import { isActiveStatus } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
-
-function errorDescription(error: unknown): string {
-  return error instanceof Error ? error.message : "未知错误";
-}
 
 export function BackgroundTaskNotifications({
   onViewTask,
@@ -19,7 +16,7 @@ export function BackgroundTaskNotifications({
       try {
         await onViewTask(taskId);
       } catch (error) {
-        toast.error("打开任务失败", { description: errorDescription(error) });
+        toast.error("打开任务失败", { description: errorMessage(error) });
       }
     };
     return useAgentStore.subscribe((state, previousState) => {

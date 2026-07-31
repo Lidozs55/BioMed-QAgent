@@ -1,4 +1,4 @@
-﻿import {
+import {
   ArrowsClockwiseIcon,
   DownloadSimpleIcon,
   FlaskIcon,
@@ -52,6 +52,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
+import { errorMessage } from "@/lib/utils";
 import type { RunStatus } from "@/runtime/contracts";
 import type { ConnectionStatus, TaskProjection } from "@/runtime/types";
 import { isActiveStatus } from "@/runtime/reducer";
@@ -85,10 +86,6 @@ const CONNECTION_META: Record<
   reconnecting: { label: "重新连接中", pending: true },
   disconnected: { label: "已断开", pending: false },
 };
-
-function errorDescription(error: unknown): string {
-  return error instanceof Error ? error.message : "未知错误";
-}
 
 function TaskRow({
   task,
@@ -214,7 +211,7 @@ export function SessionSidebar({
     try {
       await onSelectTask(taskId);
     } catch (error) {
-      toast.error("打开任务失败", { description: errorDescription(error) });
+      toast.error("打开任务失败", { description: errorMessage(error) });
     }
   };
 
@@ -230,7 +227,7 @@ export function SessionSidebar({
       await onLoadAll();
     } catch (error) {
       toast.error("历史任务加载失败", {
-        description: errorDescription(error),
+        description: errorMessage(error),
       });
     } finally {
       setLoadingAll(false);
@@ -243,7 +240,7 @@ export function SessionSidebar({
       await onRetryHistory();
     } catch (error) {
       toast.error("会话历史加载失败", {
-        description: errorDescription(error),
+        description: errorMessage(error),
       });
     }
   };
@@ -255,7 +252,7 @@ export function SessionSidebar({
     try {
       await onCancelRun(task.summary.task_id, runId);
     } catch (error) {
-      toast.error("取消任务失败", { description: errorDescription(error) });
+      toast.error("取消任务失败", { description: errorMessage(error) });
     } finally {
       setPendingCancels((current) => {
         const next = new Set(current);
@@ -272,7 +269,7 @@ export function SessionSidebar({
       await onDeleteTask(deleteTargetId);
       setDeleteTargetId(null);
     } catch (error) {
-      toast.error("删除任务失败", { description: errorDescription(error) });
+      toast.error("删除任务失败", { description: errorMessage(error) });
     } finally {
       setDeleting(false);
     }
@@ -435,7 +432,7 @@ export function SessionSidebar({
                   void onExportCache();
                 } catch (error) {
                   toast.error("导出缓存失败", {
-                    description: errorDescription(error),
+                    description: errorMessage(error),
                   });
                 }
               }}
