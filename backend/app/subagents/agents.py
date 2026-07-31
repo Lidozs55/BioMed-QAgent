@@ -148,6 +148,9 @@ class _ChildAgentRunner:
                 subagent_id=subagent_id,
                 status=SubagentStatus.FAILED,
                 summary="Child agent failed",
+                source_asset_ids=child_context.source_asset_ids,
+                recipe_id=child_context.recipe_id,
+                warnings=child_context.child_warnings,
                 error_code=SubagentErrorCode.INTERNAL_ERROR,
                 error_message=str(error) or type(error).__name__,
             )
@@ -162,6 +165,9 @@ class _ChildAgentRunner:
             subagent_id=subagent_id,
             status=SubagentStatus.COMPLETED,
             summary=summary or "Child agent completed",
+            source_asset_ids=child_context.source_asset_ids,
+            recipe_id=child_context.recipe_id,
+            warnings=child_context.child_warnings,
         )
 
 

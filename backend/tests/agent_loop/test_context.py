@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 from app.agent_loop.context import RunContext
+from app.domain.contracts import DataLevel
 from app.tools.crawler import CrawlerFacade
 
 
@@ -70,3 +71,42 @@ def test_crawler_facade_binding_is_trusted_and_exactly_once(tmp_path: Path) -> N
     assert context.crawler_facade is facade
     with pytest.raises(RuntimeError, match="already bound"):
         context.bind_crawler_facade(Mock(spec=CrawlerFacade))
+
+
+def test_child_context_owns_staging_root_and_collects_bounded_metadata(
+    tmp_path: Path,
+) -> None:
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+
+    child = parent.create_child_context("child-one")
+
+    assert child.work_dir.root == parent.work_dir.staging / "subagents" / "child-one"
+    assert child.work_dir.root != parent.work_dir.root
+    child.record_source_asset_id("asset_sha256")
+    child.record_recipe("recipe-one")
+    child.record_warning("child warning")
+
+    assert child.source_asset_ids == ["asset_sha256"]
+    assert child.recipe_id == "recipe-one"
+    assert child.child_warnings == ["child warning"]
+
+
+def test_child_source_asset_helper_commits_to_task_source_assets(
+    tmp_path: Path,
+) -> None:
+    parent = RunContext(task_id="parent_asset", base_dir=tmp_path)
+    child = parent.create_child_context("child-one")
+
+    asset = child.stage_source_asset(
+        content=b"child bytes",
+        filename="data.tsv",
+        source_id="source-child",
+        successful_attempt_id="attempt-child",
+        data_level=DataLevel.METADATA,
+        media_type="text/tab-separated-values",
+    )
+
+    assert child.source_asset_path(asset) == parent.work_dir.root / asset.relative_path
+    assert child.source_asset_path(asset).read_bytes() == b"child bytes"
+    assert child.source_asset_ids == [asset.asset_id]
+    assert asset.relative_path.startswith("source_assets/")

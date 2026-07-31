@@ -93,6 +93,32 @@ def test_capture_web_page_commits_png_and_metadata_through_staging(
     assert context.context.query_log[0]["status"] == "success"
 
 
+def test_child_capture_commits_assets_to_parent_source_assets(
+    tmp_path: Path,
+) -> None:
+    facade = _facade_with_png(b"\x89PNG\r\n\x1a\nchild")
+    parent = RunContext(task_id="test_child_visual", base_dir=tmp_path)
+    child = parent.create_child_context("child-visual")
+    child.bind_crawler_facade(facade)
+    context = ToolContext(
+        context=child,
+        tool_name="capture_web_page",
+        tool_call_id="child-call",
+        tool_arguments="{}",
+    )
+
+    result = asyncio.run(
+        capture_web_page.on_invoke_tool(
+            context,
+            json.dumps({"url": "https://example.org/figure"}),
+        )
+    )
+
+    data = json.loads(result)
+    assert Path(data["local_files"][0]).is_relative_to(parent.work_dir.source_assets)
+    assert Path(data["meta_file"]).is_relative_to(parent.work_dir.source_assets)
+
+
 def test_capture_page_section_forwards_selector_and_clamps_viewport(
     tmp_path: Path,
 ) -> None:

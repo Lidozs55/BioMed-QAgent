@@ -197,9 +197,19 @@ class CrawlerFacadeProtocol(Protocol):
 
     async def api(self, url: str) -> FetchResult: ...
 
+    async def api_request(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
+    ) -> FetchResult: ...
+
     async def html(self, url: str) -> FetchResult: ...
 
     async def browser(self, url: str) -> FetchResult: ...
+
+    async def download(self, url: str) -> DownloadResult: ...
 
 
 class CrawlerFacade:
@@ -221,6 +231,20 @@ class CrawlerFacade:
 
     async def api(self, url: str) -> FetchResult:
         """Fetch structured API content."""
+        return await self.api_request(url)
+
+    async def api_request(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
+    ) -> FetchResult:
+        """Send one pinned JSON API request without following redirects."""
+
+        normalized_method = method.upper().strip()
+        if normalized_method not in {"GET", "POST"}:
+            raise ValueError("crawler API method must be GET or POST")
         return await self._request(
             url,
             headers={
@@ -228,6 +252,8 @@ class CrawlerFacade:
                 "Accept": "application/json",
             },
             method_used="api",
+            method=normalized_method,
+            json_body=json_body,
         )
 
     async def html(self, url: str) -> FetchResult:
@@ -440,6 +466,8 @@ class CrawlerFacade:
         *,
         headers: dict[str, str],
         method_used: str,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
     ) -> FetchResult:
         started_at = time.monotonic()
         current_url = url
@@ -453,9 +481,10 @@ class CrawlerFacade:
                 request_headers["Host"] = pinned.host_header
                 async with self._open_http_client() as http:
                     request = http.build_request(
-                        "GET",
+                        method,
                         pinned.connect_url,
                         headers=request_headers,
+                        json=json_body,
                         extensions={"sni_hostname": pinned.sni_hostname},
                     )
                     response = await http.send(

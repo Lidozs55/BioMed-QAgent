@@ -212,6 +212,45 @@ async def test_crawler_pins_single_resolution_and_preserves_host_and_sni() -> No
 
 
 @pytest.mark.asyncio
+async def test_crawler_api_request_pins_post_json_and_preserves_host_and_sni() -> None:
+    transported: list[tuple[str, str, str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        transported.append(
+            (
+                request.method,
+                str(request.url),
+                request.headers["host"],
+                request.content,
+            )
+        )
+        return httpx.Response(200, json={"ok": True})
+
+    facade = CrawlerFacade(
+        min_interval=0,
+        http_transport=httpx.MockTransport(handler),
+        target_resolver=lambda url: asyncio.sleep(0, result=_pinned_target(url)),
+    )
+
+    result = await facade.api_request(
+        "https://public.example/search",
+        method="POST",
+        json_body={"term": "BRCA"},
+    )
+    await facade.aclose()
+
+    assert result.ok
+    assert transported == [
+        (
+            "POST",
+            "https://93.184.216.34/search",
+            "public.example",
+            b'{"term":"BRCA"}',
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_crawler_revalidates_redirect_before_transport() -> None:
     resolved: list[str] = []
     transported: list[str] = []

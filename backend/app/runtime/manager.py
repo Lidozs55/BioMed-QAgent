@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -657,7 +658,25 @@ class TaskManager:
         self._subagent_event_sink = event_sink
         attach = getattr(self.run_executor, "attach_subagent_runtime", None)
         if callable(attach):
-            attach(supervisor=supervisor, event_sink=event_sink)
+            try:
+                parameters = inspect.signature(attach).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            accepts_input_broker = (
+                not parameters
+                or "input_broker" in parameters
+                or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+            )
+            attach_kwargs: dict[str, object] = {
+                "supervisor": supervisor,
+                "event_sink": event_sink,
+            }
+            if accepts_input_broker:
+                attach_kwargs["input_broker"] = input_broker
+            attach(**attach_kwargs)
 
     async def start(self) -> None:
         if self._started:

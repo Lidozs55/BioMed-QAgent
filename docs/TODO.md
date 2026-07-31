@@ -99,9 +99,9 @@
 
 ### 2.1 Acquisition Skills 合规化（接入 crawler.py）
 
-- [ ] **P1** GDC skill 接入 `crawler.py`（替换 `urllib.request.urlopen` → `httpx_fetch`，获得限速 + BROWSER_UA + Referer）
-- [ ] **P1** PDB skill 接入 `crawler.py`
-- [ ] **P1** Xena skill 接入 `crawler.py` + 改用 `BROWSER_UA`（删除 `_USER_AGENT = "BioMed-QAgent/0.1"`）
+- [x] **P1** GDC skill 接入 `crawler.py`（受管控 Run 使用绑定 facade；隔离 legacy fixture 保留 `urllib` 回退）
+- [x] **P1** PDB skill 接入 `crawler.py`（GET/POST API 和下载均使用绑定 facade）
+- [x] **P1** Xena skill 接入 `crawler.py` + 使用绑定 facade（S3 XML listing 保留原解析器；隔离 legacy fixture 保留 `urllib` 回退）
 
 ### 2.2 Xena 403 修复
 

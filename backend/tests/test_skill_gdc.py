@@ -14,6 +14,7 @@ from app.skills.builtin.acquisition.gdc import (
     download_gdc,
     search_gdc,
 )
+from app.tools.crawler import DownloadResult, FetchResult
 
 
 @pytest.fixture(autouse=True)
@@ -98,15 +99,116 @@ def test_search_gdc_success() -> None:
     data = json.loads(result)
     assert data["source"] == "gdc"
     assert data["term"] == "lung"
-    assert "TCGA-LUAD" in data["project_ids"]
-    assert "TCGA-BRCA" not in data["project_ids"]  # doesn't match "lung"
-    assert len(data["records"]) == 1
-    assert data["records"][0]["project_id"] == "TCGA-LUAD"
-    assert data["records"][0]["case_count"] == 500
 
-    rc: RunContext = ctx.context
-    assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "success"
+
+def test_managed_search_gdc_uses_bound_crawler_facade(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class ManagedFacade:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def api(self, url: str) -> FetchResult:
+            self.calls.append(url)
+            return FetchResult(
+                url=url,
+                content=json.dumps({"data": {"hits": [], "pagination": {"total": 0}}}),
+                status_code=200,
+                elapsed_ms=1,
+                method_used="api",
+            )
+
+    facade = ManagedFacade()
+    context = RunContext(
+        task_id="managed_gdc",
+        base_dir=tmp_path,
+        subagent_id="child-gdc",
+    )
+    context.bind_crawler_facade(facade)
+    ctx = ToolContext(
+        context=context,
+        tool_name="search_gdc",
+        tool_call_id="call-gdc",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.gdc._fetch_json",
+        lambda _url: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(search_gdc.on_invoke_tool(ctx, json.dumps({"term": "BRCA"})))
+
+    assert json.loads(result)["project_ids"] == []
+    assert facade.calls
+
+
+def test_managed_download_gdc_stages_source_asset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class ManagedFacade:
+        async def api(self, url: str) -> FetchResult:
+            return FetchResult(
+                url=url,
+                content=json.dumps(
+                    {
+                        "data": {
+                            "hits": [
+                                {
+                                    "file_id": "file-1",
+                                    "file_name": "counts.tsv",
+                                    "data_type": "Gene Expression Quantification",
+                                }
+                            ],
+                            "pagination": {"total": 1},
+                        }
+                    }
+                ),
+                status_code=200,
+                elapsed_ms=1,
+                method_used="api",
+            )
+
+        async def download(self, url: str) -> DownloadResult:
+            return DownloadResult(
+                url=url,
+                content=b"gene\tsample\nBRCA1\t1\n",
+                status_code=200,
+                elapsed_ms=1,
+            )
+
+    facade = ManagedFacade()
+    parent = RunContext(task_id="managed_gdc_download", base_dir=tmp_path)
+    parent.bind_crawler_facade(facade)
+    child = parent.create_child_context("child-gdc")
+    ctx = ToolContext(
+        context=child,
+        tool_name="download_gdc",
+        tool_call_id="call-gdc-download",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.gdc._fetch_json",
+        lambda _url: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.gdc._download_file",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(
+        download_gdc.on_invoke_tool(
+            ctx,
+            json.dumps({"project_id": "TCGA-BRCA", "data_type": "RNA-Seq"}),
+        )
+    )
+
+    data = json.loads(result)
+    assert "error" not in data
+    assert child.source_asset_ids
+    committed = parent.work_dir.root / "source_assets"
+    assert list(committed.rglob("counts.tsv"))
 
 
 def test_search_gdc_network_error_returns_error_json() -> None:

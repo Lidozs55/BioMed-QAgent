@@ -159,6 +159,46 @@ def test_download_from_page_uses_bounded_facade_and_tracks_provenance(
     facade.download.assert_awaited_once_with("https://example.com/data.pdf")
 
 
+def test_child_download_from_page_uses_exact_child_staging_boundary(
+    tmp_path: Path,
+) -> None:
+    facade = _facade()
+    facade.download.return_value = DownloadResult(
+        url="https://example.com/data.pdf",
+        content=b"child pdf",
+        status_code=200,
+        elapsed_ms=4,
+        headers={"content-type": "application/pdf"},
+    )
+    parent = RunContext(task_id="test_child_browser_dl", base_dir=tmp_path)
+    child = parent.create_child_context("child-browser")
+    child.bind_crawler_facade(facade)
+    context = ToolContext(
+        context=child,
+        tool_name="download_from_page",
+        tool_call_id="child-call",
+        tool_arguments="{}",
+    )
+
+    result = asyncio.run(
+        download_from_page.on_invoke_tool(
+            context,
+            json.dumps(
+                {
+                    "url": "https://example.com/data.pdf",
+                    "filename": "child.pdf",
+                }
+            ),
+        )
+    )
+
+    data = json.loads(result)
+    committed = Path(data["local_files"][0])
+    assert committed.is_relative_to(parent.work_dir.source_assets)
+    assert committed.read_bytes() == b"child pdf"
+    assert child.source_asset_ids == [data["source_asset"]["asset_id"]]
+
+
 def test_download_failure_does_not_publish_partial_asset(tmp_path: Path) -> None:
     facade = _facade()
     facade.download.return_value = DownloadResult(

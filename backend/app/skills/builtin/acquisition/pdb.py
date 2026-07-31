@@ -1,6 +1,7 @@
 """RCSB PDB acquisition skill — search, describe, and download protein structures."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -9,12 +10,18 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -93,6 +100,64 @@ def _download(url: str, dest: Path) -> None:
     tmp.rename(dest)
 
 
+def _write_download(content: bytes, dest: Path) -> None:
+    """Write crawler bytes to a task-local path through an atomic temp file."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp.write_bytes(content)
+    tmp.replace(dest)
+
+
+async def _fetch_json_for_run(
+    run_ctx: RunContext,
+    url: str,
+    *,
+    method: str = "GET",
+    json_body: dict | None = None,
+) -> dict[str, Any]:
+    """Use the Run-bound crawler, with urllib retained for isolated tests."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        legacy = _post_json if method == "POST" else _get_json
+        if method == "POST":
+            return await asyncio.to_thread(legacy, url, json_body or {})
+        return await asyncio.to_thread(legacy, url)
+    if method == "POST":
+        result = await facade.api_request(
+            url,
+            method="POST",
+            json_body=json_body or {},
+        )
+    else:
+        result = await facade.api(url)
+    if not result.ok:
+        raise RuntimeError(result.error or f"HTTP {result.status_code}")
+    return json.loads(result.content)
+
+
+async def _download_file_for_run(
+    run_ctx: RunContext,
+    url: str,
+    dest: Path,
+) -> None:
+    """Download through the bound crawler or isolated legacy transport."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        await asyncio.to_thread(_download, url, dest)
+        return
+    result = await facade.download(url)
+    if not result.ok:
+        raise RuntimeError(result.error or f"HTTP {result.status_code}")
+    await asyncio.to_thread(_write_download, result.content, dest)
+
+
 def _build_search_body(term: str, max_results: int) -> dict:
     """Build RCSB Search API v2 JSON query body using full_text search."""
     return {
@@ -116,7 +181,10 @@ def _build_search_body(term: str, max_results: int) -> dict:
     }
 
 
-def _fetch_entry_detail(pdb_id: str) -> dict[str, Any]:
+async def _fetch_entry_detail(
+    run_ctx: RunContext,
+    pdb_id: str,
+) -> dict[str, Any]:
     """Fetch enriched metadata for a single PDB entry from the Data API.
 
     Returns a dict with ``title``/``organism``/``method``/``resolution``/
@@ -125,8 +193,8 @@ def _fetch_entry_detail(pdb_id: str) -> dict[str, Any]:
     """
     url = f"{_DATA_API}{pdb_id.lower()}"
     try:
-        data = _get_json(url)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        data = await _fetch_json_for_run(run_ctx, url)
+    except Exception as exc:
         logger.warning("PDB describe fetch failed for %s: %s", pdb_id, exc)
         return {}
 
@@ -161,7 +229,11 @@ def _fetch_entry_detail(pdb_id: str) -> dict[str, Any]:
         "Use ``describe_pdb`` to get full metadata for a specific PDB ID."
     ),
 )
-def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
+async def search_pdb(
+    ctx: RunContextWrapper[Any],
+    term: str,
+    max_results: int = 20,
+) -> str:
     """Search RCSB PDB by keyword (protein name, gene, organism, etc.).
 
     Uses RCSB Search API v2 with full_text search. Returns PDB IDs with
@@ -173,7 +245,12 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
     run_ctx: RunContext = ctx.context
     try:
         body = _build_search_body(term, max_results)
-        data = _post_json(_SEARCH_API, body)
+        data = await _fetch_json_for_run(
+            run_ctx,
+            _SEARCH_API,
+            method="POST",
+            json_body=body,
+        )
     except Exception as exc:
         run_ctx.log_query(term, "pdb", QueryStatus.FAILED, 0)
         return json.dumps({
@@ -202,7 +279,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
         # 前 N 条调用 Data API 补全字段（RCSB Search API result_set 仅含 identifier）。
         # Rate limiting is handled inside _get_json via _rate_limit().
         if index < enrich_limit and pdb_id:
-            record.update(_fetch_entry_detail(pdb_id))
+            record.update(await _fetch_entry_detail(run_ctx, pdb_id))
         records.append(record)
 
     return json.dumps({
@@ -215,7 +292,7 @@ def search_pdb(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
 
 
 @function_tool
-def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
+async def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     """Get detailed metadata about a PDB structure.
 
     Returns title, deposition date, resolution, experimental method,
@@ -226,7 +303,7 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
     url = f"{_DATA_API}{pdb_id}"
 
     try:
-        data = _get_json(url)
+        data = await _fetch_json_for_run(run_ctx, url)
     except Exception as exc:
         run_ctx.log_query(pdb_id, "pdb", QueryStatus.FAILED, 0)
         return json.dumps({
@@ -262,7 +339,11 @@ def describe_pdb(ctx: RunContextWrapper[Any], pdb_id: str) -> str:
 
 
 @function_tool
-def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb") -> str:
+async def download_pdb(
+    ctx: RunContextWrapper[Any],
+    pdb_id: str,
+    file_type: str = "pdb",
+) -> str:
     """Download a PDB or mmCIF file from RCSB PDB.
 
     Args:
@@ -291,10 +372,28 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
             "error": f"unsupported file_type: {file_type}. Use 'pdb' or 'cif'.",
         })
 
-    dest = run_ctx.work_dir.raw / filename
-
     try:
-        _download(url, dest)
+        if run_ctx.subagent_id is not None:
+            facade = run_ctx.crawler_facade_or_none
+            if facade is None:
+                raise RuntimeError("crawler facade is not bound to the child Run")
+            result = await facade.download(url)
+            if not result.ok:
+                raise RuntimeError(result.error or f"HTTP {result.status_code}")
+            source_id = make_source_id(Database.PDB, pdb_id.upper(), url)
+            asset = await asyncio.to_thread(
+                run_ctx.stage_source_asset,
+                content=result.content,
+                filename=filename,
+                source_id=source_id,
+                successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                data_level=DataLevel.REPOSITORY_PROCESSED,
+                media_type="application/octet-stream",
+            )
+            dest = run_ctx.source_asset_path(asset)
+        else:
+            dest = run_ctx.work_dir.raw_file(filename)
+            await _download_file_for_run(run_ctx, url, dest)
     except Exception as exc:
         return json.dumps({
             "source": "pdb",
@@ -302,7 +401,7 @@ def download_pdb(ctx: RunContextWrapper[Any], pdb_id: str, file_type: str = "pdb
             "error": str(exc),
         }, ensure_ascii=False)
 
-    local_files = [str(run_ctx.work_dir.raw_file(filename))]
+    local_files = [str(dest)]
     run_ctx.add_raw_asset(local_files[0])
 
     retrieved_at = datetime.now(UTC)

@@ -30,7 +30,6 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.subagents.staging import SubagentStagingWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -153,10 +152,7 @@ async def download_from_page(
         started_at = datetime.now(UTC)
         source_id = make_source_id(Database.BROWSER, filename, url)
         attempt_id = generate_prefixed_uuid("download_attempt")
-        workspace = SubagentStagingWorkspace(
-            run_ctx.work_dir.root,
-            generate_prefixed_uuid("browser_download"),
-        )
+        workspace = run_ctx.source_asset_workspace()
         result = await run_ctx.crawler_facade.download(url)
         finished_at = datetime.now(UTC)
         status_code = result.status_code
@@ -205,6 +201,7 @@ async def download_from_page(
             workspace.commit_source_asset,
             source_asset,
         )
+        run_ctx.record_source_asset_id(committed.asset_id)
         destination = workspace.task_root / committed.relative_path
 
         logger.info(

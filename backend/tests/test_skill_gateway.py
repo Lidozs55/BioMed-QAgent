@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from typing import Any
@@ -17,6 +18,7 @@ from app.skills.gateway import build_skill_gateway
 from app.skills.packages import SkillPackageLoader
 from app.skills.registry import SkillCategory, SkillDef
 from app.skills.search import SkillSearchStrategy
+from app.subagents.input_broker import SubagentInputBroker
 from jsonschema.validators import validator_for as jsonschema_validator_for
 
 
@@ -81,6 +83,14 @@ class RecordingSearchStrategy:
     ) -> tuple[SkillDescriptor, ...]:
         self.candidate_names = tuple(item.name for item in candidates)
         return tuple(candidates)
+
+
+class RecordingSubagentSink:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    async def emit(self, **kwargs: Any) -> None:
+        self.events.append(kwargs)
 
 
 def _protected_manifest() -> dict[str, Any]:
@@ -290,6 +300,81 @@ async def test_protected_package_operation_requires_hil_before_tool_invocation(
     assert requests[0].url.path == "/public"
     assert "Authorization" not in requests[0].headers
     assert "top-secret" not in repr(requests[0])
+
+
+@pytest.mark.asyncio
+async def test_child_protected_operation_waits_for_exact_hil_request_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(
+        "app.skills.packages.validate_public_http_url",
+        lambda url: url,
+    )
+    descriptor = SkillPackageLoader(
+        secrets={"DEMO_TOKEN": "top-secret"},
+        http_transport=httpx.MockTransport(handler),
+    ).load_manifest(_protected_manifest())
+    _, invoke_skill = build_skill_gateway(SkillCatalog([descriptor]))
+    context = RunContext(
+        task_id="task_child",
+        managed_run_id="run_child",
+        subagent_id="sub_child",
+    )
+    broker = SubagentInputBroker()
+    sink = RecordingSubagentSink()
+    context.bind_subagent_runtime(
+        supervisor=object(),
+        runner=object(),
+        event_sink=sink,
+        input_broker=broker,
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="invoke_skill",
+        tool_call_id="call_child",
+        tool_arguments="{}",
+    )
+
+    pending = asyncio.create_task(
+        _call(
+            invoke_skill,
+            tool_context,
+            skill="protected_db",
+            operation="fetch_protected",
+            arguments={},
+        )
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if sink.events:
+            break
+
+    assert len(sink.events) == 1
+    required = sink.events[0]["payload"]
+    assert required.type == "subagent_input_required"
+    assert required.subagent_id == "sub_child"
+    assert "top-secret" not in repr(required)
+    assert not pending.done()
+
+    await broker.resume(
+        task_id="task_child",
+        run_id="run_child",
+        request_id=required.request_id,
+        decision="approve",
+        detail={"confirmed": True},
+    )
+    result = await pending
+
+    assert result["status"] == "ok"
+    assert len(requests) == 1
+    assert len(sink.events) == 2
+    assert sink.events[1]["payload"].type == "subagent_input_resumed"
 
 
 @pytest.mark.asyncio

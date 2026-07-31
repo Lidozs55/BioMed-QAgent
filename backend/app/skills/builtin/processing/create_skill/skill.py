@@ -89,7 +89,7 @@ async def _invoke_create_skill(
                     "recipe_validation_unavailable",
                     "controlled Recipe validation is not available in this runtime",
                 )
-            result = await _validate(runtime, request)
+            result = await _validate(run_context, runtime, request)
         elif isinstance(request, FindRecipeRequest):
             result = _find(runtime, request)
         else:
@@ -111,10 +111,12 @@ def _develop(
         raise ValueError("develop_workflow accepts draft WorkflowRecipes only")
     with run_context.reserve_create_skill(recipe.domain, recipe.capability):
         stored = runtime.store.save_draft(recipe)
+    run_context.record_recipe(stored.recipe_id)
     return _success(request.operation, recipe=_recipe_metadata(stored))
 
 
 async def _validate(
+    run_context: RunContext,
     runtime: CreateSkillRuntime,
     request: ValidateRecipeRequest,
 ) -> dict[str, object]:
@@ -139,6 +141,8 @@ async def _validate(
         attempts=[*draft.attempts, *result.attempts],
         verification_evidence=evidence,
     )
+    run_context.record_source_asset_id(committed.asset_id)
+    run_context.record_recipe(verified.recipe_id)
     return _success(
         request.operation,
         recipe=_recipe_metadata(verified),

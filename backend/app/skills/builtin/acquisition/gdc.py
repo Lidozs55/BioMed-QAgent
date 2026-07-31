@@ -1,6 +1,7 @@
 """GDC acquisition skill — search, describe, and download from NCI Genomic Data Commons."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -15,7 +16,14 @@ from urllib.error import HTTPError, URLError
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -112,6 +120,48 @@ def _download_file(url: str, dest: Path) -> None:
     tmp.rename(dest)
 
 
+def _write_download(content: bytes, dest: Path) -> None:
+    """Write crawler bytes to a task-local path through an atomic temp file."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp.write_bytes(content)
+    tmp.replace(dest)
+
+
+async def _fetch_json_for_run(run_ctx: RunContext, url: str) -> dict[str, Any]:
+    """Use the Run-bound crawler, with urllib retained for isolated tests."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        return await asyncio.to_thread(_fetch_json, url)
+    result = await facade.api(url)
+    if not result.ok:
+        raise RuntimeError(result.error or f"HTTP {result.status_code}")
+    return json.loads(result.content)
+
+
+async def _download_file_for_run(
+    run_ctx: RunContext,
+    url: str,
+    dest: Path,
+) -> None:
+    """Download through the bound crawler or isolated legacy transport."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        await asyncio.to_thread(_download_file, url, dest)
+        return
+    result = await facade.download(url)
+    if not result.ok:
+        raise RuntimeError(result.error or f"HTTP {result.status_code}")
+    await asyncio.to_thread(_write_download, result.content, dest)
+
+
 def _normalize_data_type(data_type: str) -> str:
     """Resolve a shorthand data type to its full GDC API name."""
     return _DATA_TYPE_MAP.get(data_type.strip().lower(), data_type.strip())
@@ -154,7 +204,11 @@ def _match_term(term: str, search_text: str) -> bool:
         "Use ``describe_gdc`` to get detailed metadata for a project."
     ),
 )
-def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
+async def search_gdc(
+    ctx: RunContextWrapper[Any],
+    term: str,
+    max_results: int = 20,
+) -> str:
     """Search the NCI Genomic Data Commons for projects matching a keyword.
 
     Queries the /projects endpoint with summary expansion and then filters
@@ -194,7 +248,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
                 "summary.data_categories"
             ),
         })
-        data = _fetch_json(url)
+        data = await _fetch_json_for_run(run_ctx, url)
     except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
         run_ctx.log_query(term, "gdc", QueryStatus.FAILED, 0)
         return json.dumps({
@@ -254,7 +308,7 @@ def search_gdc(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) ->
 
 
 @function_tool
-def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
+async def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     """Get detailed metadata about a GDC project.
 
     Calls /projects/{project_id} with summary expansion to return disease
@@ -291,7 +345,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
                 "summary.data_categories,summary.experimental_strategies"
             ),
         })
-        data = _fetch_json(url)
+        data = await _fetch_json_for_run(run_ctx, url)
     except Exception as exc:
         # /projects/{id} returns HTTP 404 with {"message": "... not found"}
         # for unknown projects — surfaced here as a network-level exception.
@@ -344,7 +398,7 @@ def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
 
 
 @function_tool
-def download_gdc(
+async def download_gdc(
     ctx: RunContextWrapper[Any],
     project_id: str,
     data_type: str = "RNA-Seq",
@@ -410,7 +464,7 @@ def download_gdc(
             "format": "json",
             "size": "200",
         })
-        data = _fetch_json(url)
+        data = await _fetch_json_for_run(run_ctx, url)
     except Exception as exc:
         return json.dumps({
             "source": "gdc",
@@ -479,10 +533,36 @@ def download_gdc(
         file_name: str = fh.get("file_name", "") or f"{file_uuid}.tsv"
         download_url = f"{_GDC_API_BASE}/data/{file_uuid}"
 
-        dest = run_ctx.work_dir.raw / file_name
+        if Path(file_name).name != file_name or file_name in {".", ".."}:
+            run_ctx.add_warning(
+                "warning",
+                f"Skipped unsafe GDC filename {file_name!r}",
+                "gdc",
+            )
+            continue
         try:
-            _download_file(download_url, dest)
-            local_files.append(str(run_ctx.work_dir.raw_file(file_name)))
+            if run_ctx.subagent_id is not None:
+                facade = run_ctx.crawler_facade_or_none
+                if facade is None:
+                    raise RuntimeError("crawler facade is not bound to the child Run")
+                result = await facade.download(download_url)
+                if not result.ok:
+                    raise RuntimeError(result.error or f"HTTP {result.status_code}")
+                source_id = make_source_id(Database.GDC, project_id, download_url)
+                asset = await asyncio.to_thread(
+                    run_ctx.stage_source_asset,
+                    content=result.content,
+                    filename=file_name,
+                    source_id=source_id,
+                    successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                    data_level=DataLevel.REPOSITORY_PROCESSED,
+                    media_type="application/octet-stream",
+                )
+                local_files.append(str(run_ctx.source_asset_path(asset)))
+            else:
+                dest = run_ctx.work_dir.raw_file(file_name)
+                await _download_file_for_run(run_ctx, download_url, dest)
+                local_files.append(str(dest))
         except Exception as exc:
             logger.warning(
                 "Failed to download GDC file %s (%s): %s",

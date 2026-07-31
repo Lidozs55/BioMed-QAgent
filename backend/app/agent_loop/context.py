@@ -16,10 +16,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.domain.contracts import (
+    DataLevel,
     EventEnvelope,
     QueryStatus,
+    SourceAsset,
     StageName,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
     UserInputResumedPayload,
+    generate_prefixed_uuid,
 )
 from app.model_config import RunModelSettings
 from app.tools.workdir import TaskWorkDir, create_task_workdir
@@ -27,6 +32,8 @@ from app.tools.workdir import TaskWorkDir, create_task_workdir
 if TYPE_CHECKING:
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
+    from app.subagents.input_broker import SubagentInputBroker
+    from app.subagents.staging import SubagentStagingWorkspace
     from app.subagents.supervisor import SubagentEventSink, SubagentRunner, SubagentSupervisor
     from app.tools.crawler import CrawlerFacade
 
@@ -38,6 +45,27 @@ ProgressEmitter = Callable[
 
 
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
+
+_SENSITIVE_INPUT_KEYS = {
+    "api_key",
+    "authorization",
+    "credential",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _redact_input_detail(detail: dict[str, object]) -> dict[str, object]:
+    """Keep durable HIL detail useful without persisting credential material."""
+
+    safe: dict[str, object] = {}
+    for key, value in detail.items():
+        normalized_key = key.casefold()
+        if any(marker in normalized_key for marker in _SENSITIVE_INPUT_KEYS):
+            continue
+        safe[key] = value[:200] if isinstance(value, str) else value
+    return safe
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +85,7 @@ class SubagentRuntime:
     supervisor: SubagentSupervisor
     runner: SubagentRunner
     event_sink: SubagentEventSink
+    input_broker: SubagentInputBroker | None = None
 
 
 @dataclass(slots=True)
@@ -104,6 +133,8 @@ class RunContext:
 
     task_id: str = "default"
     base_dir: str | Path | None = field(default=None, repr=False, kw_only=True)
+    work_dir_root: str | Path | None = field(default=None, repr=False, kw_only=True)
+    subagent_id: str | None = field(default=None, repr=False, kw_only=True)
     managed_run_id: str | None = field(default=None, repr=False, kw_only=True)
     model_settings: RunModelSettings = field(
         default_factory=RunModelSettings.default,
@@ -176,6 +207,27 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _staging_task_root: Path | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _source_asset_workspace: SubagentStagingWorkspace | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _source_asset_ids: list[str] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _recipe_id: str | None = field(default=None, init=False, repr=False)
+    _child_warnings: list[str] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
     _create_skill_reservations: _CreateSkillReservations = field(
         default_factory=_CreateSkillReservations,
         init=False,
@@ -198,6 +250,7 @@ class RunContext:
         self._work_dir: TaskWorkDir = create_task_workdir(
             self.task_id,
             base_dir=base_dir,
+            root_dir=self.work_dir_root,
         )
 
     def bind_model_settings(self, model_settings: RunModelSettings) -> None:
@@ -228,6 +281,7 @@ class RunContext:
         supervisor: SubagentSupervisor,
         runner: SubagentRunner,
         event_sink: SubagentEventSink,
+        input_broker: SubagentInputBroker | None = None,
     ) -> None:
         """Bind the manager-owned child runtime to this parent Run once."""
 
@@ -237,6 +291,7 @@ class RunContext:
             supervisor=supervisor,
             runner=runner,
             event_sink=event_sink,
+            input_broker=input_broker,
         )
 
     @property
@@ -257,11 +312,13 @@ class RunContext:
 
         child = RunContext(
             task_id=self.task_id,
-            base_dir=self._work_dir.root.parent,
+            work_dir_root=self._work_dir.staging / "subagents" / subagent_id,
+            subagent_id=subagent_id,
             model_settings=self.model_settings,
             preferred_sources=list(preferred_sources or self.preferred_sources),
         )
         child._create_skill_reservations = self._create_skill_reservations
+        child._staging_task_root = self._work_dir.root
         if self._crawler_facade is not None:
             child.bind_crawler_facade(self._crawler_facade)
         if self._create_skill_runtime is not None:
@@ -273,10 +330,157 @@ class RunContext:
                 CreateSkillRuntime(
                     store=runtime.store,
                     executor=runtime.executor,
-                    workspace=SubagentStagingWorkspace(child.work_dir.root, subagent_id),
+                    workspace=SubagentStagingWorkspace(self._work_dir.root, subagent_id),
                 )
             )
         return child
+
+    def source_asset_workspace(self) -> SubagentStagingWorkspace:
+        """Return the task or child-owned SourceAsset staging boundary."""
+
+        if self._source_asset_workspace is None:
+            from app.subagents.staging import SubagentStagingWorkspace
+
+            if self.subagent_id is None:
+                task_root = self._work_dir.root
+                workspace_id = generate_prefixed_uuid("run_staging")
+            else:
+                if self._staging_task_root is None:
+                    raise RuntimeError("child staging task root is not available")
+                task_root = self._staging_task_root
+                workspace_id = self.subagent_id
+            self._source_asset_workspace = SubagentStagingWorkspace(
+                task_root,
+                workspace_id,
+            )
+        return self._source_asset_workspace
+
+    def stage_source_asset(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        source_id: str,
+        successful_attempt_id: str,
+        data_level: DataLevel,
+        media_type: str,
+    ) -> SourceAsset:
+        """Stage, validate, commit, and collect one SourceAsset."""
+
+        workspace = self.source_asset_workspace()
+        asset = workspace.stage_bytes(
+            content=content,
+            filename=filename,
+            source_id=source_id,
+            successful_attempt_id=successful_attempt_id,
+            data_level=data_level,
+            media_type=media_type,
+        )
+        workspace.validate_source_asset(asset)
+        committed = workspace.commit_source_asset(asset)
+        self.record_source_asset_id(committed.asset_id)
+        return committed
+
+    def commit_staged_source_asset(self, asset: SourceAsset) -> SourceAsset:
+        """Validate and commit an asset already staged in this Run boundary."""
+
+        workspace = self.source_asset_workspace()
+        workspace.validate_source_asset(asset)
+        committed = workspace.commit_source_asset(asset)
+        self.record_source_asset_id(committed.asset_id)
+        return committed
+
+    def source_asset_path(self, asset: SourceAsset) -> Path:
+        """Return the task-local path for a committed SourceAsset."""
+
+        return self.source_asset_workspace().task_root / asset.relative_path
+
+    @property
+    def source_asset_ids(self) -> list[str]:
+        """Return bounded SourceAsset IDs collected by this child context."""
+
+        return list(self._source_asset_ids)
+
+    @property
+    def recipe_id(self) -> str | None:
+        """Return the latest WorkflowRecipe ID collected by this child."""
+
+        return self._recipe_id
+
+    @property
+    def child_warnings(self) -> list[str]:
+        """Return bounded warning strings for the child result contract."""
+
+        return list(self._child_warnings)
+
+    def record_source_asset_id(self, asset_id: str) -> None:
+        """Record one non-empty SourceAsset ID without duplicating it."""
+
+        normalized = asset_id.strip()
+        if not normalized:
+            raise ValueError("source asset ID must not be blank")
+        if normalized not in self._source_asset_ids:
+            self._source_asset_ids.append(normalized)
+
+    def record_recipe(self, recipe_id: str) -> None:
+        """Record the child WorkflowRecipe ID without accepting blanks."""
+
+        normalized = recipe_id.strip()
+        if not normalized:
+            raise ValueError("recipe ID must not be blank")
+        self._recipe_id = normalized
+
+    def record_warning(self, message: str) -> None:
+        """Record one bounded child warning for ``SubagentResult``."""
+
+        normalized = message.strip()
+        if normalized and normalized not in self._child_warnings:
+            self._child_warnings.append(normalized)
+
+    async def request_subagent_input(
+        self,
+        *,
+        summary: str,
+        prompt_kind: str,
+        detail: dict[str, object] | None = None,
+    ) -> SubagentInputResumedPayload:
+        """Pause one child for approval without changing the parent Run state."""
+
+        if self.subagent_id is None or self.managed_run_id is None:
+            raise RuntimeError("subagent input requires a managed child context")
+        runtime = self.subagent_runtime
+        if runtime.input_broker is None:
+            raise RuntimeError("subagent input broker is unavailable")
+        request_id = generate_prefixed_uuid("subagent_input")
+        required = SubagentInputRequiredPayload(
+            subagent_id=self.subagent_id,
+            request_id=request_id,
+            summary=summary,
+            prompt_kind=prompt_kind,
+            detail=detail or {},
+        )
+        event_kwargs = {
+            "task_id": self.task_id,
+            "run_id": self.managed_run_id,
+            "subagent_id": self.subagent_id,
+            "parent_tool_call_id": f"subagent:{self.subagent_id}",
+        }
+        await runtime.event_sink.emit(payload=required, **event_kwargs)
+        resumed = await runtime.input_broker.request(
+            task_id=self.task_id,
+            run_id=self.managed_run_id,
+            payload=required,
+        )
+        await runtime.event_sink.emit(
+            payload=SubagentInputResumedPayload(
+                subagent_id=resumed.subagent_id,
+                request_id=resumed.request_id,
+                decision=resumed.decision,
+                detail=_redact_input_detail(resumed.detail),
+            ),
+            **event_kwargs,
+        )
+        return resumed
 
     def record_delegated_subagents(self, subagent_ids: list[str]) -> None:
         """Record handles this parent Run may later retrieve or cancel."""
@@ -295,6 +499,12 @@ class RunContext:
 
         if self._crawler_facade is None:
             raise RuntimeError("crawler facade is not available")
+        return self._crawler_facade
+
+    @property
+    def crawler_facade_or_none(self) -> CrawlerFacade | None:
+        """Return the bound crawler for legacy isolated contexts, if any."""
+
         return self._crawler_facade
 
     @property

@@ -71,9 +71,48 @@ async def test_child_runner_uses_new_context_session_and_turn_cap(
     assert result.status is SubagentStatus.COMPLETED
     assert observed["context"] is not parent
     assert observed["context"].task_id == parent.task_id
-    assert observed["context"].work_dir.root == parent.work_dir.root
+    assert observed["context"].work_dir.root == (
+        parent.work_dir.staging / "subagents" / "child-1"
+    )
     assert observed["max_turns"] == 10
     assert observed["session"].session_id == "subagent:child-1"
+
+
+@pytest.mark.asyncio
+async def test_child_runner_returns_collected_source_recipe_and_warning_metadata(
+    tmp_path,
+    runnable_agent_model_settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.subagents.agents as agents_module
+    from app.subagents.agents import SourceResearchAgentRunner
+
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+    runner = SourceResearchAgentRunner(parent, ChildAgentFactory())
+
+    async def fake_run(agent, prompt, *, context, session, max_turns):
+        del agent, prompt, session, max_turns
+        context.record_source_asset_id("asset_child")
+        context.record_recipe("recipe_child")
+        context.record_warning("bounded warning")
+        return SimpleNamespace(final_output="verified source")
+
+    monkeypatch.setattr(agents_module.Runner, "run", fake_run)
+    result = await runner.run(
+        SubagentRequest(
+            agent_type=SubagentType.SOURCE_RESEARCH,
+            objective="Find GEO data",
+            domain="geo",
+            capability="source_research",
+        ),
+        subagent_id="child-1",
+        task_id="parent",
+        run_id="run-1",
+    )
+
+    assert result.source_asset_ids == ["asset_child"]
+    assert result.recipe_id == "recipe_child"
+    assert result.warnings == ["bounded warning"]
 
 
 def test_agent_executor_binds_children_after_parent_model_is_frozen(tmp_path) -> None:

@@ -59,6 +59,7 @@ from app.skills.catalog import SkillCatalog
 from app.subagents.agents import ManagedChildAgentRunner
 
 if TYPE_CHECKING:
+    from app.subagents.input_broker import SubagentInputBroker
     from app.subagents.supervisor import SubagentEventSink, SubagentSupervisor
 
 if TYPE_CHECKING:
@@ -474,12 +475,14 @@ class AgentRunExecutor:
         compactor=None,
         subagent_supervisor: SubagentSupervisor | None = None,
         subagent_event_sink: SubagentEventSink | None = None,
+        subagent_input_broker: SubagentInputBroker | None = None,
     ) -> None:
         self._repository = repository
         self.skill_catalog = skill_catalog
         self._compactor = compactor or ConversationCompactor(repository)
         self._subagent_supervisor = subagent_supervisor
         self._subagent_event_sink = subagent_event_sink
+        self._subagent_input_broker = subagent_input_broker
 
     def _build(self, execution) -> AgentBuild:
         """Build the Agent for this executor (overridable by subclasses)."""
@@ -500,11 +503,13 @@ class AgentRunExecutor:
         *,
         supervisor: SubagentSupervisor,
         event_sink: SubagentEventSink,
+        input_broker: SubagentInputBroker | None = None,
     ) -> None:
         """Receive the lifecycle-owned supervisor before any managed Run starts."""
 
         self._subagent_supervisor = supervisor
         self._subagent_event_sink = event_sink
+        self._subagent_input_broker = input_broker
 
     def _bind_subagent_runtime(self, execution) -> None:
         """Attach this Run's child dispatcher without sharing parent SDK state."""
@@ -526,6 +531,7 @@ class AgentRunExecutor:
             supervisor=self._subagent_supervisor,
             runner=ManagedChildAgentRunner(context, self.skill_catalog),
             event_sink=self._subagent_event_sink,
+            input_broker=self._subagent_input_broker,
         )
 
     @staticmethod
@@ -1195,16 +1201,19 @@ class ModeDispatchRunExecutor:
         *,
         supervisor: SubagentSupervisor,
         event_sink: SubagentEventSink,
+        input_broker: SubagentInputBroker | None = None,
     ) -> None:
         """Forward lifecycle-owned child services to model-backed executors."""
 
         self.agent_executor.attach_subagent_runtime(
             supervisor=supervisor,
             event_sink=event_sink,
+            input_broker=input_broker,
         )
         self.import_executor.attach_subagent_runtime(
             supervisor=supervisor,
             event_sink=event_sink,
+            input_broker=input_broker,
         )
 
 

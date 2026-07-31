@@ -37,7 +37,6 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.subagents.staging import SubagentStagingWorkspace
 from app.tools.crawler import BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -100,10 +99,7 @@ async def _do_capture(
         accession = validated_label or generate_prefixed_uuid("capture")
         source_id = make_source_id(Database.BROWSER, accession, url)
         attempt_id = generate_prefixed_uuid("attempt")
-        workspace = SubagentStagingWorkspace(
-            run_ctx.work_dir.root,
-            generate_prefixed_uuid("visual_capture"),
-        )
+        workspace = run_ctx.source_asset_workspace()
         result = await run_ctx.crawler_facade.screenshot(
             url,
             workspace=workspace,
@@ -143,6 +139,7 @@ async def _do_capture(
             workspace.commit_source_asset,
             result.source_asset,
         )
+        run_ctx.record_source_asset_id(committed.asset_id)
         dest_path = workspace.task_root / committed.relative_path
         sha256 = committed.sha256
         size_bytes = committed.size_bytes
@@ -177,6 +174,7 @@ async def _do_capture(
             workspace.commit_source_asset,
             metadata_asset,
         )
+        run_ctx.record_source_asset_id(committed_metadata.asset_id)
         meta_path = workspace.task_root / committed_metadata.relative_path
         if size_bytes > _MAX_SCREENSHOT_BYTES:
             run_ctx.add_warning(

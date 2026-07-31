@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -10,7 +11,7 @@ import app.skills.builtin.discovery.pubmed as pubmed_module
 import httpx
 import pytest
 from app.agent_loop.context import ProgressEmitter, RunContext
-from app.domain.contracts import StageName
+from app.domain.contracts import Database, DataLevel, SourceRecord, StageName
 from app.integrations.ncbi.factory import NcbiServices
 from app.skills.builtin.acquisition.geo import (
     describe_geo_adapter,
@@ -207,6 +208,67 @@ async def test_download_geo_returns_compressed_repository_processed_asset(
     assert downloaded.read_bytes() == compressed
     assert not downloaded.with_suffix("").exists()
     assert context.raw_assets == [str(downloaded)]
+
+
+@pytest.mark.asyncio
+async def test_child_download_geo_commits_asset_outside_child_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = run_context(tmp_path)
+    child = parent.create_child_context("child-geo")
+    workspace = child.source_asset_workspace()
+    asset = workspace.stage_bytes(
+        content=b"child geo bytes",
+        filename="child.geo",
+        source_id="src_geo_child",
+        successful_attempt_id="attempt_geo_child",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+        media_type="application/octet-stream",
+    )
+    source = SourceRecord(
+        source_id="src_geo_child",
+        database=Database.GEO,
+        accession="GSE_CHILD",
+        url="https://ftp.ncbi.nlm.nih.gov/child.geo",
+        title="Child GEO",
+        retrieved_at=datetime.now(UTC),
+    )
+
+    async def fake_resolve(*_args: object, **_kwargs: object) -> tuple[SourceRecord, str, DataLevel]:
+        return source, "child.geo", DataLevel.REPOSITORY_PROCESSED
+
+    async def fake_acquire_source(**_kwargs: object) -> object:
+        return type(
+            "AcquisitionResultStub",
+            (),
+            {
+                "asset": asset,
+                "attempt": type(
+                    "AttemptStub",
+                    (),
+                    {"model_dump": lambda self, mode: {"status": "succeeded"}},
+                )(),
+            },
+        )()
+
+    monkeypatch.setattr(geo_module, "_resolve_download", fake_resolve)
+    monkeypatch.setattr(geo_module, "acquire_source", fake_acquire_source)
+
+    payload = json.loads(
+        await download_geo_adapter(
+            child,
+            "GSE_CHILD",
+            "suppl",
+            services=type("Services", (), {"cache": None, "http": None})(),
+        )
+    )
+
+    committed = parent.work_dir.root / payload["asset"]["relative_path"]
+    assert committed.exists()
+    assert committed.read_bytes() == b"child geo bytes"
+    assert not (child.work_dir.root / payload["asset"]["relative_path"]).exists()
+    assert child.source_asset_ids == [asset.asset_id]
 
 
 @pytest.mark.asyncio

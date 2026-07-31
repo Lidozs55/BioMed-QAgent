@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from app.skills.builtin.acquisition.pdb import (
     download_pdb,
     search_pdb,
 )
+from app.tools.crawler import DownloadResult, FetchResult
 
 
 def _make_ctx(task_id: str = "test_pdb") -> ToolContext:
@@ -123,6 +125,98 @@ def test_search_pdb_success() -> None:
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
     assert rc.query_log[0]["status"] == "success"
+
+
+def test_managed_search_pdb_uses_bound_crawler_facade(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class ManagedFacade:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def api_request(
+            self,
+            url: str,
+            *,
+            method: str = "GET",
+            json_body: dict[str, object] | None = None,
+        ) -> FetchResult:
+            del json_body
+            self.calls.append((method, url))
+            return FetchResult(
+                url=url,
+                content=json.dumps({"result_set": []}),
+                status_code=200,
+                elapsed_ms=1,
+                method_used="api",
+            )
+
+    facade = ManagedFacade()
+    context = RunContext(
+        task_id="managed_pdb",
+        base_dir=tmp_path,
+        subagent_id="child-pdb",
+    )
+    context.bind_crawler_facade(facade)
+    ctx = ToolContext(
+        context=context,
+        tool_name="search_pdb",
+        tool_call_id="call-pdb",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.pdb._post_json",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(
+        search_pdb.on_invoke_tool(ctx, json.dumps({"term": "BRCA"}))
+    )
+
+    assert json.loads(result)["pdb_ids"] == []
+    assert facade.calls[0][0] == "POST"
+
+
+def test_child_download_pdb_commits_source_asset(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class ManagedFacade:
+        async def download(self, url: str) -> DownloadResult:
+            return DownloadResult(
+                url=url,
+                content=b"ATOM child structure",
+                status_code=200,
+                elapsed_ms=1,
+            )
+
+    parent = RunContext(task_id="managed_pdb_download", base_dir=tmp_path)
+    parent.bind_crawler_facade(ManagedFacade())
+    child = parent.create_child_context("child-pdb")
+    context = ToolContext(
+        context=child,
+        tool_name="download_pdb",
+        tool_call_id="call-pdb-download",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.pdb._download",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(
+        download_pdb.on_invoke_tool(
+            context,
+            json.dumps({"pdb_id": "1cbs", "file_type": "pdb"}),
+        )
+    )
+
+    data = json.loads(result)
+    committed = Path(data["local_files"][0])
+    assert committed.is_relative_to(parent.work_dir.source_assets)
+    assert committed.read_bytes() == b"ATOM child structure"
+    assert child.source_asset_ids
 
 
 def test_search_pdb_network_error_returns_error_json() -> None:
