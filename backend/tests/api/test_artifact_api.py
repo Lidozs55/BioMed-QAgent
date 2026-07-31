@@ -170,7 +170,7 @@ async def test_artifact_api_requires_authoritative_task_and_handles_no_manifest(
     assert orphan_list.status_code == orphan_download.status_code == 404
     assert orphan_list.json() == orphan_download.json() == {"detail": "Task not found"}
     assert empty_list.status_code == 200
-    assert empty_list.json() == {"artifacts": []}
+    assert empty_list.json() == {"artifacts": [], "degraded": False}
     assert empty_download.status_code == 404
     assert empty_download.json() == {"detail": "Artifact not found"}
 
@@ -213,7 +213,7 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
         )
 
     assert artifact_list.status_code == 200
-    assert artifact_list.json() == {"artifacts": []}
+    assert artifact_list.json() == {"artifacts": [], "degraded": False}
     assert artifact_download.status_code == 404
     assert artifact_download.json() == {"detail": "Artifact not found"}
 

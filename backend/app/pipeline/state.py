@@ -5,6 +5,7 @@ import contextlib
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,8 @@ from app.domain.contracts import (
     StageName,
     TaskState,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StageOutputFile(ContractModel):
@@ -225,7 +228,13 @@ def load_stage_output(
             if _sha256_file(resolved) != file.sha256:
                 return None
         return expected_type.model_validate(envelope.output), envelope.files
-    except Exception:
+    except Exception as error:
+        logger.warning(
+            "load_stage_output failed for stage=%s attempt=%s: %s",
+            stage.value,
+            stage_attempt_id,
+            error,
+        )
         return None
 
 

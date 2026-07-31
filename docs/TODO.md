@@ -270,19 +270,19 @@
 
 ### 4.1 静默吞错修复
 
-- [x] **P0** `runtime/manager.py` `_commit_task` 失败已记录 `logger.error` 并传播为 `RunFailedPayload`（不再静默吞错）
-- [ ] **P0** `agent_loop/runner.py:324` 限制 `except BaseException` 范围到 `except Exception`
+- [x] **P0** `runtime/manager.py:331-334` `_commit_task` 失败增加 logger.error（当前 `except Exception: pass`）——2026-07-31 重构核对：`_abort_completion_once` 已带 `logger.error`（manager.py:340-344）
+- [x] **P0** `agent_loop/runner.py:324` 限制 `except BaseException` 范围到 `except Exception`——2026-07-31 重构执行（现 337 行 `emit_task.result()` 静默吞错收敛；其余 `except BaseException` 均为 abort 回退 + re-raise 模式，保留）
 
 ### 4.2 Pipeline artifact 降级路径
 
-- [x] **P1** 指纹未变（digest 命中 checkpoint 复用）时仍发射 `artifact_produced`，前端 HTTP 拉取路径可用（原指纹逻辑已重构，见 `_finalize_completed`）
-- [ ] **P1** `routes.py:548-549` `.runtime-publication.json` 缺失时回退到 manifest 文件本身（加 `degraded=true` 标记）
+- [x] **P1** 指纹未变（digest 命中 checkpoint 复用）时仍发射 `artifact_produced`，前端 HTTP 拉取路径可用——2026-07-31 核对：`pipeline/runner.py:_finalize_completed` 无条件为每个 artifact 发射 `artifact_produced`，原指纹跳过逻辑已移除
+- [x] **P1** `routes.py:548-549` `.runtime-publication.json` 缺失时回退到 manifest 文件本身（加 `degraded=true` 标记）——2026-07-31 执行：`_load_validated_manifest` 返回 `(manifest, artifacts_dir, degraded)`，marker 缺失且存在 ≥1 个 COMPLETED run 时降级返回；`list_artifacts` 响应新增 `degraded` 字段，`get_artifact_file` 忽略标记
 
 ### 4.3 错误日志增强
 
-- [ ] **P1** `pipeline/state.py:228` `load_stage_output` 异常返回 None 时增加 `logger.warning`
-- [ ] **P1** `pipeline/runner.py:617` `_collect_stage_output_files` 异常时增加警告日志
-- [ ] **P1** `api/ws_events.py:362, 375, 381` WebSocket 错误路径增加 WARN 日志
+- [x] **P1** `pipeline/state.py:228` `load_stage_output` 异常返回 None 时增加 `logger.warning`——2026-07-31 执行
+- [x] **P1** `pipeline/runner.py:617` `_collect_stage_output_files` 异常时增加警告日志——2026-07-31 执行（恢复路径 658 行 `logger.warning`，含 stage/attempt 上下文）
+- [x] **P1** `api/ws_events.py:362, 375, 381` WebSocket 错误路径增加 WARN 日志——2026-07-31 执行（`_send_internal_error_and_close` 错误帧发送/关闭失败；`_close_websocket` best-effort 关闭保持静默避免正常 shutdown 噪音）
 
 ### 4.4 结构化日志
 
@@ -299,11 +299,11 @@
 
 ### 5.1 消除死代码与重复
 
-- [x] **P1** 删除 `api/settings_router.py`（安全测试迁移至 `test_model_preview_security.py`）
-- [x] **P1** 前端删除 `agentSelectors.ts` 未使用导出（`selectActiveRuns` 等）
-- [x] **P1** 提取共享 `write_csv`（实际落在 `pipeline/stages/base.py`，`artifact_build.py` + `validation.py` 复用）
-- [x] **P2** 前端提取 `errorMessage` 到 `lib/utils.ts`（原 `errorDescription`，11+ 处复用）
-- [x] **P2** 前端统一 `formatSize` 到 `fileUtils.ts`（3 份不一致的变体）
+- [x] **P1** 删除 `api/settings_router.py`（仅被 `test_settings_api.py` 引用，已迁移后可移除）——2026-07-31 重构执行：安全测试迁移至 `test_model_preview_security.py`/`test_network_safety.py` 后删除
+- [x] **P1** 前端删除 `agentSelectors.ts` 未使用导出（`selectActiveRuns` 等）——2026-07-31 重构执行
+- [x] **P1** 提取共享 `_write_csv` 到 `tools/io.py`（`artifact_build.py` + `validation.py` 各一份）——2026-07-31 重构执行：合并为 `pipeline/stages/base.py:write_csv`（两文件均已导入 base，未引入新依赖）
+- [x] **P2** 前端提取 `errorDescription` 到 `lib/utils.ts`（5 处重复）——2026-07-31 重构执行：`utils.ts:errorMessage`，7 处调用点统一
+- [x] **P2** 前端统一 `formatSize` 到 `fileUtils.ts`（3 份不一致的变体）——2026-07-31 核对：`fileUtils.ts:formatSize` 已统一，`ArtifactSheet.tsx`/`ResultsViewer.tsx` 已迁移；本次将 `AgentComposer.tsx` 残留本地 `formatFileSize`（KiB/MiB 变体）一并迁移至 `formatSize`
 - [ ] **P2** 修正 `tools/io.py` → `agent_loop/context.py` 循环依赖
 
 ### 5.2 并发与资源管理

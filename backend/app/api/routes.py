@@ -781,8 +781,8 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
     snapshot = await _require_snapshot(repository, task_id)
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
-        return {"artifacts": []}
-    manifest, artifacts_dir = loaded
+        return {"artifacts": [], "degraded": False}
+    manifest, artifacts_dir, degraded = loaded
     manifest_path = artifacts_dir / "run_manifest.json"
     artifacts = [
         {
@@ -811,7 +811,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 "media_type": entry.media_type,
             }
         )
-    return {"artifacts": artifacts}
+    return {"artifacts": artifacts, "degraded": degraded}
 
 
 @router.get("/tasks/{task_id}/artifacts/{artifact_id}")
@@ -825,7 +825,7 @@ async def get_artifact_file(
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    manifest, artifacts_dir = loaded
+    manifest, artifacts_dir, _degraded = loaded
     if artifact_id == "run_manifest":
         file_path = artifacts_dir / "run_manifest.json"
         media_type = "application/json"
@@ -872,13 +872,20 @@ def _load_validated_manifest(
     tasks_dir: Path,
     task_id: str,
     snapshot: TaskSnapshot,
-) -> tuple[RunManifest, Path] | None:
+) -> tuple[RunManifest, Path, bool] | None:
+    """Load a validated manifest plus its artifacts directory.
+
+    Returns ``(manifest, artifacts_dir, degraded)`` where ``degraded`` is
+    True when the runtime publication marker is missing and the manifest is
+    trusted on its own (older pipeline output or an interrupted marker write).
+    Returns ``None`` when there is no validated manifest to expose.
+    """
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
         raise HTTPException(status_code=404, detail="Task not found")
     artifacts_dir = (tasks_dir / task_id / "artifacts").resolve()
     manifest_path = artifacts_dir / "run_manifest.json"
     marker_path = artifacts_dir / ".runtime-publication.json"
-    if not manifest_path.is_file() or not marker_path.is_file():
+    if not manifest_path.is_file():
         return None
     try:
         manifest = RunManifest.model_validate_json(manifest_path.read_text("utf-8"))
@@ -893,6 +900,16 @@ def _load_validated_manifest(
         raise HTTPException(status_code=409, detail="Artifacts are not validated")
     if manifest.task_id != task_id:
         raise HTTPException(status_code=409, detail="Artifact manifest is invalid")
+    if not marker_path.is_file():
+        # 无 marker：降级为仅信任 manifest（旧产物或 marker 写入中断）。
+        # 仍然要求 snapshot 中存在至少一个 COMPLETED run，避免把
+        # 尚未完成的任务目录里的残留 manifest 误公开。
+        completed_runs = [
+            run for run in snapshot.runs if run.status is RunStatus.COMPLETED
+        ]
+        if not completed_runs:
+            return None
+        return manifest, artifacts_dir, True
     try:
         marker = json.loads(marker_path.read_text("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
@@ -934,4 +951,4 @@ def _load_validated_manifest(
             status_code=409,
             detail="Artifact publication marker does not match manifest",
         )
-    return manifest, artifacts_dir
+    return manifest, artifacts_dir, False

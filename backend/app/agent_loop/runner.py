@@ -334,7 +334,7 @@ class _AssistantTextBuffer:
             if not emit_task.cancelled():
                 try:
                     emit_task.result()
-                except BaseException:
+                except Exception:
                     pass
                 else:
                     self._clear_confirmed_batch()

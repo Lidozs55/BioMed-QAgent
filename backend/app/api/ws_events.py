@@ -460,10 +460,16 @@ async def _send_internal_error_and_close(
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            logger.warning(
+                "failed to send internal error frame over WebSocket",
+                exc_info=True,
+            )
         try:
             await websocket.close(code=1011, reason="internal error")
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            logger.warning(
+                "failed to close WebSocket after internal error",
+                exc_info=True,
+            )

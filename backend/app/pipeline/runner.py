@@ -656,6 +656,12 @@ class PipelineRunner:
                             stage_outputs,
                         )
                     except Exception:
+                        logger.warning(
+                            "collect stage output files failed for stage=%s attempt=%s",
+                            stage.value,
+                            reusable.stage_attempt_id,
+                            exc_info=True,
+                        )
                         expected_files = None
                     if expected_files != recorded_files:
                         loaded = None
