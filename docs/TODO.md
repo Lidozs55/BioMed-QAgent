@@ -63,7 +63,7 @@
 
 - [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression、GDC project/data_type 与 Reactome 显式单 pathway 查询；Reactome 不支持多 pathway 或混合来源
 - [x] **P0** Discovery 阶段对 Xena gene-expression、GDC fixture/显式选择及 Reactome 显式单 pathway 产出统一 `SourceRecord`；Reactome 与其它数据库或多个 pathway 选择明确拒绝
-- [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库（artifact_build 写入全部 discovery.sources，含 Xena/GDC/Reactome 行）
+- [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库——2026-07-31 核对：各路由分支均已覆盖——pubmed+geo 双 source；GDC/Xena/Reactome 单源各产出唯一 SourceRecord（artifact_build 写入全部 `discovery.sources`）；pubmed-only 时 GEO 作为隐式数据集来源保留。新增 `tests/pipeline/test_discovery_source_coverage.py` 契约测试锁定各分支 source 数据库集合
 - [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
 
 #### 1.5.2 Acquisition 扩展（P0）
