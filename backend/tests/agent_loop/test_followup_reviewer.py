@@ -188,9 +188,10 @@ async def test_review_query_strategy_extractor_writes_review_to_context(
 
 
 @pytest.mark.asyncio
-async def test_review_extractor_appends_to_existing_summary() -> None:
+async def test_review_extractor_preserves_existing_summary() -> None:
     """When query_log_summary already has content (e.g. from a previous
-    compress_query_log run), the review must be appended, not replace."""
+    compress_query_log run), the review must not replace the summary —
+    it appends (rolling merge keeps the compression prefix)."""
     from agents.result import RunResult
     from app.agent_loop.reviewer import _review_extractor
 
@@ -210,6 +211,90 @@ async def test_review_extractor_appends_to_existing_summary() -> None:
         "new review must be appended"
     )
     assert "新审查意见" in ctx.query_log_summary
+
+
+@pytest.mark.asyncio
+async def test_review_extractor_rolls_reviews_keeping_latest() -> None:
+    """Second review replaces the first (rolling merge, docs/REVIEW_2026-07-31
+    §4.3 C2): the compression summary prefix is preserved but old review
+    blocks are dropped so growth stays bounded."""
+    from agents.result import RunResult
+    from app.agent_loop.reviewer import _review_extractor
+
+    ctx = RunContext(task_id="test_rolling")
+    ctx.query_log_summary = "压缩摘要：早期查询记录"
+
+    async def run_review(review_text: str) -> None:
+        fake_result = AsyncMock(spec=RunResult)
+        fake_result.context_wrapper = RunContextWrapper(ctx)
+        fake_result.final_output = review_text
+        await _review_extractor(fake_result)
+
+    await run_review("「策略审查：」第一轮意见")
+    assert "第一轮意见" in ctx.query_log_summary
+    await run_review("「策略审查：」第二轮意见")
+
+    # 滚动合并：只保留最新审查，旧的被替换
+    assert "第二轮意见" in ctx.query_log_summary
+    assert "第一轮意见" not in ctx.query_log_summary, (
+        "old review must be replaced, not appended"
+    )
+    # 压缩摘要前缀保留
+    assert "压缩摘要：早期查询记录" in ctx.query_log_summary
+    # 只出现一个审查标记
+    assert ctx.query_log_summary.count("[ReviewerAgent 审查]") == 1
+
+
+@pytest.mark.asyncio
+async def test_review_extractor_keeps_compression_block_after_review() -> None:
+    """Interleaved flow (review → compress → review): the [后续摘要]
+    compression block appended after the first review must survive the
+    second review's rolling merge (docs/REVIEW_2026-07-31 §4.3 C2)."""
+    from agents.result import RunResult
+    from app.agent_loop.reviewer import _review_extractor
+
+    ctx = RunContext(task_id="test_interleaved")
+    ctx.query_log_summary = (
+        "压缩摘要：早期查询记录\n\n"
+        "[ReviewerAgent 审查]\n第一轮意见\n\n"
+        "[后续摘要]\n第二轮压缩摘要"
+    )
+
+    fake_result = AsyncMock(spec=RunResult)
+    fake_result.context_wrapper = RunContextWrapper(ctx)
+    fake_result.final_output = "「策略审查：」第二轮意见"
+    await _review_extractor(fake_result)
+
+    # 最新审查写入
+    assert "第二轮意见" in ctx.query_log_summary
+    assert "第一轮意见" not in ctx.query_log_summary
+    # 压缩摘要前缀 + 交错 [后续摘要] 块都保留
+    assert "压缩摘要：早期查询记录" in ctx.query_log_summary
+    assert "第二轮压缩摘要" in ctx.query_log_summary
+    # 只出现一个审查标记
+    assert ctx.query_log_summary.count("[ReviewerAgent 审查]") == 1
+
+
+@pytest.mark.asyncio
+async def test_review_extractor_does_not_accumulate_review_only_summary() -> None:
+    """When the summary contains ONLY an old review (no compression prefix),
+    a second review must replace it — the old review text must not be
+    preserved as a spurious prefix and accumulate across review→review."""
+    from agents.result import RunResult
+    from app.agent_loop.reviewer import _review_extractor
+
+    ctx = RunContext(task_id="test_review_only")
+    ctx.query_log_summary = "[ReviewerAgent 审查]\n第一轮意见"
+
+    fake_result = AsyncMock(spec=RunResult)
+    fake_result.context_wrapper = RunContextWrapper(ctx)
+    fake_result.final_output = "「策略审查：」第二轮意见"
+    await _review_extractor(fake_result)
+
+    # 只保留最新审查，旧审查文本不残留
+    assert "第二轮意见" in ctx.query_log_summary
+    assert "第一轮意见" not in ctx.query_log_summary
+    assert ctx.query_log_summary.count("[ReviewerAgent 审查]") == 1
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from app.model_config.context_budget import (
     normalize_provider_origin,
     resolve_context_budget,
 )
+from app.model_config.schemas import RuntimeLimitsSettings
 
 
 class AdvancedModelSettings(BaseModel):
@@ -42,6 +43,7 @@ class ModelConfiguration(BaseModel):
     safety_reserve_ratio: float = Field(default=0.05, ge=0, le=0.25)
     compaction_trigger_ratio: float = Field(default=0.85, gt=0, lt=1)
     compaction_target_ratio: float = Field(default=0.60, gt=0, lt=1)
+    runtime_limits: RuntimeLimitsSettings = RuntimeLimitsSettings()
     advanced: AdvancedModelSettings = AdvancedModelSettings()
 
 

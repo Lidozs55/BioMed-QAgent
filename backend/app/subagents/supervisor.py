@@ -90,7 +90,7 @@ class SubagentSupervisor:
         global_limit: int = 4,
         per_run_limit: int = 3,
         batch_limit: int = 8,
-        timeout_seconds: float = 900,
+        timeout_seconds: float = 3600,
         event_timeout_seconds: float = 30,
         input_broker: SubagentInputBroker | None = None,
     ) -> None:

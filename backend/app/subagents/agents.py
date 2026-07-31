@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, Runner
+from agents import Agent, RunContextWrapper, Runner
+from agents.exceptions import MaxTurnsExceeded
 
 from app.agent_loop.agent import build_sdk_model_settings
 from app.agent_loop.context import RunContext
@@ -25,7 +27,41 @@ from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
 from app.skills.registry import SkillCategory
 
-CHILD_AGENT_MAX_TURNS = 10
+CHILD_AGENT_MAX_TURNS = 30
+
+
+def resolve_child_agent_max_turns(
+    model_settings: RunModelSettings | None = None,
+) -> int:
+    """Return the configured child-agent max_turns (default 30)."""
+
+    from app.model_config import RuntimeLimitsSettings
+
+    if model_settings is not None:
+        return model_settings.runtime_limits.child_agent_max_turns
+    return RuntimeLimitsSettings().child_agent_max_turns
+
+
+def _make_child_instructions(
+    base: str,
+) -> Callable[[RunContextWrapper[RunContext], Agent[RunContext]], Awaitable[str]]:
+    """构造子代理动态 instructions，注入父任务已完成检索清单。
+
+    Reuses the main-agent formatter (docs/REVIEW_2026-07-31 §4.3 C1): the
+    child's seeded query_log + query_log_summary render as a
+    "已完成检索（勿重复）" section so a re-dispatched child does not repeat
+    the parent's searches.
+    """
+
+    from app.agent_loop.agent import resolve_agent_instructions
+
+    async def _fn(
+        ctx: RunContextWrapper[RunContext],
+        _agent: Agent[RunContext],
+    ) -> str:
+        return resolve_agent_instructions(base, ctx.context)
+
+    return _fn
 
 _SOURCE_RESEARCH_INSTRUCTIONS = """\
 You are a bounded source-research child agent. Research only the delegated
@@ -78,7 +114,7 @@ class ChildAgentFactory:
         find_skill, invoke_skill = build_skill_gateway(self._source_catalog())
         return Agent(
             name="SourceResearchAgent",
-            instructions=_SOURCE_RESEARCH_INSTRUCTIONS,
+            instructions=_make_child_instructions(_SOURCE_RESEARCH_INSTRUCTIONS),
             tools=[find_skill, invoke_skill],
             model=get_model(self._model_settings),
             model_settings=build_sdk_model_settings(self._model_settings),
@@ -88,11 +124,12 @@ class ChildAgentFactory:
         find_skill, invoke_skill = build_skill_gateway(self._builder_catalog())
         return Agent(
             name="SkillBuilderAgent",
-            instructions=_SKILL_BUILDER_INSTRUCTIONS,
+            instructions=_make_child_instructions(_SKILL_BUILDER_INSTRUCTIONS),
             tools=[find_skill, invoke_skill, create_skill_tool],
             model=get_model(self._model_settings),
             model_settings=build_sdk_model_settings(self._model_settings),
         )
+
 
     def _source_catalog(self) -> SkillCatalog:
         """Research children may discover sources but never create recipes."""
@@ -130,6 +167,8 @@ class _ChildAgentRunner:
         child_context = self._parent_context.create_child_context(
             subagent_id,
             preferred_sources=([request.target_source] if request.target_source else None),
+            parent_query_log=self._parent_context.query_log,
+            parent_query_log_summary=self._parent_context.query_log_summary,
         )
         session = _ChildSession(session_id=f"subagent:{subagent_id}")
         model = agent.model
@@ -139,7 +178,23 @@ class _ChildAgentRunner:
                 request.objective,
                 context=child_context,
                 session=session,
-                max_turns=CHILD_AGENT_MAX_TURNS,
+                max_turns=resolve_child_agent_max_turns(
+                    self._parent_context.model_settings,
+                ),
+            )
+        except MaxTurnsExceeded as error:
+            # 子代理轮次用尽：与其它失败区分，返回可恢复的
+            # ``MAX_TURNS_EXCEEDED`` 错误码，supervisor/parent 可据此
+            # 决定续派（附 query_log 摘要）而非当作内部错误丢弃。
+            return SubagentResult(
+                subagent_id=subagent_id,
+                status=SubagentStatus.FAILED,
+                summary="Child agent exceeded max_turns",
+                source_asset_ids=child_context.source_asset_ids,
+                recipe_id=child_context.recipe_id,
+                warnings=child_context.child_warnings,
+                error_code=SubagentErrorCode.MAX_TURNS_EXCEEDED,
+                error_message=str(error) or type(error).__name__,
             )
         except asyncio.CancelledError:
             raise

@@ -253,6 +253,7 @@ class UserInputRequiredPayload(ContractModel):
         "plan_confirmation",
         "data_correction",
         "max_turns_reached",
+        "no_progress",
     ]
     summary: str = Field(min_length=1)
     expires_at: datetime | None = None

@@ -465,6 +465,7 @@ def test_subagent_enums_keep_stable_wire_values() -> None:
         "timed_out",
         "cancelled",
         "internal_error",
+        "max_turns_exceeded",
     }
 
 

@@ -89,6 +89,7 @@ class SubagentErrorCode(StrEnum):
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
     INTERNAL_ERROR = "internal_error"
+    MAX_TURNS_EXCEEDED = "max_turns_exceeded"
 
 
 class MessageRole(StrEnum):

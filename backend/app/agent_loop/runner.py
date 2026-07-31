@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -15,7 +17,10 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from app.agent_loop.agent import AGENT_MAX_TURNS, AgentBuild, build_agent
+from app.agent_loop.agent import (
+    AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
+)
+from app.agent_loop.agent import AgentBuild, build_agent, resolve_agent_max_turns
 from app.agent_loop.context import ManagedPipelineBridge, RunContext
 from app.agent_loop.import_agent import (
     ATTACHMENT_PARSING_MAX_TURNS,
@@ -47,6 +52,7 @@ from app.domain.contracts import (
     build_event,
 )
 from app.domain.contracts.runtime import validate_task_databases
+from app.model_config import RunModelSettings
 from app.model_config.token_estimation import (
     ChatCompletionsPromptShape,
     ChatCompletionsStructuralPolicy,
@@ -72,10 +78,89 @@ ASSISTANT_FLUSH_MAX_BYTES = 1024
 OFFICIAL_FIXTURE_DIR = (
     Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
 )
-#: 单次 Run 最多允许的 max_turns 暂停次数（防止无限续跑）。
+#: 单次 Run 最多允许的 max_turns 暂停次数（默认 3）。
+#: 硬上限 = (max_turns_resume_limit + 1) × agent_max_turns = 4 × 240 = 960 轮。
 MAX_TURNS_RESUME_LIMIT: int = 3
 #: Qwen 偶发返回非 JSON 的 function.arguments 导致 400，最多重试次数。
 QWEN_FUNCTION_ARGS_RETRY_LIMIT: int = 2
+
+
+def resolve_max_turns_resume_limit(
+    model_settings: RunModelSettings | None = None,
+) -> int:
+    """Return the configured max_turns resume limit (default 3)."""
+
+    from app.model_config import RuntimeLimitsSettings
+
+    if model_settings is not None:
+        return model_settings.runtime_limits.max_turns_resume_limit
+    return RuntimeLimitsSettings().max_turns_resume_limit
+
+
+class NoProgressDetected(Exception):
+    """Raised when the no-progress detector fires inside one Agent Run."""
+
+    def __init__(
+        self,
+        *,
+        tool_name: str,
+        args_hash: str,
+        occurrences: int,
+        window_seconds: float,
+    ) -> None:
+        super().__init__(
+            f"no-progress detected: {tool_name} repeated {occurrences}x "
+            f"within {window_seconds:g}s"
+        )
+        self.tool_name = tool_name
+        self.args_hash = args_hash
+        self.occurrences = occurrences
+        self.window_seconds = window_seconds
+
+
+class NoProgressDetector:
+    """Sliding-window detector for dense repeats of the same tool call.
+
+    Semantics (docs/REVIEW_2026-07-31 §7, user-confirmed):
+    - Only ``large-volume short-time dense repeats`` count: the same
+      ``(tool_name, args_hash)`` fingerprint seen >= threshold times within
+      a sliding window triggers.
+    - Long gaps do NOT count: if the gap between two same-fingerprint calls
+      exceeds the window, earlier occurrences are discarded (it may be a
+      re-check of prior work).
+    - A user instruction between two calls resets the count (the calls may be
+      user-directed, not a loop).
+    """
+
+    def __init__(self, *, window_seconds: float, threshold: int) -> None:
+        self._window = window_seconds
+        self._threshold = threshold
+        self._fingerprints: dict[tuple[str, str], list[float]] = {}
+        self._fired: set[tuple[str, str]] = set()
+
+    def reset(self) -> None:
+        """Discard all counts (a user instruction arrived between calls)."""
+
+        self._fingerprints.clear()
+
+    def record(self, tool_name: str, args_hash: str, now: float | None = None) -> int | None:
+        """Record one tool call; return occurrence count when the threshold
+        is crossed, else ``None``. Each fingerprint fires at most once per Run."""
+
+        now = time.monotonic() if now is None else now
+        key = (tool_name, args_hash)
+        if key in self._fired:
+            return None
+        stamps = self._fingerprints.setdefault(key, [])
+        # Drop occurrences outside the sliding window. If the gap since the
+        # last same-fingerprint call exceeds the window, the whole count is
+        # discarded (long interval = plausible re-check, not a dense repeat).
+        stamps[:] = [ts for ts in stamps if now - ts <= self._window]
+        stamps.append(now)
+        if len(stamps) >= self._threshold:
+            self._fired.add(key)
+            return len(stamps)
+        return None
 
 # 流式 JSON 截断配置
 #: 检测到行首 ``{`` 后，缓冲可疑 JSON 的最大字节数。超过则认定非工具参数
@@ -452,6 +537,33 @@ def _extract_tool_arguments(raw_item: object) -> dict[str, Any] | None:
     return _truncate_for_event(parsed)
 
 
+def _tool_args_fingerprint_raw(raw_item: object) -> str:
+    """Canonical fingerprint of the RAW (untruncated) tool arguments.
+
+    Hashing the full parsed JSON before ``_truncate_for_event`` avoids
+    collisions between distinct calls whose arguments share a long prefix
+    (docs/REVIEW_2026-07-31 §4.2 B2 — only identical calls count).
+    """
+
+    args_json = _value(raw_item, "arguments", None)
+    if not args_json:
+        return ""
+    if isinstance(args_json, str):
+        try:
+            parsed = json.loads(args_json)
+        except (json.JSONDecodeError, TypeError):
+            return args_json
+        if isinstance(parsed, dict):
+            return hashlib.sha256(
+                json.dumps(parsed, sort_keys=True, default=str, ensure_ascii=False).encode()
+            ).hexdigest()
+        return args_json
+    if isinstance(args_json, dict):
+        return hashlib.sha256(
+            json.dumps(args_json, sort_keys=True, default=str, ensure_ascii=False).encode()
+        ).hexdigest()
+    return str(args_json)
+
 #: ``ToolCompletedPayload.output`` 字符串化后的最大长度（4KB）。
 TOOL_OUTPUT_MAX_BYTES = 4096
 
@@ -496,7 +608,10 @@ class AgentRunExecutor:
         ``execution`` is optional for backward compatibility; subclasses that
         need run-specific max_turns (e.g. ``ImportRunExecutor``) can read it.
         """
-        return AGENT_MAX_TURNS
+        settings = None
+        if execution is not None:
+            settings = getattr(execution.context, "model_settings", None)
+        return resolve_agent_max_turns(settings)
 
     def attach_subagent_runtime(
         self,
@@ -539,6 +654,8 @@ class AgentRunExecutor:
         execution,
         result,
         text_buffer: _AssistantTextBuffer,
+        *,
+        no_progress_detector: NoProgressDetector | None = None,
     ) -> None:
         iterator = result.stream_events().__aiter__()
         pending_event: asyncio.Task | None = None
@@ -603,11 +720,25 @@ class AgentRunExecutor:
                     resolved_name = tool_name or "unknown"
                     tool_names[call_id] = resolved_name
                     raw_item = _value(event.item, "raw_item", event.item)
+                    arguments = _extract_tool_arguments(raw_item)
+                    if no_progress_detector is not None:
+                        args_hash = _tool_args_fingerprint_raw(raw_item)
+                        occurrences = no_progress_detector.record(
+                            resolved_name,
+                            args_hash,
+                        )
+                        if occurrences is not None:
+                            raise NoProgressDetected(
+                                tool_name=resolved_name,
+                                args_hash=args_hash,
+                                occurrences=occurrences,
+                                window_seconds=no_progress_detector._window,
+                            )
                     await execution.emit(
                         ToolStartedPayload(
                             tool_call_id=call_id,
                             tool_name=resolved_name,
-                            arguments=_extract_tool_arguments(raw_item),
+                            arguments=arguments,
                         )
                     )
                 elif event.name == "tool_output":
@@ -741,7 +872,20 @@ class AgentRunExecutor:
             result = None
             resume_count = 0
             qwen_retry_count = 0
+            runtime_limits = getattr(model_settings, "runtime_limits", None)
+            no_progress_detector = (
+                NoProgressDetector(
+                    window_seconds=runtime_limits.no_progress_window_seconds,
+                    threshold=runtime_limits.no_progress_repeat_threshold,
+                )
+                if runtime_limits is not None
+                else None
+            )
             while True:
+                # 用户指令（非空 agent_input：初始用户文本 / Qwen 重放）重置
+                # 无进展计数；max_turns 续跑 (agent_input=[]) 不清零。
+                if no_progress_detector is not None and agent_input:
+                    no_progress_detector.reset()
                 run_ctx = execution.context
                 preparation = await preflight_builder.preflight(
                     execution.task_id,
@@ -772,13 +916,38 @@ class AgentRunExecutor:
                 )
                 execution.set_streaming_result(result)
                 try:
-                    await self._consume_events(execution, result, text_buffer)
+                    await self._consume_events(
+                        execution,
+                        result,
+                        text_buffer,
+                        no_progress_detector=no_progress_detector,
+                    )
+                except NoProgressDetected as exc:
+                    await text_buffer.flush()
+                    decision = await self._await_no_progress_resume(
+                        execution,
+                        detector=exc,
+                    )
+                    if decision.decision == "reject":
+                        raise PipelineCancelledError(
+                            "agent run cancelled by user after no-progress detected"
+                        ) from None
+                    # 用户选择继续：保留 durable Session 续跑，清空无进展计数
+                    # （用户指令视为有效中断），避免同一指纹再次触发。
+                    if no_progress_detector is not None:
+                        no_progress_detector.reset()
+                    agent_input = []
+                    continue
                 except MaxTurnsExceeded:
                     await text_buffer.flush()
-                    if resume_count >= MAX_TURNS_RESUME_LIMIT:
+                    resume_limit = resolve_max_turns_resume_limit(
+                        getattr(execution.context, "model_settings", None),
+                    )
+                    if resume_count >= resume_limit:
                         raise RuntimeError(
                             f"agent exceeded max_turns resume limit "
-                            f"({MAX_TURNS_RESUME_LIMIT} times)"
+                            f"({resume_limit} times; hard cap "
+                            f"{(resume_limit + 1) * self._max_turns(execution)} turns)"
                         ) from None
                     decision = await self._await_max_turns_resume(
                         execution,
@@ -815,9 +984,18 @@ class AgentRunExecutor:
                                 ),
                             )
                         )
-                        # 从原始用户输入重新开始,避免把 malformed tool call
-                        # 带入下一轮 conversation history 再次触发 400。
-                        agent_input = execution.input
+                        # 不重放 execution.input（避免重复全部历史工具调用）。
+                        # durable Session 已持有完整历史；追加一条修正指令，
+                        # 让模型仅修正并重发上一次非法的工具调用。
+                        agent_input = [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "上一工具调用参数非法（400），请仅修正并重发"
+                                    "该工具调用，不要重复已完成的工作。"
+                                ),
+                            }
+                        ]
                         continue
                     raise
                 finally:
@@ -909,7 +1087,9 @@ class AgentRunExecutor:
                     detail={
                         "max_turns": max_turns,
                         "resume_count": resume_count,
-                        "resume_limit": MAX_TURNS_RESUME_LIMIT,
+                        "resume_limit": resolve_max_turns_resume_limit(
+                            getattr(execution.context, "model_settings", None),
+                        ),
                     },
                 )
             )
@@ -922,6 +1102,58 @@ class AgentRunExecutor:
         # Mirror the pipeline: emit UserInputResumedPayload after waking so the
         # reducer transitions AWAITING_USER_INPUT -> RUNNING before the manager
         # emits RunFinalizingPayload (RUNNING -> FINALIZING).
+        await execution.emit(decision_holder[0])
+        return decision_holder[0]
+
+    async def _await_no_progress_resume(
+        self,
+        execution: RunExecution,
+        *,
+        detector: NoProgressDetected,
+    ) -> UserInputResumedPayload:
+        """Pause the Agent Run after no-progress detection and wait for user.
+
+        Mirrors ``_await_max_turns_resume`` with ``prompt_kind="no_progress"``;
+        reuses the same pause-resume infrastructure (UserInputSubmitter +
+        ``POST /runs/{run_id}/resume``).
+        """
+
+        request_id = f"no_progress-{execution.run_id}"
+        event: asyncio.Event = asyncio.Event()
+        decision_holder: list[UserInputResumedPayload] = []
+
+        def submitter(payload: UserInputResumedPayload) -> bool:
+            if payload.request_id != request_id:
+                return False
+            decision_holder.append(payload)
+            event.set()
+            return True
+
+        execution.set_user_input_submitter(submitter)
+        try:
+            await execution.emit(
+                UserInputRequiredPayload(
+                    request_id=request_id,
+                    prompt_kind="no_progress",
+                    summary=(
+                        "检测到无进展：同一工具调用在短时间内密集重复 "
+                        f"({detector.tool_name} × {detector.occurrences})，"
+                        "是否继续工作？"
+                    ),
+                    detail={
+                        "tool_name": detector.tool_name,
+                        "args_hash": detector.args_hash,
+                        "occurrences": detector.occurrences,
+                        "window_seconds": detector.window_seconds,
+                    },
+                )
+            )
+            await event.wait()
+        finally:
+            execution.clear_user_input_submitter(submitter)
+
+        if not decision_holder:
+            raise RuntimeError("no_progress resume event set without a decision")
         await execution.emit(decision_holder[0])
         return decision_holder[0]
 
@@ -1244,7 +1476,10 @@ class ImportRunExecutor(AgentRunExecutor):
     def _max_turns(self, execution=None) -> int:
         if execution is not None and self._has_pending_attachments(execution):
             return ATTACHMENT_PARSING_MAX_TURNS
-        return AGENT_MAX_TURNS
+        settings = None
+        if execution is not None:
+            settings = getattr(execution.context, "model_settings", None)
+        return resolve_agent_max_turns(settings)
 
     @staticmethod
     def _has_pending_attachments(execution) -> bool:

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from app.agent_loop.context import RunContext
 from app.agent_loop.runner import AgentRunExecutor
-from app.domain.contracts import SubagentRequest, SubagentStatus, SubagentType
+from app.domain.contracts import QueryStatus, SubagentRequest, SubagentStatus, SubagentType
 from app.model_config import RunModelSettings
 from app.runtime.repository import TaskRepository
 from app.subagents.agents import ChildAgentFactory
@@ -74,7 +74,7 @@ async def test_child_runner_uses_new_context_session_and_turn_cap(
     assert observed["context"].work_dir.root == (
         parent.work_dir.staging / "subagents" / "child-1"
     )
-    assert observed["max_turns"] == 10
+    assert observed["max_turns"] == agents_module.CHILD_AGENT_MAX_TURNS
     assert observed["session"].session_id == "subagent:child-1"
 
 
@@ -153,3 +153,20 @@ def test_child_contexts_share_parent_create_skill_reservations(tmp_path) -> None
 
     with second.reserve_create_skill("geo", "another_capability"):
         pass
+
+
+def test_child_context_seeds_parent_query_log_and_summary(tmp_path) -> None:
+    """C1: child context inherits parent's completed-searches knowledge so a
+    re-dispatched child does not repeat parent searches."""
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+    parent.log_query("cancer", "pubmed", QueryStatus.SUCCESS, 5)
+    parent.query_log_summary = "压缩摘要"
+
+    child = parent.create_child_context(
+        "child-one",
+        parent_query_log=parent.query_log,
+        parent_query_log_summary=parent.query_log_summary,
+    )
+
+    assert child.query_log == parent.query_log
+    assert child.query_log_summary == "压缩摘要"

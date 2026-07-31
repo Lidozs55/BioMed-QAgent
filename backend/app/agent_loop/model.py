@@ -52,6 +52,7 @@ def to_run_model_settings(configuration: ModelConfiguration) -> RunModelSettings
             budget,
             calibration_margin_tokens=calibration_margin_for(budget),
         ),
+        runtime_limits=configuration.runtime_limits,
     )
 
 

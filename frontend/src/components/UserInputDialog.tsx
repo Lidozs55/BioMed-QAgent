@@ -188,7 +188,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
               ? "确认研究计划"
               : pending?.promptKind === "max_turns_reached"
                 ? "Agent 已达到最大轮次"
-                : "请补充信息"}
+                : pending?.promptKind === "no_progress"
+                  ? "检测到无进展"
+                  : "请补充信息"}
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words">
             {pending?.summary ?? "Pipeline 已暂停，等待你的决策。"}
@@ -326,7 +328,10 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             ) : (
               <XCircleIcon data-icon="inline-start" aria-hidden="true" />
             )}
-            {pending?.promptKind === "max_turns_reached" ? "停止" : "拒绝"}
+            {pending?.promptKind === "max_turns_reached" ||
+            pending?.promptKind === "no_progress"
+              ? "停止"
+              : "拒绝"}
           </Button>
           <Button
             disabled={pendingDecision !== null}
@@ -337,7 +342,8 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             ) : (
               <CheckIcon data-icon="inline-start" aria-hidden="true" />
             )}
-            {pending?.promptKind === "max_turns_reached"
+            {pending?.promptKind === "max_turns_reached" ||
+            pending?.promptKind === "no_progress"
               ? "继续工作"
               : "确认执行"}
           </Button>

@@ -23,6 +23,7 @@ from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
 from app.domain.contracts import TaskMode, generate_prefixed_uuid
+from app.model_config import RuntimeLimitsSettings
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
@@ -179,6 +180,7 @@ def create_app(
         )
         subagent_supervisor = SubagentSupervisor(
             input_broker=subagent_input_broker,
+            timeout_seconds=RuntimeLimitsSettings().subagent_timeout_seconds,
         )
         manager.attach_subagent_runtime(
             supervisor=subagent_supervisor,
