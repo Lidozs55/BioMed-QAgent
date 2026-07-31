@@ -53,22 +53,12 @@ Thumbs.db
 credentials.json
 secrets.json
 
-# ===== 运行时数据（保留目录结构 .gitkeep）=====
-data/uploads/*
-!data/uploads/.gitkeep
-backend/data/output/*
-!backend/data/output/.gitkeep
-backend/data/cache/*
-!backend/data/cache/.gitkeep
+# ===== 运行时数据（由 backend/data/.gitignore 统一管理）=====
+# backend/data/.gitignore 用 * 忽略 data/ 下所有内容，仅放行 examples/
+# 此处不再重复声明 data/ 子目录规则，避免冗余
+
+# ===== 临时调试目录 =====
 backend/tmp-*/
-data/parsed/*
-!data/parsed/.gitkeep
-data/output/*
-!data/output/.gitkeep
-data/cache/*
-!data/cache/.gitkeep
-data/current_tid.txt
-data/test_*.json
 
 # ===== 生成的报告 =====
 /report.html
@@ -76,12 +66,6 @@ data/test_*.json
 # ===== 日志 =====
 *.log
 logs/
-
-# ===== Pipeline 运行产物 =====
-backend/tmp-*/
-backend/data/output/
-backend/data/cache/
-backend/data/examples/**/*.csv
 
 # ===== 测试与覆盖率 =====
 .pytest_cache/
