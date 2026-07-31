@@ -131,3 +131,39 @@ def test_xena_specification_covers_only_xena_source(tmp_path: Path) -> None:
     ]
     assert result.output.literature is None
     assert result.output.geo is None
+
+
+def test_discovery_digest_changes_with_normalized_queries(tmp_path: Path) -> None:
+    """§1.5.1: the discovery digest must cover the normalized multi-source
+    query list so checkpoint reuse never treats a changed query as identical."""
+    base = TaskSpecification(
+        topic="contract",
+        queries=[
+            _query(Database.PUBMED, "34180400[PMID]"),
+            _query(Database.GEO, "GSE178352[Accession]"),
+        ],
+    )
+    changed_topic = TaskSpecification(
+        topic="different topic",
+        queries=[
+            _query(Database.PUBMED, "34180400[PMID]"),
+            _query(Database.GEO, "GSE178352[Accession]"),
+        ],
+    )
+    changed_geo = TaskSpecification(
+        topic="contract",
+        queries=[
+            _query(Database.PUBMED, "34180400[PMID]"),
+            _query(Database.GEO, "GSE999999[Accession]"),
+        ],
+    )
+
+    def digest(specification: TaskSpecification) -> str:
+        result = discovery.run_discovery(
+            _context(tmp_path, specification, fixture_dir=_NCBI_FIXTURE)
+        )
+        return result.output_digest
+
+    base_digest = digest(base)
+    assert digest(changed_geo) != base_digest
+    assert digest(changed_topic) != base_digest

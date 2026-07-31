@@ -46,7 +46,7 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
         "source", "example",
     ],
     "field_mapping.csv": [
-        "dataset_id", "raw_field", "canonical_field", "conversion",
+        "dataset_id", "source_id", "raw_field", "canonical_field", "conversion",
         "confidence", "notes",
     ],
     "cleaning_report.csv": [
@@ -362,6 +362,7 @@ def _build_source_relations(
 
 def _build_field_mapping_rows(
     dataset_id: str,
+    source_id: str,
     field_alignment: dict[str, list[str]] | None,
     samples: list[GeoSampleMetadata],
 ) -> list[dict[str, object]]:
@@ -370,7 +371,9 @@ def _build_field_mapping_rows(
     When ``field_alignment`` is available (e.g. from ``alignment.normalize_field_names``),
     each entry maps ``raw_field → canonical_field`` with a confidence score
     derived from the similarity heuristic. Falls back to the per-sample
-    expression-value mapping when alignment is missing.
+    expression-value mapping when alignment is missing. Every row carries the
+    originating ``source_id`` so multi-source runs keep one mapping group per
+    SourceAsset (§1.5.3).
     """
     if field_alignment:
         rows: list[dict[str, object]] = []
@@ -380,6 +383,7 @@ def _build_field_mapping_rows(
                 continue
             rows.append({
                 "dataset_id": dataset_id,
+                "source_id": source_id,
                 "raw_field": raw,
                 "canonical_field": norm_name,
                 "conversion": "identity",
@@ -392,6 +396,7 @@ def _build_field_mapping_rows(
     return [
         {
             "dataset_id": dataset_id,
+            "source_id": source_id,
             "raw_field": f"counts.{sample.source_alias}",
             "canonical_field": "expression_value",
             "conversion": "identity numeric parse",
@@ -698,6 +703,7 @@ def run_artifact_build(
         "field_descriptions.csv": field_descriptions,
         "field_mapping.csv": _build_field_mapping_rows(
             dataset_id=dataset_id,
+            source_id=dataset_source_id,
             field_alignment=field_alignment,
             samples=samples,
         ),
@@ -733,8 +739,12 @@ def run_artifact_build(
                 "url": download_attempt.url,
                 "status": download_attempt.status.value,
                 "bytes_received": download_attempt.bytes_received,
-                "error_code": "",
-                "error_message": "",
+                "error_code": (
+                    download_attempt.error_code.value
+                    if download_attempt.error_code is not None
+                    else ""
+                ),
+                "error_message": download_attempt.error_message or "",
                 "started_at": download_attempt.started_at.isoformat(),
                 "finished_at": download_attempt.finished_at.isoformat(),
             }

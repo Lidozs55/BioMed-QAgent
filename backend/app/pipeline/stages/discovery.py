@@ -563,6 +563,22 @@ def _digest_discovery(output: DiscoveryOutput) -> str:
         "dataset_source_id": output.dataset_source_id,
         "dataset_accession": output.dataset_accession,
         "topic": output.specification.topic,
+        # 规范化多源查询/数据集选择（§1.5.1）：查询变化必须改变 discovery
+        # digest，避免 checkpoint 复用把新查询误判为与旧结果一致。
+        "queries": [
+            {"database": query.database.value, "query": query.query}
+            for query in sorted(
+                output.specification.queries, key=lambda q: q.order
+            )
+        ],
+        "datasets": [
+            {
+                "database": dataset.database.value,
+                "accession": dataset.accession,
+                "data_type": dataset.data_type,
+            }
+            for dataset in output.specification.datasets
+        ],
     }
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

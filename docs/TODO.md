@@ -64,7 +64,7 @@
 - [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression、GDC project/data_type 与 Reactome 显式单 pathway 查询；Reactome 不支持多 pathway 或混合来源
 - [x] **P0** Discovery 阶段对 Xena gene-expression、GDC fixture/显式选择及 Reactome 显式单 pathway 产出统一 `SourceRecord`；Reactome 与其它数据库或多个 pathway 选择明确拒绝
 - [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库——2026-07-31 核对：各路由分支均已覆盖——pubmed+geo 双 source；GDC/Xena/Reactome 单源各产出唯一 SourceRecord（artifact_build 写入全部 `discovery.sources`）；pubmed-only 时 GEO 作为隐式数据集来源保留。新增 `tests/pipeline/test_discovery_source_coverage.py` 契约测试锁定各分支 source 数据库集合
-- [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
+- [x] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）——2026-07-31 执行：`_digest_discovery` 纳入规范化多源 queries/datasets（按 order 排序），查询变化必然改变 discovery digest，checkpoint 复用不再误判；契约测试覆盖 query/主题变化
 
 #### 1.5.2 Acquisition 扩展（P0）
 
@@ -74,7 +74,7 @@
 - [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/data_type 下载（files API → `acquire_source()` → `source_assets/`；首期 TSV/TSV.GZ）
 - [x] **P0** Acquisition 阶段支持 Xena fixture 与 live hub 下载适配（TSV/TSV.GZ → `source_assets/`，统一产出 `SourceAsset`/`DownloadAttempt`）；live 输入契约测试已覆盖
 - [x] **P1** Acquisition 阶段支持 Reactome 单 pathway 参与者导出（ContentService JSON/fixture → `source_assets/`，fixture/live acquisition 已有协议测试）；多 pathway/多源下载仍未实现
-- [x] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果（artifact_build 写入全部 download_attempts，status 含失败态；error 明细字段仍为空，见 §2.5）
+- [x] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果——2026-07-31 执行：`_try_acquire` 不再丢弃失败 attempt（返回 FAILED attempt + asset=None）；GEO live 回退链（counts 404 → series matrix）两条 attempt 全部进入 download_log；artifact_build 透传 error_code/error_message（原先硬编码空串）；测试 `test_acquisition_download_log.py` 覆盖
 - [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
 
 #### 1.5.3 Processing 扩展（P0）
@@ -86,7 +86,7 @@
 - [x] **P0** 新增 GDC 数据解析器（首期严格支持 fixture 契约的 gene-expression/clinical TSV/TSV.GZ；mutation/CNV/多源合并未实现）
 - [x] **P0** 新增 Xena gene-expression 解析器（TSV/TSV.GZ 表达矩阵 → 带 source locator 的长格式 CSV）；clinical/mutation/CNV 等类型仍未支持
 - [x] **P1** 新增 Reactome 单 pathway 通路数据解析器（participants → `pathway_members.csv` artifact）；Reactome 扩展数据类型仍未完成
-- [ ] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）
+- [x] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）——2026-07-31 执行：`field_mapping.csv` 新增 `source_id` 列，`_build_field_mapping_rows` 按 source 分组；schema 就绪，多源合并（§1.2）时每组记录独立
 
 #### 1.5.4 Artifact 完整性（P1）
 

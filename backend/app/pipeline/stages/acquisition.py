@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -21,11 +21,13 @@ from app.domain.contracts import (
     DatasetSelection,
     DownloadAttempt,
     DownloadStatus,
+    ErrorCode,
     SourceAsset,
     SourceRecord,
     StageName,
     TaskSpecification,
     asset_id_from_sha256,
+    generate_prefixed_uuid,
     make_source_id,
 )
 from app.integrations.acquisition import AcquisitionResult, acquire_source
@@ -122,10 +124,15 @@ async def _try_acquire(
     cache: ContentCache,
     http: httpx.AsyncClient,
     gse: str,
-) -> AcquisitionResult | None:
-    """Attempt acquire_source; return None on 404 so caller can try a fallback URL."""
+) -> AcquisitionResult:
+    """Attempt acquire_source and never discard the attempt record.
+
+    A failed download returns an ``AcquisitionResult`` whose ``attempt`` is
+    FAILED and ``asset`` is None (instead of ``None``), so callers can
+    publish the complete fallback chain in ``download_log.csv`` (§1.5.2).
+    """
     try:
-        result = await acquire_source(
+        return await acquire_source(
             source=source,
             filename=filename,
             workdir=ctx.workdir,
@@ -136,15 +143,22 @@ async def _try_acquire(
         )
     except Exception as exc:  # noqa: BLE001 — log and fall back
         logger.warning("acquisition: download failed for %s: %s", source.url, exc)
-        return None
-    if result.asset is None:
-        logger.warning(
-            "acquisition: download failed for %s: %s",
-            source.url,
-            result.attempt.error_message,
+        attempt_id = generate_prefixed_uuid("download_attempt")
+        started_at = datetime.now(UTC)
+        return AcquisitionResult(
+            attempt=DownloadAttempt(
+                attempt_id=attempt_id,
+                source_id=source.source_id,
+                url=source.url,
+                status=DownloadStatus.FAILED,
+                bytes_received=0,
+                error_code=ErrorCode.NETWORK_ERROR,
+                error_message=str(exc),
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+            ),
+            asset=None,
         )
-        return None
-    return result
 
 
 def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
@@ -340,7 +354,7 @@ async def _run_xena_acquisition_live(
     filename = dataset.accession.replace("/", "_") + ".gz"
     async with httpx.AsyncClient() as http:
         result = await _try_acquire(source, filename, ctx, cache, http, dataset.accession)
-    if result is None or result.asset is None:
+    if result.asset is None:
         raise RuntimeError(f"live Xena download failed for {dataset.accession}")
     ctx.emit_progress_sync(
         stage=StageName.ACQUISITION,
@@ -645,6 +659,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
 
         async with httpx.AsyncClient() as http:
             result: AcquisitionResult | None = None
+            attempts: list[DownloadAttempt] = []
             used_filename = ""
             for download_url, filename, title in candidates:
                 logger.info("acquisition: trying %s", download_url)
@@ -657,7 +672,8 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                     retrieved_at=retrieved_at,
                 )
                 result = await _try_acquire(source, filename, ctx, cache, http, gse)
-                if result is not None:
+                attempts.append(result.attempt)
+                if result.asset is not None:
                     used_filename = filename
                     logger.info("acquisition: success via %s", download_url)
                     break
@@ -666,7 +682,6 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
             raise RuntimeError(f"live download failed for {gse}: all candidate URLs failed")
 
         assets = [result.asset]
-        attempts = [result.attempt]
         if "tximportCounts" in used_filename:
             soft_source = SourceRecord(
                 source_id=source_id,
@@ -679,7 +694,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
             soft_result = await _try_acquire(
                 soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
             )
-            if soft_result is None or soft_result.asset is None:
+            if soft_result.asset is None:
                 raise RuntimeError(
                     f"live download failed for {gse}: family SOFT required "
                     "when tximport counts are available"

@@ -125,8 +125,10 @@ def test_field_mapping_csv_uses_alignment(tmp_path: Path) -> None:
     for row in mapping:
         assert row["raw_field"], f"raw_field must not be empty: {row}"
         assert row["canonical_field"], f"canonical_field must not be empty: {row}"
-        # alignment:normalize_field_names 或 fallback 标记
         assert row["notes"], f"notes must not be empty: {row}"
+        # §1.5.3: 每个映射行携带来源 source_id（每个 SourceAsset 一组映射）
+        assert row["source_id"], f"source_id must not be empty: {row}"
+        assert row["dataset_id"], f"dataset_id must not be empty: {row}"
 
 
 def test_cleaning_report_total_anomalies_match_warnings_count(
