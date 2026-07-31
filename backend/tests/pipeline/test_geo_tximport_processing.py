@@ -591,7 +591,7 @@ def test_run_processing_live_mode_uses_acquired_soft_for_tximport_counts(
     )
     ctx = StageContext(
         task_id="task_live_counts", workdir=workdir, fixture_dir=tmp_path,
-        topic="live", started_at=datetime.now(tz=UTC), mode="live",
+        topic="live", databases=["geo"], started_at=datetime.now(tz=UTC), mode="live",
     )
 
     result = run_processing(ctx, [counts_asset, soft_asset], "ds_geo_gse178352")
@@ -672,6 +672,7 @@ def test_run_processing_live_mode_does_not_read_fixture_soft(
         workdir=workdir,
         fixture_dir=fixture_dir,
         topic="live",
+        databases=["geo"],
         started_at=datetime.now(tz=UTC),
         mode="live",
     )

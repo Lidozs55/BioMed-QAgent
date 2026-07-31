@@ -15,6 +15,7 @@ from app.pipeline.processing.geo_tximport import (
     parse_geo_soft_samples,
     process_geo_tximport_counts,
 )
+from app.pipeline.processing.reactome import parse_reactome_table
 from app.pipeline.processing.xena_matrix import parse_xena_matrix
 from app.pipeline.stages.base import (
     CleaningReportModel,
@@ -354,7 +355,13 @@ def run_processing(
     recovers sample metadata from that asset instead.
     """
     assets = source_assets if isinstance(source_assets, list) else [source_assets]
-    if ctx.databases and any(database.lower() == "gdc" for database in ctx.databases):
+    databases = {database.strip().lower() for database in ctx.databases if database.strip()}
+    if not databases:
+        raise ValueError("processing requires a non-empty database selection")
+    if len(databases) != 1 and not databases <= {"pubmed", "geo"}:
+        raise ValueError(f"processing does not support mixed databases: {sorted(databases)}")
+    database = "geo" if databases <= {"pubmed", "geo"} else next(iter(databases))
+    if database == "gdc":
         if len(assets) != 1:
             raise ValueError("GDC processing requires one source asset")
         dataset_type = next(
@@ -378,9 +385,43 @@ def run_processing(
             output_digest=hashlib.sha256(parsed.file_asset.sha256.encode()).hexdigest(),
             output=output,
         )
-    if ctx.databases and any(
-        database.lower() in {"xena", "ucsc_xena"} for database in ctx.databases
-    ):
+    if database == "reactome":
+        reactome_asset = next(
+            (
+                asset for asset in assets
+                if asset.media_type == "text/tab-separated-values"
+            ),
+            None,
+        )
+        if reactome_asset is None:
+            raise ValueError("Reactome processing requires a normalized TSV source asset")
+        pathway_id = next(
+            (
+                dataset.accession
+                for dataset in (ctx.specification.datasets if ctx.specification else [])
+                if dataset.database.value == "reactome"
+            ),
+            None,
+        )
+        parsed = parse_reactome_table(reactome_asset, dataset_id, ctx.workdir, pathway_id)
+        cleaning_report = _clean_parsed_dataset(ctx, parsed)
+        field_alignment = _build_field_alignment([parsed], ctx)
+        output = ProcessingOutput(
+            parsed_datasets=[parsed],
+            samples=[],
+            cleaning_report=cleaning_report,
+            field_alignment=field_alignment,
+        )
+        ctx.emit_progress_sync(
+            stage=StageName.PROCESSING,
+            kind="cleaned_rows",
+            current=parsed.row_count,
+            total=None,
+            detail={"dataset_id": parsed.dataset_id, "file_asset": parsed.file_asset.relative_path},
+        )
+        digest = hashlib.sha256(parsed.file_asset.sha256.encode("utf-8")).hexdigest()
+        return StageResult(output_digest=digest, output=output)
+    if database in {"xena", "ucsc_xena"}:
         if len(assets) != 1:
             raise ValueError("Xena gene-expression processing requires one source asset")
         parsed = parse_xena_matrix(assets[0], dataset_id, ctx.workdir)
@@ -404,6 +445,9 @@ def run_processing(
         )
         digest = hashlib.sha256(parsed.file_asset.sha256.encode("utf-8")).hexdigest()
         return StageResult(output_digest=digest, output=output)
+
+    if database not in {"geo"}:
+        raise ValueError(f"unsupported processing database: {database}")
 
     source_asset = next(
         (asset for asset in assets if "tximportCounts" in asset.relative_path),

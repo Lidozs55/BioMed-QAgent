@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import hashlib
 import json
@@ -33,7 +34,7 @@ from app.pipeline.stages.base import (
     StageContext,
     StageResult,
 )
-from app.tools.content_cache import ContentCache
+from app.tools.content_cache import ContentCache, canonical_request_hash
 
 _DEFAULT_GSE = "GSE178352"
 _MAX_BYTES = 100 * 1024 * 1024  # 100 MB safety cap
@@ -178,6 +179,18 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
         if ctx.mode == "live":
             return asyncio.run(_run_xena_acquisition_live(ctx, retrieved_at, dataset))
         return _run_xena_acquisition_fixture(ctx, retrieved_at, dataset)
+    reactome_dataset = next(
+        (
+            dataset
+            for dataset in (specification.datasets if specification else [])
+            if dataset.database == Database.REACTOME
+        ),
+        None,
+    )
+    if reactome_dataset is not None:
+        if ctx.mode == "live":
+            return asyncio.run(_run_reactome_acquisition_live(ctx, retrieved_at, reactome_dataset))
+        return _run_reactome_acquisition_fixture(ctx, retrieved_at, reactome_dataset)
 
     dataset = _resolve_geo_dataset(ctx)
     gse = _extract_gse_accession(dataset.accession) or _DEFAULT_GSE
@@ -347,6 +360,159 @@ async def _run_xena_acquisition_live(
             source_assets=[result.asset],
             download_attempts=[result.attempt],
             source_path=ctx.workdir.root / result.asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _validate_reactome_content_service_json(path: Path) -> None:
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Reactome ContentService response is not valid JSON") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Reactome ContentService response must be a non-empty JSON list")
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"Reactome participant at index {index} is not an object")
+        participant_id = item.get("stId") or item.get("databaseName") or item.get("dbId")
+        if not isinstance(participant_id, (str, int)) or not str(participant_id).strip():
+            raise ValueError(
+                f"Reactome participant at index {index} is missing a participant identifier"
+            )
+
+
+def _normalize_reactome_json_asset(
+    ctx: StageContext,
+    dataset: DatasetSelection,
+    json_asset: SourceAsset,
+    attempt: DownloadAttempt,
+) -> SourceAsset:
+    """Convert validated ContentService JSON into the TSV consumed by Validation."""
+    from app.pipeline.processing.reactome import _open_reactome_json
+
+    json_path = ctx.workdir.root / json_asset.relative_path
+    normalized_path = ctx.workdir.source_assets / f"{dataset.accession}_participants.normalized.tsv"
+    with _open_reactome_json(json_path, dataset.accession) as source, normalized_path.open(
+        "w", encoding="utf-8", newline=""
+    ) as target:
+        target.write(source.read())
+    payload = normalized_path.read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    return SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=normalized_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=json_asset.source_id,
+        successful_attempt_id=attempt.attempt_id,
+        data_level=json_asset.data_level,
+    )
+
+
+async def _run_reactome_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.accession or dataset.data_type != "pathway-participants":
+        raise ValueError(
+            "Reactome acquisition requires pathway_id and pathway-participants data_type"
+        )
+    url = f"https://reactome.org/ContentService/data/participants/{dataset.accession}"
+    source = SourceRecord(
+        source_id=dataset.source_id or make_source_id(Database.REACTOME, dataset.accession, url),
+        database=Database.REACTOME,
+        accession=dataset.accession,
+        url=url,
+        title=f"Reactome {dataset.accession} participants",
+        retrieved_at=retrieved_at,
+    )
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "reactome")
+    async with httpx.AsyncClient() as http:
+        result = await acquire_source(
+            source=source,
+            filename=f"{dataset.accession}_participants.json",
+            workdir=ctx.workdir,
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=_MAX_BYTES,
+            expected_media_types=frozenset({"application/json"}),
+            accept="application/json",
+        )
+    if result.asset is None:
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}")
+    source_path = ctx.workdir.root / result.asset.relative_path
+    try:
+        _validate_reactome_content_service_json(source_path)
+        normalized_asset = _normalize_reactome_json_asset(
+            ctx, dataset, result.asset, result.attempt
+        )
+    except ValueError as exc:
+        source_path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            source_path.parent.rmdir()
+        request_hash = canonical_request_hash(
+            source.database.value, source.accession, source.url
+        )
+        cached = cache.read_metadata(request_hash)
+        if cached is not None and cached.get("sha256") == result.asset.sha256:
+            with contextlib.suppress(OSError):
+                cache.metadata_path(request_hash).unlink()
+                cache.blob_path(result.asset.sha256).unlink()
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}: {exc}") from exc
+    return StageResult(
+        output_digest=normalized_asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset, normalized_asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / normalized_asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _run_reactome_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.accession or dataset.data_type != "pathway-participants":
+        raise ValueError(
+            "Reactome acquisition requires pathway_id and pathway-participants data_type"
+        )
+    payload = (ctx.fixture_dir / "pathway_participants.tsv").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_path = ctx.workdir.source_assets / f"{dataset.accession}_participants.fixture.tsv"
+    source_path.write_bytes(payload)
+    url = f"https://reactome.org/ContentService/data/participants/{dataset.accession}"
+    source_id = dataset.source_id or make_source_id(Database.REACTOME, dataset.accession, url)
+    attempt_id = f"download_attempt_fixture_reactome_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=source_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=url,
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=source_path,
             retrieved_at=retrieved_at,
         ),
     )

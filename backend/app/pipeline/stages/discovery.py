@@ -122,6 +122,17 @@ def run_discovery(ctx: StageContext) -> StageResult:
             len(specification.datasets),
         )
 
+    selected_databases = {
+        query.database for query in specification.queries
+    } | {dataset.database for dataset in specification.datasets}
+    if Database.REACTOME in selected_databases and selected_databases != {Database.REACTOME}:
+        raise ValueError("Reactome cannot be combined with other data sources")
+    reactome_datasets = [
+        dataset for dataset in specification.datasets if dataset.database == Database.REACTOME
+    ]
+    if len(reactome_datasets) > 1:
+        raise ValueError("Reactome supports exactly one explicit DatasetSelection")
+
     gdc_dataset = next(
         (dataset for dataset in specification.datasets if dataset.database == Database.GDC),
         None,
@@ -134,6 +145,12 @@ def run_discovery(ctx: StageContext) -> StageResult:
     )
     if xena_dataset is not None:
         return _run_xena_discovery(ctx, specification, xena_dataset)
+    reactome_dataset = next(
+        (dataset for dataset in specification.datasets if dataset.database == Database.REACTOME),
+        None,
+    )
+    if reactome_dataset is not None:
+        return _run_reactome_discovery(ctx, specification, reactome_dataset)
 
     pmid = _resolve_pmid(specification)
     gse = _resolve_gse(specification)
@@ -424,6 +441,50 @@ def _run_xena_discovery(
         current=1,
         total=1,
         detail={"source": "ucsc_xena", "accession": dataset.accession},
+    )
+    return StageResult(output_digest=_digest_discovery(output), output=output)
+
+
+def _run_reactome_discovery(
+    ctx: StageContext,
+    specification: TaskSpecification,
+    dataset: DatasetSelection,
+) -> StageResult:
+    if not dataset.accession or dataset.data_type != "pathway-participants":
+        raise ValueError(
+            "Reactome discovery requires pathway_id and pathway-participants data_type"
+        )
+    retrieved_at = datetime.now(UTC)
+    url = f"https://reactome.org/ContentService/data/participants/{dataset.accession}"
+    source_id = make_source_id(Database.REACTOME, dataset.accession, url)
+    resolved = dataset.model_copy(update={"source_id": source_id})
+    output = DiscoveryOutput(
+        sources=[
+            SourceRecord(
+                source_id=source_id,
+                database=Database.REACTOME,
+                accession=dataset.accession,
+                url=url,
+                title=f"Reactome {dataset.accession} participants",
+                retrieved_at=retrieved_at,
+            )
+        ],
+        literature=None,
+        geo=None,
+        specification=specification.model_copy(update={"datasets": [resolved]}),
+        dataset_source_id=source_id,
+        dataset_accession=dataset.accession,
+        dataset_title=f"Reactome {dataset.accession} participants",
+        dataset_url=url,
+        dataset_id=resolved.dataset_id,
+        retrieved_at=retrieved_at,
+    )
+    ctx.emit_progress_sync(
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=1,
+        total=1,
+        detail={"source": "reactome", "accession": dataset.accession},
     )
     return StageResult(output_digest=_digest_discovery(output), output=output)
 

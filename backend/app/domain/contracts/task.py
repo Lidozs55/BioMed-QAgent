@@ -17,6 +17,7 @@ class TaskRequest(ContractModel):
     target_fields: list[str] = Field(default_factory=list)
     time_range: tuple[str, str] | None = None
     mode: Literal["fixture", "live"] = "fixture"
+    reactome_pathway_id: str | None = None
 
     @field_validator("topic")
     @classmethod

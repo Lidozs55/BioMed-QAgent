@@ -114,9 +114,10 @@ Gate。
 
 以下职责是目标边界；当前后端仍有两类实现差距，不能将目标描述当作已完成能力：
 
-- `PipelineRunner` 当前的 Discovery、Acquisition、Processing 和 Artifact Builder 仍按
-  PubMed + GEO 的单数据集路径实现；`TaskSpecification` 虽可表达通用查询，但尚未
-  成为所有阶段的通用路由契约。
+- `PipelineRunner` 已覆盖 PubMed/GEO 主路径，以及 GDC、Xena 和 Reactome 的首期显式
+  单数据集路径；Reactome 仅接受一个显式 pathway，必须作为唯一来源运行，和其它数据库
+  或多个 pathway selection 会被拒绝。`TaskSpecification` 虽可表达通用查询，但尚未成为
+  所有阶段的通用多源路由契约；多源合并、mutation/CNV 与 Reactome 扩展数据类型仍未完成。
 - Agent-only Skill 的文件记录仍主要通过 `RunContext.add_source()` /
   `add_raw_asset()` 保存到运行时字段；这些文件尚未统一转换为 Pipeline 的
   Pydantic `SourceRecord` / `SourceAsset` / `ParsedDataset`，因此不能直接作为正式
@@ -341,9 +342,9 @@ schema version 和生成步骤。
 负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
 候选、实际查询式、结果顺序和来源 URL。
 
-Discovery 不生成最终科研数据行。对于显式的 UCSC Xena gene-expression 数据集，Discovery
-输出统一的 `SourceRecord` 和数据集选择；GDC/Reactome 等未完成来源仍保持 Agent-only，
-不得伪装成 Pipeline 支持。
+Discovery 不生成最终科研数据行。对于显式的 UCSC Xena gene-expression 数据集与
+Reactome pathway participants，Discovery 输出统一的 `SourceRecord` 和数据集选择；
+Reactome 仅支持单来源显式 `pathway_id`，混合来源不得伪装成 Pipeline 支持。
 
 PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
 请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。

@@ -190,7 +190,7 @@ class PipelineRunner:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
         self.topic = topic
-        self.databases = databases or []
+        self.databases = databases or ["pubmed", "geo"]
         self.specification = specification
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
         self.total_timeout = total_timeout

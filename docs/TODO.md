@@ -44,13 +44,14 @@
 
 ### 1.5 Pipeline 数据库完整性
 
-> Pipeline 当前仅覆盖 PubMed + GEO（2/7+），而 LLM 工具层已支持 GDC、Xena、
-> Reactome、PubChem、PDB、Browser 等全部数据库。Pipeline 的 Discovery /
-> Acquisition / Processing 三层对非 GEO 数据库完全空白，导致以下问题：
-> 1. 用户选择非 PubMed/GEO 数据库时，Pipeline 无法产出任何 artifact
-> 2. Agent 通过工具获取的 GDC/Xena/Reactome 数据无法进入 CSV（数据孤岛）
-> 3. `source_list.csv` 和 `source_relations.csv` 不完整（缺失多源记录）
-> 4. `field_mapping.csv` 当前仅含 GEO tximport 字段映射，不支持其他数据类型
+> Pipeline 已覆盖 PubMed/GEO 主路径，以及 GDC、Xena、Reactome 的首期显式单源路径；
+> 其它数据库仍为 Agent-only 或待接入。Reactome 仅接受显式单个 pathway，且必须单独作为
+> 来源运行；Reactome 与其它数据库或多个 pathway 选择会被拒绝。多源合并、mutation/CNV
+> 以及 Reactome 更广泛的数据类型和查询扩展仍未完成。
+> 1. 用户选择尚未接入的数据库时，Pipeline 不产出伪成功 artifact
+> 2. Agent-only 工具获取的数据尚未自动进入 Pipeline CSV（数据孤岛）
+> 3. `source_list.csv` 和 `source_relations.csv` 的完整多源覆盖仍待实现
+> 4. `field_mapping.csv` 的真实多源映射和确定性合并仍未完成
 
 #### 1.5.1 Discovery 扩展（P0）
 
@@ -58,8 +59,8 @@
 > 但 DiscoveryOutput 和 `run_discovery()` 实现仍固定要求 PubMed + GEO 的
 > `LiteratureRecord` / `GeoSeriesRecord`，不会按任意数据库查询路由。
 
-- [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression 与 GDC project/data_type 查询（Reactome 仍未接入）
-- [x] **P0** Discovery 阶段对 Xena gene-expression 与 GDC fixture/显式选择产出统一 `SourceRecord`；Reactome 仍保持 Agent-only
+- [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression、GDC project/data_type 与 Reactome 显式单 pathway 查询；Reactome 不支持多 pathway 或混合来源
+- [x] **P0** Discovery 阶段对 Xena gene-expression、GDC fixture/显式选择及 Reactome 显式单 pathway 产出统一 `SourceRecord`；Reactome 与其它数据库或多个 pathway 选择明确拒绝
 - [ ] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库
 - [ ] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）
 
@@ -70,7 +71,7 @@
 
 - [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/data_type 下载（files API → `acquire_source()` → `source_assets/`；首期 TSV/TSV.GZ）
 - [x] **P0** Acquisition 阶段支持 Xena fixture 与 live hub 下载适配（TSV/TSV.GZ → `source_assets/`，统一产出 `SourceAsset`/`DownloadAttempt`）；live 输入契约测试已覆盖
-- [ ] **P1** Acquisition 阶段支持 Reactome 通路参与者导出（ContentService → `source_assets/`）
+- [x] **P1** Acquisition 阶段支持 Reactome 单 pathway 参与者导出（ContentService JSON/fixture → `source_assets/`，fixture/live acquisition 已有协议测试）；多 pathway/多源下载仍未实现
 - [ ] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果
 - [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
 
@@ -79,10 +80,10 @@
 > 当前 `run_processing()` 只接收一个 `SourceAsset`，并在 live 模式跳过 tximport
 > 表达解析；Runner 和 Artifact Build 也只消费第一个资产/解析数据集。
 
-- [ ] **P0** Processing 阶段按资产类型路由解析器（已增加 Xena 与 GDC gene-expression/clinical 分支；仍需抽象通用路由并补齐 Reactome）
+- [x] **P0** Processing 阶段按资产类型路由解析器（已覆盖 Xena、GDC gene-expression/clinical 与 Reactome 单 pathway participants；通用多源路由仍待扩展）
 - [x] **P0** 新增 GDC 数据解析器（首期严格支持 fixture 契约的 gene-expression/clinical TSV/TSV.GZ；mutation/CNV/多源合并未实现）
 - [x] **P0** 新增 Xena gene-expression 解析器（TSV/TSV.GZ 表达矩阵 → 带 source locator 的长格式 CSV）；clinical/mutation/CNV 等类型仍未支持
-- [ ] **P1** 新增 Reactome 通路数据解析器（participants → `pathway_members.csv` artifact）
+- [x] **P1** 新增 Reactome 单 pathway 通路数据解析器（participants → `pathway_members.csv` artifact）；Reactome 扩展数据类型仍未完成
 - [ ] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）
 
 #### 1.5.4 Artifact 完整性（P1）
@@ -150,7 +151,7 @@
 ### 2.3 补全 download 工具
 
 - [ ] **P1** PubChem 增加 `download_pubchem`（SDF/MOL，走 `acquire_source()` → `SourceAsset`）
-- [ ] **P1** Reactome 增加 `download_reactome`（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）
+- [ ] **P1** Reactome 增加独立 `download_reactome` skill（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）；Pipeline 显式 pathway participants 已完成
 
 ### 2.4 统一 SourceAsset 契约
 

@@ -9,10 +9,226 @@ import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.domain.contracts import Database, TaskRequest
 from app.model_config import RunModelSettings, UserSettings
 from app.pipeline.runner import PendingPublicationCleanup
-from app.pipeline.tool import run_research_pipeline
+from app.pipeline.tool import _build_tool_specification, run_research_pipeline
 from app.tools.workdir import create_task_workdir
+
+
+def test_tool_specification_adds_explicit_reactome_pathway() -> None:
+    specification = _build_tool_specification(
+        "reactome topic",
+        ["reactome"],
+        None,
+        None,
+        reactome_pathway_id="R-HSA-199420",
+    )
+
+    assert specification is not None
+    dataset = specification.datasets[0]
+    assert dataset.database is Database.REACTOME
+    assert dataset.accession == "R-HSA-199420"
+    assert dataset.data_type == "pathway-participants"
+
+
+@pytest.mark.parametrize("reactome_pathway_id", ["", "   "])
+def test_empty_reactome_pathway_is_omitted(reactome_pathway_id: str) -> None:
+    assert (
+        _build_tool_specification(
+            "reactome topic",
+            ["reactome"],
+            None,
+            None,
+            reactome_pathway_id=reactome_pathway_id,
+        )
+        is None
+    )
+
+
+def test_reactome_pathway_is_omitted_when_not_selected() -> None:
+    assert (
+        _build_tool_specification(
+            "reactome topic",
+            ["pubmed"],
+            None,
+            None,
+            reactome_pathway_id="R-HSA-199420",
+        )
+        is None
+    )
+
+
+def test_reactome_pathway_coexists_with_other_database_accessions() -> None:
+    specification = _build_tool_specification(
+        "mixed topic",
+        ["reactome", "pubmed"],
+        "12345678",
+        None,
+        reactome_pathway_id="R-HSA-199420",
+    )
+
+    assert specification is not None
+    assert [dataset.database for dataset in specification.datasets] == [Database.REACTOME]
+    assert [query.database for query in specification.queries] == [Database.PUBMED]
+
+
+def test_tool_specification_keeps_one_reactome_dataset_for_duplicate_selection() -> None:
+    specification = _build_tool_specification(
+        "reactome topic",
+        ["reactome", "reactome"],
+        None,
+        None,
+        reactome_pathway_id="R-HSA-199420",
+    )
+
+    assert specification is not None
+    assert [dataset.accession for dataset in specification.datasets] == ["R-HSA-199420"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pathway_id", [None, "", "   "])
+async def test_pipeline_function_tool_rejects_missing_reactome_pathway_id(
+    tmp_path: Path, pathway_id: str | None
+) -> None:
+    context = RunContext(task_id="task_tool_missing_reactome")
+    context._work_dir = create_task_workdir(
+        "task_tool_missing_reactome", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_missing_reactome",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps({"topic": "reactome", "databases": ["reactome"], "reactome_pathway_id": pathway_id}),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "invalid_input"
+    assert "reactome_pathway_id" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_rejects_mixed_reactome_sources(tmp_path: Path) -> None:
+    context = RunContext(task_id="task_tool_mixed_reactome")
+    context._work_dir = create_task_workdir(
+        "task_tool_mixed_reactome", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_mixed_reactome",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "mixed",
+                "databases": ["reactome", "pubmed"],
+                "reactome_pathway_id": "R-HSA-199420",
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "unsupported_databases"
+    assert payload["unsupported_databases"] == ["reactome_mixed_sources"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_uses_reactome_fixture_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = RunContext(task_id="task_tool_reactome_fixture")
+    context._work_dir = create_task_workdir(
+        "task_tool_reactome_fixture", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_reactome_fixture",
+        tool_arguments="{}",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def run(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="failed"),
+                validation=SimpleNamespace(status="invalid"),
+                artifacts=[],
+            )
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+    await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "reactome",
+                "databases": ["reactome"],
+                "reactome_pathway_id": " R-HSA-199420 ",
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    assert captured["fixture_dir"] == (
+        Path(pipeline_tool_module.__file__).parents[2] / "tests" / "fixtures" / "reactome"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_completes_reactome_only_fixture_run(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_tool_reactome_e2e")
+    context._work_dir = create_task_workdir(
+        "task_tool_reactome_e2e", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_reactome_e2e",
+        tool_arguments="{}",
+    )
+
+    payload = json.loads(
+        await run_research_pipeline.on_invoke_tool(
+            tool_context,
+            json.dumps(
+                {
+                    "topic": "Reactome apoptosis",
+                    "databases": ["reactome"],
+                    "reactome_pathway_id": " R-HSA-199420 ",
+                    "mode": "fixture",
+                }
+            ),
+        )
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["validation_status"] == "valid"
+    assert "pathway_members.csv" in [entry["name"] for entry in payload["artifacts"]]
+    assert (
+        tmp_path / "tasks" / "task_tool_reactome_e2e" / "artifacts" / "pathway_members.csv"
+    ).is_file()
+
+
+def test_task_request_accepts_optional_reactome_pathway_id() -> None:
+    request = TaskRequest(topic="reactome topic", reactome_pathway_id="R-HSA-199420")
+
+    assert request.reactome_pathway_id == "R-HSA-199420"
 
 
 @pytest.mark.asyncio

@@ -77,16 +77,58 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
     ],
 }
 
+_REACTOME_COLUMNS = {
+    "record_id", "dataset_id", "source_id", "asset_id", "pathway_id",
+    "pathway_name", "participant_id", "participant_name", "participant_type",
+    "species", "interaction_type", "source_logical_file", "source_line_number",
+    "source_column_index", "source_column_name", "source_raw_value",
+}
+
 
 # Real semantic descriptions for every field in main_data.csv (TODO §1.2).
 # Replaces the placeholder ``field.replace("_", " ")`` that produced strings
 # like ``"gene id namespace"``. Each entry is
 # ``(data_type, description, unit, nullable, example)``.
 _FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str, str, str]] = {
+    "pathway_id": (
+        "string",
+        "Reactome stable identifier for the pathway containing the participant",
+        "", "false", "R-HSA-199420",
+    ),
+    "pathway_name": (
+        "string",
+        "Display name of the Reactome pathway containing the participant",
+        "", "false", "Apoptosis",
+    ),
+    "participant_id": (
+        "string",
+        "Stable identifier of the Reactome physical entity or event participating in the pathway",
+        "", "false", "R-HSA-109581",
+    ),
+    "participant_name": (
+        "string",
+        "Display name of the Reactome participant",
+        "", "false", "Apoptosis signaling",
+    ),
+    "participant_type": (
+        "string",
+        "Reactome schema class or internal type of the participant",
+        "", "false", "PhysicalEntity",
+    ),
+    "species": (
+        "string",
+        "Species associated with the Reactome pathway participant",
+        "", "false", "Homo sapiens",
+    ),
+    "interaction_type": (
+        "string",
+        "Relationship represented by the row between the pathway and participant",
+        "", "false", "participant",
+    ),
     "record_id": (
         "string",
-        "Stable unique row identifier derived from dataset_id, gene_id and sample_id",
-        "", "false", "rec_gse178352_ENSG00000000003_GSM8117703",
+        "Stable unique row identifier derived from dataset_id, pathway_id and participant_id",
+        "", "false", "rec_ds_reactome_r-hsa-199420_R-HSA-109581",
     ),
     "dataset_id": (
         "string",
@@ -503,7 +545,9 @@ def run_artifact_build(
     parsed_path = ctx.workdir.root / parsed_dataset.file_asset.relative_path
     if not parsed_path.is_file():
         raise FileNotFoundError(f"Parsed dataset not found: {parsed_path}")
-    shutil.copy2(parsed_path, staging / "main_data.csv")
+    is_reactome = parsed_dataset.parser_name == "reactome_pathway_participants"
+    main_name = "pathway_members.csv" if is_reactome else "main_data.csv"
+    shutil.copy2(parsed_path, staging / main_name)
 
     pubmed_source_id = next(
         (s.source_id for s in sources if s.database.value == "pubmed"), None
@@ -524,14 +568,20 @@ def run_artifact_build(
         geo.accession if geo else specification.datasets[0].accession
     )
     dataset_title = dataset_title or (geo.title if geo else dataset_accession)
-    source_asset = source_assets[0]
+    source_asset = next(
+        (
+            asset for asset in source_assets
+            if is_reactome and asset.media_type == "text/tab-separated-values"
+        ),
+        source_assets[0],
+    )
     download_attempt = download_attempts[0]
 
     # Build cell-line normalization warnings (TODO §1.7). Each sample whose
     # cell_line_raw was canonicalized produces one warning row.
-    cell_line_warnings = _build_cell_line_warnings(
+    cell_line_warnings = [] if is_reactome else _build_cell_line_warnings(
         samples=samples,
-        geo_source_id=geo_source_id,
+        geo_source_id=geo_source_id or primary_source_id,
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
     )
@@ -572,7 +622,7 @@ def run_artifact_build(
         }
         for sample in samples
     ]
-    if not sample_rows:
+    if not is_reactome and not sample_rows:
         sample_ids = sorted({row["sample_id"] for row in _read_parsed_rows(parsed_path)})
         sample_rows = [
             {
@@ -605,7 +655,7 @@ def run_artifact_build(
         })
 
     rows_by_file: dict[str, list[dict[str, object]]] = {
-        "literature.csv": [
+        "literature.csv": [] if is_reactome else [
             {
                 "source_id": pubmed_source_id or "",
                 "pmid": literature.pmid if literature else "",
@@ -629,15 +679,31 @@ def run_artifact_build(
                 "accession": dataset_accession,
                 "title": geo.title if geo else dataset_title,
                 "organism": geo.organism if geo else "",
-                "experiment_type": geo.experiment_type if geo else "gene_expression",
-                "sample_count": geo.sample_count if geo else 2,
-                "platform_ids": json.dumps(sorted(geo.platform_ids)) if geo else "[]",
-                "related_pmids": json.dumps(sorted(geo.pubmed_ids)) if geo else "[]",
+                "experiment_type": (
+                    "pathway_participants"
+                    if is_reactome
+                    else (geo.experiment_type if geo else "gene_expression")
+                ),
+                "sample_count": (
+                    len(_read_parsed_rows(parsed_path))
+                    if is_reactome
+                    else (geo.sample_count if geo else 2)
+                ),
+                "platform_ids": (
+                    "[]"
+                    if is_reactome
+                    else (json.dumps(sorted(geo.platform_ids)) if geo else "[]")
+                ),
+                "related_pmids": (
+                    "[]"
+                    if is_reactome
+                    else (json.dumps(sorted(geo.pubmed_ids)) if geo else "[]")
+                ),
                 "source_url": dataset_url_value,
                 "retrieved_at": retrieved_at.isoformat(),
             }
         ],
-        "sample_metadata.csv": sample_rows,
+        "sample_metadata.csv": [] if is_reactome else sample_rows,
         "field_descriptions.csv": field_descriptions,
         "field_mapping.csv": _build_field_mapping_rows(
             dataset_id=dataset_id,
@@ -649,7 +715,7 @@ def run_artifact_build(
             record.model_dump(mode="json", exclude={"schema_version"})
             for record in sources
         ],
-        "source_relations.csv": _build_source_relations(
+        "source_relations.csv": [] if is_reactome else _build_source_relations(
             sources=sources,
             literature=literature,
             geo=geo,
@@ -657,16 +723,17 @@ def run_artifact_build(
         ) if literature is not None and geo is not None else [],
         "source_assets.csv": [
             {
-                "asset_id": source_asset.asset_id,
-                "source_id": primary_source_id,
-                "successful_attempt_id": source_asset.successful_attempt_id,
-                "data_level": source_asset.data_level.value,
-                "relative_path": source_asset.relative_path,
-                "size_bytes": source_asset.size_bytes,
-                "sha256": source_asset.sha256,
-                "media_type": source_asset.media_type,
-                "schema_version": source_asset.schema_version,
+                "asset_id": asset.asset_id,
+                "source_id": asset.source_id,
+                "successful_attempt_id": asset.successful_attempt_id,
+                "data_level": asset.data_level.value,
+                "relative_path": asset.relative_path,
+                "size_bytes": asset.size_bytes,
+                "sha256": asset.sha256,
+                "media_type": asset.media_type,
+                "schema_version": asset.schema_version,
             }
+            for asset in source_assets
         ],
         "download_log.csv": [
             {
