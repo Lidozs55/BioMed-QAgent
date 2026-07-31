@@ -41,6 +41,7 @@ class SkillDef:
         input_model: 可选输入模型（pydantic BaseModel）。
         output_model: 可选输出模型。
         examples: 可选示例列表。
+        user_selectable: 是否允许用户在数据库/Skill 选择界面直接选择。
     """
 
     name: str
@@ -51,6 +52,7 @@ class SkillDef:
     supported_sources: list[str] = field(default_factory=list)
     version: str = "0.1.0"
     enabled: bool = True
+    user_selectable: bool = True
     input_model: type | None = None
     output_model: type | None = None
     examples: list[dict] = field(default_factory=list)

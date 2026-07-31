@@ -18,6 +18,15 @@ export function getExtension(name: string): string {
   return index === -1 ? "" : name.slice(index + 1).toLowerCase();
 }
 
+export function triggerArtifactDownload(url: string, filename: string): void {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 export interface FileTypeMeta {
   Icon: Icon;
   label: string;

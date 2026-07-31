@@ -270,17 +270,27 @@ async def download_geo_adapter(
             "asset": (result.asset.model_dump(mode="json") if result.asset else None),
         }
         if result.asset:
-            path = run_ctx.work_dir.root / result.asset.relative_path
+            asset = result.asset
+            if run_ctx.subagent_id is not None:
+                asset = await asyncio.to_thread(
+                    run_ctx.commit_staged_source_asset,
+                    asset,
+                )
+                path = run_ctx.source_asset_path(asset)
+            else:
+                path = run_ctx.work_dir.root / asset.relative_path
+            run_ctx.record_source_asset_id(asset.asset_id)
             run_ctx.add_source(source)
             run_ctx.add_raw_asset(str(path))
             payload["local_files"] = [str(path)]
+            payload["asset"] = asset.model_dump(mode="json")
             payload["format_hint"] = file_type.lower().strip()
             # Surface download progress: "GEO: downloaded N bytes (1 asset)".
             # See docs/REVIEW_2026-07-18.md §4.
             await run_ctx.emit_progress(
                 stage=StageName.ACQUISITION,
                 kind="downloaded_bytes",
-                current=result.asset.size_bytes,
+                current=asset.size_bytes,
                 total=None,
                 detail={
                     "source": "geo",

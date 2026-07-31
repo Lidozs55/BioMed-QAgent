@@ -1,330 +1,309 @@
-"""Tests for the reactome skill — search_reactome and get_pathway.
+"""Reactome skill tests for the unified async fallback chain."""
 
-Tests the three-tier fallback chain (api > httpx > crawl) using
-mocked crawler functions.
-"""
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, Mock, patch
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.skills.builtin.acquisition.reactome import (
+    _accept_reactome_pathway_result,
+    _accept_reactome_search_result,
     get_pathway,
     search_reactome,
 )
-from app.tools.crawler import CrawlError, FetchResult
+from app.tools.crawler import CrawlAttempt, FetchResult, fetch_with_fallback
 
 
-def _make_ctx(task_id: str = "test_reactome") -> ToolContext:
-    rc = RunContext(task_id=task_id)
-    return ToolContext(
-        context=rc,
-        tool_name="search_reactome",
-        tool_call_id="test_call_1",
-        tool_arguments="{}",
+def _context(task_id: str) -> tuple[ToolContext, Mock]:
+    facade = Mock()
+    facade.api = AsyncMock()
+    run_context = RunContext(task_id=task_id)
+    run_context.bind_crawler_facade(facade)
+    return (
+        ToolContext(
+            context=run_context,
+            tool_name="reactome",
+            tool_call_id="call_1",
+            tool_arguments="{}",
+        ),
+        facade,
     )
 
 
-def _api_result(content: str, status_code: int = 200) -> FetchResult:
-    return FetchResult(
-        url="https://reactome.org",
-        content=content,
-        status_code=status_code,
-        elapsed_ms=50,
+def _attempt(method: str, *, status: str = "succeeded") -> CrawlAttempt:
+    return CrawlAttempt(
+        method=method,
+        url=f"https://{method}.example/data",
+        started_at=datetime.now(UTC),
+        status=status,
+        status_code=200 if status == "succeeded" else 500,
+    )
+
+
+class _FallbackFacade:
+    def __init__(self, api_content: str, *, html_content: str) -> None:
+        self.api_content = api_content
+        self.html_content = html_content
+        self.calls: list[str] = []
+
+    async def api(self, url: str) -> FetchResult:
+        self.calls.append("api")
+        return FetchResult(
+            url=url,
+            content=self.api_content,
+            status_code=200,
+            elapsed_ms=1,
+            method_used="api",
+        )
+
+    async def html(self, url: str) -> FetchResult:
+        self.calls.append("html")
+        return FetchResult(
+            url=url,
+            content=self.html_content,
+            status_code=200,
+            elapsed_ms=1,
+            method_used="httpx",
+        )
+
+    async def browser(self, url: str) -> FetchResult:
+        self.calls.append("browser")
+        return FetchResult(
+            url=url,
+            content="<html><body>Rendered Reactome result</body></html>",
+            status_code=200,
+            elapsed_ms=1,
+            method_used="crawl",
+        )
+
+
+def test_search_fallback_rejects_api_json_list_before_html() -> None:
+    facade = _FallbackFacade("[]", html_content="<html><body>Static result</body></html>")
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_search_result,
+        )
+    )
+
+    assert result.method_used == "httpx"
+    assert facade.calls == ["api", "html"]
+
+
+def test_search_fallback_rejects_api_error_document_before_browser() -> None:
+    facade = _FallbackFacade(
+        '{"error": "temporarily unavailable"}',
+        html_content="<html><body><script>no static result</script></body></html>",
+    )
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_search_result,
+        )
+    )
+
+    assert result.method_used == "crawl"
+    assert facade.calls == ["api", "html", "browser"]
+
+
+def test_pathway_fallback_rejects_non_json_api_body_before_html() -> None:
+    facade = _FallbackFacade(
+        "Service temporarily unavailable",
+        html_content="<html><body>Static pathway</body></html>",
+    )
+
+    result = asyncio.run(
+        fetch_with_fallback(
+            "https://reactome.org/api",
+            "https://reactome.org/page",
+            facade=facade,
+            accept_result=_accept_reactome_pathway_result,
+        )
+    )
+
+    assert result.method_used == "httpx"
+    assert facade.calls == ["api", "html"]
+
+
+def test_search_reactome_uses_one_audited_fallback_call() -> None:
+    context, facade = _context("reactome_search")
+    result = FetchResult(
+        url="https://api.example/data",
+        content=json.dumps(
+            {
+                "results": [
+                    {
+                        "entries": [
+                            {
+                                "stId": "R-HSA-169893",
+                                "name": '<span class="highlighting">Apoptosis</span>',
+                                "species": ["Homo sapiens"],
+                                "summation": "Programmed cell death",
+                                "exactType": "Pathway",
+                            }
+                        ]
+                    }
+                ],
+                "numberOfMatches": 1,
+            }
+        ),
+        status_code=200,
+        elapsed_ms=2,
         method_used="api",
-        error=None if status_code == 200 else "error",
+        attempts=(_attempt("api"),),
     )
 
+    with patch(
+        "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+        new=AsyncMock(return_value=result),
+    ) as fallback:
+        payload = asyncio.run(
+            search_reactome.on_invoke_tool(
+                context,
+                json.dumps({"term": "apoptosis"}),
+            )
+        )
 
-# ---------------------------------------------------------------------------
-# search_reactome
-# ---------------------------------------------------------------------------
-
-
-def test_search_reactome_api_success() -> None:
-    """search_reactome returns records when API succeeds."""
-    # 真实 Reactome API 结构:results 分组,每组含 entries;name/summation 含高亮 span
-    api_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 2,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": '<span class="highlighting">Apoptosis</span>',
-                        "species": ["Homo sapiens"],
-                        "summation": '<span class="highlighting">Apoptosis</span> is programmed cell death',
-                        "exactType": "Pathway",
-                    },
-                    {
-                        "stId": "R-HSA-109582",
-                        "name": "Hemostasis",
-                        "species": ["Homo sapiens"],
-                        "summation": "Blood clotting",
-                        "exactType": "Pathway",
-                    },
-                ],
-            }
-        ],
-        "numberOfMatches": 894,
-    })
-    api_result = _api_result(api_response)
-
-    ctx = _make_ctx(task_id="test_reactome_search")
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result):
-        args = json.dumps({"term": "apoptosis", "max_results": 10})
-        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["source"] == "reactome"
-    assert data["term"] == "apoptosis"
-    assert data["count"] == 2
-    assert data["total_matches"] == 894
-    assert data["method_used"] == "api"
-    assert len(data["records"]) == 2
-    assert data["records"][0]["pathway_id"] == "R-HSA-169893"
-    # HTML 高亮标签应被清洗
+    data = json.loads(payload)
     assert data["records"][0]["name"] == "Apoptosis"
-    assert "highlighting" not in data["records"][0]["summary"]
-    assert data["records"][0]["species"] == "Homo sapiens"
-    assert data["records"][0]["type"] == "Pathway"
-
-    rc: RunContext = ctx.context
-    assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "success"
-
-
-def test_search_reactome_enriches_missing_summation_via_pathways_endpoint() -> None:
-    """search_reactome 补全缺失的 summary 字段。
-
-    真实 Reactome ContentService ``/search/query`` 的 entries 不一定包含
-    ``summation`` 字段;search_reactome 应对前 N 条调用
-    ``/data/pathways/{stId}/summation`` 端点补全。
-    """
-    # search/query 返回的 entries 没有 summation 字段
-    search_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 1,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": "Apoptosis",
-                        "species": ["Homo sapiens"],
-                        "exactType": "Pathway",
-                    }
-                ],
-            }
-        ],
-        "numberOfMatches": 1,
-    })
-    summation_response = json.dumps([
-        {"text": "Programmed cell death pathway.", "releaseDate": "2024-01-01"},
-        {"text": "Regulated by caspases and Bcl-2 family."},
-    ])
-
-    search_result = _api_result(search_response)
-    summation_result = _api_result(summation_response)
-
-    ctx = _make_ctx(task_id="test_reactome_enrich")
-    # search_reactome 先调 search/query,再调 /data/pathways/{id}/summation
-    with patch(
-        "app.skills.builtin.acquisition.reactome.api_fetch",
-        side_effect=[search_result, summation_result],
-    ):
-        args = json.dumps({"term": "apoptosis", "max_results": 10})
-        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["source"] == "reactome"
-    assert data["count"] == 1
-    assert data["enriched_count"] == 1
-    rec0 = data["records"][0]
-    assert rec0["pathway_id"] == "R-HSA-169893"
-    # summary 应包含两段拼接
-    assert "Programmed cell death pathway." in rec0["summary"]
-    assert "Regulated by caspases and Bcl-2 family." in rec0["summary"]
-
-    rc: RunContext = ctx.context
-    assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "success"
-
-
-def test_search_reactome_summation_fetch_failure_keeps_empty_summary() -> None:
-    """search_reactome 在 summation 端点失败时保留空 summary,不抛异常。"""
-    search_response = json.dumps({
-        "results": [
-            {
-                "typeName": "Pathway",
-                "entriesCount": 1,
-                "entries": [
-                    {
-                        "stId": "R-HSA-169893",
-                        "name": "Apoptosis",
-                        "species": ["Homo sapiens"],
-                        "exactType": "Pathway",
-                    }
-                ],
-            }
-        ],
-        "numberOfMatches": 1,
-    })
-    search_result = _api_result(search_response)
-    # summation 端点返回 500
-    summation_failed = _api_result("", status_code=500)
-
-    ctx = _make_ctx(task_id="test_reactome_summation_fail")
-    with patch(
-        "app.skills.builtin.acquisition.reactome.api_fetch",
-        side_effect=[search_result, summation_failed],
-    ):
-        args = json.dumps({"term": "apoptosis", "max_results": 10})
-        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["count"] == 1
-    assert data["records"][0]["summary"] == ""
-
-
-def test_search_reactome_parse_failure_accepts_useful_static_html() -> None:
-    """Reactome can use useful visible static HTML without Playwright."""
-    api_result = _api_result("[]")
-    httpx_result = FetchResult(
-        url="https://reactome.org",
-        content="<html><body>Apoptosis pathway details</body></html>",
-        status_code=200,
-        elapsed_ms=100,
-        method_used="httpx",
+    assert data["attempts"][0]["method"] == "api"
+    assert fallback.await_args.args[0].startswith(
+        "https://reactome.org/ContentService/search/query"
+    )
+    assert fallback.await_args.args[1].startswith("https://reactome.org/content/query")
+    assert fallback.await_args.kwargs["facade"] is facade
+    predicate = fallback.await_args.kwargs["accept_result"]
+    assert predicate(result)
+    assert not predicate(
+        FetchResult(
+            url="https://api.example/error",
+            content='{"error": "not found"}',
+            status_code=200,
+            elapsed_ms=1,
+            method_used="api",
+        )
     )
 
-    ctx = _make_ctx(task_id="test_reactome_httpx")
-    with (
-        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
-        patch("app.tools.crawler.httpx_fetch", return_value=httpx_result),
-        patch("app.tools.crawler.playwright_fetch") as crawl,
-    ):
-        args = json.dumps({"term": "BRCA"})
-        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
 
-    data = json.loads(result)
-    assert data["source"] == "reactome"
-    assert data["status"] == "page_fallback"
-    assert data["method_used"] == "httpx"
-    assert data["body_text_preview"] == "Apoptosis pathway details"
-    crawl.assert_not_called()
-
-
-def test_search_reactome_all_fail_returns_structured_error() -> None:
-    """Reactome reports all attempted methods when page fallback fails."""
-    api_result = _api_result("", status_code=500)
-    ctx = _make_ctx(task_id="test_reactome_crawl")
-    with (
-        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
-        patch(
-            "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
-            side_effect=CrawlError("All fetch tiers failed. Tried: httpx, crawl"),
+def test_search_reactome_enrichment_uses_bound_async_facade() -> None:
+    context, facade = _context("reactome_enrichment")
+    search_result = FetchResult(
+        url="https://api.example/data",
+        content=json.dumps(
+            {
+                "results": [
+                    {
+                        "entries": [
+                            {
+                                "stId": "R-HSA-169893",
+                                "name": "Apoptosis",
+                                "species": ["Homo sapiens"],
+                                "exactType": "Pathway",
+                            }
+                        ]
+                    }
+                ],
+                "numberOfMatches": 1,
+            }
         ),
-    ):
-        args = json.dumps({"term": "cell cycle"})
-        result = asyncio.run(search_reactome.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["status"] == "error"
-    assert data["source"] == "reactome"
-    assert data["attempted_methods"] == ["api", "httpx", "crawl"]
-
-    rc: RunContext = ctx.context
-    assert len(rc.query_log) == 1
-    assert rc.query_log[0]["status"] == "failed"
-
-
-# ---------------------------------------------------------------------------
-# get_pathway
-# ---------------------------------------------------------------------------
-
-
-def test_get_pathway_api_success() -> None:
-    """get_pathway returns pathway details when API succeeds."""
-    # 真实 Reactome /data/query/{stId} 端点返回 name 可为数组
-    api_response = json.dumps({
-        "stId": "R-HSA-169893",
-        "name": ["Apoptosis"],
-        "speciesName": "Homo sapiens",
-        "hasDiagram": True,
-        "summation": "Programmed cell death pathway",
-        "releaseDate": "2024-01-01",
-    })
-    api_result = _api_result(api_response)
-
-    ctx = _make_ctx(task_id="test_reactome_get")
-    ctx.tool_name = "get_pathway"
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result):
-        args = json.dumps({"pathway_id": "R-HSA-169893"})
-        result = asyncio.run(get_pathway.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["source"] == "reactome"
-    assert data["pathway_id"] == "R-HSA-169893"
-    assert data["method_used"] == "api"
-    # name 数组应取首项
-    assert data["record"]["name"] == "Apoptosis"
-    assert data["record"]["has_diagram"] is True
-    assert data["record"]["species"] == "Homo sapiens"
-
-    rc: RunContext = ctx.context
-    assert len(rc.sources) == 1
-    assert rc.sources[0].database.value == "reactome"
-    assert rc.sources[0].accession == "R-HSA-169893"
-
-
-def test_get_pathway_name_as_string() -> None:
-    """get_pathway handles name field as plain string (not array)."""
-    api_response = json.dumps({
-        "stId": "R-HSA-109582",
-        "name": "Hemostasis",
-        "speciesName": "Homo sapiens",
-        "hasDiagram": True,
-    })
-    api_result = _api_result(api_response)
-
-    ctx = _make_ctx(task_id="test_reactome_get_str")
-    ctx.tool_name = "get_pathway"
-    with patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result):
-        args = json.dumps({"pathway_id": "R-HSA-109582"})
-        result = asyncio.run(get_pathway.on_invoke_tool(ctx, args))
-
-    data = json.loads(result)
-    assert data["record"]["name"] == "Hemostasis"
-
-
-def test_get_pathway_page_fallback_returns_visible_text() -> None:
-    """get_pathway strips non-visible HTML from its page fallback."""
-    api_result = _api_result("", status_code=404)
-    ctx = _make_ctx(task_id="test_reactome_get_fail")
-    ctx.tool_name = "get_pathway"
-    fallback_result = FetchResult(
-        url="https://reactome.org/content/detail/R-HSA-999999",
-        content="<html><head><style>hidden</style></head><body>Visible pathway</body></html>",
         status_code=200,
-        elapsed_ms=10,
-        method_used="httpx",
+        elapsed_ms=2,
+        method_used="api",
+        attempts=(_attempt("api"),),
     )
-    with (
-        patch("app.skills.builtin.acquisition.reactome.api_fetch", return_value=api_result),
-        patch(
-            "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
-            return_value=fallback_result,
-        ),
-    ):
-        args = json.dumps({"pathway_id": "R-HSA-999999"})
-        result = asyncio.run(get_pathway.on_invoke_tool(ctx, args))
+    facade.api.return_value = FetchResult(
+        url="https://reactome.org/summation",
+        content=json.dumps([{"text": "Programmed cell death."}]),
+        status_code=200,
+        elapsed_ms=1,
+        method_used="api",
+    )
 
-    data = json.loads(result)
+    with patch(
+        "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+        new=AsyncMock(return_value=search_result),
+    ):
+        payload = asyncio.run(
+            search_reactome.on_invoke_tool(
+                context,
+                json.dumps({"term": "apoptosis"}),
+            )
+        )
+
+    assert json.loads(payload)["records"][0]["summary"] == "Programmed cell death."
+    facade.api.assert_awaited_once_with(
+        "https://reactome.org/ContentService/data/pathways/R-HSA-169893/summation"
+    )
+
+
+def test_reactome_static_html_fallback_preserves_attempt_audit() -> None:
+    context, _ = _context("reactome_fallback")
+    result = FetchResult(
+        url="https://reactome.org/content/query?q=apoptosis",
+        content="<html><body>Visible pathway</body></html>",
+        status_code=200,
+        elapsed_ms=2,
+        method_used="httpx",
+        attempts=(
+            _attempt("api", status="failed"),
+            _attempt("html"),
+        ),
+    )
+
+    with patch(
+        "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+        new=AsyncMock(return_value=result),
+    ):
+        payload = asyncio.run(
+            search_reactome.on_invoke_tool(
+                context,
+                json.dumps({"term": "apoptosis"}),
+            )
+        )
+
+    data = json.loads(payload)
     assert data["status"] == "page_fallback"
-    assert data["source"] == "reactome"
-    assert data["body_text_preview"] == "Visible pathway"
+    assert [attempt["method"] for attempt in data["attempts"]] == ["api", "html"]
+
+
+def test_get_pathway_api_success_adds_source_provenance() -> None:
+    context, _ = _context("reactome_get")
+    result = FetchResult(
+        url="https://api.example/data",
+        content=json.dumps(
+            {
+                "stId": "R-HSA-169893",
+                "name": ["Apoptosis"],
+                "speciesName": "Homo sapiens",
+                "hasDiagram": True,
+            }
+        ),
+        status_code=200,
+        elapsed_ms=2,
+        method_used="api",
+        attempts=(_attempt("api"),),
+    )
+
+    with patch(
+        "app.skills.builtin.acquisition.reactome.fetch_with_fallback",
+        new=AsyncMock(return_value=result),
+    ):
+        payload = asyncio.run(
+            get_pathway.on_invoke_tool(
+                context,
+                json.dumps({"pathway_id": "R-HSA-169893"}),
+            )
+        )
+
+    assert json.loads(payload)["record"]["name"] == "Apoptosis"
+    assert context.context.sources[0].accession == "R-HSA-169893"

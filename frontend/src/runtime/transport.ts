@@ -4,6 +4,10 @@ import type {
   WebSocketCommand,
   WebSocketControlFrame,
 } from "./contracts";
+import {
+  isValidSubagentEventPayload,
+  parseSubagentEventPayload,
+} from "@/lib/eventParsersRuntime";
 import type { ConnectionStatus } from "./types";
 
 const CONNECTING = 0;
@@ -40,6 +44,16 @@ const EVENT_TYPES = new Set([
   "assistant_reasoning_delta",
   "tool_started",
   "conversation_compacted",
+  "subagent_queued",
+  "subagent_started",
+  "subagent_progress",
+  "subagent_completed",
+  "subagent_failed",
+  "subagent_cancel_requested",
+  "subagent_cancelled",
+  "subagent_interrupted",
+  "subagent_input_required",
+  "subagent_input_resumed",
 ]);
 
 export interface WebSocketLike {
@@ -124,9 +138,15 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
     value.type === "conversation_compacted" ||
+    value.type.startsWith("subagent_") ||
     (value.type === "tool_completed" &&
       typeof value.payload.tool_call_id === "string") ||
     (value.type === "warning" && value.payload.warning == null);
+  const hasSubagentLinkage =
+    value.subagent_id != null || value.parent_tool_call_id != null;
+  const subagentEvent = value.type.startsWith("subagent_");
+  const subagentId = value.subagent_id;
+  const parentToolCallId = value.parent_tool_call_id;
   return (
     (value.schema_version === "1.0" || value.schema_version === "2.0") &&
     typeof value.event_id === "string" &&
@@ -134,10 +154,18 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     (value.run_id === null || typeof value.run_id === "string") &&
     (value.stage_attempt_id === null ||
       typeof value.stage_attempt_id === "string") &&
+    isOptionalStringOrNull(value.subagent_id) &&
+    isOptionalStringOrNull(value.parent_tool_call_id) &&
     Number.isInteger(value.sequence) &&
     Number(value.sequence) >= 1 &&
     typeof value.timestamp === "string" &&
     value.payload.type === value.type &&
+    (!hasSubagentLinkage ||
+      (value.schema_version === "2.0" && typeof value.run_id === "string")) &&
+    (!subagentEvent ||
+      (typeof subagentId === "string" &&
+        typeof parentToolCallId === "string" &&
+        value.payload.subagent_id === subagentId)) &&
     (!runtimeScoped ||
       (value.schema_version === "2.0" && typeof value.run_id === "string"))
   );
@@ -170,6 +198,22 @@ const ASSISTANT_STREAM_END_KEYS = new Set([
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isOptionalStringOrNull(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function normalizeEventEnvelope(value: unknown): EventEnvelope | null {
+  if (!isEventEnvelope(value)) return null;
+  if (!value.type.startsWith("subagent_")) return value;
+  const payload = parseSubagentEventPayload(value.payload);
+  if (payload === null || payload.type !== value.type) return null;
+  return { ...value, payload };
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -220,6 +264,9 @@ function payloadShapeMatches(
   payload: Record<string, unknown>,
 ): boolean {
   if (payload.type !== type) return false;
+  if (type.startsWith("subagent_")) {
+    return isValidSubagentEventPayload(payload);
+  }
   switch (type) {
     case "run_queued":
       return (
@@ -636,13 +683,14 @@ export class AgentEventTransport {
       this.queueAssistantStreamFrame(frame);
       return;
     }
-    if (!isEventEnvelope(frame)) return;
-    if (!this.active.has(frame.task_id)) return;
-    this.confirmQueuedAssistantStreamFrames(frame);
-    if (isAssistantStreamBoundary(frame) && frame.run_id !== null) {
-      this.discardAssistantStreamFrames(frame.task_id, frame.run_id);
+    const envelope = normalizeEventEnvelope(frame);
+    if (envelope === null) return;
+    if (!this.active.has(envelope.task_id)) return;
+    this.confirmQueuedAssistantStreamFrames(envelope);
+    if (isAssistantStreamBoundary(envelope) && envelope.run_id !== null) {
+      this.discardAssistantStreamFrames(envelope.task_id, envelope.run_id);
     }
-    this.options.applyEvent(frame);
+    this.options.applyEvent(envelope);
   }
 
   private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {

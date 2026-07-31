@@ -9,9 +9,11 @@ import { toast } from "sonner";
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
+import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
@@ -30,6 +32,7 @@ import type {
 } from "@/runtime/contracts";
 import type { ConversationItem } from "@/runtime/types";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   selectActiveItem,
   selectActiveItems,
@@ -134,6 +137,7 @@ export function ChatPanel({
   selectedModelId,
   contextWindow,
 }: ChatPanelProps) {
+  const isMobile = useIsMobile();
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
   const items = useAgentStore(selectActiveItems);
@@ -151,7 +155,7 @@ export function ChatPanel({
   const estimatedTokens = useMemo(() => estimateContextTokens(items), [items]);
 
   // Context compaction handler
-  const [compacting, setCompacting] = useState(false);
+  const [, setCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (activeTaskId === null || compactTask === undefined) return;
     // Manual compaction threshold: only allow when usage > 65%
@@ -210,6 +214,18 @@ export function ChatPanel({
     latestRunIsTerminal(activeTask) &&
     !continuationPending;
   const activeRunId = activeTask?.summary.active_run_id ?? null;
+  const subagentCount = activeTask?.subagentOrder.length ?? 0;
+  const activeSubagentCount = activeTask?.subagentOrder.reduce(
+    (count, subagentId) => {
+      const status = activeTask.subagentsById[subagentId].status;
+      return status === "queued" ||
+        status === "running" ||
+        status === "cancel_requested"
+        ? count + 1
+        : count;
+    },
+    0,
+  ) ?? 0;
   const activeRunHasAssistantMessage =
     activeRunId !== null &&
     items.some(
@@ -415,6 +431,21 @@ export function ChatPanel({
                 ? formatActiveItemStatus(activeItem)
                 : STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
+            {isMobile && subagentCount > 0 ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-auto"
+                onClick={openSubagentPanel}
+                aria-label={`查看 ${subagentCount} 个子任务`}
+              >
+                {activeSubagentCount > 0 ? (
+                  <Spinner data-icon="inline-start" aria-hidden="true" />
+                ) : null}
+                <Badge variant="secondary">{activeSubagentCount} 个运行中</Badge>
+              </Button>
+            ) : null}
           </Marker>
         </div>
       )}

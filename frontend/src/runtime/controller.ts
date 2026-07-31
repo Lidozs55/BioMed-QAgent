@@ -538,6 +538,29 @@ export class RuntimeController {
     });
   }
 
+  async cancelSubagent(
+    taskId: string,
+    runId: string,
+    subagentId: string,
+  ): Promise<void> {
+    await this.enqueueTaskHandoff(taskId, async () => {
+      const generation = this.advanceTaskHandoffGeneration(taskId);
+      const snapshot = await this.api.cancelSubagent(
+        taskId,
+        runId,
+        subagentId,
+      );
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      try {
+        await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
+      } catch {
+        // The backend cancellation already succeeded; the snapshot remains authoritative.
+      }
+      if (this.taskHandoffGenerations.get(taskId) !== generation) return;
+      useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    });
+  }
+
   async resumeRun(
     taskId: string,
     runId: string,

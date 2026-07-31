@@ -210,6 +210,8 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     startImportTask: vi.fn(),
     continueTask: vi.fn(),
     cancelRun: vi.fn(),
+    cancelSubagent: vi.fn(),
+    compactTask: vi.fn(),
     resumeRun: vi.fn(),
     deleteTask: vi.fn(),
     fetchArtifacts: vi.fn(),
@@ -2397,6 +2399,64 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().tasksById.task_cancel.summary.status).toBe(
       "cancel_requested",
     );
+  });
+
+  it("delegates one child cancellation to the API and replays through its snapshot watermark", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_child_cancel", "running", 1)]),
+      false,
+    );
+    const cancelledSnapshot: TaskSnapshot = {
+      task: {
+        ...summary("task_child_cancel", "running", 2),
+        active_run_id: "run_task_child_cancel",
+      },
+      runs: [],
+      messages: [],
+      older_messages_cursor: null,
+    };
+    const apiClient = api({
+      cancelSubagent: vi.fn().mockResolvedValue(cancelledSnapshot),
+      fetchEvents: vi.fn().mockResolvedValue([
+        {
+          schema_version: "2.0",
+          event_id: "event_child_cancel_requested",
+          type: "subagent_cancel_requested",
+          task_id: "task_child_cancel",
+          run_id: "run_task_child_cancel",
+          subagent_id: "subagent_1",
+          parent_tool_call_id: "tool_1",
+          stage_attempt_id: null,
+          sequence: 2,
+          timestamp: CREATED_AT,
+          payload: {
+            type: "subagent_cancel_requested",
+            subagent_id: "subagent_1",
+            reason: null,
+          },
+        },
+      ]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await controller.cancelSubagent(
+      "task_child_cancel",
+      "run_task_child_cancel",
+      "subagent_1",
+    );
+
+    expect(apiClient.cancelSubagent).toHaveBeenCalledWith(
+      "task_child_cancel",
+      "run_task_child_cancel",
+      "subagent_1",
+    );
+    expect(apiClient.fetchEvents).toHaveBeenCalledWith("task_child_cancel", {
+      afterSequence: 1,
+      limit: 1000,
+    });
+    expect(
+      useAgentStore.getState().tasksById.task_child_cancel.lastSequence,
+    ).toBe(2);
   });
 
   it("replays diagnostic events before hydrating a cancellation snapshot", async () => {

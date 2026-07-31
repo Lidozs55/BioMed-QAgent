@@ -14,24 +14,30 @@ behavior across all acquisition skills (project_memory L11).
 
 Integration plan: docs/separateweb_capture_integration_plan.md
 """
+
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, StageName, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    StageName,
+    generate_prefixed_uuid,
+    make_source_id,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawler import playwright_screenshot
-from app.tools.workdir import TaskWorkDir
+from app.tools.crawler import BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
 
@@ -46,86 +52,6 @@ _MAX_VIEWPORT_HEIGHT = 1080
 _SAFE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def _sha256_file(path: Path) -> str:
-    """Compute SHA-256 hex digest of a file."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _build_figure_path(workdir: TaskWorkDir, sha256: str) -> Path:
-    """Build the content-addressed destination path for a screenshot.
-
-    The path is ``source_assets/figures/fig_<sha256[:12]>.png`` — content-
-    addressed so identical screenshots deduplicate naturally, and the short
-    prefix keeps filenames manageable while collision-resistant for a single
-    task's expected volume.
-
-    Goes through ``TaskWorkDir.source_asset_file`` so ``_safe_child`` validates
-    path safety (no ``..`` escape, no absolute paths).
-    """
-    return workdir.source_asset_file(f"figures/fig_{sha256[:12]}.png")
-
-
-def _build_meta_path(workdir: TaskWorkDir, sha256: str) -> Path:
-    """Build the per-screenshot metadata JSON path."""
-    return workdir.source_asset_file(f"figures/fig_{sha256[:12]}_meta.json")
-
-
-def _write_meta_json(
-    meta_path: Path,
-    *,
-    url: str,
-    sha256: str,
-    size_bytes: int,
-    viewport_width: int,
-    viewport_height: int,
-    full_page: bool,
-    selector: str | None,
-    label: str | None,
-    captured_at: datetime,
-) -> None:
-    """Write the per-screenshot metadata sidecar JSON."""
-    meta = {
-        "url": url,
-        "sha256": sha256,
-        "size_bytes": size_bytes,
-        "viewport": {"width": viewport_width, "height": viewport_height},
-        "full_page": full_page,
-        "selector": selector,
-        "label": label,
-        "captured_at": captured_at.isoformat(),
-        "media_type": "image/png",
-    }
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-
-
-def _publish_screenshot(temp_path: Path, dest_path: Path) -> None:
-    """Atomically publish a screenshot from temp to source_assets.
-
-    Follows ``browser_fallback._publish_no_clobber`` semantics: hard-link if
-    possible, otherwise move. Does not overwrite an existing asset (content-
-    addressed naming means the same SHA-256 is the same image).
-    """
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os_link = getattr(__import__("os"), "link", None)
-        if os_link is not None and not dest_path.exists():
-            try:
-                os_link(temp_path, dest_path)
-                return
-            except OSError:
-                pass  # Fall through to rename
-        if not dest_path.exists():
-            temp_path.replace(dest_path)
-            return
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
 def _validate_label(label: str | None) -> str | None:
     """Validate that label is safe for use in filenames and logs.
 
@@ -136,8 +62,7 @@ def _validate_label(label: str | None) -> str | None:
         return None
     if not _SAFE_LABEL_PATTERN.fullmatch(label):
         raise ValueError(
-            "label must be 1-64 chars of [A-Za-z0-9_-] only; "
-            "path separators and '..' are forbidden"
+            "label must be 1-64 chars of [A-Za-z0-9_-] only; path separators and '..' are forbidden"
         )
     return label
 
@@ -167,26 +92,33 @@ async def _do_capture(
             ensure_ascii=False,
         )
 
-    temp_path = run_ctx.work_dir.download_temp_file(
-        f"capture_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}.png"
-    )
     try:
-        result = await asyncio.to_thread(
-            playwright_screenshot,
+        viewport_width = max(1, min(viewport_width, _MAX_VIEWPORT_WIDTH))
+        viewport_height = max(1, min(viewport_height, _MAX_VIEWPORT_HEIGHT))
+        captured_at = datetime.now(UTC)
+        accession = validated_label or generate_prefixed_uuid("capture")
+        source_id = make_source_id(Database.BROWSER, accession, url)
+        attempt_id = generate_prefixed_uuid("attempt")
+        workspace = run_ctx.source_asset_workspace()
+        result = await run_ctx.crawler_facade.screenshot(
             url,
-            dest_path=temp_path,
+            workspace=workspace,
+            filename="capture.png",
+            source_id=source_id,
+            successful_attempt_id=attempt_id,
+            data_level=DataLevel.METADATA,
             full_page=full_page,
             viewport_width=viewport_width,
             viewport_height=viewport_height,
             wait_until=wait_until,
             selector=selector,
+            extra_headers=BROWSER_HEADERS,
         )
-
-        if not result.ok:
+        if result.status_code < 200 or result.status_code >= 300:
             run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
             run_ctx.add_warning(
                 severity="warning",
-                message=f"capture failed for {url}: {result.error or result.status_code}",
+                message=f"capture failed for {url}: HTTP {result.status_code}",
                 source="web_visual_capture",
             )
             return json.dumps(
@@ -194,65 +126,67 @@ async def _do_capture(
                     "source": "web_visual_capture",
                     "url": url,
                     "status_code": result.status_code,
-                    "error": result.error or f"HTTP {result.status_code}",
+                    "error": f"HTTP {result.status_code}",
                     "viewport": {
-                        "width": result.viewport_width,
-                        "height": result.viewport_height,
+                        "width": viewport_width,
+                        "height": viewport_height,
                     },
                 },
                 ensure_ascii=False,
             )
 
-        if not temp_path.exists() or temp_path.stat().st_size == 0:
-            run_ctx.log_query(url, "web_visual_capture", QueryStatus.FAILED, 0)
-            return json.dumps(
-                {
-                    "source": "web_visual_capture",
-                    "url": url,
-                    "error": "screenshot file is missing or empty",
-                },
-                ensure_ascii=False,
-            )
-
-        sha256 = _sha256_file(temp_path)
-        size_bytes = temp_path.stat().st_size
-        dest_path = _build_figure_path(run_ctx.work_dir, sha256)
-        meta_path = _build_meta_path(run_ctx.work_dir, sha256)
-        captured_at = datetime.now(UTC)
-
-        # Publish the screenshot (content-addressed; no-clobber if exists)
-        _publish_screenshot(temp_path, dest_path)
-        temp_path = None  # Consumed by _publish_screenshot
-
-        # Write per-screenshot metadata sidecar
-        _write_meta_json(
-            meta_path,
-            url=url,
-            sha256=sha256,
-            size_bytes=size_bytes,
-            viewport_width=result.viewport_width,
-            viewport_height=result.viewport_height,
-            full_page=full_page,
-            selector=selector,
-            label=validated_label,
-            captured_at=captured_at,
+        committed = await asyncio.to_thread(
+            workspace.commit_source_asset,
+            result.source_asset,
         )
-
-        # Emit oversize warning if the PNG exceeds the threshold
+        run_ctx.record_source_asset_id(committed.asset_id)
+        dest_path = workspace.task_root / committed.relative_path
+        sha256 = committed.sha256
+        size_bytes = committed.size_bytes
+        metadata = {
+            "url": url,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "viewport": {
+                "width": viewport_width,
+                "height": viewport_height,
+            },
+            "full_page": full_page,
+            "selector": selector,
+            "label": validated_label,
+            "captured_at": captured_at.isoformat(),
+            "media_type": "image/png",
+        }
+        metadata_asset = await asyncio.to_thread(
+            workspace.stage_bytes,
+            content=json.dumps(
+                metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8"),
+            filename="capture_meta.json",
+            source_id=source_id,
+            successful_attempt_id=attempt_id,
+            data_level=DataLevel.METADATA,
+            media_type="application/json",
+        )
+        committed_metadata = await asyncio.to_thread(
+            workspace.commit_source_asset,
+            metadata_asset,
+        )
+        run_ctx.record_source_asset_id(committed_metadata.asset_id)
+        meta_path = workspace.task_root / committed_metadata.relative_path
         if size_bytes > _MAX_SCREENSHOT_BYTES:
             run_ctx.add_warning(
                 severity="warning",
                 message=(
-                    f"screenshot oversize: {size_bytes} bytes "
-                    f"(> {_MAX_SCREENSHOT_BYTES}) for {url}"
+                    f"screenshot oversize: {size_bytes} bytes (> {_MAX_SCREENSHOT_BYTES}) for {url}"
                 ),
                 source="web_visual_capture",
             )
 
-        # Register provenance (loose SourceRecord, browser_fallback pattern)
-        accession = validated_label or sha256[:12]
         source_record = SourceRecord(
-            source_id=make_source_id(Database.BROWSER, accession, url),
+            source_id=source_id,
             database=Database.BROWSER,
             accession=accession,
             url=url,
@@ -276,8 +210,8 @@ async def _do_capture(
                 "sha256": sha256,
                 "size_bytes": size_bytes,
                 "viewport": {
-                    "width": result.viewport_width,
-                    "height": result.viewport_height,
+                    "width": viewport_width,
+                    "height": viewport_height,
                 },
                 "full_page": full_page,
                 "selector": selector,
@@ -286,7 +220,10 @@ async def _do_capture(
 
         logger.info(
             "web_visual_capture url=%s status=%d bytes=%d dest=%s",
-            url, result.status_code, size_bytes, dest_path,
+            url,
+            result.status_code,
+            size_bytes,
+            dest_path,
         )
 
         return json.dumps(
@@ -299,8 +236,8 @@ async def _do_capture(
                 "sha256": sha256,
                 "size_bytes": size_bytes,
                 "viewport": {
-                    "width": result.viewport_width,
-                    "height": result.viewport_height,
+                    "width": viewport_width,
+                    "height": viewport_height,
                 },
                 "full_page": full_page,
                 "selector": selector,
@@ -326,9 +263,6 @@ async def _do_capture(
             },
             ensure_ascii=False,
         )
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
 
 
 @function_tool

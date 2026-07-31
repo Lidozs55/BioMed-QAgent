@@ -58,6 +58,7 @@ class SkillOperation(BaseModel):
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     tool: Any
+    access_requirement: Literal["public", "credential_required"] = "public"
 
     @model_validator(mode="after")
     def _validate_tool(self) -> SkillOperation:
@@ -143,10 +144,7 @@ class SkillDescriptor(BaseModel):
         package_hash: str | None = None,
     ) -> SkillDescriptor:
         """Adapt an existing builtin ``SkillDef`` without changing its module."""
-        operations = tuple(
-            SkillOperation(name=tool.name, tool=tool)
-            for tool in skill.tools
-        )
+        operations = tuple(SkillOperation(name=tool.name, tool=tool) for tool in skill.tools)
         return cls(
             name=skill.name,
             display_name=display_name or skill.name,
@@ -177,14 +175,18 @@ class CatalogSnapshot:
         descriptor = self.skills.get(skill)
         if descriptor is None:
             return None
-        tool = descriptor.resolve_operation(operation)
-        if tool is None:
+        operation_binding = next(
+            (item for item in descriptor.operations if item.name == operation),
+            None,
+        )
+        if operation_binding is None:
             return None
         return ResolvedOperation(
             skill=descriptor.name,
             version=descriptor.version,
             operation=operation,
-            tool=tool,
+            tool=operation_binding.tool,
+            access_requirement=operation_binding.access_requirement,
         )
 
 
@@ -196,6 +198,7 @@ class ResolvedOperation:
     version: str
     operation: str
     tool: Any
+    access_requirement: Literal["public", "credential_required"] = "public"
 
     async def invoke(
         self,

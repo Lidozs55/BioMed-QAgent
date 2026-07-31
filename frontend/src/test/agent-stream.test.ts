@@ -397,6 +397,187 @@ describe("durable event transport", () => {
     ).toBe("legacy-null");
   });
 
+  it("rejects malformed subagent envelopes without advancing the replay cursor", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const queued = {
+      schema_version: "2.0",
+      event_id: "subagent_event_1",
+      type: "subagent_queued",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      subagent_id: "subagent_1",
+      parent_tool_call_id: "call_parent_1",
+      sequence: 1,
+      timestamp: CREATED_AT,
+      payload: {
+        type: "subagent_queued",
+        subagent_id: "subagent_1",
+        request: {
+          agent_type: "source_research",
+          objective: "Find datasets",
+          target_source: null,
+          domain: "genomics",
+          capability: "dataset_search",
+          inputs: {},
+        },
+      },
+    };
+    const terminal = {
+      ...queued,
+      type: "subagent_completed",
+      payload: {
+        type: "subagent_completed",
+        subagent_id: "subagent_1",
+        result: {
+          subagent_id: "subagent_1",
+          status: "completed",
+          summary: "Done",
+          source_asset_ids: ["source_1"],
+          recipe_id: null,
+          warnings: [],
+          error_code: null,
+          error_message: null,
+        },
+      },
+    };
+    const inputRequired = {
+      ...queued,
+      type: "subagent_input_required",
+      payload: {
+        type: "subagent_input_required",
+        subagent_id: "subagent_1",
+        request_id: "request_1",
+        summary: "Approve source access",
+        prompt_kind: "confirmation",
+        expires_at: null,
+        detail: {},
+      },
+    };
+
+    const malformed = [
+      { ...event("task_a", 1, "bad-link"), subagent_id: 7 },
+      { ...event("task_a", 1, "blank-link"), subagent_id: "" },
+      {
+        ...queued,
+        payload: {
+          ...queued.payload,
+          request: { ...queued.payload.request, agent_type: "unknown_agent" },
+        },
+      },
+      {
+        ...queued,
+        payload: {
+          ...queued.payload,
+          request: { ...queued.payload.request, target_source: 7 },
+        },
+      },
+      {
+        ...terminal,
+        payload: {
+          ...terminal.payload,
+          result: { ...terminal.payload.result, status: "failed" },
+        },
+      },
+      {
+        ...terminal,
+        payload: {
+          ...terminal.payload,
+          result: { ...terminal.payload.result, source_asset_ids: [7] },
+        },
+      },
+      {
+        ...inputRequired,
+        payload: {
+          ...inputRequired.payload,
+          prompt_kind: "invalid_prompt",
+        },
+      },
+    ];
+    for (const frame of malformed) sockets[0].message(frame);
+
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(0);
+    sockets[0].message(queued);
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
+  });
+
+  it("normalizes omitted nullable subagent payload fields before reducing", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const envelope = {
+      schema_version: "2.0",
+      event_id: "legacy_subagent_1",
+      type: "subagent_queued",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      subagent_id: "subagent_legacy",
+      parent_tool_call_id: "call_parent_1",
+      sequence: 1,
+      timestamp: CREATED_AT,
+      payload: {
+        type: "subagent_queued",
+        subagent_id: "subagent_legacy",
+        request: {
+          agent_type: "source_research",
+          objective: "Find legacy datasets",
+          domain: "genomics",
+          capability: "dataset_search",
+          inputs: {},
+        },
+      },
+    };
+    sockets[0].message(envelope);
+    sockets[0].message({
+      ...envelope,
+      event_id: "legacy_subagent_2",
+      type: "subagent_progress",
+      sequence: 2,
+      payload: {
+        type: "subagent_progress",
+        subagent_id: "subagent_legacy",
+        current: 1,
+      },
+    });
+    sockets[0].message({
+      ...envelope,
+      event_id: "legacy_subagent_3",
+      type: "subagent_completed",
+      sequence: 3,
+      payload: {
+        type: "subagent_completed",
+        subagent_id: "subagent_legacy",
+        result: {
+          subagent_id: "subagent_legacy",
+          status: "completed",
+          summary: "Found one dataset",
+          source_asset_ids: [],
+          warnings: [],
+        },
+      },
+    });
+
+    const subagent = useAgentStore.getState().tasksById.task_a.subagentsById
+      .subagent_legacy;
+    expect(subagent).toMatchObject({
+      targetSource: null,
+      progressTotal: null,
+      progressMessage: null,
+      recipeId: null,
+      errorCode: null,
+      errorMessage: null,
+    });
+  });
+
   it("cancels a queued visual batch and deactivates streams on disconnect", async () => {
     const scheduled: Array<() => void> = [];
     const cancelled: number[] = [];

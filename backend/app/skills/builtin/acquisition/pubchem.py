@@ -9,6 +9,7 @@ This skill uses the three-tier fallback chain (api > httpx > crawl):
 
 PUG-REST API docs: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
 """
+
 from __future__ import annotations
 
 import json
@@ -23,7 +24,7 @@ from bs4 import BeautifulSoup
 from app.agent_loop.context import RunContext
 from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.crawler import CrawlError, FetchResult, api_fetch, fetch_with_fallback
+from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -39,28 +40,69 @@ def _visible_text(html: str) -> str:
     return " ".join(soup.get_text(separator=" ", strip=True).split())
 
 
-def _accept_pubchem_page(result: FetchResult) -> bool:
+def _pubchem_properties(result: FetchResult) -> list[object] | None:
+    if result.method_used == "api":
+        try:
+            data = json.loads(result.content)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        properties = data.get("PropertyTable", {}).get("Properties")
+        return properties if isinstance(properties, list) else None
+    return None
+
+
+def _accept_pubchem_search_result(result: FetchResult) -> bool:
+    if result.method_used == "api":
+        return _pubchem_properties(result) is not None
     return result.method_used == "crawl" and bool(_visible_text(result.content))
 
 
+def _accept_pubchem_compound_result(result: FetchResult) -> bool:
+    if result.method_used == "api":
+        return bool(_pubchem_properties(result))
+    return result.method_used == "crawl" and bool(_visible_text(result.content))
+
+
+def _attempt_audit(attempts: tuple[CrawlAttempt, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "method": attempt.method,
+            "url": attempt.url,
+            "status": attempt.status,
+            "status_code": attempt.status_code,
+            "reason": attempt.reason,
+            "fallback_reason": attempt.fallback_reason,
+        }
+        for attempt in attempts
+    ]
+
+
 def _page_fallback(source: str, page_url: str, result: FetchResult) -> str:
-    return json.dumps({
-        "status": "page_fallback",
-        "source": source,
-        "method_used": result.method_used,
-        "page_url": page_url,
-        "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "page_fallback",
+            "source": source,
+            "method_used": result.method_used,
+            "page_url": page_url,
+            "body_text_preview": _visible_text(result.content)[:_MAX_BODY_CHARS],
+            "attempts": _attempt_audit(result.attempts),
+        },
+        ensure_ascii=False,
+    )
 
 
 def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
-    return json.dumps({
-        "status": "error",
-        "source": source,
-        "page_url": page_url,
-        "attempted_methods": ["api", "httpx", "crawl"],
-        "error": str(error),
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "status": "error",
+            "source": source,
+            "page_url": page_url,
+            "attempted_methods": ["api", "httpx", "crawl"],
+            "attempts": _attempt_audit(error.attempts),
+            "error": str(error),
+        },
+        ensure_ascii=False,
+    )
 
 
 @function_tool(
@@ -72,7 +114,7 @@ def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
         "Use ``get_compound`` to get full details for a specific CID."
     ),
 )
-def search_pubchem(
+async def search_pubchem(
     ctx: RunContextWrapper[Any],
     term: str,
     max_results: int = 20,
@@ -102,9 +144,19 @@ def search_pubchem(
         f"JSON?MaxRecords={max_results}"
     )
 
-    # Tier 1: API
-    result = api_fetch(api_url)
-    if result.ok:
+    page_url = f"https://pubchem.ncbi.nlm.nih.gov/#query={encoded_term}"
+    try:
+        result = await fetch_with_fallback(
+            api_url,
+            page_url,
+            source_name="pubchem",
+            accept_result=_accept_pubchem_search_result,
+            facade=run_ctx.crawler_facade,
+        )
+    except CrawlError as exc:
+        run_ctx.log_query(term, "pubchem", QueryStatus.FAILED, 0)
+        return _fallback_error("pubchem", page_url, exc)
+    if result.method_used == "api":
         try:
             data = json.loads(result.content)
             compounds = data.get("PropertyTable", {}).get("Properties", [])
@@ -120,37 +172,25 @@ def search_pubchem(
                 for c in compounds
             ]
             run_ctx.log_query(term, "pubchem", QueryStatus.SUCCESS, len(records))
-            return json.dumps({
-                "source": "pubchem",
-                "term": term,
-                "count": len(records),
-                "records": records,
-                "method_used": "api",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "source": "pubchem",
+                    "term": term,
+                    "count": len(records),
+                    "records": records,
+                    "method_used": "api",
+                    "attempts": _attempt_audit(result.attempts),
+                },
+                ensure_ascii=False,
+            )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem API response: %s", exc)
-
-    # Direct page fallback: PubChem requires rendered browser content.
-    page_url = f"https://pubchem.ncbi.nlm.nih.gov/#query={encoded_term}"
-    try:
-        page_result = fetch_with_fallback(
-            None,
-            page_url,
-            source_name="pubchem",
-            accept_result=_accept_pubchem_page,
-        )
-        # Page fallback returns only a visible-text preview, not structured
-        # records — log honestly so query_log/metrics don't overstate success.
-        # See docs/REVIEW_2026-07-18.md §17.3 item 2.
-        run_ctx.log_query(term, "pubchem", QueryStatus.PAGE_FALLBACK, 0)
-        return _page_fallback("pubchem", page_url, page_result)
-    except CrawlError as exc:
-        run_ctx.log_query(term, "pubchem", QueryStatus.FAILED, 0)
-        return _fallback_error("pubchem", page_url, exc)
+    run_ctx.log_query(term, "pubchem", QueryStatus.PAGE_FALLBACK, 0)
+    return _page_fallback("pubchem", page_url, result)
 
 
 @function_tool
-def get_compound(
+async def get_compound(
     ctx: RunContextWrapper[Any],
     cid: int,
 ) -> str:
@@ -175,9 +215,19 @@ def get_compound(
         f"JSON"
     )
 
-    # Tier 1: API
-    result = api_fetch(api_url)
-    if result.ok:
+    page_url = f"{_PUBCHEM_PAGE_BASE}/{cid}"
+    try:
+        result = await fetch_with_fallback(
+            api_url,
+            page_url,
+            source_name="pubchem",
+            accept_result=_accept_pubchem_compound_result,
+            facade=run_ctx.crawler_facade,
+        )
+    except CrawlError as exc:
+        run_ctx.log_query(str(cid), "pubchem", QueryStatus.FAILED, 0)
+        return _fallback_error("pubchem", page_url, exc)
+    if result.method_used == "api":
         try:
             data = json.loads(result.content)
             compounds = data.get("PropertyTable", {}).get("Properties", [])
@@ -205,31 +255,20 @@ def get_compound(
                 )
                 run_ctx.add_source(source_record)
 
-                return json.dumps({
-                    "source": "pubchem",
-                    "cid": cid,
-                    "record": record,
-                    "method_used": "api",
-                }, ensure_ascii=False)
+                return json.dumps(
+                    {
+                        "source": "pubchem",
+                        "cid": cid,
+                        "record": record,
+                        "method_used": "api",
+                        "attempts": _attempt_audit(result.attempts),
+                    },
+                    ensure_ascii=False,
+                )
         except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
             logger.warning("Failed to parse PubChem compound response: %s", exc)
-
-    # Direct rendered page fallback.
-    page_url = f"{_PUBCHEM_PAGE_BASE}/{cid}"
-    try:
-        page_result = fetch_with_fallback(
-            None,
-            page_url,
-            source_name="pubchem",
-            accept_result=_accept_pubchem_page,
-        )
-        # Page fallback returns only a visible-text preview, not structured
-        # compound records — log honestly. See docs/REVIEW_2026-07-18.md §17.3.
-        run_ctx.log_query(str(cid), "pubchem", QueryStatus.PAGE_FALLBACK, 0)
-        return _page_fallback("pubchem", page_url, page_result)
-    except CrawlError as exc:
-        run_ctx.log_query(str(cid), "pubchem", QueryStatus.FAILED, 0)
-        return _fallback_error("pubchem", page_url, exc)
+    run_ctx.log_query(str(cid), "pubchem", QueryStatus.PAGE_FALLBACK, 0)
+    return _page_fallback("pubchem", page_url, result)
 
 
 pubchem_skill = SkillDef(

@@ -12,7 +12,6 @@ _NON_SELECTABLE_BUILTINS = {
     "local_cache",
     "web_visual_capture",
     "literature_understanding",
-    "self_evolution",
     "pdf_extraction",
     "extract_chart_data_vlm",
     "analysis",
@@ -38,7 +37,8 @@ def load_builtin_skill_descriptors() -> tuple[SkillDescriptor, ...]:
             skill,
             display_name=skill.name.replace("_", " ").title(),
             user_selectable=(
-                bool(skill.supported_sources)
+                skill.user_selectable
+                and bool(skill.supported_sources)
                 and skill.name not in _NON_SELECTABLE_BUILTINS
             ),
             pipeline_supported=skill.name in _PIPELINE_SUPPORTED_BUILTINS,

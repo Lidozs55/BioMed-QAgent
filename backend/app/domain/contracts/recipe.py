@@ -1,0 +1,299 @@
+"""Declarative, non-executable workflow recipe contracts."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from enum import StrEnum
+from typing import Annotated, Any, Literal, Self
+
+from pydantic import Field, JsonValue, field_validator, model_validator
+
+from app.domain.contracts.base import ContractModel
+
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_URL_USERINFO_PATTERN = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s@]+@")
+_EXECUTABLE_FIELD_TOKENS = {"code", "javascript", "python", "script", "shell"}
+_ALLOWED_CODE_FIELD_NAMES = {"statuscode"}
+_COMPACT_EXECUTABLE_FIELD_NAMES = {
+    "executablecode",
+    "generatedsourcecode",
+    "javascriptbody",
+    "javascriptcode",
+    "javascriptcommand",
+    "javascriptpayload",
+    "pythonbody",
+    "pythoncode",
+    "pythoncommand",
+    "pythonpayload",
+    "pythonscript",
+    "scriptbody",
+    "scriptcode",
+    "scriptcommand",
+    "scriptpayload",
+    "shellbody",
+    "shellcode",
+    "shellcommand",
+    "shellpayload",
+    "shellscript",
+    "sourcecode",
+}
+
+
+class RecipeStatus(StrEnum):
+    DRAFT = "draft"
+    VERIFIED = "verified"
+    PROMOTED = "promoted"
+    REJECTED = "rejected"
+
+
+class ApiRequestStep(ContractModel):
+    type: Literal["api_request"] = "api_request"
+    method: Literal["GET", "POST"] = "GET"
+    url_template: str = Field(min_length=1)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    output_name: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url_template")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
+
+
+class HtmlExtractStep(ContractModel):
+    type: Literal["html_extract"] = "html_extract"
+    url_template: str = Field(min_length=1)
+    selectors: dict[str, str] = Field(min_length=1)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    output_name: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url_template")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
+
+
+class BrowserActionStep(ContractModel):
+    type: Literal["browser_action"] = "browser_action"
+    action: Literal["navigate", "click", "fill", "select", "wait_for", "extract"]
+    target: str | None = Field(default=None, min_length=1)
+    value: str | None = Field(default=None, min_length=1)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    output_name: str | None = Field(default=None, min_length=1)
+
+    @field_validator("target", "value")
+    @classmethod
+    def reject_url_userinfo(cls, value: str | None) -> str | None:
+        return _reject_url_userinfo(value) if value is not None else None
+
+
+RecipeStep = Annotated[
+    ApiRequestStep | HtmlExtractStep | BrowserActionStep,
+    Field(discriminator="type"),
+]
+
+
+class RecipeAttempt(ContractModel):
+    method: Literal["api", "html", "browser"]
+    url: str = Field(min_length=1)
+    status: Literal["succeeded", "failed", "skipped"]
+    started_at: datetime
+    finished_at: datetime
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    reason: str | None = Field(default=None, min_length=1)
+    fallback_reason: str | None = Field(default=None, min_length=1)
+
+    @field_validator("url")
+    @classmethod
+    def reject_url_userinfo(cls, value: str) -> str:
+        return _reject_url_userinfo(value)
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> Self:
+        if self.finished_at < self.started_at:
+            raise ValueError("finished_at must not precede started_at")
+        return self
+
+
+class WorkflowRecipe(ContractModel):
+    recipe_id: str = Field(min_length=1)
+    version: int = Field(default=0, ge=0)
+    digest: str = ""
+    status: RecipeStatus = RecipeStatus.DRAFT
+    created_at: datetime
+    verified_at: datetime | None = None
+    promotion_requested_at: datetime | None = None
+    promoted_at: datetime | None = None
+    rejected_at: datetime | None = None
+    generated_by_model: str = Field(min_length=1)
+    domain: str = Field(min_length=1)
+    capability: str = Field(min_length=1)
+    allowed_hosts: list[str] = Field(default_factory=list)
+    url_patterns: list[str] = Field(default_factory=list)
+    input_schema: dict[str, JsonValue] = Field(default_factory=dict)
+    steps: list[RecipeStep] = Field(min_length=1)
+    attempts: list[RecipeAttempt] = Field(default_factory=list)
+    output_extraction: dict[str, JsonValue] = Field(default_factory=dict)
+    source_asset_mapping: dict[str, JsonValue] = Field(default_factory=dict)
+    security_requirements: list[str] = Field(default_factory=list)
+    hil_requirements: list[str] = Field(default_factory=list)
+    rate_limit_seconds: float = Field(default=0.0, ge=0)
+    timeout_seconds: float = Field(default=900.0, gt=0, le=900)
+    verification_evidence: list[str] = Field(default_factory=list)
+    last_succeeded_at: datetime | None = None
+    rejection_reason: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_executable_fields(cls, value: Any) -> Any:
+        if _contains_executable_field(value):
+            raise ValueError("WorkflowRecipe cannot contain executable fields")
+        if _contains_url_userinfo(value):
+            raise ValueError("WorkflowRecipe cannot contain URL userinfo credentials")
+        return value
+
+    @field_validator("digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized and not _SHA256_PATTERN.fullmatch(normalized):
+            raise ValueError("digest must contain 64 hexadecimal characters")
+        return normalized
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def normalize_hosts(cls, value: list[str]) -> list[str]:
+        normalized = [host.strip().lower().rstrip(".") for host in value]
+        if any(not host or "/" in host or "\\" in host for host in normalized):
+            raise ValueError("allowed_hosts must contain host names only")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("allowed_hosts must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_lifecycle_fields(self) -> Self:
+        if self.last_succeeded_at is not None and self.verified_at is None:
+            raise ValueError("lifecycle last_succeeded_at requires verified_at")
+        lifecycle = (
+            self.verified_at,
+            self.promotion_requested_at,
+            self.promoted_at,
+            self.rejected_at,
+            self.last_succeeded_at,
+            self.rejection_reason,
+        )
+        if self.status is RecipeStatus.DRAFT:
+            if any(value is not None for value in lifecycle):
+                raise ValueError("draft recipe cannot contain lifecycle timestamps or reasons")
+        elif self.status is RecipeStatus.VERIFIED:
+            if self.verified_at is None:
+                raise ValueError("verified recipe requires verified_at")
+            if any(
+                value is not None
+                for value in (self.promoted_at, self.rejected_at, self.rejection_reason)
+            ):
+                raise ValueError("verified recipe contains forbidden lifecycle fields")
+        elif self.status is RecipeStatus.PROMOTED:
+            if any(
+                value is None
+                for value in (
+                    self.verified_at,
+                    self.promotion_requested_at,
+                    self.promoted_at,
+                )
+            ):
+                raise ValueError(
+                    "promoted recipe requires verification, request, and promotion timestamps"
+                )
+            if self.rejected_at is not None or self.rejection_reason is not None:
+                raise ValueError("promoted recipe contains forbidden lifecycle fields")
+        elif self.status is RecipeStatus.REJECTED:
+            if self.rejected_at is None or self.rejection_reason is None:
+                raise ValueError("rejected recipe requires rejected_at and rejection_reason")
+            if self.promoted_at is not None:
+                raise ValueError("rejected recipe contains forbidden lifecycle fields")
+            if self.promotion_requested_at is not None and self.verified_at is None:
+                raise ValueError("promotion request requires verified_at")
+        self._validate_lifecycle_ordering()
+        return self
+
+    def _validate_lifecycle_ordering(self) -> None:
+        for field_name in (
+            "verified_at",
+            "promotion_requested_at",
+            "promoted_at",
+            "rejected_at",
+            "last_succeeded_at",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value < self.created_at:
+                raise ValueError(f"{field_name} must not precede created_at")
+        if (
+            self.promotion_requested_at is not None
+            and self.verified_at is not None
+            and self.promotion_requested_at < self.verified_at
+        ):
+            raise ValueError("promotion_requested_at must not precede verified_at")
+        if (
+            self.promoted_at is not None
+            and self.promotion_requested_at is not None
+            and self.promoted_at < self.promotion_requested_at
+        ):
+            raise ValueError("promoted_at must not precede promotion_requested_at")
+        rejection_floor = self.promotion_requested_at or self.verified_at
+        if (
+            self.rejected_at is not None
+            and rejection_floor is not None
+            and self.rejected_at < rejection_floor
+        ):
+            raise ValueError("rejected_at must not precede the prior lifecycle event")
+        success_ceiling = {
+            RecipeStatus.VERIFIED: self.verified_at,
+            RecipeStatus.PROMOTED: self.promoted_at,
+            RecipeStatus.REJECTED: self.rejected_at,
+        }.get(self.status)
+        if (
+            self.last_succeeded_at is not None
+            and success_ceiling is not None
+            and success_ceiling < self.last_succeeded_at
+        ):
+            raise ValueError("lifecycle terminal timestamp must not precede last_succeeded_at")
+
+
+def _contains_executable_field(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            _is_executable_field_name(str(key)) or _contains_executable_field(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_executable_field(item) for item in value)
+    return False
+
+
+def _is_executable_field_name(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", value.lower())
+    if normalized in _ALLOWED_CODE_FIELD_NAMES:
+        return False
+    if normalized in _COMPACT_EXECUTABLE_FIELD_NAMES:
+        return True
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    tokens = {token.lower() for token in re.split(r"[^A-Za-z0-9]+", separated) if token}
+    return bool(tokens & _EXECUTABLE_FIELD_TOKENS)
+
+
+def _contains_url_userinfo(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_url_userinfo(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_url_userinfo(item) for item in value)
+    return isinstance(value, str) and _URL_USERINFO_PATTERN.search(value) is not None
+
+
+def _reject_url_userinfo(value: str) -> str:
+    if _URL_USERINFO_PATTERN.search(value):
+        raise ValueError("URL userinfo credentials are forbidden")
+    return value

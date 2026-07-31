@@ -6,7 +6,11 @@ import asyncio
 
 import pytest
 from app.agent_loop.context import RunContext
-from app.domain.contracts import ConversationCompactedPayload, TaskRunAccepted
+from app.domain.contracts import (
+    ConversationCompactedPayload,
+    TaskRunAccepted,
+    build_event,
+)
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.manager import TaskManager
 from compaction_support import budgeted_request, completed_snapshot, conversation_items
@@ -169,9 +173,46 @@ async def test_commit_callback_owns_atomic_summary_and_event_persistence() -> No
             assert requested_task_id == task_id
             self.marker = dict(summary)
 
-        async def append_event(self, event: object) -> None:
+        async def append_event_payload(
+            self,
+            *,
+            requested_task_id: str | None = None,
+            task_id: str | None = None,
+            run_id: str,
+            payload: object,
+            **kwargs: object,
+        ) -> tuple[object, object]:
+            resolved_task_id = task_id or requested_task_id
+            assert resolved_task_id == "task_atomic"
+            event = build_event(
+                task_id=resolved_task_id,
+                run_id=run_id,
+                sequence=4,
+                payload=payload,
+            )
             self.events.append(event)
             raise RuntimeError("projection failure after event persistence")
+
+        async def find_matching_event(
+            self,
+            *,
+            task_id: str,
+            run_id: str,
+            payload: object,
+            after_sequence: int = 0,
+            **kwargs: object,
+        ) -> object | None:
+            return next(
+                (
+                    event
+                    for event in reversed(self.events)
+                    if event.task_id == task_id
+                    and event.run_id == run_id
+                    and event.payload == payload
+                    and event.sequence > after_sequence
+                ),
+                None,
+            )
 
         async def list_events(self, *args: object, **kwargs: object) -> list[object]:
             return list(self.events)

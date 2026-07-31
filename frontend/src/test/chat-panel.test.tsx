@@ -9,6 +9,13 @@ import { useAgentStore } from "@/stores/agentStore";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
 
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
 function seedBackgroundTask(): void {
   useAgentStore.getState().mergeTaskPage(
     {
@@ -92,7 +99,7 @@ function deferred<T>() {
 
 function chooseFiles(container: HTMLElement, files: File[]): void {
   fireEvent.click(screen.getByRole("button", { name: "添加附件" }));
-  fireEvent.click(screen.getByText("上传文件到本地缓存"));
+  fireEvent.click(screen.getByText("上传文件（从本地缓存）"));
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   if (input === null) throw new Error("File picker was not rendered");
   fireEvent.change(input, { target: { files } });
@@ -113,6 +120,7 @@ describe("ChatPanel", () => {
   });
 
   beforeEach(() => {
+    setViewportWidth(1024);
     useAgentStore.setState({
       ...createInitialRuntimeState(),
       connectionStatus: "connected",
@@ -142,6 +150,46 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
     expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
+  });
+
+  it("shows active task artifacts before the attachment control", () => {
+    seedTerminalTask();
+    const state = useAgentStore.getState();
+    const task = state.tasksById.task_terminal;
+    useAgentStore.setState({
+      tasksById: {
+        ...state.tasksById,
+        task_terminal: {
+          ...task,
+          artifactsById: {
+            artifact_main: {
+              artifact_id: "artifact_main",
+              name: "main_data.csv",
+              size: 128,
+              sha256: "a".repeat(64),
+              media_type: "text/csv",
+              taskId: "task_terminal",
+              generatedByStepId: null,
+            },
+          },
+          artifactOrder: ["artifact_main"],
+        },
+      },
+    });
+
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
+    const composer = container.querySelector('[data-slot="agent-composer"]');
+    const artifactButton = screen.getByRole("button", {
+      name: "查看 1 个产物",
+    });
+    const attachmentButton = screen.getByRole("button", { name: "添加附件" });
+
+    expect(artifactButton).toBeVisible();
+    expect(
+      artifactButton.compareDocumentPosition(attachmentButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(composer).toContainElement(artifactButton);
   });
 
   it("renders attachments, removes one, and submits the remaining file with its note", async () => {
@@ -938,5 +986,63 @@ describe("ChatPanel", () => {
 
     // The model selector should show the selected model name
     expect(screen.getByText("Qwen Plus")).toBeVisible();
+  });
+
+  it("shows the active subagent count in the mobile task header", () => {
+    setViewportWidth(390);
+    seedBackgroundTask();
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: {
+        task_id: "task_background",
+        mode: "agent",
+        databases: ["pubmed"],
+        title: "Background research",
+        status: "running",
+        active_run_id: "run_background",
+        created_at: CREATED_AT,
+        updated_at: CREATED_AT,
+        latest_sequence: 2,
+      },
+      runs: [],
+      messages: [],
+      subagents: [
+        {
+          subagent_id: "subagent_1",
+          task_id: "task_background",
+          run_id: "run_background",
+          agent_type: "source_research",
+          objective: "Explore a public source",
+          target_source: "example",
+          status: "running",
+          parent_tool_call_id: "tool_1",
+          created_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: null,
+          progress_current: 1,
+          progress_total: 3,
+          progress_message: "正在解析公开页面",
+          result_summary: null,
+          source_asset_ids: [],
+          recipe_id: null,
+          error_code: null,
+          error_message: null,
+          pending_request_id: null,
+        },
+      ],
+      older_messages_cursor: null,
+    });
+    useAgentStore.getState().setActiveTaskId("task_background");
+
+    const { container } = render(<ChatPanel startTask={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: "查看 1 个子任务" });
+    expect(button).toBeVisible();
+    expect(button).toHaveTextContent("1 个运行中");
+    expect(
+      button.querySelector('[data-slot="spinner"]'),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-slot="resizable-panel-group"]'),
+    ).not.toBeInTheDocument();
   });
 });

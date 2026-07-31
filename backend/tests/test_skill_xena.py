@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agents.tool_context import ToolContext
@@ -12,6 +13,7 @@ from app.skills.builtin.acquisition.xena import (
     download_xena,
     search_xena,
 )
+from app.tools.crawler import DownloadResult, FetchResult
 
 
 def _make_ctx(task_id: str = "test_xena") -> ToolContext:
@@ -91,6 +93,97 @@ def test_search_xena_success() -> None:
     rc: RunContext = ctx.context
     assert len(rc.query_log) == 1
     assert rc.query_log[0]["status"] == "success"
+
+
+def test_managed_search_xena_uses_bound_crawler_facade(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    facade_calls: list[str] = []
+
+    class ManagedFacade:
+        async def api(self, url: str) -> FetchResult:
+            facade_calls.append(url)
+            return FetchResult(
+                url=url,
+                content=_make_s3_xml([]).decode("utf-8"),
+                status_code=200,
+                elapsed_ms=1,
+                method_used="api",
+            )
+
+    context = RunContext(
+        task_id="managed_xena",
+        base_dir=tmp_path,
+        subagent_id="child-xena",
+    )
+    context.bind_crawler_facade(ManagedFacade())
+    ctx = ToolContext(
+        context=context,
+        tool_name="search_xena",
+        tool_call_id="call-xena",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.xena._fetch_hub_index",
+        lambda: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(
+        search_xena.on_invoke_tool(ctx, json.dumps({"term": "BRCA"}))
+    )
+
+    assert json.loads(result)["count"] == 0
+    assert facade_calls
+
+
+def test_child_download_xena_commits_compressed_source_asset(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    raw_content = b"gene\tsample\nBRCA1\t1\n"
+    gz_content = gzip.compress(raw_content)
+
+    class ManagedFacade:
+        async def download(self, url: str) -> DownloadResult:
+            return DownloadResult(
+                url=url,
+                content=gz_content,
+                status_code=200,
+                elapsed_ms=1,
+            )
+
+    parent = RunContext(task_id="managed_xena_download", base_dir=tmp_path)
+    parent.bind_crawler_facade(ManagedFacade())
+    child = parent.create_child_context("child-xena")
+    context = ToolContext(
+        context=child,
+        tool_name="download_xena",
+        tool_call_id="call-xena-download",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.xena._download",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    )
+
+    result = asyncio.run(
+        download_xena.on_invoke_tool(
+            context,
+            json.dumps(
+                {
+                    "dataset_id": "TCGA.BRCA.sampleMap/HiSeqV2",
+                    "file_type": "tsv",
+                }
+            ),
+        )
+    )
+
+    data = json.loads(result)
+    committed = Path(data["local_files"][0])
+    assert committed.is_relative_to(parent.work_dir.source_assets)
+    assert committed.read_bytes() == gz_content
+    assert child.source_asset_ids
 
 
 def test_search_xena_network_error_returns_error_json() -> None:

@@ -55,6 +55,25 @@ const CATALOG: ModelInfo[] = [
     supports_streaming: true,
   },
   {
+    id: "qwen-max",
+    name: "Qwen Max",
+    description: "",
+    context_window: 32768,
+    suggested_max_tokens: 4096,
+    recommended: false,
+    api_available: true,
+    capability_source: "catalog",
+    capabilities: { text: true, image: false, video: false, audio: false },
+    max_output_tokens: 8192,
+    vendor_id: null,
+    knowledge_cutoff: null,
+    pricing_input_per_1m: null,
+    pricing_output_per_1m: null,
+    model_family: null,
+    function_calling: true,
+    supports_streaming: true,
+  },
+  {
     id: "api-v0",
     name: "API Model",
     description: "",
@@ -95,11 +114,15 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
-async function loadModelsAndSelect(modelName: string) {
-  fireEvent.click(screen.getByRole("button", { name: /鍔犺浇妯″瀷/ }));
+async function loadModels() {
+  fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
   await waitFor(() => {
     expect(document.querySelector<HTMLButtonElement>("#settings-model")).not.toBeNull();
   });
+}
+
+async function loadModelsAndSelect(modelName: string) {
+  await loadModels();
   const trigger = document.querySelector<HTMLButtonElement>("#settings-model");
   if (trigger === null) throw new Error("Expected model selector");
   fireEvent.click(trigger);
@@ -125,39 +148,45 @@ describe("SettingsPanel model selector", () => {
     render(<SettingsPanel open onOpenChange={() => undefined} api={mockApi()} />);
     await screen.findByLabelText("API Key");
 
-    const outputTokens = screen.getByLabelText("鏈€澶ц緭鍑?Tokens");
+    const outputTokens = screen.getByLabelText("最大输出 Tokens");
     expect(outputTokens).toHaveAttribute("type", "range");
     expect(outputTokens).toHaveAttribute("min", "512");
     expect(outputTokens).toHaveAttribute("max", "131072");
     expect(screen.queryByLabelText("Context Window Override")).not.toBeInTheDocument();
   });
 
-  it("selects an API-discovered model and persists only its model name", async () => {
+  it("selects an API-discovered model and persists its model name and key", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     const secret = await screen.findByLabelText("API Key");
     fireEvent.change(secret, { target: { value: "sk-validation-key" } });
 
     await loadModelsAndSelect("API Model");
-    fireEvent.click(screen.getByRole("button", { name: "淇濆瓨妯″瀷璁剧疆" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
+      api_key: "sk-validation-key",
       model_name: "api-v0",
     });
   });
 
-  it("selects a catalog model without sending a context-window override", async () => {
+  it("selects a catalog model and records its context window", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     const secret = await screen.findByLabelText("API Key");
     fireEvent.change(secret, { target: { value: "sk-validation-key" } });
 
     await loadModelsAndSelect("Qwen Plus");
-    fireEvent.click(screen.getByRole("button", { name: "淇濆瓨妯″瀷璁剧疆" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
+      model_name: "qwen-plus",
+      context_window: 131072,
+    });
+    expect(vi.mocked(api.saveSettings).mock.calls[1]?.[0]).toEqual({
+      api_key: "sk-validation-key",
       model_name: "qwen-plus",
     });
   });
@@ -165,13 +194,13 @@ describe("SettingsPanel model selector", () => {
   it("persists changes from the output-token slider", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
-    const secret = await screen.findByLabelText("API Key");
-    fireEvent.change(secret, { target: { value: "sk-validation-key" } });
-    fireEvent.change(screen.getByLabelText("鏈€澶ц緭鍑?Tokens"), {
+    await screen.findByLabelText("API Key");
+    await loadModels();
+    fireEvent.change(screen.getByLabelText("最大输出 Tokens"), {
       target: { value: "16384" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "淇濆瓨妯″瀷璁剧疆" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存模型设置" }));
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toEqual({
@@ -181,22 +210,32 @@ describe("SettingsPanel model selector", () => {
 
   it("requires a fresh API key and surfaces connection validation failures", async () => {
     const api = mockApi({
-      fetchModels: vi.fn().mockRejectedValue(new Error("invalid credentials")),
+      fetchModels: vi.fn()
+        .mockResolvedValueOnce(CATALOG)
+        .mockRejectedValue(new Error("invalid credentials")),
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     const secret = await screen.findByLabelText("API Key");
-    fireEvent.change(screen.getByLabelText("鏈€澶ц緭鍑?Tokens"), {
+    fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
+    await waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>("#settings-model")).not.toBeNull();
+    });
+    fireEvent.change(screen.getByLabelText("最大输出 Tokens"), {
       target: { value: "16384" },
     });
-    const save = screen.getByRole("button", { name: "淇濆瓨妯″瀷璁剧疆" });
-    expect(save).toBeDisabled();
+    const save = screen.getByRole("button", { name: "保存模型设置" });
+    expect(save).not.toBeDisabled();
 
     fireEvent.change(secret, { target: { value: "bad-key" } });
     expect(save).not.toBeDisabled();
     fireEvent.click(save);
 
     await waitFor(() => {
-      expect(screen.getByText("API 瀵嗛挜楠岃瘉澶辫触锛岃妫€鏌ュ瘑閽ユ槸鍚︽纭垨涓?Base URL 鏄惁鍖归厤")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "API 密钥验证失败，请检查密钥是否正确或与 Base URL 是否匹配",
+        ),
+      ).toBeInTheDocument();
     });
     expect(api.saveSettings).not.toHaveBeenCalled();
   });

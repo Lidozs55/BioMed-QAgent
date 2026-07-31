@@ -1,6 +1,155 @@
 import { APIError } from "@/hooks/settingsContracts";
-import type { EventPayload, JsonValue } from "@/runtime/contracts";
+import type {
+  EventPayload,
+  JsonValue,
+  SubagentErrorCode,
+  SubagentPromptKind,
+  SubagentRequest,
+  SubagentResult,
+  SubagentStatus,
+  SubagentType,
+} from "@/runtime/contracts";
 import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "./eventValidatorHelpers";
+
+export type SubagentEventPayload = Extract<
+  EventPayload,
+  { type: `subagent_${string}` }
+>;
+
+function assertRequiredString(value: unknown, path: string): string {
+  return assertString(value, path, true);
+}
+
+function assertNonNegativeInteger(value: unknown, path: string): number {
+  const number = assertNumber(value, path);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new APIError(502, `Expected non-negative integer at ${path}`);
+  }
+  return number;
+}
+
+function assertSubagentType(value: unknown, path: string): SubagentType {
+  if (value === "source_research" || value === "skill_builder") return value;
+  throw new APIError(502, `Invalid subagent type at ${path}`);
+}
+
+function assertSubagentStatus(value: unknown, path: string): SubagentStatus {
+  switch (value) {
+    case "queued":
+    case "running":
+    case "completed":
+    case "failed":
+    case "cancel_requested":
+    case "cancelled":
+    case "interrupted":
+      return value;
+    default:
+      throw new APIError(502, `Invalid subagent status at ${path}`);
+  }
+}
+
+function assertSubagentErrorCode(
+  value: unknown,
+  path: string,
+): SubagentErrorCode {
+  switch (value) {
+    case "not_found":
+    case "capability_gap":
+    case "extraction_failed":
+    case "auth_required":
+    case "captcha_required":
+    case "credential_required":
+    case "payment_required":
+    case "policy_denied":
+    case "rate_limited":
+    case "timed_out":
+    case "cancelled":
+    case "internal_error":
+      return value;
+    default:
+      throw new APIError(502, `Invalid subagent error code at ${path}`);
+  }
+}
+
+function assertSubagentPromptKind(
+  value: unknown,
+  path: string,
+): SubagentPromptKind {
+  switch (value) {
+    case "authentication":
+    case "captcha":
+    case "api_key_or_credential":
+    case "payment":
+    case "terms_approval":
+    case "confirmation":
+      return value;
+    default:
+      throw new APIError(502, `Invalid subagent prompt kind at ${path}`);
+  }
+}
+
+function assertStringArray(value: unknown, path: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new APIError(502, `Expected string array at ${path}`);
+  }
+  return value.map((entry, index) =>
+    assertRequiredString(entry, `${path}[${index}]`),
+  );
+}
+
+function parseSubagentRequest(value: unknown, path: string): SubagentRequest {
+  const request = assertJsonRecord(value, path);
+  return {
+    agent_type: assertSubagentType(Reflect.get(request, "agent_type"), `${path}.agent_type`),
+    objective: assertRequiredString(Reflect.get(request, "objective"), `${path}.objective`),
+    target_source: assertOptionalNull(
+      Reflect.get(request, "target_source"),
+      `${path}.target_source`,
+      assertRequiredString,
+    ),
+    domain: assertRequiredString(Reflect.get(request, "domain"), `${path}.domain`),
+    capability: assertRequiredString(Reflect.get(request, "capability"), `${path}.capability`),
+    inputs: assertJsonRecord(Reflect.get(request, "inputs"), `${path}.inputs`),
+  };
+}
+
+function parseSubagentResult(value: unknown, path: string): SubagentResult {
+  const result = assertJsonRecord(value, path);
+  const status = assertSubagentStatus(Reflect.get(result, "status"), `${path}.status`);
+  if (
+    status !== "completed" &&
+    status !== "failed" &&
+    status !== "cancelled" &&
+    status !== "interrupted"
+  ) {
+    throw new APIError(502, `Expected terminal subagent status at ${path}.status`);
+  }
+  return {
+    subagent_id: assertRequiredString(Reflect.get(result, "subagent_id"), `${path}.subagent_id`),
+    status,
+    summary: assertRequiredString(Reflect.get(result, "summary"), `${path}.summary`),
+    source_asset_ids: assertStringArray(
+      Reflect.get(result, "source_asset_ids"),
+      `${path}.source_asset_ids`,
+    ),
+    recipe_id: assertOptionalNull(
+      Reflect.get(result, "recipe_id"),
+      `${path}.recipe_id`,
+      assertRequiredString,
+    ),
+    warnings: assertStringArray(Reflect.get(result, "warnings"), `${path}.warnings`),
+    error_code: assertOptionalNull(
+      Reflect.get(result, "error_code"),
+      `${path}.error_code`,
+      assertSubagentErrorCode,
+    ),
+    error_message: assertOptionalNull(
+      Reflect.get(result, "error_message"),
+      `${path}.error_message`,
+      assertRequiredString,
+    ),
+  };
+}
 
 export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, path: string): EventPayload {
   const payloadType = assertString(Reflect.get(payloadObj, "type"), path + ".type");
@@ -62,7 +211,105 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       if (!/^[0-9a-f]{64}$/.test(summary_digest)) throw new APIError(502, "Expected 64-char hex string at " + path + ".summary_digest");
       return { type: "conversation_compacted", covered_through_run_id, summary_digest };
     }
+    case "subagent_queued":
+      return {
+        type: "subagent_queued",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        request: parseSubagentRequest(Reflect.get(payloadObj, "request"), path + ".request"),
+      };
+    case "subagent_started":
+      return {
+        type: "subagent_started",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+      };
+    case "subagent_progress":
+      return {
+        type: "subagent_progress",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        current: assertNonNegativeInteger(Reflect.get(payloadObj, "current"), path + ".current"),
+        total: assertOptionalNull(Reflect.get(payloadObj, "total"), path + ".total", assertNonNegativeInteger),
+        message: assertOptionalNull(Reflect.get(payloadObj, "message"), path + ".message", assertRequiredString),
+      };
+    case "subagent_completed":
+    case "subagent_failed":
+    case "subagent_cancelled":
+    case "subagent_interrupted": {
+      const subagent_id = assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id");
+      const result = parseSubagentResult(Reflect.get(payloadObj, "result"), path + ".result");
+      const expectedStatus = typeToTerminalStatus(payloadType);
+      if (result.subagent_id !== subagent_id || result.status !== expectedStatus) {
+        throw new APIError(502, `Terminal subagent result must match ${payloadType} at ${path}`);
+      }
+      return { type: payloadType, subagent_id, result };
+    }
+    case "subagent_cancel_requested":
+      return {
+        type: "subagent_cancel_requested",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        reason: assertOptionalNull(Reflect.get(payloadObj, "reason"), path + ".reason", assertRequiredString),
+      };
+    case "subagent_input_required":
+      return {
+        type: "subagent_input_required",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        summary: assertRequiredString(Reflect.get(payloadObj, "summary"), path + ".summary"),
+        prompt_kind: assertSubagentPromptKind(Reflect.get(payloadObj, "prompt_kind"), path + ".prompt_kind"),
+        expires_at: assertOptionalNull(Reflect.get(payloadObj, "expires_at"), path + ".expires_at", assertRequiredString),
+        detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
+      };
+    case "subagent_input_resumed": {
+      const decision = assertRequiredString(Reflect.get(payloadObj, "decision"), path + ".decision");
+      if (decision !== "approve" && decision !== "reject") {
+        throw new APIError(502, `Invalid subagent decision at ${path}.decision`);
+      }
+      return {
+        type: "subagent_input_resumed",
+        subagent_id: assertRequiredString(Reflect.get(payloadObj, "subagent_id"), path + ".subagent_id"),
+        request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        decision,
+        detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
+      };
+    }
     default:
       throw new APIError(502, "Unknown runtime event payload type " + payloadType);
+  }
+}
+
+export function isValidSubagentEventPayload(
+  payloadObj: Record<string, unknown>,
+): boolean {
+  return parseSubagentEventPayload(payloadObj) !== null;
+}
+
+export function parseSubagentEventPayload(
+  payloadObj: Record<string, unknown>,
+): SubagentEventPayload | null {
+  try {
+    const payload = parseRuntimeEventPayload(payloadObj, "websocket.payload");
+    return isSubagentEventPayload(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSubagentEventPayload(
+  payload: EventPayload,
+): payload is SubagentEventPayload {
+  return payload.type.startsWith("subagent_");
+}
+
+function typeToTerminalStatus(
+  type: "subagent_completed" | "subagent_failed" | "subagent_cancelled" | "subagent_interrupted",
+): SubagentResult["status"] {
+  switch (type) {
+    case "subagent_completed":
+      return "completed";
+    case "subagent_failed":
+      return "failed";
+    case "subagent_cancelled":
+      return "cancelled";
+    case "subagent_interrupted":
+      return "interrupted";
   }
 }

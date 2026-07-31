@@ -26,6 +26,7 @@ async def test_database_api_lists_only_user_selectable_data_sources(
         {
             "analysis",
             "browser_fallback",
+            "create_skill",
             "self_evolution",
             "literature_understanding",
             "pdf_extraction",
@@ -35,4 +36,4 @@ async def test_database_api_lists_only_user_selectable_data_sources(
     assert all(item["available"] is True for item in projected.values())
     assert projected["pubmed"]["pipeline_supported"] is True
     assert projected["geo"]["pipeline_supported"] is True
-    assert projected["gdc"]["pipeline_supported"] is False
+    assert projected["gdc"]["pipeline_supported"] is True

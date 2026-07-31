@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -33,6 +34,7 @@ from app.agent_loop.import_agent import (
     build_attachment_parsing_agent,
 )
 from app.agent_loop.runner import ImportRunExecutor, ModeDispatchRunExecutor
+from app.runtime.repository import TaskRepository
 from app.tools import cache_store as cache_store_module
 from app.tools.cache_store import init_cache_store
 from app.tools.cache_tools import commit_to_cache
@@ -140,6 +142,37 @@ def test_import_run_executor_subclasses_agent_run_executor() -> None:
     from app.agent_loop.runner import AgentRunExecutor
 
     assert issubclass(ImportRunExecutor, AgentRunExecutor)
+
+
+def test_import_run_executor_keeps_attachment_parsing_and_main_delegation_separate(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="import-task", base_dir=tmp_path)
+    execution = SimpleNamespace(context=context, databases=[])
+    executor = ImportRunExecutor(TaskRepository(tmp_path / "output"))
+    attachment = context.work_dir.source_assets / "input.csv"
+    attachment.write_text("sample,value\na,1\n", encoding="utf-8")
+
+    parsing_build = executor._build(execution)
+    parsing_names = {tool.name for tool in parsing_build.agent.tools}
+    assert not {
+        "delegate_research",
+        "get_subagent_results",
+        "cancel_subagent",
+    }.intersection(parsing_names)
+
+    ImportRunExecutor._archive_source_assets(execution)
+    main_build = executor._build(execution)
+    main_names = {tool.name for tool in main_build.agent.tools}
+    assert {
+        "delegate_research",
+        "get_subagent_results",
+        "cancel_subagent",
+    }.intersection(main_names) == {
+        "delegate_research",
+        "get_subagent_results",
+        "cancel_subagent",
+    }
 
 
 # ── End-to-end IMPORT tool chain ─────────────────────────────────────

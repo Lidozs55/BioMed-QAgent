@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.agent_loop.context import RunContext
 from app.agent_loop.runner import ModeDispatchRunExecutor
 from app.api.model_info_router import router as model_info_router
 from app.api.routes import router as routes_router
@@ -21,20 +22,30 @@ from app.api.settings import router as settings_router
 from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
-from app.domain.contracts import TaskMode
+from app.domain.contracts import TaskMode, generate_prefixed_uuid
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
 )
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
+from app.recipes.client import ControlledRecipeClient, RecipeTransportFactory
+from app.recipes.executor import RecipeExecutor
+from app.recipes.store import WorkflowRecipeStore
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 from app.runtime.manager import RunAdmissionRejectedError, TaskManager
 from app.runtime.repository import TaskRepository
 from app.skills.builtin import load_builtin_skill_descriptors
+from app.skills.builtin.processing.create_skill import CreateSkillRuntime
 from app.skills.catalog import SkillCatalog
 from app.skills.store import UserSkillStore
+from app.subagents.event_sink import DurableSubagentEventSink
+from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.staging import SubagentStagingWorkspace
+from app.subagents.supervisor import SubagentSupervisor
+from app.tools.browser_pool import BrowserPool
 from app.tools.cache_store import init_cache_store
+from app.tools.crawler import CrawlerFacade
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -47,9 +58,7 @@ logging.basicConfig(
 # is the audit artifact for metrics analysis and ablation studies.
 _pipeline_log_dir = Path("logs")
 _pipeline_log_dir.mkdir(parents=True, exist_ok=True)
-_pipeline_log_handler = logging.FileHandler(
-    _pipeline_log_dir / "pipeline.jsonl", encoding="utf-8"
-)
+_pipeline_log_handler = logging.FileHandler(_pipeline_log_dir / "pipeline.jsonl", encoding="utf-8")
 _pipeline_log_handler.setFormatter(logging.Formatter("%(message)s"))
 logging.getLogger("app.pipeline").addHandler(_pipeline_log_handler)
 
@@ -60,12 +69,17 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "version": "1.0.0", "arch": "agent_loop"}
 
 
-def create_app(configured: Settings = settings) -> FastAPI:
+def create_app(
+    configured: Settings = settings,
+    *,
+    recipe_http_transport_factory: RecipeTransportFactory | None = None,
+) -> FastAPI:
     """Build an application whose lifespan owns all runtime resources."""
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         loop = asyncio.get_running_loop()
+        previous_default_executor = getattr(loop, "_default_executor", None)
         sync_executor = ThreadPoolExecutor(
             max_workers=configured.runtime_sync_worker_threads,
             thread_name_prefix="task-sync",
@@ -87,17 +101,13 @@ def create_app(configured: Settings = settings) -> FastAPI:
             settings=configured,
             storage_executor=storage_executor,
         )
-        event_hub = EventHub(
-            subscriber_queue_size=configured.runtime_subscriber_queue_size
-        )
+        event_hub = EventHub(subscriber_queue_size=configured.runtime_subscriber_queue_size)
         assistant_stream_hub = AssistantStreamHub(
             subscriber_queue_size=configured.runtime_subscriber_queue_size
         )
         skill_catalog = SkillCatalog()
         model_settings_store = ModelSettingsStore(
-            Path(configured.output_dir).expanduser().resolve().parent
-            / "settings"
-            / "model.json",
+            Path(configured.output_dir).expanduser().resolve().parent / "settings" / "model.json",
             defaults=configured,
         )
         set_current_model_settings_store(model_settings_store)
@@ -111,6 +121,35 @@ def create_app(configured: Settings = settings) -> FastAPI:
             catalog=skill_catalog,
             builtins=load_builtin_skill_descriptors(),
         )
+        workflow_recipe_store = WorkflowRecipeStore(configured.skill_data_path / "recipes")
+        browser_pool = BrowserPool(max_contexts=4)
+        crawler_facade = CrawlerFacade(browser_pool=browser_pool)
+        recipe_client = ControlledRecipeClient(
+            transport_factory=recipe_http_transport_factory,
+            browser_pool=browser_pool,
+        )
+        recipe_executor = RecipeExecutor(
+            client=recipe_client,
+            store=workflow_recipe_store,
+        )
+
+        def task_context_factory(task_id: str) -> RunContext:
+            context = RunContext(
+                task_id=task_id,
+                base_dir=repository.tasks_dir,
+            )
+            context.bind_crawler_facade(crawler_facade)
+            context.bind_create_skill_runtime(
+                CreateSkillRuntime(
+                    store=workflow_recipe_store,
+                    executor=recipe_executor,
+                    workspace=SubagentStagingWorkspace(
+                        context.work_dir.root,
+                        generate_prefixed_uuid("create_skill"),
+                    ),
+                )
+            )
+            return context
 
         def admit_model_backed_run(_mode: TaskMode) -> None:
             """Reject model-backed admission when active settings lack a budget."""
@@ -128,9 +167,23 @@ def create_app(configured: Settings = settings) -> FastAPI:
             ),
             max_active_runs=configured.runtime_max_active_runs,
             max_queued_runs=configured.runtime_run_queue_size,
+            context_factory=task_context_factory,
             run_admission=admit_model_backed_run,
             event_hub=event_hub,
             assistant_stream_hub=assistant_stream_hub,
+        )
+        subagent_input_broker = SubagentInputBroker()
+        subagent_event_sink = DurableSubagentEventSink(
+            repository=repository,
+            hub=event_hub,
+        )
+        subagent_supervisor = SubagentSupervisor(
+            input_broker=subagent_input_broker,
+        )
+        manager.attach_subagent_runtime(
+            supervisor=subagent_supervisor,
+            input_broker=subagent_input_broker,
+            event_sink=subagent_event_sink,
         )
         application.state.sync_executor = sync_executor
         application.state.storage_executor = storage_executor
@@ -139,6 +192,15 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.event_hub = event_hub
         application.state.assistant_stream_hub = assistant_stream_hub
         application.state.task_manager = manager
+        application.state.task_context_factory = task_context_factory
+        application.state.workflow_recipe_store = workflow_recipe_store
+        application.state.browser_pool = browser_pool
+        application.state.crawler_facade = crawler_facade
+        application.state.recipe_client = recipe_client
+        application.state.recipe_executor = recipe_executor
+        application.state.subagent_input_broker = subagent_input_broker
+        application.state.subagent_event_sink = subagent_event_sink
+        application.state.subagent_supervisor = subagent_supervisor
         # Initialize the local queryable cache (D1/D3) — stores user-imported
         # and previously-cleaned datasets under data/cache/records/.
         application.state.cache_store = init_cache_store(
@@ -149,6 +211,7 @@ def create_app(configured: Settings = settings) -> FastAPI:
         application.state.model_settings_store = model_settings_store
         application.state.model_preview_client = model_preview_client
         try:
+            await browser_pool.start()
             await manager.start()
             yield
         finally:
@@ -156,21 +219,39 @@ def create_app(configured: Settings = settings) -> FastAPI:
                 await model_preview_client.aclose()
             finally:
                 try:
-                    await manager.close()
+                    await subagent_supervisor.shutdown()
                 finally:
                     try:
-                        await assistant_stream_hub.close()
+                        await manager.close()
                     finally:
                         try:
-                            await event_hub.close()
+                            await recipe_client.aclose()
                         finally:
                             try:
-                                await index_executor.close()
+                                await crawler_facade.aclose()
                             finally:
                                 try:
-                                    storage_executor.shutdown(wait=True)
+                                    await browser_pool.close()
                                 finally:
-                                    sync_executor.shutdown(wait=True)
+                                    try:
+                                        await assistant_stream_hub.close()
+                                    finally:
+                                        try:
+                                            await event_hub.close()
+                                        finally:
+                                            try:
+                                                await index_executor.close()
+                                            finally:
+                                                try:
+                                                    storage_executor.shutdown(wait=True)
+                                                finally:
+                                                    if previous_default_executor is None:
+                                                        loop._default_executor = None
+                                                    else:
+                                                        loop.set_default_executor(
+                                                            previous_default_executor
+                                                        )
+                                                    sync_executor.shutdown(wait=True)
 
     application = FastAPI(
         title="BioMed QAgent v1",

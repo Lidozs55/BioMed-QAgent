@@ -61,6 +61,36 @@ class RunStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class SubagentType(StrEnum):
+    SOURCE_RESEARCH = "source_research"
+    SKILL_BUILDER = "skill_builder"
+
+
+class SubagentStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCEL_REQUESTED = "cancel_requested"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+class SubagentErrorCode(StrEnum):
+    NOT_FOUND = "not_found"
+    CAPABILITY_GAP = "capability_gap"
+    EXTRACTION_FAILED = "extraction_failed"
+    AUTH_REQUIRED = "auth_required"
+    CAPTCHA_REQUIRED = "captcha_required"
+    CREDENTIAL_REQUIRED = "credential_required"
+    PAYMENT_REQUIRED = "payment_required"
+    POLICY_DENIED = "policy_denied"
+    RATE_LIMITED = "rate_limited"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+    INTERNAL_ERROR = "internal_error"
+
+
 class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"

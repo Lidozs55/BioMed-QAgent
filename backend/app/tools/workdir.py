@@ -84,16 +84,28 @@ class TaskWorkDir:
         return run_path
 
 
-def create_task_workdir(task_id: str, base_dir: str | None = None) -> TaskWorkDir:
-    """Create the approved isolated directory structure for one task."""
+def create_task_workdir(
+    task_id: str,
+    base_dir: str | None = None,
+    *,
+    root_dir: str | Path | None = None,
+) -> TaskWorkDir:
+    """Create the approved directory structure for a task or child staging root."""
 
     safe_task_id = _validate_id(task_id, "task_id")
-    base = (
-        Path(base_dir) if base_dir else Path(settings.output_dir) / "tasks"
-    ).resolve()
-    root = base / safe_task_id
+    if root_dir is None:
+        base = (
+            Path(base_dir) if base_dir else Path(settings.output_dir) / "tasks"
+        ).resolve()
+        root = base / safe_task_id
+    else:
+        root = Path(root_dir).absolute()
+        if root.exists() and root.is_symlink():
+            raise ValueError("work directory root must not be a symlink")
 
     paths: dict[str, Path] = {}
+    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve(strict=True)
     for subdir in _SUBDIRS:
         path = root / subdir
         path.mkdir(parents=True, exist_ok=True)

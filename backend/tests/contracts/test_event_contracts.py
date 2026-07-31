@@ -17,6 +17,20 @@ from app.domain.contracts import (
     StageName,
     StageProgressPayload,
     StageStartedPayload,
+    SubagentCancelledPayload,
+    SubagentCancelRequestedPayload,
+    SubagentCompletedPayload,
+    SubagentFailedPayload,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
+    SubagentInterruptedPayload,
+    SubagentProgressPayload,
+    SubagentQueuedPayload,
+    SubagentRequest,
+    SubagentResult,
+    SubagentStartedPayload,
+    SubagentStatus,
+    SubagentType,
     TaskCreatedPayload,
     ToolCalledPayload,
     build_event,
@@ -363,3 +377,240 @@ def test_assistant_stream_union_is_discriminated_and_not_an_event_payload() -> N
     assert isinstance(frame, contracts.AssistantStreamDeltaFrame)
     with pytest.raises(ValidationError):
         build_event(task_id="task_1", run_id="run_1", sequence=1, payload=frame)
+
+
+def test_subagent_events_require_complete_matching_v2_linkage() -> None:
+    payload = SubagentQueuedPayload(
+        subagent_id="subagent_123",
+        request=SubagentRequest(
+            agent_type=SubagentType.SOURCE_RESEARCH,
+            objective="Find expression datasets",
+            domain="bioinformatics",
+            capability="source_research",
+            inputs={"gene": "TP53"},
+        ),
+    )
+
+    event = build_event(
+        task_id="task_1",
+        run_id="run_1",
+        sequence=1,
+        payload=payload,
+        subagent_id="subagent_123",
+        parent_tool_call_id="call_123",
+        timestamp=NOW,
+    )
+
+    assert event.schema_version == "2.0"
+    assert event.subagent_id == payload.subagent_id
+    assert event.parent_tool_call_id == "call_123"
+
+    with pytest.raises(ValidationError, match="both envelope linkage fields"):
+        build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=2,
+            payload=payload,
+            subagent_id="subagent_123",
+            timestamp=NOW,
+        )
+    with pytest.raises(ValidationError, match="must match envelope.subagent_id"):
+        build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=3,
+            payload=payload,
+            subagent_id="subagent_other",
+            parent_tool_call_id="call_123",
+            timestamp=NOW,
+        )
+
+
+def test_subagent_payloads_are_discriminated_and_round_trip() -> None:
+    result = SubagentResult(
+        subagent_id="subagent_123",
+        status=SubagentStatus.COMPLETED,
+        summary="Found two datasets",
+        source_asset_ids=["asset_1"],
+    )
+    payloads = [
+        SubagentQueuedPayload(
+            subagent_id="subagent_123",
+            request=SubagentRequest(
+                agent_type=SubagentType.SOURCE_RESEARCH,
+                objective="Find datasets",
+                domain="bioinformatics",
+                capability="source_research",
+                inputs={},
+            ),
+        ),
+        SubagentStartedPayload(subagent_id="subagent_123"),
+        SubagentProgressPayload(
+            subagent_id="subagent_123",
+            current=1,
+            total=2,
+            message="Inspecting GEO",
+        ),
+        SubagentCompletedPayload(subagent_id="subagent_123", result=result),
+        SubagentFailedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.FAILED,
+                summary="Search failed",
+            ),
+        ),
+        SubagentCancelRequestedPayload(subagent_id="subagent_123"),
+        SubagentCancelledPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.CANCELLED,
+                summary="Cancelled",
+            ),
+        ),
+        SubagentInterruptedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.INTERRUPTED,
+                summary="Interrupted",
+            ),
+        ),
+        SubagentInputRequiredPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            summary="Credentials required",
+            prompt_kind="api_key_or_credential",
+            expires_at=NOW,
+            detail={"source": "GEO"},
+        ),
+        SubagentInputResumedPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            decision="approve",
+            detail={"source": "GEO"},
+        ),
+    ]
+
+    for sequence, payload in enumerate(payloads, start=1):
+        event = build_event(
+            task_id="task_1",
+            run_id="run_1",
+            sequence=sequence,
+            payload=payload,
+            subagent_id="subagent_123",
+            parent_tool_call_id="call_123",
+            timestamp=NOW,
+        )
+        parsed = EventEnvelope.model_validate_json(event.model_dump_json())
+        assert type(parsed.payload) is type(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "values"),
+    [
+        (
+            SubagentInputRequiredPayload,
+            {
+                "subagent_id": "subagent_123",
+                "request_id": "request_123",
+                "summary": "Credentials required",
+                "prompt_kind": "api_key_or_credential",
+                "expires_at": NOW,
+                "detail": {"source": "GEO"},
+            },
+        ),
+        (
+            SubagentInputResumedPayload,
+            {
+                "subagent_id": "subagent_123",
+                "request_id": "request_123",
+                "decision": "approve",
+                "detail": {"source": "GEO"},
+            },
+        ),
+    ],
+)
+def test_subagent_hil_payloads_round_trip_and_forbid_extra_fields(
+    payload_type: type[SubagentInputRequiredPayload | SubagentInputResumedPayload],
+    values: dict[str, object],
+) -> None:
+    payload = payload_type.model_validate(values)
+
+    assert payload_type.model_validate_json(payload.model_dump_json()) == payload
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        payload_type.model_validate({**values, "unexpected": True})
+
+
+def test_subagent_hil_payloads_default_empty_detail() -> None:
+    required = SubagentInputRequiredPayload(
+        subagent_id="subagent_123",
+        request_id="request_123",
+        summary="Confirm source terms",
+        prompt_kind="terms_approval",
+    )
+    resumed = SubagentInputResumedPayload(
+        subagent_id="subagent_123",
+        request_id="request_123",
+        decision="approve",
+    )
+
+    assert required.expires_at is None
+    assert required.detail == {}
+    assert resumed.detail == {}
+
+
+@pytest.mark.parametrize(
+    ("payload_type", "expected_status", "other_status"),
+    [
+        (
+            SubagentCompletedPayload,
+            SubagentStatus.COMPLETED,
+            SubagentStatus.FAILED,
+        ),
+        (
+            SubagentFailedPayload,
+            SubagentStatus.FAILED,
+            SubagentStatus.CANCELLED,
+        ),
+        (
+            SubagentCancelledPayload,
+            SubagentStatus.CANCELLED,
+            SubagentStatus.INTERRUPTED,
+        ),
+        (
+            SubagentInterruptedPayload,
+            SubagentStatus.INTERRUPTED,
+            SubagentStatus.COMPLETED,
+        ),
+    ],
+)
+def test_subagent_terminal_payloads_require_matching_result(
+    payload_type: type[
+        SubagentCompletedPayload
+        | SubagentFailedPayload
+        | SubagentCancelledPayload
+        | SubagentInterruptedPayload
+    ],
+    expected_status: SubagentStatus,
+    other_status: SubagentStatus,
+) -> None:
+    with pytest.raises(ValidationError, match="subagent_id must match result"):
+        payload_type(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_other",
+                status=expected_status,
+                summary="Terminal result",
+            ),
+        )
+    with pytest.raises(ValidationError, match="result status must match"):
+        payload_type(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=other_status,
+                summary="Terminal result",
+            ),
+        )

@@ -25,6 +25,22 @@ from app.domain.contracts import (
     RuntimeEventType,
     StartRunRequest,
     StartTaskRequest,
+    SubagentCancelledPayload,
+    SubagentCancelRequestedPayload,
+    SubagentCompletedPayload,
+    SubagentErrorCode,
+    SubagentFailedPayload,
+    SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
+    SubagentInterruptedPayload,
+    SubagentProgressPayload,
+    SubagentQueuedPayload,
+    SubagentRecord,
+    SubagentRequest,
+    SubagentResult,
+    SubagentStartedPayload,
+    SubagentStatus,
+    SubagentType,
     TaskCreatedPayload,
     TaskMode,
     TaskPage,
@@ -65,6 +81,66 @@ RUNTIME_PAYLOADS = [
     ),
     WarningPayload(message="compaction failed", code="compaction_failed"),
 ]
+
+def make_subagent_runtime_payloads() -> list[object]:
+    return [
+        SubagentQueuedPayload(
+            subagent_id="subagent_123",
+            request=SubagentRequest(
+                agent_type=SubagentType.SOURCE_RESEARCH,
+                objective="Find datasets",
+                domain="bioinformatics",
+                capability="source_research",
+                inputs={},
+            ),
+        ),
+        SubagentStartedPayload(subagent_id="subagent_123"),
+        SubagentProgressPayload(subagent_id="subagent_123", current=1, total=2),
+        SubagentCompletedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.COMPLETED,
+                summary="Found datasets",
+            ),
+        ),
+        SubagentFailedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.FAILED,
+                summary="Search failed",
+            ),
+        ),
+        SubagentCancelRequestedPayload(subagent_id="subagent_123"),
+        SubagentCancelledPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.CANCELLED,
+                summary="Cancelled",
+            ),
+        ),
+        SubagentInterruptedPayload(
+            subagent_id="subagent_123",
+            result=SubagentResult(
+                subagent_id="subagent_123",
+                status=SubagentStatus.INTERRUPTED,
+                summary="Interrupted",
+            ),
+        ),
+        SubagentInputRequiredPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            summary="Credentials required",
+            prompt_kind="api_key_or_credential",
+        ),
+        SubagentInputResumedPayload(
+            subagent_id="subagent_123",
+            request_id="request_123",
+            decision="approve",
+        ),
+    ]
 
 
 def test_event_envelope_accepts_v2_run_linkage() -> None:
@@ -261,10 +337,13 @@ def test_runtime_snapshot_and_pages_are_typed() -> None:
 
 
 def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
-    assert {payload.type for payload in RUNTIME_PAYLOADS} == set(RuntimeEventType) | {
-        PipelineEventType.TOOL_COMPLETED,
-        PipelineEventType.WARNING,
-    }
+    assert {payload.type for payload in RUNTIME_PAYLOADS}.issubset(
+        set(RuntimeEventType)
+        | {
+            PipelineEventType.TOOL_COMPLETED,
+            PipelineEventType.WARNING,
+        }
+    )
 
     for sequence, payload in enumerate(RUNTIME_PAYLOADS, start=1):
         envelope = EventEnvelope(
@@ -279,6 +358,16 @@ def test_all_runtime_payloads_are_discriminated_and_require_run_id() -> None:
         )
         parsed = EventEnvelope.model_validate_json(envelope.model_dump_json())
         assert type(parsed.payload) is type(payload)
+
+
+def test_runtime_payload_fixtures_cover_every_runtime_event_type() -> None:
+    payload_types = {
+        payload.type
+        for payload in [*RUNTIME_PAYLOADS, *make_subagent_runtime_payloads()]
+        if isinstance(payload.type, RuntimeEventType)
+    }
+
+    assert payload_types == set(RuntimeEventType)
 
 
 @pytest.mark.parametrize(
@@ -347,3 +436,82 @@ def test_runtime_id_helpers_use_canonical_prefixes() -> None:
     assert generate_task_id().startswith("task_")
     assert generate_run_id().startswith("run_")
     assert generate_message_id().startswith("message_")
+
+
+def test_subagent_enums_keep_stable_wire_values() -> None:
+    assert {agent_type.value for agent_type in SubagentType} == {
+        "source_research",
+        "skill_builder",
+    }
+    assert {status.value for status in SubagentStatus} == {
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancel_requested",
+        "cancelled",
+        "interrupted",
+    }
+    assert {code.value for code in SubagentErrorCode} == {
+        "not_found",
+        "capability_gap",
+        "extraction_failed",
+        "auth_required",
+        "captcha_required",
+        "credential_required",
+        "payment_required",
+        "policy_denied",
+        "rate_limited",
+        "timed_out",
+        "cancelled",
+        "internal_error",
+    }
+
+
+def test_subagent_runtime_contracts_validate_terminal_results_and_snapshot() -> None:
+    record = SubagentRecord(
+        subagent_id="subagent_123",
+        task_id="task_123",
+        run_id="run_123",
+        agent_type=SubagentType.SOURCE_RESEARCH,
+        objective="Find TP53 datasets",
+        status=SubagentStatus.QUEUED,
+        parent_tool_call_id="call_123",
+        created_at=NOW,
+        progress_current=0,
+        source_asset_ids=[],
+    )
+    request = SubagentRequest(
+        agent_type=SubagentType.SOURCE_RESEARCH,
+        objective="Find TP53 datasets",
+        domain="bioinformatics",
+        capability="source_research",
+        inputs={"gene": "TP53"},
+    )
+    result = SubagentResult(
+        subagent_id=record.subagent_id,
+        status=SubagentStatus.COMPLETED,
+        summary="Found two datasets",
+        source_asset_ids=["asset_1"],
+        warnings=["One source needs credentials"],
+    )
+
+    summary = TaskSummary(
+        task_id="task_123",
+        mode=TaskMode.AGENT,
+        title="TP53 datasets",
+        status=RunStatus.RUNNING,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    snapshot = TaskSnapshot(task=summary, subagents=[record])
+
+    assert request.target_source is None
+    assert result.status is SubagentStatus.COMPLETED
+    assert snapshot.subagents == [record]
+    with pytest.raises(ValidationError, match="terminal"):
+        SubagentResult(
+            subagent_id="subagent_123",
+            status=SubagentStatus.RUNNING,
+            summary="Still working",
+        )

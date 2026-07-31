@@ -136,7 +136,6 @@ _SKILL_DISPLAY_NAMES: dict[str, str] = {
     "literature_understanding": "Literature Understanding",
     "pdf_extraction": "PDF Extraction",
     "browser_fallback": "Browser Fallback",
-    "self_evolution": "Self Evolution",
     "analysis": "Analysis",
     "pubchem": "PubChem",
     "reactome": "Reactome",
@@ -595,6 +594,49 @@ async def cancel_task_run(
         raise
 
 
+@router.post(
+    "/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel",
+    status_code=202,
+    response_model=TaskSnapshot,
+)
+async def cancel_task_subagent(
+    task_id: str,
+    run_id: str,
+    subagent_id: str,
+    repository: TaskRepositoryDep,
+    manager: TaskManagerDep,
+) -> TaskSnapshot:
+    """Request cancellation of one nonterminal child agent."""
+
+    snapshot = await _require_snapshot(repository, task_id)
+    _require_run(snapshot, run_id)
+    try:
+        return await manager.cancel_subagent(
+            task_id,
+            run_id,
+            subagent_id,
+            reason=None,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail="Subagent not found") from error
+    except RuntimeError as error:
+        detail = str(error)
+        if detail in {
+            "task manager is not running",
+            "subagent runtime is unavailable",
+        }:
+            raise HTTPException(
+                status_code=503,
+                detail="Subagent runtime is unavailable",
+            ) from error
+        if detail == f"subagent {subagent_id} is not cancellable":
+            raise HTTPException(
+                status_code=409,
+                detail="Subagent is not cancellable",
+            ) from error
+        raise
+
+
 class ResumeRunRequest(BaseModel):
     """Body for ``POST /runs/{run_id}/resume``.
 
@@ -637,6 +679,11 @@ async def resume_task_run(
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail="Run not found") from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Resume request does not belong to this run",
+        ) from error
     except RuntimeError as error:
         detail = str(error)
         if detail == "task manager is not running":

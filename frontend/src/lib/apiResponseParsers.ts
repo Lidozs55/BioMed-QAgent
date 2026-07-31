@@ -4,10 +4,17 @@
 /* ------------------------------------------------------------------ */
 
 import { APIError } from "@/hooks/settingsContracts";
-import type { EventPage, MessagePage, TaskPage, TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
+import type {
+  EventPage,
+  MessagePage,
+  SubagentErrorCode,
+  TaskPage,
+  TaskRunAccepted,
+  TaskSnapshot,
+} from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import {
-  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, optSchemaVersion,
+  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion,
 } from "@/lib/eventValidatorHelpers";
 
 /* ---- EventEnvelope invariant helpers ---- */
@@ -17,6 +24,14 @@ const RUNTIME_EVENT_TYPES = new Set([
   "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
   "run_cancel_requested", "run_cancelled", "run_interrupted",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "conversation_compacted",
+  "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
+  "subagent_failed", "subagent_cancel_requested", "subagent_cancelled",
+  "subagent_interrupted", "subagent_input_required", "subagent_input_resumed",
+]);
+const SUBAGENT_EVENT_TYPES = new Set([
+  "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
+  "subagent_failed", "subagent_cancel_requested", "subagent_cancelled",
+  "subagent_interrupted", "subagent_input_required", "subagent_input_resumed",
 ]);
 
 /* ---- finite/discriminated value validators (explicit switch, no as cast) ---- */
@@ -54,7 +69,7 @@ function assertEventSchemaVersion(v: unknown, path: string): "1.0" | "2.0" {
   throw new APIError(502, `Expected "1.0"|"2.0" at ${path}, got ${String(v)}`);
 }
 
-export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "assistant_delta" | "assistant_reasoning_delta" | "conversation_compacted" {
+export function assertEventType(v: unknown, path: string): "task_created" | "plan_ready" | "user_input_required" | "user_input_resumed" | "stage_started" | "stage_completed" | "stage_failed" | "stage_skipped" | "stage_progress" | "tool_called" | "tool_completed" | "tool_started" | "warning" | "artifact_produced" | "task_cancel_requested" | "task_cancelled" | "task_recovered" | "task_completed" | "task_failed" | "run_queued" | "run_started" | "run_finalizing" | "run_completed" | "run_failed" | "run_cancel_requested" | "run_cancelled" | "run_interrupted" | "assistant_delta" | "assistant_reasoning_delta" | "conversation_compacted" | "subagent_queued" | "subagent_started" | "subagent_progress" | "subagent_completed" | "subagent_failed" | "subagent_cancel_requested" | "subagent_cancelled" | "subagent_interrupted" | "subagent_input_required" | "subagent_input_resumed" {
   if (typeof v !== "string") throw new APIError(502, `Expected event type string at ${path}, got ${typeof v}`);
   switch (v) {
     case "task_created": case "plan_ready": case "user_input_required": case "user_input_resumed":
@@ -64,6 +79,9 @@ export function assertEventType(v: unknown, path: string): "task_created" | "pla
     case "run_queued": case "run_started": case "run_finalizing": case "run_completed": case "run_failed":
     case "run_cancel_requested": case "run_cancelled": case "run_interrupted":
     case "assistant_delta": case "assistant_reasoning_delta": case "conversation_compacted":
+    case "subagent_queued": case "subagent_started": case "subagent_progress": case "subagent_completed":
+    case "subagent_failed": case "subagent_cancel_requested": case "subagent_cancelled":
+    case "subagent_interrupted": case "subagent_input_required": case "subagent_input_resumed":
       return v;
     default:
       throw new APIError(502, `Unknown event type "${v}" at ${path}`);
@@ -116,9 +134,70 @@ function parseMessageRecord(json: unknown, idx: number): TaskSnapshot["messages"
   };
 }
 
+function parseSubagentRecord(
+  json: unknown,
+  idx: number,
+): NonNullable<TaskSnapshot["subagents"]>[number] {
+  const obj = assertObject(json, `subagents[${idx}]`);
+  return {
+    subagent_id: assertString(Reflect.get(obj, "subagent_id"), `subagents[${idx}].subagent_id`),
+    task_id: assertString(Reflect.get(obj, "task_id"), `subagents[${idx}].task_id`),
+    run_id: assertString(Reflect.get(obj, "run_id"), `subagents[${idx}].run_id`),
+    agent_type: assertFinite(Reflect.get(obj, "agent_type"), `subagents[${idx}].agent_type`, ["source_research", "skill_builder"]),
+    objective: assertString(Reflect.get(obj, "objective"), `subagents[${idx}].objective`),
+    target_source: assertStringOrNull(Reflect.get(obj, "target_source"), `subagents[${idx}].target_source`),
+    status: assertFinite(Reflect.get(obj, "status"), `subagents[${idx}].status`, ["queued", "running", "completed", "failed", "cancel_requested", "cancelled", "interrupted"]),
+    parent_tool_call_id: assertString(Reflect.get(obj, "parent_tool_call_id"), `subagents[${idx}].parent_tool_call_id`),
+    created_at: assertString(Reflect.get(obj, "created_at"), `subagents[${idx}].created_at`),
+    started_at: assertStringOrNull(Reflect.get(obj, "started_at"), `subagents[${idx}].started_at`),
+    finished_at: assertStringOrNull(Reflect.get(obj, "finished_at"), `subagents[${idx}].finished_at`),
+    progress_current: assertNumber(Reflect.get(obj, "progress_current"), `subagents[${idx}].progress_current`),
+    progress_total: assertOptionalNull(
+      Reflect.get(obj, "progress_total"),
+      `subagents[${idx}].progress_total`,
+      assertNumber,
+    ),
+    progress_message: assertStringOrNull(Reflect.get(obj, "progress_message"), `subagents[${idx}].progress_message`),
+    result_summary: assertStringOrNull(Reflect.get(obj, "result_summary"), `subagents[${idx}].result_summary`),
+    source_asset_ids: assertArray(Reflect.get(obj, "source_asset_ids"), `subagents[${idx}].source_asset_ids`, (value, sourceIndex) => assertString(value, `subagents[${idx}].source_asset_ids[${sourceIndex}]`)),
+    recipe_id: assertStringOrNull(Reflect.get(obj, "recipe_id"), `subagents[${idx}].recipe_id`),
+    error_code: assertFiniteOrNull(Reflect.get(obj, "error_code"), `subagents[${idx}].error_code`),
+    error_message: assertStringOrNull(Reflect.get(obj, "error_message"), `subagents[${idx}].error_message`),
+    pending_request_id: assertStringOrNull(Reflect.get(obj, "pending_request_id"), `subagents[${idx}].pending_request_id`),
+  };
+}
+
+function assertFiniteOrNull(
+  value: unknown,
+  path: string,
+): SubagentErrorCode | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new APIError(502, `Invalid subagent error code at ${path}`);
+  }
+  switch (value) {
+    case "not_found":
+    case "capability_gap":
+    case "extraction_failed":
+    case "auth_required":
+    case "captcha_required":
+    case "credential_required":
+    case "payment_required":
+    case "policy_denied":
+    case "rate_limited":
+    case "timed_out":
+    case "cancelled":
+    case "internal_error":
+      return value;
+    default:
+      throw new APIError(502, `Invalid subagent error code at ${path}`);
+  }
+}
+
 export function parseTaskSnapshot(json: unknown): TaskSnapshot {
   const obj = assertObject(json, "TaskSnapshot");
   const task = assertObject(Reflect.get(obj, "task"), "task");
+  const rawSubagents = Reflect.get(obj, "subagents");
   return {
     schema_version: optSchemaVersion(Reflect.get(obj, "schema_version"), "schema_version"),
     task: {
@@ -135,6 +214,9 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
     },
     runs: assertArray(Reflect.get(obj, "runs"), "runs", parseRunRecord),
     messages: assertArray(Reflect.get(obj, "messages"), "messages", parseMessageRecord),
+    subagents: rawSubagents === undefined
+      ? []
+      : assertArray(rawSubagents, "subagents", parseSubagentRecord),
     older_messages_cursor: assertStringOrNull(Reflect.get(obj, "older_messages_cursor"), "older_messages_cursor"),
   };
 }
@@ -212,6 +294,8 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
   const taskId = assertNonEmptyId(Reflect.get(obj, "task_id"), `events[${idx}].task_id`);
   const runId = assertStringOrNullNonEmpty(Reflect.get(obj, "run_id"), `events[${idx}].run_id`);
   const stageAttemptId = assertStringOrNullNonEmpty(Reflect.get(obj, "stage_attempt_id"), `events[${idx}].stage_attempt_id`);
+  const subagentId = assertStringOrNullNonEmpty(Reflect.get(obj, "subagent_id"), `events[${idx}].subagent_id`);
+  const parentToolCallId = assertStringOrNullNonEmpty(Reflect.get(obj, "parent_tool_call_id"), `events[${idx}].parent_tool_call_id`);
   const sequence = assertPositiveSequence(Reflect.get(obj, "sequence"), `events[${idx}].sequence`);
 
   /* Parse payload first to determine runtime scope from content */
@@ -236,6 +320,20 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
   if (runtimeScoped && runId === null) {
     throw new APIError(502, `Runtime-scoped event type "${eventType}" requires non-null run_id at events[${idx}]`);
   }
+  if ((subagentId !== null || parentToolCallId !== null) && runId === null) {
+    throw new APIError(502, `Subagent linkage requires non-null run_id at events[${idx}]`);
+  }
+  if (SUBAGENT_EVENT_TYPES.has(eventType)) {
+    if (subagentId === null || parentToolCallId === null) {
+      throw new APIError(502, `Subagent event type "${eventType}" requires envelope linkage at events[${idx}]`);
+    }
+    if (
+      !("subagent_id" in payload) ||
+      payload.subagent_id !== subagentId
+    ) {
+      throw new APIError(502, `Subagent payload linkage must match envelope at events[${idx}]`);
+    }
+  }
 
   return {
     schema_version: schemaVersion,
@@ -244,6 +342,8 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
     task_id: taskId,
     run_id: runId,
     stage_attempt_id: stageAttemptId,
+    subagent_id: subagentId,
+    parent_tool_call_id: parentToolCallId,
     sequence: sequence,
     timestamp: assertString(Reflect.get(obj, "timestamp"), `events[${idx}].timestamp`),
     payload,

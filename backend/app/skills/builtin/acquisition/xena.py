@@ -4,6 +4,7 @@ Search and download public genomics datasets from the Xena data hub.
 """
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
 import logging
@@ -20,7 +21,14 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -96,6 +104,72 @@ def _extract_cohort(name: str) -> str:
     return "unknown"
 
 
+def _hub_list_url(continuation_token: str | None = None) -> str:
+    params: dict[str, str] = {
+        "list-type": "2",
+        "prefix": "download/",
+        "max-keys": "1000",
+    }
+    if continuation_token:
+        params["continuation-token"] = continuation_token
+    return f"{_XENA_HUB_BASE}/?{urllib.parse.urlencode(params)}"
+
+
+def _parse_hub_page(
+    root_xml: ET.Element,
+    datasets: dict[str, dict[str, Any]],
+) -> str | None:
+    """Add one S3 listing page to *datasets* and return its next token."""
+
+    ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
+    for item in root_xml.findall("s3:Contents", ns):
+        key_el = item.find("s3:Key", ns)
+        if key_el is None:
+            continue
+        key = key_el.text or ""
+        if not key or key.endswith("/"):
+            continue
+
+        dataset_id = key[len("download/") :] if key.startswith("download/") else key
+        if dataset_id.endswith(".gz"):
+            dataset_id = dataset_id[:-3]
+
+        lower = dataset_id.lower()
+        if lower in ("hub.txt", "genomes.txt", "hub.json", "index.html"):
+            continue
+
+        name = dataset_id
+        for ext in (".tsv", ".json"):
+            if name.endswith(ext):
+                name = name[: -len(ext)]
+                break
+
+        size_el = item.find("s3:Size", ns)
+        mod_el = item.find("s3:LastModified", ns)
+        size_bytes = int(size_el.text) if size_el is not None and size_el.text else 0
+        last_modified = mod_el.text if mod_el is not None and mod_el.text else ""
+
+        datasets[dataset_id] = {
+            "dataset_id": dataset_id,
+            "name": name,
+            "type": _classify_dataset_type(name),
+            "cohort": _extract_cohort(name),
+            "size_bytes": size_bytes,
+            "last_modified": last_modified,
+        }
+
+    is_truncated_el = root_xml.find("s3:IsTruncated", ns)
+    next_token_el = root_xml.find("s3:NextContinuationToken", ns)
+    if (
+        is_truncated_el is not None
+        and is_truncated_el.text == "true"
+        and next_token_el is not None
+        and next_token_el.text
+    ):
+        return next_token_el.text
+    return None
+
+
 def _fetch_hub_index() -> list[dict[str, Any]]:
     """Fetch and parse the S3 ListObjectsV2 XML listing from the Xena public data hub.
 
@@ -107,17 +181,9 @@ def _fetch_hub_index() -> list[dict[str, Any]]:
     """
     datasets: dict[str, dict[str, Any]] = {}
     continuation_token: str | None = None
-    ns = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 
     while True:
-        params: dict[str, str] = {
-            "list-type": "2",
-            "prefix": "download/",
-            "max-keys": "1000",
-        }
-        if continuation_token:
-            params["continuation-token"] = continuation_token
-        list_url = f"{_XENA_HUB_BASE}/?{urllib.parse.urlencode(params)}"
+        list_url = _hub_list_url(continuation_token)
 
         _rate_limit()
         request = urllib.request.Request(
@@ -127,58 +193,33 @@ def _fetch_hub_index() -> list[dict[str, Any]]:
         with urllib.request.urlopen(request, timeout=60) as resp:
             root_xml = ET.parse(resp).getroot()
 
-        for item in root_xml.findall("s3:Contents", ns):
-            key_el = item.find("s3:Key", ns)
-            if key_el is None:
-                continue
-            key = key_el.text or ""
-            if not key or key.endswith("/"):
-                continue
-
-            # Strip the leading "download/" prefix to form the canonical dataset_id
-            dataset_id = (
-                key[len("download/") :] if key.startswith("download/") else key
-            )
-
-            # Strip trailing .gz for the canonical ID
-            if dataset_id.endswith(".gz"):
-                dataset_id = dataset_id[:-3]
-
-            # Skip metadata/hub descriptor files
-            lower = dataset_id.lower()
-            if lower in ("hub.txt", "genomes.txt", "hub.json", "index.html"):
-                continue
-
-            name = dataset_id
-            # Strip .tsv or .json middle extension for display name
-            for ext in (".tsv", ".json"):
-                if name.endswith(ext):
-                    name = name[:-len(ext)]
-                    break
-
-            size_el = item.find("s3:Size", ns)
-            mod_el = item.find("s3:LastModified", ns)
-            size_bytes = int(size_el.text) if size_el is not None and size_el.text else 0
-            last_modified = mod_el.text if mod_el is not None and mod_el.text else ""
-
-            datasets[dataset_id] = {
-                "dataset_id": dataset_id,
-                "name": name,
-                "type": _classify_dataset_type(name),
-                "cohort": _extract_cohort(name),
-                "size_bytes": size_bytes,
-                "last_modified": last_modified,
-            }
-
-        # Check for pagination
-        is_truncated_el = root_xml.find("s3:IsTruncated", ns)
-        next_token_el = root_xml.find("s3:NextContinuationToken", ns)
-        is_truncated = is_truncated_el is not None and is_truncated_el.text == "true"
-        if is_truncated and next_token_el is not None and next_token_el.text:
-            continuation_token = next_token_el.text
-        else:
+        continuation_token = _parse_hub_page(root_xml, datasets)
+        if continuation_token is None:
             break
 
+    return list(datasets.values())
+
+
+async def _fetch_hub_index_for_run(run_ctx: RunContext) -> list[dict[str, Any]]:
+    """Fetch Xena XML through the Run-bound crawler when available."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        return await asyncio.to_thread(_fetch_hub_index)
+
+    datasets: dict[str, dict[str, Any]] = {}
+    continuation_token: str | None = None
+    while True:
+        list_url = _hub_list_url(continuation_token)
+        result = await facade.api(list_url)
+        if not result.ok:
+            raise RuntimeError(result.error or f"HTTP {result.status_code}")
+        root_xml = ET.fromstring(result.content)
+        continuation_token = _parse_hub_page(root_xml, datasets)
+        if continuation_token is None:
+            break
     return list(datasets.values())
 
 
@@ -208,6 +249,34 @@ def _download(url: str, dest: Path) -> None:
     tmp.rename(dest)
 
 
+def _write_download(content: bytes, dest: Path) -> None:
+    """Write crawler bytes to a task-local path through an atomic temp file."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp.write_bytes(content)
+    tmp.replace(dest)
+
+
+async def _download_file_for_run(
+    run_ctx: RunContext,
+    url: str,
+    dest: Path,
+) -> None:
+    """Download through the bound crawler or isolated legacy transport."""
+
+    facade = run_ctx.crawler_facade_or_none
+    if facade is None:
+        if run_ctx.subagent_id is not None:
+            raise RuntimeError("crawler facade is not bound to the child Run")
+        await asyncio.to_thread(_download, url, dest)
+        return
+    result = await facade.download(url)
+    if not result.ok:
+        raise RuntimeError(result.error or f"HTTP {result.status_code}")
+    await asyncio.to_thread(_write_download, result.content, dest)
+
+
 def _decompress_gz(path: Path) -> Path:
     """Decompress a .gz file, returning the output path."""
     out = path.with_suffix("")
@@ -225,7 +294,11 @@ def _decompress_gz(path: Path) -> Path:
         "Use ``download_xena`` to fetch data files for a specific dataset_id."
     ),
 )
-def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -> str:
+async def search_xena(
+    ctx: RunContextWrapper[Any],
+    term: str,
+    max_results: int = 20,
+) -> str:
     """Search UCSC Xena public hub datasets by term.
 
     Fetches the S3 XML directory listing from the Xena hub, parses available
@@ -242,7 +315,7 @@ def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -
     """
     run_ctx: RunContext = ctx.context
     try:
-        all_datasets = _fetch_hub_index()
+        all_datasets = await _fetch_hub_index_for_run(run_ctx)
     except Exception as exc:
         run_ctx.log_query(term, "xena", QueryStatus.FAILED, 0)
         return json.dumps({
@@ -271,7 +344,7 @@ def search_xena(ctx: RunContextWrapper[Any], term: str, max_results: int = 20) -
 
 
 @function_tool
-def download_xena(
+async def download_xena(
     ctx: RunContextWrapper[Any],
     dataset_id: str,
     file_type: str = "tsv",
@@ -318,10 +391,36 @@ def download_xena(
     remote_filename = f"{base_id}.gz"
     url = f"{_XENA_DOWNLOAD_BASE}/{remote_filename}"
 
-    local_gz = run_ctx.work_dir.raw / remote_filename.replace("/", "_")
-
     try:
-        _download(url, local_gz)
+        if run_ctx.subagent_id is not None:
+            facade = run_ctx.crawler_facade_or_none
+            if facade is None:
+                raise RuntimeError("crawler facade is not bound to the child Run")
+            result = await facade.download(url)
+            if not result.ok:
+                raise RuntimeError(result.error or f"HTTP {result.status_code}")
+            source_id = make_source_id(Database.UCSC_XENA, dataset_id, url)
+            attempt_id = generate_prefixed_uuid("download_attempt")
+            temp_path = run_ctx.work_dir.download_temp_file(
+                remote_filename.replace("/", "_")
+            )
+            await asyncio.to_thread(_write_download, result.content, temp_path)
+            decompressed = await asyncio.to_thread(_decompress_gz, temp_path)
+            asset = await asyncio.to_thread(
+                run_ctx.stage_source_asset,
+                content=result.content,
+                filename=temp_path.name,
+                source_id=source_id,
+                successful_attempt_id=attempt_id,
+                data_level=DataLevel.REPOSITORY_PROCESSED,
+                media_type="application/gzip",
+            )
+            local_gz = run_ctx.source_asset_path(asset)
+        else:
+            local_gz = run_ctx.work_dir.raw_file(
+                remote_filename.replace("/", "_")
+            )
+            await _download_file_for_run(run_ctx, url, local_gz)
     except Exception as exc:
         return json.dumps({
             "source": "xena",
@@ -330,17 +429,17 @@ def download_xena(
             "error": f"download failed: {exc}",
         }, ensure_ascii=False)
 
-    try:
-        decompressed = _decompress_gz(local_gz)
-    except Exception as exc:
-        return json.dumps({
-            "source": "xena",
-            "dataset_id": dataset_id,
-            "source_url": url,
-            "local_files": [str(local_gz)],
-            "error": f"decompression failed: {exc}",
-        }, ensure_ascii=False)
-
+    if run_ctx.subagent_id is None:
+        try:
+            decompressed = await asyncio.to_thread(_decompress_gz, local_gz)
+        except Exception as exc:
+            return json.dumps({
+                "source": "xena",
+                "dataset_id": dataset_id,
+                "source_url": url,
+                "local_files": [str(local_gz)],
+                "error": f"decompression failed: {exc}",
+            }, ensure_ascii=False)
     local_files = [str(local_gz), str(decompressed)]
 
     run_ctx.add_raw_asset(local_files[0])

@@ -61,6 +61,13 @@ function mockApi(overrides: Partial<SettingsAPIClient> = {}): SettingsAPIClient 
   return { ...base, ...overrides };
 }
 
+async function loadModels() {
+  fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
+  await waitFor(() => {
+    expect(document.querySelector<HTMLButtonElement>("#settings-model")).not.toBeNull();
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /*  Tests                                                              */
 /* ------------------------------------------------------------------ */
@@ -79,15 +86,16 @@ describe("SettingsPanel", () => {
   });
 
   /* ================================================================ */
-  /*  Model settings — key omission / explicit clear / scrollability   */
+  /*  Model settings — key persistence / explicit clear / scrollability */
   /* ================================================================ */
 
-  it("omits api_key from the persisted payload after connection validation", async () => {
+  it("persists a typed api_key after connection validation", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
     const secret = await screen.findByLabelText("API Key");
     fireEvent.change(secret, { target: { value: "sk-validation-key" } });
+    await loadModels();
 
     const slider = screen.getByLabelText("最大输出 Tokens");
     fireEvent.change(slider, { target: { value: "16384" } });
@@ -96,15 +104,19 @@ describe("SettingsPanel", () => {
 
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(api.saveSettings).mock.calls[0]?.[0];
-    expect(payload).not.toHaveProperty("api_key");
+    expect(payload).toMatchObject({
+      api_key: "sk-validation-key",
+      max_tokens: 16384,
+    });
   });
 
-  it("uses a typed API key for validation without persisting it", async () => {
+  it("uses and persists a typed API key for validation", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
     const secret = await screen.findByLabelText("API Key");
     fireEvent.change(secret, { target: { value: "sk-new-secret-key" } });
+    await loadModels();
 
     // Mark dirty
     const slider = screen.getByLabelText("最大输出 Tokens");
@@ -117,14 +129,15 @@ describe("SettingsPanel", () => {
     expect(api.fetchModels).toHaveBeenCalledWith(expect.objectContaining({
       apiKey: "sk-new-secret-key",
     }));
-    expect(payload).not.toHaveProperty("api_key");
+    expect(payload).toHaveProperty("api_key", "sk-new-secret-key");
   });
 
-  it("disables saving when the fresh API key is cleared", async () => {
+  it("persists an explicit API key clear when a key was configured", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
 
     const secret = await screen.findByLabelText("API Key");
+    await loadModels();
     // Type a key first
     fireEvent.change(secret, { target: { value: "sk-temp" } });
     // Then clear it
@@ -134,8 +147,15 @@ describe("SettingsPanel", () => {
     const slider = screen.getByLabelText("最大输出 Tokens");
     fireEvent.change(slider, { target: { value: "16384" } });
 
-    expect(screen.getByRole("button", { name: "保存模型设置" })).toBeDisabled();
-    expect(api.saveSettings).not.toHaveBeenCalled();
+    const save = screen.getByRole("button", { name: "保存模型设置" });
+    expect(save).not.toBeDisabled();
+    fireEvent.click(save);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.saveSettings).mock.calls[0]?.[0]).toMatchObject({
+      api_key: "",
+      max_tokens: 16384,
+    });
   });
 
   it("does not put the API key value into visible DOM text", async () => {
