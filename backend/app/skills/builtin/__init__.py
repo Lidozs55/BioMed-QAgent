@@ -17,7 +17,7 @@ _NON_SELECTABLE_BUILTINS = {
     "extract_chart_data_vlm",
     "analysis",
 }
-_PIPELINE_SUPPORTED_BUILTINS = {"pubmed", "geo"}
+_PIPELINE_SUPPORTED_BUILTINS = {"pubmed", "geo", "gdc", "xena", "reactome"}
 
 
 def builtin_skill_modules() -> tuple[str, ...]:

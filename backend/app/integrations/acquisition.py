@@ -198,6 +198,8 @@ async def acquire_source(
     max_bytes: int,
     expected_size: int | None = None,
     expected_sha256: str | None = None,
+    expected_media_types: frozenset[str] | None = None,
+    accept: str = "text/tab-separated-values",
 ) -> AcquisitionResult:
     attempt_id = generate_prefixed_uuid("download_attempt")
     started_at = datetime.now(UTC)
@@ -255,7 +257,11 @@ async def acquire_source(
         media_type = "application/octet-stream"
         while True:
             async with http.stream(
-                "GET", current_url, follow_redirects=False, timeout=timeout
+                "GET",
+                current_url,
+                headers={"Accept": accept},
+                follow_redirects=False,
+                timeout=timeout,
             ) as response:
                 if response.is_redirect:
                     location = response.headers.get("Location")
@@ -315,7 +321,12 @@ async def acquire_source(
                     )
                 media_type = response.headers.get(
                     "Content-Type", "application/octet-stream"
-                )
+                ).split(";", 1)[0].strip().lower()
+                if expected_media_types and media_type not in expected_media_types:
+                    raise AcquisitionFailure(
+                        ErrorCode.VALIDATION_ERROR,
+                        f"unexpected content type: {media_type or 'missing'}",
+                    )
                 break
 
         if expected_size is not None and bytes_received != expected_size:

@@ -27,6 +27,10 @@ def _build_tool_specification(
     databases: list[str],
     pmid: str | None,
     gse: str | None,
+    xena_dataset_id: str | None = None,
+    gdc_project_id: str | None = None,
+    gdc_data_type: str | None = None,
+    reactome_pathway_id: str | None = None,
 ) -> TaskSpecification | None:
     """Build a TaskSpecification when the Agent supplied explicit accessions.
 
@@ -36,7 +40,17 @@ def _build_tool_specification(
     discovery stage uses direct NCBI lookups instead of topic search (which
     fails for non-English topics).
     """
-    if not pmid and not gse:
+    normalized_reactome_pathway_id = (
+        reactome_pathway_id.strip() if reactome_pathway_id else None
+    )
+    has_reactome_pathway_id = bool(normalized_reactome_pathway_id)
+    if (
+        not pmid
+        and not gse
+        and not xena_dataset_id
+        and not gdc_project_id
+        and not has_reactome_pathway_id
+    ):
         return None
     selected = {value.lower() for value in databases}
     queries: list[QuerySpecification] = []
@@ -68,6 +82,63 @@ def _build_tool_specification(
                 reason="agent-identified GEO series",
             )
         )
+    if gdc_project_id and "gdc" in selected:
+        if not gdc_data_type:
+            raise ValueError("gdc_data_type is required with gdc_project_id")
+        queries.append(
+            QuerySpecification(
+                query_id="query_gdc_1",
+                database=Database.GDC,
+                query=gdc_project_id,
+                generated_by="agent",
+                purpose="explicit GDC project",
+                order=_next_order(),
+            )
+        )
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_gdc_{gdc_project_id.lower()}",
+                database=Database.GDC,
+                accession=gdc_project_id,
+                reason="agent-identified GDC project",
+                data_type=gdc_data_type,
+            )
+        )
+    if xena_dataset_id and ({"xena", "ucsc_xena"} & selected):
+        queries.append(
+            QuerySpecification(
+                query_id="query_xena_1",
+                database=Database.UCSC_XENA,
+                query=xena_dataset_id,
+                generated_by="agent",
+                purpose="explicit Xena dataset from agent discovery",
+                order=_next_order(),
+            )
+        )
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_ucsc_xena_{xena_dataset_id.lower().replace('/', '_')}",
+                database=Database.UCSC_XENA,
+                accession=xena_dataset_id,
+                source_id="",
+                reason="agent-identified Xena dataset",
+            )
+        )
+    if has_reactome_pathway_id and "reactome" in selected:
+        datasets.append(
+            DatasetSelection(
+                dataset_id=f"ds_reactome_{normalized_reactome_pathway_id.lower()}",
+                database=Database.REACTOME,
+                accession=normalized_reactome_pathway_id,
+                reason="agent-identified Reactome pathway",
+                data_type="pathway-participants",
+            )
+        )
+    reactome_datasets = [
+        dataset for dataset in datasets if dataset.database == Database.REACTOME
+    ]
+    if len(reactome_datasets) > 1:
+        raise ValueError("Reactome supports exactly one explicit DatasetSelection")
     if pmid and "pubmed" in selected:
         queries.append(
             QuerySpecification(
@@ -79,7 +150,7 @@ def _build_tool_specification(
                 order=_next_order(),
             )
         )
-    if not queries:
+    if not queries and not datasets:
         return None
     return TaskSpecification(
         topic=topic,
@@ -130,11 +201,46 @@ async def run_research_pipeline(
     databases: list[str],
     pmid: str | None = None,
     gse: str | None = None,
+    xena_dataset_id: str | None = None,
+    gdc_project_id: str | None = None,
+    gdc_data_type: str | None = None,
+    reactome_pathway_id: str | None = None,
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
-    normalized_databases = [value.lower() for value in databases]
+    normalized_databases = [value.strip().lower() for value in databases]
     if not normalized_databases:
         raise ValueError("databases must be a non-empty list of database identifiers")
+    supported_databases = {"pubmed", "geo", "gdc", "xena", "ucsc_xena", "reactome"}
+    unsupported_databases = sorted(
+        {value for value in normalized_databases if value not in supported_databases}
+    )
+    if unsupported_databases:
+        return json.dumps(
+            {
+                "status": "unsupported_databases",
+                "unsupported_databases": unsupported_databases,
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    if "reactome" in normalized_databases and len(set(normalized_databases)) > 1:
+        return json.dumps(
+            {
+                "status": "unsupported_databases",
+                "unsupported_databases": ["reactome_mixed_sources"],
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    if normalized_databases == ["reactome"] and not (reactome_pathway_id or "").strip():
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": "reactome_pathway_id is required when databases is ['reactome']",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
 
     run_context = ctx.context
     try:
@@ -155,10 +261,22 @@ async def run_research_pipeline(
             },
             ensure_ascii=False,
         )
+    fixture_root = Path(__file__).parents[2] / "tests" / "fixtures"
     fixture_dir = (
-        Path(__file__).parents[2] / "tests" / "fixtures" / "ncbi" / "gse178352"
+        fixture_root / "reactome"
+        if "reactome" in normalized_databases
+        else fixture_root / "ncbi" / "gse178352"
     )
-    specification = _build_tool_specification(topic, normalized_databases, pmid, gse)
+    specification = _build_tool_specification(
+        topic,
+        normalized_databases,
+        pmid,
+        gse,
+        xena_dataset_id,
+        gdc_project_id,
+        gdc_data_type,
+        reactome_pathway_id,
+    )
     runner: PipelineRunner | None = None
     transferred = False
     reservation_released = False
@@ -218,11 +336,7 @@ async def run_research_pipeline(
                 if terminal_error is not None:
                     run_context.set_managed_terminal_error(terminal_error)
     except BaseException:
-        if (
-            managed_run_id is not None
-            and not transferred
-            and not reservation_released
-        ):
+        if managed_run_id is not None and not transferred and not reservation_released:
             await abort_reserved_runner()
         raise
     finally:
@@ -232,7 +346,8 @@ async def run_research_pipeline(
     # Extract error details from failed stage attempts so the Agent can
     # understand the specific reason and avoid repeating the same mistake.
     failed_attempts = [
-        attempt for attempt in runner.state.stage_attempts
+        attempt
+        for attempt in runner.state.stage_attempts
         if attempt.status.value == "failed" and attempt.error is not None
     ]
     last_error = failed_attempts[-1] if failed_attempts else None

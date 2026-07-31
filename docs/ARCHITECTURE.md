@@ -64,9 +64,67 @@ Agent 不直接拼装最终 CSV，也不能绕过 Validation Gate。
 - 固化下载、解析、追溯和导出行为；
 - 为模型、网络、解析和完整任务设置独立超时；
 - 只发布通过验证的 Artifact；
-- 失败时保证终态事件，不使用 mock 伪装成功。
+- 失败时保证终态事件，不使用 mock 伪装成功；
+- 接收 Agent 发现或补充的数据，但必须将其转换为统一的
+  `SourceRecord` / `SourceAsset` / `ParsedDataset` 契约后再处理；
+- 负责确定性合并、最终验证和正式 Artifact 发布，Agent 不直接合并或写入最终 CSV。
 
-### 2.3 Skill 和 Tool 的职责
+### 2.3 目标 Agent 编排工作流
+
+系统采用“Agent 编排 + Pipeline 确定性发布”的迭代流程：
+
+```text
+Agent 初步分析与调研
+    -> 版本化 TaskSpecification / ResearchPlan
+    -> Pipeline Run #1
+         -> validated_intermediate artifacts
+    -> Agent 根据结构化结果评估进展
+         |-- 可修复失败：新的 durable Run，完整或受控局部重跑
+         |-- 有明确缺口：检索、浏览器、PDF 或其它数据库补充数据
+         `-- 无新增证据：结束补充阶段
+    -> Agent 补充数据注册为 SourceRecord / SourceAsset / ParsedDataset
+    -> Pipeline 新 Run
+         -> 确定性合并 + Validation Gate
+         -> validated_final artifacts
+```
+
+这不是让 LLM 直接生成最终 CSV。Agent 只负责问题理解、候选发现、工具选择、
+补充策略和映射建议；所有正式数据仍必须经过 Pipeline 的处理、追溯和 Validation
+Gate。
+
+### 2.4 迭代、重跑与版本决策
+
+- 同一 Agent Run 内只允许一次 Pipeline publication；反复调用通过新的 durable
+  Run 实现，避免同一 publication slot 的重入和不可审计覆盖。
+- 完整重跑可以复用输入、参数和上游输出 digest 一致的已验证阶段；topic、来源、
+  解析规则或字段映射变化必须形成新的 Run/版本。
+- 局部重跑不是任意 `skip_stages`。服务端根据阶段依赖闭包从指定阶段重新执行，
+  下游阶段不得消费 digest 不匹配的上游输出。
+- 第一轮通过验证的结果标记为 `validated_intermediate`；合并 Agent 补充数据后
+  重新构建并验证，才标记为 `validated_final`。旧版本 Artifact 保留，不被新 Run
+  原地覆盖。
+- Agent-only 数据源不自动等同于 Pipeline 支持；`pipeline_supported` 只表示该
+  来源已经完成相应的搜索、元数据、下载、解析和验证闭环。
+- GDC Pipeline 首期仅接受显式 `project_id` + `data_type`（`gene-expression` 或
+  `clinical`），Discovery 生成 GDC `SourceRecord`，Acquisition 通过 `/files` 选择
+  稳定 TSV/TSV.GZ 文件并使用 `acquire_source()` 下载，Processing 严格拒绝不符合
+  fixture 表布局的输入；mutation、CNV 和多源合并不在此支持边界内。
+
+### 2.5 Skill 和 Tool 的职责
+
+以下职责是目标边界；当前后端仍有两类实现差距，不能将目标描述当作已完成能力：
+
+- `PipelineRunner` 已覆盖 PubMed/GEO 主路径，以及 GDC、Xena 和 Reactome 的首期显式
+  单数据集路径；Reactome 仅接受一个显式 pathway，必须作为唯一来源运行，和其它数据库
+  或多个 pathway selection 会被拒绝。`TaskSpecification` 虽可表达通用查询，但尚未成为
+  所有阶段的通用多源路由契约；多源合并、mutation/CNV 与 Reactome 扩展数据类型仍未完成。
+- Agent-only Skill 的文件记录仍主要通过 `RunContext.add_source()` /
+  `add_raw_asset()` 保存到运行时字段；这些文件尚未统一转换为 Pipeline 的
+  Pydantic `SourceRecord` / `SourceAsset` / `ParsedDataset`，因此不能直接作为正式
+  Pipeline 数据或最终 CSV 的来源。
+- Pipeline 的 `Validation Gate` 只约束 Pipeline 生成的研究数据包；直接由 Agent
+  Skill 写入 `artifacts/` 的分析图表或报告属于未纳入正式发布闭环的辅助产物，后续
+  必须明确其目录隔离或接入同一验证契约。
 
 统一 Skill 仓库继续按四类组织：
 
@@ -91,7 +149,7 @@ backend/app/skills/
 - processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
 - learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
-### 2.4 动态 Skill Catalog 与管理面
+### 2.6 动态 Skill Catalog 与管理面
 
 业务 Skill 统一由 lifespan 创建的进程级 `SkillCatalog` 管理。Catalog 合并随应用
 发布的 builtin Skill 与外部应用数据目录中的用户 Skill，并通过不可变快照和单调
@@ -284,7 +342,9 @@ schema version 和生成步骤。
 负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
 候选、实际查询式、结果顺序和来源 URL。
 
-Discovery 不生成最终科研数据行。
+Discovery 不生成最终科研数据行。对于显式的 UCSC Xena gene-expression 数据集与
+Reactome pathway participants，Discovery 输出统一的 `SourceRecord` 和数据集选择；
+Reactome 仅支持单来源显式 `pathway_id`，混合来源不得伪装成 Pipeline 支持。
 
 PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
 请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
@@ -301,6 +361,9 @@ PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局
 - 计算 SHA-256 和字节数；
 - 完整成功后创建 SourceAsset；
 - 部分或失败文件永不交给 Parser。
+- Xena gene-expression live acquisition 将显式数据集 accession 映射到 Xena hub
+  `download/{dataset_id}.gz`，复用同一 `acquire_source()`、内容寻址缓存和
+  `SourceAsset`/`DownloadAttempt` 契约；临床、突变、CNV 等 Xena 类型尚未纳入该闭环。
 
 成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
 参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
@@ -351,14 +414,22 @@ Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数
 
 ```text
 data/output/tasks/<task_id>/
-|-- source_assets/# 不可变来源文件
+|-- source_assets/# 不可变来源文件（包括 Agent 补充来源）
 |-- download_tmp/ # 不完整下载
 |-- parsed/       # 解析结果
 |-- normalized/   # 清洗和字段对齐结果
 |-- staging/      # 按 run_id 隔离的候选产物
-|-- artifacts/    # 已通过验证的交付物
+|-- artifacts/    # 已通过验证的当前交付物版本
 |-- state/        # 任务锁和恢复状态
 `-- logs/         # stage attempts、事件、验证和诊断记录
+```
+
+Agent 的查询、选择理由、进度判定和提取记录可以保存在任务级
+`agent_results/` 中，但大型原始数据不得重复存放；原始文件统一进入
+`source_assets/`，并通过 SourceAsset/ParsedDataset 进入 Pipeline。
+
+```text
+agent_results/    # Agent 决策、查询和提取审计记录（可选）
 ```
 
 API 只公开 `artifacts/`。

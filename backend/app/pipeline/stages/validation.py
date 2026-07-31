@@ -425,15 +425,22 @@ def _validate_package(
     max_lineage_checks: int = _DEFAULT_MAX_LINEAGE_CHECKS,
 ) -> tuple[ValidationSummary, list[dict[str, object]]]:
     """Run all validation checks on the staging package."""
-    main_rows = _read_csv(staging / "main_data.csv")
+    main_path = staging / "main_data.csv"
+    if not main_path.is_file():
+        main_path = staging / "pathway_members.csv"
+    main_rows = _read_csv(main_path)
     dataset_ids = {
         row["dataset_id"] for row in _read_csv(staging / "dataset_catalog.csv")
     }
     sample_rows = _read_csv(staging / "sample_metadata.csv")
     sample_ids = {row["sample_id"] for row in sample_rows}
-    source_ids = {row["source_id"] for row in _read_csv(staging / "source_list.csv")}
+    source_list_rows = _read_csv(staging / "source_list.csv")
+    source_ids = {row["source_id"] for row in source_list_rows}
+    reactome_rows = bool(main_rows) and "pathway_id" in main_rows[0]
     asset_rows = _read_csv(staging / "source_assets.csv")
     asset_ids = {row["asset_id"] for row in asset_rows}
+    assets_by_id = {row["asset_id"]: row for row in asset_rows}
+    dataset_rows = _read_csv(staging / "dataset_catalog.csv")
     download_rows = _read_csv(staging / "download_log.csv")
     described = {
         row["field_name"] for row in _read_csv(staging / "field_descriptions.csv")
@@ -453,7 +460,7 @@ def _validate_package(
     )
     reference_failures = sum(
         row["dataset_id"] not in dataset_ids
-        or row["sample_id"] not in sample_ids
+        or (not reactome_rows and row["sample_id"] not in sample_ids)
         or row["source_id"] not in source_ids
         or row["asset_id"] not in asset_ids
         for row in main_rows
@@ -469,6 +476,156 @@ def _validate_package(
             "details": "",
         }
     )
+    reactome_source_lines: list[list[str]] = []
+    reactome_source_header: list[str] = []
+    reactome_source_file = (
+        source_path.name[:-3]
+        if source_path.suffix.lower() == ".gz"
+        else source_path.name
+    )
+    if reactome_rows:
+        opener = gzip.open if source_path.suffix.lower() == ".gz" else Path.open
+        if source_path.suffix.lower() == ".gz":
+            with opener(source_path, "rt", encoding="utf-8", newline="") as handle:
+                reactome_source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+        else:
+            with source_path.open("r", encoding="utf-8", newline="") as handle:
+                reactome_source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+        reactome_source_header = reactome_source_lines[0] if reactome_source_lines else []
+        pathway_failures = sum(
+            not row.get("pathway_id", "").strip()
+            or not row.get("pathway_name", "").strip()
+            or not row.get("species", "").strip()
+            for row in main_rows
+        )
+        participant_failures = sum(
+            not row.get("participant_id", "").strip()
+            or not row.get("participant_name", "").strip()
+            or not row.get("participant_type", "").strip()
+            or not row.get("interaction_type", "").strip()
+            for row in main_rows
+        )
+        source_failures = sum(
+            not row.get("source_id", "").strip()
+            or row.get("source_id", "") not in source_ids
+            for row in main_rows
+        )
+        asset_failures_for_rows = sum(
+            not row.get("asset_id", "").strip()
+            or row.get("asset_id", "") not in asset_ids
+            for row in main_rows
+        )
+        asset_source_failures = sum(
+            row.get("source_id", "")
+            != assets_by_id.get(row.get("asset_id", ""), {}).get(
+                "source_id", ""
+            )
+            for row in main_rows
+        )
+        dataset_row = dataset_rows[0] if dataset_rows else {}
+        dataset_source_failures = sum(
+            row.get("source_id", "") != dataset_row.get("source_id", "")
+            or dataset_row.get("source_id", "") not in source_ids
+            for row in main_rows
+        )
+        source_list_failures = sum(
+            source.get("source_id", "") == dataset_row.get("source_id", "")
+            and (
+                source.get("database", "") != dataset_row.get("database", "")
+                or source.get("accession", "") != dataset_row.get("accession", "")
+            )
+            for source in source_list_rows
+        )
+        dataset_accession = dataset_row.get("accession", "").strip()
+        pathway_dataset_failures = sum(
+            row.get("pathway_id", "").strip() != dataset_accession
+            for row in main_rows
+        )
+        locator_failures = 0
+        for row in main_rows:
+            try:
+                valid_locator = (
+                    bool(row.get("record_id", "").strip())
+                    and bool(row.get("source_logical_file", "").strip())
+                    and bool(row.get("source_column_name", "").strip())
+                    and bool(row.get("source_raw_value", "").strip())
+                    and int(row.get("source_line_number", "0")) >= 2
+                    and int(row.get("source_column_index", "-1")) >= 0
+                    and row.get("source_logical_file", "") == reactome_source_file
+                    and int(row["source_column_index"]) < len(reactome_source_header)
+                    and reactome_source_header[int(row["source_column_index"])]
+                    == row.get("source_column_name", "")
+                )
+            except ValueError:
+                valid_locator = False
+            locator_failures += not valid_locator
+        for check_id, check_name, failed_count in (
+            (
+                "reactome_pathway_fields",
+                "Reactome pathway fields are complete",
+                pathway_failures,
+            ),
+            (
+                "reactome_participant_fields",
+                "Reactome participant fields are complete",
+                participant_failures,
+            ),
+            (
+                "reactome_source_foreign_keys",
+                "Reactome source references close",
+                source_failures,
+            ),
+            (
+                "reactome_asset_foreign_keys",
+                "Reactome asset references close",
+                asset_failures_for_rows,
+            ),
+            (
+                "reactome_asset_source_consistency",
+                "Reactome asset source references match main data",
+                asset_source_failures,
+            ),
+            (
+                "reactome_dataset_source_consistency",
+                "Reactome dataset source matches main data and source list",
+                dataset_source_failures + source_list_failures,
+            ),
+            (
+                "reactome_pathway_dataset_consistency",
+                "Reactome pathway IDs match dataset accession",
+                pathway_dataset_failures,
+            ),
+            (
+                "reactome_source_locator",
+                "Reactome source locators are complete",
+                locator_failures,
+            ),
+        ):
+            checks.append(
+                {
+                    "check_id": check_id,
+                    "scope": "pathway_members",
+                    "check_name": check_name,
+                    "status": "passed" if failed_count == 0 else "failed",
+                    "checked_count": len(main_rows),
+                    "failed_count": failed_count,
+                    "details": "",
+                }
+            )
+        duplicate_record_ids = len(main_rows) - len(
+            {row.get("record_id", "") for row in main_rows}
+        )
+        checks.append(
+            {
+                "check_id": "reactome_lineage_contract",
+                "scope": "main_data",
+                "check_name": "Reactome participant and lineage fields are complete",
+                "status": "passed" if duplicate_record_ids == 0 else "failed",
+                "checked_count": len(main_rows),
+                "failed_count": duplicate_record_ids,
+                "details": "",
+            }
+        )
     sample_reference_failures = sum(
         row["dataset_id"] not in dataset_ids or row["source_id"] not in source_ids
         for row in sample_rows
@@ -500,13 +657,13 @@ def _validate_package(
     else:
         source_rel_base = source_path.parents[len(parts) - sa_index - 1]
     for row in asset_rows:
+        asset_path = source_rel_base / row["relative_path"]
         asset_failures += (
             row["successful_attempt_id"] not in successful_attempt_ids
             or row["source_id"] not in source_ids
-            or row["relative_path"]
-            != source_path.relative_to(source_rel_base).as_posix()
-            or int(row["size_bytes"]) != source_path.stat().st_size
-            or row["sha256"] != _sha256(source_path)
+            or not asset_path.is_file()
+            or int(row["size_bytes"]) != asset_path.stat().st_size
+            or row["sha256"] != _sha256(asset_path)
         )
     checks.append(
         {
@@ -532,16 +689,29 @@ def _validate_package(
         }
     )
 
-    with gzip.open(source_path, "rt", encoding="utf-8", newline="") as handle:
-        source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    opener = gzip.open if source_path.suffix.lower() == ".gz" else Path.open
+    if source_path.suffix.lower() == ".gz":
+        with opener(source_path, "rt", encoding="utf-8", newline="") as handle:
+            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    else:
+        with source_path.open("r", encoding="utf-8", newline="") as handle:
+            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
     sampled_rows = _deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
     sampled_skipped = 0
     for row in sampled_rows:
-        # Skip sample-metadata rows: they have no expression value to verify
-        # against (the series_matrix expression block is empty for snRNAseq /
-        # RNA-seq series). ``measurement_type="sample_metadata"`` and
-        # ``source_line_number=0`` are the sentinels for these rows.
+        if reactome_rows:
+            line_index = int(row["source_line_number"]) - 1
+            column_index = int(row["source_column_index"])
+            try:
+                raw = source_lines[line_index][column_index]
+            except (IndexError, ValueError):
+                lineage_failures += 1
+                continue
+            if raw != row["source_raw_value"] or raw != row["participant_id"]:
+                lineage_failures += 1
+            continue
+        # Skip sample-metadata rows: they have no expression value to verify.
         if row.get("measurement_type") == "sample_metadata":
             sampled_skipped += 1
             continue

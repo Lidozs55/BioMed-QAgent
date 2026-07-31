@@ -1,13 +1,17 @@
 """Acquisition stage: fixture gzip or live download of GEO counts."""
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import hashlib
+import json
 import logging
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
@@ -30,7 +34,7 @@ from app.pipeline.stages.base import (
     StageContext,
     StageResult,
 )
-from app.tools.content_cache import ContentCache
+from app.tools.content_cache import ContentCache, canonical_request_hash
 
 _DEFAULT_GSE = "GSE178352"
 _MAX_BYTES = 100 * 1024 * 1024  # 100 MB safety cap
@@ -97,6 +101,11 @@ def _counts_download_url(gse: str) -> str:
     )
 
 
+def _family_soft_url(gse: str) -> str:
+    prefix = gse[:6].upper()
+    return f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/{gse}/soft/{gse}_family.soft.gz"
+
+
 def _series_matrix_url(gse: str) -> str:
     """Build the NCBI GEO series matrix URL (universally available fallback)."""
     prefix = gse[:6].upper()
@@ -139,15 +148,50 @@ async def _try_acquire(
 
 
 def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
-    """Download (live) or gzip (fixture) the GEO counts and publish as SourceAsset.
+    """Download (live) or fixture data and publish as SourceAsset.
 
-    In fixture mode, reads ``tximport_counts_slice.tsv`` from the fixture,
-    compresses it with ``mtime=0`` for reproducibility, and writes to
-    ``source_assets/``.
+    GDC uses its files API to select one deterministic file for the explicit
+    project and data type, then downloads it through acquire_source().
 
-    In live mode, streams the real GEO counts file from NCBI FTP via
-    ``acquire_source``, with content-addressed caching.
+    In fixture mode, reads the fixture table and writes to source_assets.
+    In live mode, streams the source through acquire_source with caching.
     """
+    specification = ctx.specification
+    gdc_dataset = next(
+        (
+            d
+            for d in (specification.datasets if specification else [])
+            if d.database == Database.GDC
+        ),
+        None,
+    )
+    if gdc_dataset is not None:
+        if ctx.mode == "fixture":
+            return _run_gdc_acquisition_fixture(ctx, retrieved_at, gdc_dataset)
+        return asyncio.run(_run_gdc_acquisition_live(ctx, retrieved_at, gdc_dataset))
+
+    if specification and any(
+        dataset.database == Database.UCSC_XENA for dataset in specification.datasets
+    ):
+        dataset = next(
+            dataset for dataset in specification.datasets if dataset.database == Database.UCSC_XENA
+        )
+        if ctx.mode == "live":
+            return asyncio.run(_run_xena_acquisition_live(ctx, retrieved_at, dataset))
+        return _run_xena_acquisition_fixture(ctx, retrieved_at, dataset)
+    reactome_dataset = next(
+        (
+            dataset
+            for dataset in (specification.datasets if specification else [])
+            if dataset.database == Database.REACTOME
+        ),
+        None,
+    )
+    if reactome_dataset is not None:
+        if ctx.mode == "live":
+            return asyncio.run(_run_reactome_acquisition_live(ctx, retrieved_at, reactome_dataset))
+        return _run_reactome_acquisition_fixture(ctx, retrieved_at, reactome_dataset)
+
     dataset = _resolve_geo_dataset(ctx)
     gse = _extract_gse_accession(dataset.accession) or _DEFAULT_GSE
     if ctx.mode == "live":
@@ -155,13 +199,372 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
     return _run_acquisition_fixture(ctx, retrieved_at, gse)
 
 
-def _run_acquisition_fixture(
-    ctx: StageContext, retrieved_at: datetime, gse: str
+def _gdc_fixture_file(ctx: StageContext, data_type: str) -> Path:
+    name = "gdc_expression.tsv" if data_type.startswith("gene") else "gdc_clinical.tsv"
+    path = ctx.fixture_dir / name
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path
+
+
+def _run_gdc_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
 ) -> StageResult:
-    if gse.upper() != _DEFAULT_GSE:
-        raise ValueError(
-            f"fixture mode only supports the pinned dataset {_DEFAULT_GSE}, got {gse}"
+    payload = _gdc_fixture_file(ctx, dataset.data_type or "").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_id = dataset.source_id or make_source_id(
+        Database.GDC, dataset.accession, f"https://api.gdc.cancer.gov/projects/{dataset.accession}"
+    )
+    path = ctx.workdir.source_assets / _gdc_fixture_file(ctx, dataset.data_type or "").name
+    path.write_bytes(payload)
+    attempt_id = f"download_attempt_fixture_gdc_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="application/gzip" if path.suffix == ".gz" else "text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=f"https://api.gdc.cancer.gov/data/{dataset.accession}",
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+async def _run_gdc_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.data_type:
+        raise ValueError("GDC acquisition requires data_type")
+    params = {
+        "filters": json.dumps(
+            {
+                "op": "and",
+                "content": [
+                    {
+                        "op": "=",
+                        "content": {
+                            "field": "cases.project.project_id",
+                            "value": dataset.accession,
+                        },
+                    },
+                    {"op": "=", "content": {"field": "data_type", "value": dataset.data_type}},
+                ],
+            }
+        ),
+        "fields": "file_id,file_name,md5sum,data_format",
+        "format": "json",
+        "size": "10",
+    }
+    async with httpx.AsyncClient() as http:
+        response = await http.get("https://api.gdc.cancer.gov/files", params=params, timeout=30)
+        response.raise_for_status()
+        hits = response.json().get("data", {}).get("hits", [])
+        if not hits:
+            raise ValueError(f"no GDC file for {dataset.accession}/{dataset.data_type}")
+        hit = sorted(hits, key=lambda item: (item.get("file_name", ""), item.get("file_id", "")))[0]
+        file_id = hit.get("file_id")
+        filename = hit.get("file_name")
+        if (
+            not file_id
+            or not filename
+            or hit.get("data_format") not in {"TSV", "tsv", "TSV.GZ", "tsv.gz"}
+        ):
+            raise ValueError("GDC file metadata lacks supported id/name/data_format")
+        url = f"https://api.gdc.cancer.gov/data/{file_id}"
+        source = SourceRecord(
+            source_id=dataset.source_id or make_source_id(Database.GDC, dataset.accession, url),
+            database=Database.GDC,
+            accession=dataset.accession,
+            url=url,
+            title=filename,
+            retrieved_at=retrieved_at,
         )
+        result = await acquire_source(
+            source=source,
+            filename=filename,
+            workdir=ctx.workdir,
+            cache=ContentCache(ctx.workdir.root.parent.parent / "cache" / "gdc"),
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=_MAX_BYTES,
+            expected_sha256=hit.get("md5sum") if len(hit.get("md5sum", "")) == 64 else None,
+        )
+    if result.asset is None:
+        raise RuntimeError(f"GDC download failed: {result.attempt.error_message}")
+    return StageResult(
+        output_digest=result.asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / result.asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+async def _run_xena_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    url = (
+        "https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/"
+        f"{dataset.accession.removesuffix('.gz')}.gz"
+    )
+    source = SourceRecord(
+        source_id=make_source_id(Database.UCSC_XENA, dataset.accession, url),
+        database=Database.UCSC_XENA,
+        accession=dataset.accession,
+        url=url,
+        title=f"UCSC Xena dataset {dataset.accession}",
+        retrieved_at=retrieved_at,
+    )
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "xena")
+    filename = dataset.accession.replace("/", "_") + ".gz"
+    async with httpx.AsyncClient() as http:
+        result = await _try_acquire(source, filename, ctx, cache, http, dataset.accession)
+    if result is None or result.asset is None:
+        raise RuntimeError(f"live Xena download failed for {dataset.accession}")
+    ctx.emit_progress_sync(
+        stage=StageName.ACQUISITION,
+        kind="downloaded_bytes",
+        current=result.asset.size_bytes,
+        total=None,
+        detail={
+            "source": "ucsc_xena",
+            "dataset_id": dataset.accession,
+            "filename": filename,
+            "records": 1,
+        },
+    )
+    return StageResult(
+        output_digest=result.asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / result.asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _validate_reactome_content_service_json(path: Path) -> None:
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Reactome ContentService response is not valid JSON") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Reactome ContentService response must be a non-empty JSON list")
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"Reactome participant at index {index} is not an object")
+        participant_id = item.get("stId") or item.get("databaseName") or item.get("dbId")
+        if not isinstance(participant_id, (str, int)) or not str(participant_id).strip():
+            raise ValueError(
+                f"Reactome participant at index {index} is missing a participant identifier"
+            )
+
+
+def _normalize_reactome_json_asset(
+    ctx: StageContext,
+    dataset: DatasetSelection,
+    json_asset: SourceAsset,
+    attempt: DownloadAttempt,
+) -> SourceAsset:
+    """Convert validated ContentService JSON into the TSV consumed by Validation."""
+    from app.pipeline.processing.reactome import _open_reactome_json
+
+    json_path = ctx.workdir.root / json_asset.relative_path
+    normalized_path = ctx.workdir.source_assets / f"{dataset.accession}_participants.normalized.tsv"
+    with _open_reactome_json(json_path, dataset.accession) as source, normalized_path.open(
+        "w", encoding="utf-8", newline=""
+    ) as target:
+        target.write(source.read())
+    payload = normalized_path.read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    return SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=normalized_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=json_asset.source_id,
+        successful_attempt_id=attempt.attempt_id,
+        data_level=json_asset.data_level,
+    )
+
+
+async def _run_reactome_acquisition_live(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.accession or dataset.data_type != "pathway-participants":
+        raise ValueError(
+            "Reactome acquisition requires pathway_id and pathway-participants data_type"
+        )
+    url = f"https://reactome.org/ContentService/data/participants/{dataset.accession}"
+    source = SourceRecord(
+        source_id=dataset.source_id or make_source_id(Database.REACTOME, dataset.accession, url),
+        database=Database.REACTOME,
+        accession=dataset.accession,
+        url=url,
+        title=f"Reactome {dataset.accession} participants",
+        retrieved_at=retrieved_at,
+    )
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "reactome")
+    async with httpx.AsyncClient() as http:
+        result = await acquire_source(
+            source=source,
+            filename=f"{dataset.accession}_participants.json",
+            workdir=ctx.workdir,
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=_MAX_BYTES,
+            expected_media_types=frozenset({"application/json"}),
+            accept="application/json",
+        )
+    if result.asset is None:
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}")
+    source_path = ctx.workdir.root / result.asset.relative_path
+    try:
+        _validate_reactome_content_service_json(source_path)
+        normalized_asset = _normalize_reactome_json_asset(
+            ctx, dataset, result.asset, result.attempt
+        )
+    except ValueError as exc:
+        source_path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            source_path.parent.rmdir()
+        request_hash = canonical_request_hash(
+            source.database.value, source.accession, source.url
+        )
+        cached = cache.read_metadata(request_hash)
+        if cached is not None and cached.get("sha256") == result.asset.sha256:
+            with contextlib.suppress(OSError):
+                cache.metadata_path(request_hash).unlink()
+                cache.blob_path(result.asset.sha256).unlink()
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}: {exc}") from exc
+    return StageResult(
+        output_digest=normalized_asset.sha256,
+        output=AcquisitionOutput(
+            source_assets=[result.asset, normalized_asset],
+            download_attempts=[result.attempt],
+            source_path=ctx.workdir.root / normalized_asset.relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _run_reactome_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    if not dataset.accession or dataset.data_type != "pathway-participants":
+        raise ValueError(
+            "Reactome acquisition requires pathway_id and pathway-participants data_type"
+        )
+    payload = (ctx.fixture_dir / "pathway_participants.tsv").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_path = ctx.workdir.source_assets / f"{dataset.accession}_participants.fixture.tsv"
+    source_path.write_bytes(payload)
+    url = f"https://reactome.org/ContentService/data/participants/{dataset.accession}"
+    source_id = dataset.source_id or make_source_id(Database.REACTOME, dataset.accession, url)
+    attempt_id = f"download_attempt_fixture_reactome_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=source_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=url,
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=source_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _run_xena_acquisition_fixture(
+    ctx: StageContext, retrieved_at: datetime, dataset: DatasetSelection
+) -> StageResult:
+    payload = (ctx.fixture_dir / "xena_matrix.tsv").read_bytes()
+    checksum = hashlib.sha256(payload).hexdigest()
+    source_path = ctx.workdir.source_assets / "xena_matrix.fixture.tsv"
+    if source_path.exists() and hashlib.sha256(source_path.read_bytes()).hexdigest() != checksum:
+        raise FileExistsError("fixture Xena source asset already exists with different content")
+    if not source_path.exists():
+        source_path.write_bytes(payload)
+    url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
+    source_id = make_source_id(Database.UCSC_XENA, dataset.accession, url)
+    attempt_id = f"download_attempt_fixture_xena_{dataset.accession.lower()}"
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=source_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(payload),
+        media_type="text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id=attempt_id,
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    attempt = DownloadAttempt(
+        attempt_id=attempt_id,
+        source_id=source_id,
+        url=url,
+        status=DownloadStatus.SUCCEEDED,
+        bytes_received=len(payload),
+        started_at=retrieved_at,
+        finished_at=retrieved_at,
+    )
+    return StageResult(
+        output_digest=checksum,
+        output=AcquisitionOutput(
+            source_assets=[asset],
+            download_attempts=[attempt],
+            source_path=source_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+def _run_acquisition_fixture(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
+    if gse.upper() != _DEFAULT_GSE:
+        raise ValueError(f"fixture mode only supports the pinned dataset {_DEFAULT_GSE}, got {gse}")
     compressed = gzip.compress(
         (ctx.fixture_dir / "tximport_counts_slice.tsv").read_bytes(), mtime=0
     )
@@ -169,9 +572,7 @@ def _run_acquisition_fixture(
     source_path = ctx.workdir.source_assets / f"{gse}_tximportCounts.fixture.txt.gz"
     if source_path.exists():
         if hashlib.sha256(source_path.read_bytes()).hexdigest() != checksum:
-            raise FileExistsError(
-                "fixture source asset already exists with different content"
-            )
+            raise FileExistsError("fixture source asset already exists with different content")
     else:
         with source_path.open("xb") as handle:
             handle.write(compressed)
@@ -224,26 +625,22 @@ def _run_acquisition_fixture(
     return StageResult(output_digest=checksum, output=output)
 
 
-def _run_acquisition_live(
-    ctx: StageContext, retrieved_at: datetime, gse: str
-) -> StageResult:
+def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
     """Download the real GEO counts file for ``gse`` from NCBI FTP.
 
     Tries the tximport counts URL first; if that 404s (many GEO series don't
     ship tximport counts), falls back to the universally-available series
     matrix file. The processing stage handles both formats.
     """
+
     async def _download() -> StageResult:
         geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={gse}"
         source_id = make_source_id(Database.GEO, gse, geo_url)
         cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
 
-        # Build candidate (url, filename, title) tuples to try in order.
         candidates: list[tuple[str, str, str]] = [
-            (_counts_download_url(gse), f"{gse}_tximportCounts.txt.gz",
-             f"{gse} tximport counts"),
-            (_series_matrix_url(gse), f"{gse}_series_matrix.txt.gz",
-             f"{gse} series matrix"),
+            (_counts_download_url(gse), f"{gse}_tximportCounts.txt.gz", f"{gse} tximport counts"),
+            (_series_matrix_url(gse), f"{gse}_series_matrix.txt.gz", f"{gse} series matrix"),
         ]
 
         async with httpx.AsyncClient() as http:
@@ -259,18 +656,36 @@ def _run_acquisition_live(
                     title=title,
                     retrieved_at=retrieved_at,
                 )
-                result = await _try_acquire(
-                    source, filename, ctx, cache, http, gse
-                )
+                result = await _try_acquire(source, filename, ctx, cache, http, gse)
                 if result is not None:
                     used_filename = filename
                     logger.info("acquisition: success via %s", download_url)
                     break
 
         if result is None or result.asset is None:
-            raise RuntimeError(
-                f"live download failed for {gse}: all candidate URLs failed"
+            raise RuntimeError(f"live download failed for {gse}: all candidate URLs failed")
+
+        assets = [result.asset]
+        attempts = [result.attempt]
+        if "tximportCounts" in used_filename:
+            soft_source = SourceRecord(
+                source_id=source_id,
+                database=Database.GEO,
+                accession=gse,
+                url=_family_soft_url(gse),
+                title=f"{gse} family SOFT",
+                retrieved_at=retrieved_at,
             )
+            soft_result = await _try_acquire(
+                soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
+            )
+            if soft_result is None or soft_result.asset is None:
+                raise RuntimeError(
+                    f"live download failed for {gse}: family SOFT required "
+                    "when tximport counts are available"
+                )
+            assets.append(soft_result.asset)
+            attempts.append(soft_result.attempt)
 
         # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
         ctx.emit_progress_sync(
@@ -286,8 +701,8 @@ def _run_acquisition_live(
             },
         )
         output = AcquisitionOutput(
-            source_assets=[result.asset],
-            download_attempts=[result.attempt],
+            source_assets=assets,
+            download_attempts=attempts,
             source_path=ctx.workdir.root / result.asset.relative_path,
             retrieved_at=retrieved_at,
         )
