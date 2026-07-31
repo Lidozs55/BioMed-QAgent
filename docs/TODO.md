@@ -292,6 +292,7 @@
 ### 4.5 Agent max_turns 后续
 
 - [ ] **P2** INSTRUCTIONS 新增"达到 max_turns 后应输出 `[MAX_TURNS_REACHED]` 标记"指导
+- [ ] **P1** 实施轮次限制移除方案（轮次参数化 + token 预算门控 + 无进展检测器；子代理默认超时 1h）——见 docs/REVIEW_2026-07-31-agent-turn-limits.md
 
 ---
 
