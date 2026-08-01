@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
-from app.skills.builtin.acquisition.pubchem import get_compound, search_pubchem
+from app.skills.builtin.acquisition.pubchem import (
+    download_pubchem,
+    get_compound,
+    search_pubchem,
+)
 from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult
 
 
@@ -195,3 +199,122 @@ def test_pubchem_all_tiers_failed_returns_audited_error() -> None:
     data = json.loads(payload)
     assert data["status"] == "error"
     assert len(data["attempts"]) == 3
+
+
+def test_download_pubchem_sdf_saves_raw_file_and_tracks_provenance(
+    tmp_path,
+) -> None:
+    """download_pubchem saves an SDF file and records a SourceRecord."""
+    from pathlib import Path
+
+    run_context = RunContext(task_id="pubchem_dl_sdf", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_pubchem",
+        tool_call_id="call_pubchem_dl_sdf",
+        tool_arguments="{}",
+    )
+    sdf = (
+        "\n  PubChem2026\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\n"
+        "M  END\n$$$$\n"
+    )
+    with patch(
+        "app.skills.builtin.acquisition.pubchem.download_file_for_run",
+        new=AsyncMock(side_effect=lambda _ctx, url, dest: dest.write_text(sdf)),
+    ) as mock_dl:
+        result = asyncio.run(
+            download_pubchem.on_invoke_tool(
+                context,
+                json.dumps({"cid": 2244, "file_type": "sdf"}),
+            )
+        )
+
+    data = json.loads(result)
+    assert data["source"] == "pubchem"
+    assert data["cid"] == 2244
+    assert data["format_hint"] == "pubchem_sdf"
+    assert data["source_url"] == (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/2244/"
+        "record/SDF?record_type=2d"
+    )
+    assert mock_dl.await_args.args[1] == data["source_url"]
+    local_path = Path(data["local_files"][0])
+    assert local_path.is_file()
+    assert "M  END" in local_path.read_text(encoding="utf-8")
+    assert len(run_context.raw_assets) == 1
+    assert run_context.sources[0].database.value == "pubchem"
+    assert run_context.sources[0].accession == "2244"
+
+
+def test_download_pubchem_mol_url_and_unsupported_type(tmp_path) -> None:
+    """download_pubchem builds the MOL URL and rejects bad file types."""
+    from pathlib import Path
+
+    run_context = RunContext(task_id="pubchem_dl_mol", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_pubchem",
+        tool_call_id="call_pubchem_dl_mol",
+        tool_arguments="{}",
+    )
+    with patch(
+        "app.skills.builtin.acquisition.pubchem.download_file_for_run",
+        new=AsyncMock(side_effect=lambda _ctx, url, dest: dest.write_bytes(b"M  END")),
+    ) as mock_dl:
+        result = asyncio.run(
+            download_pubchem.on_invoke_tool(
+                context,
+                json.dumps({"cid": 2244, "file_type": "mol"}),
+            )
+        )
+    data = json.loads(result)
+    assert data["format_hint"] == "pubchem_mol"
+    assert data["source_url"] == (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/2244/"
+        "record/MOL?record_type=2d"
+    )
+    assert mock_dl.await_args.args[1] == data["source_url"]
+    assert Path(data["local_files"][0]).is_file()
+
+    # Unsupported file_type → error JSON, no download attempted.
+    run_context2 = RunContext(task_id="pubchem_dl_bad", base_dir=str(tmp_path))
+    context2 = ToolContext(
+        context=run_context2,
+        tool_name="download_pubchem",
+        tool_call_id="call_pubchem_dl_bad",
+        tool_arguments="{}",
+    )
+    result2 = asyncio.run(
+        download_pubchem.on_invoke_tool(
+            context2,
+            json.dumps({"cid": 2244, "file_type": "json"}),
+        )
+    )
+    data2 = json.loads(result2)
+    assert "error" in data2
+    assert "unsupported file_type" in data2["error"]
+
+
+def test_download_pubchem_network_error_returns_error_json(tmp_path) -> None:
+    """download_pubchem returns error JSON on download failure."""
+    run_context = RunContext(task_id="pubchem_dl_err", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_pubchem",
+        tool_call_id="call_pubchem_dl_err",
+        tool_arguments="{}",
+    )
+    with patch(
+        "app.skills.builtin.acquisition.pubchem.download_file_for_run",
+        new=AsyncMock(side_effect=RuntimeError("403 Forbidden")),
+    ):
+        result = asyncio.run(
+            download_pubchem.on_invoke_tool(
+                context,
+                json.dumps({"cid": 2244, "file_type": "sdf"}),
+            )
+        )
+    data = json.loads(result)
+    assert data["source"] == "pubchem"
+    assert "error" in data
+    assert "download failed" in data["error"]

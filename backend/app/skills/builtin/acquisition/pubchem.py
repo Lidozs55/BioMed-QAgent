@@ -12,6 +12,7 @@ PUG-REST API docs: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -22,7 +23,15 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
+from app.skills.builtin.acquisition._download_io import download_file_for_run
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
@@ -271,6 +280,101 @@ async def get_compound(
     return _page_fallback("pubchem", page_url, result)
 
 
+@function_tool
+async def download_pubchem(
+    ctx: RunContextWrapper[Any],
+    cid: int,
+    file_type: str = "sdf",
+) -> str:
+    """Download a PubChem compound structure file (SDF or MOL).
+
+    Uses the PUG-REST ``record`` endpoint to fetch the full structure record
+    in SDF (2D) or MOL (2D) format. The file is staged as a compliant
+    ``SourceAsset`` in managed (subagent) runs and written to the task raw
+    directory otherwise, then tracked via a ``SourceRecord`` for provenance.
+
+    Args:
+        ctx: Agent SDK run context wrapper.
+        cid: PubChem Compound ID (e.g. 2244 for aspirin).
+        file_type: ``sdf`` (default) or ``mol``.
+
+    Returns:
+        JSON with source, cid, source_url, local_files, format_hint, and
+        retrieved_at (ISO-8601); ``error`` on failure.
+    """
+    run_ctx: RunContext = ctx.context
+    file_type = file_type.lower().strip().lstrip(".")
+    if file_type not in {"sdf", "mol"}:
+        return json.dumps({
+            "source": "pubchem",
+            "cid": cid,
+            "error": f"unsupported file_type: {file_type}. Use 'sdf' or 'mol'.",
+        }, ensure_ascii=False)
+    record_type = "2d"
+    ext = file_type.upper()
+    url = f"{_PUGREST_BASE}/compound/cid/{cid}/record/{ext}?record_type={record_type}"
+    filename = f"CID{cid}.{file_type}"
+    format_hint = f"pubchem_{file_type}"
+
+    try:
+        if run_ctx.subagent_id is not None:
+            facade = run_ctx.crawler_facade_or_none
+            if facade is None:
+                raise RuntimeError("crawler facade is not bound to the child Run")
+            result = await facade.download(url)
+            if not result.ok:
+                raise RuntimeError(result.error or f"HTTP {result.status_code}")
+            content = result.content
+            source_id = make_source_id(Database.PUBCHEM, str(cid), url)
+            asset = await asyncio.to_thread(
+                run_ctx.stage_source_asset,
+                content=content,
+                filename=filename,
+                source_id=source_id,
+                successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                data_level=DataLevel.REPOSITORY_PROCESSED,
+                media_type=(
+                    "chemical/x-mdl-sdfile"
+                    if file_type == "sdf"
+                    else "chemical/x-mdl-molfile"
+                ),
+            )
+            dest = run_ctx.source_asset_path(asset)
+        else:
+            dest = run_ctx.work_dir.raw_file(filename)
+            await download_file_for_run(run_ctx, url, dest)
+    except Exception as exc:
+        return json.dumps({
+            "source": "pubchem",
+            "cid": cid,
+            "source_url": url,
+            "error": f"download failed: {exc}",
+        }, ensure_ascii=False)
+
+    local_files = [str(dest)]
+    run_ctx.add_raw_asset(local_files[0])
+
+    retrieved_at = datetime.now(UTC)
+    source_record = SourceRecord(
+        source_id=make_source_id(Database.PUBCHEM, str(cid), url),
+        database=Database.PUBCHEM,
+        accession=str(cid),
+        url=url,
+        title=f"PubChem compound {cid} {file_type.upper()} structure",
+        retrieved_at=retrieved_at,
+    )
+    run_ctx.add_source(source_record)
+
+    return json.dumps({
+        "source": "pubchem",
+        "cid": cid,
+        "source_url": url,
+        "local_files": local_files,
+        "format_hint": format_hint,
+        "retrieved_at": retrieved_at.isoformat(),
+    }, ensure_ascii=False)
+
+
 pubchem_skill = SkillDef(
     name="pubchem",
     category=SkillCategory.ACQUISITION,
@@ -282,10 +386,11 @@ pubchem_skill = SkillDef(
     instructions=(
         "Use search_pubchem to find compounds by name (e.g. 'aspirin', 'curcumin'). "
         "Use get_compound to fetch details for a specific compound by CID "
-        "(e.g. 2244 for aspirin). API failures automatically use a rendered "
+        "(e.g. 2244 for aspirin). Use download_pubchem to fetch the full SDF/MOL "
+        "structure record for a CID. API failures automatically use a rendered "
         "page fallback and return a bounded visible-text preview."
     ),
-    tools=[search_pubchem, get_compound],
+    tools=[search_pubchem, get_compound, download_pubchem],
     supported_sources=["pubchem"],
     version="0.1.0",
 )

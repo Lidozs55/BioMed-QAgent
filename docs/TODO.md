@@ -145,15 +145,15 @@
 
 ### 2.2 Xena 403 修复
 
-- [ ] **P1** 切换 download host 到 `toil.xenabrowser.net` 或加 browser fallback
-- [ ] **P1** 更新 `integrations/acquisition.py:_ALLOWED_HOSTS` 域名白名单
-- [ ] **P1** 更新 `test_skill_xena.py` 的 URL 硬断言
-- [ ] **P1** 移除 `test_all_data_sources_live.py:200-208` 的 xfail
+- [x] **P1** 切换 download host 到 `toil.xenabrowser.net` 或加 browser fallback——2026-08-01 核对：`download_xena` 已切换 S3 hub（`toil-xena-hub.s3.us-east-1.amazonaws.com/download/{dataset_id}.gz`），URL 构造回归测试（`test_download_xena_url_uses_gz_not_tsv_gz`）锁定
+- [x] **P1** 更新 `integrations/acquisition.py:_ALLOWED_HOSTS` 域名白名单——2026-08-01 核对：已含 `toil-xena-hub.s3.us-east-1.amazonaws.com`
+- [x] **P1** 更新 `test_skill_xena.py` 的 URL 硬断言——2026-08-01 核对：403/URL 构造断言均使用 toil hub
+- [ ] **P1** 移除 `test_all_data_sources_live.py:200-208` 的 xfail（live 网络验证，需真实外网可达后移除）
 
 ### 2.3 补全 download 工具
 
-- [ ] **P1** PubChem 增加 `download_pubchem`（SDF/MOL，走 `acquire_source()` → `SourceAsset`）
-- [ ] **P1** Reactome 增加独立 `download_reactome` skill（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）；Pipeline 显式 pathway participants 已完成
+- [x] **P1** PubChem 增加 `download_pubchem`（SDF/MOL，走 `acquire_source()` → `SourceAsset`）——2026-08-01 执行：`download_pubchem` 经 PUG-REST `record/SDF|MOL?record_type=2d` 下载；managed 子代理经 crawler facade 提交 `SourceAsset`，主代理写入 task raw 目录，均记录 `SourceRecord`；URL/格式校验/错误路径契约测试覆盖
+- [x] **P1** Reactome 增加独立 `download_reactome` skill（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）；Pipeline 显式 pathway participants 已完成——2026-08-01 执行：`download_reactome` 经 ContentService exporter（`participants/{id}.tsv` / `diagram/{id}.sbgn`）下载；managed 子代理提交 `SourceAsset`，主代理写入 raw 目录；TSV/SBGN/错误路径/子代理 SourceAsset 测试覆盖；抽取共享 `_download_io.download_file_for_run`（复用 xena/pdb 模式，避免第 3/4 份重复）
 
 ### 2.4 统一 SourceAsset 契约
 

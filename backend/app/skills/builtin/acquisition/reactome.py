@@ -12,6 +12,7 @@ Reactome REST API docs: https://reactome.org/ContentService
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -23,7 +24,15 @@ from agents import RunContextWrapper, function_tool
 from bs4 import BeautifulSoup
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    generate_prefixed_uuid,
+    make_source_id,
+)
+from app.skills.builtin.acquisition._download_io import download_file_for_run
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 from app.tools.crawler import CrawlAttempt, CrawlError, FetchResult, fetch_with_fallback
 
@@ -348,6 +357,106 @@ async def get_pathway(
     return _page_fallback("reactome", page_url, result)
 
 
+@function_tool
+async def download_reactome(
+    ctx: RunContextWrapper[Any],
+    pathway_id: str,
+    file_type: str = "tsv",
+) -> str:
+    """Download a Reactome pathway file (participants TSV or SBGN diagram).
+
+    Uses the Reactome ContentService exporter endpoints:
+    ``/exporter/participants/{pathway_id}.tsv`` for the participant table and
+    ``/exporter/diagram/{pathway_id}.sbgn`` for the SBGN-ML diagram. The file
+    is staged as a compliant ``SourceAsset`` in managed (subagent) runs and
+    written to the task raw directory otherwise, then tracked via a
+    ``SourceRecord`` for provenance.
+
+    Args:
+        ctx: Agent SDK run context wrapper.
+        pathway_id: Reactome stable ID (e.g. "R-HSA-169893").
+        file_type: ``tsv`` (default, participants) or ``sbgn`` (diagram).
+
+    Returns:
+        JSON with source, pathway_id, source_url, local_files, format_hint,
+        and retrieved_at (ISO-8601); ``error`` on failure.
+    """
+    run_ctx: RunContext = ctx.context
+    pathway_id = pathway_id.strip()
+    file_type = file_type.lower().strip().lstrip(".")
+    if file_type == "tsv":
+        url = f"{_REACTOME_API_BASE}/exporter/participants/{pathway_id}.tsv"
+        filename = f"{pathway_id}_participants.tsv"
+        format_hint = "reactome_participants_tsv"
+        media_type = "text/tab-separated-values"
+    elif file_type == "sbgn":
+        url = f"{_REACTOME_API_BASE}/exporter/diagram/{pathway_id}.sbgn"
+        filename = f"{pathway_id}.sbgn"
+        format_hint = "reactome_sbgn"
+        media_type = "application/xml"
+    else:
+        return json.dumps({
+            "source": "reactome",
+            "pathway_id": pathway_id,
+            "error": (
+                f"unsupported file_type: {file_type}. Use 'tsv' or 'sbgn'."
+            ),
+        }, ensure_ascii=False)
+
+    try:
+        if run_ctx.subagent_id is not None:
+            facade = run_ctx.crawler_facade_or_none
+            if facade is None:
+                raise RuntimeError("crawler facade is not bound to the child Run")
+            result = await facade.download(url)
+            if not result.ok:
+                raise RuntimeError(result.error or f"HTTP {result.status_code}")
+            source_id = make_source_id(Database.REACTOME, pathway_id, url)
+            asset = await asyncio.to_thread(
+                run_ctx.stage_source_asset,
+                content=result.content,
+                filename=filename,
+                source_id=source_id,
+                successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                data_level=DataLevel.REPOSITORY_PROCESSED,
+                media_type=media_type,
+            )
+            dest = run_ctx.source_asset_path(asset)
+        else:
+            dest = run_ctx.work_dir.raw_file(filename)
+            await download_file_for_run(run_ctx, url, dest)
+    except Exception as exc:
+        return json.dumps({
+            "source": "reactome",
+            "pathway_id": pathway_id,
+            "source_url": url,
+            "error": f"download failed: {exc}",
+        }, ensure_ascii=False)
+
+    local_files = [str(dest)]
+    run_ctx.add_raw_asset(local_files[0])
+
+    retrieved_at = datetime.now(UTC)
+    source_record = SourceRecord(
+        source_id=make_source_id(Database.REACTOME, pathway_id, url),
+        database=Database.REACTOME,
+        accession=pathway_id,
+        url=url,
+        title=f"Reactome pathway {pathway_id} {file_type.upper()}",
+        retrieved_at=retrieved_at,
+    )
+    run_ctx.add_source(source_record)
+
+    return json.dumps({
+        "source": "reactome",
+        "pathway_id": pathway_id,
+        "source_url": url,
+        "local_files": local_files,
+        "format_hint": format_hint,
+        "retrieved_at": retrieved_at.isoformat(),
+    }, ensure_ascii=False)
+
+
 reactome_skill = SkillDef(
     name="reactome",
     category=SkillCategory.ACQUISITION,
@@ -359,10 +468,11 @@ reactome_skill = SkillDef(
     instructions=(
         "Use search_reactome to find pathways by keyword (e.g. 'apoptosis', 'BRCA'). "
         "Use get_pathway to fetch details for a specific pathway by its stable ID "
-        "(e.g. 'R-HSA-169893'). API failures automatically use direct page "
-        "fallback and return a bounded visible-text preview."
+        "(e.g. 'R-HSA-169893'). Use download_reactome to fetch the participants "
+        "TSV or SBGN diagram for a pathway. API failures automatically use direct "
+        "page fallback and return a bounded visible-text preview."
     ),
-    tools=[search_reactome, get_pathway],
+    tools=[search_reactome, get_pathway, download_reactome],
     supported_sources=["reactome"],
     version="0.1.0",
 )
