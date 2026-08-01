@@ -12,6 +12,7 @@ from app.agent_loop.context import RunContext
 from app.skills.builtin.acquisition.reactome import (
     _accept_reactome_pathway_result,
     _accept_reactome_search_result,
+    download_reactome,
     get_pathway,
     search_reactome,
 )
@@ -307,3 +308,171 @@ def test_get_pathway_api_success_adds_source_provenance() -> None:
 
     assert json.loads(payload)["record"]["name"] == "Apoptosis"
     assert context.context.sources[0].accession == "R-HSA-169893"
+
+
+def test_download_reactome_tsv_saves_raw_file_and_tracks_provenance(
+    tmp_path,
+) -> None:
+    """download_reactome saves a participants TSV and records a SourceRecord."""
+    from pathlib import Path
+
+    run_context = RunContext(task_id="reactome_dl_tsv", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_reactome",
+        tool_call_id="call_reactome_dl_tsv",
+        tool_arguments="{}",
+    )
+    payload = (
+        "stId\tparticipantName\tparticipantType\n"
+        "R-HSA-109581\tApoptosis signaling\tPhysicalEntity\n"
+    )
+    with patch(
+        "app.skills.builtin.acquisition.reactome.download_file_for_run",
+        new=AsyncMock(side_effect=lambda _ctx, url, dest: dest.write_text(payload)),
+    ) as mock_dl:
+        result = asyncio.run(
+            download_reactome.on_invoke_tool(
+                context,
+                json.dumps({"pathway_id": "R-HSA-169893", "file_type": "tsv"}),
+            )
+        )
+
+    data = json.loads(result)
+    assert data["source"] == "reactome"
+    assert data["pathway_id"] == "R-HSA-169893"
+    assert data["format_hint"] == "reactome_participants_tsv"
+    assert data["source_url"] == (
+        "https://reactome.org/ContentService/exporter/participants/"
+        "R-HSA-169893.tsv"
+    )
+    assert mock_dl.await_args.args[1] == data["source_url"]
+    local_path = Path(data["local_files"][0])
+    assert local_path.is_file()
+    assert "Apoptosis signaling" in local_path.read_text(encoding="utf-8")
+    assert len(run_context.raw_assets) == 1
+    assert run_context.sources[0].database.value == "reactome"
+    assert run_context.sources[0].accession == "R-HSA-169893"
+
+
+def test_download_reactome_sbgn_url_and_unsupported_type(tmp_path) -> None:
+    """download_reactome builds the SBGN exporter URL and rejects bad types."""
+    from pathlib import Path
+
+    run_context = RunContext(task_id="reactome_dl_sbgn", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_reactome",
+        tool_call_id="call_reactome_dl_sbgn",
+        tool_arguments="{}",
+    )
+    with patch(
+        "app.skills.builtin.acquisition.reactome.download_file_for_run",
+        new=AsyncMock(side_effect=lambda _ctx, url, dest: dest.write_bytes(b"<sbgn/>")),
+    ) as mock_dl:
+        result = asyncio.run(
+            download_reactome.on_invoke_tool(
+                context,
+                json.dumps({"pathway_id": "R-HSA-169893", "file_type": "sbgn"}),
+            )
+        )
+    data = json.loads(result)
+    assert data["format_hint"] == "reactome_sbgn"
+    assert data["source_url"] == (
+        "https://reactome.org/ContentService/exporter/diagram/"
+        "R-HSA-169893.sbgn"
+    )
+    assert mock_dl.await_args.args[1] == data["source_url"]
+    assert Path(data["local_files"][0]).is_file()
+
+    # Unsupported file_type → error JSON, no download attempted.
+    run_context2 = RunContext(task_id="reactome_dl_bad", base_dir=str(tmp_path))
+    context2 = ToolContext(
+        context=run_context2,
+        tool_name="download_reactome",
+        tool_call_id="call_reactome_dl_bad",
+        tool_arguments="{}",
+    )
+    result2 = asyncio.run(
+        download_reactome.on_invoke_tool(
+            context2,
+            json.dumps({"pathway_id": "R-HSA-169893", "file_type": "xml"}),
+        )
+    )
+    data2 = json.loads(result2)
+    assert "error" in data2
+    assert "unsupported file_type" in data2["error"]
+
+
+def test_download_reactome_network_error_returns_error_json(tmp_path) -> None:
+    """download_reactome returns error JSON on download failure."""
+
+    run_context = RunContext(task_id="reactome_dl_err", base_dir=str(tmp_path))
+    context = ToolContext(
+        context=run_context,
+        tool_name="download_reactome",
+        tool_call_id="call_reactome_dl_err",
+        tool_arguments="{}",
+    )
+    with patch(
+        "app.skills.builtin.acquisition.reactome.download_file_for_run",
+        new=AsyncMock(side_effect=RuntimeError("403 Forbidden")),
+    ):
+        result = asyncio.run(
+            download_reactome.on_invoke_tool(
+                context,
+                json.dumps({"pathway_id": "R-HSA-169893", "file_type": "tsv"}),
+            )
+        )
+    data = json.loads(result)
+    assert data["source"] == "reactome"
+    assert "error" in data
+    assert "download failed" in data["error"]
+
+
+def test_child_download_reactome_commits_source_asset(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Managed subagent download stages a compliant SourceAsset."""
+    from pathlib import Path
+
+    from app.tools.crawler import DownloadResult
+
+    class ManagedFacade:
+        async def download(self, url: str) -> DownloadResult:
+            return DownloadResult(
+                url=url,
+                content=b"stId\tname\nR-HSA-109581\tApoptosis\n",
+                status_code=200,
+                elapsed_ms=1,
+            )
+
+    parent = RunContext(task_id="managed_reactome_dl", base_dir=str(tmp_path))
+    parent.bind_crawler_facade(ManagedFacade())
+    child = parent.create_child_context("child-reactome")
+    context = ToolContext(
+        context=child,
+        tool_name="download_reactome",
+        tool_call_id="call_reactome_dl_child",
+        tool_arguments="{}",
+    )
+    monkeypatch.setattr(
+        "app.skills.builtin.acquisition.reactome.download_file_for_run",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("raw path used in child run")
+        ),
+    )
+
+    result = asyncio.run(
+        download_reactome.on_invoke_tool(
+            context,
+            json.dumps({"pathway_id": "R-HSA-169893", "file_type": "tsv"}),
+        )
+    )
+
+    data = json.loads(result)
+    committed = Path(data["local_files"][0])
+    assert committed.is_relative_to(parent.work_dir.source_assets)
+    assert committed.read_bytes().startswith(b"stId\tname")
+    assert child.source_asset_ids
