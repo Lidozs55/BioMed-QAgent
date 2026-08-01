@@ -87,7 +87,15 @@ def build_skill_gateway(
                 if normalized_source not in normalized_supported_sources:
                     continue
             candidates.append(descriptor)
-        matches = resolved_search_strategy.search(candidates, text)
+        search_async = getattr(resolved_search_strategy, "search_async", None)
+        if search_async is not None:
+            matches = await search_async(
+                candidates,
+                text,
+                ctx.context.model_settings,
+            )
+        else:
+            matches = resolved_search_strategy.search(candidates, text)
         if normalized_source is None:
             preferred_sources = {
                 normalize_skill_search_text(item) for item in ctx.context.preferred_sources

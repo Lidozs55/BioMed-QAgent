@@ -26,6 +26,7 @@ from app.pipeline.tool import run_research_pipeline
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
+from app.skills.llm_search import LLMRerankingSkillSearchStrategy
 from app.skills.registry import SkillCategory
 from app.subagents.tools import (
     cancel_subagent,
@@ -269,7 +270,10 @@ def build_agent(
 
     active_model_settings = model_settings or get_active_model_settings()
     model = get_model(active_model_settings)
-    find_skill, invoke_skill = build_skill_gateway(resolved_catalog)
+    find_skill, invoke_skill = build_skill_gateway(
+        resolved_catalog,
+        search_strategy=LLMRerankingSkillSearchStrategy(),
+    )
     tools = [
         find_skill,
         invoke_skill,
