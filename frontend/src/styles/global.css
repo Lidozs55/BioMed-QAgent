@@ -156,6 +156,17 @@
   animation: settings-highlight-flash 1.6s ease-out;
 }
 
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.no-spinner {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 .markdown-content[data-streaming="true"] > :last-child::after {
   display: inline-block;
   width: 0.5em;

@@ -137,7 +137,7 @@ export function NumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(clamp(Number(event.target.value)))}
-        className="h-8 w-28 font-mono text-xs tabular-nums"
+        className="no-spinner h-8 w-28 font-mono text-xs tabular-nums"
       />
       <Slider
         value={[value]}
