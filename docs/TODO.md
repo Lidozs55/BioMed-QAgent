@@ -24,9 +24,9 @@
 > `alignment.align_fields`，但 Runner 尚未传入多个 ParsedDataset，且未调用
 > `alignment.merge_datasets`，所以尚未形成真实多源合并。
 
-- [ ] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`
-- [ ] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）
-- [ ] **P0** 生成 `field_mapping.csv` 的真实映射关系（当前部分硬编码）
+- [x] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`——2026-07-31 执行：`run_processing` 新增多数据集分支（`_run_multi_dataset_processing`），当 spec 选择 ≥2 个数据型数据集（GDC/Xena）时逐个解析，`_build_field_alignment` 多数据集分支真实调用 `align_fields`；`merge_parsed_datasets` 公开函数直接调用 `align_fields` 构建映射
+- [x] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）——2026-07-31 执行：`merge_parsed_datasets` 通过旧模型适配器（`_to_legacy_parsed_datasets`）调用 `merge_datasets` 垂向合并，写入 `parsed/{id}_merged.csv` 并返回 `ParsedDataset`；`ProcessingOutput` 新增 `merged_dataset` 字段，Runner 将全部 `parsed_datasets` + `merged_dataset` 传入 artifact_build
+- [x] **P0** 生成 `field_mapping.csv` 的真实映射关系（当前部分硬编码）——2026-07-31 执行：`_build_field_mapping_rows` 对多数据集输出每个 dataset 一组真实映射（每 slot 对应一个 ParsedDataset 的 source_id/dataset_id），notes 标记 `alignment:align_fields`；`test_multisource_merge.py` 锁定 2 源合并发布（main_data.csv 行数、_source 列、双 source field_mapping、merge 步骤进入 processing_log）
 
 ### 1.3 清洗测试
 
@@ -39,7 +39,7 @@
 > Pipeline 支持。
 
 - [x] **P0** `/databases` 已返回 `pipeline_supported`
-- [ ] **P0** 补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源标记为 research-only/pending，只能作为调研或待接入来源
+- [x] **P0** 补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源标记为 research-only/pending，只能作为调研或待接入来源——2026-07-31 执行：新增 `SourceCapability` 枚举与 `SOURCE_CAPABILITIES` 单一事实表（pubmed/geo/gdc/ucsc_xena/reactome = pipeline_supported；pdb/pubchem/browser = research_only），`TaskSpecification.declare_sources` 为每个选中来源生成 `SourceCapabilityDeclaration`（含 identifier/capability/note），未知来源标记 pending；`run_research_pipeline` 按能力表拒绝非 pipeline-supported 来源并返回 `capabilities` 明细；skill catalog 的 `pipeline_supported` 从能力表派生，`/databases` 响应新增 `capability` 字段；新增 `tests/pipeline/test_source_capabilities.py` 契约测试锁定能力边界
 - [x] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；`run_research_pipeline` 现在对未支持来源返回 `status=unsupported_databases`、`retryable=false`，不产生伪成功 Artifact
 - [ ] **P1** `pipeline/stages/acquisition.py` 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
 - [ ] **P2** 按验收标准新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力；未通过 search、metadata、download 测试前不得标记为 Pipeline 支持

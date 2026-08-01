@@ -147,6 +147,25 @@ def _display_name(skill_name: str) -> str:
     return _SKILL_DISPLAY_NAMES.get(skill_name, skill_name.replace("_", " ").title())
 
 
+def _source_capability_for_skill(skill_name: str) -> str:
+    """Map a skill id to its Pipeline input-level capability (TODO §1.4).
+
+    Uses the single source-of-truth capability table so the API projection
+    cannot drift from the Pipeline tool's rejection logic. Unknown skills
+    resolve to ``pending`` (never silently treated as pipeline-supported).
+    """
+    from app.domain.contracts.enums import (
+        DATABASE_IDENTIFIER_ALIASES,
+        SOURCE_CAPABILITIES,
+        SourceCapability,
+    )
+
+    database = DATABASE_IDENTIFIER_ALIASES.get(skill_name)
+    if database is None:
+        return SourceCapability.PENDING.value
+    return SOURCE_CAPABILITIES[database].value
+
+
 def load_database_skills() -> None:
     """Compatibility wrapper for callers that still trigger builtin discovery."""
     from app.skills.builtin import load_builtin_skill_descriptors
@@ -193,6 +212,10 @@ async def get_databases(request: Request = None) -> dict:
                 "origin": skill.origin,
                 "version": skill.version,
                 "pipeline_supported": skill.pipeline_supported,
+                # TODO §1.4: expose the capability classification so the
+                # frontend can distinguish research_only / pending sources
+                # from pipeline_supported ones.
+                "capability": _source_capability_for_skill(skill.name),
             }
         )
     return {"databases": databases}

@@ -37,3 +37,9 @@ async def test_database_api_lists_only_user_selectable_data_sources(
     assert projected["pubmed"]["pipeline_supported"] is True
     assert projected["geo"]["pipeline_supported"] is True
     assert projected["gdc"]["pipeline_supported"] is True
+    # TODO §1.4: each source carries its declared capability so the frontend
+    # can distinguish pipeline_supported from research_only / pending.
+    assert projected["pubmed"]["capability"] == "pipeline_supported"
+    assert projected["xena"]["capability"] == "pipeline_supported"
+    assert projected["pdb"]["capability"] == "research_only"
+    assert projected["pubchem"]["capability"] == "research_only"
