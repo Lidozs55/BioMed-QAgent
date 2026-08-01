@@ -496,6 +496,15 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
     assert payload["status"] == "unsupported_databases"
     assert payload["unsupported_databases"] == ["pdb"]
     assert payload["retryable"] is False
+    # TODO §1.4: Agent-only sources carry a declared capability so the Agent
+    # knows the rejection is a capability boundary, not a retryable error.
+    assert payload["capabilities"] == [
+        {
+            "database": "pdb",
+            "capability": "research_only",
+            "reason": "Agent-only investigation source; not accepted by the Pipeline",
+        }
+    ]
     assert not (
         tmp_path / "tasks" / "task_tool_extra_dbs" / "artifacts" / "run_manifest.json"
     ).exists()

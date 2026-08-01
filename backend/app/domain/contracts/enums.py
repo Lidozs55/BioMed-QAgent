@@ -16,6 +16,51 @@ class Database(StrEnum):
     BROWSER = "browser"
 
 
+class SourceCapability(StrEnum):
+    """Pipeline input-level capability of a data source (TODO §1.4).
+
+    Distinguishes sources the deterministic Pipeline has accepted
+    (search/metadata/download/parse/validate closed loop) from sources that
+    are Agent-only research channels or pending integration. A source marked
+    ``research_only`` may be used for investigation but must never be routed
+    into the Pipeline as if it were a verified data source.
+    """
+
+    PIPELINE_SUPPORTED = "pipeline_supported"
+    RESEARCH_ONLY = "research_only"
+    PENDING = "pending"
+
+
+# Single source of truth for source capabilities (TODO §1.4). The Pipeline
+# tool resolves user-selected databases against this table; skill catalog
+# ``pipeline_supported`` derives from it as well so the two declarations
+# cannot drift apart.
+SOURCE_CAPABILITIES: dict[Database, SourceCapability] = {
+    Database.PUBMED: SourceCapability.PIPELINE_SUPPORTED,
+    Database.GEO: SourceCapability.PIPELINE_SUPPORTED,
+    Database.GDC: SourceCapability.PIPELINE_SUPPORTED,
+    Database.UCSC_XENA: SourceCapability.PIPELINE_SUPPORTED,
+    Database.REACTOME: SourceCapability.PIPELINE_SUPPORTED,
+    Database.PDB: SourceCapability.RESEARCH_ONLY,
+    Database.PUBCHEM: SourceCapability.RESEARCH_ONLY,
+    Database.BROWSER: SourceCapability.RESEARCH_ONLY,
+}
+
+# Stable identifier aliases users may pass to run_research_pipeline
+# (e.g. "xena" for ucsc_xena). Keys are user-facing identifiers.
+DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
+    "pubmed": Database.PUBMED,
+    "geo": Database.GEO,
+    "gdc": Database.GDC,
+    "xena": Database.UCSC_XENA,
+    "ucsc_xena": Database.UCSC_XENA,
+    "pdb": Database.PDB,
+    "reactome": Database.REACTOME,
+    "pubchem": Database.PUBCHEM,
+    "browser": Database.BROWSER,
+}
+
+
 class DataLevel(StrEnum):
     RAW_SEQUENCE = "raw_sequence"
     SUBMITTER_PROCESSED = "submitter_processed"

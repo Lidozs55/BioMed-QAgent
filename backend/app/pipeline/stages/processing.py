@@ -7,6 +7,7 @@ import hashlib
 import logging
 
 from app.domain.contracts import ParsedDataset, SourceAsset, StageName
+from app.domain.processing import ParsedDataset as OldParsedDataset
 from app.pipeline.processing.gdc import parse_gdc_table
 from app.pipeline.processing.geo_tximport import (
     _OUTPUT_COLUMNS,
@@ -268,7 +269,23 @@ def _build_field_alignment(
         return {norm: [orig] for orig, norm in norm_map.items()}
 
     # --- multi-dataset alignment (TODO §1.2: merge_datasets) ---
-    from app.domain.processing import ParsedDataset as OldParsedDataset
+    old_datasets = _to_legacy_parsed_datasets(parsed_datasets, ctx)
+    from app.tools.alignment import align_fields
+
+    return align_fields(old_datasets)
+
+
+def _to_legacy_parsed_datasets(
+    parsed_datasets: list[ParsedDataset],
+    ctx: StageContext,
+) -> list[OldParsedDataset]:
+    """Convert Pipeline ParsedDataset entries into the legacy in-memory model.
+
+    ``alignment.align_fields`` / ``alignment.merge_datasets`` operate on the
+    legacy ``app.domain.processing.ParsedDataset`` (rows kept in memory).
+    This adapter reads each parsed CSV back so the deterministic merge tools
+    can be reused without duplicating their logic (TODO §1.2).
+    """
 
     old_datasets: list[OldParsedDataset] = []
     for pd_dataset in parsed_datasets:
@@ -309,9 +326,84 @@ def _build_field_alignment(
                 source_locator="csv",
             )
         )
-    from app.tools.alignment import align_fields
+    return old_datasets
 
-    return align_fields(old_datasets)
+
+def merge_parsed_datasets(
+    ctx: StageContext,
+    parsed_datasets: list[ParsedDataset],
+    merged_dataset_id: str,
+) -> ParsedDataset:
+    """Deterministically merge two or more parsed datasets (TODO §1.2).
+
+    Uses ``alignment.align_fields`` to build the canonical field mapping and
+    ``alignment.merge_datasets`` to vertically merge rows. The merged result
+    is written as ``parsed/{merged_dataset_id}_merged.csv`` and returned as
+    a Pipeline ``ParsedDataset`` with the same lineage columns every parsed
+    dataset carries.
+
+    Raises ``ValueError`` when fewer than two datasets are supplied — the
+    merge path must never fabricate a merged artifact from a single source.
+    """
+    if len(parsed_datasets) < 2:
+        raise ValueError("merge requires at least two parsed datasets")
+
+    import hashlib
+
+    from app.domain.contracts import FileAsset, asset_id_from_sha256, make_record_id
+    from app.tools.alignment import align_fields, merge_datasets
+
+    old_datasets = _to_legacy_parsed_datasets(parsed_datasets, ctx)
+    if len(old_datasets) != len(parsed_datasets):
+        raise ValueError("one or more parsed datasets could not be read for merging")
+    field_mapping = align_fields(old_datasets)
+    if not field_mapping:
+        raise ValueError("field alignment produced no shared fields; merge aborted")
+    merged = merge_datasets(
+        old_datasets,
+        field_mapping,
+        output_name=merged_dataset_id,
+    )
+
+    output_path = ctx.workdir.parsed / f"{merged_dataset_id}_merged.csv"
+    columns = list(merged.field_names)
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
+        writer.writeheader()
+        for row in merged.rows:
+            writer.writerow({col: row.get(col, "") for col in columns})
+    file_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(file_bytes).hexdigest()
+    file_asset = FileAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="parsed",
+        relative_path=output_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(file_bytes),
+        media_type="text/csv",
+        generated_by_step_id="step_multi_source_merge_v1",
+    )
+    record_id = make_record_id(merged_dataset_id, "merged", "row")
+    return ParsedDataset(
+        dataset_id=merged_dataset_id,
+        source_id=",".join(dataset.source_id for dataset in parsed_datasets),
+        source_asset_id=",".join(
+            dataset.source_asset_id for dataset in parsed_datasets
+        ),
+        file_asset=file_asset,
+        columns=columns,
+        row_count=len(merged.rows),
+        parser_name="alignment_merger",
+        parser_version="0.1.0",
+        source_row_count=sum(dataset.source_row_count for dataset in parsed_datasets),
+        processing_parameters={
+            "merge_algorithm": "alignment.merge_datasets",
+            "merged_dataset_id": merged_dataset_id,
+            "input_dataset_ids": [d.dataset_id for d in parsed_datasets],
+            "shared_field_count": len(field_mapping),
+            "record_id_example": record_id,
+        },
+    )
 
 
 def _recover_samples_from_series_matrix(
@@ -341,6 +433,106 @@ def _recover_samples_from_series_matrix(
         return []
 
 
+def _run_multi_dataset_processing(
+    ctx: StageContext,
+    assets: list[SourceAsset],
+    datasets: list,
+) -> StageResult:
+    """Parse multiple data-type datasets and deterministically merge them.
+
+    TODO §1.2: each dataset/asset pair is parsed into a ``ParsedDataset`` via
+    the existing per-database parsers; then ``alignment.align_fields`` builds
+    the real field mapping and ``alignment.merge_datasets`` vertically merges
+    the rows. The merged result is returned as ``merged_dataset`` so the
+    artifact build can publish it as ``main_data.csv`` while retaining every
+    per-source parsed dataset for lineage.
+    """
+    if len(datasets) < 2:
+        raise ValueError("multi-dataset processing requires at least two datasets")
+
+    parsed_datasets: list[ParsedDataset] = []
+    used_asset_ids: set[str] = set()
+    for dataset in datasets:
+        matching = [
+            asset
+            for asset in assets
+            if asset.source_id == dataset.source_id
+            and asset.asset_id not in used_asset_ids
+        ]
+        if not matching:
+            matching = [
+                asset for asset in assets if asset.asset_id not in used_asset_ids
+            ]
+        dataset_asset = matching[0] if matching else None
+        if dataset_asset is None:
+            raise ValueError(
+                f"multi-dataset processing: no asset for {dataset.dataset_id}"
+            )
+        used_asset_ids.add(dataset_asset.asset_id)
+        database = dataset.database.value
+        if database == "gdc":
+            if not dataset.data_type:
+                raise ValueError("GDC processing requires data_type")
+            parsed_datasets.append(
+                parse_gdc_table(dataset_asset, dataset.dataset_id, ctx.workdir, dataset.data_type)
+            )
+        elif database in {"xena", "ucsc_xena"}:
+            parsed_datasets.append(
+                parse_xena_matrix(dataset_asset, dataset.dataset_id, ctx.workdir)
+            )
+        elif database == "geo":
+            # GEO expression parsing needs its SOFT/context pairing; the
+            # deterministic merge path keeps GEO as the primary dataset and
+            # skips re-parsing it here (the merged row set is derived from
+            # the other sources' parsed long-form rows).
+            continue
+        else:
+            raise ValueError(f"multi-dataset processing: unsupported {database}")
+
+    if len(parsed_datasets) < 2:
+        raise ValueError(
+            "multi-dataset processing requires at least two parseable datasets"
+        )
+    field_alignment = _build_field_alignment(parsed_datasets, ctx)
+    merged = merge_parsed_datasets(
+        ctx, parsed_datasets, merged_dataset_id=f"{parsed_datasets[0].dataset_id}_merged"
+    )
+    cleaning_report = _clean_parsed_dataset(ctx, merged)
+    output = ProcessingOutput(
+        parsed_datasets=parsed_datasets,
+        samples=[],
+        cleaning_report=cleaning_report,
+        field_alignment=field_alignment,
+        merged_dataset=merged,
+    )
+    ctx.emit_progress_sync(
+        stage=StageName.PROCESSING,
+        kind="cleaned_rows",
+        current=merged.row_count,
+        total=None,
+        detail={
+            "dataset_id": merged.dataset_id,
+            "file_asset": merged.file_asset.relative_path,
+            "merged_inputs": [d.dataset_id for d in parsed_datasets],
+        },
+    )
+    digest = hashlib.sha256(merged.file_asset.sha256.encode("utf-8")).hexdigest()
+    return StageResult(output_digest=digest, output=output)
+
+
+def _data_type_datasets(
+    ctx: StageContext,
+) -> list:
+    """Return the data-type datasets selected in the specification."""
+    if ctx.specification is None:
+        return []
+    return [
+        dataset
+        for dataset in ctx.specification.datasets
+        if dataset.database.value in {"gdc", "ucsc_xena", "xena"}
+    ]
+
+
 def run_processing(
     ctx: StageContext,
     source_assets: SourceAsset | list[SourceAsset],
@@ -353,8 +545,15 @@ def run_processing(
     family SOFT asset, the actual downloaded SOFT is used to parse real
     expression rows. If acquisition falls back to a series matrix, processing
     recovers sample metadata from that asset instead.
+
+    When the specification selects two or more data-type datasets (GDC/Xena)
+    the multi-dataset merge path runs instead: every selected dataset is
+    parsed and the results are deterministically merged (TODO §1.2).
     """
     assets = source_assets if isinstance(source_assets, list) else [source_assets]
+    data_type_datasets = _data_type_datasets(ctx)
+    if len(data_type_datasets) >= 2:
+        return _run_multi_dataset_processing(ctx, assets, data_type_datasets)
     databases = {database.strip().lower() for database in ctx.databases if database.strip()}
     if not databases:
         raise ValueError("processing requires a non-empty database selection")

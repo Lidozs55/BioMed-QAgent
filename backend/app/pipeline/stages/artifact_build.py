@@ -365,6 +365,7 @@ def _build_field_mapping_rows(
     source_id: str,
     field_alignment: dict[str, list[str]] | None,
     samples: list[GeoSampleMetadata],
+    parsed_datasets: list[ParsedDataset] | None = None,
 ) -> list[dict[str, object]]:
     """Build ``field_mapping.csv`` rows from the alignment result.
 
@@ -374,22 +375,39 @@ def _build_field_mapping_rows(
     expression-value mapping when alignment is missing. Every row carries the
     originating ``source_id`` so multi-source runs keep one mapping group per
     SourceAsset (§1.5.3).
+
+    For a multi-dataset alignment (``parsed_datasets`` with ≥2 entries) the
+    alignment list has one slot per dataset; one mapping group is emitted per
+    dataset so ``field_mapping.csv`` reflects the real merge used to build
+    ``main_data.csv`` (TODO §1.2).
     """
     if field_alignment:
         rows: list[dict[str, object]] = []
+        num_datasets = len(parsed_datasets) if parsed_datasets else 1
         for norm_name, originals in field_alignment.items():
-            raw = originals[0] if originals else ""
-            if not raw:
+            if len(originals) < num_datasets:
                 continue
-            rows.append({
-                "dataset_id": dataset_id,
-                "source_id": source_id,
-                "raw_field": raw,
-                "canonical_field": norm_name,
-                "conversion": "identity",
-                "confidence": "1.0" if raw == norm_name else "0.9",
-                "notes": "alignment:normalize_field_names",
-            })
+            for ds_index in range(num_datasets):
+                raw = originals[ds_index]
+                if not raw:
+                    continue
+                rows.append({
+                    "dataset_id": (
+                        parsed_datasets[ds_index].dataset_id
+                        if parsed_datasets and ds_index < len(parsed_datasets)
+                        else dataset_id
+                    ),
+                    "source_id": (
+                        parsed_datasets[ds_index].source_id
+                        if parsed_datasets and ds_index < len(parsed_datasets)
+                        else source_id
+                    ),
+                    "raw_field": raw,
+                    "canonical_field": norm_name,
+                    "conversion": "identity",
+                    "confidence": "1.0" if raw == norm_name else "0.9",
+                    "notes": "alignment:align_fields",
+                })
         return rows
 
     # Fallback: per-sample expression_value mapping (backward compat).
@@ -522,6 +540,8 @@ def run_artifact_build(
     stage_attempt_id: str,
     cleaning_report: CleaningReportModel | None = None,
     field_alignment: dict[str, list[str]] | None = None,
+    parsed_datasets: list[ParsedDataset] | None = None,
+    merged_dataset: ParsedDataset | None = None,
     dataset_source_id: str | None = None,
     dataset_accession: str | None = None,
     dataset_title: str | None = None,
@@ -532,16 +552,24 @@ def run_artifact_build(
 
     Writes all CSVs except ``quality_report.csv`` (which is written by the
     validation stage). Returns the staging directory and artifact paths.
+
+    ``parsed_datasets`` carries every parsed dataset produced by processing;
+    when a deterministic multi-source merge exists (TODO §1.2) it is passed
+    as ``merged_dataset`` and becomes the ``main_data.csv`` source instead of
+    the first parsed dataset.
     """
     staging = ctx.workdir.staging_run(ctx.run_id)
     if any(staging.iterdir()):
         shutil.rmtree(staging)
         staging.mkdir(parents=True)
 
-    parsed_path = ctx.workdir.root / parsed_dataset.file_asset.relative_path
+    all_parsed = parsed_datasets if parsed_datasets else [parsed_dataset]
+    primary = merged_dataset if merged_dataset is not None else parsed_dataset
+    parsed_path = ctx.workdir.root / primary.file_asset.relative_path
     if not parsed_path.is_file():
         raise FileNotFoundError(f"Parsed dataset not found: {parsed_path}")
-    is_reactome = parsed_dataset.parser_name == "reactome_pathway_participants"
+    is_reactome = primary.parser_name == "reactome_pathway_participants"
+    is_merged = merged_dataset is not None
     main_name = "pathway_members.csv" if is_reactome else "main_data.csv"
     shutil.copy2(parsed_path, staging / main_name)
 
@@ -638,7 +666,7 @@ def run_artifact_build(
         ]
 
     field_descriptions = []
-    for field in parsed_dataset.columns:
+    for field in primary.columns:
         metadata = _FIELD_DESCRIPTIONS.get(field, ("string", "Source column", "", "true", ""))
         field_descriptions.append({
             "field_name": field,
@@ -646,9 +674,76 @@ def run_artifact_build(
             "description": metadata[1],
             "unit": metadata[2],
             "nullable": metadata[3],
-            "source": parsed_dataset.parser_name,
+            "source": primary.parser_name,
             "example": metadata[4],
         })
+
+    processing_log_rows = [
+        {
+            "step_id": primary.file_asset.generated_by_step_id,
+            "stage_attempt_id": stage_attempt_id,
+            "stage": "processing",
+            "operation": primary.parser_name,
+            # input_refs points at the source asset (the raw file the
+            # parser read from); output_refs points at the parsed
+            # dataset's file_asset (the long-form CSV the parser wrote).
+            # Previously both referenced source_asset.asset_id, which
+            # made the processing_log falsely claim the parser produced
+            # no new artifact (TODO §1.3).
+            "input_refs": json.dumps([source_asset.asset_id]),
+            "output_refs": json.dumps([primary.file_asset.asset_id]),
+            "tool_version": primary.parser_version,
+            # rows_before is the upstream source file's data-row count
+            # (e.g. gene-row count in a tximport matrix); rows_after is
+            # the long-form parsed row count (gene × sample). The
+            # previous hardcoded ``4`` was a placeholder that didn't
+            # reflect reality (TODO §1.3).
+            "rows_before": primary.source_row_count,
+            "rows_after": primary.row_count,
+            # parameters comes from the parser itself so judges audit
+            # the actual measurement_type / value_semantics / sample_count
+            # instead of a hardcoded ``{"measurement": "counts"}``
+            # (TODO §1.3).
+            "parameters": json.dumps(
+                primary.processing_parameters, sort_keys=True
+            ),
+            "status": "succeeded",
+            "started_at": ctx.started_at.isoformat(),
+            "finished_at": datetime.now(UTC).isoformat(),
+            "warnings": processing_log_warnings,
+        }
+    ]
+    if is_merged:
+        processing_log_rows.append(
+            {
+                "step_id": primary.file_asset.generated_by_step_id,
+                "stage_attempt_id": stage_attempt_id,
+                "stage": "processing",
+                "operation": "alignment.merge_datasets",
+                "input_refs": json.dumps(
+                    [dataset.file_asset.asset_id for dataset in all_parsed]
+                ),
+                "output_refs": json.dumps([primary.file_asset.asset_id]),
+                "tool_version": "0.1.0",
+                "rows_before": sum(
+                    dataset.row_count for dataset in all_parsed
+                ),
+                "rows_after": primary.row_count,
+                "parameters": json.dumps(
+                    {
+                        "input_datasets": [
+                            dataset.dataset_id for dataset in all_parsed
+                        ],
+                        "merged_dataset_id": primary.dataset_id,
+                    },
+                    sort_keys=True,
+                ),
+                "status": "succeeded",
+                "started_at": ctx.started_at.isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "warnings": "[]",
+            }
+        )
 
     rows_by_file: dict[str, list[dict[str, object]]] = {
         "literature.csv": [] if is_reactome else [
@@ -706,6 +801,7 @@ def run_artifact_build(
             source_id=dataset_source_id,
             field_alignment=field_alignment,
             samples=samples,
+            parsed_datasets=all_parsed if len(all_parsed) > 1 else None,
         ),
         "cleaning_report.csv": _build_cleaning_report_rows(cleaning_report),
         "source_list.csv": [
@@ -749,41 +845,7 @@ def run_artifact_build(
                 "finished_at": download_attempt.finished_at.isoformat(),
             }
         ],
-        "processing_log.csv": [
-            {
-                "step_id": parsed_dataset.file_asset.generated_by_step_id,
-                "stage_attempt_id": stage_attempt_id,
-                "stage": "processing",
-                "operation": parsed_dataset.parser_name,
-                # input_refs points at the source asset (the raw file the
-                # parser read from); output_refs points at the parsed
-                # dataset's file_asset (the long-form CSV the parser wrote).
-                # Previously both referenced source_asset.asset_id, which
-                # made the processing_log falsely claim the parser produced
-                # no new artifact (TODO §1.3).
-                "input_refs": json.dumps([source_asset.asset_id]),
-                "output_refs": json.dumps([parsed_dataset.file_asset.asset_id]),
-                "tool_version": parsed_dataset.parser_version,
-                # rows_before is the upstream source file's data-row count
-                # (e.g. gene-row count in a tximport matrix); rows_after is
-                # the long-form parsed row count (gene × sample). The
-                # previous hardcoded ``4`` was a placeholder that didn't
-                # reflect reality (TODO §1.3).
-                "rows_before": parsed_dataset.source_row_count,
-                "rows_after": parsed_dataset.row_count,
-                # parameters comes from the parser itself so judges audit
-                # the actual measurement_type / value_semantics / sample_count
-                # instead of a hardcoded ``{"measurement": "counts"}``
-                # (TODO §1.3).
-                "parameters": json.dumps(
-                    parsed_dataset.processing_parameters, sort_keys=True
-                ),
-                "status": "succeeded",
-                "started_at": ctx.started_at.isoformat(),
-                "finished_at": datetime.now(UTC).isoformat(),
-                "warnings": processing_log_warnings,
-            }
-        ],
+        "processing_log.csv": processing_log_rows,
         "warnings.csv": all_warnings,
     }
 

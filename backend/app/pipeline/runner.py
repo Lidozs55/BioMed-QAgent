@@ -892,6 +892,8 @@ class PipelineRunner:
                 source_assets=acquisition.source_assets,
                 download_attempts=acquisition.download_attempts,
                 parsed_dataset=processing.parsed_datasets[0],
+                parsed_datasets=processing.parsed_datasets,
+                merged_dataset=processing.merged_dataset,
                 samples=processing.samples,
                 literature=discovery.literature,
                 geo=discovery.geo,

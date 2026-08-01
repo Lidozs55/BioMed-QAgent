@@ -11,6 +11,8 @@ from app.domain.contracts.discovery import (
     PubMedSearchResult,
 )
 from app.domain.contracts.enums import (
+    DATABASE_IDENTIFIER_ALIASES,
+    SOURCE_CAPABILITIES,
     AttemptStatus,
     Database,
     DataLevel,
@@ -20,6 +22,7 @@ from app.domain.contracts.enums import (
     QueryStatus,
     RequestedOutput,
     RunStatus,
+    SourceCapability,
     StageName,
     SubagentErrorCode,
     SubagentStatus,
@@ -133,6 +136,7 @@ from app.domain.contracts.stream import (
 from app.domain.contracts.task import (
     DatasetSelection,
     QuerySpecification,
+    SourceCapabilityDeclaration,
     TaskRequest,
     TaskSpecification,
 )
@@ -152,6 +156,7 @@ __all__ = [
     "CancelRequestedPayload",
     "ConversationCompactedPayload",
     "ContractModel",
+    "DATABASE_IDENTIFIER_ALIASES",
     "DataLevel",
     "Database",
     "DatasetSelection",
@@ -193,6 +198,9 @@ __all__ = [
     "RunStatus",
     "RuntimeEventType",
     "RunManifest",
+    "SOURCE_CAPABILITIES",
+    "SourceCapability",
+    "SourceCapabilityDeclaration",
     "SubagentCancelledPayload",
     "SubagentCancelRequestedPayload",
     "SubagentCompletedPayload",
