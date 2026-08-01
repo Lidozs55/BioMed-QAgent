@@ -47,6 +47,15 @@ def test_parse_ranking_response_handles_bare_list_and_garbage() -> None:
     assert _parse_ranking_response("not json at all", {"geo"}) == ()
     assert _parse_ranking_response("", {"geo"}) == ()
 
+def test_parse_ranking_response_strips_code_fence() -> None:
+    assert _parse_ranking_response('```json\n{"skills": ["geo"]}\n```', {"geo"}) == ("geo",)
+
+
+def test_parse_ranking_response_dedupes_names() -> None:
+    assert _parse_ranking_response(
+        '{"skills": ["geo", "geo", "xena"]}', {"geo", "xena"}
+    ) == ("geo", "xena")
+
 
 def test_empty_text_fastpath_returns_all_candidates_no_model() -> None:
     strategy = LLMRerankingSkillSearchStrategy()
@@ -56,10 +65,14 @@ def test_empty_text_fastpath_returns_all_candidates_no_model() -> None:
 
 
 class _SpyRanker:
-    """Record whether the model ranker was invoked (zero-call assertion)."""
+    """Record whether the model ranker was invoked; optionally return a
+    fixed subset instead of all candidates."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, result: Sequence[SkillDescriptor] | None = None
+    ) -> None:
         self.calls: list[tuple[Sequence[SkillDescriptor], str]] = []
+        self._result = tuple(result) if result is not None else None
 
     async def __call__(
         self,
@@ -68,7 +81,7 @@ class _SpyRanker:
         model_settings: RunModelSettings,
     ) -> tuple[SkillDescriptor, ...]:
         self.calls.append((candidates, text))
-        return tuple(candidates)
+        return self._result if self._result is not None else tuple(candidates)
 
 
 class _FailingRanker:
@@ -89,7 +102,7 @@ async def test_search_async_exact_hit_skips_model_call() -> None:
     (production path is search_async, so this guards real cost)."""
     spy = _SpyRanker()
     strategy = LLMRerankingSkillSearchStrategy()
-    strategy._model_ranker = spy  # type: ignore[attr-defined]
+    strategy._model_ranker = spy
     pubmed = _descriptor("pubmed", "Search biomedical literature.", sources=["pubmed"])
     geo = _descriptor("geo", "GEO datasets.", sources=["geo"])
 
@@ -110,7 +123,7 @@ async def test_search_async_exact_hit_skips_model_call() -> None:
 async def test_search_async_model_failure_falls_back_to_lexical() -> None:
     """ranker raises -> return the lexical result, never raise."""
     strategy = LLMRerankingSkillSearchStrategy()
-    strategy._model_ranker = _FailingRanker()  # type: ignore[attr-defined]
+    strategy._model_ranker = _FailingRanker()
     pubmed = _descriptor("pubmed", "Search biomedical literature.", sources=["pubmed"])
     geo = _descriptor("geo", "GEO datasets.", sources=["geo"])
 
@@ -123,3 +136,33 @@ async def test_search_async_model_failure_falls_back_to_lexical() -> None:
     )
 
     assert result == ()
+
+
+@pytest.mark.asyncio
+async def test_search_async_reranked_takes_precedence_lexical_fills_tail() -> None:
+    """model returns a proper subset -> reranked names first (model
+    precedence), lexical-only hits fill the tail, no duplicates."""
+    pubmed = _descriptor("pubmed", "Search biomedical literature.", sources=["pubmed"])
+    geo = _descriptor("geo", "GEO datasets.", sources=["geo"])
+    spy = _SpyRanker(result=(geo,))
+    strategy = LLMRerankingSkillSearchStrategy()
+    strategy._model_ranker = spy
+
+    # "literature" hits only pubmed lexically; the model overrides with geo
+    result = await strategy.search_async(
+        (pubmed, geo),
+        "literature",
+        RunModelSettings.default(),
+    )
+    assert [d.name for d in result] == ["geo", "pubmed"]
+    assert spy.calls == [((pubmed, geo), "literature")]
+
+    # empty text short-circuits before the model: all candidates, zero calls
+    spy.calls.clear()
+    result = await strategy.search_async(
+        (pubmed, geo),
+        "",
+        RunModelSettings.default(),
+    )
+    assert [d.name for d in result] == ["pubmed", "geo"]
+    assert spy.calls == []
