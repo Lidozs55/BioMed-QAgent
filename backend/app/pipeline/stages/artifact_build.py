@@ -85,6 +85,12 @@ _REACTOME_COLUMNS = {
     "source_column_index", "source_column_name", "source_raw_value",
 }
 
+# Multi-source manifest columns (TODO §1.5.4): dataset_id → database →
+# row_count, one row per input dataset of a deterministic merge.
+_MULTI_SOURCE_MANIFEST_COLUMNS = [
+    "dataset_id", "database", "accession", "source_id", "row_count",
+]
+
 
 # Real semantic descriptions for every field in main_data.csv (TODO §1.2).
 # Replaces the placeholder ``field.replace("_", " ")`` that produced strings
@@ -360,6 +366,136 @@ def _build_source_relations(
     return relations
 
 
+def _build_dataset_catalog_rows(
+    *,
+    is_merged: bool,
+    all_parsed: list[ParsedDataset],
+    specification: TaskSpecification,
+    dataset_id: str,
+    primary_source_id: str,
+    dataset_accession: str,
+    dataset_title: str,
+    geo: GeoSeriesRecord | None,
+    is_reactome: bool,
+    dataset_url_value: str,
+    retrieved_at: datetime,
+    workdir_root: Path,
+    parsed_path: Path,
+    sources: list[SourceRecord],
+) -> list[dict[str, object]]:
+    """Build ``dataset_catalog.csv`` rows.
+
+    The single-dataset path keeps the historic one-row GEO-oriented catalog
+    entry. When a deterministic multi-source merge exists (TODO §1.2), one
+    row per input dataset is emitted so every ``dataset_id`` referenced by
+    the merged ``main_data.csv`` closes against the catalog (TODO §1.5.4).
+    """
+    if not is_merged:
+        return [
+            {
+                "dataset_id": dataset_id,
+                "source_id": primary_source_id,
+                "database": sources[0].database.value,
+                "accession": dataset_accession,
+                "title": geo.title if geo else dataset_title,
+                "organism": geo.organism if geo else "",
+                "experiment_type": (
+                    "pathway_participants"
+                    if is_reactome
+                    else (geo.experiment_type if geo else "gene_expression")
+                ),
+                "sample_count": (
+                    len(_read_parsed_rows(parsed_path))
+                    if is_reactome
+                    else (geo.sample_count if geo else 2)
+                ),
+                "platform_ids": (
+                    "[]"
+                    if is_reactome
+                    else (json.dumps(sorted(geo.platform_ids)) if geo else "[]")
+                ),
+                "related_pmids": (
+                    "[]"
+                    if is_reactome
+                    else (json.dumps(sorted(geo.pubmed_ids)) if geo else "[]")
+                ),
+                "source_url": dataset_url_value,
+                "retrieved_at": retrieved_at.isoformat(),
+            }
+        ]
+
+    selections = {d.dataset_id: d for d in specification.datasets}
+    rows: list[dict[str, object]] = []
+    for dataset in all_parsed:
+        selection = selections.get(dataset.dataset_id)
+        dataset_path = workdir_root / dataset.file_asset.relative_path
+        try:
+            sample_count = len(
+                {
+                    row["sample_id"]
+                    for row in _read_parsed_rows(dataset_path)
+                    if row.get("sample_id")
+                }
+            )
+        except (OSError, KeyError):
+            sample_count = dataset.row_count
+        rows.append(
+            {
+                "dataset_id": dataset.dataset_id,
+                "source_id": dataset.source_id,
+                "database": (
+                    selection.database.value if selection else ""
+                ),
+                "accession": (
+                    selection.accession if selection else dataset.dataset_id
+                ),
+                "title": dataset.dataset_id,
+                "organism": "",
+                "experiment_type": (
+                    selection.data_type if selection and selection.data_type
+                    else "gene_expression"
+                ),
+                "sample_count": sample_count,
+                "platform_ids": "[]",
+                "related_pmids": "[]",
+                "source_url": dataset_url_value,
+                "retrieved_at": retrieved_at.isoformat(),
+            }
+        )
+    return rows
+
+
+def _build_multi_source_manifest_rows(
+    all_parsed: list[ParsedDataset],
+    specification: TaskSpecification,
+) -> list[dict[str, object]]:
+    """Build ``multi_source_manifest.csv`` rows (TODO §1.5.4).
+
+    One row per input dataset: ``dataset_id`` → source ``database`` →
+    parsed ``row_count``. Only produced when a deterministic multi-source
+    merge exists so single-source runs keep the historic artifact set.
+    """
+    selections = {d.dataset_id: d for d in specification.datasets}
+    return [
+        {
+            "dataset_id": dataset.dataset_id,
+            "database": (
+                selections[dataset.dataset_id].database.value
+                if dataset.dataset_id in selections
+                else ""
+            ),
+            "accession": (
+                selections[dataset.dataset_id].accession
+                if dataset.dataset_id in selections
+                else dataset.dataset_id
+            ),
+            "source_id": dataset.source_id,
+            "row_count": dataset.row_count,
+        }
+        for dataset in all_parsed
+    ]
+
+
 def _build_field_mapping_rows(
     dataset_id: str,
     source_id: str,
@@ -599,7 +735,6 @@ def run_artifact_build(
         ),
         source_assets[0],
     )
-    download_attempt = download_attempts[0]
 
     # Build cell-line normalization warnings (TODO §1.7). Each sample whose
     # cell_line_raw was canonicalized produces one warning row.
@@ -647,23 +782,36 @@ def run_artifact_build(
         for sample in samples
     ]
     if not is_reactome and not sample_rows:
-        sample_ids = sorted({row["sample_id"] for row in _read_parsed_rows(parsed_path)})
-        sample_rows = [
-            {
-                "sample_id": sample_id,
-                "dataset_id": dataset_id,
-                "source_id": primary_source_id,
-                "source_sample_alias": sample_id,
-                "cell_line_raw": "",
-                "cell_line_canonical": "",
-                "normalization_rule": "",
-                "treatment": "",
-                "replicate": "",
-                "organism": "",
-                "source_url": dataset_url_value,
-            }
-            for sample_id in sample_ids
-        ]
+        # Fallback when no GEO sample metadata was recovered: derive one row
+        # per distinct sample_id from the parsed rows. For a merged package
+        # the sample belongs to the dataset/source of its originating rows
+        # (TODO §1.5.4), keeping sample_metadata's dataset/source closure.
+        sample_rows = []
+        seen_samples: set[tuple[str, str, str]] = set()
+        for row in _read_parsed_rows(parsed_path):
+            sample_id = row.get("sample_id")
+            if not sample_id:
+                continue
+            row_dataset_id = row.get("dataset_id") or dataset_id
+            row_source_id = row.get("source_id") or primary_source_id
+            if (sample_id, row_dataset_id, row_source_id) in seen_samples:
+                continue
+            seen_samples.add((sample_id, row_dataset_id, row_source_id))
+            sample_rows.append(
+                {
+                    "sample_id": sample_id,
+                    "dataset_id": row_dataset_id,
+                    "source_id": row_source_id,
+                    "source_sample_alias": sample_id,
+                    "cell_line_raw": "",
+                    "cell_line_canonical": "",
+                    "normalization_rule": "",
+                    "treatment": "",
+                    "replicate": "",
+                    "organism": "",
+                    "source_url": dataset_url_value,
+                }
+            )
 
     field_descriptions = []
     for field in primary.columns:
@@ -762,38 +910,22 @@ def run_artifact_build(
                 "retrieved_at": retrieved_at.isoformat(),
             }
         ],
-        "dataset_catalog.csv": [
-            {
-                "dataset_id": dataset_id,
-                "source_id": primary_source_id,
-                "database": sources[0].database.value,
-                "accession": dataset_accession,
-                "title": geo.title if geo else dataset_title,
-                "organism": geo.organism if geo else "",
-                "experiment_type": (
-                    "pathway_participants"
-                    if is_reactome
-                    else (geo.experiment_type if geo else "gene_expression")
-                ),
-                "sample_count": (
-                    len(_read_parsed_rows(parsed_path))
-                    if is_reactome
-                    else (geo.sample_count if geo else 2)
-                ),
-                "platform_ids": (
-                    "[]"
-                    if is_reactome
-                    else (json.dumps(sorted(geo.platform_ids)) if geo else "[]")
-                ),
-                "related_pmids": (
-                    "[]"
-                    if is_reactome
-                    else (json.dumps(sorted(geo.pubmed_ids)) if geo else "[]")
-                ),
-                "source_url": dataset_url_value,
-                "retrieved_at": retrieved_at.isoformat(),
-            }
-        ],
+        "dataset_catalog.csv": _build_dataset_catalog_rows(
+            is_merged=is_merged,
+            all_parsed=all_parsed,
+            specification=specification,
+            dataset_id=dataset_id,
+            primary_source_id=primary_source_id,
+            dataset_accession=dataset_accession,
+            dataset_title=dataset_title,
+            geo=geo,
+            is_reactome=is_reactome,
+            dataset_url_value=dataset_url_value,
+            retrieved_at=retrieved_at,
+            workdir_root=ctx.workdir.root,
+            parsed_path=parsed_path,
+            sources=sources,
+        ),
         "sample_metadata.csv": [] if is_reactome else sample_rows,
         "field_descriptions.csv": field_descriptions,
         "field_mapping.csv": _build_field_mapping_rows(
@@ -830,20 +962,21 @@ def run_artifact_build(
         ],
         "download_log.csv": [
             {
-                "attempt_id": download_attempt.attempt_id,
-                "source_id": download_attempt.source_id,
-                "url": download_attempt.url,
-                "status": download_attempt.status.value,
-                "bytes_received": download_attempt.bytes_received,
+                "attempt_id": attempt.attempt_id,
+                "source_id": attempt.source_id,
+                "url": attempt.url,
+                "status": attempt.status.value,
+                "bytes_received": attempt.bytes_received,
                 "error_code": (
-                    download_attempt.error_code.value
-                    if download_attempt.error_code is not None
+                    attempt.error_code.value
+                    if attempt.error_code is not None
                     else ""
                 ),
-                "error_message": download_attempt.error_message or "",
-                "started_at": download_attempt.started_at.isoformat(),
-                "finished_at": download_attempt.finished_at.isoformat(),
+                "error_message": attempt.error_message or "",
+                "started_at": attempt.started_at.isoformat(),
+                "finished_at": attempt.finished_at.isoformat(),
             }
+            for attempt in download_attempts
         ],
         "processing_log.csv": processing_log_rows,
         "warnings.csv": all_warnings,
@@ -852,6 +985,15 @@ def run_artifact_build(
     for name, columns in _ARTIFACT_COLUMNS.items():
         write_csv(staging / name, columns, rows_by_file.get(name, []))
 
+    # Multi-source manifest (TODO §1.5.4): produced only when a deterministic
+    # multi-source merge exists, so single-source runs keep the historic
+    # artifact set unchanged.
+    if is_merged:
+        write_csv(
+            staging / "multi_source_manifest.csv",
+            _MULTI_SOURCE_MANIFEST_COLUMNS,
+            _build_multi_source_manifest_rows(all_parsed, specification),
+        )
     artifact_paths = sorted(staging.iterdir(), key=lambda item: item.name)
     # Derive source_path from the actual SourceAsset relative_path so both
     # fixture mode (GSE178352_tximportCounts.fixture.txt.gz) and live mode
