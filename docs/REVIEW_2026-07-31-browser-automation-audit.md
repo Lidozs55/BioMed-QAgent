@@ -135,19 +135,19 @@ Agent 说"浏览器"/"网页"/"截图" → 空结果 → 提示词 166-167 又�
 
 ---
 
-## 四、修复建议（未实施，按投入产出排序）
+## 四、修复建议（按投入产出排序）
 
-1. **发现层（根治，改动最小）**：
-   - 给 `_DOMAIN_INTENTS` 加 `"网页"/"浏览器"/"截图"` 键（映射到 browser/visual/web/capture/page）；
-   - 或给 `browser_fallback`/`web_visual_capture` 的 description/supported_sources 增加中文别名 token。
-   现有机制完全支持，无需改搜索算法。
-2. **提示词一致性**：修正 agent.py:154-157——要么把 capture 工具注入主 Agent，要么改写为
-   "通过 `find_skill` 查询 `web_visual_capture` 后调用"，消除"未注入却称可直接调用"的矛盾。
-3. **软化 last-resort 措辞**：`browser_fallback`/`web_visual_capture` 的 instructions 从
-   "only when API endpoints are unavailable" 改为 "API 失败或需要 JS 渲染/视觉证据时优先使用"，
-   降低对自主调用的抑制。
-4. **选择层（可选）**：若希望用户能在 UI 选择浏览器来源，把两个 skill 移出
-   `_NON_SELECTABLE_BUILTINS`（或新增一个可选条目）。
+1. **发现层（根治，改动最小）**：✅ **已实施**（branch `fix/browser-skill-discovery`）——
+   `_DOMAIN_INTENTS` 增加 `"网页"/"浏览器"/"截图"` 中文键（search.py），
+   中文能力词现可命中 `browser_fallback`/`web_visual_capture`；新增
+   `test_chinese_browser_intents_expand_to_browser_skills` 测试；既有中文意图
+   （文献/蛋白结构/差异表达/统计分析/图表）真实目录排序无回归。
+2. **提示词一致性**：✅ **已实施**——agent.py 视觉证据采集段改写为通过
+   `find_skill`（`text="网页截图"` 或 `source="web_visual_capture"`）+ `invoke_skill`
+   路由调用 `capture_web_page`/`capture_page_section`，保留 last-resort 框架，
+   消除"未注入却称可直接调用"的矛盾。
+3. **软化 last-resort 措辞**：未实施（用户未要求，属可选后续）。
+4. **选择层（可选）**：未实施（用户未要求）。
 
 ---
 

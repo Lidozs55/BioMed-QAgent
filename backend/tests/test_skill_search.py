@@ -143,3 +143,38 @@ def test_equal_scores_preserve_catalog_order() -> None:
     result = strategy.search((second, first), "pathway")
 
     assert result == (second, first)
+
+
+
+def test_chinese_browser_intents_expand_to_browser_skills() -> None:
+    """中文能力词（网页/浏览器/截图）必须命中英文元数据的浏览器 Skill
+    （docs/REVIEW_2026-07-31-browser-automation-audit.md §四.1 修复 1）。"""
+    strategy = LexicalSkillSearchStrategy()
+    browser = _descriptor(
+        "browser_fallback",
+        "Last-resort rendered browser fallback for navigating pages and "
+        "downloading files when API tools fail.",
+        sources=["browser_fallback", "http", "web"],
+    )
+    visual = _descriptor(
+        "web_visual_capture",
+        "Capture web page screenshots for visual evidence and chart extraction.",
+        sources=["web_visual_capture", "visual_capture", "web"],
+    )
+    pubmed = _descriptor(
+        "pubmed",
+        "Search biomedical literature and research papers.",
+        sources=["pubmed"],
+        category=SkillCategory.DISCOVERY,
+    )
+    candidates = (pubmed, browser, visual)
+
+    web = strategy.search(candidates, "抓取网页")
+    browser_hits = strategy.search(candidates, "浏览器")
+    screenshot = strategy.search(candidates, "网页截图")
+
+    assert "browser_fallback" in [item.name for item in web]
+    assert "web_visual_capture" in [item.name for item in web]
+    assert "browser_fallback" in [item.name for item in browser_hits]
+    assert "web_visual_capture" in [item.name for item in screenshot]
+    assert "pubmed" not in [item.name for item in web]
