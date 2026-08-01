@@ -266,4 +266,30 @@ describe("UserInputDialog", () => {
     // max_turns_reached 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
   });
+
+  it("renders no_progress prompt without structured plan card", () => {
+    const task = taskWithPrompt(
+      "task_no_progress",
+      "run_no_progress",
+      "run_no_progress",
+      "request_no_progress",
+      {
+        promptKind: "no_progress",
+        summary: "检测到无进展：同一工具调用在短时间内密集重复 (search_pubmed × 3)，是否继续工作？",
+        detail: {
+          tool_name: "search_pubmed",
+          args_hash: "abc",
+          occurrences: 3,
+          window_seconds: 300,
+        },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    expect(screen.getByText("检测到无进展")).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续工作" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
+    // no_progress 不应渲染 plan card
+    expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
 });

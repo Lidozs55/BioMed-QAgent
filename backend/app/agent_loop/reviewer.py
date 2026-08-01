@@ -43,8 +43,9 @@ async def _reviewer_instructions(ctx: RunContextWrapper) -> str:
 async def _review_extractor(result: RunResult | RunResultStreaming) -> str:
     """as_tool 的 custom_output_extractor：把审查结果写入 RunContext。
 
-    审查结果**追加**到 ``RunContext.query_log_summary``（不替换），确保
-    后续 ``compress_query_log`` 压缩时审查意见保留在 summary 中。
+    滚动合并（docs/REVIEW_2026-07-31 §4.3 C2）：审查结果**替换**旧的
+    审查块，保留所有压缩摘要（``[后续摘要]``）部分，避免长跑后审查意见
+    无限累积、且不丢失已压缩的检索历史（审查与压缩可能交错发生）。
 
     LLM 返回非字符串或空字符串时抛 ``RuntimeError``，不静默 fallback
     —— 符合"LLM 失败必须抛异常"的硬约束。
@@ -57,13 +58,30 @@ async def _review_extractor(result: RunResult | RunResultStreaming) -> str:
             "refusing to silently fallback to a placeholder review"
         )
     review = raw_output.strip()
-    if run_ctx.query_log_summary:
-        run_ctx.query_log_summary = (
-            f"{run_ctx.query_log_summary}\n\n[ReviewerAgent 审查]\n{review}"
+    # 滚动合并：去掉所有旧 [ReviewerAgent 审查] 块，保留压缩摘要前缀与
+    # 任何 [后续摘要] 压缩块（含其正文），再追加最新一条审查。
+    marker = "[ReviewerAgent 审查]"
+    kept: list[str] = []
+    blocks = run_ctx.query_log_summary.split(marker)
+    for index, block in enumerate(blocks):
+        stripped = block.strip()
+        if not stripped:
+            continue
+        # 块内若含 [后续摘要] 行，从该行起保留到块尾（压缩正文可多行）
+        lines = stripped.splitlines()
+        summary_start = next(
+            (i for i, line in enumerate(lines) if line.startswith("[后续摘要]")),
+            None,
         )
-    else:
-        run_ctx.query_log_summary = f"[ReviewerAgent 审查]\n{review}"
-    return f"已写入策略审查到 query_log_summary（{len(review)} 字）。"
+        if summary_start is not None:
+            kept.append("\n".join(lines[summary_start:]))
+        elif index == 0:
+            # 仅首个 marker 之前的段可以是压缩摘要前缀；review-only 摘要
+            # （第一个 marker 前为空）不会把旧审查文本误当前缀保留。
+            kept.append(stripped)
+    parts = [part for part in (*kept, f"{marker}\n{review}") if part]
+    run_ctx.query_log_summary = "\n\n".join(parts)
+    return f"已写入策略审查到 query_log_summary（{len(review)} 字，滚动合并）。"
 
 
 def build_review_query_strategy_tool(model: LazyDashScopeModel):

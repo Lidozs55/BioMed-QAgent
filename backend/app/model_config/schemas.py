@@ -7,6 +7,26 @@ from pydantic import BaseModel, ConfigDict, Field
 from .context_budget import ContextBudget, resolve_context_budget
 
 
+class RuntimeLimitsSettings(BaseModel):
+    """Configurable agent round/time limits (see docs/REVIEW_2026-07-31 §4)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    #: 主 Agent 单段 max_turns；硬上限 = (max_turns_resume_limit + 1) × agent_max_turns。
+    agent_max_turns: int = Field(default=240, ge=1)
+    #: 主 Agent max_turns 暂停后的续跑次数上限（默认 3 → 硬上限 4×240=960 轮）。
+    max_turns_resume_limit: int = Field(default=3, ge=0)
+    #: 子代理（source research / skill builder）max_turns。
+    child_agent_max_turns: int = Field(default=30, ge=1)
+    #: 子代理墙钟超时（秒）；用户确认默认 1h。
+    subagent_timeout_seconds: float = Field(default=3600.0, gt=0)
+
+    #: 无进展检测滑动窗口（秒）；同指纹调用间隔超过窗口 → 先前计数作废。
+    no_progress_window_seconds: float = Field(default=300.0, gt=0)
+    #: 无进展判定阈值：同 (tool, args) 指纹在窗口内出现次数达到该值触发。
+    no_progress_repeat_threshold: int = Field(default=3, ge=2)
+
+
 class Capabilities(BaseModel):
     text: bool = True
     image: bool = False
@@ -43,7 +63,6 @@ class UserSettings(BaseModel):
     compaction_target_ratio: float = Field(default=0.60, gt=0, lt=1)
     advanced: AdvancedParams = Field(default_factory=AdvancedParams)
 
-
 class RunModelSettings(BaseModel):
     """Immutable model identity and credentials owned by one Run."""
 
@@ -59,6 +78,7 @@ class RunModelSettings(BaseModel):
     enable_search: bool
     thinking_mode: bool
     context_budget: ContextBudget
+    runtime_limits: RuntimeLimitsSettings = RuntimeLimitsSettings()
 
     @classmethod
     def from_user_settings(cls, settings: UserSettings) -> RunModelSettings:

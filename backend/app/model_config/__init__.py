@@ -14,6 +14,7 @@ from .schemas import (
     Capabilities,
     QwenModelEntry,
     RunModelSettings,
+    RuntimeLimitsSettings,
     UserSettings,
 )
 from .vendors import VENDORS, Vendor, get_vendors, list_vendors
@@ -26,6 +27,7 @@ __all__ = [
     "QWEN_MODELS_DB",
     "QwenModelEntry",
     "RunModelSettings",
+    "RuntimeLimitsSettings",
     "UserSettings",
     "VENDORS",
     "Vendor",

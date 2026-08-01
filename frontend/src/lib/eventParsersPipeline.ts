@@ -3,7 +3,7 @@ import type { EventPayload, JsonValue } from "@/runtime/contracts";
 import { assertString, assertNumber, assertBoolean, assertObject, assertFinite, assertOptionalNull, assertHex64, assertPositiveInt, assertNonNegativeInt, assertOptionalNonNegativeInt, assertJsonRecord } from "./eventValidatorHelpers";
 
 const STAGE_NAMES = ["discovery", "acquisition", "processing", "artifact_build", "validation"] as const;
-const PROMPT_KINDS = ["plan_confirmation", "data_correction", "max_turns_reached"] as const;
+const PROMPT_KINDS = ["plan_confirmation", "data_correction", "max_turns_reached", "no_progress"] as const;
 const USER_DECISIONS = ["approve", "reject"] as const;
 const SEVERITIES = ["info", "warning", "error"] as const;
 

@@ -164,9 +164,18 @@ async def test_qwen_function_args_error_retried_with_original_input(
 
         assert call_count == 2  # 第一轮 400 + 第二轮 success
 
-        # 重试必须用原始 execution.input (str),不是 to_input_list (list)
+        # 首轮用原始 execution.input；重试不再重放原始输入，而是追加一条
+        # 修正指令（durable Session 已持有完整历史，避免重复全部工具调用）。
         assert captured_inputs[0] == "qwen retry success path"
-        assert captured_inputs[1] == "qwen retry success path"
+        assert captured_inputs[1] == [
+            {
+                "role": "user",
+                "content": (
+                    "上一工具调用参数非法（400），请仅修正并重发"
+                    "该工具调用，不要重复已完成的工作。"
+                ),
+            }
+        ]
 
         events = await repository.list_events(accepted.task_id)
         payloads = [event.payload for event in events]

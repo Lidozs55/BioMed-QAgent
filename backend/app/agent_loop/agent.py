@@ -34,7 +34,23 @@ from app.subagents.tools import (
 )
 from app.tools.io import list_files, read_file, write_file
 
-AGENT_MAX_TURNS: int = 15
+AGENT_MAX_TURNS: int = 240
+
+
+def resolve_agent_max_turns(
+    model_settings: RunModelSettings | None = None,
+) -> int:
+    """Return the configured main-agent segment max_turns.
+
+    Reads the run's immutable model settings when available (so per-run
+    configuration flows through), falling back to the standalone default.
+    """
+
+    from app.model_config import RuntimeLimitsSettings
+
+    if model_settings is not None:
+        return model_settings.runtime_limits.agent_max_turns
+    return RuntimeLimitsSettings().agent_max_turns
 
 INSTRUCTIONS = """\
 你是 BioMed-QAgent，一个生物医学数据检索与整理助手。

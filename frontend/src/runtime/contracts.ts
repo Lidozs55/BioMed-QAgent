@@ -251,7 +251,8 @@ export interface WarningRecord {
 export type UserInputPromptKind =
   | "plan_confirmation"
   | "data_correction"
-  | "max_turns_reached";
+  | "max_turns_reached"
+  | "no_progress";
 
 export type UserInputDecision = "approve" | "reject";
 

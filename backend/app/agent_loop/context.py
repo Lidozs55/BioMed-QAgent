@@ -307,8 +307,15 @@ class RunContext:
         subagent_id: str,
         *,
         preferred_sources: list[str] | None = None,
+        parent_query_log: list[dict] | None = None,
+        parent_query_log_summary: str = "",
     ) -> RunContext:
-        """Create an isolated child context while retaining trusted services."""
+        """Create an isolated child context while retaining trusted services.
+
+        ``parent_query_log`` / ``parent_query_log_summary`` seed the child's
+        completed-searches knowledge (docs/REVIEW_2026-07-31 §4.3 C1) so a
+        re-dispatched child does not repeat searches the parent already ran.
+        """
 
         child = RunContext(
             task_id=self.task_id,
@@ -316,6 +323,8 @@ class RunContext:
             subagent_id=subagent_id,
             model_settings=self.model_settings,
             preferred_sources=list(preferred_sources or self.preferred_sources),
+            query_log=list(parent_query_log) if parent_query_log else [],
+            query_log_summary=parent_query_log_summary,
         )
         child._create_skill_reservations = self._create_skill_reservations
         child._staging_task_root = self._work_dir.root
