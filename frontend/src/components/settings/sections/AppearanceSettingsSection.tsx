@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import {
   ACCENT_PRESETS,
   FONT_OPTIONS,
@@ -218,13 +219,22 @@ export function AppearanceSettingsSection() {
               </Select>
             }
           />
-          <div className="px-5 py-4">
-            <p className="text-base font-medium">Aa 生物医学检索</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              上下文窗口 · 生成参数 · 技能管理
-            </p>
-          </div>
         </SettingCard>
+        <div
+          className="rounded-xl border bg-card p-5 ring-1 ring-foreground/10"
+          data-setting-id="settings-font-preview"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              所选字体展示
+            </p>
+            <Badge variant="outline">{FONT_OPTIONS[font].label}</Badge>
+          </div>
+          <p className="mt-4 text-2xl font-medium tracking-tight">Aa 生物医学检索</p>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            上下文窗口 · 生成参数 · 技能管理
+          </p>
+        </div>
       </SettingSection>
     </div>
   );
