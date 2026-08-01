@@ -149,7 +149,7 @@ describe("SettingsPanel model selector", () => {
     await screen.findByLabelText("API Key");
 
     const outputTokens = screen.getByLabelText("最大输出 Tokens");
-    expect(outputTokens).toHaveAttribute("type", "range");
+    expect(outputTokens).toHaveAttribute("type", "number");
     expect(outputTokens).toHaveAttribute("min", "512");
     expect(outputTokens).toHaveAttribute("max", "131072");
     expect(screen.queryByLabelText("Context Window Override")).not.toBeInTheDocument();

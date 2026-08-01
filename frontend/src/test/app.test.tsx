@@ -247,7 +247,7 @@ describe("App startup ownership", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "打开设置" })[0]);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(useAgentStore.getState().activeTaskId).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回应用" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
   });
