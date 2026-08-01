@@ -24,10 +24,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-function formatTokens(value: number): string {
-  return value.toLocaleString();
-}
-
 function SelectedModelCapabilities({ model }: { model: NonNullable<ModelSettingsSectionProps["models"]>[number] }) {
   return (
     <div className="mt-1 flex shrink-0 gap-1.5">
@@ -327,7 +323,6 @@ export function ModelSettingsSection({
                 max={131072}
                 step={512}
                 onChange={(value) => onDraftChange({ maxTokens: value })}
-                format={formatTokens}
               />
             }
           />
@@ -353,7 +348,6 @@ export function ModelSettingsSection({
                 min={0}
                 max={2}
                 step={0.1}
-                precision={1}
                 onChange={(value) => onDraftChange({ temperature: value })}
                 marks={[
                   { value: 0, label: "精确" },
@@ -377,7 +371,6 @@ export function ModelSettingsSection({
                 min={0}
                 max={1}
                 step={0.05}
-                precision={2}
                 onChange={(value) => onDraftChange({ topP: value })}
                 marks={[
                   { value: 0, label: "严格" },

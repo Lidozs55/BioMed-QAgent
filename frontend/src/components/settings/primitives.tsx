@@ -104,10 +104,8 @@ export interface NumberFieldProps {
   min: number;
   max: number;
   step?: number;
-  precision?: number;
   ariaLabel?: string;
   onChange: (value: number) => void;
-  format?: (value: number) => string;
   marks?: { value: number; label: string }[];
   className?: string;
 }
@@ -118,10 +116,8 @@ export function NumberField({
   min,
   max,
   step = 1,
-  precision = 0,
   ariaLabel,
   onChange,
-  format,
   marks,
   className,
 }: NumberFieldProps) {
@@ -129,28 +125,20 @@ export function NumberField({
     if (!Number.isFinite(next)) return value;
     return Math.min(max, Math.max(min, next));
   };
-  const displayed = format
-    ? format(value)
-    : value.toLocaleString(undefined, { maximumFractionDigits: precision });
 
   return (
     <div className={cn("flex w-64 max-w-full flex-col gap-2", className)}>
-      <div className="flex items-center gap-2">
-        <Input
-          id={id}
-          type="number"
-          aria-label={ariaLabel}
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(event) => onChange(clamp(Number(event.target.value)))}
-          className="h-8 w-28 font-mono text-xs tabular-nums"
-        />
-        <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
-          {displayed}
-        </span>
-      </div>
+      <Input
+        id={id}
+        type="number"
+        aria-label={ariaLabel}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(clamp(Number(event.target.value)))}
+        className="h-8 w-28 font-mono text-xs tabular-nums"
+      />
       <Slider
         value={[value]}
         min={min}
