@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { UploadSimpleIcon, XIcon } from "@phosphor-icons/react";
+import { toast } from "sonner";
 
 import {
   ColorSwatch,
@@ -15,9 +17,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ACCENT_PRESETS,
   FONT_OPTIONS,
+  customFontId,
+  fontDisplayName,
   useThemeStore,
   type ThemeAccent,
   type ThemeFont,
@@ -30,6 +36,13 @@ const THEME_MODES: { value: ThemeMode; label: string; hint: string }[] = [
   { value: "light", label: "浅色", hint: "明亮界面" },
   { value: "dark", label: "深色", hint: "低光环境" },
 ];
+
+const FONT_FORMATS: Record<string, string> = {
+  ttf: "truetype",
+  otf: "opentype",
+  woff: "woff",
+  woff2: "woff2",
+};
 
 function CustomAccentField({
   value,
@@ -113,13 +126,60 @@ export function AppearanceSettingsSection() {
   const accent = useThemeStore((state) => state.accent);
   const customAccent = useThemeStore((state) => state.customAccent);
   const font = useThemeStore((state) => state.font);
+  const importedFonts = useThemeStore((state) => state.importedFonts);
   const setMode = useThemeStore((state) => state.setMode);
   const setAccent = useThemeStore((state) => state.setAccent);
   const setCustomAccent = useThemeStore((state) => state.setCustomAccent);
   const setFont = useThemeStore((state) => state.setFont);
+  const addImportedFont = useThemeStore((state) => state.addImportedFont);
+  const removeImportedFont = useThemeStore((state) => state.removeImportedFont);
+  const fontInputRef = useRef<HTMLInputElement>(null);
 
   const presetHex =
     accent === "custom" ? customAccent : ACCENT_PRESETS[accent as Exclude<ThemeAccent, "custom">].light;
+
+  const fontOptions = [
+    ...(Object.keys(FONT_OPTIONS) as ThemeFont[]).map((key) => ({
+      value: key,
+      label: FONT_OPTIONS[key].label,
+    })),
+    ...importedFonts.map((item) => ({
+      value: customFontId(item.id),
+      label: item.name,
+    })),
+  ];
+
+  const importFontFile = async (file: File | undefined) => {
+    if (!file) return;
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const format = FONT_FORMATS[extension];
+    if (!format) {
+      toast.error("不支持的字体格式", { description: "仅支持 TTF、OTF、WOFF、WOFF2 文件" });
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("字体文件过大", { description: "请选择 2MB 以内的字体文件" });
+      return;
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+      reader.readAsDataURL(file);
+    });
+    const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "导入字体";
+    const imported = addImportedFont({
+      name,
+      family: `Imported-${Date.now().toString(36)}`,
+      format,
+      dataUrl,
+    });
+    if (!imported) {
+      toast.error("导入失败", { description: "已到达字体数量上限（12 个）" });
+      return;
+    }
+    toast.success(`字体“${imported.name}”已导入`);
+  };
 
   return (
     <div className="space-y-8">
@@ -203,15 +263,15 @@ export function AppearanceSettingsSection() {
             title="字体"
             description="切换后立即作用于整个应用。"
             control={
-              <Select value={font} onValueChange={(value) => setFont(value as ThemeFont)}>
+              <Select value={font} onValueChange={(value) => setFont(value ?? "inter")}>
                 <SelectTrigger className="w-48" aria-label="界面字体">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    {(Object.keys(FONT_OPTIONS) as ThemeFont[]).map((key) => (
-                      <SelectItem key={key} value={key}>
-                        {FONT_OPTIONS[key].label}
+                    {fontOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -219,6 +279,64 @@ export function AppearanceSettingsSection() {
               </Select>
             }
           />
+          <SettingRow
+            id="settings-font-import"
+            title="导入字体"
+            description="支持 TTF、OTF、WOFF、WOFF2 文件，单个不超过 2MB。"
+            controlClassName="w-full sm:w-auto"
+            control={
+              <div className="flex items-center gap-2">
+                <Input
+                  ref={fontInputRef}
+                  id="settings-font-import"
+                  type="file"
+                  accept=".ttf,.otf,.woff,.woff2"
+                  aria-label="导入字体"
+                  onChange={(event) => void importFontFile(event.target.files?.[0])}
+                  className="max-w-52"
+                />
+                <Button variant="outline" onClick={() => fontInputRef.current?.click()}>
+                  <UploadSimpleIcon data-icon="inline-start" />
+                  导入字体
+                </Button>
+              </div>
+            }
+          />
+          {importedFonts.length > 0 && (
+            <div className="px-5 py-4">
+              <div className="rounded-lg border bg-muted/40 p-4">
+                <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  已导入字体
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {importedFonts.map((item) => {
+                    const selected = font === customFontId(item.id);
+                    return (
+                      <span
+                        key={item.id}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+                          selected
+                            ? "border-primary/40 bg-primary/10 font-medium text-primary"
+                            : "bg-background text-foreground",
+                        )}
+                      >
+                        {item.name}
+                        <button
+                          type="button"
+                          aria-label={`删除字体 ${item.name}`}
+                          onClick={() => removeImportedFont(item.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <XIcon className="size-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
           <div className="px-5 py-4">
             <div
               className="rounded-lg border bg-muted/40 p-4"
@@ -228,7 +346,7 @@ export function AppearanceSettingsSection() {
                 <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
                   所选字体展示
                 </p>
-                <Badge variant="outline">{FONT_OPTIONS[font].label}</Badge>
+                <Badge variant="outline">{fontDisplayName(font, importedFonts)}</Badge>
               </div>
               <p className="mt-3 text-2xl font-medium tracking-tight">Aa 生物医学检索</p>
               <p className="mt-1.5 text-sm text-muted-foreground">

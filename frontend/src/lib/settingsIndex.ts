@@ -124,6 +124,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     anchor: "settings-font",
   },
   {
+    id: "appearance.font-import",
+    title: "导入字体",
+    keywords: ["import font", "字体文件", "ttf", "otf", "woff", "woff2"],
+    section: "appearance",
+    anchor: "settings-font-import",
+  },
+  {
     id: "general.export",
     title: "导出本地缓存",
     keywords: ["export", "导出", "缓存", "zip", "备份"],
