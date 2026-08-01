@@ -273,3 +273,135 @@ def test_artifact_build_publishes_merged_dataset_as_main_data(tmp_path: Path) ->
     ) as handle:
         log_rows = list(_csv.DictReader(handle))
     assert any("merge_datasets" in row["operation"] for row in log_rows)
+    # Multi-source manifest lists one row per input dataset (TODO §1.5.4).
+    with (staging / "multi_source_manifest.csv").open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as handle:
+        manifest_rows = list(_csv.DictReader(handle))
+    assert {row["dataset_id"] for row in manifest_rows} == {
+        "ds_xena",
+        "ds_gdc",
+    }
+    by_dataset = {row["dataset_id"]: row for row in manifest_rows}
+    assert by_dataset["ds_xena"]["database"] == "ucsc_xena"
+    assert by_dataset["ds_gdc"]["database"] == "gdc"
+    assert int(by_dataset["ds_xena"]["row_count"]) == 4
+    assert int(by_dataset["ds_gdc"]["row_count"]) == 4
+    # dataset_catalog.csv must carry one row per input dataset so every
+    # dataset_id referenced by the merged main_data.csv closes.
+    with (staging / "dataset_catalog.csv").open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as handle:
+        catalog_rows = list(_csv.DictReader(handle))
+    assert {row["dataset_id"] for row in catalog_rows} == {"ds_xena", "ds_gdc"}
+    # download_log.csv must record every source's attempt (not only the first).
+    with (staging / "download_log.csv").open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as handle:
+        log_attempts = list(_csv.DictReader(handle))
+    assert {row["attempt_id"] for row in log_attempts} == {
+        "attempt_src_xena_test",
+        "attempt_src_gdc_test",
+    }
+
+
+def test_merged_package_passes_validation_gate(tmp_path: Path) -> None:
+    """A merged multi-source package must pass the full Validation Gate.
+
+    TODO §1.5.4: the merged result is re-validated like any single-source
+    package — lineage rows route to their own source file, dataset_catalog
+    carries every input dataset, sample_metadata derives per-dataset rows,
+    and the multi_source_manifest artifact is produced.
+    """
+    from app.domain.contracts import (
+        DownloadAttempt,
+        DownloadStatus,
+        SourceRecord,
+    )
+    from app.pipeline.stages.artifact_build import run_artifact_build
+    from app.pipeline.stages.validation import _validate_package
+
+    specification = TaskSpecification(
+        topic="multi",
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_xena",
+                database=Database.UCSC_XENA,
+                accession="xena.tsv",
+                source_id="src_xena_test",
+                reason="test",
+            ),
+            DatasetSelection(
+                dataset_id="ds_gdc",
+                database=Database.GDC,
+                accession="TCGA-TEST",
+                source_id="src_gdc_test",
+                reason="test",
+                data_type="gene-expression",
+            ),
+        ],
+    )
+    ctx = _context(tmp_path, specification)
+    xena_asset = _asset(ctx.workdir, _XENA_PAYLOAD, "xena.tsv", "src_xena_test")
+    gdc_asset = _asset(ctx.workdir, _GDC_PAYLOAD, "gdc.tsv", "src_gdc_test")
+    processing_result = run_processing(ctx, [xena_asset, gdc_asset], "ds_xena")
+    merged = processing_result.output.merged_dataset
+    assert merged is not None
+
+    sources = [
+        SourceRecord(
+            source_id="src_xena_test",
+            database=Database.UCSC_XENA,
+            accession="xena.tsv",
+            url="https://xenabrowser.net/datapages/?dataset=xena.tsv",
+            title="xena",
+            retrieved_at=datetime.now(UTC),
+        ),
+        SourceRecord(
+            source_id="src_gdc_test",
+            database=Database.GDC,
+            accession="TCGA-TEST",
+            url="https://api.gdc.cancer.gov/projects/TCGA-TEST",
+            title="gdc",
+            retrieved_at=datetime.now(UTC),
+        ),
+    ]
+    attempts = [
+        DownloadAttempt(
+            attempt_id=f"attempt_{source_id}",
+            source_id=source_id,
+            url="https://example.test/download",
+            status=DownloadStatus.SUCCEEDED,
+            bytes_received=len(_XENA_PAYLOAD),
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+        )
+        for source_id in ("src_xena_test", "src_gdc_test")
+    ]
+    build_result = run_artifact_build(
+        ctx,
+        sources=sources,
+        source_assets=[xena_asset, gdc_asset],
+        download_attempts=attempts,
+        parsed_dataset=processing_result.output.parsed_datasets[0],
+        parsed_datasets=processing_result.output.parsed_datasets,
+        merged_dataset=merged,
+        samples=[],
+        literature=None,
+        geo=None,
+        specification=specification,
+        retrieved_at=datetime.now(UTC),
+        stage_attempt_id="stage_attempt_multisource",
+        cleaning_report=processing_result.output.cleaning_report,
+        field_alignment=processing_result.output.field_alignment,
+    )
+    summary, checks = _validate_package(
+        build_result.output.staging_dir,
+        build_result.output.source_path,
+        ctx.workdir.logs / "validation_report.json",
+    )
+    assert summary.status == "valid", [
+        check for check in checks if check["status"] != "passed"
+    ]
+    assert summary.failed_count == 0
+    assert (build_result.output.staging_dir / "multi_source_manifest.csv").is_file()

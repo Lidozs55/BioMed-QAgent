@@ -91,10 +91,10 @@
 #### 1.5.4 Artifact 完整性（P1）
 
 - [ ] **P1** `artifact_build` 按传入的 `SourceAsset` 类型决定产出哪些 artifact（当前固定 13 个 GEO 侧写）
-- [ ] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）
-- [ ] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）
+- [x] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）——2026-08-01 执行：`_build_multi_source_manifest_rows` 按 `specification.datasets` 匹配 database/accession，每个输入 dataset 一行（含 row_count）；仅 `is_merged` 时写入，单源 artifact 集合不变；`test_artifact_build_publishes_merged_dataset_as_main_data` 断言 manifest 内容
+- [x] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）——2026-08-01 执行：`_build_dataset_catalog_rows` 多源分支每输入 dataset 一行（dataset_id/source_id/database/accession/experiment_type/sample_count），保证 merged `main_data.csv` 的 dataset_id 外键闭合
 - [ ] **P1** 中间结果与最终结果使用独立的 run/version 标识，旧版已验证 Artifact 不被新 Run 覆盖
-- [ ] **P1** 合并结果必须重新经过 Artifact Build + Validation Gate，不能由 Agent 直接写入正式 `artifacts/`
+- [x] **P1** 合并结果必须重新经过 Artifact Build + Validation Gate，不能由 Agent 直接写入正式 `artifacts/`——2026-08-01 执行：合并包闭环通过完整 Validation Gate——`download_log.csv` 记录全部 attempt（原只写首个）、`sample_metadata.csv` fallback 按行聚合 dataset_id/source_id、lineage 校验（`source_value_lineage`）按行 asset_id 路由到各自源文件（`_lines_for` + 缓存）；新增 `test_merged_package_passes_validation_gate` 端到端锁定 status=valid
 
 #### 1.5.5 Agent ↔ Pipeline 数据桥接与确定性合并（P1）
 
