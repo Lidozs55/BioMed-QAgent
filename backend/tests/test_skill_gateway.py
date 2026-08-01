@@ -510,6 +510,7 @@ class _AsyncRecordingStrategy(LLMRerankingSkillSearchStrategy):
 
     async def search_async(self, candidates, text, model_settings):  # type: ignore[override]
         self.async_called = True
+        self.model_settings_arg = model_settings
         return tuple(candidates)
 
 
@@ -517,8 +518,9 @@ class _AsyncRecordingStrategy(LLMRerankingSkillSearchStrategy):
 async def test_find_skill_dispatches_to_search_async_when_available() -> None:
     strategy = _AsyncRecordingStrategy()
     find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]), search_strategy=strategy)
-
-    result = await _call(find_skill, _context(), text="geo", preferred_sources=[])
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="geo", preferred_sources=[])
 
     assert strategy.async_called is True
-    assert '"geo"' in json.dumps(result, ensure_ascii=False)
+    assert strategy.model_settings_arg is ctx.context.model_settings
+    assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)
