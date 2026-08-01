@@ -47,6 +47,7 @@ def test_parse_ranking_response_handles_bare_list_and_garbage() -> None:
     assert _parse_ranking_response("not json at all", {"geo"}) == ()
     assert _parse_ranking_response("", {"geo"}) == ()
 
+
 def test_parse_ranking_response_strips_code_fence() -> None:
     assert _parse_ranking_response('```json\n{"skills": ["geo"]}\n```', {"geo"}) == ("geo",)
 

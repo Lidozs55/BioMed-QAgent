@@ -519,7 +519,7 @@ async def test_find_skill_dispatches_to_search_async_when_available() -> None:
     strategy = _AsyncRecordingStrategy()
     find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]), search_strategy=strategy)
     ctx = _context()
-    result = await _call(find_skill, ctx, text="geo", preferred_sources=[])
+    result = await _call(find_skill, ctx, text="geo")
 
     assert strategy.async_called is True
     assert strategy.model_settings_arg is ctx.context.model_settings

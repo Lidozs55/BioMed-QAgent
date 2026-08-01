@@ -22,7 +22,11 @@ from app.agent_loop.model import (
 )
 from app.model_config import RunModelSettings
 from app.skills.catalog import SkillDescriptor
-from app.skills.search import LexicalSkillSearchStrategy, SkillSearchStrategy
+from app.skills.search import (
+    LexicalSkillSearchStrategy,
+    SkillSearchStrategy,
+    normalize_skill_search_text,
+)
 
 _DEFAULT_MODEL = "qwen-flash"
 _DEFAULT_TIMEOUT = 5.0
@@ -119,6 +123,7 @@ class LLMRerankingSkillSearchStrategy:
         client = AsyncOpenAI(
             api_key=model_settings.api_key,
             base_url=base_url,
+            max_retries=0,
         )
         try:
             response = await client.chat.completions.create(
@@ -157,7 +162,13 @@ class LLMRerankingSkillSearchStrategy:
         model_settings: RunModelSettings,
     ) -> tuple[SkillDescriptor, ...]:
         lexical_result = self._lexical.search(candidates, text)
+        if not candidates:
+            return lexical_result
         if not text.strip():
+            return lexical_result
+        if len(lexical_result) == len(candidates):
+            # lexical already returns every candidate (e.g. stop-word-only
+            # query): reranking would be a no-op, skip the model call
             return lexical_result
         if self._has_exact_identity(lexical_result, text):
             # exact identity/source hit: lexical is authoritative, skip model
@@ -179,9 +190,11 @@ class LLMRerankingSkillSearchStrategy:
         text: str,
     ) -> bool:
         """True when the lexical result contains an exact name or source match."""
-        normalized = text.strip().casefold()
+        normalized = normalize_skill_search_text(text)
         return any(
-            d.name.casefold() == normalized
-            or normalized in {s.casefold() for s in d.supported_sources}
+            normalize_skill_search_text(d.name) == normalized
+            or normalized in {
+                normalize_skill_search_text(s) for s in d.supported_sources
+            }
             for d in lexical_result
         )
