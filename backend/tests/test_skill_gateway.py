@@ -15,6 +15,7 @@ from app.agent_loop.context import RunContext
 from app.skills import gateway as gateway_module
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.gateway import build_skill_gateway
+from app.skills.llm_search import LLMRerankingSkillSearchStrategy
 from app.skills.packages import SkillPackageLoader
 from app.skills.registry import SkillCategory, SkillDef
 from app.skills.search import SkillSearchStrategy
@@ -500,3 +501,26 @@ async def test_invoke_skill_returns_argument_validation_error() -> None:
 
     assert result["status"] == "error"
     assert result["error"]["code"] == "invalid_arguments"
+
+
+class _AsyncRecordingStrategy(LLMRerankingSkillSearchStrategy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_called = False
+
+    async def search_async(self, candidates, text, model_settings):  # type: ignore[override]
+        self.async_called = True
+        self.model_settings_arg = model_settings
+        return tuple(candidates)
+
+
+@pytest.mark.asyncio
+async def test_find_skill_dispatches_to_search_async_when_available() -> None:
+    strategy = _AsyncRecordingStrategy()
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]), search_strategy=strategy)
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="geo")
+
+    assert strategy.async_called is True
+    assert strategy.model_settings_arg is ctx.context.model_settings
+    assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)

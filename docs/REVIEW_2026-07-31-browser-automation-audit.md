@@ -148,6 +148,11 @@ Agent 说"浏览器"/"网页"/"截图" → 空结果 → 提示词 166-167 又�
    消除"未注入却称可直接调用"的矛盾。
 3. **软化 last-resort 措辞**：未实施（用户未要求，属可选后续）。
 4. **选择层（可选）**：未实施（用户未要求）。
+5. **语义检索（已实施，branch `feat/llm-skill-retrieval`）**：`find_skill` 引入
+   `LLMRerankingSkillSearchStrategy`（app/skills/llm_search.py）——词法检索为确定性基线，
+   词法空结果/模糊时用 `qwen-flash` 单次分类调用对全目录（15 skills）重排 top-k；
+   模型失败/离线回退词法，空 text fast-path 保留。仅主 Agent 启用；子代理保持词法。
+   中文能力词（网页/截图/浏览器）由模型语义命中，不再依赖 `_DOMAIN_INTENTS` 手工表。
 
 ---
 
