@@ -168,6 +168,15 @@ describe("SettingsPanel", () => {
     expect(screen.queryByText("sk-****")).not.toBeInTheDocument();
   });
 
+  it("reopens with the saved API key shown as a masked value", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+
+    const secret = (await screen.findByLabelText("API Key")) as HTMLInputElement;
+    expect(secret.value).toBe("sk-****");
+    expect(secret.type).toBe("password");
+  });
+
   it("model dropdown options contain no descendant interactive elements and capability icons have accessible labels", async () => {
     const api = mockApi({
       // Return settings with a valid base URL so model fetch works

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -55,12 +55,12 @@ describe("database draft validation", () => {
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "技能" }));
     const filter = await screen.findByPlaceholderText("筛选技能");
     fireEvent.change(filter, { target: { value: "missing" } });
     expect(screen.getByText("没有匹配的技能")).toBeInTheDocument();
     fireEvent.change(filter, { target: { value: "PubMed" } });
-    fireEvent.click(screen.getByRole("button", { name: "停用 PubMed" }));
+    fireEvent.click(screen.getByRole("switch", { name: "停用 PubMed" }));
     await waitFor(() => expect(api.setSkillEnabled).toHaveBeenCalledWith("pubmed", false));
     expect(vi.mocked(api.fetchSkills).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
@@ -87,7 +87,7 @@ describe("database draft validation", () => {
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(await screen.findByRole("button", { name: "编辑 PubMed" }));
 
     expect(api.fetchSkill).toHaveBeenCalledWith("pubmed");
@@ -116,8 +116,9 @@ describe("database draft validation", () => {
     const api = mockApi({ fetchSkills: vi.fn().mockResolvedValue(skills) });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
-    expect(await screen.findByRole("button", { name: "停用 Builtin DB" })).toBeDisabled();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
+    const builtinSwitch = await screen.findByRole("switch", { name: "停用 Builtin DB" });
+    expect(builtinSwitch).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByRole("button", { name: "删除 PubMed" }));
     expect(api.deleteDatabase).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
@@ -129,7 +130,7 @@ describe("database draft validation", () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
     const methodInput = screen.getByLabelText("Method");
     fireEvent.change(methodInput, { target: { value: "P" } });
@@ -153,7 +154,7 @@ describe("database draft validation", () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
 
     const input = screen.getByLabelText(label);

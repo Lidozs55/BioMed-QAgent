@@ -149,10 +149,26 @@ describe("SettingsPanel model selector", () => {
     await screen.findByLabelText("API Key");
 
     const outputTokens = screen.getByLabelText("最大输出 Tokens");
-    expect(outputTokens).toHaveAttribute("type", "range");
+    expect(outputTokens).toHaveAttribute("type", "number");
     expect(outputTokens).toHaveAttribute("min", "512");
     expect(outputTokens).toHaveAttribute("max", "131072");
     expect(screen.queryByLabelText("Context Window Override")).not.toBeInTheDocument();
+  });
+
+  it("selects a context window preset from a dropdown", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByLabelText("API Key");
+
+    fireEvent.click(screen.getByRole("combobox", { name: "上下文窗口" }));
+    const option = await screen.findByRole("option", { name: "128K" });
+    // Base UI commits real mouse selections only after a matching pointer-down.
+    fireEvent.pointerDown(option, { pointerType: "mouse", button: 0, buttons: 1 });
+    fireEvent.click(option, { pointerType: "mouse" });
+
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith({ context_window: 131072 }),
+    );
   });
 
   it("selects an API-discovered model and persists its model name and key", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { SlidersHorizontalIcon } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -26,14 +26,30 @@ import { cn } from "@/lib/utils";
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Preset context window values in tokens. */
-const PRESETS = [
-  { label: "128K", value: 131_072 },
-  { label: "256K", value: 262_144 },
-  { label: "512K", value: 524_288 },
-  { label: "1M", value: 1_000_000 },
-  { label: "2M", value: 2_000_000 },
+/** Common context window presets in tokens, smallest first. */
+const COMMON_WINDOWS = [
+  8_192,
+  16_384,
+  32_768,
+  65_536,
+  131_072,
+  262_144,
+  524_288,
+  1_000_000,
+  2_000_000,
 ] as const;
+
+const PRESET_LABELS: Record<number, string> = {
+  8_192: "8K",
+  16_384: "16K",
+  32_768: "32K",
+  65_536: "64K",
+  131_072: "128K",
+  262_144: "256K",
+  524_288: "512K",
+  1_000_000: "1M",
+  2_000_000: "2M",
+};
 
 type Unit = "B" | "K" | "M";
 
@@ -45,11 +61,15 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function windowLabel(tokens: number): string {
+  return PRESET_LABELS[tokens] ?? formatTokens(tokens);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
 /* ------------------------------------------------------------------ */
 
-export interface ContextWindowSliderProps {
+export interface ContextWindowSelectProps {
   /** Current effective context window in tokens. */
   value: number;
   /** Maximum allowed context window (from catalog). 0 = no known limit. */
@@ -64,160 +84,82 @@ export interface ContextWindowSliderProps {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export function ContextWindowSlider({
-  ...props
-}: ContextWindowSliderProps) {
-  return <ContextWindowSliderControl key={props.value} {...props} />;
-}
-
-function ContextWindowSliderControl({
+export function ContextWindowSelect({
   value,
   maxCatalogWindow,
   source,
   onChange,
-}: ContextWindowSliderProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const draggingRef = useRef(false);
-
-  // Find which preset index the current value corresponds to
-  const committedIndex = useMemo(() => {
-    const idx = PRESETS.findIndex((p) => p.value === value);
-    if (idx >= 0) return idx;
-    let nearest = 0;
-    let minDist = Infinity;
-    for (let i = 0; i < PRESETS.length; i++) {
-      const dist = Math.abs(PRESETS[i].value - value);
-      if (dist < minDist) { minDist = dist; nearest = i; }
+}: ContextWindowSelectProps) {
+  const options = useMemo(() => {
+    const result: { tokens: number; label: string }[] = [];
+    const seen = new Set<number>();
+    const push = (tokens: number) => {
+      if (tokens > 0 && !seen.has(tokens)) {
+        seen.add(tokens);
+        result.push({ tokens, label: windowLabel(tokens) });
+      }
+    };
+    for (const tokens of COMMON_WINDOWS) {
+      if (maxCatalogWindow <= 0 || tokens <= maxCatalogWindow) push(tokens);
     }
-    return nearest;
-  }, [value]);
+    // Keep the model's documented max visible even when it is not a common preset.
+    if (maxCatalogWindow > 0) push(maxCatalogWindow);
+    // Keep an existing custom value selectable so the dropdown reflects the state.
+    if (value > 0) push(value);
+    return result.sort((a, b) => a.tokens - b.tokens);
+  }, [maxCatalogWindow, value]);
 
-  const [localIndex, setLocalIndex] = useState(committedIndex);
+  const selectedKey = options.some((option) => option.tokens === value)
+    ? String(value)
+    : "";
 
-  // Commit a preset index
-  const commitIndex = useCallback(
-    (idx: number) => {
-      const clamped = Math.max(0, Math.min(PRESETS.length - 1, idx));
-      setLocalIndex(clamped);
-      const selected = PRESETS[clamped].value;
-      if (maxCatalogWindow > 0 && selected > maxCatalogWindow) {
+  const handleSelect = useCallback(
+    (raw: string | null) => {
+      if (raw === null) return;
+      const tokens = Number(raw);
+      if (!Number.isFinite(tokens) || tokens <= 0) return;
+      if (maxCatalogWindow > 0 && tokens > maxCatalogWindow) {
         toast.warning("超出该模型最大上下文限制", {
           description: `该模型最大上下文为 ${formatTokens(maxCatalogWindow)} tokens，已自动调整为最大值`,
         });
         onChange(maxCatalogWindow);
-      } else {
-        onChange(selected);
+        return;
       }
+      onChange(tokens);
     },
     [maxCatalogWindow, onChange],
   );
 
-  // Calculate nearest index from pointer X position on track
-  const indexFromPointer = useCallback((clientX: number): number => {
-    const track = trackRef.current;
-    if (!track) return localIndex;
-    const rect = track.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return Math.round(ratio * (PRESETS.length - 1));
-  }, [localIndex]);
-
-  // Pointer down on track: snap immediately + start drag
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault();
-      draggingRef.current = true;
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      commitIndex(indexFromPointer(e.clientX));
-    },
-    [commitIndex, indexFromPointer],
-  );
-
-  // Pointer move while dragging
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!draggingRef.current) return;
-      commitIndex(indexFromPointer(e.clientX));
-    },
-    [commitIndex, indexFromPointer],
-  );
-
-  // Pointer up: end drag
-  const handlePointerUp = useCallback(() => {
-    draggingRef.current = false;
-  }, []);
-
-  // Display: show preset label when value matches, otherwise format
-  const displayValue = useMemo(() => {
-    const match = PRESETS.find((p) => p.value === value);
-    if (match) return match.label;
-    if (value > 0) return formatTokens(value);
-    return PRESETS[localIndex]?.label ?? "?";
-  }, [value, localIndex]);
-
-  // Thumb position as percentage
-  const thumbPct = (localIndex / (PRESETS.length - 1)) * 100;
-
   return (
     <Field>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <FieldLabel>上下文窗口</FieldLabel>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs font-medium text-foreground tabular-nums">
-            {displayValue}
+        {source === "inferred" && (
+          <span className="rounded border border-dashed border-muted-foreground/40 px-1 py-0.5 text-[10px] text-muted-foreground">
+            推断
           </span>
-          {source === "inferred" && (
-            <span className="rounded border border-dashed border-muted-foreground/40 px-1 py-0.5 text-[10px] text-muted-foreground">
-              推断
-            </span>
-          )}
-          <CustomContextPopover
-            value={value}
-            maxCatalogWindow={maxCatalogWindow}
-            onChange={onChange}
-          />
-        </div>
+        )}
       </div>
-      <div className="flex flex-col gap-1.5 pt-2">
-        {/* Custom track with pointer events */}
-        <div
-          ref={trackRef}
-          className="relative h-6 cursor-pointer touch-none select-none"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-        >
-          {/* Track background */}
-          <div className="absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-muted" />
-          {/* Filled portion */}
-          <div
-            className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-primary transition-[width] duration-100"
-            style={{ width: `${thumbPct}%` }}
-          />
-          {/* Thumb */}
-          <div
-            className="absolute top-1/2 size-4.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-primary bg-white shadow-sm transition-[left] duration-100 active:cursor-grabbing"
-            style={{ left: `${thumbPct}%` }}
-          />
-        </div>
-        {/* Preset labels */}
-        <div className="flex justify-between px-0.5">
-          {PRESETS.map((p, i) => (
-            <button
-              key={p.value}
-              type="button"
-              onClick={() => commitIndex(i)}
-              className={cn(
-                "rounded px-1 py-0.5 text-[10px] transition-all hover:text-foreground",
-                localIndex === i
-                  ? "bg-primary/10 font-semibold text-primary"
-                  : "text-muted-foreground",
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center gap-2">
+        <Select value={selectedKey} onValueChange={handleSelect}>
+          <SelectTrigger aria-label="上下文窗口" className="w-full sm:w-64">
+            <SelectValue placeholder="选择上下文窗口" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {options.map((option) => (
+                <SelectItem key={option.tokens} value={String(option.tokens)}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <CustomContextPopover
+          value={value}
+          maxCatalogWindow={maxCatalogWindow}
+          onChange={onChange}
+        />
       </div>
       {maxCatalogWindow > 0 && value > maxCatalogWindow && (
         <FieldDescription className="text-destructive">
