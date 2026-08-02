@@ -11,12 +11,17 @@ import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallItem } from "@/runtime/types";
 import { formatToolCall } from "./toolLabels";
+import { toolRenderers } from "./toolRenderers";
 
 interface ToolCallStepProps {
   item: ToolCallItem;
 }
 
 export function ToolCallStep({ item }: ToolCallStepProps) {
+  const Renderer = toolRenderers[item.toolName];
+  if (Renderer !== undefined) {
+    return <Renderer item={item} />;
+  }
   const label = formatToolCall(item.toolName, item.arguments);
   const [expanded, setExpanded] = useState(false);
   const isRunning = item.status === "running";
