@@ -91,6 +91,8 @@ export interface TaskSummary {
   created_at: string;
   updated_at: string;
   latest_sequence: number;
+  /** Number of validated artifacts produced by the task (absent in older snapshots). */
+  artifact_count?: number;
 }
 
 export interface RunRecord {

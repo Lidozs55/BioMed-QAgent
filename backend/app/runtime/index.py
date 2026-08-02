@@ -24,7 +24,10 @@ from app.domain.contracts import (
     TaskSummary,
 )
 from app.runtime.event_store import CorruptEventLogError, EventStore
-from app.runtime.state import reduce_task_event
+from app.runtime.state import (
+    count_artifact_produced_events,
+    reduce_task_event,
+)
 
 DEFAULT_TASK_PAGE_LIMIT = default_settings.task_page_size
 MAX_TASK_PAGE_LIMIT = default_settings.task_page_max_size
@@ -185,7 +188,8 @@ class TaskIndex:
                 active_run_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                latest_sequence INTEGER NOT NULL
+                latest_sequence INTEGER NOT NULL,
+                artifact_count INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_task_summaries_history
                 ON task_summaries(created_at DESC, task_id DESC);
@@ -206,6 +210,11 @@ class TaskIndex:
             connection.execute(
                 "ALTER TABLE task_summaries "
                 "ADD COLUMN databases TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "artifact_count" not in columns:
+            connection.execute(
+                "ALTER TABLE task_summaries "
+                "ADD COLUMN artifact_count INTEGER NOT NULL DEFAULT 0"
             )
         connection.commit()
 
@@ -242,8 +251,8 @@ class TaskIndex:
             """
             INSERT INTO task_summaries (
                 task_id, mode, databases, title, status, active_run_id,
-                created_at, updated_at, latest_sequence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, latest_sequence, artifact_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 mode = excluded.mode,
                 databases = excluded.databases,
@@ -251,7 +260,8 @@ class TaskIndex:
                 status = excluded.status,
                 active_run_id = excluded.active_run_id,
                 updated_at = excluded.updated_at,
-                latest_sequence = excluded.latest_sequence
+                latest_sequence = excluded.latest_sequence,
+                artifact_count = excluded.artifact_count
             """,
             (
                 task.task_id,
@@ -263,6 +273,7 @@ class TaskIndex:
                 _utc_text(task.created_at),
                 _utc_text(task.updated_at),
                 task.latest_sequence,
+                task.artifact_count,
             ),
         )
         if include_requests:
@@ -381,6 +392,7 @@ class TaskIndex:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             latest_sequence=row["latest_sequence"],
+            artifact_count=row["artifact_count"],
         )
 
     def _rebuild_sync(self) -> None:
@@ -394,14 +406,30 @@ class TaskIndex:
                 snapshot_path = task_dir / "state" / "task_snapshot.json"
                 if not snapshot_path.is_file():
                     continue
-                snapshot = TaskSnapshot.model_validate_json(
-                    snapshot_path.read_text("utf-8")
-                )
+                raw_snapshot = json.loads(snapshot_path.read_text("utf-8"))
+                snapshot = TaskSnapshot.model_validate(raw_snapshot)
                 if task_dir.name != snapshot.task.task_id:
                     raise ValueError(
                         "task directory name does not match snapshot task_id: "
                         f"{task_dir.name} != {snapshot.task.task_id}"
                     )
+                if "artifact_count" not in raw_snapshot.get("task", {}):
+                    historical_events = event_store.read(
+                        snapshot.task.task_id,
+                        after_sequence=0,
+                    )
+                    legacy_count = count_artifact_produced_events(
+                        historical_events,
+                        through_sequence=snapshot.task.latest_sequence,
+                    )
+                    if legacy_count > 0:
+                        snapshot = snapshot.model_copy(
+                            update={
+                                "task": snapshot.task.model_copy(
+                                    update={"artifact_count": legacy_count}
+                                )
+                            }
+                        )
                 events = event_store.read(
                     snapshot.task.task_id,
                     after_sequence=snapshot.task.latest_sequence,

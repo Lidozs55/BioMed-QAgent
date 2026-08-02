@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
@@ -8,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from app.config import Settings
 from app.domain.contracts import (
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     RunQueuedPayload,
     RunRecord,
     RunStatus,
@@ -158,9 +161,25 @@ async def test_index_migrates_legacy_summary_table_with_empty_databases(
     try:
         page = await index.list_tasks()
         assert page.tasks[0].databases == []
+        assert page.tasks[0].artifact_count == 0
         await index.upsert_snapshot(snapshot("task_legacy_index", databases=["geo"]))
         updated = await index.list_tasks()
         assert updated.tasks[0].databases == ["geo"]
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_persists_artifact_count(tmp_path) -> None:
+    tasks_dir = tmp_path / "tasks"
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        base = snapshot("task_artifact_count")
+        base.task = base.task.model_copy(update={"artifact_count": 3})
+        await index.upsert_snapshot(base)
+        listed = await index.list_tasks()
+        assert listed.tasks[0].artifact_count == 3
     finally:
         await index.close()
 
@@ -583,6 +602,60 @@ async def test_index_rebuilds_from_snapshot_and_newer_events(tmp_path) -> None:
             task_id=task_id,
             run_id="run_recovered",
         )
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    task_id = "task_legacy_artifacts"
+    initial = snapshot(
+        task_id,
+        request_id="req_legacy",
+        run_id="run_legacy",
+        status=RunStatus.COMPLETED,
+    )
+    initial = initial.model_copy(
+        update={"task": initial.task.model_copy(update={"latest_sequence": 2})}
+    )
+    state_dir = tasks_dir / task_id / "state"
+    state_dir.mkdir(parents=True)
+    raw = initial.model_dump(mode="json")
+    raw["task"].pop("artifact_count")
+    (state_dir / "task_snapshot.json").write_text(
+        json.dumps(raw, ensure_ascii=False) + "\n",
+        "utf-8",
+    )
+    event_store = EventStore(tasks_dir)
+    for sequence, artifact_id in ((1, "artifact_a"), (2, "artifact_b")):
+        event_store.append(
+            build_event(
+                task_id=task_id,
+                run_id="run_legacy",
+                sequence=sequence,
+                timestamp=NOW + timedelta(seconds=sequence),
+                payload=ArtifactProducedPayload(
+                    artifact=ArtifactManifestEntry(
+                        artifact_id=artifact_id,
+                        name=f"{artifact_id}.csv",
+                        relative_path=f"artifacts/{artifact_id}.csv",
+                        media_type="text/csv",
+                        size_bytes=12,
+                        sha256="0" * 64,
+                        generated_by_step_id="step_legacy",
+                    )
+                ),
+            )
+        )
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        await index.rebuild()
+        listed = await index.list_tasks()
+        assert listed.tasks[0].artifact_count == 2
     finally:
         await index.close()
 

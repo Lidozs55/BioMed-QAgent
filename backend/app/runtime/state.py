@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from app.domain.contracts import (
+    ArtifactProducedPayload,
     EventEnvelope,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -334,6 +337,10 @@ def reduce_task_event(
     else:
         status = snapshot.task.status
 
+    artifact_count = snapshot.task.artifact_count
+    if isinstance(payload, ArtifactProducedPayload):
+        artifact_count += 1
+
     active_run_id = snapshot.task.active_run_id
     if isinstance(payload, RunQueuedPayload) or type(payload) in _STATUS_PAYLOADS:
         active_run_id = None if status in _TERMINAL_STATUSES else event.run_id
@@ -344,8 +351,23 @@ def reduce_task_event(
             "active_run_id": active_run_id,
             "updated_at": event.timestamp,
             "latest_sequence": event.sequence,
+            "artifact_count": artifact_count,
         }
     )
     return snapshot.model_copy(
         update={"task": task, "runs": runs, "subagents": subagents}
+    )
+
+
+def count_artifact_produced_events(
+    events: Iterable[EventEnvelope],
+    *,
+    through_sequence: int | None = None,
+) -> int:
+    """Count validated artifact events for legacy snapshot backfill."""
+    return sum(
+        1
+        for event in events
+        if isinstance(event.payload, ArtifactProducedPayload)
+        and (through_sequence is None or event.sequence <= through_sequence)
     )

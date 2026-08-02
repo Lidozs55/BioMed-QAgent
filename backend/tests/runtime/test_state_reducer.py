@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.domain.contracts import (
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     AssistantDeltaPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -65,6 +67,50 @@ def test_reducer_projects_legal_run_lifecycle_without_mutating_input() -> None:
     assert snapshot.task.status is RunStatus.COMPLETED
     assert snapshot.task.active_run_id is None
     assert snapshot.task.latest_sequence == 4
+
+
+def test_reducer_counts_artifact_produced_events() -> None:
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            2,
+            RunStartedPayload(),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            3,
+            ArtifactProducedPayload(
+                artifact=ArtifactManifestEntry(
+                    artifact_id="artifact_123",
+                    name="result.csv",
+                    relative_path="artifacts/result.csv",
+                    media_type="text/csv",
+                    size_bytes=42,
+                    sha256="0" * 64,
+                    generated_by_step_id="stage_123",
+                )
+            ),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            4,
+            RunFinalizingPayload(),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            5,
+            RunCompletedPayload(),
+        ),
+    )
+
+    assert snapshot.task.artifact_count == 1
 
 
 def runtime_event(

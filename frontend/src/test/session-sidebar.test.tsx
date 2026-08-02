@@ -18,6 +18,7 @@ function summary(
   taskId: string,
   status: RunStatus,
   title = taskId,
+  artifactCount?: number,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -36,6 +37,7 @@ function summary(
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
     latest_sequence: 1,
+    ...(artifactCount === undefined ? {} : { artifact_count: artifactCount }),
   };
 }
 
@@ -291,15 +293,68 @@ describe("SessionSidebar", () => {
       screen.getByRole("button", { name }).querySelector("svg");
     expect(iconFor("Running 运行中")).toHaveClass("text-primary");
     expect(iconFor("Queued 排队中")).toHaveClass("text-primary");
-    expect(iconFor("Completed 已完成")).not.toHaveClass(
-      "text-primary",
-      "text-destructive",
+    expect(iconFor("Completed 已完成")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
     );
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
     expect(iconFor("Cancelled 已取消")).toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
     expect(container.querySelector('[data-slot="badge"]')).not.toHaveTextContent(
       /运行中|排队中|已完成|失败|已取消|已中断/,
+    );
+  });
+
+  it("colors terminal indicators by structured data outcome", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("with_data", "completed", "With Data", 3),
+          summary("without_data", "completed", "No Data", 0),
+          summary("error", "failed", "Error"),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: summary("silent", "failed", "Silent", 0),
+      runs: [
+        {
+          run_id: "run_silent",
+          task_id: "silent",
+          request_id: "req_silent",
+          status: "failed",
+          input: "question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: CREATED_AT,
+          error:
+            "agent completed without producing any artifacts (manifest missing or unchanged)",
+        },
+      ],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("With Data 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("No Data 已完成")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
+    );
+    expect(iconFor("Error 失败")).toHaveClass("text-destructive");
+    expect(iconFor("Silent 失败")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
     );
   });
 
