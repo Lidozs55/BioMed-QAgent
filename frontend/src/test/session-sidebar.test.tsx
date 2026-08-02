@@ -19,6 +19,7 @@ function summary(
   status: RunStatus,
   title = taskId,
   artifactCount?: number,
+  noArtifactFailure?: boolean,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -38,6 +39,9 @@ function summary(
     updated_at: CREATED_AT,
     latest_sequence: 1,
     ...(artifactCount === undefined ? {} : { artifact_count: artifactCount }),
+    ...(noArtifactFailure === undefined
+      ? {}
+      : { no_artifact_failure: noArtifactFailure }),
   };
 }
 
@@ -322,6 +326,7 @@ describe("SessionSidebar", () => {
           summary("with_data", "completed", "With Data", 3),
           summary("without_data", "completed", "No Data", 0),
           summary("error", "failed", "Error"),
+          summary("silent_summary", "failed", "Silent Summary", 0, true),
         ],
         next_cursor: null,
       },
@@ -362,6 +367,10 @@ describe("SessionSidebar", () => {
     );
     expect(iconFor("Error 失败")).toHaveClass("text-destructive");
     expect(iconFor("Silent 失败")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
+    );
+    expect(iconFor("Silent Summary 失败")).toHaveClass(
       "text-sky-600",
       "dark:text-sky-400",
     );

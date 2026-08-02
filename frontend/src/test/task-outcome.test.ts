@@ -77,4 +77,21 @@ describe("taskOutcome", () => {
     expect(isNoArtifactFailure(silent)).toBe(true);
     expect(taskOutcome(silent)).toBe("no_data");
   });
+
+  it("prefers data when the task produced validated artifacts", () => {
+    const task = createTaskProjection({
+      ...summary("g", "failed", 2),
+      no_artifact_failure: true,
+    });
+    expect(taskOutcome(task)).toBe("data");
+  });
+
+  it("classifies a summary-only no-artifact failure as no_data", () => {
+    const task = createTaskProjection({
+      ...summary("d", "failed"),
+      no_artifact_failure: true,
+    });
+    expect(isNoArtifactFailure(task)).toBe(true);
+    expect(taskOutcome(task)).toBe("no_data");
+  });
 });

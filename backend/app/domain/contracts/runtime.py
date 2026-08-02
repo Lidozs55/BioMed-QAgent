@@ -56,6 +56,7 @@ class TaskSummary(ContractModel):
     updated_at: datetime
     latest_sequence: int = Field(default=0, ge=0)
     artifact_count: int = Field(default=0, ge=0)
+    no_artifact_failure: bool = Field(default=False)
 
 
 class MessageRecord(ContractModel):

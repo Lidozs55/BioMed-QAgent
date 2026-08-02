@@ -176,10 +176,13 @@ async def test_index_persists_artifact_count(tmp_path) -> None:
     await index.initialize()
     try:
         base = snapshot("task_artifact_count")
-        base.task = base.task.model_copy(update={"artifact_count": 3})
+        base.task = base.task.model_copy(
+            update={"artifact_count": 3, "no_artifact_failure": True}
+        )
         await index.upsert_snapshot(base)
         listed = await index.list_tasks()
         assert listed.tasks[0].artifact_count == 3
+        assert listed.tasks[0].no_artifact_failure is True
     finally:
         await index.close()
 
@@ -656,6 +659,51 @@ async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
         await index.rebuild()
         listed = await index.list_tasks()
         assert listed.tasks[0].artifact_count == 2
+    finally:
+        await index.close()
+
+@pytest.mark.asyncio
+async def test_index_rebuild_backfills_legacy_no_artifact_failure(
+    tmp_path,
+) -> None:
+    tasks_dir = tmp_path / "tasks"
+    task_id = "task_legacy_no_artifact"
+    initial = snapshot(
+        task_id,
+        request_id="req_legacy",
+        run_id="run_legacy",
+        status=RunStatus.FAILED,
+    )
+    initial = initial.model_copy(
+        update={
+            "runs": [
+                initial.runs[0].model_copy(
+                    update={
+                        "status": RunStatus.FAILED,
+                        "error": (
+                            "agent completed without producing any artifacts "
+                            "(manifest missing or unchanged)"
+                        ),
+                    }
+                )
+            ],
+        }
+    )
+    state_dir = tasks_dir / task_id / "state"
+    state_dir.mkdir(parents=True)
+    raw = initial.model_dump(mode="json")
+    raw["task"].pop("artifact_count")
+    raw["task"].pop("no_artifact_failure")
+    (state_dir / "task_snapshot.json").write_text(
+        json.dumps(raw, ensure_ascii=False) + "\n",
+        "utf-8",
+    )
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        await index.rebuild()
+        listed = await index.list_tasks()
+        assert listed.tasks[0].no_artifact_failure is True
     finally:
         await index.close()
 

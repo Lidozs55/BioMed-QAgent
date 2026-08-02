@@ -26,6 +26,7 @@ from app.domain.contracts import (
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.state import (
     count_artifact_produced_events,
+    no_artifact_failure_from_runs,
     reduce_task_event,
 )
 
@@ -189,7 +190,8 @@ class TaskIndex:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 latest_sequence INTEGER NOT NULL,
-                artifact_count INTEGER NOT NULL DEFAULT 0
+                artifact_count INTEGER NOT NULL DEFAULT 0,
+                no_artifact_failure INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_task_summaries_history
                 ON task_summaries(created_at DESC, task_id DESC);
@@ -215,6 +217,11 @@ class TaskIndex:
             connection.execute(
                 "ALTER TABLE task_summaries "
                 "ADD COLUMN artifact_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "no_artifact_failure" not in columns:
+            connection.execute(
+                "ALTER TABLE task_summaries "
+                "ADD COLUMN no_artifact_failure INTEGER NOT NULL DEFAULT 0"
             )
         connection.commit()
 
@@ -251,8 +258,9 @@ class TaskIndex:
             """
             INSERT INTO task_summaries (
                 task_id, mode, databases, title, status, active_run_id,
-                created_at, updated_at, latest_sequence, artifact_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, latest_sequence, artifact_count,
+                no_artifact_failure
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 mode = excluded.mode,
                 databases = excluded.databases,
@@ -261,7 +269,8 @@ class TaskIndex:
                 active_run_id = excluded.active_run_id,
                 updated_at = excluded.updated_at,
                 latest_sequence = excluded.latest_sequence,
-                artifact_count = excluded.artifact_count
+                artifact_count = excluded.artifact_count,
+                no_artifact_failure = excluded.no_artifact_failure
             """,
             (
                 task.task_id,
@@ -274,6 +283,7 @@ class TaskIndex:
                 _utc_text(task.updated_at),
                 task.latest_sequence,
                 task.artifact_count,
+                task.no_artifact_failure,
             ),
         )
         if include_requests:
@@ -393,6 +403,7 @@ class TaskIndex:
             updated_at=row["updated_at"],
             latest_sequence=row["latest_sequence"],
             artifact_count=row["artifact_count"],
+            no_artifact_failure=bool(row["no_artifact_failure"]),
         )
 
     def _rebuild_sync(self) -> None:
@@ -430,6 +441,17 @@ class TaskIndex:
                                 )
                             }
                         )
+                if (
+                    "no_artifact_failure" not in raw_snapshot.get("task", {})
+                    and no_artifact_failure_from_runs(snapshot.runs)
+                ):
+                    snapshot = snapshot.model_copy(
+                        update={
+                            "task": snapshot.task.model_copy(
+                                update={"no_artifact_failure": True}
+                            )
+                        }
+                    )
                 events = event_store.read(
                     snapshot.task.task_id,
                     after_sequence=snapshot.task.latest_sequence,

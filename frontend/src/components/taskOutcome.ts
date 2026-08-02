@@ -17,6 +17,7 @@ export function taskHasArtifacts(task: TaskProjection): boolean {
 
 export function isNoArtifactFailure(task: TaskProjection): boolean {
   if (task.summary.status !== "failed") return false;
+  if (task.summary.no_artifact_failure === true) return true;
   const latestRunId = task.runOrder[task.runOrder.length - 1];
   const error =
     latestRunId === undefined ? null : task.runsById[latestRunId]?.error ?? null;
@@ -26,11 +27,11 @@ export function isNoArtifactFailure(task: TaskProjection): boolean {
   );
 }
 
-/** Terminal sidebar outcome: red error stays null; blue/no-data and green/data are explicit. */
+/** Terminal sidebar outcome: green/data wins, red error stays null, blue/no-data is explicit. */
 export function taskOutcome(task: TaskProjection): TaskOutcome | null {
-  if (task.summary.status === "completed") {
-    return taskHasArtifacts(task) ? "data" : "no_data";
+  if (taskHasArtifacts(task)) return "data";
+  if (task.summary.status === "completed" || isNoArtifactFailure(task)) {
+    return "no_data";
   }
-  if (isNoArtifactFailure(task)) return "no_data";
   return null;
 }

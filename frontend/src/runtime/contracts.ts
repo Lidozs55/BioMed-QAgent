@@ -93,6 +93,8 @@ export interface TaskSummary {
   latest_sequence: number;
   /** Number of validated artifacts produced by the task (absent in older snapshots). */
   artifact_count?: number;
+  /** True when the latest run failed only because no validated artifacts were produced. */
+  no_artifact_failure?: boolean;
 }
 
 export interface RunRecord {
