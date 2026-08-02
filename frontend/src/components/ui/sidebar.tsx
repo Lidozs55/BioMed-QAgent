@@ -258,8 +258,9 @@ function SidebarTrigger({
   const label = state === "expanded" ? "隐藏导航" : "展开导航"
 
   return (
-    <Tooltip delay={0}>
+    <Tooltip>
       <TooltipTrigger
+        delay={0}
         render={
           <Button
             data-sidebar="trigger"
