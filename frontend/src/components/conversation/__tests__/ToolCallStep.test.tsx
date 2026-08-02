@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ToolCallStep } from "@/components/conversation/ToolCallStep";
+import { toolRenderers } from "@/components/conversation/toolRenderers";
 import type { ToolCallItem } from "@/runtime/types";
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";
@@ -121,5 +122,38 @@ describe("ToolCallStep", () => {
     fireEvent.click(screen.getByRole("button"));
     expect(screen.queryByText("输出")).not.toBeInTheDocument();
     expect(screen.getByText("输入参数")).toBeInTheDocument();
+  });
+  it("renders find_skill via SkillMarker instead of '调用 find_skill'", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "find_skill",
+          arguments: { text: "网页截图" },
+          output: null,
+        })}
+      />,
+    );
+    expect(screen.getByText("检索技能")).toBeInTheDocument();
+    expect(screen.queryByText(/调用 find_skill/)).not.toBeInTheDocument();
+  });
+
+  it("renders invoke_skill via SkillMarker with the skill name", () => {
+    render(
+      <ToolCallStep
+        item={makeToolCall({
+          toolName: "invoke_skill",
+          arguments: { skill: "web_visual_capture" },
+          output: null,
+        })}
+      />,
+    );
+    expect(screen.getByText("调用 web_visual_capture")).toBeInTheDocument();
+  });
+
+  it("registers custom renderers for find_skill and invoke_skill", () => {
+    expect(Object.keys(toolRenderers).sort()).toEqual([
+      "find_skill",
+      "invoke_skill",
+    ]);
   });
 });

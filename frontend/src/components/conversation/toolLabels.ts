@@ -50,6 +50,11 @@ const TOOL_LABEL_MAP: Record<string, ToolLabelFormatter> = {
     target: "网页区域截图",
     details: args?.url ? String(args.url) : undefined,
   }),
+  find_skill: () => ({ verb: "检索", target: "技能" }),
+  invoke_skill: (args) => ({
+    verb: "调用",
+    target: args?.skill ? String(args.skill) : "技能",
+  }),
 };
 
 export function formatToolCall(
