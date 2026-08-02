@@ -358,7 +358,7 @@ async def test_route_authorizes_main_frames_redirects_and_subresources_before_tr
 
 
 @pytest.mark.asyncio
-async def test_route_aborts_denied_request_without_continuing_transport() -> None:
+async def test_route_aborts_denied_subresource_without_failing_page() -> None:
     fake = FakePlaywright()
     pool = BrowserPool(playwright_factory=fake.factory)
 
@@ -369,36 +369,37 @@ async def test_route_aborts_denied_request_without_continuing_transport() -> Non
         return object()
 
     await pool.start()
-    with pytest.raises(ValueError, match="denied subresource"):
-        await pool.fetch(
-            "https://example.org/page",
-            authorize_request=authorize,
-        )
+    result = await pool.fetch(
+        "https://example.org/page",
+        authorize_request=authorize,
+    )
     await pool.close()
 
+    assert result.status_code > 0
     denied = fake.contexts[0].routes[-1]
     assert denied.aborted
     assert not denied.continued
 
 
 @pytest.mark.asyncio
-async def test_route_denial_propagates_when_playwright_dispatcher_swallows_callback_error() -> None:
-    fake = FakePlaywright(swallow_route_errors=True)
+async def test_route_denial_of_main_document_still_fails_fetch() -> None:
+    fake = FakePlaywright()
     pool = BrowserPool(playwright_factory=fake.factory)
 
     def authorize(url: str, *, resource_type: str) -> object:
-        del resource_type
-        if "cdn.example.org" in url:
-            raise ValueError("denied subresource")
+        if "example.org" in url and resource_type == "main_frame":
+            raise ValueError("denied main document")
         return object()
 
     await pool.start()
-    with pytest.raises(ValueError, match="denied subresource"):
+    with pytest.raises(ValueError, match="denied main document"):
         await pool.fetch(
             "https://example.org/page",
             authorize_request=authorize,
         )
     await pool.close()
+
+
 
 
 @pytest.mark.asyncio

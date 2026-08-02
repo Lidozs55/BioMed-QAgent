@@ -122,11 +122,15 @@ def _fallback_error(source: str, page_url: str, error: CrawlError) -> str:
         "Returns JSON with compound records (CID, name, formula, MW, etc.). "
         "Use ``get_compound`` to get full details for a specific CID."
     ),
+    # max_results defaults to None; the SDK strict-schema conversion strips
+    # default=None keys and still marks the param required, so this tool must
+    # opt out of strict mode for max_results to stay optional.
+    strict_mode=False,
 )
 async def search_pubchem(
     ctx: RunContextWrapper[Any],
     term: str,
-    max_results: int = 20,
+    max_results: int | None = None,
 ) -> str:
     """Search PubChem for chemical compounds matching a name or keyword.
 
@@ -144,6 +148,7 @@ async def search_pubchem(
         On failure: JSON with status="error" and attempted methods.
     """
     run_ctx: RunContext = ctx.context
+    max_results = max_results or 20
     encoded_term = quote(term)
 
     # PUG-REST: /compound/name/{name}/property/.../JSON

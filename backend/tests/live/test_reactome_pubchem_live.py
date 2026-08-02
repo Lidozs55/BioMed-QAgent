@@ -9,13 +9,16 @@ from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.skills.builtin.acquisition.pubchem import get_compound
 from app.skills.builtin.acquisition.reactome import search_reactome
+from app.tools.crawler import CrawlerFacade
 
 pytestmark = pytest.mark.live
 
 
 def _context(tool_name: str) -> ToolContext:
+    run_context = RunContext(task_id=f"live_{tool_name}")
+    run_context.bind_crawler_facade(CrawlerFacade())
     return ToolContext(
-        context=RunContext(task_id=f"live_{tool_name}"),
+        context=run_context,
         tool_name=tool_name,
         tool_call_id="live_call",
         tool_arguments="{}",

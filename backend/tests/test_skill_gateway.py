@@ -558,3 +558,16 @@ async def test_find_skill_source_alias_browser_matches_browser_skill() -> None:
     names = [s["name"] for s in result["skills"]]
 
     assert names == ["browser_fallback"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_skill_accepts_omitted_defaulted_parameter() -> None:
+    """The SDK marks defaulted params as required in strict schemas; the
+    gateway must treat them as optional so callers may omit them (e.g. the
+    agent calls search_pubchem without max_results)."""
+    _, invoke_skill = build_skill_gateway(SkillCatalog([_skill()]))
+    ctx = _context()
+    result = await _call(invoke_skill, ctx, skill="geo_fetch", operation="fetch_record", arguments={"accession": "GSE1"})
+
+    assert result["status"] == "ok"
+    assert result["result"]["limit"] == 1
