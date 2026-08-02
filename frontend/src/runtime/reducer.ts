@@ -327,7 +327,12 @@ export function mergeOlderMessagePage(
     messages: mergeProjectedMessages(task.messages, incoming),
     olderMessagesCursor: page.next_cursor,
   };
-  const taskWithItems = mergeMessagesIntoItems(mergedTask);
+  // Older message pages load messages from before the replayed event window;
+  // they have no run_queued events to align with, so projection must fall
+  // back to ordinals (which are strictly increasing across the full session).
+  const taskWithItems = mergeMessagesIntoItems(mergedTask, {
+    preserveUserSequences: false,
+  });
   return {
     ...state,
     tasksById: {
@@ -771,9 +776,22 @@ function stripLastAssistantSegmentToolArgs(
 
 function projectMessageToItem(
   message: ProjectedMessage,
+  userSequenceByRun?: ReadonlyMap<string, number>,
 ): ConversationItem | null {
   const runId = message.runId ?? "";
-  const sequence = message.sequence ?? message.ordinal ?? 0;
+  // User messages are re-projected from snapshot.messages during hydration.
+  // Prefer the run_queued event sequence (same clock as event-driven items)
+  // so sorting stays chronological; fall back to message.sequence ?? ordinal
+  // when the event was not replayed (e.g. truncated event page).
+  const userEventSequence =
+    message.role === "user" && runId !== ""
+      ? userSequenceByRun?.get(runId)
+      : undefined;
+  const sequence =
+    userEventSequence ??
+    message.sequence ??
+    message.ordinal ??
+    0;
   if (message.role === "user") {
     return {
       kind: "user_message",
@@ -805,7 +823,9 @@ function projectMessageToItem(
 
 function mergeMessagesIntoItems(
   task: TaskProjection,
+  options: { preserveUserSequences?: boolean } = {},
 ): TaskProjection {
+  const preserveUserSequences = options.preserveUserSequences ?? true;
   const userRunIds = new Set(
     task.messages
       .filter(
@@ -823,8 +843,12 @@ function mergeMessagesIntoItems(
       )
       .map((item) => item.runId),
   );
+  const userSequenceByRun = new Map<string, number>();
   const items = task.items.filter((item) => {
     if (item.kind === "user_message" && userRunIds.has(item.runId)) {
+      if (preserveUserSequences) {
+        userSequenceByRun.set(item.runId, item.sequence);
+      }
       return false;
     }
     return !(
@@ -847,7 +871,10 @@ function mergeMessagesIntoItems(
     ) {
       continue;
     }
-    const item = projectMessageToItem(message);
+    const item = projectMessageToItem(
+      message,
+      preserveUserSequences ? userSequenceByRun : undefined,
+    );
     if (item === null) continue;
     next = upsertItem(next, item);
   }
