@@ -104,11 +104,27 @@ Gate。
   重新构建并验证，才标记为 `validated_final`。旧版本 Artifact 保留，不被新 Run
   原地覆盖。
 - Agent-only 数据源不自动等同于 Pipeline 支持；`pipeline_supported` 只表示该
-  来源已经完成相应的搜索、元数据、下载、解析和验证闭环。
+  来源已经完成相应的搜索、元数据、下载、解析和验证闭环。来源能力以
+  `SOURCE_CAPABILITIES` 单一事实表声明（TODO §1.4）：pubmed/geo/gdc/ucsc_xena/
+  reactome 为 `pipeline_supported`，pdb/pubchem/browser 为 `research_only`。
+  `TaskSpecification.declare_sources` 为每个选中来源生成输入级能力声明，
+  `run_research_pipeline` 按能力表拒绝非 pipeline-supported 来源并返回
+  `capabilities` 明细；skill catalog 的 `pipeline_supported` 与 `/databases`
+  的 `capability` 字段均从该表派生，避免两套声明漂移。
 - GDC Pipeline 首期仅接受显式 `project_id` + `data_type`（`gene-expression` 或
   `clinical`），Discovery 生成 GDC `SourceRecord`，Acquisition 通过 `/files` 选择
   稳定 TSV/TSV.GZ 文件并使用 `acquire_source()` 下载，Processing 严格拒绝不符合
   fixture 表布局的输入；mutation、CNV 和多源合并不在此支持边界内。
+- 多源确定性合并（TODO §1.2/§1.5.4）：当 `TaskSpecification` 选择 ≥2 个数据型数据集
+  （GDC/Xena）时，Processing 为每个数据集解析独立 `ParsedDataset`，通过
+  `alignment.align_fields` 生成真实字段映射、`alignment.merge_datasets` 垂向合并，
+  产出 `merged_dataset`（`parsed/{id}_merged.csv`）；Runner 将全部 `parsed_datasets`
+  与 `merged_dataset` 传入 Artifact Build，合并结果作为 `main_data.csv` 发布，
+  `field_mapping.csv` 按来源各一组真实映射，merge 步骤写入 `processing_log.csv`。
+  合并包与单源包一样重新经过 Artifact Build + Validation Gate：`dataset_catalog.csv`
+  每个输入数据集一行、`download_log.csv` 记录全部 attempt、`sample_metadata.csv` 按
+  来源行聚合、lineage 校验按行 asset_id 路由到各自源文件，并生成
+  `multi_source_manifest.csv`（dataset_id → database → row_count）声明合并构成。
 
 ### 2.5 Skill 和 Tool 的职责
 

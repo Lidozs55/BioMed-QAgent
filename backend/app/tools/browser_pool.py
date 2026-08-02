@@ -569,6 +569,11 @@ def _route_handler(
     async def handle(route: Any) -> None:
         request = route.request
         resource_type = _resource_type(request)
+        is_main_frame = (
+            request.is_navigation_request()
+            and request.frame.parent_frame is None
+            and resource_type == "main_frame"
+        )
         try:
             await asyncio.to_thread(
                 authorizer,
@@ -577,9 +582,16 @@ def _route_handler(
             )
             await proxy_lease.authorize_url(request.url)
         except BaseException as error:
-            route_errors.append(error)
+            if is_main_frame:
+                # Only a rejected main-document navigation is fatal; a
+                # subresource (script, image, font, fetch, ...) that fails
+                # the public-address check is aborted silently so the page
+                # body still renders.
+                route_errors.append(error)
             await route.abort()
-            raise
+            if is_main_frame:
+                raise
+            return
         await route.continue_()
 
     return handle

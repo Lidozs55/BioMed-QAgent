@@ -73,7 +73,11 @@ def build_skill_gateway(
         source filter.
         """
         snapshot = catalog.snapshot()
-        normalized_source = normalize_skill_search_text(source) if source is not None else None
+        normalized_source = (
+            normalize_skill_search_text(source)
+            if source is not None and source.strip()
+            else None
+        )
         candidates: list[SkillDescriptor] = []
         for descriptor in snapshot.skills.values():
             if not descriptor.enabled:
@@ -87,7 +91,18 @@ def build_skill_gateway(
                 if normalized_source not in normalized_supported_sources:
                     continue
             candidates.append(descriptor)
-        matches = resolved_search_strategy.search(candidates, text)
+        if not candidates:
+            matches = ()
+        else:
+            search_async = getattr(resolved_search_strategy, "search_async", None)
+            if search_async is not None:
+                matches = await search_async(
+                    candidates,
+                    text,
+                    ctx.context.model_settings,
+                )
+            else:
+                matches = resolved_search_strategy.search(candidates, text)
         if normalized_source is None:
             preferred_sources = {
                 normalize_skill_search_text(item) for item in ctx.context.preferred_sources
@@ -183,9 +198,25 @@ def build_skill_gateway(
                     operation=operation,
                 )
         try:
-            validator_class = validator_for(handle.tool.params_json_schema)
-            validator_class.check_schema(handle.tool.params_json_schema)
-            validator_class(handle.tool.params_json_schema).validate(arguments)
+            schema = handle.tool.params_json_schema
+            validator_class = validator_for(schema)
+            validator_class.check_schema(schema)
+            # The SDK marks every strict-schema property as required even when
+            # the parameter carries a default (see ensure_strict_json_schema).
+            # Treat defaulted properties as optional so callers may omit them.
+            required = list(schema.get("required", []))
+            defaulted = {
+                name
+                for name in required
+                if "default" in schema.get("properties", {}).get(name, {})
+            }
+            if defaulted:
+                effective = schema | {
+                    "required": [name for name in required if name not in defaulted]
+                }
+            else:
+                effective = schema
+            validator_class(effective).validate(arguments)
         except JsonSchemaValidationError as exc:
             return _error(
                 "invalid_arguments",

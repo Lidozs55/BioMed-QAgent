@@ -15,6 +15,7 @@ from app.agent_loop.context import RunContext
 from app.skills import gateway as gateway_module
 from app.skills.catalog import SkillCatalog, SkillDescriptor
 from app.skills.gateway import build_skill_gateway
+from app.skills.llm_search import LLMRerankingSkillSearchStrategy
 from app.skills.packages import SkillPackageLoader
 from app.skills.registry import SkillCategory, SkillDef
 from app.skills.search import SkillSearchStrategy
@@ -500,3 +501,73 @@ async def test_invoke_skill_returns_argument_validation_error() -> None:
 
     assert result["status"] == "error"
     assert result["error"]["code"] == "invalid_arguments"
+
+
+class _AsyncRecordingStrategy(LLMRerankingSkillSearchStrategy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_called = False
+
+    async def search_async(self, candidates, text, model_settings):  # type: ignore[override]
+        self.async_called = True
+        self.model_settings_arg = model_settings
+        return tuple(candidates)
+
+
+@pytest.mark.asyncio
+async def test_find_skill_dispatches_to_search_async_when_available() -> None:
+    strategy = _AsyncRecordingStrategy()
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]), search_strategy=strategy)
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="geo")
+
+    assert strategy.async_called is True
+    assert strategy.model_settings_arg is ctx.context.model_settings
+    assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "   "])
+async def test_find_skill_treats_blank_source_as_unspecified(
+    source: str,
+) -> None:
+    """LLM callers serialize an unset optional param as ''; that must behave
+    like ``source=None`` instead of filtering every candidate out."""
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]))
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="", source=source)
+
+    assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_find_skill_source_alias_browser_matches_browser_skill() -> None:
+    """source='browser' resolves browser_fallback via its supported_sources."""
+    browser = SkillDescriptor.from_skill_def(
+        SkillDef(
+            name="browser_fallback",
+            category=SkillCategory.ACQUISITION,
+            description="Browser fallback acquisition.",
+            supported_sources=["browser", "browser_fallback", "http", "web"],
+            tools=[fetch_record],
+        ),
+    )
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill(), browser]))
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="", source="browser")
+    names = [s["name"] for s in result["skills"]]
+
+    assert names == ["browser_fallback"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_skill_accepts_omitted_defaulted_parameter() -> None:
+    """The SDK marks defaulted params as required in strict schemas; the
+    gateway must treat them as optional so callers may omit them (e.g. the
+    agent calls search_pubchem without max_results)."""
+    _, invoke_skill = build_skill_gateway(SkillCatalog([_skill()]))
+    ctx = _context()
+    result = await _call(invoke_skill, ctx, skill="geo_fetch", operation="fetch_record", arguments={"accession": "GSE1"})
+
+    assert result["status"] == "ok"
+    assert result["result"]["limit"] == 1

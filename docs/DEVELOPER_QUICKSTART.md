@@ -507,3 +507,34 @@ uv run playwright install chromium
 ---
 
 > **📌 最后提醒：本项目配有完整的 AGENTS.md，你的 AI 工具能自动理解项目规则。遇到问题，先把 AGENTS.md 和 docs/ARCHITECTURE.md 丢给 AI，让它帮你定位。**
+
+## 已知陷阱:LLM 序列化未指定可选参数为空字符串
+
+Agent 调用 `function_tool` 时,未指定的可选参数(如 find_skill 的 `source`)会被
+LLM 序列化为 `""`(空字符串)而非省略。任何按 `param is not None` 判断"是否提供"
+的工具实现都会因此把所有候选过滤掉,表现为工具恒返回空。
+
+处理模式(见 `app/skills/gateway.py:_find_skill`):显式参数用
+`param is not None and param.strip()` 判断,空白字符串视为未提供。
+
+受影响面:所有 LLM 直接调用的 Function Tool 都要按此模式处理可选参数。
+
+## 已知陷阱:浏览器子资源拒绝导致整页失败(已修复)
+
+`BrowserPool._route_handler` 曾把所有被拒的子资源请求(脚本/图片/CDN,如
+IPv6 地址 2001::1 被 SSRF 防护拒绝)当作致命错误:`route.abort()` + `raise`,
+导致页面 close 时抛异常、`navigate_page` 整体失败。修复后仅**主文档导航**
+被拒才致命;子资源被拒只 abort(SSRF 防护保留,页面主体仍渲染)。若未来
+页面出现"导航失败但主文档正常"的回归,先查 `_route_handler` 的
+`is_main_frame` 判断。
+
+## 已知陷阱:SDK strict schema 把带默认值参数标 required
+
+OpenAI Agents SDK 的 `ensure_strict_json_schema` 把所有属性无条件加入
+`required`,即使参数有默认值(`default=None` 的键还会被剥离)。表现:Agent
+调用缺省可选参数时报 `'X' is a required property`。两层防护:
+1. `gateway._invoke_skill` 校验时把 `required` 中带 `default` 的属性视为可选
+   (覆盖非 None 默认值,如 `limit: int = 1`);
+2. 参数默认值为 `None` 时(`Optional[X] = None`)strict 会剥离 default 键,
+   需在 `@function_tool(strict_mode=False)` 显式退出 strict(如
+   `search_pubchem.max_results`)。

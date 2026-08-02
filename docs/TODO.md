@@ -24,9 +24,9 @@
 > `alignment.align_fields`，但 Runner 尚未传入多个 ParsedDataset，且未调用
 > `alignment.merge_datasets`，所以尚未形成真实多源合并。
 
-- [ ] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`
-- [ ] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）
-- [ ] **P0** 生成 `field_mapping.csv` 的真实映射关系（当前部分硬编码）
+- [x] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`——2026-07-31 执行：`run_processing` 新增多数据集分支（`_run_multi_dataset_processing`），当 spec 选择 ≥2 个数据型数据集（GDC/Xena）时逐个解析，`_build_field_alignment` 多数据集分支真实调用 `align_fields`；`merge_parsed_datasets` 公开函数直接调用 `align_fields` 构建映射
+- [x] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）——2026-07-31 执行：`merge_parsed_datasets` 通过旧模型适配器（`_to_legacy_parsed_datasets`）调用 `merge_datasets` 垂向合并，写入 `parsed/{id}_merged.csv` 并返回 `ParsedDataset`；`ProcessingOutput` 新增 `merged_dataset` 字段，Runner 将全部 `parsed_datasets` + `merged_dataset` 传入 artifact_build
+- [x] **P0** 生成 `field_mapping.csv` 的真实映射关系（当前部分硬编码）——2026-07-31 执行：`_build_field_mapping_rows` 对多数据集输出每个 dataset 一组真实映射（每 slot 对应一个 ParsedDataset 的 source_id/dataset_id），notes 标记 `alignment:align_fields`；`test_multisource_merge.py` 锁定 2 源合并发布（main_data.csv 行数、_source 列、双 source field_mapping、merge 步骤进入 processing_log）
 
 ### 1.3 清洗测试
 
@@ -39,7 +39,7 @@
 > Pipeline 支持。
 
 - [x] **P0** `/databases` 已返回 `pipeline_supported`
-- [ ] **P0** 补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源标记为 research-only/pending，只能作为调研或待接入来源
+- [x] **P0** 补齐 `TaskSpecification` / Pipeline 输入级别的能力声明，Agent-only 来源标记为 research-only/pending，只能作为调研或待接入来源——2026-07-31 执行：新增 `SourceCapability` 枚举与 `SOURCE_CAPABILITIES` 单一事实表（pubmed/geo/gdc/ucsc_xena/reactome = pipeline_supported；pdb/pubchem/browser = research_only），`TaskSpecification.declare_sources` 为每个选中来源生成 `SourceCapabilityDeclaration`（含 identifier/capability/note），未知来源标记 pending；`run_research_pipeline` 按能力表拒绝非 pipeline-supported 来源并返回 `capabilities` 明细；skill catalog 的 `pipeline_supported` 从能力表派生，`/databases` 响应新增 `capability` 字段；新增 `tests/pipeline/test_source_capabilities.py` 契约测试锁定能力边界
 - [x] **P0** Pipeline 当前不会按 `databases` 路由，仍固定执行 PubMed/GEO；`run_research_pipeline` 现在对未支持来源返回 `status=unsupported_databases`、`retryable=false`，不产生伪成功 Artifact
 - [ ] **P1** `pipeline/stages/acquisition.py` 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
 - [ ] **P2** 按验收标准新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力；未通过 search、metadata、download 测试前不得标记为 Pipeline 支持
@@ -91,10 +91,10 @@
 #### 1.5.4 Artifact 完整性（P1）
 
 - [ ] **P1** `artifact_build` 按传入的 `SourceAsset` 类型决定产出哪些 artifact（当前固定 13 个 GEO 侧写）
-- [ ] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）
-- [ ] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）
+- [x] **P1** 多源数据合并时生成 `multi_source_manifest.csv`（数据集 ID → 来源数据库 → 行数）——2026-08-01 执行：`_build_multi_source_manifest_rows` 按 `specification.datasets` 匹配 database/accession，每个输入 dataset 一行（含 row_count）；仅 `is_merged` 时写入，单源 artifact 集合不变；`test_artifact_build_publishes_merged_dataset_as_main_data` 断言 manifest 内容
+- [x] **P1** `dataset_catalog.csv` 支持非 GEO 条目（当前硬编码 GEO accession 字段）——2026-08-01 执行：`_build_dataset_catalog_rows` 多源分支每输入 dataset 一行（dataset_id/source_id/database/accession/experiment_type/sample_count），保证 merged `main_data.csv` 的 dataset_id 外键闭合
 - [ ] **P1** 中间结果与最终结果使用独立的 run/version 标识，旧版已验证 Artifact 不被新 Run 覆盖
-- [ ] **P1** 合并结果必须重新经过 Artifact Build + Validation Gate，不能由 Agent 直接写入正式 `artifacts/`
+- [x] **P1** 合并结果必须重新经过 Artifact Build + Validation Gate，不能由 Agent 直接写入正式 `artifacts/`——2026-08-01 执行：合并包闭环通过完整 Validation Gate——`download_log.csv` 记录全部 attempt（原只写首个）、`sample_metadata.csv` fallback 按行聚合 dataset_id/source_id、lineage 校验（`source_value_lineage`）按行 asset_id 路由到各自源文件（`_lines_for` + 缓存）；新增 `test_merged_package_passes_validation_gate` 端到端锁定 status=valid
 
 #### 1.5.5 Agent ↔ Pipeline 数据桥接与确定性合并（P1）
 
@@ -145,15 +145,15 @@
 
 ### 2.2 Xena 403 修复
 
-- [ ] **P1** 切换 download host 到 `toil.xenabrowser.net` 或加 browser fallback
-- [ ] **P1** 更新 `integrations/acquisition.py:_ALLOWED_HOSTS` 域名白名单
-- [ ] **P1** 更新 `test_skill_xena.py` 的 URL 硬断言
-- [ ] **P1** 移除 `test_all_data_sources_live.py:200-208` 的 xfail
+- [x] **P1** 切换 download host 到 `toil.xenabrowser.net` 或加 browser fallback——2026-08-01 核对：`download_xena` 已切换 S3 hub（`toil-xena-hub.s3.us-east-1.amazonaws.com/download/{dataset_id}.gz`），URL 构造回归测试（`test_download_xena_url_uses_gz_not_tsv_gz`）锁定
+- [x] **P1** 更新 `integrations/acquisition.py:_ALLOWED_HOSTS` 域名白名单——2026-08-01 核对：已含 `toil-xena-hub.s3.us-east-1.amazonaws.com`
+- [x] **P1** 更新 `test_skill_xena.py` 的 URL 硬断言——2026-08-01 核对：403/URL 构造断言均使用 toil hub
+- [ ] **P1** 移除 `test_all_data_sources_live.py:200-208` 的 xfail（live 网络验证，需真实外网可达后移除）
 
 ### 2.3 补全 download 工具
 
-- [ ] **P1** PubChem 增加 `download_pubchem`（SDF/MOL，走 `acquire_source()` → `SourceAsset`）
-- [ ] **P1** Reactome 增加独立 `download_reactome` skill（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）；Pipeline 显式 pathway participants 已完成
+- [x] **P1** PubChem 增加 `download_pubchem`（SDF/MOL，走 `acquire_source()` → `SourceAsset`）——2026-08-01 执行：`download_pubchem` 经 PUG-REST `record/SDF|MOL?record_type=2d` 下载；managed 子代理经 crawler facade 提交 `SourceAsset`，主代理写入 task raw 目录，均记录 `SourceRecord`；URL/格式校验/错误路径契约测试覆盖
+- [x] **P1** Reactome 增加独立 `download_reactome` skill（participants TSV / SBGN，走 `acquire_source()` → `SourceAsset`）；Pipeline 显式 pathway participants 已完成——2026-08-01 执行：`download_reactome` 经 ContentService exporter（`participants/{id}.tsv` / `diagram/{id}.sbgn`）下载；managed 子代理提交 `SourceAsset`，主代理写入 raw 目录；TSV/SBGN/错误路径/子代理 SourceAsset 测试覆盖；抽取共享 `_download_io.download_file_for_run`（复用 xena/pdb 模式，避免第 3/4 份重复）
 
 ### 2.4 统一 SourceAsset 契约
 

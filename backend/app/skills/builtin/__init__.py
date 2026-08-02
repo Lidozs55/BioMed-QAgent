@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pkgutil
 
+from app.domain.contracts.enums import DATABASE_IDENTIFIER_ALIASES, SOURCE_CAPABILITIES
 from app.skills.catalog import SkillDescriptor
 from app.skills.registry import skill_registry
 
@@ -16,7 +17,13 @@ _NON_SELECTABLE_BUILTINS = {
     "extract_chart_data_vlm",
     "analysis",
 }
-_PIPELINE_SUPPORTED_BUILTINS = {"pubmed", "geo", "gdc", "xena", "reactome"}
+# Derive the pipeline-supported set from the single source-of-truth capability
+# table (TODO §1.4) so the skill catalog and the Pipeline tool cannot drift.
+_PIPELINE_SUPPORTED_BUILTINS = {
+    identifier
+    for identifier, database in DATABASE_IDENTIFIER_ALIASES.items()
+    if SOURCE_CAPABILITIES[database].value == "pipeline_supported"
+}
 
 
 def builtin_skill_modules() -> tuple[str, ...]:

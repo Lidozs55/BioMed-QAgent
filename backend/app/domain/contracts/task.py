@@ -7,7 +7,13 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.enums import Database, RequestedOutput
+from app.domain.contracts.enums import (
+    DATABASE_IDENTIFIER_ALIASES,
+    SOURCE_CAPABILITIES,
+    Database,
+    RequestedOutput,
+    SourceCapability,
+)
 
 
 class TaskRequest(ContractModel):
@@ -48,8 +54,84 @@ class DatasetSelection(ContractModel):
     data_type: str | None = None
 
 
+class SourceCapabilityDeclaration(ContractModel):
+    """Pipeline input-level capability declaration for one source (TODO §1.4).
+
+    ``database`` is the canonical ``Database`` member; ``identifier`` records
+    the user-facing identifier that was selected (e.g. ``xena`` for
+    ``ucsc_xena``) so the declaration stays truthful to what was requested.
+    """
+
+    database: Database | None
+    capability: SourceCapability
+    identifier: str = ""
+    note: str = ""
+
+
 class TaskSpecification(ContractModel):
     topic: str = Field(min_length=1)
     queries: list[QuerySpecification] = Field(default_factory=list)
     datasets: list[DatasetSelection] = Field(default_factory=list)
     requested_outputs: list[RequestedOutput] = Field(default_factory=list)
+    # Pipeline input-level capability declarations for the selected sources.
+    # Agent-only sources are declared ``research_only`` / ``pending`` so they
+    # can only be used for investigation, never routed into the Pipeline as
+    # verified data sources (TODO §1.4).
+    source_capabilities: list[SourceCapabilityDeclaration] = Field(
+        default_factory=list
+    )
+
+    @classmethod
+    def declare_sources(
+        cls,
+        *,
+        topic: str,
+        identifiers: list[str],
+        queries: list[QuerySpecification] | None = None,
+        datasets: list[DatasetSelection] | None = None,
+        requested_outputs: list[RequestedOutput] | None = None,
+    ) -> TaskSpecification:
+        """Build a specification that declares each selected source's capability.
+
+        Unknown identifiers resolve to ``SourceCapability.PENDING`` so an
+        explicit declaration always exists for every selected source; the
+        Pipeline tool performs the authoritative rejection before running.
+        """
+        declarations: list[SourceCapabilityDeclaration] = []
+        seen: set[Database] = set()
+        for identifier in identifiers:
+            normalized = identifier.strip().lower()
+            database = DATABASE_IDENTIFIER_ALIASES.get(normalized)
+            if database is None:
+                declarations.append(
+                    SourceCapabilityDeclaration(
+                        database=None,
+                        capability=SourceCapability.PENDING,
+                        identifier=normalized,
+                        note="unknown source; awaiting integration",
+                    )
+                )
+                continue
+            if database in seen:
+                continue
+            seen.add(database)
+            capability = SOURCE_CAPABILITIES[database]
+            declarations.append(
+                SourceCapabilityDeclaration(
+                    database=database,
+                    capability=capability,
+                    identifier=normalized,
+                    note=(
+                        ""
+                        if capability == SourceCapability.PIPELINE_SUPPORTED
+                        else "Agent-only investigation source; not accepted by the Pipeline"
+                    ),
+                )
+            )
+        return cls(
+            topic=topic,
+            queries=queries or [],
+            datasets=datasets or [],
+            requested_outputs=requested_outputs or [],
+            source_capabilities=declarations,
+        )

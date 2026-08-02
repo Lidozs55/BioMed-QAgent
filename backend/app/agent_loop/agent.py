@@ -26,6 +26,7 @@ from app.pipeline.tool import run_research_pipeline
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
+from app.skills.llm_search import LLMRerankingSkillSearchStrategy
 from app.skills.registry import SkillCategory
 from app.subagents.tools import (
     cancel_subagent,
@@ -152,9 +153,11 @@ source 已覆盖、哪些零结果不应重试、是否需要换关键词或换 
 图片重复调用。
 
 ## 视觉证据采集
-`capture_web_page` 与 `capture_page_section` 用于结构化 API 失败时的视觉兜底，
-**不得替代已有结构化 API**。优先使用结构化接口；仅当 API 不可用或返回空且页面
-确有可视数据时才调用视觉采集。
+网页视觉采集能力通过 `find_skill` 发现 `web_visual_capture` Skill（可用
+`text="网页截图"` 或 `source="web_visual_capture"` 查询），再用 `invoke_skill`
+提交 `operation`（`capture_web_page` 整页截图或 `capture_page_section` 区域截图）
+和结构化参数。仅在结构化 API 失败时用于视觉兜底，**不得替代已有结构化 API**：
+优先使用结构化接口；仅当 API 不可用或返回空且页面确有可视数据时才调用视觉采集。
 
 ## 动态 Skill 发现协议
 - 业务数据库与处理能力不会作为主 Agent 的直接工具注入。执行相关操作前先调用
@@ -267,7 +270,10 @@ def build_agent(
 
     active_model_settings = model_settings or get_active_model_settings()
     model = get_model(active_model_settings)
-    find_skill, invoke_skill = build_skill_gateway(resolved_catalog)
+    find_skill, invoke_skill = build_skill_gateway(
+        resolved_catalog,
+        search_strategy=LLMRerankingSkillSearchStrategy(),
+    )
     tools = [
         find_skill,
         invoke_skill,

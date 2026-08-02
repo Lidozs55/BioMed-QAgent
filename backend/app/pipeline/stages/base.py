@@ -193,12 +193,20 @@ class CleaningReportModel(ContractModel):
 
 
 class ProcessingOutput(ContractModel):
-    """Output of the processing stage: parsed datasets + samples + cleaning + alignment."""
+    """Output of the processing stage: parsed datasets + samples + cleaning + alignment.
+
+    ``parsed_datasets`` carries one entry per parsed source asset. When two
+    or more datasets are parsed in one run, ``merged_dataset`` holds the
+    deterministic vertical merge produced by ``alignment.merge_datasets``
+    (TODO §1.2) and ``field_alignment`` holds the real ``align_fields``
+    mapping used to build it.
+    """
 
     parsed_datasets: list[ParsedDataset]
     samples: list[GeoSampleMetadata]
     cleaning_report: CleaningReportModel | None = None
     field_alignment: dict[str, list[str]] | None = None
+    merged_dataset: ParsedDataset | None = None
 
 
 class ArtifactBuildOutput(ContractModel):

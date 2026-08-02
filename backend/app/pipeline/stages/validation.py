@@ -680,22 +680,44 @@ def _validate_package(
         }
     )
 
-    opener = gzip.open if source_path.suffix.lower() == ".gz" else Path.open
-    if source_path.suffix.lower() == ".gz":
-        with opener(source_path, "rt", encoding="utf-8", newline="") as handle:
-            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
-    else:
-        with source_path.open("r", encoding="utf-8", newline="") as handle:
-            source_lines = list(csv.reader(handle, delimiter="\t", quotechar='"'))
+    def _read_source_lines(path: Path) -> list[list[str]]:
+        if path.suffix.lower() == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
+                return list(csv.reader(handle, delimiter="\t", quotechar='"'))
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return list(csv.reader(handle, delimiter="\t", quotechar='"'))
+
+    # Multi-source merged packages carry rows from several source files; route
+    # each row's lineage check to the file of its own asset (TODO §1.5.4).
+    # Single-source packages resolve every row to the one source_path, which
+    # matches the pre-merge behavior.
+    lines_cache: dict[str, list[list[str]]] = {}
+
+    def _lines_for(asset_id: str) -> list[list[str]]:
+        key = asset_id or "source"
+        if key in lines_cache:
+            return lines_cache[key]
+        path = source_path
+        if asset_id:
+            asset_row = assets_by_id.get(asset_id)
+            if asset_row and asset_row.get("relative_path"):
+                candidate = source_rel_base / asset_row["relative_path"]
+                if candidate.is_file():
+                    path = candidate
+        lines = _read_source_lines(path)
+        lines_cache[key] = lines
+        return lines
+
     sampled_rows = _deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
     sampled_skipped = 0
     for row in sampled_rows:
+        lines = _lines_for(row.get("asset_id", ""))
         if reactome_rows:
             line_index = int(row["source_line_number"]) - 1
             column_index = int(row["source_column_index"])
             try:
-                raw = source_lines[line_index][column_index]
+                raw = lines[line_index][column_index]
             except (IndexError, ValueError):
                 lineage_failures += 1
                 continue
@@ -709,7 +731,7 @@ def _validate_package(
         line_index = int(row["source_line_number"]) - 1
         column_index = int(row["source_column_index"])
         try:
-            raw = source_lines[line_index][column_index]
+            raw = lines[line_index][column_index]
         except (IndexError, ValueError):
             lineage_failures += 1
             continue

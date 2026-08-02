@@ -12,10 +12,13 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
+    DATABASE_IDENTIFIER_ALIASES,
+    SOURCE_CAPABILITIES,
     Database,
     DatasetSelection,
     QuerySpecification,
     RequestedOutput,
+    SourceCapability,
     TaskSpecification,
 )
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
@@ -152,8 +155,9 @@ def _build_tool_specification(
         )
     if not queries and not datasets:
         return None
-    return TaskSpecification(
+    return TaskSpecification.declare_sources(
         topic=topic,
+        identifiers=databases,
         queries=queries,
         datasets=datasets,
         requested_outputs=[
@@ -210,15 +214,39 @@ async def run_research_pipeline(
     normalized_databases = [value.strip().lower() for value in databases]
     if not normalized_databases:
         raise ValueError("databases must be a non-empty list of database identifiers")
-    supported_databases = {"pubmed", "geo", "gdc", "xena", "ucsc_xena", "reactome"}
-    unsupported_databases = sorted(
-        {value for value in normalized_databases if value not in supported_databases}
-    )
-    if unsupported_databases:
+    # Resolve each selected identifier against the single source-of-truth
+    # capability table (TODO §1.4). Only pipeline-supported sources may run;
+    # research_only / pending / unknown sources are reported with their
+    # declared capability instead of being silently accepted.
+    rejected: list[dict[str, str]] = []
+    seen_database: set[str] = set()
+    for identifier in normalized_databases:
+        database = DATABASE_IDENTIFIER_ALIASES.get(identifier)
+        if database is None:
+            rejected.append({
+                "database": identifier,
+                "capability": "pending",
+                "reason": "unknown source; awaiting integration",
+            })
+            continue
+        if database.value in seen_database:
+            continue
+        seen_database.add(database.value)
+        capability = SOURCE_CAPABILITIES[database]
+        if capability is not SourceCapability.PIPELINE_SUPPORTED:
+            rejected.append({
+                "database": identifier,
+                "capability": capability.value,
+                "reason": (
+                    "Agent-only investigation source; not accepted by the Pipeline"
+                ),
+            })
+    if rejected:
         return json.dumps(
             {
                 "status": "unsupported_databases",
-                "unsupported_databases": unsupported_databases,
+                "unsupported_databases": [item["database"] for item in rejected],
+                "capabilities": rejected,
                 "retryable": False,
             },
             ensure_ascii=False,

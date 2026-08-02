@@ -33,6 +33,12 @@ _DOMAIN_INTENTS: dict[str, tuple[str, ...]] = {
     "图表": ("chart", "figure"),
     "表格": ("table",),
     "统计分析": ("statistical", "analysis"),
+    # 浏览器自动化能力（docs/REVIEW_2026-07-31-browser-automation-audit.md
+    # §四.1）：主 Agent 提示词为中文，须让中文能力词命中
+    # browser_fallback / web_visual_capture 的英文元数据。
+    "网页": ("web", "page", "html"),
+    "浏览器": ("browser", "web", "rendered"),
+    "截图": ("capture", "screenshot", "visual"),
 }
 _IDENTITY_WEIGHT = 12
 _OPERATION_WEIGHT = 6
