@@ -63,11 +63,11 @@ function DefaultToolCallStep({ item }: ToolCallStepProps) {
               />
             </button>
             {expanded && (
-              <div className="mt-2 space-y-2 text-sm">
+              <div className="mt-1 space-y-1 text-sm">
                 {item.arguments && (
               <details>
                 <summary className="cursor-pointer text-muted-foreground">输入参数</summary>
-                <pre className="mt-1 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                <pre className="mt-1 overflow-x-auto rounded-md bg-primary-foreground/15 p-2 text-xs">
                   {JSON.stringify(item.arguments, null, 2)}
                 </pre>
               </details>
@@ -79,8 +79,8 @@ function DefaultToolCallStep({ item }: ToolCallStepProps) {
                     </summary>
                     <pre
                       className={cn(
-                        "mt-1 overflow-x-auto rounded p-2 text-xs",
-                        item.status === "error" ? "bg-destructive/10" : "bg-muted/50",
+                        "mt-1 overflow-x-auto rounded-md p-2 text-xs",
+                        item.status === "error" ? "bg-destructive/10" : "bg-primary-foreground/15",
                       )}
                     >
                       {item.output}

@@ -36,7 +36,7 @@ export function SkillMarker({ item }: SkillMarkerProps) {
     ) ?? null;
 
   return (
-    <div className="my-1">
+    <div>
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
@@ -60,20 +60,20 @@ export function SkillMarker({ item }: SkillMarkerProps) {
         />
       </button>
       {expanded && (
-        <div className="mt-1 space-y-2 border-l-2 border-muted pl-6 text-sm">
+        <div className="mt-1 space-y-1 border-l-2 border-muted pl-6 text-sm">
           {isFindSkill ? (
             <>
               {keywords !== null && (
                 <div>
                   <div className="text-muted-foreground">关键词</div>
-                  <pre className="mt-1 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-primary-foreground/15 p-2 text-xs">
                     {keywords}
                   </pre>
                 </div>
               )}
               <div>
                 <div className="text-muted-foreground">结果摘要</div>
-                <pre className="mt-1 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                <pre className="mt-1 overflow-x-auto rounded-md bg-primary-foreground/15 p-2 text-xs">
                   {summary === null
                     ? (item.output ?? "无输出")
                     : summary.total === 0
@@ -89,7 +89,7 @@ export function SkillMarker({ item }: SkillMarkerProps) {
               {item.arguments !== null && (
                 <div>
                   <div className="text-muted-foreground">输入参数</div>
-                  <pre className="mt-1 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-primary-foreground/15 p-2 text-xs">
                     {JSON.stringify(item.arguments, null, 2)}
                   </pre>
                 </div>
@@ -101,8 +101,8 @@ export function SkillMarker({ item }: SkillMarkerProps) {
                   </div>
                   <pre
                     className={cn(
-                      "mt-1 overflow-x-auto rounded p-2 text-xs",
-                      isError ? "bg-destructive/10" : "bg-muted/50",
+                      "mt-1 overflow-x-auto rounded-md p-2 text-xs",
+                      isError ? "bg-destructive/10" : "bg-primary-foreground/15",
                     )}
                   >
                     {item.output}

@@ -45,7 +45,7 @@ export function ReasoningBlock({ item }: ReasoningBlockProps) {
   };
 
   return (
-    <div className="my-1">
+    <div>
       <button
         type="button"
         onClick={handleToggle}

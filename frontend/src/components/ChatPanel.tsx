@@ -455,7 +455,7 @@ export function ChatPanel({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <MessageScroller className="min-w-0 flex-1">
             <MessageScrollerViewport>
-              <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-7 px-5 py-6">
+              <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3 px-5 py-6">
                 {hasOlderMessages && (
                   <MessageScrollerItem messageId={`older-messages:${activeTaskId}`}>
                     <div className="flex flex-col items-center gap-1">
