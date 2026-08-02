@@ -507,3 +507,14 @@ uv run playwright install chromium
 ---
 
 > **📌 最后提醒：本项目配有完整的 AGENTS.md，你的 AI 工具能自动理解项目规则。遇到问题，先把 AGENTS.md 和 docs/ARCHITECTURE.md 丢给 AI，让它帮你定位。**
+
+## 已知陷阱:LLM 序列化未指定可选参数为空字符串
+
+Agent 调用 `function_tool` 时,未指定的可选参数(如 find_skill 的 `source`)会被
+LLM 序列化为 `""`(空字符串)而非省略。任何按 `param is not None` 判断"是否提供"
+的工具实现都会因此把所有候选过滤掉,表现为工具恒返回空。
+
+处理模式(见 `app/skills/gateway.py:_find_skill`):显式参数用
+`param is not None and param.strip()` 判断,空白字符串视为未提供。
+
+受影响面:所有 LLM 直接调用的 Function Tool 都要按此模式处理可选参数。
