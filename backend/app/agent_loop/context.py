@@ -176,6 +176,11 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _pipeline_attempt_count: int = field(
+        default=0,
+        init=False,
+        repr=False,
+    )
     _pending_publication: PendingPublication | PendingPublicationCleanup | None = field(
         default=None,
         init=False,
@@ -553,7 +558,14 @@ class RunContext:
         if self._pipeline_publication_reserved:
             raise RuntimeError("pipeline publication is already reserved")
         self._pipeline_publication_reserved = True
+        self._pipeline_attempt_count += 1
         return self.managed_run_id
+
+    @property
+    def pipeline_attempt_count(self) -> int:
+        """Total number of pipeline publication reservations (issue #3)."""
+
+        return self._pipeline_attempt_count
 
     def bind_managed_run(self, run_id: str) -> None:
         """Bind this context to the manager's authoritative Run identity."""

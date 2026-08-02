@@ -125,7 +125,7 @@ class TestInvalidContextRaises:
         # An object that is not None but lacks RunContext fields
         bogus_context = SimpleNamespace(foo="bar")
 
-        with pytest.raises(AttributeError, match="query_log_summary"):
+        with pytest.raises(AttributeError, match="preferred_sources|query_log_summary"):
             await preflight.preflight(
                 "task_bogus", "query",
                 model_handle=object(), emit=Mock(), session=object(),

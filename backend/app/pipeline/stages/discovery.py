@@ -163,6 +163,19 @@ def run_discovery(ctx: StageContext) -> StageResult:
     )
 
     if ctx.mode == "live":
+        # Issue #2: the pipeline must not auto-search GEO by topic when no
+        # explicit gse was provided.  Auto-discovered datasets are unvetted
+        # by the Agent and frequently fail at the acquisition stage (e.g.
+        # "family SOFT required when tximport counts are available").  The
+        # Agent is responsible for discovering and vetting accessions before
+        # calling run_research_pipeline.
+        if gse is None:
+            raise LookupError(
+                "No explicit GEO accession (gse) was provided. The pipeline "
+                "does not auto-search GEO by topic. Use search_geo to discover "
+                "a relevant GSE accession and pass it via the gse parameter "
+                "to run_research_pipeline."
+            )
         literature, geo, retrieved_at = _run_discovery_live(pmid, gse, topic=ctx.topic)
     else:
         literature, geo, retrieved_at = _run_discovery_fixture(
@@ -199,19 +212,25 @@ def _build_default_specification(ctx: StageContext) -> TaskSpecification:
     discovery stage searches NCBI by topic. For fixture mode, the pinned
     Phase 1 case (GSE178352 + PMID 34180400) is used to preserve backward
     compatibility with offline regression tests.
+
+    Issue #2: in live mode, the GEO topic query is only added when GEO is
+    in ``ctx.databases``.  Even so, the discovery stage requires an explicit
+    ``gse`` accession — the topic query alone will not trigger a GEO search.
     """
     if ctx.mode == "live":
-        return TaskSpecification(
-            topic=ctx.topic,
-            queries=[
-                QuerySpecification(
-                    query_id="query_pubmed_1",
-                    database=Database.PUBMED,
-                    query=ctx.topic,
-                    generated_by="pipeline",
-                    purpose="find literature by topic",
-                    order=1,
-                ),
+        selected = {db.lower() for db in ctx.databases}
+        queries: list[QuerySpecification] = [
+            QuerySpecification(
+                query_id="query_pubmed_1",
+                database=Database.PUBMED,
+                query=ctx.topic,
+                generated_by="pipeline",
+                purpose="find literature by topic",
+                order=1,
+            ),
+        ]
+        if "geo" in selected:
+            queries.append(
                 QuerySpecification(
                     query_id="query_geo_1",
                     database=Database.GEO,
@@ -220,7 +239,10 @@ def _build_default_specification(ctx: StageContext) -> TaskSpecification:
                     purpose="find expression dataset by topic",
                     order=2,
                 ),
-            ],
+            )
+        return TaskSpecification(
+            topic=ctx.topic,
+            queries=queries,
             datasets=[],
             requested_outputs=[
                 RequestedOutput.MAIN_DATA,

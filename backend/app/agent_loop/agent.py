@@ -79,8 +79,8 @@ Pipeline 生成。
 - 通路/反应网络 → Reactome
 - 大型癌症组学数据仓库 → Xena
 
-用户在 UI 选择的数据库会作为 `preferred_sources`。**优先检索用户选择的 preferred_sources
-中与课题相关的数据库**；
+用户在 UI 选择的数据库会作为 `preferred_sources` 注入到系统提示顶部（见"用户选择的
+数据库"小节）。**优先检索用户选择的 preferred_sources 中与课题相关的数据库**；
 若某个被选中的数据库与课题明显不相关（如研究表达谱时选了 PDB），
 **向用户说明为何跳过**，而不是无脑调用一次得到空结果。
 选择结果不是硬 allowlist：未选择但公开、免登录且不需要私密凭据的其他来源也
@@ -124,13 +124,24 @@ assistant 文本中写出参数 JSON。工具结果会自动以结构化卡片�
 正式产物必须通过 `run_research_pipeline` 生成，不要自行拼装或直接写最终 CSV。
 调用时传：
 - `topic`（必填）：用户研究主题
-- `databases`（必填）：用户选择的数据库列表
-- `pmid`/`gse`（可选）：你先前发现的 accession
+- `databases`（可选）：用户选择的数据库列表；不传时自动使用 `preferred_sources`
+- `pmid`/`gse`（强烈建议）：你先前通过 search 工具发现的 accession。**Pipeline 不会
+  按 topic 自动搜索 GEO**——如果 databases 包含 GEO，你必须先通过 `search_geo` 发现
+  具体的 GSE accession 并传入 `gse` 参数，否则 Pipeline 会在 discovery 阶段失败
 - 不要传 `mode` 参数（默认即对接真实外部 API）
 
+## Pipeline 失败处理
+`run_research_pipeline` 最多允许调用 2 次。如果返回的 `status` 不是 `completed`：
+1. **阅读 `error_message`**：错误信息会明确指出缺失的参数或失败原因
+2. **调整参数重试**：如错误提示缺少 `gse`，先调用 `search_geo` 发现 GSE，再重试
+3. **不要用相同参数重试**：相同参数必然导致相同失败
+4. **第 2 次仍失败后停止**：向用户如实汇报失败原因和已尝试的方案，不要卡在重试循环中
+
 ## Pipeline 产物与汇报
-Pipeline 执行成功后会在 `artifacts/` 目录产出 CSV 包（外加一个
-`run_manifest.json`）。**引用产物时用 `list_files` 查看实际文件名，
+Pipeline 执行成功后会产出 CSV 包（外加一个 `run_manifest.json`）。工具返回的 JSON 中
+`artifact_dir` 字段指示产物所在目录——可能是 `artifacts/`（已发布）或
+`staging/run_<id>/artifacts/`（待发布，run 结束后自动迁移到 `artifacts/`）。
+**引用产物时用 `list_files` 查看 `artifact_dir` 下的实际文件名，
 不要编造文件名或列名**——字段含义参考 `field_descriptions.csv` 的
 `description` 列。
 
@@ -219,6 +230,24 @@ def _format_query_log_section(run_ctx: RunContext) -> str:
     return "\n".join(parts)
 
 
+def _format_preferred_sources_section(run_ctx: RunContext) -> str:
+    """格式化"用户选择的数据库"小节，注入到系统提示顶部。
+
+    让 LLM 始终能看到用户在 UI 勾选的数据库列表（preferred_sources），
+    避免 Agent 错误地声称"用户尚未选择数据库"（问题 #1 根因修复）。
+    """
+    sources = run_ctx.preferred_sources
+    if not sources:
+        return "## 用户选择的数据库\n\n（用户未显式勾选数据库；可根据课题自行选择合适的来源）"
+    display = ", ".join(sources)
+    return (
+        f"## 用户选择的数据库（preferred_sources）\n\n"
+        f"{display}\n\n"
+        "**以上数据库已由用户在 UI 中显式勾选**。调用 `run_research_pipeline` 时 "
+        "如不传 `databases` 参数，将自动使用此列表。"
+    )
+
+
 def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     """Return the exact dynamic instruction string the Agent will receive.
 
@@ -226,8 +255,9 @@ def resolve_agent_instructions(base: str, run_ctx: RunContext) -> str:
     construction and prompt estimation so they share one prompt-shape source.
     """
 
+    sources_section = _format_preferred_sources_section(run_ctx)
     search_section = _format_query_log_section(run_ctx)
-    return f"{base}\n\n---\n\n{search_section}"
+    return f"{base}\n\n---\n\n{sources_section}\n\n---\n\n{search_section}"
 
 
 def _make_instructions_fn(
