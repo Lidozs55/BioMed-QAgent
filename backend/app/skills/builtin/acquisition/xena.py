@@ -9,8 +9,6 @@ import gzip
 import json
 import logging
 import re
-import shutil
-import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -29,31 +27,23 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
     make_source_id,
 )
+from app.skills.builtin.acquisition._download_io import (
+    _USER_AGENT,
+    _write_download,
+    download_file,
+    rate_limit,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
 
 _XENA_HUB_BASE = "https://toil-xena-hub.s3.us-east-1.amazonaws.com"
 _XENA_DOWNLOAD_BASE = f"{_XENA_HUB_BASE}/download"
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
-#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
-_RATE_LIMIT_SECONDS = 2.0
-
-_last_request_ts: float = 0.0
 
 
 def _rate_limit() -> None:
-    """Sleep so that two consecutive Xena API calls are at least 2s apart."""
-    global _last_request_ts
-    now = time.monotonic()
-    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request_ts = time.monotonic()
+    """Rate limit (delegates to shared ``_download_io.rate_limit``)."""
+    rate_limit()
 
 # Known dataset type patterns for categorization
 _DATASET_TYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -234,28 +224,8 @@ def _match_term(record: dict[str, Any], term: str) -> bool:
 
 
 def _download(url: str, dest: Path) -> None:
-    """Download a file to dest via urllib, using a .part temp file."""
-    _rate_limit()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": _USER_AGENT},
-    )
-    with urllib.request.urlopen(request, timeout=60) as resp, open(tmp, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    if dest.exists():
-        dest.unlink()
-    tmp.rename(dest)
-
-
-def _write_download(content: bytes, dest: Path) -> None:
-    """Write crawler bytes to a task-local path through an atomic temp file."""
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    tmp.write_bytes(content)
-    tmp.replace(dest)
+    """Download a file to dest (delegates to shared ``_download_io.download_file``)."""
+    download_file(url, dest)
 
 
 async def _download_file_for_run(

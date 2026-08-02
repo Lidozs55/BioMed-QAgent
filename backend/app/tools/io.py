@@ -13,14 +13,24 @@ context 参数为 RunContextWrapper，由 SDK 自动注入，不暴露给 LLM。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from agents import RunContextWrapper, function_tool
 
-from app.agent_loop.context import RunContext
+
+class WorkDirLike(Protocol):
+    """Structural protocol for a task working directory.
+
+    Decouples ``io.py`` (tools layer) from ``agent_loop.context.RunContext``
+    (agent layer).  ``TaskWorkDir`` satisfies this structurally.
+    """
+
+    root: Path
+
+    def agent_staging_file(self, path: str) -> Path: ...
 
 
-def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
+def _resolve_safe_path(path: str, work_dir: WorkDirLike) -> Path:
     """将用户提供的路径解析为任务目录内的安全路径。
 
     安全策略：
@@ -28,7 +38,7 @@ def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
       2. 拒绝 .. 路径穿越（resolve 后不在任务根目录内）
       3. 拒绝任务根目录外的符号链接（real 目标不在任务根目录内）
 
-    沙箱边界为 ``run_ctx.work_dir.root``，覆盖全部子目录（source_assets、
+    沙箱边界为 ``work_dir.root``，覆盖全部子目录（source_assets、
     parsed、normalized、staging、artifacts、state、logs 等），让 Agent 能
     直接读取 skill 下载/解析的中间产物。
     """
@@ -39,7 +49,7 @@ def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
         raise ValueError(f"不允许使用绝对路径: {path}")
 
     # 拼接任务根目录并解析（规范化 .. 和 . 等）
-    task_root = run_ctx.work_dir.root.resolve()
+    task_root = work_dir.root.resolve()
     resolved = (task_root / p).resolve()
 
     # 安全检查 2：拒绝 .. 路径穿越
@@ -61,12 +71,12 @@ def _resolve_safe_path(path: str, run_ctx: RunContext) -> Path:
     return resolved
 
 
-def _resolve_safe_write_path(path: str, run_ctx: RunContext) -> Path:
+def _resolve_safe_write_path(path: str, work_dir: WorkDirLike) -> Path:
     """将 Agent 写入路径限制在任务的专用 staging/agent 目录内。"""
     if Path(path).is_absolute():
         raise ValueError(f"不允许使用绝对路径: {path}")
     try:
-        return run_ctx.work_dir.agent_staging_file(path)
+        return work_dir.agent_staging_file(path)
     except ValueError:
         raise ValueError(f"路径穿越被拒绝: {path}（目标在 Agent 暂存目录之外）") from None
 
@@ -74,9 +84,9 @@ def _resolve_safe_write_path(path: str, run_ctx: RunContext) -> Path:
 @function_tool
 def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
     """读取任务工作目录内的文件内容。path 为相对于任务根目录的相对路径。"""
-    run_ctx: RunContext = ctx.context
+    work_dir: WorkDirLike = ctx.context.work_dir
     try:
-        safe_path = _resolve_safe_path(path, run_ctx)
+        safe_path = _resolve_safe_path(path, work_dir)
     except ValueError as e:
         return f"路径错误: {e}"
 
@@ -88,9 +98,9 @@ def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
 @function_tool
 def write_file(ctx: RunContextWrapper[Any], path: str, content: str) -> str:
     """将内容写入任务 staging/agent 目录。path 为相对路径。"""
-    run_ctx: RunContext = ctx.context
+    work_dir: WorkDirLike = ctx.context.work_dir
     try:
-        safe_path = _resolve_safe_write_path(path, run_ctx)
+        safe_path = _resolve_safe_write_path(path, work_dir)
     except ValueError as e:
         return f"路径错误: {e}"
 
@@ -102,14 +112,14 @@ def write_file(ctx: RunContextWrapper[Any], path: str, content: str) -> str:
 @function_tool
 def list_files(ctx: RunContextWrapper[Any], subdir: str = "") -> str:
     """列出任务工作目录下的文件。subdir 为可选子目录（相对路径）。"""
-    run_ctx: RunContext = ctx.context
+    work_dir: WorkDirLike = ctx.context.work_dir
     try:
-        d = _resolve_safe_path(subdir, run_ctx) if subdir else run_ctx.work_dir.root.resolve()
+        d = _resolve_safe_path(subdir, work_dir) if subdir else work_dir.root.resolve()
     except ValueError as e:
         return f"路径错误: {e}"
 
     if not d.exists():
         return f"目录不存在: {d}"
-    task_root = run_ctx.work_dir.root.resolve()
+    task_root = work_dir.root.resolve()
     files = [str(f.relative_to(task_root)) for f in d.rglob("*") if f.is_file()]
     return "\n".join(files) if files else "（空目录）"

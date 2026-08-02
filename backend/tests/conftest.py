@@ -33,6 +33,7 @@ def _disable_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     in independent acquisition skills.
     """
     for module_path in (
+        "app.skills.builtin.acquisition._download_io.rate_limit",
         "app.skills.builtin.acquisition.gdc._rate_limit",
         "app.skills.builtin.acquisition.pdb._rate_limit",
         "app.skills.builtin.acquisition.xena._rate_limit",

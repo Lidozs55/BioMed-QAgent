@@ -3,20 +3,29 @@
 Every acquisition skill that needs to fetch a binary artifact (SDF/MOL, TSV,
 SBGN, …) routes the download through the Run-bound crawler facade when the
 run is managed (subagent), and falls back to the isolated urllib transport
-for main-agent or unit-test runs. This mirrors the per-skill
-``_download_file_for_run`` helpers previously duplicated in xena.py and
-pdb.py so new download tools don't copy a third/fourth implementation.
+for main-agent or unit-test runs.
+
+This module is the **single convergence host** for:
+  - Rate limiting (``rate_limit``) — 2s between requests (AGENTS.md hard constraint)
+  - JSON fetching (``fetch_json``) — GET/POST with browser UA + rate limit
+  - File downloading (``download_file``) — atomic .part rename + rate limit
+  - Run-bound wrappers (``download_bytes_for_run`` / ``download_file_for_run``)
+
+gdc/pdb/xena previously each maintained their own copy of these helpers;
+they now import from here (P1.1/P1.2 convergence, REVIEW 2026-08-02).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import time
 import urllib.request
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from app.agent_loop.context import RunContext
+from app.model_config import RuntimeLimitsSettings
 
 #: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
 _USER_AGENT = (
@@ -28,11 +37,19 @@ _USER_AGENT = (
 #: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
 _RATE_LIMIT_SECONDS = 2.0
 
+#: Centralized timeout defaults from RuntimeLimitsSettings.
+_DEFAULTS = RuntimeLimitsSettings()
+
 _last_request_ts: float = 0.0
 
 
-def _rate_limit() -> None:
-    """Sleep so that two consecutive external downloads are at least 2s apart."""
+def rate_limit() -> None:
+    """Sleep so that two consecutive external requests are at least 2s apart.
+
+    Single global timestamp shared across all acquisition skills — stricter
+    than per-skill independent windows, matching AGENTS.md's "2s per request"
+    global constraint.
+    """
     global _last_request_ts
     now = time.monotonic()
     wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
@@ -41,15 +58,61 @@ def _rate_limit() -> None:
     _last_request_ts = time.monotonic()
 
 
+def fetch_json(
+    url: str,
+    *,
+    method: str = "GET",
+    json_body: dict | None = None,
+    timeout: float = _DEFAULTS.http_timeout_seconds,
+) -> dict[str, Any]:
+    """Fetch and parse JSON from a REST API endpoint via urllib.
+
+    Sends a real browser User-Agent, rate-limits calls to 2s apart
+    (AGENTS.md hard constraint), and returns the parsed JSON dict.
+    """
+    rate_limit()
+    headers: dict[str, str] = {
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json",
+    }
+    data = None
+    if method == "POST" and json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def download_file(
+    url: str,
+    dest: Path,
+    *,
+    timeout: float = _DEFAULTS.http_download_timeout_seconds,
+) -> None:
+    """Download a file to *dest*, atomically via a .part temp file."""
+    rate_limit()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    req = urllib.request.Request(
+        url, headers={"User-Agent": _USER_AGENT}, method="GET"
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as f:
+        shutil.copyfileobj(resp, f)
+    if dest.exists():
+        dest.unlink()
+    tmp.rename(dest)
+
+
 def _download_bytes(url: str) -> bytes:
     """Download a URL via urllib (isolated legacy transport)."""
-    _rate_limit()
+    rate_limit()
     request = urllib.request.Request(
         url,
         headers={"User-Agent": _USER_AGENT},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=60) as resp:
+    with urllib.request.urlopen(request, timeout=_DEFAULTS.http_download_timeout_seconds) as resp:
         return resp.read()
 
 

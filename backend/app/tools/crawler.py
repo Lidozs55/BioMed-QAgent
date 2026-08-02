@@ -27,6 +27,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from app.domain.contracts import DataLevel
+from app.model_config import RuntimeLimitsSettings
 from app.subagents.staging import SubagentStagingWorkspace
 from app.tools.browser_pool import (
     BrowserPool,
@@ -39,6 +40,9 @@ from app.tools.network_safety import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Centralized HTTP timeout default (RuntimeLimitsSettings.http_timeout_seconds).
+_HTTP_TIMEOUT: float = RuntimeLimitsSettings().http_timeout_seconds
 
 # Real Chrome User-Agent (project_memory L11: real browser UA required)
 BROWSER_UA = (
@@ -593,7 +597,7 @@ class CrawlerFacade:
         if self._closed:
             raise RuntimeError("crawler facade is closed")
         return httpx.AsyncClient(
-            timeout=30.0,
+            timeout=_HTTP_TIMEOUT,
             follow_redirects=False,
             trust_env=False,
             transport=self._http_transport,

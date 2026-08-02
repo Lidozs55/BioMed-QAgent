@@ -26,6 +26,15 @@ class RuntimeLimitsSettings(BaseModel):
     #: 无进展判定阈值：同 (tool, args) 指纹在窗口内出现次数达到该值触发。
     no_progress_repeat_threshold: int = Field(default=3, ge=2)
 
+    #: 进程内任务锁获取超时（秒）；Pipeline runner 的 TaskLock 使用。
+    lock_timeout_seconds: float = Field(default=5.0, gt=0)
+    #: 单次 HTTP 请求超时（秒）；acquisition skill 的 urllib 回退路径使用。
+    http_timeout_seconds: float = Field(default=30.0, gt=0)
+    #: HTTP 文件下载超时（秒）；acquisition skill 的大文件下载使用。
+    http_download_timeout_seconds: float = Field(default=60.0, gt=0)
+    #: 浏览器自动化超时（秒）；browser skill 的页面操作使用。
+    browser_timeout_seconds: float = Field(default=120.0, gt=0)
+
 
 class Capabilities(BaseModel):
     text: bool = True

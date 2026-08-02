@@ -378,7 +378,7 @@ async def download_supplementary_adapter(
             file_response = await services.http.get(
                 file_url,
                 headers=BROWSER_HEADERS,
-                timeout=60.0,
+                timeout=run_ctx.model_settings.runtime_limits.http_download_timeout_seconds,
                 follow_redirects=True,
             )
             file_response.raise_for_status()
