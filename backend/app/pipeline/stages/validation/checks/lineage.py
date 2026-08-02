@@ -83,18 +83,29 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
             row["expression_value"]
         ):
             lineage_failures += 1
+    total_sampled = len(sampled_rows)
+    checked_count = total_sampled - sampled_skipped
+    # Flag a high metadata-skip ratio: when nearly every sampled row is a
+    # sample_metadata placeholder, the lineage check effectively verified
+    # nothing — the package is "formally valid but content-hollow" (see
+    # ARTIFACT_ANALYSIS §缺陷 3). Downstream consumers can use this flag to
+    # distinguish a real pass from a vacuous one.
+    high_skip_ratio = (
+        total_sampled > 0 and sampled_skipped / total_sampled > 0.8
+    )
     return {
         "check_id": "source_value_lineage",
         "scope": "main_data",
         "check_name": "sampled values match source locator",
         "status": "passed" if lineage_failures == 0 else "failed",
-        "checked_count": len(sampled_rows) - sampled_skipped,
+        "checked_count": checked_count,
         "failed_count": lineage_failures,
         "details": json.dumps(
             {
                 "total_rows": len(main_rows),
-                "sampled": len(sampled_rows),
+                "sampled": total_sampled,
                 "skipped_metadata_rows": sampled_skipped,
+                "high_skip_ratio": high_skip_ratio,
             }
         ),
     }

@@ -25,6 +25,103 @@ def check_main_data_nonempty(ctx: ValidationContext) -> dict[str, object]:
     }
 
 
+# Minimum non-empty rate for core data fields. Below this the package cannot
+# support any downstream analysis and must fail validation rather than ship a
+# "formally complete but content-empty" artifact (see
+# docs/ARTIFACT_ANALYSIS_2026-08-02_AD_Osteoporosis.md §缺陷 2/3).
+_CORE_DATA_NONEMPTY_THRESHOLD = 0.1
+
+
+def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
+    """Core data fields have sufficient non-empty records.
+
+    For GEO / expression packages, verifies that ``expression_value`` and
+    ``gene_id`` each meet a minimum non-empty rate (10%). A package where
+    these fields are 100% empty — e.g. a download failure masked by
+    ``geo_minimal_placeholder`` metadata-only rows — fails here instead of
+    silently passing the structural checks.
+
+    Packages that legitimately lack expression columns are skipped:
+    - Reactome pathway-participant packages (``participant_id`` is verified
+      by the Reactome-specific checks).
+    - GDC clinical packages (no ``expression_value``/``gene_id`` column by
+      design — clinical variables are stored in dedicated columns).
+    The check only fires when an ``expression_value`` column is present in
+    the header, i.e. the package claims to carry expression data.
+    """
+    main_rows = ctx.main_rows
+    if not main_rows:
+        return {
+            "check_id": "core_data_existence",
+            "scope": "main_data",
+            "check_name": "core data fields have sufficient non-empty records",
+            "status": "failed",
+            "checked_count": 0,
+            "failed_count": 1,
+            "details": "main_data is empty",
+        }
+    # Reactome packages: participant_id completeness is owned by the
+    # reactome checks. Report a passed no-op so the check_id sequence stays
+    # uniform across package types.
+    if ctx.reactome_rows:
+        return {
+            "check_id": "core_data_existence",
+            "scope": "main_data",
+            "check_name": "core data fields have sufficient non-empty records",
+            "status": "passed",
+            "checked_count": len(main_rows),
+            "failed_count": 0,
+            "details": "reactome package; participant_id verified by reactome checks",
+        }
+    # Only apply to packages that actually declare an expression_value column.
+    # GDC clinical and other non-expression packages omit this column by
+    # design and must not be penalised.
+    columns = set(main_rows[0].keys())
+    if "expression_value" not in columns and "gene_id" not in columns:
+        return {
+            "check_id": "core_data_existence",
+            "scope": "main_data",
+            "check_name": "core data fields have sufficient non-empty records",
+            "status": "passed",
+            "checked_count": len(main_rows),
+            "failed_count": 0,
+            "details": "non-expression package (no expression_value/gene_id column); skipped",
+        }
+    total = len(main_rows)
+    has_expr = "expression_value" in columns
+    has_gene = "gene_id" in columns
+    expr_non_empty = (
+        sum(1 for row in main_rows if row.get("expression_value", "").strip())
+        if has_expr
+        else total
+    )
+    gene_non_empty = (
+        sum(1 for row in main_rows if row.get("gene_id", "").strip())
+        if has_gene
+        else total
+    )
+    expr_rate = expr_non_empty / total
+    gene_rate = gene_non_empty / total
+    expr_ok = expr_rate >= _CORE_DATA_NONEMPTY_THRESHOLD
+    gene_ok = gene_rate >= _CORE_DATA_NONEMPTY_THRESHOLD
+    status = "passed" if expr_ok and gene_ok else "failed"
+    parts: list[str] = []
+    if has_expr:
+        parts.append(f"expression_value: {expr_non_empty}/{total} non-empty ({expr_rate:.0%})")
+    if has_gene:
+        parts.append(f"gene_id: {gene_non_empty}/{total} non-empty ({gene_rate:.0%})")
+    parts.append(f"threshold={_CORE_DATA_NONEMPTY_THRESHOLD:.0%}")
+    return {
+        "check_id": "core_data_existence",
+        "scope": "main_data",
+        "check_name": "core data fields have sufficient non-empty records",
+        "status": status,
+        "checked_count": total,
+        "failed_count": 0 if status == "passed" else 1,
+        "details": "; ".join(parts),
+    }
+
+
 def check_foreign_keys(ctx: ValidationContext) -> dict[str, object]:
     """Foreign-key closure for main_data dataset/sample/source/asset."""
     main_rows = ctx.main_rows

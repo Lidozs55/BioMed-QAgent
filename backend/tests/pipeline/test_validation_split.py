@@ -29,6 +29,7 @@ _REACTOME_FIXTURE = Path(__file__).parents[1] / "fixtures" / "reactome"
 # Golden check_id sequence emitted by the original monolithic _validate_package.
 _GEO_CHECK_IDS = [
     "main_data_nonempty",
+    "core_data_existence",
     "foreign_keys",
     "sample_foreign_keys",
     "source_asset_integrity",
@@ -40,6 +41,7 @@ _GEO_CHECK_IDS = [
 
 _REACTOME_CHECK_IDS = [
     "main_data_nonempty",
+    "core_data_existence",
     "foreign_keys",
     "reactome_pathway_fields",
     "reactome_participant_fields",
