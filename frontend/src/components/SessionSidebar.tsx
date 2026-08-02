@@ -318,7 +318,7 @@ export function SessionSidebar({
               src={biomedLogoV2}
               alt="BioMed QAgent"
               draggable={false}
-              className="h-16 w-auto max-w-full"
+              className="h-auto w-full"
             />
           </div>
           <Button
