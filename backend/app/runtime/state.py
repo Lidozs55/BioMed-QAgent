@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from app.domain.contracts import (
+    ArtifactProducedPayload,
     EventEnvelope,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -49,6 +52,10 @@ _TERMINAL_STATUSES = {
     RunStatus.CANCELLED,
     RunStatus.INTERRUPTED,
 }
+NO_ARTIFACT_FAILURE_MARKERS = (
+    "without producing any artifacts",
+    "manifest missing or unchanged",
+)
 
 _LEGAL_TRANSITIONS = {
     RunStatus.QUEUED: {RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED},
@@ -334,6 +341,11 @@ def reduce_task_event(
     else:
         status = snapshot.task.status
 
+    artifact_count = snapshot.task.artifact_count
+    if isinstance(payload, ArtifactProducedPayload):
+        artifact_count += 1
+    no_artifact_failure = no_artifact_failure_from_runs(runs)
+
     active_run_id = snapshot.task.active_run_id
     if isinstance(payload, RunQueuedPayload) or type(payload) in _STATUS_PAYLOADS:
         active_run_id = None if status in _TERMINAL_STATUSES else event.run_id
@@ -344,8 +356,36 @@ def reduce_task_event(
             "active_run_id": active_run_id,
             "updated_at": event.timestamp,
             "latest_sequence": event.sequence,
+            "artifact_count": artifact_count,
+            "no_artifact_failure": no_artifact_failure,
         }
     )
     return snapshot.model_copy(
         update={"task": task, "runs": runs, "subagents": subagents}
+    )
+
+
+def no_artifact_failure_from_runs(runs: list[RunRecord]) -> bool:
+    """True when the latest run failed with the no-artifact completion marker."""
+    latest = runs[-1] if runs else None
+    if (
+        latest is None
+        or latest.status is not RunStatus.FAILED
+        or latest.error is None
+    ):
+        return False
+    return any(marker in latest.error for marker in NO_ARTIFACT_FAILURE_MARKERS)
+
+
+def count_artifact_produced_events(
+    events: Iterable[EventEnvelope],
+    *,
+    through_sequence: int | None = None,
+) -> int:
+    """Count validated artifact events for legacy snapshot backfill."""
+    return sum(
+        1
+        for event in events
+        if isinstance(event.payload, ArtifactProducedPayload)
+        and (through_sequence is None or event.sequence <= through_sequence)
     )

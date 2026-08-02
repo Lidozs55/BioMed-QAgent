@@ -1,7 +1,6 @@
 import {
   ArrowsClockwiseIcon,
   DownloadSimpleIcon,
-  FlaskIcon,
   GearIcon,
   PlusCircleIcon,
   TrashIcon,
@@ -9,11 +8,14 @@ import {
   WifiSlashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
+import biomedLogoV2 from "../../../assets/logo/biomed-qagent-logo-v2.svg";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
+import { taskOutcome } from "@/components/taskOutcome";
 import {
   Alert,
   AlertDescription,
@@ -33,7 +35,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
-  EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
@@ -43,7 +44,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
@@ -62,7 +62,7 @@ interface SessionSidebarProps {
   onOpenSettings?: () => void;
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
-  onLoadAll?: () => Promise<void>;
+  onLoadMore?: () => Promise<void>;
   onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
@@ -105,13 +105,18 @@ function TaskRow({
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
   const active = isActiveStatus(summary.status);
+  const outcome = taskOutcome(task);
   const statusIconClass = active
     ? "text-primary"
-    : summary.status === "failed" ||
-        summary.status === "cancelled" ||
-        summary.status === "interrupted"
-      ? "text-destructive"
-      : undefined;
+    : outcome === "data"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : outcome === "no_data"
+        ? "text-sky-600 dark:text-sky-400"
+        : summary.status === "failed" ||
+            summary.status === "cancelled" ||
+            summary.status === "interrupted"
+          ? "text-destructive"
+          : undefined;
   const cancelling = summary.status === "cancel_requested" || pendingCancel;
 
   return (
@@ -129,6 +134,7 @@ function TaskRow({
       >
         <TaskStatusIcon
           status={summary.status}
+          outcome={outcome ?? undefined}
           className={statusIconClass}
         />
         <span className="min-w-0 flex-1 truncate" title={summary.title}>
@@ -166,7 +172,7 @@ function TaskRow({
 export function SessionSidebar({
   onNewDraft,
   onSelectTask,
-  onLoadAll,
+  onLoadMore,
   onRetryHistory,
   onCancelRun,
   onDeleteTask,
@@ -182,7 +188,7 @@ export function SessionSidebar({
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
-  const [loadingAll, setLoadingAll] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
     () => new Set(),
   );
@@ -192,7 +198,8 @@ export function SessionSidebar({
   const activeTasks = activeItems
     .map((taskId) => tasksById[taskId])
     .filter((task): task is TaskProjection => task !== undefined);
-  const historyTasks = taskOrder
+  const visibleTaskIds = new Set([...activeItems, ...taskOrder]);
+  const visibleTasks = [...visibleTaskIds]
     .map((taskId) => tasksById[taskId])
     .filter((task): task is TaskProjection => task !== undefined);
   const runningCount = activeTasks.filter((task) =>
@@ -202,9 +209,9 @@ export function SessionSidebar({
   const deleteTarget =
     deleteTargetId === null ? undefined : tasksById[deleteTargetId];
 
-  const closeMobile = () => {
+  const closeMobile = useCallback(() => {
     if (isMobile) setOpenMobile(false);
-  };
+  }, [isMobile, setOpenMobile]);
 
   const selectTask = async (taskId: string) => {
     closeMobile();
@@ -215,22 +222,33 @@ export function SessionSidebar({
     }
   };
 
-  const showNewDraft = () => {
+  const showNewDraft = useCallback(() => {
     onNewDraft();
     closeMobile();
-  };
+  }, [closeMobile, onNewDraft]);
 
-  const loadAll = async () => {
-    if (loadingAll || onLoadAll === undefined) return;
-    setLoadingAll(true);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        showNewDraft();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showNewDraft]);
+
+  const loadMore = async () => {
+    if (loadingMore || onLoadMore === undefined || nextCursor === null) return;
+    setLoadingMore(true);
     try {
-      await onLoadAll();
+      await onLoadMore();
     } catch (error) {
       toast.error("历史任务加载失败", {
         description: errorMessage(error),
       });
     } finally {
-      setLoadingAll(false);
+      setLoadingMore(false);
     }
   };
 
@@ -294,47 +312,43 @@ export function SessionSidebar({
   return (
     <>
       <Sidebar>
-        <SidebarHeader>
-          <div className="flex min-w-0 items-center gap-2 px-2 pt-2">
-            <FlaskIcon className="shrink-0 text-sidebar-foreground" />
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-semibold text-sidebar-foreground">
-                BioMed QAgent
-              </span>
-              <span className="truncate text-xs text-sidebar-foreground/70">
-                Durable task workspace
-              </span>
-            </div>
+        <SidebarHeader className="gap-1 p-1">
+          <div className="flex min-w-0 items-center px-1">
+            <img
+              src={biomedLogoV2}
+              alt="BioMed QAgent"
+              draggable={false}
+              className="h-[95.04px] w-auto max-w-full"
+            />
           </div>
           <Button
             variant="outline"
-            size="sm"
-            className="w-full justify-start"
+            size="lg"
+            className="h-11 w-full justify-start gap-2 px-3"
             onClick={showNewDraft}
           >
-            <PlusCircleIcon data-icon="inline-start" />
-            新建研究
+            <PlusCircleIcon data-icon="inline-start" className="size-5" />
+            <span className="truncate">新建研究</span>
+            <span className="ml-auto flex shrink-0 items-center gap-1">
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+                Ctrl
+              </kbd>
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+                N
+              </kbd>
+            </span>
           </Button>
         </SidebarHeader>
 
-        <SidebarContent>
+        <SidebarContent
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            if (element.scrollHeight - element.scrollTop - element.clientHeight < 160) {
+              void loadMore();
+            }
+          }}
+        >
           <SidebarGroup>
-            <SidebarGroupLabel>正在进行</SidebarGroupLabel>
-            <SidebarGroupContent>
-              {activeTasks.length > 0 ? (
-                taskRows(activeTasks)
-              ) : (
-                <Empty className="p-4">
-                  <EmptyHeader>
-                    <EmptyTitle>没有运行中的任务</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>历史任务</SidebarGroupLabel>
             <SidebarGroupContent>
               {historyStatus === "error" && (
                 <Alert variant="destructive" className="mb-2">
@@ -354,44 +368,31 @@ export function SessionSidebar({
                   </AlertDescription>
                 </Alert>
               )}
-              {historyStatus === "loading" && historyTasks.length === 0 ? (
+              {historyStatus === "loading" && visibleTasks.length === 0 ? (
                 <div
                   role="status"
                   className="flex items-center gap-2 p-4 text-xs text-muted-foreground"
                 >
                   <Spinner aria-hidden="true" />
-                  正在加载历史任务
+                  正在加载对话
                 </div>
-              ) : historyTasks.length > 0 ? (
-                taskRows(historyTasks)
+              ) : visibleTasks.length > 0 ? (
+                taskRows(visibleTasks)
               ) : historyStatus !== "error" ? (
                 <Empty className="p-4">
                   <EmptyHeader>
-                    <EmptyTitle>暂无历史任务</EmptyTitle>
-                    <EmptyDescription>完成的研究会显示在这里。</EmptyDescription>
+                    <EmptyTitle>暂无对话</EmptyTitle>
                   </EmptyHeader>
                 </Empty>
               ) : null}
-              {nextCursor !== null && onLoadAll !== undefined && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-1 w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
-                  disabled={loadingAll}
-                  aria-label={loadingAll ? "正在加载全部会话" : "显示更多"}
-                  onClick={() => void loadAll()}
+              {loadingMore && (
+                <div
+                  role="status"
+                  className="flex items-center justify-center gap-2 p-3 text-xs text-muted-foreground"
                 >
-                  {loadingAll ? (
-                    <Spinner
-                      data-icon="inline-start"
-                      className="text-primary"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <PlusCircleIcon data-icon="inline-start" aria-hidden="true" />
-                  )}
-                  {loadingAll ? "正在加载" : "显示更多"}
-                </Button>
+                  <Spinner className="size-3.5" aria-hidden="true" />
+                  正在加载
+                </div>
               )}
             </SidebarGroupContent>
           </SidebarGroup>

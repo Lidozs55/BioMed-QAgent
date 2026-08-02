@@ -33,7 +33,11 @@ from app.domain.contracts.events import EventPayload
 from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
-from app.runtime.state import reduce_task_event
+from app.runtime.state import (
+    count_artifact_produced_events,
+    no_artifact_failure_from_runs,
+    reduce_task_event,
+)
 
 _ResultT = TypeVar("_ResultT")
 _TRANSIENT_INDEX_ERRORS = (OSError, sqlite3.Error)
@@ -577,7 +581,8 @@ class TaskRepository:
         snapshot_path = self._snapshot_path(task_id)
         if not snapshot_path.is_file():
             return None
-        snapshot = TaskSnapshot.model_validate_json(snapshot_path.read_text("utf-8"))
+        raw_snapshot = json.loads(snapshot_path.read_text("utf-8"))
+        snapshot = TaskSnapshot.model_validate(raw_snapshot)
         latest_sequence = self.events.latest_sequence(task_id)
         if snapshot.task.latest_sequence > latest_sequence:
             raise CorruptEventLogError(
@@ -585,6 +590,37 @@ class TaskRepository:
                 f"for task {task_id}: "
                 f"{snapshot.task.latest_sequence} > {latest_sequence}"
             )
+        legacy = (
+            "artifact_count" not in raw_snapshot.get("task", {})
+            or "no_artifact_failure" not in raw_snapshot.get("task", {})
+        )
+        legacy_artifact_count = 0
+        legacy_no_artifact_failure = False
+        if legacy:
+            historical_events = self.events.read(task_id, after_sequence=0)
+            legacy_artifact_count = count_artifact_produced_events(
+                historical_events,
+                through_sequence=snapshot.task.latest_sequence,
+            )
+            if legacy_artifact_count > 0:
+                snapshot = snapshot.model_copy(
+                    update={
+                        "task": snapshot.task.model_copy(
+                            update={"artifact_count": legacy_artifact_count}
+                        )
+                    }
+                )
+            legacy_no_artifact_failure = no_artifact_failure_from_runs(
+                snapshot.runs
+            )
+            if legacy_no_artifact_failure:
+                snapshot = snapshot.model_copy(
+                    update={
+                        "task": snapshot.task.model_copy(
+                            update={"no_artifact_failure": True}
+                        )
+                    }
+                )
         events = (
             self.events.read(
                 task_id,
@@ -598,6 +634,13 @@ class TaskRepository:
                 snapshot = reduce_task_event(snapshot, event)
             snapshot = self._snapshot_without_messages(snapshot)
             atomic_write_json(snapshot_path, snapshot)
+        elif legacy and (
+            legacy_artifact_count > 0 or legacy_no_artifact_failure
+        ):
+            atomic_write_json(
+                snapshot_path,
+                self._snapshot_without_messages(snapshot),
+            )
         return snapshot
 
     def _append_event_sync(self, event: EventEnvelope) -> TaskSnapshot:

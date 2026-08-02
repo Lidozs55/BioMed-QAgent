@@ -18,6 +18,8 @@ function summary(
   taskId: string,
   status: RunStatus,
   title = taskId,
+  artifactCount?: number,
+  noArtifactFailure?: boolean,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -36,7 +38,30 @@ function summary(
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
     latest_sequence: 1,
+    ...(artifactCount === undefined ? {} : { artifact_count: artifactCount }),
+    ...(noArtifactFailure === undefined
+      ? {}
+      : { no_artifact_failure: noArtifactFailure }),
   };
+}
+
+function scrollSidebarToBottom() {
+  const content = document.querySelector(
+    '[data-slot="sidebar-content"]',
+  ) as HTMLElement;
+  Object.defineProperty(content, "scrollHeight", {
+    value: 1000,
+    configurable: true,
+  });
+  Object.defineProperty(content, "clientHeight", {
+    value: 200,
+    configurable: true,
+  });
+  Object.defineProperty(content, "scrollTop", {
+    value: 760,
+    configurable: true,
+  });
+  fireEvent.scroll(content);
 }
 
 function renderSidebar(
@@ -48,7 +73,7 @@ function renderSidebar(
         onNewDraft={vi.fn()}
         onSelectTask={vi.fn()}
         onRetryHistory={vi.fn().mockResolvedValue(undefined)}
-        onLoadAll={vi.fn().mockResolvedValue(undefined)}
+        onLoadMore={vi.fn().mockResolvedValue(undefined)}
         onCancelRun={vi.fn().mockResolvedValue(undefined)}
         onDeleteTask={vi.fn().mockResolvedValue(undefined)}
         {...props}
@@ -76,7 +101,15 @@ describe("SessionSidebar", () => {
     useAgentStore.setState(createInitialRuntimeState());
   });
 
-  it("renders active tasks separately from the first 10 history tasks", () => {
+  it("renders the v2 logo at the top of the sidebar", () => {
+    renderSidebar();
+
+    const logo = screen.getByRole("img", { name: "BioMed QAgent" });
+    expect(logo).toHaveAttribute("alt", "BioMed QAgent");
+    expect(logo).toHaveAttribute("draggable", "false");
+  });
+
+  it("renders active and history tasks in one shared list", () => {
     const history = Array.from({ length: 10 }, (_, index) =>
       summary(`history_${index}`, "completed", `History ${index + 1}`),
     );
@@ -94,19 +127,17 @@ describe("SessionSidebar", () => {
 
     renderSidebar();
 
-    const activeGroup = screen
-      .getByText("正在进行")
+    expect(screen.queryByText("正在进行")).toBeNull();
+    expect(screen.queryByText("历史任务")).toBeNull();
+    const group = screen
+      .getByText("Running task")
       .closest('[data-slot="sidebar-group"]');
-    const historyGroup = screen
-      .getByText("历史任务")
-      .closest('[data-slot="sidebar-group"]');
-    expect(activeGroup).not.toBeNull();
-    expect(historyGroup).not.toBeNull();
-    expect(within(activeGroup as HTMLElement).getByText("Running task")).toBeVisible();
-    expect(within(activeGroup as HTMLElement).getByText("Queued task")).toBeVisible();
-    expect(within(activeGroup as HTMLElement).queryByText("History 1")).toBeNull();
+    expect(group).not.toBeNull();
+    expect(within(group as HTMLElement).getByText("Queued task")).toBeVisible();
+    expect(within(group as HTMLElement).getByText("History 1")).toBeVisible();
+    expect(within(group as HTMLElement).getByText("History 10")).toBeVisible();
     expect(
-      within(historyGroup as HTMLElement).getAllByRole("button", {
+      within(group as HTMLElement).getAllByRole("button", {
         name: /^History \d+ 已完成$/,
       }),
     ).toHaveLength(10);
@@ -123,7 +154,7 @@ describe("SessionSidebar", () => {
     );
     useAgentStore.getState().setActiveTaskId("history_a");
     let resolveLoad: (() => void) | undefined;
-    const onLoadAll = vi.fn(
+    const onLoadMore = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           resolveLoad = () => {
@@ -139,15 +170,16 @@ describe("SessionSidebar", () => {
           };
         }),
     );
-    renderSidebar({ onLoadAll });
+    renderSidebar({ onLoadMore });
 
-    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
-    expect(screen.getByRole("button", { name: "正在加载全部会话" })).toBeDisabled();
+    scrollSidebarToBottom();
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toBeVisible();
     expect(screen.getAllByText("Active A")).toHaveLength(1);
     act(() => resolveLoad?.());
 
     await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
-    expect(screen.queryByRole("button", { name: "显示更多" })).toBeNull();
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
   });
 
@@ -160,10 +192,10 @@ describe("SessionSidebar", () => {
       },
       false,
     );
-    const onLoadAll = vi.fn().mockRejectedValue(new Error("history unavailable"));
-    renderSidebar({ onLoadAll });
+    const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
+    renderSidebar({ onLoadMore });
 
-    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
+    scrollSidebarToBottom();
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -261,11 +293,22 @@ describe("SessionSidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Task B 运行中" }));
     expect(onSelectTask).toHaveBeenCalledWith("task_b");
-    const newResearch = screen.getByRole("button", { name: "新建研究" });
+    const newResearch = screen.getByRole("button", { name: /新建研究/ });
     expect(newResearch).toBeEnabled();
     fireEvent.click(newResearch);
     expect(onNewDraft).toHaveBeenCalledTimes(1);
     expect(useAgentStore.getState().tasksById.task_a.summary.status).toBe("running");
+  });
+  it("creates a new draft with Ctrl+N and shows the shortcut blocks", () => {
+    const onNewDraft = vi.fn();
+    renderSidebar({ onNewDraft });
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+
+    expect(onNewDraft).toHaveBeenCalledTimes(1);
+    const newResearch = screen.getByRole("button", { name: /新建研究/ });
+    expect(within(newResearch).getByText("Ctrl")).toBeInTheDocument();
+    expect(within(newResearch).getByText("N")).toBeInTheDocument();
   });
 
   it("uses status icons as the only visible status treatment", () => {
@@ -291,15 +334,73 @@ describe("SessionSidebar", () => {
       screen.getByRole("button", { name }).querySelector("svg");
     expect(iconFor("Running 运行中")).toHaveClass("text-primary");
     expect(iconFor("Queued 排队中")).toHaveClass("text-primary");
-    expect(iconFor("Completed 已完成")).not.toHaveClass(
-      "text-primary",
-      "text-destructive",
+    expect(iconFor("Completed 已完成")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
     );
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
     expect(iconFor("Cancelled 已取消")).toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
     expect(container.querySelector('[data-slot="badge"]')).not.toHaveTextContent(
       /运行中|排队中|已完成|失败|已取消|已中断/,
+    );
+  });
+
+  it("colors terminal indicators by structured data outcome", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("with_data", "completed", "With Data", 3),
+          summary("without_data", "completed", "No Data", 0),
+          summary("error", "failed", "Error"),
+          summary("silent_summary", "failed", "Silent Summary", 0, true),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().hydrateTaskSnapshot({
+      task: summary("silent", "failed", "Silent", 0),
+      runs: [
+        {
+          run_id: "run_silent",
+          task_id: "silent",
+          request_id: "req_silent",
+          status: "failed",
+          input: "question",
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+          started_at: CREATED_AT,
+          finished_at: CREATED_AT,
+          error:
+            "agent completed without producing any artifacts (manifest missing or unchanged)",
+        },
+      ],
+      messages: [],
+      older_messages_cursor: null,
+    });
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("With Data 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("No Data 已完成")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
+    );
+    expect(iconFor("Error 失败")).toHaveClass("text-destructive");
+    expect(iconFor("Silent 失败")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
+    );
+    expect(iconFor("Silent Summary 失败")).toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
     );
   });
 

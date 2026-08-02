@@ -136,7 +136,7 @@ export default function App() {
         onNewDraft={() => controller.showNewDraft()}
         onSelectTask={selectTask}
         onRetryHistory={() => controller.refreshTaskHistory()}
-        onLoadAll={() => controller.loadAllTasks()}
+        onLoadMore={() => controller.loadMoreTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
         onExportCache={exportCache}

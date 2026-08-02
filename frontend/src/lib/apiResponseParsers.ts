@@ -17,6 +17,14 @@ import {
   assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion,
 } from "@/lib/eventValidatorHelpers";
 
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 /* ---- EventEnvelope invariant helpers ---- */
 
 const STAGE_EVENT_TYPES = new Set(["stage_started", "stage_completed", "stage_failed", "stage_skipped"]);
@@ -211,6 +219,10 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
       created_at: assertString(Reflect.get(task, "created_at"), "task.created_at"),
       updated_at: assertString(Reflect.get(task, "updated_at"), "task.updated_at"),
       latest_sequence: assertNumber(Reflect.get(task, "latest_sequence"), "task.latest_sequence"),
+      artifact_count: optionalNumber(Reflect.get(task, "artifact_count")),
+      no_artifact_failure: optionalBoolean(
+        Reflect.get(task, "no_artifact_failure"),
+      ),
     },
     runs: assertArray(Reflect.get(obj, "runs"), "runs", parseRunRecord),
     messages: assertArray(Reflect.get(obj, "messages"), "messages", parseMessageRecord),
@@ -244,6 +256,10 @@ function parseTaskSummary(json: unknown, path: string): TaskPage["active_items"]
     created_at: assertString(Reflect.get(obj, "created_at"), `${path}.created_at`),
     updated_at: assertString(Reflect.get(obj, "updated_at"), `${path}.updated_at`),
     latest_sequence: assertNumber(Reflect.get(obj, "latest_sequence"), `${path}.latest_sequence`),
+    artifact_count: optionalNumber(Reflect.get(obj, "artifact_count")),
+    no_artifact_failure: optionalBoolean(
+      Reflect.get(obj, "no_artifact_failure"),
+    ),
   };
 }
 

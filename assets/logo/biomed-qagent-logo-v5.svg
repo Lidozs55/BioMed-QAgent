@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1000" viewBox="0 0 2400 1000">
+  <defs>
+    <linearGradient id="coreGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00C6FF"/>
+      <stop offset="1" stop-color="#0066FF"/>
+    </linearGradient>
+  </defs>
+
+  <g id="brand-mark">
+    <polygon points="340,310 504.5,405 504.5,595 340,690 175.5,595 175.5,405" fill="url(#coreGradient)" stroke="#0B4EA8" stroke-width="6" stroke-linejoin="round"/>
+    <circle cx="340" cy="500" r="158" fill="none" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="4"/>
+    <circle cx="340" cy="500" r="70" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="3"/>
+
+    <g stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="4">
+      <line x1="340" y1="500" x2="340" y2="370"/>
+      <line x1="340" y1="500" x2="452" y2="435"/>
+      <line x1="340" y1="500" x2="452" y2="565"/>
+      <line x1="340" y1="500" x2="340" y2="630"/>
+      <line x1="340" y1="500" x2="228" y2="565"/>
+      <line x1="340" y1="500" x2="228" y2="435"/>
+    </g>
+
+    <circle cx="340" cy="500" r="54" fill="#FFFFFF"/>
+    <path d="M 320 500 L 337 517 L 362 488" fill="none" stroke="#FF9F1C" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <circle cx="340" cy="370" r="14" fill="#FFFFFF"/>
+    <circle cx="452" cy="435" r="14" fill="#FFFFFF"/>
+    <circle cx="452" cy="565" r="14" fill="#FFFFFF"/>
+    <circle cx="340" cy="630" r="14" fill="#FFFFFF"/>
+    <circle cx="228" cy="565" r="14" fill="#FFFFFF"/>
+    <circle cx="228" cy="435" r="14" fill="#FFFFFF"/>
+  </g>
+
+  <g id="wordmark">
+    <text x="660" y="555" font-family="Segoe UI, Arial, sans-serif" font-size="112" font-weight="800">
+      <tspan fill="#0A58D0">BioMed</tspan>
+      <tspan fill="#9DB4CC">-</tspan>
+      <tspan fill="#FF9F1C">Q</tspan>
+      <tspan fill="#0A58D0">Agent</tspan>
+    </text>
+
+    <rect x="660" y="616" width="190" height="8" rx="4" fill="#00A3E0"/>
+
+    <text x="660" y="676" font-family="Segoe UI, Arial, sans-serif" font-size="31" font-weight="600" letter-spacing="3" fill="#4E6E8C">TRUSTED BIOMEDICAL DATA INTELLIGENCE</text>
+    <text x="660" y="730" font-family="Microsoft YaHei, PingFang SC, sans-serif" font-size="36" font-weight="400" letter-spacing="2" fill="#6B87A0">生物医学数据研究智能体</text>
+  </g>
+</svg>

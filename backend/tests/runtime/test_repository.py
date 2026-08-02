@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 from app.config import Settings
 from app.domain.contracts import (
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     AssistantDeltaPayload,
+    EventEnvelope,
+    RunFinalizingPayload,
     RunQueuedPayload,
     RunRecord,
     RunStatus,
@@ -56,6 +60,126 @@ def queued_event(task_id: str = "task_123"):
         timestamp=NOW + timedelta(seconds=1),
         payload=RunQueuedPayload(request_id="req_123", input="question"),
     )
+
+
+def artifact_event(
+    task_id: str,
+    sequence: int,
+    artifact_id: str,
+) -> EventEnvelope:
+    return build_event(
+        task_id=task_id,
+        run_id="run_123",
+        sequence=sequence,
+        timestamp=NOW + timedelta(seconds=sequence),
+        payload=ArtifactProducedPayload(
+            artifact=ArtifactManifestEntry(
+                artifact_id=artifact_id,
+                name=f"{artifact_id}.csv",
+                relative_path=f"artifacts/{artifact_id}.csv",
+                media_type="text/csv",
+                size_bytes=12,
+                sha256="0" * 64,
+                generated_by_step_id="step_123",
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_repository_backfills_artifact_count_for_legacy_snapshot(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    task_id = "task_legacy_artifacts"
+    base = empty_snapshot(task_id=task_id)
+    base = base.model_copy(
+        update={
+            "task": base.task.model_copy(update={"latest_sequence": 3}),
+        }
+    )
+    await repository.save_snapshot(base)
+    try:
+        for event in (
+            artifact_event(task_id, 1, "artifact_a"),
+            artifact_event(task_id, 2, "artifact_b"),
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=3,
+                timestamp=NOW + timedelta(seconds=3),
+                payload=RunFinalizingPayload(),
+            ),
+        ):
+            await asyncio.to_thread(repository.events.append, event)
+        snapshot_path = (
+            output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
+        )
+        raw = json.loads(snapshot_path.read_text("utf-8"))
+        raw["task"].pop("artifact_count")
+        snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
+
+        loaded = await repository.get_snapshot(task_id)
+
+        assert loaded is not None
+        assert loaded.task.artifact_count == 2
+        persisted = json.loads(snapshot_path.read_text("utf-8"))
+        assert persisted["task"]["artifact_count"] == 2
+    finally:
+        await repository.close()
+
+@pytest.mark.asyncio
+async def test_repository_backfills_no_artifact_failure_for_legacy_snapshot(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    task_id = "task_legacy_no_artifact"
+    base = snapshot_with_run(
+        task_id=task_id,
+        request_id="req_legacy",
+        run_id="run_legacy",
+    )
+    base = base.model_copy(
+        update={
+            "task": base.task.model_copy(
+                update={"status": RunStatus.FAILED, "active_run_id": None}
+            ),
+            "runs": [
+                base.runs[0].model_copy(
+                    update={
+                        "status": RunStatus.FAILED,
+                        "finished_at": NOW + timedelta(seconds=1),
+                        "error": (
+                            "agent completed without producing any artifacts "
+                            "(manifest missing or unchanged)"
+                        ),
+                    }
+                )
+            ],
+        }
+    )
+    await repository.save_snapshot(base)
+    try:
+        snapshot_path = (
+            output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
+        )
+        raw = json.loads(snapshot_path.read_text("utf-8"))
+        raw["task"].pop("artifact_count")
+        raw["task"].pop("no_artifact_failure")
+        snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
+
+        loaded = await repository.get_snapshot(task_id)
+
+        assert loaded is not None
+        assert loaded.task.no_artifact_failure is True
+        persisted = json.loads(snapshot_path.read_text("utf-8"))
+        assert persisted["task"]["no_artifact_failure"] is True
+    finally:
+        await repository.close()
 
 
 @pytest.mark.asyncio
