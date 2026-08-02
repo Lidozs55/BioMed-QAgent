@@ -34,7 +34,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
-  EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
@@ -44,7 +43,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
@@ -199,7 +197,8 @@ export function SessionSidebar({
   const activeTasks = activeItems
     .map((taskId) => tasksById[taskId])
     .filter((task): task is TaskProjection => task !== undefined);
-  const historyTasks = taskOrder
+  const visibleTaskIds = new Set([...activeItems, ...taskOrder]);
+  const visibleTasks = [...visibleTaskIds]
     .map((taskId) => tasksById[taskId])
     .filter((task): task is TaskProjection => task !== undefined);
   const runningCount = activeTasks.filter((task) =>
@@ -345,22 +344,6 @@ export function SessionSidebar({
 
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>正在进行</SidebarGroupLabel>
-            <SidebarGroupContent>
-              {activeTasks.length > 0 ? (
-                taskRows(activeTasks)
-              ) : (
-                <Empty className="p-4">
-                  <EmptyHeader>
-                    <EmptyTitle>没有运行中的任务</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>历史任务</SidebarGroupLabel>
             <SidebarGroupContent>
               {historyStatus === "error" && (
                 <Alert variant="destructive" className="mb-2">
@@ -380,21 +363,20 @@ export function SessionSidebar({
                   </AlertDescription>
                 </Alert>
               )}
-              {historyStatus === "loading" && historyTasks.length === 0 ? (
+              {historyStatus === "loading" && visibleTasks.length === 0 ? (
                 <div
                   role="status"
                   className="flex items-center gap-2 p-4 text-xs text-muted-foreground"
                 >
                   <Spinner aria-hidden="true" />
-                  正在加载历史任务
+                  正在加载对话
                 </div>
-              ) : historyTasks.length > 0 ? (
-                taskRows(historyTasks)
+              ) : visibleTasks.length > 0 ? (
+                taskRows(visibleTasks)
               ) : historyStatus !== "error" ? (
                 <Empty className="p-4">
                   <EmptyHeader>
-                    <EmptyTitle>暂无历史任务</EmptyTitle>
-                    <EmptyDescription>完成的研究会显示在这里。</EmptyDescription>
+                    <EmptyTitle>暂无对话</EmptyTitle>
                   </EmptyHeader>
                 </Empty>
               ) : null}

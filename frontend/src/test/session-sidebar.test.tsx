@@ -78,7 +78,7 @@ describe("SessionSidebar", () => {
     useAgentStore.setState(createInitialRuntimeState());
   });
 
-  it("renders active tasks separately from the first 10 history tasks", () => {
+  it("renders active and history tasks in one shared list", () => {
     const history = Array.from({ length: 10 }, (_, index) =>
       summary(`history_${index}`, "completed", `History ${index + 1}`),
     );
@@ -96,19 +96,17 @@ describe("SessionSidebar", () => {
 
     renderSidebar();
 
-    const activeGroup = screen
-      .getByText("正在进行")
+    expect(screen.queryByText("正在进行")).toBeNull();
+    expect(screen.queryByText("历史任务")).toBeNull();
+    const group = screen
+      .getByText("Running task")
       .closest('[data-slot="sidebar-group"]');
-    const historyGroup = screen
-      .getByText("历史任务")
-      .closest('[data-slot="sidebar-group"]');
-    expect(activeGroup).not.toBeNull();
-    expect(historyGroup).not.toBeNull();
-    expect(within(activeGroup as HTMLElement).getByText("Running task")).toBeVisible();
-    expect(within(activeGroup as HTMLElement).getByText("Queued task")).toBeVisible();
-    expect(within(activeGroup as HTMLElement).queryByText("History 1")).toBeNull();
+    expect(group).not.toBeNull();
+    expect(within(group as HTMLElement).getByText("Queued task")).toBeVisible();
+    expect(within(group as HTMLElement).getByText("History 1")).toBeVisible();
+    expect(within(group as HTMLElement).getByText("History 10")).toBeVisible();
     expect(
-      within(historyGroup as HTMLElement).getAllByRole("button", {
+      within(group as HTMLElement).getAllByRole("button", {
         name: /^History \d+ 已完成$/,
       }),
     ).toHaveLength(10);
