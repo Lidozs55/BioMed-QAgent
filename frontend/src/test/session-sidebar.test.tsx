@@ -101,6 +101,14 @@ describe("SessionSidebar", () => {
     useAgentStore.setState(createInitialRuntimeState());
   });
 
+  it("renders the v2 logo at the top of the sidebar", () => {
+    renderSidebar();
+
+    const logo = screen.getByRole("img", { name: "BioMed QAgent" });
+    expect(logo).toHaveAttribute("alt", "BioMed QAgent");
+    expect(logo).toHaveAttribute("draggable", "false");
+  });
+
   it("renders active and history tasks in one shared list", () => {
     const history = Array.from({ length: 10 }, (_, index) =>
       summary(`history_${index}`, "completed", `History ${index + 1}`),

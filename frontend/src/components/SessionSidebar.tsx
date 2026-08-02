@@ -1,7 +1,6 @@
 import {
   ArrowsClockwiseIcon,
   DownloadSimpleIcon,
-  FlaskIcon,
   GearIcon,
   PlusCircleIcon,
   TrashIcon,
@@ -11,6 +10,8 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
+import biomedLogoV2 from "../../../assets/logo/biomed-qagent-logo-v2.svg";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
@@ -312,16 +313,13 @@ export function SessionSidebar({
     <>
       <Sidebar>
         <SidebarHeader>
-          <div className="flex min-w-0 items-center gap-2 px-2 pt-2">
-            <FlaskIcon className="shrink-0 text-sidebar-foreground" />
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-semibold text-sidebar-foreground">
-                BioMed QAgent
-              </span>
-              <span className="truncate text-xs text-sidebar-foreground/70">
-                Durable task workspace
-              </span>
-            </div>
+          <div className="flex min-w-0 items-center px-2 pt-2">
+            <img
+              src={biomedLogoV2}
+              alt="BioMed QAgent"
+              draggable={false}
+              className="h-16 w-auto max-w-full"
+            />
           </div>
           <Button
             variant="outline"
