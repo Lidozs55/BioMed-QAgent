@@ -312,8 +312,8 @@ export function SessionSidebar({
   return (
     <>
       <Sidebar>
-        <SidebarHeader>
-          <div className="flex min-w-0 items-center px-2 pt-2">
+        <SidebarHeader className="gap-1.5 p-1.5">
+          <div className="flex min-w-0 items-center px-1 pt-0.5">
             <img
               src={biomedLogoV2}
               alt="BioMed QAgent"
