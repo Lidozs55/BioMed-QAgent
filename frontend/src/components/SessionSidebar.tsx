@@ -312,13 +312,13 @@ export function SessionSidebar({
   return (
     <>
       <Sidebar>
-        <SidebarHeader className="gap-1.5 p-1.5">
-          <div className="flex min-w-0 items-center px-1 pt-0.5">
+        <SidebarHeader className="gap-1 p-1">
+          <div className="flex min-w-0 items-center px-1">
             <img
               src={biomedLogoV2}
               alt="BioMed QAgent"
               draggable={false}
-              className="h-auto w-full"
+              className="h-12 w-auto max-w-full"
             />
           </div>
           <Button
