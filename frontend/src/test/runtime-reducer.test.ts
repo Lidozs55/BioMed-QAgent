@@ -1355,6 +1355,117 @@ describe("runtime event projection", () => {
     ]);
   });
 
+  it("keeps hydrated user messages on the event clock so ordering survives re-entry", () => {
+    // Live path: user messages are created by run_queued events with the
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_reentry")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_reentry", "run_one", 1, {
+        type: "run_queued",
+        request_id: "req_one",
+        input: "first request",
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_reentry", "run_one", 50, {
+        type: "assistant_delta",
+        delta: "first reply",
+        stream_id: "stream_one",
+        from_chunk_index: 0,
+        through_chunk_index: 0,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_reentry", "run_two", 90, {
+        type: "run_queued",
+        request_id: "req_two",
+        input: "second request",
+      }),
+    );
+
+    const beforeHydrate = state.tasksById.task_reentry.items.map(
+      (item) => item.kind,
+    );
+    expect(beforeHydrate).toEqual([
+      "user_message",
+      "assistant_segment",
+      "user_message",
+    ]);
+
+    // Re-entry: hydrate from the snapshot. user messages come from
+    // snapshot.messages (ordinals 1 and 2), which would sort before the
+    // assistant reply at event sequence 50 without the fix.
+    state = hydrateTaskSnapshot(
+      state,
+      taskSnapshot(
+        "task_reentry",
+        [
+          message("task_reentry", 1, {
+            messageId: "user_one",
+            runId: "run_one",
+            role: "user",
+            content: "first request",
+          }),
+          message("task_reentry", 2, {
+            messageId: "user_two",
+            runId: "run_two",
+            role: "user",
+            content: "second request",
+          }),
+          message("task_reentry", 3, {
+            messageId: "assistant_one",
+            runId: "run_one",
+            role: "assistant",
+            content: "first reply",
+          }),
+        ],
+        null,
+        90,
+      ),
+    );
+
+    const afterHydrate = state.tasksById.task_reentry.items.map(
+      (item) => [item.kind, item.sequence] as const,
+    );
+    expect(afterHydrate).toEqual([
+      ["user_message", 1],
+      ["assistant_segment", 50],
+      ["user_message", 90],
+    ]);
+  });
+
+  it("falls back to ordinal when a user run_queued event was not replayed", () => {
+    // Truncated event page: hydrate has no user_message items to capture
+    // event sequences from, so projection must fall back to ordinal.
+    const state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_no_event",
+        [
+          message("task_no_event", 7, {
+            messageId: "user_only",
+            runId: "run_orphan",
+            role: "user",
+            content: "orphan request",
+          }),
+        ],
+        null,
+        0,
+      ),
+    );
+
+    const userItem = state.tasksById.task_no_event.items.find(
+      (item) => item.kind === "user_message",
+    );
+    expect(userItem?.sequence).toBe(7);
+  });
+
   it("keeps fixture task terminal payloads informational until runtime terminalizes the Run", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
