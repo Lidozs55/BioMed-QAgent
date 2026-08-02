@@ -1,10 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import {
-  parseFindSkillOutput,
-  SkillMarker,
-} from "@/components/conversation/SkillMarker";
+import { SkillMarker } from "@/components/conversation/SkillMarker";
+import { parseFindSkillOutput } from "@/components/conversation/skillOutput";
 import type { ToolCallItem } from "@/runtime/types";
 
 const TIMESTAMP = "2026-07-20T00:00:00Z";

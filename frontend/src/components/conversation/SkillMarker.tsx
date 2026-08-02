@@ -8,30 +8,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import type { ToolCallItem } from "@/runtime/types";
-
-export interface FindSkillSummary {
-  total: number;
-  names: string[];
-}
-
-/** Parse find_skill's JSON output; null when missing/unparseable. */
-export function parseFindSkillOutput(
-  output: string | null,
-): FindSkillSummary | null {
-  if (!output) return null;
-  try {
-    const parsed = JSON.parse(output) as {
-      skills?: Array<{ name?: string; display_name?: string }>;
-    };
-    if (!Array.isArray(parsed.skills)) return null;
-    const names = parsed.skills
-      .map((skill) => skill.display_name ?? skill.name ?? "")
-      .filter((name) => name.length > 0);
-    return { total: names.length, names };
-  } catch {
-    return null;
-  }
-}
+import { parseFindSkillOutput } from "./skillOutput";
 
 interface SkillMarkerProps {
   item: ToolCallItem;
@@ -54,7 +31,8 @@ export function SkillMarker({ item }: SkillMarkerProps) {
   const summary = isFindSkill ? parseFindSkillOutput(item.output) : null;
   const keywords =
     [item.arguments?.text, item.arguments?.source, item.arguments?.category].find(
-      (value) => typeof value === "string" && value !== "",
+      (value): value is string =>
+        typeof value === "string" && value !== "",
     ) ?? null;
 
   return (

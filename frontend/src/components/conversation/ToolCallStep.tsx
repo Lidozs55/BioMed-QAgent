@@ -22,6 +22,10 @@ export function ToolCallStep({ item }: ToolCallStepProps) {
   if (Renderer !== undefined) {
     return <Renderer item={item} />;
   }
+  return <DefaultToolCallStep item={item} />;
+}
+
+function DefaultToolCallStep({ item }: ToolCallStepProps) {
   const label = formatToolCall(item.toolName, item.arguments);
   const [expanded, setExpanded] = useState(false);
   const isRunning = item.status === "running";
