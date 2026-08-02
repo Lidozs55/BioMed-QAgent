@@ -190,19 +190,19 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
     name_override="run_research_pipeline",
     description_override=(
         "Run the deterministic validated research-data pipeline. "
-        "Call this tool exactly once per research task — it cannot be "
-        "called repeatedly.  Pass ``pmid``/``gse`` when you have already "
-        "discovered explicit accessions via search_pubmed/search_geo/describe_geo "
-        "— this avoids re-searching NCBI by topic (which fails for non-English "
-        "topics).  Defaults to live mode (real external APIs) for production "
-        "agent runs; fixture mode is reserved for offline regression tests "
-        "and must be set explicitly."
+        "Call this tool at most twice per research task.  Pass ``pmid``/``gse`` "
+        "when you have already discovered explicit accessions via "
+        "search_pubmed/search_geo/describe_geo — the pipeline does NOT auto-search "
+        "GEO by topic, so ``gse`` is required when GEO is in databases.  "
+        "Defaults to live mode (real external APIs) for production agent runs; "
+        "fixture mode is reserved for offline regression tests and must be set "
+        "explicitly."
     ),
 )
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
-    databases: list[str],
+    databases: list[str] | None = None,
     pmid: str | None = None,
     gse: str | None = None,
     xena_dataset_id: str | None = None,
@@ -211,9 +211,25 @@ async def run_research_pipeline(
     reactome_pathway_id: str | None = None,
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
+    run_context = ctx.context
+    # databases defaults to the user's UI-selected preferred_sources (issue #1).
+    # Handle None, empty list, and the LLM "unset optional param as empty
+    # string" edge case uniformly.
+    if not isinstance(databases, list) or not databases:
+        databases = list(run_context.preferred_sources)
     normalized_databases = [value.strip().lower() for value in databases]
     if not normalized_databases:
-        raise ValueError("databases must be a non-empty list of database identifiers")
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "databases is empty and no preferred_sources were set. "
+                    "Pass a non-empty databases list or select databases in the UI."
+                ),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     # Resolve each selected identifier against the single source-of-truth
     # capability table (TODO §1.4). Only pipeline-supported sources may run;
     # research_only / pending / unknown sources are reported with their
@@ -270,7 +286,20 @@ async def run_research_pipeline(
             ensure_ascii=False,
         )
 
-    run_context = ctx.context
+    # Issue #3: limit pipeline retries to prevent agent stuck loops.
+    if run_context.pipeline_attempt_count >= 2:
+        return json.dumps(
+            {
+                "status": "max_attempts_exceeded",
+                "message": (
+                    "The research pipeline has been attempted 2 times and failed. "
+                    "Do not call run_research_pipeline again. Report the failure "
+                    "to the user with the error details from the last attempt."
+                ),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     try:
         managed_run_id = run_context.reserve_pipeline_publication()
     except RuntimeError:
@@ -380,6 +409,11 @@ async def run_research_pipeline(
     ]
     last_error = failed_attempts[-1] if failed_attempts else None
 
+    # Determine where artifacts currently reside (issue #4).  When
+    # defer_publication is active (managed run), artifacts are staged in
+    # staging/run_<id>/ and published to artifacts/ only at run completion.
+    artifact_dir = f"staging/{managed_run_id}" if managed_run_id is not None else "artifacts"
+
     result = {
         "task_id": manifest.task_id,
         "status": manifest.task_state.value,
@@ -393,12 +427,17 @@ async def run_research_pipeline(
             }
             for entry in manifest.artifacts
         ],
+        "artifact_dir": artifact_dir,
         "mode": mode,
         "topic": topic,
         "note": (
-            "Artifacts are published to the task's artifacts/ directory "
-            "with the exact names listed above. Reference these filenames "
-            "verbatim in any user-facing report; do not invent filenames."
+            f"Artifacts are in the '{artifact_dir}' directory"
+            + (
+                " (will be published to artifacts/ at run completion)."
+                if managed_run_id is not None
+                else "."
+            )
+            + " Reference these filenames verbatim; do not invent filenames."
         ),
     }
     if last_error is not None:
