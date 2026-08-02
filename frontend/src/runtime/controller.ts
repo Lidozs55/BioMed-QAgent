@@ -585,36 +585,28 @@ export class RuntimeController {
     useAgentStore.getState().removeTask(taskId);
   }
 
-  loadAllTasks(): Promise<void> {
-    if (useAgentStore.getState().nextCursor === null) return Promise.resolve();
+  loadMoreTasks(): Promise<void> {
+    const cursor = useAgentStore.getState().nextCursor;
+    if (cursor === null) return Promise.resolve();
     if (this.taskHistoryExpansion !== null) return this.taskHistoryExpansion;
 
     const expansion = (async () => {
-      const seenCursors = new Set<string>();
-      while (true) {
-        const cursor = useAgentStore.getState().nextCursor;
-        if (cursor === null) return;
-        if (seenCursors.has(cursor)) {
-          throw new Error("Task pagination cursor did not advance");
-        }
-        seenCursors.add(cursor);
-        const page = excludeDeletedTasks(
-          await this.api.fetchTasks({
-            limit: TASK_PAGE_SIZE,
-            cursor,
-          }),
-          this.deletedTaskIds,
-        );
-        if (page.next_cursor === cursor) {
-          throw new Error("Task pagination cursor did not advance");
-        }
-        useAgentStore.getState().mergeTaskPage(page, true);
-        for (const task of page.active_items) {
-          const lastSequence =
-            useAgentStore.getState().tasksById[task.task_id]?.lastSequence ??
-            task.latest_sequence;
-          this.transport.subscribe(task.task_id, lastSequence);
-        }
+      const page = excludeDeletedTasks(
+        await this.api.fetchTasks({
+          limit: TASK_PAGE_SIZE,
+          cursor,
+        }),
+        this.deletedTaskIds,
+      );
+      if (page.next_cursor === cursor) {
+        throw new Error("Task pagination cursor did not advance");
+      }
+      useAgentStore.getState().mergeTaskPage(page, true);
+      for (const task of page.active_items) {
+        const lastSequence =
+          useAgentStore.getState().tasksById[task.task_id]?.lastSequence ??
+          task.latest_sequence;
+        this.transport.subscribe(task.task_id, lastSequence);
       }
     })();
 

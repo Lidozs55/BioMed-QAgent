@@ -61,7 +61,7 @@ interface SessionSidebarProps {
   onOpenSettings?: () => void;
   onNewDraft: () => void;
   onSelectTask: (taskId: string) => void | Promise<void>;
-  onLoadAll?: () => Promise<void>;
+  onLoadMore?: () => Promise<void>;
   onRetryHistory?: () => Promise<void>;
   onCancelRun?: (taskId: string, runId: string) => Promise<void>;
   onDeleteTask?: (taskId: string) => Promise<void>;
@@ -171,7 +171,7 @@ function TaskRow({
 export function SessionSidebar({
   onNewDraft,
   onSelectTask,
-  onLoadAll,
+  onLoadMore,
   onRetryHistory,
   onCancelRun,
   onDeleteTask,
@@ -187,7 +187,7 @@ export function SessionSidebar({
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
-  const [loadingAll, setLoadingAll] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
     () => new Set(),
   );
@@ -237,17 +237,17 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showNewDraft]);
 
-  const loadAll = async () => {
-    if (loadingAll || onLoadAll === undefined) return;
-    setLoadingAll(true);
+  const loadMore = async () => {
+    if (loadingMore || onLoadMore === undefined || nextCursor === null) return;
+    setLoadingMore(true);
     try {
-      await onLoadAll();
+      await onLoadMore();
     } catch (error) {
       toast.error("历史任务加载失败", {
         description: errorMessage(error),
       });
     } finally {
-      setLoadingAll(false);
+      setLoadingMore(false);
     }
   };
 
@@ -342,7 +342,14 @@ export function SessionSidebar({
           </Button>
         </SidebarHeader>
 
-        <SidebarContent>
+        <SidebarContent
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            if (element.scrollHeight - element.scrollTop - element.clientHeight < 160) {
+              void loadMore();
+            }
+          }}
+        >
           <SidebarGroup>
             <SidebarGroupContent>
               {historyStatus === "error" && (
@@ -380,26 +387,14 @@ export function SessionSidebar({
                   </EmptyHeader>
                 </Empty>
               ) : null}
-              {nextCursor !== null && onLoadAll !== undefined && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-1 w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
-                  disabled={loadingAll}
-                  aria-label={loadingAll ? "正在加载全部会话" : "显示更多"}
-                  onClick={() => void loadAll()}
+              {loadingMore && (
+                <div
+                  role="status"
+                  className="flex items-center justify-center gap-2 p-3 text-xs text-muted-foreground"
                 >
-                  {loadingAll ? (
-                    <Spinner
-                      data-icon="inline-start"
-                      className="text-primary"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <PlusCircleIcon data-icon="inline-start" aria-hidden="true" />
-                  )}
-                  {loadingAll ? "正在加载" : "显示更多"}
-                </Button>
+                  <Spinner className="size-3.5" aria-hidden="true" />
+                  正在加载
+                </div>
               )}
             </SidebarGroupContent>
           </SidebarGroup>

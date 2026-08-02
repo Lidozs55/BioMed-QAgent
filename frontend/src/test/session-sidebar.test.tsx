@@ -45,6 +45,25 @@ function summary(
   };
 }
 
+function scrollSidebarToBottom() {
+  const content = document.querySelector(
+    '[data-slot="sidebar-content"]',
+  ) as HTMLElement;
+  Object.defineProperty(content, "scrollHeight", {
+    value: 1000,
+    configurable: true,
+  });
+  Object.defineProperty(content, "clientHeight", {
+    value: 200,
+    configurable: true,
+  });
+  Object.defineProperty(content, "scrollTop", {
+    value: 760,
+    configurable: true,
+  });
+  fireEvent.scroll(content);
+}
+
 function renderSidebar(
   props: Partial<React.ComponentProps<typeof SessionSidebar>> = {},
 ) {
@@ -54,7 +73,7 @@ function renderSidebar(
         onNewDraft={vi.fn()}
         onSelectTask={vi.fn()}
         onRetryHistory={vi.fn().mockResolvedValue(undefined)}
-        onLoadAll={vi.fn().mockResolvedValue(undefined)}
+        onLoadMore={vi.fn().mockResolvedValue(undefined)}
         onCancelRun={vi.fn().mockResolvedValue(undefined)}
         onDeleteTask={vi.fn().mockResolvedValue(undefined)}
         {...props}
@@ -127,7 +146,7 @@ describe("SessionSidebar", () => {
     );
     useAgentStore.getState().setActiveTaskId("history_a");
     let resolveLoad: (() => void) | undefined;
-    const onLoadAll = vi.fn(
+    const onLoadMore = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           resolveLoad = () => {
@@ -143,15 +162,16 @@ describe("SessionSidebar", () => {
           };
         }),
     );
-    renderSidebar({ onLoadAll });
+    renderSidebar({ onLoadMore });
 
-    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
-    expect(screen.getByRole("button", { name: "正在加载全部会话" })).toBeDisabled();
+    scrollSidebarToBottom();
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toBeVisible();
     expect(screen.getAllByText("Active A")).toHaveLength(1);
     act(() => resolveLoad?.());
 
     await waitFor(() => expect(screen.getByText("History B")).toBeVisible());
-    expect(screen.queryByRole("button", { name: "显示更多" })).toBeNull();
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
   });
 
@@ -164,10 +184,10 @@ describe("SessionSidebar", () => {
       },
       false,
     );
-    const onLoadAll = vi.fn().mockRejectedValue(new Error("history unavailable"));
-    renderSidebar({ onLoadAll });
+    const onLoadMore = vi.fn().mockRejectedValue(new Error("history unavailable"));
+    renderSidebar({ onLoadMore });
 
-    fireEvent.click(screen.getByRole("button", { name: "显示更多" }));
+    scrollSidebarToBottom();
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
