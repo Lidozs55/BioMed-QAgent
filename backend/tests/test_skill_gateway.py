@@ -524,3 +524,37 @@ async def test_find_skill_dispatches_to_search_async_when_available() -> None:
     assert strategy.async_called is True
     assert strategy.model_settings_arg is ctx.context.model_settings
     assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "   "])
+async def test_find_skill_treats_blank_source_as_unspecified(
+    source: str,
+) -> None:
+    """LLM callers serialize an unset optional param as ''; that must behave
+    like ``source=None`` instead of filtering every candidate out."""
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill()]))
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="", source=source)
+
+    assert '"geo_fetch"' in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_find_skill_source_alias_browser_matches_browser_skill() -> None:
+    """source='browser' resolves browser_fallback via its supported_sources."""
+    browser = SkillDescriptor.from_skill_def(
+        SkillDef(
+            name="browser_fallback",
+            category=SkillCategory.ACQUISITION,
+            description="Browser fallback acquisition.",
+            supported_sources=["browser", "browser_fallback", "http", "web"],
+            tools=[fetch_record],
+        ),
+    )
+    find_skill, _ = build_skill_gateway(SkillCatalog([_skill(), browser]))
+    ctx = _context()
+    result = await _call(find_skill, ctx, text="", source="browser")
+    names = [s["name"] for s in result["skills"]]
+
+    assert names == ["browser_fallback"]

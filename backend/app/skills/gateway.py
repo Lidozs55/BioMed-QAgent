@@ -73,7 +73,11 @@ def build_skill_gateway(
         source filter.
         """
         snapshot = catalog.snapshot()
-        normalized_source = normalize_skill_search_text(source) if source is not None else None
+        normalized_source = (
+            normalize_skill_search_text(source)
+            if source is not None and source.strip()
+            else None
+        )
         candidates: list[SkillDescriptor] = []
         for descriptor in snapshot.skills.values():
             if not descriptor.enabled:
