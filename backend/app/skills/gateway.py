@@ -198,9 +198,25 @@ def build_skill_gateway(
                     operation=operation,
                 )
         try:
-            validator_class = validator_for(handle.tool.params_json_schema)
-            validator_class.check_schema(handle.tool.params_json_schema)
-            validator_class(handle.tool.params_json_schema).validate(arguments)
+            schema = handle.tool.params_json_schema
+            validator_class = validator_for(schema)
+            validator_class.check_schema(schema)
+            # The SDK marks every strict-schema property as required even when
+            # the parameter carries a default (see ensure_strict_json_schema).
+            # Treat defaulted properties as optional so callers may omit them.
+            required = list(schema.get("required", []))
+            defaulted = {
+                name
+                for name in required
+                if "default" in schema.get("properties", {}).get(name, {})
+            }
+            if defaulted:
+                effective = schema | {
+                    "required": [name for name in required if name not in defaulted]
+                }
+            else:
+                effective = schema
+            validator_class(effective).validate(arguments)
         except JsonSchemaValidationError as exc:
             return _error(
                 "invalid_arguments",
