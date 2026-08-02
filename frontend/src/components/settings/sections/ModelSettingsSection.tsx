@@ -1,7 +1,7 @@
 import { EyeClosedIcon, EyeIcon, Image, SpeakerHigh, VideoCamera } from "@phosphor-icons/react";
 
 import { ModelInfoCard } from "@/components/model-info-card";
-import { ContextWindowSlider } from "@/components/ContextWindowSlider";
+import { ContextWindowSelect } from "@/components/ContextWindowSelect";
 import {
   NumberField,
   SettingCard,
@@ -143,7 +143,7 @@ export function ModelSettingsSection({
           <SettingRow
             id="settings-apikey"
             title="API Key"
-            description="已保存的密钥不会回填输入框。留空并保存，可清除密钥。"
+            description="已保存的密钥以掩码形式回显，保留首尾字符；输入新值可覆盖，留空并保存可清除。"
             controlId="settings-apikey"
             highlight={highlightAnchor === "settings-apikey"}
             controlClassName="w-full sm:w-96"
@@ -153,6 +153,7 @@ export function ModelSettingsSection({
                   id="settings-apikey"
                   type={draft.showApiKey ? "text" : "password"}
                   value={draft.apiKey}
+                  onFocus={(event) => event.target.select()}
                   onChange={(event) => onDraftChange({ apiKey: event.target.value })}
                   placeholder={settings?.api_key_configured ? "输入新值以覆盖已配置密钥" : "sk-..."}
                   className="w-full pr-8"
@@ -301,7 +302,7 @@ export function ModelSettingsSection({
       >
         <SettingCard>
           <div className="px-5 py-4">
-            <ContextWindowSlider
+            <ContextWindowSelect
               value={settings?.context_window ?? 0}
               maxCatalogWindow={selectedModel?.context_window ?? 0}
               source={settings?.context_window_source ?? "unknown"}

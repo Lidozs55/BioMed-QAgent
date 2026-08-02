@@ -100,6 +100,14 @@ The active settings API and frontend contracts expose:
 
 Known models populate context metadata automatically and permit an explicit override. Unknown models require an explicit positive context-window value before save/run. The UI displays context capacity, metadata source, reserved output, safety reserve, and available input capacity. Advanced ratios are editable only in advanced settings. API validation is authoritative and rejects invalid combinations regardless of UI behavior.
 
+The model settings page keeps model selection and generation parameters on one
+page (parallel layout) rather than a serial wizard: model selection is the
+primary control, and the context window plus output/generation parameters below
+it adapt to the selected model. The context window is chosen from a preset
+dropdown (8K-2M plus a custom entry), with options filtered to the selected
+model's documented maximum; the dropdown replaces the earlier slider while
+preserving the custom override popover.
+
 ## Testing
 
 The implementation is test-first and must add tests before production changes.

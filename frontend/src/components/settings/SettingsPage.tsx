@@ -162,6 +162,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       setSkills(nextSkills);
       setDraft({
         ...INITIAL_DRAFT,
+        apiKey: nextSettings.api_key_configured ? nextSettings.api_key : "",
         modelName: nextSettings.model_name,
         maxTokens: nextSettings.max_tokens,
         temperature: nextSettings.advanced.temperature ?? 0.7,
@@ -253,7 +254,10 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     setSaving(true);
     try {
       try {
-        await api.fetchModels({ baseUrl: draft.baseUrl, apiKey: draft.apiKey });
+        await api.fetchModels({
+          baseUrl: draft.baseUrl,
+          apiKey: apiKeyDirtyRef.current ? draft.apiKey : undefined,
+        });
       } catch {
         setSaving(false);
         setModelError("API 密钥验证失败，请检查密钥是否正确或与 Base URL 是否匹配");
@@ -285,7 +289,10 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       if (saveSeqRef.current !== seq) return;
 
       setSettings(updated);
-      setDraft((previous) => ({ ...previous, apiKey: "" }));
+      setDraft((previous) => ({
+        ...previous,
+        apiKey: updated.api_key_configured ? updated.api_key : "",
+      }));
       apiKeyDirtyRef.current = false;
       setDirty(false);
       setModelsLoaded(true);
