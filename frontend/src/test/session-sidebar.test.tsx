@@ -263,11 +263,22 @@ describe("SessionSidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Task B 运行中" }));
     expect(onSelectTask).toHaveBeenCalledWith("task_b");
-    const newResearch = screen.getByRole("button", { name: "新建研究" });
+    const newResearch = screen.getByRole("button", { name: /新建研究/ });
     expect(newResearch).toBeEnabled();
     fireEvent.click(newResearch);
     expect(onNewDraft).toHaveBeenCalledTimes(1);
     expect(useAgentStore.getState().tasksById.task_a.summary.status).toBe("running");
+  });
+  it("creates a new draft with Ctrl+N and shows the shortcut blocks", () => {
+    const onNewDraft = vi.fn();
+    renderSidebar({ onNewDraft });
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+
+    expect(onNewDraft).toHaveBeenCalledTimes(1);
+    const newResearch = screen.getByRole("button", { name: /新建研究/ });
+    expect(within(newResearch).getByText("Ctrl")).toBeInTheDocument();
+    expect(within(newResearch).getByText("N")).toBeInTheDocument();
   });
 
   it("uses status icons as the only visible status treatment", () => {

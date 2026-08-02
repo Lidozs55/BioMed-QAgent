@@ -9,7 +9,7 @@ import {
   WifiSlashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { TaskStatusIcon } from "@/components/taskStatus";
@@ -209,9 +209,9 @@ export function SessionSidebar({
   const deleteTarget =
     deleteTargetId === null ? undefined : tasksById[deleteTargetId];
 
-  const closeMobile = () => {
+  const closeMobile = useCallback(() => {
     if (isMobile) setOpenMobile(false);
-  };
+  }, [isMobile, setOpenMobile]);
 
   const selectTask = async (taskId: string) => {
     closeMobile();
@@ -222,10 +222,21 @@ export function SessionSidebar({
     }
   };
 
-  const showNewDraft = () => {
+  const showNewDraft = useCallback(() => {
     onNewDraft();
     closeMobile();
-  };
+  }, [closeMobile, onNewDraft]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        showNewDraft();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showNewDraft]);
 
   const loadAll = async () => {
     if (loadingAll || onLoadAll === undefined) return;
@@ -315,12 +326,20 @@ export function SessionSidebar({
           </div>
           <Button
             variant="outline"
-            size="sm"
-            className="w-full justify-start"
+            size="lg"
+            className="h-11 w-full justify-start gap-2 px-3"
             onClick={showNewDraft}
           >
-            <PlusCircleIcon data-icon="inline-start" />
-            新建研究
+            <PlusCircleIcon data-icon="inline-start" className="size-5" />
+            <span className="truncate">新建研究</span>
+            <span className="ml-auto flex shrink-0 items-center gap-1">
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+                Ctrl
+              </kbd>
+              <kbd className="rounded-md border border-sidebar-border bg-sidebar-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-sidebar-foreground/70">
+                N
+              </kbd>
+            </span>
           </Button>
         </SidebarHeader>
 
