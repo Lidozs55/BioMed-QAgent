@@ -270,7 +270,7 @@ browser_fallback_skill = SkillDef(
         "and records linked download provenance."
     ),
     tools=[navigate_page, download_from_page],
-    supported_sources=["browser_fallback", "http", "web"],
+    supported_sources=["browser", "browser_fallback", "http", "web"],
     version="0.2.0",
 )
 
