@@ -4,9 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
-import time
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +19,12 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
     make_source_id,
 )
+from app.skills.builtin.acquisition._download_io import (
+    _write_download,
+    download_file,
+    fetch_json,
+    rate_limit,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
@@ -30,83 +33,28 @@ _SEARCH_API = "https://search.rcsb.org/rcsbsearch/v2/query"
 _DATA_API = "https://data.rcsb.org/rest/v1/core/entry/"
 _FILES_BASE = "https://files.rcsb.org/download/"
 
-#: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
-#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
-_RATE_LIMIT_SECONDS = 2.0
-
 #: search_pdb 内部对前 N 条结果补全详情，避免 N+1 查询阻塞 agent loop。
 _DESCRIBE_BATCH_LIMIT = 3
 
-_last_request_ts: float = 0.0
-
 
 def _rate_limit() -> None:
-    """Sleep so that two consecutive PDB API calls are at least 2s apart."""
-    global _last_request_ts
-    now = time.monotonic()
-    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request_ts = time.monotonic()
+    """Rate limit (delegates to shared ``_download_io.rate_limit``)."""
+    rate_limit()
 
 
 def _post_json(url: str, body: dict) -> dict:
-    """POST JSON body and return parsed response."""
-    _rate_limit()
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": _USER_AGENT,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    """POST JSON body and return parsed response (delegates to shared helper)."""
+    return fetch_json(url, method="POST", json_body=body)
 
 
 def _get_json(url: str) -> dict:
-    """GET JSON from a URL with browser User-Agent."""
-    _rate_limit()
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    """GET JSON from a URL (delegates to shared helper)."""
+    return fetch_json(url)
 
 
 def _download(url: str, dest: Path) -> None:
-    """Download a file to dest (atomic via .part rename)."""
-    _rate_limit()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(
-        url, headers={"User-Agent": _USER_AGENT}, method="GET"
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    if dest.exists():
-        dest.unlink()
-    tmp.rename(dest)
-
-
-def _write_download(content: bytes, dest: Path) -> None:
-    """Write crawler bytes to a task-local path through an atomic temp file."""
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    tmp.write_bytes(content)
-    tmp.replace(dest)
+    """Download a file to dest (delegates to shared helper, atomic .part rename)."""
+    download_file(url, dest)
 
 
 async def _fetch_json_for_run(

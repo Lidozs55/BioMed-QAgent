@@ -13,6 +13,7 @@ from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
 )
+from app.model_info.vendors import list_vendors as _list_vendor_dicts
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
 from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
@@ -61,31 +62,6 @@ class ModelPreviewRequest(BaseModel):
     query: str | None = None
     preview_base_url: str
     preview_api_key: str = ""
-
-
-VENDORS = (
-    {
-        "id": "dashscope",
-        "name": "DashScope",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "description": "阿里云 Qwen 官方 API",
-        "recommended": True,
-    },
-    {
-        "id": "openai",
-        "name": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "description": "OpenAI 官方 API",
-        "recommended": False,
-    },
-    {
-        "id": "deepseek",
-        "name": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
-        "description": "DeepSeek 官方 API",
-        "recommended": False,
-    },
-)
 
 
 def get_store(request: Request) -> ModelSettingsStore:
@@ -171,7 +147,7 @@ async def update_settings(body: SettingsUpdate, store: StoreDep) -> PublicSettin
 
 @router.get("/vendors")
 async def list_vendors() -> dict[str, object]:
-    return {"vendors": VENDORS}
+    return {"vendors": _list_vendor_dicts()}
 
 
 @router.post("/models")

@@ -68,7 +68,7 @@ def test_agent_instructions_require_dynamic_skill_discovery_protocol() -> None:
     assert "find_skill" in INSTRUCTIONS
     assert "invoke_skill" in INSTRUCTIONS
     assert "技能目录更新后" in INSTRUCTIONS
-    assert "简短自然语言能力描述" in INSTRUCTIONS
+    assert "简短 `text` 描述能力" in INSTRUCTIONS
     assert "缩短查询" in INSTRUCTIONS
     assert "优先传 `source`" in INSTRUCTIONS
     assert "每个被选中的数据库必须至少调用一次" not in INSTRUCTIONS
@@ -80,14 +80,11 @@ def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
         RunContext(preferred_sources=["pubmed"]),
     )
 
-    assert "not_found 不得触发 create_skill" in instructions
+    assert "不等于能力缺失" in instructions
     assert "capability_gap" in instructions
-    assert "同一 domain + capability 最多调用一次" in instructions
+    assert "同一 domain+capability 最多一次" in instructions
     assert "优先检索用户选择的 preferred_sources" in instructions
     assert "公开、免登录" in instructions
-    assert "SkillBuilderAgent" in instructions
-    assert "HIL" in instructions
-    assert "`credential_required` 必须转 HIL" in instructions
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,9 @@
-"""OpenAI-compatible vendor quick-select data and helpers."""
+"""OpenAI-compatible vendor quick-select data and helpers.
+
+Single source of truth for the vendor list served by ``GET /api/v1/vendors``.
+Relocated from ``app.model_config.vendors`` (which was dead code) so the vendor
+catalog lives alongside the rest of the model-info warehouse.
+"""
 
 from __future__ import annotations
 

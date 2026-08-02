@@ -190,7 +190,7 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
     name_override="run_research_pipeline",
     description_override=(
         "Run the deterministic validated research-data pipeline. "
-        "Call this tool at most twice per research task.  Pass ``pmid``/``gse`` "
+        "Call this tool at most 5 times per research task.  Pass ``pmid``/``gse`` "
         "when you have already discovered explicit accessions via "
         "search_pubmed/search_geo/describe_geo — the pipeline does NOT auto-search "
         "GEO by topic, so ``gse`` is required when GEO is in databases.  "
@@ -287,12 +287,12 @@ async def run_research_pipeline(
         )
 
     # Issue #3: limit pipeline retries to prevent agent stuck loops.
-    if run_context.pipeline_attempt_count >= 2:
+    if run_context.pipeline_attempt_count >= 5:
         return json.dumps(
             {
                 "status": "max_attempts_exceeded",
                 "message": (
-                    "The research pipeline has been attempted 2 times and failed. "
+                    "The research pipeline has been attempted 5 times and failed. "
                     "Do not call run_research_pipeline again. Report the failure "
                     "to the user with the error details from the last attempt."
                 ),
@@ -377,6 +377,7 @@ async def run_research_pipeline(
             event_sink=bridge.event_sink if bridge is not None else None,
             run_id=managed_run_id or STANDALONE_RUN_ID,
             model_name=run_context.model_settings.model_name,
+            lock_timeout=run_context.model_settings.runtime_limits.lock_timeout_seconds,
         )
         if bridge is not None:
             submitter = runner.submit_user_input

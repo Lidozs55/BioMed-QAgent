@@ -674,8 +674,8 @@ async def test_text_buffer_discards_suspect_json_on_tool_call_finish() -> None:
         p.delta for p in durable_payloads if isinstance(p, AssistantDeltaPayload)
     )
     assert durable_text == "开始检索。\n"
-    assert buffer._json_suspect_active is False
-    assert buffer._json_suspect_parts == []
+    assert buffer._json_suspect.active is False
+    assert buffer._json_suspect._parts == []
 
 
 @pytest.mark.asyncio
@@ -778,12 +778,12 @@ async def test_text_buffer_flushes_suspect_as_text_when_exceeding_cap() -> None:
     live_frames: list[object] = []
     execution = _make_text_buffer_execution(durable_payloads, live_frames)
     buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
-    buffer._json_suspect_max_bytes = 20  # 设小上限便于测试
+    buffer._json_suspect._max_bytes = 20  # 设小上限便于测试
 
     # 行首 `{` 触发，但内容超过 20 字节且非合法 JSON
     await buffer.add("{这是很长很长的非 JSON 文本内容，超过上限")
     # 触发上限后应已补发并退出可疑模式
-    assert buffer._json_suspect_active is False
+    assert buffer._json_suspect.active is False
     await buffer.end("stop")
 
     live_deltas = [
@@ -800,7 +800,7 @@ async def test_text_buffer_discards_large_tool_args_json_via_tool_call() -> None
     execution = _make_text_buffer_execution(durable_payloads, live_frames)
     buffer = runner_module._AssistantTextBuffer(execution, max_bytes=1024)
     # 释放上限，验证大 JSON 也能正确缓冲
-    buffer._json_suspect_max_bytes = 10 * 1024 * 1024
+    buffer._json_suspect._max_bytes = 10 * 1024 * 1024
 
     # 模拟真实场景：文本 + 行首大 JSON
     await buffer.add("现在开始执行文献线索提取。\n\n")
@@ -858,6 +858,130 @@ async def test_text_buffer_creates_new_segment_when_flushing_non_json_text() -> 
     )
     assert segment_0_text == "前缀文本\n"
     assert segment_1_text == "{这是非JSON文本"
+
+
+# ── JsonSuspectBuffer unit tests ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_json_suspect_buffer_discards_on_tool_call_finalize() -> None:
+    """``finalize("tool_call")`` discards buffered text without calling flush."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback)
+    buf.activate()
+    await buf.add('{"query": "alzheimer"}')
+
+    await buf.finalize("tool_call")
+
+    assert buf.active is False
+    assert flushed == []
+
+
+@pytest.mark.asyncio
+async def test_json_suspect_buffer_resends_non_json_text_on_stop() -> None:
+    """``finalize("stop")`` with non-JSON text resends via flush_callback."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback)
+    buf.activate()
+    await buf.add("{这是普通文本，不是 JSON")
+
+    await buf.finalize("stop")
+
+    assert buf.active is False
+    assert flushed == ["{这是普通文本，不是 JSON"]
+
+
+@pytest.mark.asyncio
+async def test_json_suspect_buffer_discards_valid_json_on_stop() -> None:
+    """``finalize("stop")`` with valid JSON (dict/list) discards without resend."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback)
+    buf.activate()
+    await buf.add('{"key": "value"}')
+
+    await buf.finalize("stop")
+
+    assert buf.active is False
+    assert flushed == []
+
+
+@pytest.mark.asyncio
+async def test_json_suspect_buffer_flushes_as_text_when_exceeding_cap() -> None:
+    """Exceeding ``max_bytes`` flushes as text and exits suspect mode."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback, max_bytes=20)
+    buf.activate()
+    await buf.add("{这是很长很长的非 JSON 文本内容，超过上限")
+
+    assert buf.active is False
+    assert flushed == ["{这是很长很长的非 JSON 文本内容，超过上限"]
+
+
+@pytest.mark.asyncio
+async def test_json_suspect_buffer_finalize_is_noop_when_not_active() -> None:
+    """``finalize`` when not active is a no-op (no flush callback)."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback)
+    await buf.finalize("stop")
+
+    assert buf.active is False
+    assert flushed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finish_reason", "content", "should_flush"),
+    [
+        ("tool_call", '{"query": "test"}', False),
+        ("stop", '{"query": "test"}', False),
+        ("stop", "{not json", True),
+        ("stop", "", False),
+        ("length", "{not json", True),
+    ],
+)
+async def test_json_suspect_buffer_finalize_matrix(
+    finish_reason: str,
+    content: str,
+    should_flush: bool,
+) -> None:
+    """Parametrized matrix covering discard vs resend decision paths."""
+    flushed: list[str] = []
+
+    async def flush_callback(text: str) -> None:
+        flushed.append(text)
+
+    buf = runner_module.JsonSuspectBuffer(flush_callback=flush_callback)
+    buf.activate()
+    if content:
+        await buf.add(content)
+
+    await buf.finalize(finish_reason)
+
+    assert buf.active is False
+    if should_flush:
+        assert flushed == [content]
+    else:
+        assert flushed == []
 
 
 @pytest.mark.asyncio
