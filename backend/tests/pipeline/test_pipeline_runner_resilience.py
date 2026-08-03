@@ -10,11 +10,15 @@ import hashlib
 import json
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from app.domain.contracts import (
     AttemptStatus,
+    DownloadAttempt,
+    DownloadStatus,
+    ErrorCode,
     StageName,
     TaskState,
     UserInputRequiredPayload,
@@ -26,8 +30,55 @@ from app.pipeline.runner import (
     PipelineRunner,
 )
 from app.pipeline.stages import PipelineCancelledError
+from app.pipeline.state import DownloadAttemptAuditRecord
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+def test_failed_acquisition_attempts_are_persisted_for_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.pipeline import runner as runner_module
+
+    recorded_at = datetime.now(UTC)
+    download_attempt = DownloadAttempt(
+        attempt_id="download_attempt_failed_audit",
+        source_id="src_failed_audit",
+        url="https://example.org/data.tsv",
+        status=DownloadStatus.FAILED,
+        bytes_received=17,
+        error_code=ErrorCode.NETWORK_ERROR,
+        error_message="download returned HTTP 503",
+        started_at=recorded_at,
+        finished_at=recorded_at,
+    )
+
+    def fail_acquisition(ctx, *_args, **_kwargs):
+        ctx.record_download_attempt(download_attempt)
+        raise RuntimeError("all acquisition candidates failed")
+
+    monkeypatch.setattr(runner_module, "run_acquisition", fail_acquisition)
+    runner = PipelineRunner(
+        task_id="task_failed_download_audit",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="fixture",
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.FAILED
+    audit_path = runner.workdir.logs / "download_attempts.jsonl"
+    records = [
+        DownloadAttemptAuditRecord.model_validate_json(line)
+        for line in audit_path.read_text("utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0].task_id == "task_failed_download_audit"
+    assert records[0].run_id == runner.ctx.run_id
+    assert records[0].stage_attempt_id.startswith("stage_attempt_")
+    assert records[0].attempt == download_attempt
 
 
 def test_live_parameter_digest_does_not_read_missing_fixture_directory(
