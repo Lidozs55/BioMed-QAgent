@@ -16,9 +16,11 @@ from uuid import uuid4
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
+    Database,
     RunManifest,
     StageAttempt,
     TaskRequest,
+    TaskSpecification,
     TaskState,
     ValidationSummary,
 )
@@ -48,6 +50,8 @@ def _sha256(path: Path) -> str:
 
 
 _DEFAULT_MAX_LINEAGE_CHECKS = 100
+_PINNED_GEO_ACCESSION = "GSE178352"
+_PINNED_PMID = "34180400"
 _ARTIFACT_BACKUP_NAME = re.compile(r"^\.artifacts\.previous-[0-9a-f]{32}$")
 _MARKER_BACKUP_NAME = re.compile(
     r"^publish_completed\.previous-[0-9a-f]{32}\.json$"
@@ -55,13 +59,16 @@ _MARKER_BACKUP_NAME = re.compile(
 _LOGGER = logging.getLogger(__name__)
 
 
-def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[dict[str, str]]:
+def _deterministic_sample(
+    rows: list[dict[str, str]],
+    max_samples: int | None,
+) -> list[dict[str, str]]:
     """Select up to ``max_samples`` rows deterministically by record_id hash.
 
     The sampling is stable across runs: the same input always yields the same
     subset, which makes validation failures reproducible.
     """
-    if len(rows) <= max_samples:
+    if max_samples is None or len(rows) <= max_samples:
         return rows
     scored = [
         (hashlib.sha256(row["record_id"].encode("utf-8")).digest(), row)
@@ -69,6 +76,23 @@ def _deterministic_sample(rows: list[dict[str, str]], max_samples: int) -> list[
     ]
     scored.sort(key=lambda item: item[0])
     return [row for _hash, row in scored[:max_samples]]
+
+
+def _requires_full_lineage_validation(
+    specification: TaskSpecification,
+) -> bool:
+    """Return whether *specification* is the official pinned acceptance pair."""
+    has_pinned_geo = any(
+        dataset.database is Database.GEO
+        and dataset.accession.strip().upper() == _PINNED_GEO_ACCESSION
+        for dataset in specification.datasets
+    )
+    has_pinned_pmid = any(
+        query.database is Database.PUBMED
+        and re.search(rf"(?<!\d){_PINNED_PMID}(?!\d)", query.query) is not None
+        for query in specification.queries
+    )
+    return has_pinned_geo and has_pinned_pmid
 
 
 def publish_artifacts(
@@ -413,7 +437,7 @@ def _validate_package(
     source_path: Path,
     report_path: Path,
     *,
-    max_lineage_checks: int = _DEFAULT_MAX_LINEAGE_CHECKS,
+    max_lineage_checks: int | None = _DEFAULT_MAX_LINEAGE_CHECKS,
 ) -> tuple[ValidationSummary, list[dict[str, object]]]:
     """Run all validation checks on the staging package."""
     main_path = staging / "main_data.csv"
@@ -900,6 +924,11 @@ def run_validation(
         build_output.staging_dir,
         build_output.source_path,
         ctx.workdir.logs / "validation_report.json",
+        max_lineage_checks=(
+            None
+            if _requires_full_lineage_validation(build_output.specification)
+            else _DEFAULT_MAX_LINEAGE_CHECKS
+        ),
     )
     write_csv(
         build_output.staging_dir / "quality_report.csv",
