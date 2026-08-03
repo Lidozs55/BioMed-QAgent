@@ -22,36 +22,10 @@
 
 ---
 
-## 二、PROBLEM.md 核心需求回顾
+## 二、系统产物详细审查
 
-### 2.1 七项核心能力要求
-
-| # | 能力 | 描述 |
-|---|------|------|
-| 1 | 数据查找 | 根据研究目标自动定位相关数据来源 |
-| 2 | 数据解析 | 从正文、表格、附件、图表中提取可用信息 |
-| 3 | 数据清洗 | 处理缺失、重复、格式不一致等问题 |
-| 4 | 字段对齐 | 统一不同来源的数据字段和格式 |
-| 5 | 来源标注 | 清晰标注每条数据的来源信息 |
-| 6 | 结构化输出 | 以标准化格式（如 CSV）输出整合结果 |
-| 7 | 图表数据处理 | 论文图像或图表的识别、提取或校验 |
-
-### 2.2 四项评价标准
-
-1. **数据查找完备性** — 在问题子领域内数据查找是否完备
-2. **来源可追溯性** — 数据来源是否清楚可追溯
-3. **清洗整合可靠性** — 数据清洗整合是否可靠
-4. **输出格式可用性** — 输出格式是否便于后续分析
-
-### 2.3 加分项
-
-- 自动识别缺失数据、重复数据、单位不一致
-- 自动识别图表坐标轴或图例解析错误
-- 能够完成修正或寻求人类建议后修正
-
----
-
-## 三、系统产物详细审查
+> PROBLEM.md 的七项能力要求和四项评价标准详见仓库根目录 PROBLEM.md，
+> 此处不再赘述。下文直接审查系统产物实际表现。
 
 ### 3.1 产物文件清单（task_03298a37, 14 CSV + 1 JSON）
 
@@ -77,39 +51,19 @@
 
 #### 缺陷 1：表达数据下载失败，Pipeline 以空数据继续
 
-`download_log.csv` 证据：
-```
-attempt_id: download_attempt_fa9ffe7d...
-url: https://ftp.ncbi.nlm.nih.gov/geo/series/GSE260nnn/GSE260461/suppl/GSE260461_tximportCounts.txt.gz
-status: failed
-error_code: network_error
-error_message: download returned HTTP 404
-bytes_received: 0
-```
+`download_log.csv` 显示 `GSE260461_tximportCounts.txt.gz` 下载返回 HTTP 404。
+Pipeline 仅成功下载了 series matrix 元数据文件（14 KB），然后以
+`geo_minimal_placeholder` 处理步骤生成了 39 行**纯元数据占位行**。
 
-表达计数文件 `GSE260461_tximportCounts.txt.gz` 返回 HTTP 404。Pipeline 仅成功下载了 series matrix 元数据文件（14 KB），然后以 `geo_minimal_placeholder` 处理步骤生成了 39 行**纯元数据占位行**。
-
-**问题**：
-- 下载失败后未尝试替代 URL（如 NCBI SRA、ArrayExpress 等）
-- 未尝试下载替代数据集（同主题的其他 GEO 数据集）
-- 未触发人在回路(HIL)机制让用户决策
-- Pipeline 继续执行并以"成功"状态完成
+**问题**：下载失败后未尝试替代 URL（SRA/ArrayExpress）、未尝试替代数据集、
+未触发 HIL 机制、Pipeline 继续以"成功"状态完成。
 
 #### 缺陷 2：main_data.csv 核心字段 100% 缺失
 
-`main_data.csv` 前 5 行证据（39 行完全同构）：
-```
-record_id: rec_040cd246...
-gene_id_raw: (空)
-gene_id: (空)
-gene_id_namespace: (空)
-expression_value: (空)
-source_raw_value: (空)
-measurement_type: sample_metadata
-value_semantics: metadata_only
-```
-
-`cleaning_report.csv` 确认：6 个核心字段各有 39 个缺失值（100%）。这意味着**产物中没有任何实际的基因表达数据**，只有 39 个样本的 ID 和分组标签。
+`main_data.csv` 的 39 行全部为 `metadata_only` 占位符——`gene_id`、
+`expression_value`、`source_raw_value` 均 100% 缺失。`cleaning_report.csv`
+确认 6 个核心字段各有 39 个缺失值。**产物中没有任何实际的基因表达数据**，
+只有 39 个样本的 ID 和分组标签。
 
 #### 缺陷 3：验证门禁过于宽松
 
@@ -337,98 +291,33 @@ AD 风险位点 ~95 个（APOE, ABCA7, BIN1, TREM2, SORL1 等）；OP/BMD GWAS �
 
 ## 七、优化建议
 
-### 7.1 P0：验证门禁增加核心数据存在性检查
+> 以下建议已按优先级实施或记录为后续设计。P0 项已在 §十四 实施，P1/P2 项
+> 的详细设计见 §十五。
 
-**问题**：100% 缺失的产物可以通过验证。
-
-**方案**：在 `validation/` 的检查项中增加：
-- `core_data_coverage`：检查 `main_data.csv` 中 `expression_value` 或 `gene_id` 的非空率。若非空率 < 阈值（如 10%），标记为 `warning`；若为 0%，标记为 `failed`
-- `measurement_substance`：检查 `measurement_type` 字段是否全部为 `sample_metadata`。若是，说明缺少实际测量数据
-
-### 7.2 P0：下载失败后的替代策略
-
-**问题**：HTTP 404 后无替代方案，直接降级为空数据。
-
-**方案**：
-1. GEO 表达数据下载失败时，自动尝试：
-   - NCBI SRA (Sequence Read Archive) 获取原始测序数据
-   - ArrayExpress 镜像
-   - GEO 的替代 supplementary 文件
-2. 若所有替代均失败，触发 HIL 机制：向用户报告"数据集 X 的表达数据不可用，是否选择替代数据集 Y/Z？"
-3. Pipeline 应有一个"最小数据质量门槛"——若核心数据缺失率 > 90%，标记 Pipeline 状态为 `degraded` 而非 `completed`
-
-### 7.3 P1：Agent 多数据库联合检索策略
-
-**问题**：Agent 仅使用 2/7 个数据库技能。
-
-**方案**：
-1. 在 system prompt 中增加"数据查找完备性自评估"步骤：Agent 在进入 Pipeline 前必须回答"我是否已查询了所有相关数据库？"
-2. 增加"数据查找清单"机制：根据研究主题自动生成应查询的数据库列表，Agent 逐项确认
-3. 对于"X 与 Y 共病"类主题，prompt 应指导 Agent 分别查询 X 相关数据、Y 相关数据和 X∩Y 共享机制数据
-
-### 7.4 P1：Pipeline 增加数据内容丰富度评估
-
-**问题**：产物仅有 2 个来源，无多源整合。
-
-**方案**：
-1. Pipeline 完成后增加"数据丰富度报告"：来源数、数据库覆盖数、基因覆盖数、通路覆盖数
-2. 若来源数 < 3 或数据库覆盖 < 3，自动建议 Agent 补充查询（而非直接完成）
-
-### 7.5 P2：GEO 处理步骤升级
-
-**问题**：`geo_minimal_placeholder` 非真实表达数据解析。
-
-**方案**：
-1. 实现 series matrix 的完整解析（提取 `!sample_characteristics`、`!sample_title` 等注释行，并解析 `series_matrix_table` 中的表达矩阵）
-2. 对于 RNA-seq 数据集，支持从 SRA 下载 FASTQ 并运行量化流程（或使用已量化的 tximport 数据）
-3. 处理步骤应能区分"元数据提取"和"表达数据解析"两种模式，前者仅作为补充
-
-### 7.6 P2：增加文献全文解析能力
-
-**问题**：仅获取了文献摘要，未解析全文中的表格、图表数据。
-
-**方案**：
-1. 对关键文献，尝试获取 PMC 全文 XML
-2. 从全文表格中提取基因列表、通路信息、实验数据
-3. 从图表中提取数据点（OCR + 结构化提取）
-
-### 7.7 P2：修复 dataset_catalog 数据库字段
-
-**问题**：GEO 数据集的 `database` 字段错误标记为 `pubmed`。
-
-**方案**：检查 discovery 阶段的 source 归类逻辑，确保 GEO 数据集的 `database` 字段为 `geo`。
+| 优先级 | 建议 | 状态 |
+|--------|------|------|
+| P0 | 验证门禁增加核心数据存在性检查 | ✅ 已实施（§14.1） |
+| P0 | 修复 dataset_catalog database 字段错误 | ✅ 已实施（§14.4） |
+| P0 | Agent 多数据库联合检索 + 共病双侧分解 | ✅ 已实施（§14.5，本轮重构为五类主题策略） |
+| P0 | 下载失败后替代策略 + HIL | 📋 见 §15.2 |
+| P1 | GEO series matrix 完整解析器 | 📋 见 §15.3 |
+| P1 | 覆盖率报告工具 + post-pipeline 检查 | 📋 见 §15.4 |
+| P2 | 文献全文表格提取 | 📋 见 §15.6 |
 
 ---
 
 ## 八、理想产物蓝图（基于独立科研）
 
-如果系统充分发挥能力，针对"AD 与 OP 共病"主题应产出：
+如果系统充分发挥能力，针对"AD 与 OP 共病"主题应覆盖 7 个数据库（PubMed 15+ 篇、
+GEO 10+ 个 AD+OP 数据集、GWAS 2 批次、PDB 9+ 结构、Reactome 7+ 通路、PubChem 10+
+化合物、Xena 2+ 仓库），`main_data.csv` 应包含 AD 脑组织和 OP 骨组织的基因表达矩阵，
+并以 22 个共享基因为枢纽产出多源整合表（基因 × AD 表达值 | OP 表达值 | 通路归属 |
+PDB 结构 | GWAS p-value）。
 
-### 8.1 数据来源（应覆盖 7 个数据库）
-
-| 数据库 | 应发现内容 | 来源数 |
-|--------|-----------|--------|
-| PubMed | 15+ 篇关键综述和原始研究 | 15+ |
-| GEO | AD 脑组织数据集 + OP 骨组织数据集 | 10+ |
-| GWAS Catalog | AD 风险位点 + BMD/OP 位点 | 2 批次 |
-| PDB | APP, SOST, RANKL-OPG, APOE4, VDR 等结构 | 9+ |
-| Reactome | Wnt, RANKL, 雌激素, 钙信号等通路 | 7+ |
-| PubChem | 双重靶点化合物 | 10+ |
-| Xena | TCGA/GTEx 跨组织表达数据 | 2+ |
-
-### 8.2 main_data.csv 应包含
-
-- AD 脑组织基因表达矩阵（基因 × 样本）
-- OP 骨组织基因表达矩阵（基因 × 样本）
-- 22 个共享基因的表达值跨组织比较
-- 样本元数据（含疾病状态、组织类型、APOE 基因型等）
-
-### 8.3 多源整合产物
-
-- **共享基因表**：22 个基因 × (AD 表达值 | OP 表达值 | 通路归属 | PDB 结构 | GWAS p-value)
-- **共享通路表**：7 条通路 × (基因列表 | 化合物靶点 | 文献证据)
-- **化合物-靶点表**：10+ 化合物 × (靶点蛋白 | 通路 | AD 活性 | OP 活性)
-- **文献-基因关联表**：15+ 文献 × (提及的基因 | 机制 | 数据集引用)
+> **架构限制**：当前 PDB/PubChem/GWAS 属于 `RESEARCH_ONLY` 数据库，数据无法进入
+> `artifacts/` 正式产物（详见 docs/AGENT_PROMPT_REFACTOR_DESIGN_2026-08-03.md §二）。
+> 实现理想蓝图需先将这些数据库升级为 `PIPELINE_SUPPORTED` 或增加 `agent_research_notes`
+> 产物通道。
 
 ---
 
@@ -438,14 +327,9 @@ AD 风险位点 ~95 个（APOE, ABCA7, BIN1, TREM2, SORL1 等）；OP/BMD GWAS �
 |---|------|------|------|----------|----------|
 | 1 | Xu G et al. | Front Immunol | 2026 | PMC13341297 | 骨-免疫-脑轴框架 |
 | 2 | Margetts TJ et al. | Curr Osteoporos Rep | 2024 | PMC10912148 | AD-OP 流行病学综述 |
-| 3 | Li YX et al. | Aging Dis | 2026 | doi:10.14336/AD.2024.1438 | 遗传/激素/环境机制 |
-| 4 | Li H et al. | Aging Dis | 2025 | PMC12834398 | 炎症桥梁机制 |
-| 5 | Ogunwale AN et al. | Geriatrics | 2025 | PMC12333915 | 共享生物标志物 |
-| 6 | Nagarajan A et al. | J Gerontol A | 2024 | doi:10.1093/gerona/glae211 | 跨组织网络分析 |
-| 7 | De Ferrari GV et al. | PNAS | 2007 | doi:10.1073/pnas.0603523104 | LRP6 Val-1062 共享变异 |
-| 8 | Xia W et al. | Molecules | 2023 | PMC9865655 | Aβ 在骨组织中沉积 |
-| 9 | Liu D et al. | Exp Gerontol | 2026 | PMID 41534646 | Probucol/AKT/FOXO3a 轴 |
-| 10 | Chen Q et al. | Bone Rep | 2024 | PMC11301219 | Aβ 通过 Wnt 影响骨 |
+| 3 | De Ferrari GV et al. | PNAS | 2007 | doi:10.1073/pnas.0603523104 | LRP6 Val-1062 共享变异 |
+| 4 | Nagarajan A et al. | J Gerontol A | 2024 | doi:10.1093/gerona/glae211 | 跨组织网络分析 |
+| 5 | Xia W et al. | Molecules | 2023 | PMC9865655 | Aβ 在骨组织中沉积 |
 
 ---
 
@@ -720,10 +604,11 @@ tximport 文件可能尚未上传）。在投入解析之前，**先验证文件
 
 | 策略 | 来源工作流阶段 | 实现方式 |
 |------|---------------|---------|
-| 共病主题双侧分解 | 阶段 0 | prompt 指导：X 与 Y 共病 → 分别查 X 侧、Y 侧、X∩Y 共享机制 |
-| 多数据库强制覆盖 | 阶段 4/6 | prompt 指导：至少覆盖 3 个相关数据库才进 Pipeline |
-| 机制驱动检索 | 阶段 2/4 | prompt 指导：先从综述提取候选机制，再按机制基因查 PDB/Reactome |
-| 数据可用性预检 | 阶段 5 | prompt 指导：传入 GSE 前用 search_geo 确认 supplementary 文件存在 |
+| 研究主题分类与策略选择 | 阶段 0 | prompt 第1步：五类主题（单疾病/共病/药物靶点/生物标志物/通路）各自策略 |
+| 多数据库强制覆盖 | 阶段 4/6 | prompt 第3步：覆盖门禁检查清单，至少 3 个相关数据库才进 Pipeline |
+| 机制驱动检索 | 阶段 2/4 | prompt 第2步：先从综述提取候选机制，再按机制基因查 PDB/Reactome |
+| 数据可用性预检 | 阶段 5 | prompt 第4步：传入 GSE 前优先选成熟数据集，404 后换替代 |
+| RESEARCH_ONLY 数据流 | 阶段 7 | prompt"数据库与数据流"小节：PDB/PubChem 数据用 write_file 保存供汇报 |
 
 ### 13.3 需要较大改动才能嵌入的部分（记录为后续设计）
 
@@ -771,11 +656,16 @@ tximport 文件可能尚未上传）。在投入解析之前，**先验证文件
 `sources[0].database.value`（总是 PubMed，因为 sources 列表 PubMed 在前）改为
 根据 `is_reactome` / `geo` 判定实际数据库。Reactome → "reactome"，有 geo → "geo"。
 
-### 14.5 Agent prompt 增加多数据库联合检索引导（P1）
+### 14.5 Agent prompt 连贯化重构（P1，两轮迭代）
 
 **文件**：`backend/app/agent_loop/agent.py`
-**改动**：在 `INSTRUCTIONS` 中新增"多数据库联合检索要求"和"共病主题双侧分解"
-两个小节，强制 Agent 至少覆盖 3 个相关数据库，并对共病主题做双侧分解。
+**改动**：
+- **第一轮**：新增多数据库覆盖门禁、共病双侧分解、数据可用性预检（补丁式）
+- **第二轮**：将补丁式小节重构为连贯的六步工作流——第1步内嵌五类研究主题
+  分类与策略选择（单疾病机制/共病/药物靶点/生物标志物/通路网络），第3步
+  内嵌结构化覆盖门禁检查清单，第4步内嵌数据可用性预检。新增"数据库与数据流"
+  小节明确 RESEARCH_ONLY 数据库（PDB/PubChem）的数据无法进入 artifacts/。
+  详见 `docs/AGENT_PROMPT_REFACTOR_DESIGN_2026-08-03.md`。
 
 ### 14.6 更新 `test_validation_split.py` 黄金检查序列（P0）
 
