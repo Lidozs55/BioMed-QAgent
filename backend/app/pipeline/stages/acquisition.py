@@ -268,6 +268,7 @@ async def _run_gdc_acquisition_live(
 ) -> StageResult:
     if not dataset.data_type:
         raise ValueError("GDC acquisition requires data_type")
+    official_data_type = _gdc_live_data_type(dataset.data_type)
     params = {
         "filters": json.dumps(
             {
@@ -280,7 +281,14 @@ async def _run_gdc_acquisition_live(
                             "value": dataset.accession,
                         },
                     },
-                    {"op": "=", "content": {"field": "data_type", "value": dataset.data_type}},
+                    {
+                        "op": "=",
+                        "content": {"field": "data_type", "value": official_data_type},
+                    },
+                    {
+                        "op": "=",
+                        "content": {"field": "data_format", "value": "TSV"},
+                    },
                 ],
             }
         ),
@@ -333,6 +341,23 @@ async def _run_gdc_acquisition_live(
             retrieved_at=retrieved_at,
         ),
     )
+
+
+def _gdc_live_data_type(data_type: str) -> str:
+    normalized = data_type.strip().lower().replace("_", "-")
+    if normalized in {
+        "gene-expression",
+        "gene expression",
+        "expression",
+        "gene expression quantification",
+    }:
+        return "Gene Expression Quantification"
+    if normalized == "clinical":
+        raise ValueError(
+            "GDC live clinical is not supported: Clinical Supplement files require "
+            "an XML lineage parser"
+        )
+    raise ValueError(f"unsupported GDC live data type: {data_type}")
 
 
 async def _run_xena_acquisition_live(
