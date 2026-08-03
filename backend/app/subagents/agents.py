@@ -26,6 +26,7 @@ from app.skills.builtin.processing.create_skill import create_skill_tool
 from app.skills.catalog import SkillCatalog
 from app.skills.gateway import build_skill_gateway
 from app.skills.registry import SkillCategory
+from app.subagents.result_safety import sanitize_subagent_result
 
 CHILD_AGENT_MAX_TURNS = 30
 
@@ -157,6 +158,12 @@ class _ChildAgentRunner:
         self._parent_context = parent_context
         self._factory = factory
 
+    def _sanitize_result(self, result: SubagentResult) -> SubagentResult:
+        return sanitize_subagent_result(
+            result,
+            known_secrets=(self._parent_context.model_settings.api_key,),
+        )
+
     async def _run_agent(
         self,
         request: SubagentRequest,
@@ -268,10 +275,12 @@ class SourceResearchAgentRunner(_ChildAgentRunner):
         del task_id, run_id
         if request.agent_type is not SubagentType.SOURCE_RESEARCH:
             raise ValueError("source runner received a non-source request")
-        return await self._run_agent(
-            request,
-            subagent_id=subagent_id,
-            agent=self._factory.build_source_research_agent(),
+        return self._sanitize_result(
+            await self._run_agent(
+                request,
+                subagent_id=subagent_id,
+                agent=self._factory.build_source_research_agent(),
+            )
         )
 
 
@@ -289,10 +298,12 @@ class SkillBuilderAgentRunner(_ChildAgentRunner):
         del task_id, run_id
         if request.agent_type is not SubagentType.SKILL_BUILDER:
             raise ValueError("skill builder received a non-builder request")
-        return await self._run_agent(
-            request,
-            subagent_id=subagent_id,
-            agent=self._factory.build_skill_builder_agent(),
+        return self._sanitize_result(
+            await self._run_agent(
+                request,
+                subagent_id=subagent_id,
+                agent=self._factory.build_skill_builder_agent(),
+            )
         )
 
 

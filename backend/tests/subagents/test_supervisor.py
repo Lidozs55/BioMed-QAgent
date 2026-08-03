@@ -212,6 +212,29 @@ class ErrorRunner:
         raise RuntimeError("runner exploded")
 
 
+class UnsafeResultRunner:
+    async def run(
+        self,
+        request: SubagentRequest,
+        *,
+        subagent_id: str,
+        task_id: str,
+        run_id: str,
+    ) -> SubagentResult:
+        del request, task_id, run_id
+        return SubagentResult(
+            subagent_id=subagent_id,
+            status=SubagentStatus.FAILED,
+            summary="Authorization: Bearer summary-secret\n" + "s" * 5_000,
+            warnings=[f"token=warning-{index} " + "w" * 700 for index in range(25)],
+            error_code=SubagentErrorCode.INTERNAL_ERROR,
+            error_message=(
+                "-----BEGIN PRIVATE KEY-----private-secret"
+                "-----END PRIVATE KEY-----" + "e" * 2_000
+            ),
+        )
+
+
 class CancellationIgnoringRunner:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -235,6 +258,38 @@ class CancellationIgnoringRunner:
                 summary="Ignored cancellation",
             )
         raise AssertionError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_supervisor_sanitizes_terminal_result_before_persistence() -> None:
+    sink = RecordingSink()
+    supervisor = SubagentSupervisor()
+    records = await supervisor.start_batch(
+        task_id="task_safe_result",
+        run_id="run_safe_result",
+        parent_tool_call_id="call_safe_result",
+        requests=[_request(0)],
+        runner=UnsafeResultRunner(),
+        sink=sink,
+    )
+
+    result = await supervisor.wait(records[0].subagent_id)
+    terminal = next(
+        payload
+        for payload in sink.payloads_for(records[0].subagent_id)
+        if isinstance(payload, SubagentFailedPayload)
+    )
+
+    assert terminal.result == result
+    assert len(result.summary) <= 4_096
+    assert len(result.error_message or "") <= 1_024
+    assert len(result.warnings) == 20
+    assert all(len(warning) <= 512 for warning in result.warnings)
+    serialized = result.model_dump_json()
+    assert "summary-secret" not in serialized
+    assert "private-secret" not in serialized
+    assert "warning-0" not in serialized
+    await supervisor.shutdown()
 
 
 class GatedQueuedSink(RecordingSink):

@@ -13,7 +13,7 @@ from app.domain.contracts import (
     SubagentStatus,
     SubagentType,
 )
-from app.model_config import RunModelSettings
+from app.model_config import RunModelSettings, UserSettings
 from app.runtime.repository import TaskRepository
 from app.subagents.agents import ChildAgentFactory
 from app.subagents.input_broker import SubagentInputBroker
@@ -157,6 +157,59 @@ async def test_child_runner_returns_collected_source_recipe_and_warning_metadata
     assert result.source_asset_ids == ["asset_child"]
     assert result.recipe_id == "recipe_child"
     assert result.warnings == ["bounded warning"]
+
+
+@pytest.mark.asyncio
+async def test_child_runner_redacts_known_key_and_bounds_model_output(
+    tmp_path,
+    runnable_agent_model_settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.subagents.agents as agents_module
+    from app.subagents.agents import SourceResearchAgentRunner
+
+    secret = "sk-child-secret-exact-value"
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+    parent.bind_model_settings(
+        RunModelSettings.from_user_settings(
+            UserSettings(
+                api_key=secret,
+                context_window=65_536,
+            )
+        )
+    )
+    runner = SourceResearchAgentRunner(parent, ChildAgentFactory())
+
+    async def fake_run(agent, prompt, *, context, session, max_turns):
+        del agent, prompt, session, max_turns
+        context.record_source_asset_id("asset_child")
+        for index in range(25):
+            context.record_warning(f"warning {index} Bearer warning-secret " + "w" * 700)
+        return SimpleNamespace(
+            final_output=f"raw key {secret}; api_key=second-secret " + "x" * 6_000
+        )
+
+    monkeypatch.setattr(agents_module.Runner, "run", fake_run)
+    result = await runner.run(
+        SubagentRequest(
+            agent_type=SubagentType.SOURCE_RESEARCH,
+            objective="Find GEO data",
+            domain="geo",
+            capability="source_research",
+        ),
+        subagent_id="child-safe-result",
+        task_id="parent",
+        run_id="run-1",
+    )
+
+    serialized = result.model_dump_json()
+    assert secret not in serialized
+    assert "second-secret" not in serialized
+    assert "warning-secret" not in serialized
+    assert len(result.summary) <= 4_096
+    assert result.summary.endswith("...[truncated]")
+    assert len(result.warnings) == 20
+    assert all(len(warning) <= 512 for warning in result.warnings)
 
 
 def test_agent_executor_binds_children_after_parent_model_is_frozen(tmp_path) -> None:
