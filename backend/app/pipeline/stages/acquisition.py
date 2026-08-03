@@ -678,29 +678,31 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                     logger.info("acquisition: success via %s", download_url)
                     break
 
-        if result is None or result.asset is None:
-            raise RuntimeError(f"live download failed for {gse}: all candidate URLs failed")
-
-        assets = [result.asset]
-        if "tximportCounts" in used_filename:
-            soft_source = SourceRecord(
-                source_id=source_id,
-                database=Database.GEO,
-                accession=gse,
-                url=_family_soft_url(gse),
-                title=f"{gse} family SOFT",
-                retrieved_at=retrieved_at,
-            )
-            soft_result = await _try_acquire(
-                soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
-            )
-            if soft_result.asset is None:
+            if result is None or result.asset is None:
                 raise RuntimeError(
-                    f"live download failed for {gse}: family SOFT required "
-                    "when tximport counts are available"
+                    f"live download failed for {gse}: all candidate URLs failed"
                 )
-            assets.append(soft_result.asset)
-            attempts.append(soft_result.attempt)
+
+            assets = [result.asset]
+            if "tximportCounts" in used_filename:
+                soft_source = SourceRecord(
+                    source_id=source_id,
+                    database=Database.GEO,
+                    accession=gse,
+                    url=_family_soft_url(gse),
+                    title=f"{gse} family SOFT",
+                    retrieved_at=retrieved_at,
+                )
+                soft_result = await _try_acquire(
+                    soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
+                )
+                if soft_result.asset is None:
+                    raise RuntimeError(
+                        f"live download failed for {gse}: family SOFT required "
+                        "when tximport counts are available"
+                    )
+                assets.append(soft_result.asset)
+                attempts.append(soft_result.attempt)
 
         # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
         ctx.emit_progress_sync(

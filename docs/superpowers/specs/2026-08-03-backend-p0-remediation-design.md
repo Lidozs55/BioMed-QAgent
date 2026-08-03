@@ -107,8 +107,10 @@ Series-matrix values are marked normalized with an explicit
 If the matrix has no expression rows, Processing raises a clear error. The
 metadata-only placeholder builder is removed from the production path.
 Validation adds a core scientific-value check for non-Reactome packages:
-there must be at least one non-metadata row with a gene identifier, numeric
-expression value, positive source line, and non-negative source column. The
+there must be at least one row with a non-empty source value, positive source
+line, non-negative source column, and a scientific record identity. Expression
+rows additionally require a gene identifier and numeric expression value;
+traceable non-expression rows such as GDC clinical records remain valid. The
 lineage check must inspect at least one value for such packages.
 
 Fixture tests that deliberately exercise malformed/empty series matrices are

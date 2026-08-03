@@ -48,6 +48,29 @@ def test_parse_gdc_expression_tsv_gz_to_long_form(tmp_path: Path) -> None:
     assert rows[0]["source_line_number"] == "2"
 
 
+def test_parse_gdc_clinical_preserves_sample_locator(tmp_path: Path) -> None:
+    workdir = create_task_workdir(
+        "gdc_clinical_parser", base_dir=str(tmp_path / "tasks")
+    )
+    payload = b"sample_id\tproject_id\tdiagnosis\nS1\tTCGA-BRCA\tcarcinoma\n"
+
+    result = parse_gdc_table(
+        _asset(workdir, payload, "clinical.tsv"),
+        "ds_gdc_clinical",
+        workdir,
+        "clinical",
+    )
+
+    with (workdir.root / result.file_asset.relative_path).open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        row = next(csv.DictReader(handle))
+    assert row["source_line_number"] == "2"
+    assert row["source_column_index"] == "0"
+    assert row["source_column_name"] == "sample_id"
+    assert row["source_raw_value"] == "S1"
+
+
 @pytest.mark.parametrize("payload", [b"sample\tvalue\nS1\tbad\n", b"gene_id\tS1\n"])
 def test_parse_gdc_rejects_unsupported_layout(tmp_path: Path, payload: bytes) -> None:
     workdir = create_task_workdir("gdc_bad", base_dir=str(tmp_path / "tasks"))

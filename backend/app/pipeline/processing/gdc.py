@@ -156,7 +156,7 @@ def _parse_clinical(
                 **{column: row[column] for column in source_columns if column != "sample_id"},
                 "source_logical_file": source_name,
                 "source_line_number": line_number,
-                "source_column_index": 1,
+                "source_column_index": 0,
                 "source_column_name": "sample_id",
                 "source_raw_value": sample_id,
             })
