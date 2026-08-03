@@ -200,7 +200,8 @@ class TaskIndex:
             CREATE TABLE IF NOT EXISTS request_ids (
                 request_id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
-                run_id TEXT NOT NULL
+                run_id TEXT NOT NULL,
+                request_fingerprint TEXT
             );
             """
         )
@@ -222,6 +223,14 @@ class TaskIndex:
             connection.execute(
                 "ALTER TABLE task_summaries "
                 "ADD COLUMN no_artifact_failure INTEGER NOT NULL DEFAULT 0"
+            )
+        request_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(request_ids)")
+        }
+        if "request_fingerprint" not in request_columns:
+            connection.execute(
+                "ALTER TABLE request_ids ADD COLUMN request_fingerprint TEXT"
             )
         connection.commit()
 
@@ -289,11 +298,17 @@ class TaskIndex:
         if include_requests:
             connection.executemany(
                 """
-                INSERT OR IGNORE INTO request_ids (request_id, task_id, run_id)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO request_ids (
+                    request_id, task_id, run_id, request_fingerprint
+                ) VALUES (?, ?, ?, ?)
                 """,
                 [
-                    (run.request_id, snapshot.task.task_id, run.run_id)
+                    (
+                        run.request_id,
+                        snapshot.task.task_id,
+                        run.run_id,
+                        run.request_fingerprint,
+                    )
                     for run in snapshot.runs
                 ],
             )
@@ -306,10 +321,16 @@ class TaskIndex:
         with connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO request_ids (request_id, task_id, run_id)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO request_ids (
+                    request_id, task_id, run_id, request_fingerprint
+                ) VALUES (?, ?, ?, ?)
                 """,
-                (accepted.request_id, accepted.task_id, accepted.run_id),
+                (
+                    accepted.request_id,
+                    accepted.task_id,
+                    accepted.run_id,
+                    accepted.request_fingerprint,
+                ),
             )
         existing = self._find_request_sync(accepted.request_id)
         if existing is None:
@@ -333,7 +354,7 @@ class TaskIndex:
             self._get_connection()
             .execute(
                 """
-            SELECT request_id, task_id, run_id
+            SELECT request_id, task_id, run_id, request_fingerprint
             FROM request_ids
             WHERE request_id = ?
             """,
@@ -408,7 +429,7 @@ class TaskIndex:
 
     def _rebuild_sync(self) -> None:
         snapshots: list[TaskSnapshot] = []
-        authoritative_requests: dict[str, tuple[str, str]] = {}
+        authoritative_requests: dict[str, tuple[str, str, str | None]] = {}
         event_store = EventStore(self.tasks_dir)
         if self.tasks_dir.exists():
             for task_dir in sorted(self.tasks_dir.iterdir()):
@@ -467,7 +488,11 @@ class TaskIndex:
                     snapshot = reduce_task_event(snapshot, event)
                 snapshots.append(snapshot)
                 for run in snapshot.runs:
-                    mapping = (snapshot.task.task_id, run.run_id)
+                    mapping = (
+                        snapshot.task.task_id,
+                        run.run_id,
+                        run.request_fingerprint,
+                    )
                     existing = authoritative_requests.get(run.request_id)
                     if existing is not None and existing != mapping:
                         raise ValueError(
@@ -488,11 +513,16 @@ class TaskIndex:
                 )
             connection.executemany(
                 """
-                INSERT INTO request_ids (request_id, task_id, run_id)
-                VALUES (?, ?, ?)
+                INSERT INTO request_ids (
+                    request_id, task_id, run_id, request_fingerprint
+                ) VALUES (?, ?, ?, ?)
                 """,
                 [
-                    (request_id, task_id, run_id)
-                    for request_id, (task_id, run_id) in authoritative_requests.items()
+                    (request_id, task_id, run_id, request_fingerprint)
+                    for request_id, (
+                        task_id,
+                        run_id,
+                        request_fingerprint,
+                    ) in authoritative_requests.items()
                 ],
             )

@@ -4050,6 +4050,76 @@ async def test_duplicate_request_returns_authoritative_active_run(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_request_id_rejects_different_continuation_input(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run(_execution) -> None:
+        started.set()
+        await release.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_semantic_run"))
+        await manager.submit_run(
+            "task_semantic_run",
+            StartRunRequest(request_id="req_semantic_run", input="first input"),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        with pytest.raises(
+            manager_module.RequestIdSemanticConflictError,
+            match="different request semantics",
+        ):
+            await manager.submit_run(
+                "task_semantic_run",
+                StartRunRequest(request_id="req_semantic_run", input="changed input"),
+            )
+    finally:
+        release.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_request_id_rejects_different_task_creation_semantics(tmp_path) -> None:
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    release = asyncio.Event()
+
+    async def run(_execution) -> None:
+        await release.wait()
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await manager.create_task(
+            StartTaskRequest(
+                request_id="req_semantic_task",
+                input="analyze GEO",
+                mode=TaskMode.AGENT,
+                databases=["geo"],
+            )
+        )
+
+        with pytest.raises(manager_module.RequestIdSemanticConflictError):
+            await manager.create_task(
+                StartTaskRequest(
+                    request_id="req_semantic_task",
+                    input="import local file",
+                    mode=TaskMode.IMPORT,
+                    databases=[],
+                    idempotency_metadata={"uploads": [{"sha256": "ab" * 32}]},
+                )
+            )
+    finally:
+        release.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_request_id_cannot_be_reused_for_a_different_task(tmp_path) -> None:
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")

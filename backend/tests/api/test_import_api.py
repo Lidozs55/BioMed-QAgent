@@ -195,6 +195,41 @@ async def test_import_tasks_creates_task_and_persists_files(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_import_tasks_rejects_request_id_reused_by_different_task(
+    tmp_path: Path,
+) -> None:
+    application = create_app(_settings(tmp_path))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="http://localhost",
+    ) as client:
+        application.state.task_manager.run_executor = lambda _execution: asyncio.sleep(0)
+        original = await client.post(
+            "/api/v1/tasks",
+            json={"request_id": "req-semantic-import", "input": "Agent task"},
+        )
+        response = await client.post(
+            "/api/v1/import/tasks",
+            data={
+                "request_id": "req-semantic-import",
+                "input": "Import patients data",
+            },
+            files=[
+                (
+                    "files",
+                    ("patients.csv", b"patient_id,age\nP001,54\n", "text/csv"),
+                )
+            ],
+        )
+
+    assert original.status_code == 202, original.text
+    assert response.status_code == 409, response.text
+    assert "different request content" in response.text
+    assert len(_task_directories(tmp_path)) == 1
+    assert not (tmp_path / "output" / "tasks" / ".uploads").exists()
+
+
+@pytest.mark.asyncio
 async def test_import_tasks_rejects_no_files(tmp_path: Path) -> None:
     application = create_app(_settings(tmp_path))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
