@@ -52,6 +52,11 @@ _SOURCE_LIST_COLUMNS = [
     "source_id", "database", "accession", "url", "title", "retrieved_at",
 ]
 
+_SOURCE_RELATION_COLUMNS = [
+    "relation_id", "from_source_id", "to_source_id", "relation_type",
+    "evidence_type", "evidence_value", "evidence_url",
+]
+
 _SOURCE_ASSET_COLUMNS = [
     "asset_id", "source_id", "successful_attempt_id", "data_level",
     "relative_path", "size_bytes", "sha256", "media_type", "schema_version",
@@ -252,6 +257,37 @@ def test_valid_package_passes_all_checks(tmp_path: Path) -> None:
     assert summary.failed_count == 0
     for check in checks:
         assert check["status"] == "passed", f"{check['check_id']} unexpectedly failed"
+
+
+def test_source_relation_validation_rejects_unclosed_or_false_evidence(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "tasks" / "bad_relation"
+    staging = task_root / "staging"
+    source_path = task_root / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+    _write_csv(
+        staging / "source_relations.csv",
+        _SOURCE_RELATION_COLUMNS,
+        [
+            {
+                "relation_id": "rel_false",
+                "from_source_id": "src_missing_pubmed",
+                "to_source_id": "src_geo",
+                "relation_type": "article_describes_dataset",
+                "evidence_type": "geo_pubmed_id",
+                "evidence_value": "99999999",
+                "evidence_url": "https://hostile.example/fabricated",
+            }
+        ],
+    )
+
+    summary, checks = _run_validation(staging, source_path, task_root)
+
+    relation_check = _check_by_id(checks, "source_relation_evidence")
+    assert summary.status == "invalid"
+    assert relation_check["status"] == "failed"
+    assert relation_check["failed_count"] == 1
 
 
 # ---------------------------------------------------------------------------

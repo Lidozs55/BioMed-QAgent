@@ -293,7 +293,7 @@ def _build_cell_line_warnings(
 
 def _build_source_relations(
     sources: list[SourceRecord],
-    literature: LiteratureRecord,
+    literature: LiteratureRecord | None,
     geo: GeoSeriesRecord,
     geo_url: str,
 ) -> list[dict[str, object]]:
@@ -313,10 +313,9 @@ def _build_source_relations(
       full citation graph without inflating ``source_list.csv`` with sources
       the pipeline never acquired.
 
-    The primary relation (literature.pmid ↔ geo.accession) is always emitted
-    first with ``relation_type="article_describes_dataset"`` and
-    ``evidence_type="geo_pubmed_id"`` so existing validation gates keep
-    passing.
+    A primary article→dataset relation is emitted only when the GEO metadata
+    explicitly includes the acquired PMID. This prevents a caller-selected,
+    unrelated article and dataset from becoming a fabricated relationship.
     """
     pubmed_source_id = next(
         (s.source_id for s in sources if s.database.value == "pubmed"), None
@@ -324,30 +323,34 @@ def _build_source_relations(
     geo_source_id = next(
         (s.source_id for s in sources if s.database.value == "geo"), None
     )
-    if not pubmed_source_id or not geo_source_id:
+    if not geo_source_id:
         return []
 
-    primary_pmid = literature.pmid
-    primary_relation_id = (
-        f"rel_pmid{primary_pmid}_{geo.accession.lower()}"
+    primary_pmid = literature.pmid if literature is not None else None
+    primary_is_evidenced = bool(
+        pubmed_source_id
+        and primary_pmid
+        and primary_pmid in geo.pubmed_ids
     )
-    relations: list[dict[str, object]] = [
-        {
-            "relation_id": primary_relation_id,
-            "from_source_id": pubmed_source_id,
-            "to_source_id": geo_source_id,
-            "relation_type": "article_describes_dataset",
-            "evidence_type": "geo_pubmed_id",
-            "evidence_value": primary_pmid,
-            "evidence_url": geo_url,
-        }
-    ]
+    relations: list[dict[str, object]] = []
+    if primary_is_evidenced and primary_pmid is not None:
+        relations.append(
+            {
+                "relation_id": f"rel_pmid{primary_pmid}_{geo.accession.lower()}",
+                "from_source_id": pubmed_source_id,
+                "to_source_id": geo_source_id,
+                "relation_type": "article_describes_dataset",
+                "evidence_type": "geo_pubmed_id",
+                "evidence_value": primary_pmid,
+                "evidence_url": geo_url,
+            }
+        )
 
     # Surface additional PMIDs referenced by the GEO series but not acquired
     # as a SourceRecord. These are external citations — they don't have a
     # local ``source_id`` so we use a stable ``ext:pubmed:<pmid>`` identifier
     # to keep the citation graph visible without polluting source_list.csv.
-    seen = {primary_pmid}
+    seen = {primary_pmid} if primary_is_evidenced else set()
     for pmid in geo.pubmed_ids:
         if pmid in seen:
             continue
