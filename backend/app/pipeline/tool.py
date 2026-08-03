@@ -191,7 +191,7 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
     name_override="run_research_pipeline",
     description_override=(
         "Run the deterministic validated research-data pipeline. "
-        "Call this tool at most twice per research task.  Pass ``pmid``/``gse`` "
+        "Call this tool at most 5 times per research task.  Pass ``pmid``/``gse`` "
         "when you have already discovered explicit accessions via "
         "search_pubmed/search_geo/describe_geo — the pipeline does NOT auto-search "
         "GEO by topic, so ``gse`` is required when GEO is in databases.  "
@@ -203,7 +203,7 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
-    databases: list[str] | None = None,
+    databases: list[str] | str | None = None,
     pmid: str | None = None,
     gse: str | None = None,
     xena_dataset_id: str | None = None,
@@ -213,19 +213,48 @@ async def run_research_pipeline(
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
     run_context = ctx.context
+    # Qwen serializes list params as JSON strings (e.g. '["geo","pubmed"]')
+    # instead of native lists, which fails SDK strict_schema list_type
+    # validation. Accept both forms so the agent doesn't get stuck retrying.
+    if isinstance(databases, str):
+        try:
+            databases = json.loads(databases)
+        except json.JSONDecodeError:
+            return json.dumps(
+                {
+                    "status": "invalid_input",
+                    "message": (
+                        f"databases must be a list or JSON list string, "
+                        f"got: {databases!r}"
+                    ),
+                    "retryable": False,
+                },
+                ensure_ascii=False,
+            )
     # databases defaults to the user's UI-selected preferred_sources (issue #1).
     # Handle None, empty list, and the LLM "unset optional param as empty
-    # string" edge case uniformly.
+    # string" edge case uniformly.  When falling back, silently filter out
+    # RESEARCH_ONLY sources (PDB/PubChem) — they are agent-investigation
+    # sources and must not cause the whole pipeline call to be rejected just
+    # because the agent omitted databases.  The agent may still explicitly
+    # request them and get a clear capability rejection below.
     if not isinstance(databases, list) or not databases:
-        databases = list(run_context.preferred_sources)
+        databases = [
+            src
+            for src in run_context.preferred_sources
+            if (db := DATABASE_IDENTIFIER_ALIASES.get(src.strip().lower())) is not None
+            and SOURCE_CAPABILITIES[db] is SourceCapability.PIPELINE_SUPPORTED
+        ]
     normalized_databases = [value.strip().lower() for value in databases]
     if not normalized_databases:
         return json.dumps(
             {
                 "status": "invalid_input",
                 "message": (
-                    "databases is empty and no preferred_sources were set. "
-                    "Pass a non-empty databases list or select databases in the UI."
+                    "databases is empty and no pipeline-supported "
+                    "preferred_sources were set. Select at least one "
+                    "pipeline-supported database (pubmed/geo/gdc/xena/reactome) "
+                    "in the UI or pass a non-empty databases list."
                 ),
                 "retryable": False,
             },
@@ -303,12 +332,12 @@ async def run_research_pipeline(
         )
 
     # Issue #3: limit pipeline retries to prevent agent stuck loops.
-    if run_context.pipeline_attempt_count >= 2:
+    if run_context.pipeline_attempt_count >= 5:
         return json.dumps(
             {
                 "status": "max_attempts_exceeded",
                 "message": (
-                    "The research pipeline has been attempted 2 times and failed. "
+                    "The research pipeline has been attempted 5 times and failed. "
                     "Do not call run_research_pipeline again. Report the failure "
                     "to the user with the error details from the last attempt."
                 ),
@@ -393,6 +422,7 @@ async def run_research_pipeline(
             event_sink=bridge.event_sink if bridge is not None else None,
             run_id=managed_run_id or STANDALONE_RUN_ID,
             model_name=run_context.model_settings.model_name,
+            lock_timeout=run_context.model_settings.runtime_limits.lock_timeout_seconds,
         )
         if bridge is not None:
             submitter = runner.submit_user_input

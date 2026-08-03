@@ -33,6 +33,7 @@ from app.domain.contracts import (
 from app.integrations.acquisition import AcquisitionResult, acquire_source
 from app.pipeline.stages.base import (
     AcquisitionOutput,
+    DownloadError,
     StageContext,
     StageResult,
 )
@@ -767,7 +768,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                     break
 
             if result is None or result.asset is None:
-                raise RuntimeError(
+                raise DownloadError(
                     f"live download failed for {gse}: all candidate URLs failed"
                 )
 
@@ -786,7 +787,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                 )
                 attempts.append(soft_result.attempt)
                 if soft_result.asset is None:
-                    raise RuntimeError(
+                    raise DownloadError(
                         f"live download failed for {gse}: family SOFT required "
                         "when tximport counts are available"
                     )

@@ -4,10 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
-import time
 import urllib.parse
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,36 +21,25 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
     make_source_id,
 )
+from app.skills.builtin.acquisition._download_io import (
+    _write_download,
+    download_file,
+    fetch_json,
+    rate_limit,
+)
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
 logger = logging.getLogger(__name__)
 
 _GDC_API_BASE = "https://api.gdc.cancer.gov"
 
-#: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
-#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
-_RATE_LIMIT_SECONDS = 2.0
-
 #: Token 短于该字符数时不参与 OR 匹配（避免 "and"/"or" 等噪声词）。
 _MIN_TOKEN_LEN = 3
 
-_last_request_ts: float = 0.0
-
 
 def _rate_limit() -> None:
-    """Sleep so that two consecutive GDC API calls are at least 2s apart."""
-    global _last_request_ts
-    now = time.monotonic()
-    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request_ts = time.monotonic()
+    """Rate limit (delegates to shared ``_download_io.rate_limit``)."""
+    rate_limit()
 
 
 # ---------------------------------------------------------------------------
@@ -92,41 +78,15 @@ def _build_url(path: str, params: dict[str, str] | None = None) -> str:
 def _fetch_json(url: str) -> dict[str, Any]:
     """Fetch and parse JSON from a GDC REST API endpoint.
 
-    Sends a real browser User-Agent and rate-limits calls to 2s apart
-    (AGENTS.md hard constraint).
+    Delegates to the shared ``_download_io.fetch_json`` helper (rate-limited,
+    browser UA, 30s timeout).
     """
-    _rate_limit()
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+    return fetch_json(url)
 
 
 def _download_file(url: str, dest: Path) -> None:
-    """Download a file to *dest*, atomically via a .part temp file."""
-    _rate_limit()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(
-        url, headers={"User-Agent": _USER_AGENT}, method="GET"
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    if dest.exists():
-        dest.unlink()
-    tmp.rename(dest)
-
-
-def _write_download(content: bytes, dest: Path) -> None:
-    """Write crawler bytes to a task-local path through an atomic temp file."""
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    tmp.write_bytes(content)
-    tmp.replace(dest)
+    """Download a file to *dest* (delegates to shared ``_download_io.download_file``)."""
+    download_file(url, dest)
 
 
 async def _fetch_json_for_run(run_ctx: RunContext, url: str) -> dict[str, Any]:
@@ -136,7 +96,7 @@ async def _fetch_json_for_run(run_ctx: RunContext, url: str) -> dict[str, Any]:
     if facade is None:
         if run_ctx.subagent_id is not None:
             raise RuntimeError("crawler facade is not bound to the child Run")
-        return await asyncio.to_thread(_fetch_json, url)
+        return await asyncio.to_thread(fetch_json, url)
     result = await facade.api(url)
     if not result.ok:
         raise RuntimeError(result.error or f"HTTP {result.status_code}")
@@ -154,7 +114,7 @@ async def _download_file_for_run(
     if facade is None:
         if run_ctx.subagent_id is not None:
             raise RuntimeError("crawler facade is not bound to the child Run")
-        await asyncio.to_thread(_download_file, url, dest)
+        await asyncio.to_thread(download_file, url, dest)
         return
     result = await facade.download(url)
     if not result.ok:

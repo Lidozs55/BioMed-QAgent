@@ -562,6 +562,31 @@ class _QueuedRun:
     model_settings: RunModelSettings = field(repr=False)
 
 
+@dataclass(slots=True)
+class _DispatchOutcome:
+    """Mutable dispatch state shared between _dispatch_run and _finalize_run."""
+
+    retain_cancellation: bool = False
+    completion_durable: bool = False
+    completion_cleanup_attempted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutionState:
+    """Frozen state carried between _execute phases.
+
+    The ``outcome`` field is a mutable object, so ``_dispatch_run`` can record
+    dispatch/finalization results that ``_finalize_run`` reads in the finally
+    block. The frozen constraint only prevents reassigning the fields, not
+    mutating the ``_DispatchOutcome`` instance.
+    """
+
+    accepted: TaskRunAccepted
+    lock: asyncio.Lock
+    execution: RunExecution
+    outcome: _DispatchOutcome
+
+
 def _run_key(accepted: TaskRunAccepted) -> tuple[str, str]:
     return accepted.task_id, accepted.run_id
 
@@ -1457,6 +1482,22 @@ class TaskManager:
             )
 
     async def _execute(self, queued: _QueuedRun) -> None:
+        state = await self._prepare_execution(queued)
+        if state is None:
+            return
+        try:
+            await self._dispatch_run(state)
+        finally:
+            await self._finalize_run(state)
+
+    async def _prepare_execution(self, queued: _QueuedRun) -> _ExecutionState | None:
+        """Acquire lock, read snapshot, validate state, and build RunExecution.
+
+        Returns ``None`` when the run is no longer queued (skip silently).
+        Raises when the task or run cannot be found, or when RunExecution
+        construction fails (after persisting a RunFailedPayload).
+        """
+
         accepted = queued.accepted
         lock = self._task_locks.setdefault(accepted.task_id, asyncio.Lock())
         async with lock:
@@ -1469,7 +1510,7 @@ class TaskManager:
                 if candidate.run_id == accepted.run_id
             )
             if run.status is not RunStatus.QUEUED:
-                return
+                return None
             await self._append_status(accepted, RunStartedPayload())
             try:
                 context = self._context_factory(accepted.task_id)
@@ -1516,175 +1557,202 @@ class TaskManager:
                 )
                 raise
             self._running[(accepted.task_id, accepted.run_id)] = execution
+        return _ExecutionState(
+            accepted=accepted,
+            lock=lock,
+            execution=execution,
+            outcome=_DispatchOutcome(),
+        )
 
+    async def _dispatch_run(self, state: _ExecutionState) -> None:
+        """Run the executor and finalize the completion state.
+
+        Must be called inside ``_execute``'s try block so that
+        ``_finalize_run`` always runs afterwards. All dispatch outcomes
+        (success, failure, cancellation) are recorded on ``state.outcome``
+        so the finally block can clean up correctly.
+        """
+
+        accepted = state.accepted
+        lock = state.lock
+        execution = state.execution
+        outcome = state.outcome
+
+        cleanup_error: BaseException | None = None
+        error: BaseException | None = None
         try:
-            retain_cancellation = False
-            completion_durable = False
-            completion_cleanup_attempted = False
-            cleanup_error: BaseException | None = None
-            error: BaseException | None = None
+            await self.run_executor(execution)
+        except asyncio.CancelledError as caught:
+            worker_task = asyncio.current_task()
+            if worker_task is not None and worker_task.cancelling() > 0:
+                raise
+            error = caught
+        except Exception as caught:
+            error = caught
+
+        if error is not None:
+            outcome.completion_cleanup_attempted = True
             try:
-                await self.run_executor(execution)
-            except asyncio.CancelledError as caught:
-                worker_task = asyncio.current_task()
-                if worker_task is not None and worker_task.cancelling() > 0:
-                    raise
-                error = caught
-            except Exception as caught:
-                error = caught
+                await self._abort_completion_and_drain(execution)
+            except BaseException as caught:
+                cleanup_error = caught
+            else:
+                execution.discard_completion()
 
-            if error is not None:
-                completion_cleanup_attempted = True
-                try:
-                    await self._abort_completion_and_drain(execution)
-                except BaseException as caught:
-                    cleanup_error = caught
-                else:
-                    execution.discard_completion()
-
-            if error is not None:
-                async with lock:
-                    snapshot = await self.repository.get_snapshot(accepted.task_id)
-                    if snapshot is None:
-                        raise LookupError(accepted.task_id)
-                    run = next(
-                        candidate
-                        for candidate in snapshot.runs
-                        if candidate.run_id == accepted.run_id
-                    )
-                    if (
-                        run.status is RunStatus.CANCEL_REQUESTED
-                        and cleanup_error is None
-                    ):
-                        retain_cancellation = True
-                        return
-                    await self._append_status(
-                        accepted,
-                        RunFailedPayload(
-                            error=self._format_completion_error(error, cleanup_error)
-                        ),
-                    )
+        if error is not None:
+            async with lock:
+                snapshot = await self.repository.get_snapshot(accepted.task_id)
+                if snapshot is None:
+                    raise LookupError(accepted.task_id)
+                run = next(
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == accepted.run_id
+                )
+                if (
+                    run.status is RunStatus.CANCEL_REQUESTED
+                    and cleanup_error is None
+                ):
+                    outcome.retain_cancellation = True
                     return
+                await self._append_status(
+                    accepted,
+                    RunFailedPayload(
+                        error=self._format_completion_error(error, cleanup_error)
+                    ),
+                )
+                return
 
-            finalization_error: BaseException | None = None
-            try:
-                async with lock:
-                    snapshot = await self.repository.get_snapshot(accepted.task_id)
-                    if snapshot is None:
-                        raise LookupError(accepted.task_id)
-                    run = next(
-                        candidate
-                        for candidate in snapshot.runs
-                        if candidate.run_id == accepted.run_id
-                    )
-                    if run.status is RunStatus.CANCEL_REQUESTED:
-                        retain_cancellation = True
-                        return
+        finalization_error: BaseException | None = None
+        try:
+            async with lock:
+                snapshot = await self.repository.get_snapshot(accepted.task_id)
+                if snapshot is None:
+                    raise LookupError(accepted.task_id)
+                run = next(
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == accepted.run_id
+                )
+                if run.status is RunStatus.CANCEL_REQUESTED:
+                    outcome.retain_cancellation = True
+                    return
+                await self._append_completion_status(
+                    accepted,
+                    RunFinalizingPayload(),
+                )
+                if execution.context.cancellation_requested.is_set():
+                    outcome.retain_cancellation = True
+                    return
+                execution.seal_completion()
+                completion_events = await execution.commit_completion()
+                for completion_event in completion_events:
                     await self._append_completion_status(
                         accepted,
-                        RunFinalizingPayload(),
+                        completion_event.payload,
+                        stage_attempt_id=completion_event.stage_attempt_id,
+                        timestamp=completion_event.timestamp,
                     )
-                    if execution.context.cancellation_requested.is_set():
-                        retain_cancellation = True
-                        return
-                    execution.seal_completion()
-                    completion_events = await execution.commit_completion()
-                    for completion_event in completion_events:
-                        await self._append_completion_status(
-                            accepted,
-                            completion_event.payload,
-                            stage_attempt_id=completion_event.stage_attempt_id,
-                            timestamp=completion_event.timestamp,
-                        )
-                    # 成功证据校验：AGENT 模式下若 AgentRunExecutor 真的跑过
-                    # 但未产出任何 artifact 事件，转 RunFailedPayload 而非
-                    # RunCompletedPayload。修复"LLM 完成但无 artifact"与
-                    # "LLM 截断静默完成"两个症状
-                    # (见 docs/REVIEW_2026-07-18.md §0、§1、§2)。
-                    # agent_executed 标记由 AgentRunExecutor 在真实 SDK result
-                    # 完成时设置，mock executor 不设置，避免破坏测试。
-                    if (
-                        execution.mode is TaskMode.AGENT
-                        and execution.agent_executed
-                        and not completion_events
-                        and not execution.context.cancellation_requested.is_set()
-                    ):
-                        await self._append_status(
-                            accepted,
-                            RunFailedPayload(
-                                error=(
-                                    "agent completed without producing any artifacts "
-                                    "(manifest missing or unchanged)"
-                                ),
-                            ),
-                        )
-                        completion_durable = True
-                        execution.discard_completion()
-                        return
-                    await self._append_completion_status(
-                        accepted,
-                        RunCompletedPayload(),
-                    )
-                    completion_durable = True
-                    execution.discard_completion()
-            except asyncio.CancelledError as caught:
-                worker_task = asyncio.current_task()
-                if worker_task is not None and worker_task.cancelling() > 0:
-                    raise
-                finalization_error = caught
-            except Exception as caught:
-                finalization_error = caught
-
-            if finalization_error is not None:
-                completion_cleanup_attempted = True
-                cleanup_error = None
-                try:
-                    await self._abort_completion_and_drain(execution)
-                except BaseException as caught:
-                    cleanup_error = caught
-                else:
-                    execution.discard_completion()
-                async with lock:
-                    snapshot = await self.repository.get_snapshot(accepted.task_id)
-                    if snapshot is None:
-                        raise LookupError(accepted.task_id)
-                    run = next(
-                        candidate
-                        for candidate in snapshot.runs
-                        if candidate.run_id == accepted.run_id
-                    )
-                    if run.status is RunStatus.COMPLETED:
-                        completion_durable = True
-                        execution.discard_completion()
-                        return
+                # 成功证据校验：AGENT 模式下若 AgentRunExecutor 真的跑过
+                # 但未产出任何 artifact 事件，转 RunFailedPayload 而非
+                # RunCompletedPayload。修复"LLM 完成但无 artifact"与
+                # "LLM 截断静默完成"两个症状
+                # (见 docs/REVIEW_2026-07-18.md §0、§1、§2)。
+                # agent_executed 标记由 AgentRunExecutor 在真实 SDK result
+                # 完成时设置，mock executor 不设置，避免破坏测试。
+                if (
+                    execution.mode is TaskMode.AGENT
+                    and execution.agent_executed
+                    and not completion_events
+                    and not execution.context.cancellation_requested.is_set()
+                ):
                     await self._append_status(
                         accepted,
                         RunFailedPayload(
-                            error=self._format_completion_error(
-                                finalization_error,
-                                cleanup_error,
-                            )
+                            error=(
+                                "agent completed without producing any artifacts "
+                                "(manifest missing or unchanged)"
+                            ),
                         ),
                     )
-                return
-        finally:
+                    outcome.completion_durable = True
+                    execution.discard_completion()
+                    return
+                await self._append_completion_status(
+                    accepted,
+                    RunCompletedPayload(),
+                )
+                outcome.completion_durable = True
+                execution.discard_completion()
+        except asyncio.CancelledError as caught:
+            worker_task = asyncio.current_task()
+            if worker_task is not None and worker_task.cancelling() > 0:
+                raise
+            finalization_error = caught
+        except Exception as caught:
+            finalization_error = caught
+
+        if finalization_error is not None:
+            outcome.completion_cleanup_attempted = True
+            cleanup_error = None
             try:
-                if not completion_durable and not completion_cleanup_attempted:
-                    completion_cleanup_attempted = True
-                    try:
-                        await self._abort_completion_and_drain(execution)
-                    except BaseException as cleanup_error:
-                        retain_cancellation = False
-                        await self._record_completion_cleanup_failure(
-                            accepted,
+                await self._abort_completion_and_drain(execution)
+            except BaseException as caught:
+                cleanup_error = caught
+            else:
+                execution.discard_completion()
+            async with lock:
+                snapshot = await self.repository.get_snapshot(accepted.task_id)
+                if snapshot is None:
+                    raise LookupError(accepted.task_id)
+                run = next(
+                    candidate
+                    for candidate in snapshot.runs
+                    if candidate.run_id == accepted.run_id
+                )
+                if run.status is RunStatus.COMPLETED:
+                    outcome.completion_durable = True
+                    execution.discard_completion()
+                    return
+                await self._append_status(
+                    accepted,
+                    RunFailedPayload(
+                        error=self._format_completion_error(
+                            finalization_error,
                             cleanup_error,
                         )
-                    else:
-                        execution.discard_completion()
-            finally:
-                execution._mark_drained()
-                if not retain_cancellation:
-                    self._running.pop((accepted.task_id, accepted.run_id), None)
+                    ),
+                )
+            return
+
+    async def _finalize_run(self, state: _ExecutionState) -> None:
+        """Run completion cleanup after dispatch, whether or not it succeeded.
+
+        Placed in ``_execute``'s finally block so it always runs. Reads the
+        outcome flags set by ``_dispatch_run`` to decide whether to attempt
+        a fallback abort and whether to retain the cancellation slot.
+        """
+
+        accepted = state.accepted
+        execution = state.execution
+        outcome = state.outcome
+        try:
+            if not outcome.completion_durable and not outcome.completion_cleanup_attempted:
+                outcome.completion_cleanup_attempted = True
+                try:
+                    await self._abort_completion_and_drain(execution)
+                except BaseException as cleanup_error:
+                    outcome.retain_cancellation = False
+                    await self._record_completion_cleanup_failure(
+                        accepted,
+                        cleanup_error,
+                    )
+                else:
+                    execution.discard_completion()
+        finally:
+            execution._mark_drained()
+            if not outcome.retain_cancellation:
+                self._running.pop((accepted.task_id, accepted.run_id), None)
 
     @staticmethod
     async def _abort_completion_and_drain(execution: RunExecution) -> None:

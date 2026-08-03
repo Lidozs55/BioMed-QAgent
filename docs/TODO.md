@@ -217,7 +217,8 @@
 > 来源生成表达记录；无法恢复核心科研值时 fail-closed，不再生成零行或合成占位数据。
 
 - [x] **P0** Acquisition 在 live tximport counts 成功后同步获取对应 `family.soft.gz`；Processing 使用实际下载的 SOFT 解析样本并生成真实表达记录；已有 live 回归测试覆盖 counts + SOFT 路径
-- [x] **P0** Series matrix fallback 解析真实表达块并保留精确物理行列；空矩阵删除部分输出并失败；Validation Gate 要求至少一条可回溯核心科研记录——2026-08-03 回归测试覆盖
+- [x] **P0** Processing 在 tximport counts 不可用（下载失败 / 404 / 解析异常）时回退解析 series_matrix 表达矩阵块（`!series_matrix_table_begin`/`_end`），产出真实 `series_matrix_expression` 行；空块（snRNAseq/RNA-seq 系列常见）再回退到每样本一行 `sample_metadata` 元数据行——2026-08-03 执行：新增 `process_geo_series_matrix_expression()`（`geo_tximport.py`），`processing.py` 通过 `_try_series_matrix_expression_or_minimal()` 统一 fixture/live 两条回退路径（tximport → series_matrix 表达 → 样本元数据）；4 个测试覆盖非空块/空块/NA 值/live 集成
+- [x] **P0** 下载失败回退 + retryable 信号——2026-08-03 执行：新增 `DownloadError(RuntimeError)` 异常（`stages/base.py`），acquisition 所有下载失败路径（GEO counts/series_matrix/SOFT、GDC、Xena、Reactome）统一抛出 `DownloadError`；runner `_run_stages_loop` 新增 `except DownloadError` 分支映射为 `ErrorCode.NETWORK_ERROR`，`_finalize_stage_failed`/`_finalize_failed` 的 `retryable` 判定从 `error_code is TIMEOUT` 扩展为 `error_code in (TIMEOUT, NETWORK_ERROR)`；Agent 收到 `status=failed`、`failed_stage=acquisition`、`error_code=network_error`、`retryable=true`，可选择替代 GSE 重试或请求 HIL；`test_download_failure_is_retryable_network_error` 锁定契约
 
 ---
 

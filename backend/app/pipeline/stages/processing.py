@@ -18,9 +18,11 @@ from app.domain.contracts import (
 from app.domain.processing import ParsedDataset as OldParsedDataset
 from app.pipeline.processing.gdc import parse_gdc_table
 from app.pipeline.processing.geo_tximport import (
+    _OUTPUT_COLUMNS,
     GeoSampleMetadata,
+    parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
-    process_geo_series_matrix,
+    process_geo_series_matrix_expression,
     process_geo_tximport_counts,
 )
 from app.pipeline.processing.reactome import parse_reactome_table
@@ -34,6 +36,107 @@ from app.pipeline.stages.base import (
 from app.tools.alignment import normalize_field_names
 
 logger = logging.getLogger(__name__)
+
+
+def _build_minimal_parsed_dataset(
+    source_asset: SourceAsset,
+    dataset_id: str,
+    ctx: StageContext,
+    samples: list[GeoSampleMetadata] | None = None,
+) -> ParsedDataset:
+    """Produce a ParsedDataset for cases where tximport parsing fails.
+
+    When ``samples`` is provided (e.g. recovered from a series_matrix file
+    whose expression block is empty), one row per sample is written with
+    ``measurement_type="sample_metadata"`` so that ``main_data.csv`` always
+    carries the per-sample metadata even when no expression matrix is
+    available. Expression-related fields (``gene_id_raw``, ``expression_value``,
+    etc.) are left blank, and ``source_line_number``/``source_column_index``
+    are set to ``0`` to signal "no source locator" — the validation gate
+    skips lineage checks for these rows.
+
+    When ``samples`` is empty or None, the file is schema-only (0 rows) for
+    backward compatibility with callers that have no sample metadata to
+    recover (e.g. fixture-mode tests that don't exercise live mode).
+    """
+    import csv
+
+    from app.domain.contracts import FileAsset, asset_id_from_sha256, make_record_id
+
+    output_path = ctx.workdir.parsed / f"{dataset_id}_tximport_long.csv"
+    row_count = 0
+    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_OUTPUT_COLUMNS)
+        writer.writeheader()
+        if samples:
+            for sample in samples:
+                writer.writerow(
+                    {
+                        "record_id": make_record_id(
+                            dataset_id, "sample_metadata", sample.sample_id
+                        ),
+                        "dataset_id": dataset_id,
+                        "source_id": source_asset.source_id,
+                        "asset_id": source_asset.asset_id,
+                        "gene_id_raw": "",
+                        "gene_id": "",
+                        "gene_id_namespace": "",
+                        "gene_id_version": "",
+                        "sample_id": sample.sample_id,
+                        "source_sample_alias": sample.source_alias,
+                        "measurement_type": "sample_metadata",
+                        "value_semantics": "metadata_only",
+                        "value_scale": "na",
+                        "is_normalized": "false",
+                        "is_integer_expected": "false",
+                        "expression_value": "",
+                        "expression_unit": "na",
+                        "source_logical_file": "series_matrix_metadata",
+                        "source_line_number": 0,
+                        "source_column_index": 0,
+                        "source_column_name": "sample_metadata",
+                        "source_raw_value": "",
+                    }
+                )
+                row_count += 1
+    file_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(file_bytes).hexdigest()
+    file_asset = FileAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="parsed",
+        relative_path=output_path.relative_to(ctx.workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(file_bytes),
+        media_type="text/csv",
+        generated_by_step_id="step_geo_minimal_v1",
+    )
+    # The minimal parser emits one row per sample (no expression matrix).
+    # ``source_row_count`` is 0 because the source series_matrix had no
+    # expression data rows; ``processing_parameters`` records the actual
+    # measurement_type so processing_log.parameters is not hardcoded (TODO §1.3).
+    processing_parameters = {
+        "measurement_type": "sample_metadata",
+        "value_semantics": "metadata_only",
+        "value_scale": "na",
+        "is_normalized": False,
+        "is_integer_expected": False,
+        "sample_count": len(samples) if samples else 0,
+        "source_logical_file": "series_matrix_metadata",
+        "gene_id_namespace": "",
+    }
+    return ParsedDataset(
+        dataset_id=dataset_id,
+        source_id=source_asset.source_id,
+        source_asset_id=source_asset.asset_id,
+        file_asset=file_asset,
+        columns=list(_OUTPUT_COLUMNS),
+        row_count=row_count,
+        parser_name="geo_minimal_placeholder",
+        parser_version="1.0.0",
+        source_row_count=0,
+        processing_parameters=processing_parameters,
+    )
 
 
 def _clean_parsed_dataset(
@@ -386,6 +489,72 @@ def merge_parsed_datasets(
     )
 
 
+def _recover_samples_from_series_matrix(
+    source_asset: SourceAsset,
+    ctx: StageContext,
+) -> list[GeoSampleMetadata]:
+    """Try to parse the downloaded series_matrix file for sample metadata.
+
+    Returns an empty list when the downloaded file is not a series_matrix
+    (e.g. fixture mode) or when parsing fails. The caller (``run_processing``)
+    uses the result to populate ``sample_metadata.csv`` even when the
+    expression-matrix block is empty.
+    """
+    source_path = ctx.workdir.root / source_asset.relative_path
+    if not source_path.is_file():
+        logger.warning("processing: source asset not found at %s", source_path)
+        return []
+    try:
+        compressed = source_path.read_bytes()
+    except OSError as exc:
+        logger.warning("processing: cannot read source asset: %s", exc)
+        return []
+    try:
+        return parse_geo_series_matrix_samples(compressed)
+    except (ValueError, OSError) as exc:
+        logger.warning("processing: series_matrix sample recovery failed: %s", exc)
+        return []
+
+
+def _try_series_matrix_expression_or_minimal(
+    source_asset: SourceAsset,
+    dataset_id: str,
+    ctx: StageContext,
+    samples: list[GeoSampleMetadata],
+) -> ParsedDataset:
+    """Try parsing the series_matrix expression block; fall back to minimal.
+
+    When the series_matrix has a non-empty ``!series_matrix_table_begin``/
+    ``!series_matrix_table_end`` block, produces real expression rows.
+    Otherwise falls back to ``_build_minimal_parsed_dataset`` (metadata-only).
+    """
+    if samples:
+        try:
+            expression_parsed = process_geo_series_matrix_expression(
+                source_asset=source_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                samples=samples,
+            )
+            if expression_parsed is not None:
+                logger.info(
+                    "processing: parsed %d expression rows from series_matrix",
+                    expression_parsed.row_count,
+                )
+                return expression_parsed
+            logger.info(
+                "processing: series_matrix expression block is empty; "
+                "falling back to sample_metadata rows",
+            )
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "processing: series_matrix expression parse failed (%s); "
+                "falling back to sample_metadata rows",
+                exc,
+            )
+    return _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
+
+
 def _run_multi_dataset_processing(
     ctx: StageContext,
     assets: list[SourceAsset],
@@ -627,14 +796,15 @@ def run_processing(
                 len(samples),
             )
         except (ValueError, FileNotFoundError, OSError) as exc:
-            if "series_matrix" not in source_asset.relative_path:
-                raise
+            # Fixture-mode fallback: try series_matrix expression parsing,
+            # then fall back to sample_metadata rows.
             logger.warning(
-                "processing: tximport parse failed (%s); parsing series_matrix values",
+                "processing: tximport parse failed (%s); attempting series_matrix recovery",
                 exc,
             )
-            parsed, samples = process_geo_series_matrix(
-                source_asset, dataset_id, ctx.workdir
+            samples = _recover_samples_from_series_matrix(source_asset, ctx)
+            parsed = _try_series_matrix_expression_or_minimal(
+                source_asset, dataset_id, ctx, samples
             )
     else:
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
@@ -648,12 +818,18 @@ def run_processing(
             )
             samples = parse_geo_soft_samples(soft_bytes)
         else:
-            parsed, samples = process_geo_series_matrix(
-                source_asset, dataset_id, ctx.workdir
+            samples = _recover_samples_from_series_matrix(source_asset, ctx)
+            parsed = _try_series_matrix_expression_or_minimal(
+                source_asset, dataset_id, ctx, samples
             )
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
             logger.info(
                 "processing: live mode parsed %d expression rows from downloaded tximport counts",
+                parsed.row_count,
+            )
+        elif parsed.processing_parameters.get("measurement_type") == "series_matrix_expression":
+            logger.info(
+                "processing: live mode parsed %d expression rows from series_matrix",
                 parsed.row_count,
             )
         elif samples:

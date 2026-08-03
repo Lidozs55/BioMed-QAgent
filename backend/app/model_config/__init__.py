@@ -1,4 +1,4 @@
-"""Public model configuration schemas, catalogs, and vendor helpers."""
+"""Public model configuration schemas and catalogs."""
 
 from .catalog import (
     QWEN_MODELS_DB,
@@ -17,7 +17,6 @@ from .schemas import (
     RuntimeLimitsSettings,
     UserSettings,
 )
-from .vendors import VENDORS, Vendor, get_vendors, list_vendors
 
 __all__ = [
     "AdvancedParams",
@@ -29,13 +28,9 @@ __all__ = [
     "RunModelSettings",
     "RuntimeLimitsSettings",
     "UserSettings",
-    "VENDORS",
-    "Vendor",
     "augment_capabilities",
     "get_advanced_defaults",
     "get_known_model",
-    "get_vendors",
     "infer_capabilities",
     "list_known_models",
-    "list_vendors",
 ]

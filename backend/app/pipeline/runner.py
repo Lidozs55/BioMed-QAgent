@@ -60,6 +60,7 @@ from app.pipeline.stages import (
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
+    DownloadError,
     PipelineCancelledError,
     ProcessingOutput,
     StageContext,
@@ -188,6 +189,7 @@ class PipelineRunner:
         event_sink: PipelineEventSink | None = None,
         run_id: str = STANDALONE_RUN_ID,
         model_name: str = RunModelSettings.default().model_name,
+        lock_timeout: float = 5.0,
     ) -> None:
         self.task_id = task_id
         self.fixture_dir = fixture_dir
@@ -195,6 +197,7 @@ class PipelineRunner:
         self.databases = databases or ["pubmed", "geo"]
         self.specification = specification
         self.stage_timeouts = stage_timeouts or dict(DEFAULT_STAGE_TIMEOUTS)
+        self.lock_timeout = lock_timeout
         self.total_timeout = total_timeout
         self.user_input_timeout = user_input_timeout
         self.mode = mode
@@ -331,7 +334,7 @@ class PipelineRunner:
         process). The lock is held for the entire pipeline run and released
         in ``finally``.
         """
-        lock = TaskLock(self.workdir.state / "task_running.lock", timeout=5.0)
+        lock = TaskLock(self.workdir.state / "task_running.lock", timeout=self.lock_timeout)
         try:
             lock.acquire()
         except TimeoutError as exc:
@@ -609,6 +612,81 @@ class PipelineRunner:
         if decision.decision == "reject":
             raise PipelinePlanRejectedError("research plan was rejected by user")
 
+    async def _try_reuse_stage(
+        self,
+        stage: StageName,
+        input_digest: str,
+        parameter_digest: str,
+        stage_outputs: dict[StageName, Any],
+        reuse_allowed: bool,
+    ) -> bool:
+        """Try to reuse a digest-matched stage output.
+
+        Returns ``True`` (and mutates ``stage_outputs`` + state) when the stage
+        was successfully reused — the caller should ``continue`` to the next
+        stage.  Returns ``False`` when the stage must run fresh.
+        """
+        reusable = (
+            self.state.find_reusable(stage, input_digest, parameter_digest)
+            if reuse_allowed
+            and not (self.defer_publication and stage is StageName.VALIDATION)
+            else None
+        )
+        completed_digest = self.state.completed_stages.get(stage.value)
+        if not (
+            reusable is not None
+            and reusable.output_digest is not None
+            and completed_digest == reusable.output_digest
+        ):
+            return False
+
+        loaded = load_stage_output(
+            self.workdir.state,
+            task_root=self.workdir.root,
+            task_id=self.task_id,
+            stage=stage,
+            stage_attempt_id=reusable.stage_attempt_id,
+            output_digest=reusable.output_digest,
+            expected_type=_STAGE_OUTPUT_TYPES[stage],
+        )
+        if loaded is not None:
+            loaded_output, recorded_files = loaded
+            try:
+                expected_files = self._collect_stage_output_files(
+                    stage, loaded_output, stage_outputs,
+                )
+            except Exception:
+                logger.warning(
+                    "collect stage output files failed for stage=%s attempt=%s",
+                    stage.value,
+                    reusable.stage_attempt_id,
+                    exc_info=True,
+                )
+                expected_files = None
+            if expected_files != recorded_files:
+                loaded = None
+        if loaded is None:
+            return False
+
+        stage_outputs[stage] = loaded_output
+        skipped_attempt = self._build_attempt(
+            stage, input_digest, parameter_digest,
+            AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
+            attempt=self._next_attempt_number(stage),
+        )
+        self.state.append_attempt(skipped_attempt)
+        await self._emit_stage_event(
+            StageSkippedPayload(
+                stage=stage,
+                status=AttemptStatus.SKIPPED,
+                reason="digest matched existing successful attempt",
+                reused_stage_attempt_id=reusable.stage_attempt_id,
+            ),
+            stage_attempt_id=skipped_attempt.stage_attempt_id,
+        )
+        save_state(self.workdir.state, self.state)
+        return True
+
     async def _run_stages_loop(
         self,
         stage_outputs: dict[StageName, Any],
@@ -627,66 +705,10 @@ class PipelineRunner:
             input_digest = self._compute_input_digest(stage, stage_outputs)
             parameter_digest = self._compute_parameter_digest(stage)
 
-            reusable = (
-                self.state.find_reusable(stage, input_digest, parameter_digest)
-                if reuse_allowed
-                and not (
-                    self.defer_publication and stage is StageName.VALIDATION
-                )
-                else None
-            )
-            completed_digest = self.state.completed_stages.get(stage.value)
-            if (
-                reusable is not None
-                and reusable.output_digest is not None
-                and completed_digest == reusable.output_digest
+            if await self._try_reuse_stage(
+                stage, input_digest, parameter_digest, stage_outputs, reuse_allowed
             ):
-                loaded = load_stage_output(
-                    self.workdir.state,
-                    task_root=self.workdir.root,
-                    task_id=self.task_id,
-                    stage=stage,
-                    stage_attempt_id=reusable.stage_attempt_id,
-                    output_digest=reusable.output_digest,
-                    expected_type=_STAGE_OUTPUT_TYPES[stage],
-                )
-                if loaded is not None:
-                    loaded_output, recorded_files = loaded
-                    try:
-                        expected_files = self._collect_stage_output_files(
-                            stage,
-                            loaded_output,
-                            stage_outputs,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "collect stage output files failed for stage=%s attempt=%s",
-                            stage.value,
-                            reusable.stage_attempt_id,
-                            exc_info=True,
-                        )
-                        expected_files = None
-                    if expected_files != recorded_files:
-                        loaded = None
-                if loaded is not None:
-                    stage_outputs[stage] = loaded_output
-                    skipped_attempt = self._build_attempt(
-                        stage, input_digest, parameter_digest,
-                        AttemptStatus.SKIPPED, output_digest=reusable.output_digest,
-                        attempt=self._next_attempt_number(stage),
-                    )
-                    self.state.append_attempt(skipped_attempt)
-                    await self._emit_stage_event(
-                        StageSkippedPayload(
-                            stage=stage,
-                            status=AttemptStatus.SKIPPED,
-                            reason="digest matched existing successful attempt",
-                            reused_stage_attempt_id=reusable.stage_attempt_id,
-                        ),
-                        stage_attempt_id=skipped_attempt.stage_attempt_id,
-                    )
-                    save_state(self.workdir.state, self.state)
-                    continue
+                continue
 
             reuse_allowed = False
             started = datetime.now(UTC)
@@ -730,6 +752,12 @@ class PipelineRunner:
                     )
                 except PipelineCancelledError:
                     return await self._finalize_cancelled()
+                except DownloadError as exc:
+                    return await self._finalize_stage_failed(
+                        stage,
+                        exc,
+                        ErrorCode.NETWORK_ERROR,
+                    )
                 except Exception as exc:
                     return await self._finalize_stage_failed(
                         stage,
@@ -1257,7 +1285,7 @@ class PipelineRunner:
         error = ErrorDetail(
             code=error_code,
             message=str(exc),
-            retryable=error_code is ErrorCode.TIMEOUT,
+            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
             stage=stage,
         )
         attempt = self._build_attempt(
@@ -1290,7 +1318,7 @@ class PipelineRunner:
             stage_error = ErrorDetail(
                 code=error_code,
                 message=str(exc),
-                retryable=error_code is ErrorCode.TIMEOUT,
+                retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
                 stage=inflight.stage,
             )
             failed = self._build_attempt(
@@ -1311,7 +1339,7 @@ class PipelineRunner:
         error = ErrorDetail(
             code=error_code,
             message=str(exc),
-            retryable=error_code is ErrorCode.TIMEOUT,
+            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
         )
         await self._emit_event(TaskFailedPayload(error=error))
         self._persist_logs()

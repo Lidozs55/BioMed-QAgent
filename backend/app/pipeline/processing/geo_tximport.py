@@ -180,6 +180,146 @@ def parse_geo_series_matrix_samples(compressed: bytes) -> list[GeoSampleMetadata
     return samples
 
 
+def process_geo_series_matrix_expression(
+    *,
+    source_asset: SourceAsset,
+    dataset_id: str,
+    workdir: TaskWorkDir,
+    samples: list[GeoSampleMetadata],
+) -> ParsedDataset | None:
+    """Parse the expression matrix block from a GEO ``*_series_matrix.txt.gz``.
+
+    Returns a ``ParsedDataset`` with real expression rows when the
+    ``!series_matrix_table_begin`` / ``!series_matrix_table_end`` block
+    contains data rows. Returns ``None`` when the block is empty (only a
+    header row, as is common for snRNAseq/RNA-seq series whose expression
+    matrices ship as supplementary files rather than in the series matrix).
+
+    Raises ``ValueError`` for malformed data within the block (e.g. a header
+    row with no sample columns), and ``FileNotFoundError`` when the source
+    asset is missing. Checksum mismatch raises ``ValueError``.
+    """
+    source_path = workdir.root / source_asset.relative_path
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    raw_bytes = source_path.read_bytes()
+    if hashlib.sha256(raw_bytes).hexdigest() != source_asset.sha256:
+        raise ValueError("source asset checksum mismatch before processing")
+
+    text = gzip.decompress(raw_bytes).decode("utf-8")
+    lines = text.splitlines()
+
+    begin_idx: int | None = None
+    end_idx: int | None = None
+    for i, line in enumerate(lines):
+        if line.startswith("!series_matrix_table_begin"):
+            begin_idx = i
+        elif line.startswith("!series_matrix_table_end") and begin_idx is not None:
+            end_idx = i
+            break
+
+    if begin_idx is None or end_idx is None or end_idx <= begin_idx + 1:
+        return None
+
+    header_parts = [p.strip().strip('"') for p in lines[begin_idx + 1].split("\t")]
+    sample_ids = header_parts[1:]
+    if not sample_ids:
+        return None
+
+    sample_map = {s.sample_id: s for s in samples}
+    data_lines = lines[begin_idx + 2 : end_idx]
+    if not data_lines:
+        return None
+
+    output_path = workdir.parsed / f"{dataset_id}_series_matrix_long.csv"
+    row_count = 0
+    source_row_count = 0
+
+    with output_path.open("w", encoding="utf-8-sig", newline="") as target:
+        writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
+        writer.writeheader()
+        for offset, data_line in enumerate(data_lines):
+            values = [v.strip().strip('"') for v in data_line.split("\t")]
+            if len(values) < 2:
+                continue
+            gene_id_raw = values[0]
+            source_row_count += 1
+            source_line_number = begin_idx + 3 + offset
+            for col_idx, sample_id in enumerate(sample_ids):
+                physical_index = col_idx + 1
+                raw_value = values[physical_index] if physical_index < len(values) else ""
+                if not raw_value or raw_value in {"NA", "null", "NaN"}:
+                    continue
+                try:
+                    float(raw_value)
+                except (ValueError, TypeError):
+                    continue
+                sample = sample_map.get(sample_id)
+                source_alias = sample.source_alias if sample else sample_id
+                writer.writerow({
+                    "record_id": make_record_id(dataset_id, gene_id_raw, sample_id),
+                    "dataset_id": dataset_id,
+                    "source_id": source_asset.source_id,
+                    "asset_id": source_asset.asset_id,
+                    "gene_id_raw": gene_id_raw,
+                    "gene_id": gene_id_raw,
+                    "gene_id_namespace": "geo_id_ref",
+                    "gene_id_version": "",
+                    "sample_id": sample_id,
+                    "source_sample_alias": source_alias,
+                    "measurement_type": "series_matrix_expression",
+                    "value_semantics": "normalized_expression_value",
+                    "value_scale": "log2",
+                    "is_normalized": "true",
+                    "is_integer_expected": "false",
+                    "expression_value": raw_value,
+                    "expression_unit": "normalized_expression_value",
+                    "source_logical_file": "series_matrix_expression",
+                    "source_line_number": source_line_number,
+                    "source_column_index": physical_index,
+                    "source_column_name": sample_id,
+                    "source_raw_value": raw_value,
+                })
+                row_count += 1
+
+    if row_count == 0:
+        return None
+
+    file_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(file_bytes).hexdigest()
+    file_asset = FileAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="parsed",
+        relative_path=output_path.relative_to(workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(file_bytes),
+        media_type="text/csv",
+        generated_by_step_id="step_geo_series_matrix_v1",
+    )
+    processing_parameters = {
+        "measurement_type": "series_matrix_expression",
+        "value_semantics": "normalized_expression_value",
+        "value_scale": "log2",
+        "is_normalized": True,
+        "is_integer_expected": False,
+        "sample_count": len(sample_ids),
+        "source_logical_file": "series_matrix_expression",
+        "gene_id_namespace": "geo_id_ref",
+    }
+    return ParsedDataset(
+        dataset_id=dataset_id,
+        source_id=source_asset.source_id,
+        source_asset_id=source_asset.asset_id,
+        file_asset=file_asset,
+        columns=list(_OUTPUT_COLUMNS),
+        row_count=row_count,
+        parser_name="geo_series_matrix_expression",
+        parser_version="1.0.0",
+        source_row_count=source_row_count,
+        processing_parameters=processing_parameters,
+    )
+
+
 def _build_sample(values: dict[str, object]) -> GeoSampleMetadata:
     characteristics = values["characteristics"]
     raw_cell_line = str(characteristics.get("cell line", ""))

@@ -13,6 +13,7 @@ from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
 )
+from app.model_info.vendors import list_vendors as _list_vendor_dicts
 from app.model_settings import ModelConfiguration, ModelSettingsStore, mask_api_key
 from app.tools.network_safety import UnsafeUrlError, resolve_public_http_target
 
@@ -182,7 +183,7 @@ async def update_settings(body: SettingsUpdate, store: StoreDep) -> PublicSettin
 
 @router.get("/vendors")
 async def list_vendors() -> dict[str, object]:
-    return {"vendors": VENDORS}
+    return {"vendors": _list_vendor_dicts()}
 
 
 @router.post("/models")

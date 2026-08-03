@@ -425,6 +425,13 @@ PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局
 成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
 参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
 
+GEO live acquisition 采用两级候选回退：tximport counts → series matrix。当全部
+候选下载失败时，acquisition 抛出 `DownloadError`，Pipeline Runner 将其映射为
+`ErrorCode.NETWORK_ERROR` 且 `retryable=True`（与 `TIMEOUT` 同为可重试错误）。
+Agent 收到 `status=failed`、`failed_stage=acquisition`、`error_code=network_error`、
+`retryable=true`，可选择替代 GSE 重试或请求 HIL，而非将下载失败视为不可恢复的
+内部错误。GDC/Xena/Reactome 的下载失败同样走此路径。
+
 ### 4.3 Processing
 
 只读取成功的 `SourceAsset`：
@@ -442,9 +449,31 @@ decompress
 每一步记录输入、输出、工具版本、参数摘要、处理前后行数、警告和时间。样本和
 gene ID 规范化同时保留 raw value、canonical value 与规则。
 
-GEO tximport counts 使用实际下载的 family SOFT 恢复样本；series matrix fallback
-直接解析其表达矩阵，空表达块失败而不生成占位行。GDC 官方 STAR-counts 跳过统计
-汇总行、规范化 Ensembl 版本号并保留原始值与物理行列定位。
+GEO 表达数据的解析采用三级回退链，确保 `main_data.csv` 在 counts 缺失时仍能
+携带真实表达值或至少样本元数据：
+
+```text
+tximport counts (首选，整型 estimated count)
+    |-- 失败/缺失/404
+    v
+series_matrix 表达矩阵块 (!series_matrix_table_begin/_end)
+    |-- 空块 (snRNAseq / RNA-seq 系列常见)
+    v
+sample_metadata 元数据行 (每样本一行，source_line_number=0)
+```
+
+- `process_geo_tximport_counts` 解析 `*_tximportCounts.txt` 长格式表，gene ID
+  命名空间为 `ensembl_gene`，`measurement_type=tximport_estimated_count`。
+- `process_geo_series_matrix_expression` 解析 series_matrix 表达矩阵块，gene ID
+  命名空间为 `geo_id_ref`，`measurement_type=series_matrix_expression`，
+  `value_scale=log2`（已归一化）。空块返回 `None`，由调用方继续回退。
+- `_build_minimal_parsed_dataset` 写入每样本一行 `sample_metadata` 元数据行，
+  `source_line_number`/`source_column_index` 置 `0` 标识"无源行号"；
+  Validation Gate 的 `source_value_lineage` 检查跳过这些行（无表达值可校验）。
+
+`_try_series_matrix_expression_or_minimal` 统一 fixture 与 live 两条路径的回退
+入口，保证无论 tximport 是否可用，`main_data.csv` 都不会出现零行占位。GDC 官方
+STAR-counts 跳过统计汇总行、规范化 Ensembl 版本号并保留原始值与物理行列定位。
 
 ### 4.4 Artifact Builder
 

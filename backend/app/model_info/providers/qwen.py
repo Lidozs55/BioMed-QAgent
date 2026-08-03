@@ -39,7 +39,7 @@ MODELS: dict[str, ModelDetail] = {
         capabilities=ModelCapabilities(text=True, image=False, video=False, audio=False),
         knowledge_cutoff="2025-05",
         recommended=True,
-        model_family="qwen",
+        model_family="deepseek",
     ),
     "deepseek-r1": ModelDetail(
         id="deepseek-r1",
@@ -52,7 +52,7 @@ MODELS: dict[str, ModelDetail] = {
         capabilities=ModelCapabilities(text=True, image=False, video=False, audio=False),
         knowledge_cutoff="2025-05",
         recommended=False,
-        model_family="qwen",
+        model_family="deepseek",
     ),
     "deepseek-reasoner": ModelDetail(
         id="deepseek-reasoner",
@@ -65,7 +65,7 @@ MODELS: dict[str, ModelDetail] = {
         capabilities=ModelCapabilities(text=True, image=False, video=False, audio=False),
         knowledge_cutoff="2025-05",
         recommended=False,
-        model_family="qwen",
+        model_family="deepseek",
     ),
     "deepseek-v3": ModelDetail(
         id="deepseek-v3",
@@ -78,7 +78,7 @@ MODELS: dict[str, ModelDetail] = {
         capabilities=ModelCapabilities(text=True, image=False, video=False, audio=False),
         knowledge_cutoff="2025-05",
         recommended=False,
-        model_family="qwen",
+        model_family="deepseek",
     ),
     "glm-4-flash": ModelDetail(
         id="glm-4-flash",

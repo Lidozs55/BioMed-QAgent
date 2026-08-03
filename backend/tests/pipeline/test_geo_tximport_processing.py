@@ -5,9 +5,7 @@ import gzip
 import hashlib
 from pathlib import Path
 
-import pytest
 from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
-from app.pipeline.processing import geo_tximport
 from app.pipeline.processing.geo_tximport import (
     parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
@@ -147,84 +145,6 @@ def test_series_matrix_parser_recovers_samples_from_empty_matrix_block() -> None
     assert by_gsm["GSM9000003"].replicate == 3
 
 
-def test_series_matrix_processor_writes_numeric_long_form_rows(
-    tmp_path: Path,
-) -> None:
-    processor = getattr(geo_tximport, "process_geo_series_matrix", None)
-    assert processor is not None
-    matrix = """!Series_title\t"Numeric series"
-!Sample_geo_accession\t"GSM9000100"\t"GSM9000101"
-!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"
-!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"
-!series_matrix_table_begin
-"ID_REF"\t"GSM9000100"\t"GSM9000101"
-"TP53"\t"1.5"\t"2.5"
-"BRCA1"\t"3.5"\t"4.5"
-!series_matrix_table_end
-"""
-    compressed = gzip.compress(matrix.encode("utf-8"), mtime=0)
-    workdir = create_task_workdir(
-        "task_series_values", base_dir=str(tmp_path / "tasks")
-    )
-    source_path = workdir.source_assets / "GSE999999_series_matrix.txt.gz"
-    source_path.write_bytes(compressed)
-    checksum = hashlib.sha256(compressed).hexdigest()
-    source_asset = SourceAsset(
-        asset_id=f"asset_{checksum}",
-        kind="source",
-        relative_path="source_assets/GSE999999_series_matrix.txt.gz",
-        sha256=checksum,
-        size_bytes=len(compressed),
-        media_type="application/gzip",
-        source_id="src_geo_gse999999",
-        successful_attempt_id="attempt_series",
-        data_level=DataLevel.REPOSITORY_PROCESSED,
-    )
-
-    parsed, samples = processor(source_asset, "ds_geo_gse999999", workdir)
-
-    assert parsed.row_count == 4
-    assert parsed.source_row_count == 2
-    assert [sample.sample_id for sample in samples] == ["GSM9000100", "GSM9000101"]
-    with (workdir.root / parsed.file_asset.relative_path).open(
-        "r", encoding="utf-8-sig", newline=""
-    ) as handle:
-        rows = list(csv.DictReader(handle))
-    assert [row["expression_value"] for row in rows] == ["1.5", "2.5", "3.5", "4.5"]
-    assert rows[0]["gene_id"] == "TP53"
-    assert rows[0]["sample_id"] == "GSM9000100"
-    assert rows[0]["source_line_number"] == "7"
-    assert rows[0]["source_column_index"] == "1"
-    assert rows[0]["source_column_name"] == "GSM9000100"
-    assert rows[0]["source_raw_value"] == "1.5"
-
-
-def test_series_matrix_processor_rejects_metadata_only_matrix(tmp_path: Path) -> None:
-    processor = getattr(geo_tximport, "process_geo_series_matrix", None)
-    assert processor is not None
-    compressed = gzip.compress(SERIES_MATRIX_EMPTY_BLOCK.encode("utf-8"), mtime=0)
-    workdir = create_task_workdir(
-        "task_empty_series", base_dir=str(tmp_path / "tasks")
-    )
-    source_path = workdir.source_assets / "GSE999998_series_matrix.txt.gz"
-    source_path.write_bytes(compressed)
-    checksum = hashlib.sha256(compressed).hexdigest()
-    source_asset = SourceAsset(
-        asset_id=f"asset_{checksum}",
-        kind="source",
-        relative_path="source_assets/GSE999998_series_matrix.txt.gz",
-        sha256=checksum,
-        size_bytes=len(compressed),
-        media_type="application/gzip",
-        source_id="src_geo_gse999998",
-        successful_attempt_id="attempt_series_empty",
-        data_level=DataLevel.REPOSITORY_PROCESSED,
-    )
-
-    with pytest.raises(ValueError, match="no expression rows"):
-        processor(source_asset, "ds_geo_gse999998", workdir)
-
-
 def test_series_matrix_parser_treatment_falls_back_to_title() -> None:
     """When the series_matrix has no `treatment` characteristic, the parser
     should fall back to using the sample title as the treatment field."""
@@ -278,10 +198,133 @@ def test_geo_sample_metadata_accepts_gsm_accession_as_source_alias() -> None:
     assert sample.source_alias == "GSM9000001"
 
 
-def test_validation_rejects_lineage_with_only_sample_metadata_rows(
+# --- main_data.csv 始终含样本元数据行 (§17.5) -------------------------------
+#
+# 当 GEO series_matrix 的表达矩阵为空（snRNAseq / RNA-seq 系列）时，
+# _build_minimal_parsed_dataset 必须为每个恢复出的样本生成一行
+# measurement_type="sample_metadata" 的元数据行写入 main_data.csv，
+# 保证 main_data.csv 始终有数据。表达相关字段留空，source_line_number=0
+# 标识"无源行号"，validation 的 source_value_lineage 检查会跳过这些行。
+
+
+def _make_geo_sample(sample_id: str, alias: str = "", treatment: str = "Control"):
+    from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+
+    return GeoSampleMetadata(
+        sample_id=sample_id,
+        source_alias=alias or sample_id,
+        cell_line_raw="MDA-MB-231",
+        cell_line_canonical="MDA-MB-231",
+        normalization_rule="identity",
+        treatment=treatment,
+        replicate=1,
+    )
+
+
+def _make_minimal_ctx(
+    tmp_path: Path, task_id: str
+) -> tuple[object, SourceAsset]:
+    """Build a StageContext + placeholder SourceAsset for processing tests."""
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+
+    workdir = create_task_workdir(task_id, base_dir=str(tmp_path / task_id))
+    placeholder = workdir.source_assets / "series_matrix.txt.gz"
+    placeholder.write_bytes(b"placeholder")
+    checksum = hashlib.sha256(b"placeholder").hexdigest()
+    source_asset = SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/series_matrix.txt.gz",
+        sha256=checksum,
+        size_bytes=len(b"placeholder"),
+        media_type="application/gzip",
+        source_id="src_geo_gse_test",
+        successful_attempt_id="download_attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    ctx = StageContext(
+        task_id=task_id,
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="test",
+        started_at=datetime.now(tz=UTC),
+    )
+    return ctx, source_asset
+
+
+def test_minimal_dataset_with_samples_writes_one_metadata_row_per_sample(
     tmp_path: Path,
 ) -> None:
-    """Metadata-only rows cannot satisfy scientific-value lineage."""
+    """When samples are provided, _build_minimal_parsed_dataset must write
+    one sample_metadata row per sample into main_data.csv (not 0 rows)."""
+    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
+
+    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md1")
+
+    samples = [
+        _make_geo_sample("GSM9000001", treatment="DMSO"),
+        _make_geo_sample("GSM9000002", treatment="DrugA"),
+        _make_geo_sample("GSM9000003", treatment="DMSO"),
+    ]
+    parsed = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=samples
+    )
+
+    # row_count must equal the number of samples (not 0)
+    assert parsed.row_count == 3
+
+    output_path = ctx.workdir.root / parsed.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 3
+    # Every row is a sample_metadata row
+    assert all(r["measurement_type"] == "sample_metadata" for r in rows)
+    # Sample IDs are preserved
+    assert {r["sample_id"] for r in rows} == {
+        "GSM9000001", "GSM9000002", "GSM9000003",
+    }
+    # Expression-related fields are blank
+    for r in rows:
+        assert r["gene_id_raw"] == ""
+        assert r["gene_id"] == ""
+        assert r["expression_value"] == ""
+        assert r["source_raw_value"] == ""
+        # source_line_number=0 is the "no source locator" sentinel
+        assert r["source_line_number"] == "0"
+        assert r["source_column_index"] == "0"
+    # source_sample_alias is preserved
+    assert {r["source_sample_alias"] for r in rows} == {
+        "GSM9000001", "GSM9000002", "GSM9000003",
+    }
+    # record_id is deterministic per (dataset_id, "sample_metadata", sample_id)
+    assert all(r["record_id"].startswith("rec_") for r in rows)
+    assert len({r["record_id"] for r in rows}) == 3
+
+
+def test_minimal_dataset_without_samples_is_schema_only(tmp_path: Path) -> None:
+    """When samples is None or empty, _build_minimal_parsed_dataset writes a
+    schema-only CSV (0 rows) for backward compatibility."""
+    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
+
+    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md2")
+
+    parsed_none = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=None
+    )
+    assert parsed_none.row_count == 0
+
+    parsed_empty = _build_minimal_parsed_dataset(
+        source_asset, "ds_geo_test", ctx, samples=[]
+    )
+    assert parsed_empty.row_count == 0
+
+
+def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
+    """The source_value_lineage check must skip measurement_type="sample_metadata"
+    rows (they have no expression value to verify against)."""
     import gzip as _gzip
     import json as _json
 
@@ -430,12 +473,9 @@ def test_validation_rejects_lineage_with_only_sample_metadata_rows(
         staging, source_path, tmp_path / "tasks" / "task_val" / "logs" / "r.json"
     )
     svl = next(c for c in checks if c["check_id"] == "source_value_lineage")
-    core = next(c for c in checks if c["check_id"] == "core_scientific_values")
-    assert summary.status == "invalid"
-    assert core["status"] == "failed"
-    assert svl["status"] == "failed"
-    assert int(svl["failed_count"]) == 1
-    assert int(svl["checked_count"]) == 0
+    # No lineage failures — sample_metadata rows were skipped
+    assert svl["status"] == "passed"
+    assert int(svl["failed_count"]) == 0
     details = _json.loads(svl["details"])
     assert details["skipped_metadata_rows"] == 2
     assert details["total_rows"] == 2
@@ -576,8 +616,10 @@ def test_run_processing_live_mode_does_not_read_fixture_soft(
     """In live mode, ``run_processing`` must NOT read the fixture SOFT file
     even when it exists on disk (TODO §1.1).
 
-    The live fallback must parse the acquired series matrix and never read
-    ``ctx.fixture_dir / "gse178352_family.soft.gz"``.
+    Previously the live path called ``process_geo_tximport_counts`` with
+    ``ctx.fixture_dir / "gse178352_family.soft.gz"`` bytes, contaminating
+    live data with fixture SOFT. After §1.1, live mode skips the tximport
+    parser entirely and goes straight to series_matrix recovery.
     """
     import gzip as _gzip
     from datetime import UTC, datetime
@@ -599,7 +641,6 @@ def test_run_processing_live_mode_does_not_read_fixture_soft(
         '!Sample_characteristics_ch1\t"treatment: DMSO"\t"treatment: DrugA"\n'
         '!series_matrix_table_begin\n'
         '"ID_REF"\t"GSM9000100"\t"GSM9000101"\n'
-        '"TP53"\t"1.25"\t"2.5"\n'
         '!series_matrix_table_end\n'
     )
     matrix_bytes = _gzip.compress(matrix.encode("utf-8"), mtime=0)
@@ -646,13 +687,11 @@ def test_run_processing_live_mode_does_not_read_fixture_soft(
     assert {s.sample_id for s in result.output.samples} == {
         "GSM9000100", "GSM9000101",
     }
-    # main_data.csv carries the source-derived expression values.
+    # main_data.csv carries one sample_metadata row per sample (no expression
+    # matrix in live mode — see architectural note in run_processing).
     assert parsed.row_count == 2
-    assert parsed.source_row_count == 1
-    assert (
-        parsed.processing_parameters["measurement_type"]
-        == "geo_series_matrix_expression"
-    )
+    assert parsed.source_row_count == 0
+    assert parsed.processing_parameters["measurement_type"] == "sample_metadata"
     assert parsed.processing_parameters["sample_count"] == 2
 
 
@@ -681,3 +720,258 @@ def test_run_processing_fixture_mode_still_uses_fixture_soft() -> None:
         "run_processing must still branch on ctx.mode == 'fixture' so "
         "fixture mode keeps using process_geo_tximport_counts"
     )
+
+
+# --- series_matrix expression matrix parsing (P0-1) -----------------------
+#
+# When tximport counts are unavailable (HTTP 404) and the pipeline falls back
+# to the series_matrix file, the expression block between
+# !series_matrix_table_begin and !series_matrix_table_end must be parsed into
+# real expression rows — not just sample metadata.
+
+SERIES_MATRIX_WITH_EXPRESSION = """\
+!Series_title\t"Test series with expression data"
+!Sample_geo_accession\t"GSM9000200"\t"GSM9000201"
+!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"
+!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"
+!Sample_characteristics_ch1\t"cell line: MCF7"\t"cell line: MCF7"
+!Sample_characteristics_ch1\t"treatment: DMSO"\t"treatment: DrugA"
+!series_matrix_table_begin
+"ID_REF"\t"GSM9000200"\t"GSM9000201"
+"BRCA1"\t"5.2"\t"3.1"
+"TP53"\t"8.7"\t"6.4"
+"GAPDH"\t"12.3"\t"11.9"
+!series_matrix_table_end
+"""
+
+
+def _make_series_matrix_asset(
+    tmp_path: Path, content: str, task_id: str = "task_expr"
+) -> tuple[object, SourceAsset]:
+    """Build a StageContext + series_matrix SourceAsset for expression tests."""
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+
+    workdir = create_task_workdir(task_id, base_dir=str(tmp_path / task_id))
+    matrix_bytes = gzip.compress(content.encode("utf-8"), mtime=0)
+    source_path = workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    source_path.write_bytes(matrix_bytes)
+    checksum = hashlib.sha256(matrix_bytes).hexdigest()
+    source_asset = SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/GSE999999_series_matrix.txt.gz",
+        sha256=checksum,
+        size_bytes=len(matrix_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    ctx = StageContext(
+        task_id=task_id,
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="test",
+        started_at=datetime.now(tz=UTC),
+    )
+    return ctx, source_asset
+
+
+def test_series_matrix_expression_parser_extracts_real_expression_rows(
+    tmp_path: Path,
+) -> None:
+    """A non-empty expression block must yield real expression rows, not
+    metadata-only placeholders."""
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    ctx, source_asset = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_WITH_EXPRESSION
+    )
+    compressed = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_test",
+        workdir=ctx.workdir,
+        samples=samples,
+    )
+
+    assert result is not None
+    assert result.row_count == 6  # 3 genes × 2 samples
+    assert result.parser_name == "geo_series_matrix_expression"
+    assert result.source_row_count == 3  # 3 gene rows in the source
+
+    output_path = ctx.workdir.root / result.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 6
+    # All rows are expression rows, not sample_metadata
+    assert all(r["measurement_type"] == "series_matrix_expression" for r in rows)
+    # Expression values are populated
+    assert all(r["expression_value"] != "" for r in rows)
+    assert all(r["gene_id_raw"] != "" for r in rows)
+    # Sample IDs are correct
+    assert {r["sample_id"] for r in rows} == {"GSM9000200", "GSM9000201"}
+    # Gene IDs are correct
+    assert {r["gene_id_raw"] for r in rows} == {"BRCA1", "TP53", "GAPDH"}
+    # Source coordinates are populated (not 0 sentinel)
+    assert all(int(r["source_line_number"]) > 0 for r in rows)
+    assert all(int(r["source_column_index"]) > 0 for r in rows)
+    # source_raw_value matches expression_value
+    assert all(r["source_raw_value"] == r["expression_value"] for r in rows)
+    # First row: BRCA1 × GSM9000200 = 5.2
+    first = rows[0]
+    assert first["gene_id_raw"] == "BRCA1"
+    assert first["sample_id"] == "GSM9000200"
+    assert first["expression_value"] == "5.2"
+    assert first["value_scale"] == "log2"
+    assert first["is_normalized"] == "true"
+
+
+def test_series_matrix_expression_parser_returns_none_for_empty_block(
+    tmp_path: Path,
+) -> None:
+    """An empty expression block (only header, no data rows) must return None
+    so the caller falls back to sample_metadata rows."""
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    ctx, source_asset = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_EMPTY_BLOCK
+    )
+    compressed = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_test",
+        workdir=ctx.workdir,
+        samples=samples,
+    )
+
+    assert result is None
+
+
+def test_series_matrix_expression_parser_skips_na_values(
+    tmp_path: Path,
+) -> None:
+    """NA/null/NaN values in the expression matrix must be skipped, not
+    written as expression rows."""
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    matrix_with_na = (
+        '!Sample_geo_accession\t"GSM9000300"\t"GSM9000301"\n'
+        '!Sample_title\t"Ctrl rep. 1"\t"Trt rep. 2"\n'
+        '!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM9000300"\t"GSM9000301"\n'
+        '"GENE_A"\t"5.0"\t"NA"\n'
+        '"GENE_B"\t"null"\t"3.0"\n'
+        '!series_matrix_table_end\n'
+    )
+    ctx, source_asset = _make_series_matrix_asset(tmp_path, matrix_with_na, "task_na")
+    compressed = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_na",
+        workdir=ctx.workdir,
+        samples=samples,
+    )
+
+    assert result is not None
+    # 2 genes × 2 samples = 4, but 2 are NA/null → 2 real rows
+    assert result.row_count == 2
+    output_path = ctx.workdir.root / result.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    # Only non-NA values
+    assert {r["expression_value"] for r in rows} == {"5.0", "3.0"}
+
+
+def test_run_processing_live_mode_uses_series_matrix_expression(
+    tmp_path: Path,
+) -> None:
+    """In live mode, when tximport counts are unavailable and the pipeline
+    falls back to a series_matrix with a non-empty expression block, the
+    parsed dataset must contain real expression rows (not sample_metadata)."""
+    import gzip as _gzip
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+    from app.pipeline.stages.processing import run_processing
+
+    workdir = create_task_workdir(
+        "task_live_expr", base_dir=str(tmp_path / "task_live_expr")
+    )
+
+    matrix = (
+        '!Series_title\t"Live series with expression"\n'
+        '!Sample_geo_accession\t"GSM9000400"\t"GSM9000401"\n'
+        '!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"\n'
+        '!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"\n'
+        '!Sample_characteristics_ch1\t"cell line: MCF7"\t"cell line: MCF7"\n'
+        '!Sample_characteristics_ch1\t"treatment: DMSO"\t"treatment: DrugA"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM9000400"\t"GSM9000401"\n'
+        '"BRCA1"\t"5.2"\t"3.1"\n'
+        '"TP53"\t"8.7"\t"6.4"\n'
+        '!series_matrix_table_end\n'
+    )
+    matrix_bytes = _gzip.compress(matrix.encode("utf-8"), mtime=0)
+    source_path = workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    source_path.write_bytes(matrix_bytes)
+    checksum = hashlib.sha256(matrix_bytes).hexdigest()
+    source_asset = SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/GSE999999_series_matrix.txt.gz",
+        sha256=checksum,
+        size_bytes=len(matrix_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_live",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+
+    ctx = StageContext(
+        task_id="task_live_expr",
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="live",
+        databases=["geo"],
+        started_at=datetime.now(tz=UTC),
+        mode="live",
+    )
+
+    result = run_processing(ctx, source_asset, "ds_geo_live_expr")
+
+    parsed = result.output.parsed_datasets[0]
+    # Real expression rows, not sample_metadata
+    assert parsed.row_count == 4  # 2 genes × 2 samples
+    assert parsed.parser_name == "geo_series_matrix_expression"
+    assert parsed.processing_parameters["measurement_type"] == "series_matrix_expression"
+    assert parsed.source_row_count == 2  # 2 gene rows in source
+
+    output_path = workdir.root / parsed.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 4
+    assert all(r["measurement_type"] == "series_matrix_expression" for r in rows)
+    assert all(r["expression_value"] != "" for r in rows)
+    assert {r["gene_id_raw"] for r in rows} == {"BRCA1", "TP53"}
+    assert {r["sample_id"] for r in rows} == {"GSM9000400", "GSM9000401"}

@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -172,6 +172,84 @@ _CODE_FENCE_RE = re.compile(r"```|~~~")
 _JSON_START_RE = re.compile(r"\n[ \t]*\{")
 
 
+class JsonSuspectBuffer:
+    """State machine that buffers text starting with a line-head ``{``.
+
+    Qwen 等 LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出。
+    检测到行首 ``{``（非代码围栏内）时进入可疑模式，缓冲后续内容不发出，
+    直到 ``finalize`` 根据 finish_reason 判断丢弃（tool_call 或合法 JSON）
+    或补发（非 JSON 文本）。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+
+    The ``add``/``end`` orchestration (trigger detection, code-fence tracking,
+    segment rotation) lives in ``_AssistantTextBuffer``; this class owns only
+    the suspect buffering state and the discard/resend decision.
+    """
+
+    def __init__(
+        self,
+        *,
+        flush_callback: Callable[[str], Awaitable[None]],
+        max_bytes: int = ASSISTANT_JSON_SUSPECT_MAX_BYTES,
+    ) -> None:
+        self._flush_callback = flush_callback
+        self._max_bytes = max_bytes
+        self._active: bool = False
+        self._parts: list[str] = []
+        self._bytes: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def activate(self) -> None:
+        """Enter suspect buffering mode (subsequent ``add`` calls buffer)."""
+        self._active = True
+
+    async def add(self, delta: str) -> None:
+        """将 delta 累积到可疑 JSON 缓冲，超限时作为普通文本补发。"""
+        self._parts.append(delta)
+        self._bytes += len(delta.encode("utf-8"))
+        if self._bytes >= self._max_bytes:
+            await self._flush_as_text()
+
+    async def _flush_as_text(self) -> None:
+        """将可疑 JSON 缓冲作为普通文本补发（认定非工具参数 JSON）。"""
+        text = "".join(self._parts)
+        self._parts = []
+        self._bytes = 0
+        self._active = False
+        if text:
+            await self._flush_callback(text)
+
+    async def finalize(self, finish_reason: str) -> None:
+        """At segment end, decide discard vs resend.
+
+        - ``tool_call``: 确认是工具参数 JSON，丢弃。
+        - 合法 JSON (dict/list): 模型把 JSON 当文本输出，丢弃。
+        - 非 JSON 文本: 作为普通文本补发到当前 segment。
+        """
+        if not self._active:
+            return
+        text = "".join(self._parts)
+        self._parts = []
+        self._bytes = 0
+        self._active = False
+        if finish_reason == "tool_call":
+            return  # 确认是工具参数 JSON，丢弃
+        if not text:
+            return
+        is_json = False
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, (dict, list)):
+                is_json = True
+        except json.JSONDecodeError:
+            pass
+        if not is_json:
+            # 非 JSON 文本，补发到当前 segment
+            await self._flush_callback(text)
+
+
 class _AssistantTextBuffer:
     def __init__(
         self,
@@ -199,15 +277,11 @@ class _AssistantTextBuffer:
         self._through_chunk_index: int | None = None
         self._segment_active = False
         self._has_ended = False
-        # 流式 JSON 截断状态
-        # Qwen 等 LLM 在 function_call 前会把参数 JSON 作为 text_delta 输出。
-        # 检测到行首 `{`（非代码围栏内）时进入可疑模式，缓冲后续内容不发出，
-        # 直到 end() 根据 finish_reason 判断丢弃（tool_call 或合法 JSON）或
-        # 补发（非 JSON 文本）。详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
-        self._json_suspect_active: bool = False
-        self._json_suspect_parts: list[str] = []
-        self._json_suspect_bytes: int = 0
-        self._json_suspect_max_bytes: int = ASSISTANT_JSON_SUSPECT_MAX_BYTES
+        # 流式 JSON 截断状态机：检测到行首 `{`（非代码围栏内）时进入可疑模式，
+        # 缓冲后续内容不发出，直到 end() 根据 finish_reason 判断丢弃
+        # （tool_call 或合法 JSON）或补发（非 JSON 文本）。
+        # 详见 docs/REVIEW_2026-07-20-llm-output-hygiene.md。
+        self._json_suspect = JsonSuspectBuffer(flush_callback=self._add_raw)
         # Markdown 代码围栏状态（跨 chunk 检测）
         self._in_code_fence: bool = False
         self._code_fence_tail: str = ""
@@ -217,8 +291,8 @@ class _AssistantTextBuffer:
     async def add(self, delta: str) -> None:
         if not delta:
             return
-        if self._json_suspect_active:
-            await self._add_to_json_suspect(delta)
+        if self._json_suspect.active:
+            await self._json_suspect.add(delta)
             return
         # 更新代码围栏状态（跨 chunk 检测 ```` ``` ````）
         self._update_code_fence_state(delta)
@@ -235,8 +309,8 @@ class _AssistantTextBuffer:
         # 缓冲结束后若补发文本会创建新 segment（_has_ended=True 触发轮转）。
         if self._segment_active:
             await self.end("tool_call_pending")
-        self._json_suspect_active = True
-        await self._add_to_json_suspect(after)
+        self._json_suspect.activate()
+        await self._json_suspect.add(after)
 
     def _update_code_fence_state(self, delta: str) -> None:
         """更新代码围栏状态，跨 chunk 检测 ```` ``` ```` 和 ``~~`` 标记。"""
@@ -303,22 +377,6 @@ class _AssistantTextBuffer:
         if delta:
             self._last_emitted_char = delta[-1]
 
-    async def _add_to_json_suspect(self, delta: str) -> None:
-        """将 delta 累积到可疑 JSON 缓冲，超限时作为普通文本补发。"""
-        self._json_suspect_parts.append(delta)
-        self._json_suspect_bytes += len(delta.encode("utf-8"))
-        if self._json_suspect_bytes >= self._json_suspect_max_bytes:
-            await self._flush_json_suspect_as_text()
-
-    async def _flush_json_suspect_as_text(self) -> None:
-        """将可疑 JSON 缓冲作为普通文本补发（认定非工具参数 JSON）。"""
-        text = "".join(self._json_suspect_parts)
-        self._json_suspect_parts = []
-        self._json_suspect_bytes = 0
-        self._json_suspect_active = False
-        if text:
-            await self._add_raw(text)
-
     def _split_delta(self, delta: str) -> list[str]:
         chunks: list[str] = []
         characters: list[str] = []
@@ -342,24 +400,7 @@ class _AssistantTextBuffer:
     async def end(self, finish_reason: str) -> None:
         # 先处理可疑 JSON 缓冲：tool_call 丢弃，其他情况尝试 json.loads，
         # 合法 JSON 丢弃，非法则作为普通文本补发。
-        if self._json_suspect_active:
-            text = "".join(self._json_suspect_parts)
-            self._json_suspect_parts = []
-            self._json_suspect_bytes = 0
-            self._json_suspect_active = False
-            if finish_reason == "tool_call":
-                pass  # 确认是工具参数 JSON，丢弃
-            elif text:
-                is_json = False
-                try:
-                    parsed = json.loads(text)
-                    if isinstance(parsed, (dict, list)):
-                        is_json = True
-                except json.JSONDecodeError:
-                    pass
-                if not is_json:
-                    # 非 JSON 文本，补发到当前 segment
-                    await self._add_raw(text)
+        await self._json_suspect.finalize(finish_reason)
         if not self._segment_active and self._has_ended:
             return
         await self.flush()
@@ -852,180 +893,9 @@ class AgentRunExecutor:
 
             bind_progress_emitter(emit_progress)
         try:
-            # Build per-invocation preflight from the immutable Run budget.
-            # Every SDK invocation is gated by a fresh CompactionRequest that
-            # carries the current ``agent_input``, resolved instructions, and
-            # the frozen ContextBudget.
-            prompt_shape = getattr(
-                build, "prompt_shape",
-                _default_prompt_shape(),
+            await self._run_agent_loop(
+                execution, build, text_buffer, model_settings, task_session
             )
-            preflight_builder = InvocationPreflight.from_budget(
-                budget=model_settings.context_budget,
-                prompt_shape=prompt_shape,
-                compactor=self._compactor,
-            )
-            # Agent 循环：每次 Runner.run_streamed 消耗 max_turns 个 turn；
-            # 若 SDK 抛 MaxTurnsExceeded，发射 UserInputRequiredPayload 走
-            # pause-resume。用户选"继续"时复用 durable Session，但不把
-            # 已持久化的历史再次作为新输入追加。
-            # See docs/REVIEW_2026-07-18.md §11.
-            agent_input: str | list = execution.input
-            result = None
-            resume_count = 0
-            qwen_retry_count = 0
-            runtime_limits = getattr(model_settings, "runtime_limits", None)
-            no_progress_detector = (
-                NoProgressDetector(
-                    window_seconds=runtime_limits.no_progress_window_seconds,
-                    threshold=runtime_limits.no_progress_repeat_threshold,
-                )
-                if runtime_limits is not None
-                else None
-            )
-            while True:
-                # 用户指令（非空 agent_input：初始用户文本 / Qwen 重放）重置
-                # 无进展计数；max_turns 续跑 (agent_input=[]) 不清零。
-                if no_progress_detector is not None and agent_input:
-                    no_progress_detector.reset()
-                run_ctx = execution.context
-                preparation = await preflight_builder.preflight(
-                    execution.task_id,
-                    agent_input,
-                    model_handle=build.model,
-                    emit=execution.emit,
-                    session=task_session,
-                    cancellation_requested=execution.context.cancellation_requested,
-                    commit=execution.commit_compaction,
-                    context=(
-                        run_ctx if isinstance(run_ctx, RunContext) else None
-                    ),
-                )
-                if execution.context.cancellation_requested.is_set():
-                    raise CompactionCancelledError(
-                        "conversation compaction was cancelled before Agent Run"
-                    )
-                # reset_streaming_result 让续跑的 Runner.run_streamed 能挂载新的
-                # RunResultStreaming (上一轮已 exhausted),保持 cancel 通道对准
-                # 当前活跃的 SDK run。首轮为 no-op (_streaming_result 本就为 None)。
-                execution.reset_streaming_result()
-                result = Runner.run_streamed(
-                    build.agent,
-                    preparation.agent_input,
-                    context=execution.context,
-                    session=preparation.session,
-                    max_turns=self._max_turns(execution),
-                )
-                execution.set_streaming_result(result)
-                try:
-                    await self._consume_events(
-                        execution,
-                        result,
-                        text_buffer,
-                        no_progress_detector=no_progress_detector,
-                    )
-                except NoProgressDetected as exc:
-                    await text_buffer.flush()
-                    decision = await self._await_no_progress_resume(
-                        execution,
-                        detector=exc,
-                    )
-                    if decision.decision == "reject":
-                        raise PipelineCancelledError(
-                            "agent run cancelled by user after no-progress detected"
-                        ) from None
-                    # 用户选择继续：保留 durable Session 续跑，清空无进展计数
-                    # （用户指令视为有效中断），避免同一指纹再次触发。
-                    if no_progress_detector is not None:
-                        no_progress_detector.reset()
-                    agent_input = []
-                    continue
-                except MaxTurnsExceeded:
-                    await text_buffer.flush()
-                    resume_limit = resolve_max_turns_resume_limit(
-                        getattr(execution.context, "model_settings", None),
-                    )
-                    if resume_count >= resume_limit:
-                        raise RuntimeError(
-                            f"agent exceeded max_turns resume limit "
-                            f"({resume_limit} times; hard cap "
-                            f"{(resume_limit + 1) * self._max_turns(execution)} turns)"
-                        ) from None
-                    decision = await self._await_max_turns_resume(
-                        execution,
-                        resume_count=resume_count,
-                    )
-                    if decision.decision == "reject":
-                        raise PipelineCancelledError(
-                            "agent run cancelled by user after max_turns reached"
-                        ) from None
-                    resume_count += 1
-                    # Durable Session 已拥有上一轮的完整上下文。这里若传
-                    # result.to_input_list()，SDK 会把历史再次 append 到
-                    # Session，进而生成重复 MessageRecord。
-                    agent_input = []
-                    continue
-                except Exception as exc:
-                    # Qwen 偶发返回非 JSON 的 function.arguments 导致 400。
-                    # 重试时用原始 execution.input 从头跑,Qwen 通常会生成合法 JSON。
-                    # See docs/REVIEW_2026-07-18.md §3.
-                    if (
-                        _is_qwen_function_args_error(exc)
-                        and qwen_retry_count < QWEN_FUNCTION_ARGS_RETRY_LIMIT
-                    ):
-                        qwen_retry_count += 1
-                        await text_buffer.flush()
-                        await execution.emit(
-                            WarningPayload(
-                                code="llm_function_args_retry",
-                                message=(
-                                    f"LLM returned malformed function arguments "
-                                    f"(400); retrying Run "
-                                    f"({qwen_retry_count}/"
-                                    f"{QWEN_FUNCTION_ARGS_RETRY_LIMIT})"
-                                ),
-                            )
-                        )
-                        # 不重放 execution.input（避免重复全部历史工具调用）。
-                        # durable Session 已持有完整历史；追加一条修正指令，
-                        # 让模型仅修正并重发上一次非法的工具调用。
-                        agent_input = [
-                            {
-                                "role": "user",
-                                "content": (
-                                    "上一工具调用参数非法（400），请仅修正并重发"
-                                    "该工具调用，不要重复已完成的工作。"
-                                ),
-                            }
-                        ]
-                        continue
-                    raise
-                finally:
-                    await text_buffer.flush()
-                # 消耗成功后，记录权威输入 usage 残差供未来 Run 校准。
-                # 缺失/不支持/零 input usage 为 no-op；活跃 Run 的预算不变。
-                record_calibration_from_result(
-                    result,
-                    preparation.estimate,
-                    model_settings.context_budget,
-                )
-                break
-            # final_output 校验:若 Agent 未产出有效输出则抛异常,
-            # 避免 LLM 截断/不调 tool 时静默 completed。
-            # 见 docs/REVIEW_2026-07-18.md §2。
-            # 用 getattr 安全访问:mock result 可能没有 final_output 属性,
-            # 此时跳过校验(测试场景由测试自身保证语义)。
-            if not execution.context.cancellation_requested.is_set():
-                final_output = getattr(result, "final_output", None)
-                if isinstance(final_output, str) and not final_output.strip():
-                    raise RuntimeError(
-                        "agent returned empty final_output; "
-                        "refusing to silently complete without output"
-                    )
-                # 真实 SDK result 有 final_output 属性，标记 agent_executed
-                # 让 manager 的成功证据校验生效。
-                if hasattr(result, "final_output"):
-                    execution.mark_agent_executed()
         except (asyncio.CancelledError, CompactionCancelledError):
             await text_buffer.end("cancelled")
             raise
@@ -1049,6 +919,202 @@ class AgentRunExecutor:
                 await build.model.close()
             if terminal_error is not None:
                 raise terminal_error
+
+    async def _run_agent_loop(
+        self,
+        execution,
+        build: AgentBuild,
+        text_buffer: _AssistantTextBuffer,
+        model_settings: RunModelSettings,
+        task_session,
+    ) -> None:
+        """Run the streaming Agent loop with max_turns/no-progress/Qwen recovery.
+
+        Extracted from ``__call__`` for readability. ``__call__`` handles model
+        binding, sub-agent runtime binding, pipeline bridge / progress emitter
+        installation, and the terminal ``text_buffer.end`` / cleanup; this method
+        owns the inner ``Runner.run_streamed`` loop and its recovery paths.
+
+        Recovery paths (all pre-existing, unchanged behavior):
+        - ``MaxTurnsExceeded`` → pause-resume via ``_await_max_turns_resume``.
+        - ``NoProgressDetected`` → pause-resume via ``_await_no_progress_resume``.
+        - Qwen malformed ``function.arguments`` 400 → retry with a correction
+          instruction (up to ``QWEN_FUNCTION_ARGS_RETRY_LIMIT`` times).
+        """
+        # Build per-invocation preflight from the immutable Run budget.
+        # Every SDK invocation is gated by a fresh CompactionRequest that
+        # carries the current ``agent_input``, resolved instructions, and
+        # the frozen ContextBudget.
+        prompt_shape = getattr(
+            build, "prompt_shape",
+            _default_prompt_shape(),
+        )
+        preflight_builder = InvocationPreflight.from_budget(
+            budget=model_settings.context_budget,
+            prompt_shape=prompt_shape,
+            compactor=self._compactor,
+        )
+        # Agent 循环：每次 Runner.run_streamed 消耗 max_turns 个 turn；
+        # 若 SDK 抛 MaxTurnsExceeded，发射 UserInputRequiredPayload 走
+        # pause-resume。用户选"继续"时复用 durable Session，但不把
+        # 已持久化的历史再次作为新输入追加。
+        # See docs/REVIEW_2026-07-18.md §11.
+        agent_input: str | list = execution.input
+        result = None
+        resume_count = 0
+        qwen_retry_count = 0
+        runtime_limits = getattr(model_settings, "runtime_limits", None)
+        no_progress_detector = (
+            NoProgressDetector(
+                window_seconds=runtime_limits.no_progress_window_seconds,
+                threshold=runtime_limits.no_progress_repeat_threshold,
+            )
+            if runtime_limits is not None
+            else None
+        )
+        while True:
+            # 用户指令（非空 agent_input：初始用户文本 / Qwen 重放）重置
+            # 无进展计数；max_turns 续跑 (agent_input=[]) 不清零。
+            if no_progress_detector is not None and agent_input:
+                no_progress_detector.reset()
+            run_ctx = execution.context
+            preparation = await preflight_builder.preflight(
+                execution.task_id,
+                agent_input,
+                model_handle=build.model,
+                emit=execution.emit,
+                session=task_session,
+                cancellation_requested=execution.context.cancellation_requested,
+                commit=execution.commit_compaction,
+                context=(
+                    run_ctx if isinstance(run_ctx, RunContext) else None
+                ),
+            )
+            if execution.context.cancellation_requested.is_set():
+                raise CompactionCancelledError(
+                    "conversation compaction was cancelled before Agent Run"
+                )
+            # reset_streaming_result 让续跑的 Runner.run_streamed 能挂载新的
+            # RunResultStreaming (上一轮已 exhausted),保持 cancel 通道对准
+            # 当前活跃的 SDK run。首轮为 no-op (_streaming_result 本就为 None)。
+            execution.reset_streaming_result()
+            result = Runner.run_streamed(
+                build.agent,
+                preparation.agent_input,
+                context=execution.context,
+                session=preparation.session,
+                max_turns=self._max_turns(execution),
+            )
+            execution.set_streaming_result(result)
+            try:
+                await self._consume_events(
+                    execution,
+                    result,
+                    text_buffer,
+                    no_progress_detector=no_progress_detector,
+                )
+            except NoProgressDetected as exc:
+                await text_buffer.flush()
+                decision = await self._await_no_progress_resume(
+                    execution,
+                    detector=exc,
+                )
+                if decision.decision == "reject":
+                    raise PipelineCancelledError(
+                        "agent run cancelled by user after no-progress detected"
+                    ) from None
+                # 用户选择继续：保留 durable Session 续跑，清空无进展计数
+                # （用户指令视为有效中断），避免同一指纹再次触发。
+                if no_progress_detector is not None:
+                    no_progress_detector.reset()
+                agent_input = []
+                continue
+            except MaxTurnsExceeded:
+                await text_buffer.flush()
+                resume_limit = resolve_max_turns_resume_limit(
+                    getattr(execution.context, "model_settings", None),
+                )
+                if resume_count >= resume_limit:
+                    raise RuntimeError(
+                        f"agent exceeded max_turns resume limit "
+                        f"({resume_limit} times; hard cap "
+                        f"{(resume_limit + 1) * self._max_turns(execution)} turns)"
+                    ) from None
+                decision = await self._await_max_turns_resume(
+                    execution,
+                    resume_count=resume_count,
+                )
+                if decision.decision == "reject":
+                    raise PipelineCancelledError(
+                        "agent run cancelled by user after max_turns reached"
+                    ) from None
+                resume_count += 1
+                # Durable Session 已拥有上一轮的完整上下文。这里若传
+                # result.to_input_list()，SDK 会把历史再次 append 到
+                # Session，进而生成重复 MessageRecord。
+                agent_input = []
+                continue
+            except Exception as exc:
+                # Qwen 偶发返回非 JSON 的 function.arguments 导致 400。
+                # 重试时用原始 execution.input 从头跑,Qwen 通常会生成合法 JSON。
+                # See docs/REVIEW_2026-07-18.md §3.
+                if (
+                    _is_qwen_function_args_error(exc)
+                    and qwen_retry_count < QWEN_FUNCTION_ARGS_RETRY_LIMIT
+                ):
+                    qwen_retry_count += 1
+                    await text_buffer.flush()
+                    await execution.emit(
+                        WarningPayload(
+                            code="llm_function_args_retry",
+                            message=(
+                                f"LLM returned malformed function arguments "
+                                f"(400); retrying Run "
+                                f"({qwen_retry_count}/"
+                                f"{QWEN_FUNCTION_ARGS_RETRY_LIMIT})"
+                            ),
+                        )
+                    )
+                    # 不重放 execution.input（避免重复全部历史工具调用）。
+                    # durable Session 已持有完整历史；追加一条修正指令，
+                    # 让模型仅修正并重发上一次非法的工具调用。
+                    agent_input = [
+                        {
+                            "role": "user",
+                            "content": (
+                                "上一工具调用参数非法（400），请仅修正并重发"
+                                "该工具调用，不要重复已完成的工作。"
+                            ),
+                        }
+                    ]
+                    continue
+                raise
+            finally:
+                await text_buffer.flush()
+            # 消耗成功后，记录权威输入 usage 残差供未来 Run 校准。
+            # 缺失/不支持/零 input usage 为 no-op；活跃 Run 的预算不变。
+            record_calibration_from_result(
+                result,
+                preparation.estimate,
+                model_settings.context_budget,
+            )
+            break
+        # final_output 校验:若 Agent 未产出有效输出则抛异常,
+        # 避免 LLM 截断/不调 tool 时静默 completed。
+        # 见 docs/REVIEW_2026-07-18.md §2。
+        # 用 getattr 安全访问:mock result 可能没有 final_output 属性,
+        # 此时跳过校验(测试场景由测试自身保证语义)。
+        if not execution.context.cancellation_requested.is_set():
+            final_output = getattr(result, "final_output", None)
+            if isinstance(final_output, str) and not final_output.strip():
+                raise RuntimeError(
+                    "agent returned empty final_output; "
+                    "refusing to silently complete without output"
+                )
+            # 真实 SDK result 有 final_output 属性，标记 agent_executed
+            # 让 manager 的成功证据校验生效。
+            if hasattr(result, "final_output"):
+                execution.mark_agent_executed()
 
     async def _await_max_turns_resume(
         self,

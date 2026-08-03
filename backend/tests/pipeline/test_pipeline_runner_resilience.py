@@ -29,7 +29,7 @@ from app.pipeline.runner import (
     PipelineEventSinkError,
     PipelineRunner,
 )
-from app.pipeline.stages import PipelineCancelledError
+from app.pipeline.stages import DownloadError, PipelineCancelledError
 from app.pipeline.state import DownloadAttemptAuditRecord
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -96,6 +96,36 @@ def test_live_parameter_digest_does_not_read_missing_fixture_directory(
     assert not missing_fixture_dir.exists()
     digest = runner._compute_parameter_digest(StageName.DISCOVERY)
     assert len(digest) == 64
+
+
+def test_download_failure_is_retryable_network_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acquisition download failures surface as retryable network errors."""
+
+    def failing_acquisition(ctx, retrieved_at):
+        raise DownloadError("all candidate URLs failed")
+
+    monkeypatch.setattr("app.pipeline.runner.run_acquisition", failing_acquisition)
+    runner = PipelineRunner(
+        task_id="task_download_fail",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.FAILED
+    failed = next(
+        attempt
+        for attempt in runner.state.stage_attempts
+        if attempt.status is AttemptStatus.FAILED
+    )
+    assert failed.stage is StageName.ACQUISITION
+    assert failed.error is not None
+    assert failed.error.code is ErrorCode.NETWORK_ERROR
+    assert failed.error.retryable is True
+    assert "all candidate URLs failed" in failed.error.message
 
 
 @pytest.mark.asyncio
