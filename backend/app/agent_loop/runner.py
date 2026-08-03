@@ -776,7 +776,9 @@ class AgentRunExecutor:
                 await asyncio.gather(pending_event, return_exceptions=True)
 
     async def __call__(self, execution) -> None:
-        model_settings = to_run_model_settings(get_current_model_configuration())
+        model_settings = execution.model_settings or to_run_model_settings(
+            get_current_model_configuration()
+        )
         bind_model_settings = getattr(
             execution.context,
             "bind_model_settings",

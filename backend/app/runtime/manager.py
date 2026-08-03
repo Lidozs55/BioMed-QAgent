@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
 from app.agent_loop.context import RunContext
+from app.agent_loop.model import to_run_model_settings
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantStreamFrame,
@@ -44,6 +45,8 @@ from app.domain.contracts import (
     generate_task_id,
 )
 from app.domain.contracts.runtime import validate_task_databases
+from app.model_config import RunModelSettings
+from app.model_settings import get_current_model_configuration
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
 from app.subagents.event_sink import DurableSubagentEventSink
@@ -104,6 +107,7 @@ class RunExecution:
     request_id: str
     input: str
     context: RunContext
+    model_settings: RunModelSettings | None = field(default=None, repr=False)
     mode: TaskMode = TaskMode.AGENT
     databases: list[str] = field(default_factory=list)
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
@@ -502,6 +506,7 @@ class TaskDeletionConflictError(RuntimeError):
 class _QueuedRun:
     accepted: TaskRunAccepted
     input: str
+    model_settings: RunModelSettings = field(repr=False)
 
 
 def _run_key(accepted: TaskRunAccepted) -> tuple[str, str]:
@@ -902,7 +907,15 @@ class TaskManager:
             await self.repository.record_request(accepted)
             await self.event_hub.publish(event)
         finally:
-            self._queue.put_nowait(_QueuedRun(accepted=accepted, input=input_value))
+            self._queue.put_nowait(
+                _QueuedRun(
+                    accepted=accepted,
+                    input=input_value,
+                    model_settings=to_run_model_settings(
+                        get_current_model_configuration()
+                    ),
+                )
+            )
         return accepted
 
     async def cancel_run(
@@ -1239,7 +1252,13 @@ class TaskManager:
                             run.created_at,
                             summary.task_id,
                             run.run_id,
-                            _QueuedRun(accepted=accepted, input=run.input),
+                            _QueuedRun(
+                                accepted=accepted,
+                                input=run.input,
+                                model_settings=to_run_model_settings(
+                                    get_current_model_configuration()
+                                ),
+                            ),
                         )
                     )
                 else:
@@ -1384,6 +1403,7 @@ class TaskManager:
                     request_id=accepted.request_id,
                     input=queued.input,
                     context=context,
+                    model_settings=queued.model_settings,
                     mode=snapshot.task.mode,
                     databases=list(snapshot.task.databases),
                     _event_emitter=(

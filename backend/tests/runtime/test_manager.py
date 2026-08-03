@@ -110,6 +110,74 @@ def empty_snapshot(
     )
 
 
+@pytest.mark.asyncio
+async def test_queued_run_keeps_admission_time_model_settings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing global settings must not retarget an already accepted Run."""
+    from app.model_settings import AdvancedModelSettings, ModelConfiguration
+
+    manager_module = importlib.import_module("app.runtime.manager")
+
+    def configuration(name: str, api_key: str) -> ModelConfiguration:
+        return ModelConfiguration(
+            base_url=f"https://{name}.example/v1",
+            api_key=api_key,
+            model_name=name,
+            advanced=AdvancedModelSettings(),
+        )
+
+    active = {"value": configuration("provider-a", "key-a")}
+    monkeypatch.setattr(
+        manager_module,
+        "get_current_model_configuration",
+        lambda: active["value"],
+        raising=False,
+    )
+    repository = TaskRepository(tmp_path / "output")
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_settings = []
+
+    async def run(execution) -> None:
+        if execution.task_id == "task_model_blocker":
+            first_started.set()
+            await release_first.wait()
+            return
+        second_settings.append(getattr(execution, "model_settings", None))
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        max_active_runs=1,
+    )
+    await manager.start()
+    try:
+        for task_id in ("task_model_blocker", "task_model_queued"):
+            await repository.save_snapshot(empty_snapshot(task_id))
+        await manager.submit_run(
+            "task_model_blocker",
+            StartRunRequest(request_id="req_model_blocker", input="block"),
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await manager.submit_run(
+            "task_model_queued",
+            StartRunRequest(request_id="req_model_queued", input="queued"),
+        )
+
+        active["value"] = configuration("provider-b", "key-b")
+        release_first.set()
+        await manager.wait_until_idle()
+
+        assert len(second_settings) == 1
+        assert second_settings[0].model_name == "provider-a"
+        assert second_settings[0].api_key == "key-a"
+    finally:
+        release_first.set()
+        await manager.close()
+
+
 def snapshot_with_status(task_id: str, status: RunStatus) -> TaskSnapshot:
     active_statuses = {
         RunStatus.QUEUED,
