@@ -216,6 +216,34 @@ class _ChildAgentRunner:
 
         output = getattr(result, "final_output", None)
         summary = output.strip() if isinstance(output, str) else "Child agent completed"
+        if (
+            request.agent_type is SubagentType.SOURCE_RESEARCH
+            and not child_context.source_asset_ids
+        ):
+            return SubagentResult(
+                subagent_id=subagent_id,
+                status=SubagentStatus.FAILED,
+                summary=summary or "Source research produced no verifiable asset",
+                source_asset_ids=[],
+                recipe_id=child_context.recipe_id,
+                warnings=child_context.child_warnings,
+                error_code=SubagentErrorCode.EXTRACTION_FAILED,
+                error_message="source research completed without a source asset",
+            )
+        if (
+            request.agent_type is SubagentType.SKILL_BUILDER
+            and child_context.recipe_id is None
+        ):
+            return SubagentResult(
+                subagent_id=subagent_id,
+                status=SubagentStatus.FAILED,
+                summary=summary or "Skill builder produced no verifiable recipe",
+                source_asset_ids=child_context.source_asset_ids,
+                recipe_id=None,
+                warnings=child_context.child_warnings,
+                error_code=SubagentErrorCode.CAPABILITY_GAP,
+                error_message="skill builder completed without a workflow recipe",
+            )
         return SubagentResult(
             subagent_id=subagent_id,
             status=SubagentStatus.COMPLETED,

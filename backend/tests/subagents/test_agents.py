@@ -6,7 +6,13 @@ from types import SimpleNamespace
 import pytest
 from app.agent_loop.context import RunContext
 from app.agent_loop.runner import AgentRunExecutor
-from app.domain.contracts import QueryStatus, SubagentRequest, SubagentStatus, SubagentType
+from app.domain.contracts import (
+    QueryStatus,
+    SubagentErrorCode,
+    SubagentRequest,
+    SubagentStatus,
+    SubagentType,
+)
 from app.model_config import RunModelSettings
 from app.runtime.repository import TaskRepository
 from app.subagents.agents import ChildAgentFactory
@@ -48,6 +54,7 @@ async def test_child_runner_uses_new_context_session_and_turn_cap(
     observed: dict[str, object] = {}
 
     async def fake_run(agent, prompt, *, context, session, max_turns):
+        context.record_source_asset_id("asset_verified")
         observed.update(
             agent=agent,
             prompt=prompt,
@@ -78,6 +85,41 @@ async def test_child_runner_uses_new_context_session_and_turn_cap(
     )
     assert observed["max_turns"] == agents_module.CHILD_AGENT_MAX_TURNS
     assert observed["session"].session_id == "subagent:child-1"
+
+
+@pytest.mark.asyncio
+async def test_child_runner_rejects_normal_output_without_verifiable_evidence(
+    tmp_path,
+    runnable_agent_model_settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.subagents.agents as agents_module
+    from app.subagents.agents import SourceResearchAgentRunner
+
+    parent = RunContext(task_id="parent", base_dir=tmp_path)
+    runner = SourceResearchAgentRunner(parent, ChildAgentFactory())
+
+    async def fake_run(agent, prompt, *, context, session, max_turns):
+        del agent, prompt, context, session, max_turns
+        return SimpleNamespace(final_output="I found something plausible")
+
+    monkeypatch.setattr(agents_module.Runner, "run", fake_run)
+    result = await runner.run(
+        SubagentRequest(
+            agent_type=SubagentType.SOURCE_RESEARCH,
+            objective="Find GEO data",
+            domain="geo",
+            capability="source_research",
+        ),
+        subagent_id="child-no-evidence",
+        task_id="parent",
+        run_id="run-1",
+    )
+
+    assert result.status is SubagentStatus.FAILED
+    assert result.error_code is SubagentErrorCode.EXTRACTION_FAILED
+    assert result.source_asset_ids == []
+    assert result.recipe_id is None
 
 
 @pytest.mark.asyncio
