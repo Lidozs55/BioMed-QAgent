@@ -2680,7 +2680,7 @@ describe("runtime orchestration", () => {
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    const loading = controller.loadAllTasks();
+    const loading = controller.loadMoreTasks();
     await vi.waitFor(() => expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1));
     await controller.deleteTask("task_delete_page_race");
     nextPage.resolve(
@@ -2719,7 +2719,7 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().taskOrder).toContain("task_delete");
   });
 
-  it("loads all remaining pages without duplicating active tasks or changing selection", async () => {
+  it("loads one more history page per call without duplicating active tasks or changing selection", async () => {
     useAgentStore.getState().mergeTaskPage(
       page(
         [summary("task_active")],
@@ -2765,12 +2765,22 @@ describe("runtime orchestration", () => {
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    await controller.loadAllTasks();
+    await controller.loadMoreTasks();
 
     expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(1, {
       limit: 10,
       cursor: "cursor_1",
     });
+    expect(useAgentStore.getState().activeItems).toEqual(["task_active"]);
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_history",
+      "task_older",
+    ]);
+    expect(useAgentStore.getState().activeTaskId).toBe("task_history");
+    expect(useAgentStore.getState().nextCursor).toBe("cursor_2");
+
+    await controller.loadMoreTasks();
+
     expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(2, {
       limit: 10,
       cursor: "cursor_2",
@@ -2785,7 +2795,7 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().nextCursor).toBeNull();
   });
 
-  it("resumes loading all history from the failed cursor", async () => {
+  it("resumes loading the next page from the failed cursor", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_history", "completed")], "cursor_1"),
       false,
@@ -2827,14 +2837,21 @@ describe("runtime orchestration", () => {
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    await expect(controller.loadAllTasks()).rejects.toThrow("page unavailable");
+    await controller.loadMoreTasks();
     expect(useAgentStore.getState().taskOrder).toEqual([
       "task_history",
       "task_older",
     ]);
     expect(useAgentStore.getState().nextCursor).toBe("cursor_2");
 
-    await controller.loadAllTasks();
+    await expect(controller.loadMoreTasks()).rejects.toThrow("page unavailable");
+    expect(useAgentStore.getState().taskOrder).toEqual([
+      "task_history",
+      "task_older",
+    ]);
+    expect(useAgentStore.getState().nextCursor).toBe("cursor_2");
+
+    await controller.loadMoreTasks();
 
     expect(apiClient.fetchTasks).toHaveBeenNthCalledWith(3, {
       limit: 10,
@@ -2845,6 +2862,7 @@ describe("runtime orchestration", () => {
       "task_older",
       "task_oldest",
     ]);
+    expect(useAgentStore.getState().nextCursor).toBeNull();
   });
 
   it("rejects cyclic history cursors instead of requesting forever", async () => {
@@ -2853,20 +2871,17 @@ describe("runtime orchestration", () => {
       false,
     );
     const apiClient = api({
-      fetchTasks: vi
-        .fn()
-        .mockResolvedValueOnce(page([], [], "cursor_2"))
-        .mockResolvedValueOnce(page([], [], "cursor_1")),
+      fetchTasks: vi.fn().mockResolvedValueOnce(page([], [], "cursor_1")),
     });
     const controller = new RuntimeController(apiClient, transport());
 
-    await expect(controller.loadAllTasks()).rejects.toThrow(
+    await expect(controller.loadMoreTasks()).rejects.toThrow(
       "Task pagination cursor did not advance",
     );
-    expect(apiClient.fetchTasks).toHaveBeenCalledTimes(2);
+    expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces concurrent requests to load all history", async () => {
+  it("coalesces concurrent requests to load more history", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_history", "completed")], "cursor_1"),
       false,
@@ -2875,8 +2890,8 @@ describe("runtime orchestration", () => {
     const apiClient = api({ fetchTasks: vi.fn(() => nextPage.promise) });
     const controller = new RuntimeController(apiClient, transport());
 
-    const first = controller.loadAllTasks();
-    const second = controller.loadAllTasks();
+    const first = controller.loadMoreTasks();
+    const second = controller.loadMoreTasks();
     expect(first).toBe(second);
     expect(apiClient.fetchTasks).toHaveBeenCalledTimes(1);
 

@@ -254,24 +254,47 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { state, toggleSidebar } = useSidebar()
+  const label = state === "expanded" ? "隐藏导航" : "展开导航"
 
   return (
-    <Button
-      data-sidebar="trigger"
-      data-slot="sidebar-trigger"
-      variant="ghost"
-      size="icon-sm"
-      className={cn(className)}
-      onClick={(event) => {
-        onClick?.(event)
-        toggleSidebar()
-      }}
-      {...props}
-    >
-      <SidebarIcon />
-      <span className="sr-only">Toggle Sidebar</span>
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        delay={0}
+        render={
+          <Button
+            data-sidebar="trigger"
+            data-slot="sidebar-trigger"
+            variant="ghost"
+            size="icon-sm"
+            className={cn(className)}
+            onClick={(event) => {
+              onClick?.(event)
+              toggleSidebar()
+            }}
+            {...props}
+          >
+            <SidebarIcon />
+            <span className="sr-only">Toggle Sidebar</span>
+          </Button>
+        }
+      />
+      <TooltipContent side="right" align="center">
+        <span>{label}</span>
+        <kbd
+          data-slot="kbd"
+          className="rounded-sm bg-background/15 px-1.5 py-0.5 font-mono text-[10px] text-background"
+        >
+          Ctrl
+        </kbd>
+        <kbd
+          data-slot="kbd"
+          className="rounded-sm bg-background/15 px-1.5 py-0.5 font-mono text-[10px] text-background"
+        >
+          B
+        </kbd>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

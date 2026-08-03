@@ -127,6 +127,17 @@ export default function App() {
     });
   }, [api]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
     <SidebarProvider
       defaultOpen={true}
@@ -136,7 +147,7 @@ export default function App() {
         onNewDraft={() => controller.showNewDraft()}
         onSelectTask={selectTask}
         onRetryHistory={() => controller.refreshTaskHistory()}
-        onLoadAll={() => controller.loadAllTasks()}
+        onLoadMore={() => controller.loadMoreTasks()}
         onCancelRun={(taskId, runId) => controller.cancelRun(taskId, runId)}
         onDeleteTask={(taskId) => controller.deleteTask(taskId)}
         onExportCache={exportCache}
@@ -194,7 +205,12 @@ export default function App() {
         </main>
       </SidebarInset>
       <BackgroundTaskNotifications onViewTask={selectTask} />
-      <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} api={api} />
+      <SettingsPanel
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        api={api}
+        onExportCache={exportCache}
+      />
       <Toaster />
     </SidebarProvider>
   );

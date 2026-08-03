@@ -11,12 +11,21 @@ import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
 import type { ToolCallItem } from "@/runtime/types";
 import { formatToolCall } from "./toolLabels";
+import { toolRenderers } from "./toolRenderers";
 
 interface ToolCallStepProps {
   item: ToolCallItem;
 }
 
 export function ToolCallStep({ item }: ToolCallStepProps) {
+  const Renderer = toolRenderers[item.toolName];
+  if (Renderer !== undefined) {
+    return <Renderer item={item} />;
+  }
+  return <DefaultToolCallStep item={item} />;
+}
+
+function DefaultToolCallStep({ item }: ToolCallStepProps) {
   const label = formatToolCall(item.toolName, item.arguments);
   const [expanded, setExpanded] = useState(false);
   const isRunning = item.status === "running";
@@ -54,11 +63,11 @@ export function ToolCallStep({ item }: ToolCallStepProps) {
               />
             </button>
             {expanded && (
-              <div className="mt-2 space-y-2 text-sm">
+              <div className="mt-1 space-y-1 text-sm">
                 {item.arguments && (
               <details>
                 <summary className="cursor-pointer text-muted-foreground">输入参数</summary>
-                <pre className="mt-1 overflow-x-auto rounded bg-muted/50 p-2 text-xs">
+                <pre className="mt-1 overflow-x-auto rounded-md bg-primary-foreground/15 p-2 text-xs">
                   {JSON.stringify(item.arguments, null, 2)}
                 </pre>
               </details>
@@ -70,8 +79,8 @@ export function ToolCallStep({ item }: ToolCallStepProps) {
                     </summary>
                     <pre
                       className={cn(
-                        "mt-1 overflow-x-auto rounded p-2 text-xs",
-                        item.status === "error" ? "bg-destructive/10" : "bg-muted/50",
+                        "mt-1 overflow-x-auto rounded-md p-2 text-xs",
+                        item.status === "error" ? "bg-destructive/10" : "bg-primary-foreground/15",
                       )}
                     >
                       {item.output}

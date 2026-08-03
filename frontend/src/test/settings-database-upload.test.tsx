@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -57,7 +57,7 @@ describe("database creation submits through createDatabase", () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
 
     fireEvent.click(screen.getByRole("button", { name: /新建数据库/ }));
 
@@ -85,7 +85,7 @@ describe("database creation submits through createDatabase", () => {
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Databases" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "数据库" }));
 
     const fileInput = screen.getByLabelText<HTMLInputElement>("上传数据库包");
     const file = new File(['{"name":"test"}'], "test.yaml", { type: "application/x-yaml" });
@@ -106,7 +106,7 @@ describe("database creation submits through createDatabase", () => {
     });
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
     await screen.findByLabelText("API Key");
-    fireEvent.click(screen.getByRole("tab", { name: "Skills" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", { name: "技能" }));
 
     const fileInput = screen.getByLabelText<HTMLInputElement>("上传技能");
     const file = new File(['{"name":"test-skill"}'], "skill.yaml", { type: "application/x-yaml" });

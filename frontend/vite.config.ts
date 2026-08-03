@@ -12,6 +12,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+    fs: {
+      allow: [path.resolve(__dirname, "..")],
+    },
     proxy: {
       "/api": {
         target: process.env.VITE_BACKEND_TARGET ?? "http://127.0.0.1:8000",

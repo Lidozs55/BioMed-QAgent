@@ -152,4 +152,24 @@ describe("formatToolCall", () => {
       target: "another_unknown",
     });
   });
+  it("maps find_skill", () => {
+    const label = formatToolCall("find_skill", { text: "网页截图" });
+    expect(label).toEqual({ verb: "检索", target: "技能" });
+  });
+
+  it("maps invoke_skill with skill name", () => {
+    const label = formatToolCall("invoke_skill", {
+      skill: "web_visual_capture",
+      operation: "capture_web_page",
+    });
+    expect(label).toEqual({
+      verb: "调用",
+      target: "web_visual_capture",
+    });
+  });
+
+  it("maps invoke_skill without args", () => {
+    const label = formatToolCall("invoke_skill", null);
+    expect(label).toEqual({ verb: "调用", target: "技能" });
+  });
 });

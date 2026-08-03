@@ -4,10 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.domain.contracts import (
+    ArtifactManifestEntry,
+    ArtifactProducedPayload,
     AssistantDeltaPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
     RunQueuedPayload,
     RunStartedPayload,
@@ -65,6 +68,84 @@ def test_reducer_projects_legal_run_lifecycle_without_mutating_input() -> None:
     assert snapshot.task.status is RunStatus.COMPLETED
     assert snapshot.task.active_run_id is None
     assert snapshot.task.latest_sequence == 4
+
+
+def test_reducer_counts_artifact_produced_events() -> None:
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            2,
+            RunStartedPayload(),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            3,
+            ArtifactProducedPayload(
+                artifact=ArtifactManifestEntry(
+                    artifact_id="artifact_123",
+                    name="result.csv",
+                    relative_path="artifacts/result.csv",
+                    media_type="text/csv",
+                    size_bytes=42,
+                    sha256="0" * 64,
+                    generated_by_step_id="stage_123",
+                )
+            ),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            4,
+            RunFinalizingPayload(),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            5,
+            RunCompletedPayload(),
+        ),
+    )
+
+    assert snapshot.task.artifact_count == 1
+
+def test_reducer_marks_no_artifact_failure_from_latest_run_error() -> None:
+    silent = queued_snapshot()
+    silent = reduce_task_event(
+        silent,
+        runtime_event(2, RunStartedPayload()),
+    )
+    silent = reduce_task_event(
+        silent,
+        runtime_event(
+            3,
+            RunFailedPayload(
+                error=(
+                    "agent completed without producing any artifacts "
+                    "(manifest missing or unchanged)"
+                )
+            ),
+        ),
+    )
+    assert silent.task.no_artifact_failure is True
+
+    real = queued_snapshot()
+    real = reduce_task_event(
+        real,
+        runtime_event(2, RunStartedPayload()),
+    )
+    real = reduce_task_event(
+        real,
+        runtime_event(
+            3,
+            RunFailedPayload(error="model connection timeout"),
+        ),
+    )
+    assert real.task.no_artifact_failure is False
 
 
 def runtime_event(
