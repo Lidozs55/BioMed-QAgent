@@ -83,7 +83,7 @@ def test_agent_prompt_distinguishes_results_from_capability_gaps() -> None:
     assert "不等于能力缺失" in instructions
     assert "capability_gap" in instructions
     assert "同一 domain+capability 最多一次" in instructions
-    assert "优先检索用户选择的 preferred_sources" in instructions
+    assert "优先检索 preferred_sources" in instructions
     assert "公开、免登录" in instructions
 
 

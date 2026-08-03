@@ -38,11 +38,23 @@ def _build_dataset_catalog_rows(
     the merged ``main_data.csv`` closes against the catalog (TODO §1.5.4).
     """
     if not is_merged:
+        # Derive the dataset's own database rather than sources[0].database.
+        # The sources list orders PubMed first then GEO (see discovery
+        # ``_build_output``), so sources[0].database is PubMed even for a GEO
+        # dataset — which produced the bug where dataset_catalog.csv reported
+        # ``database=pubmed`` for a GSE accession (see ARTIFACT_ANALYSIS
+        # §缺陷 4).
+        if is_reactome:
+            dataset_database = "reactome"
+        elif geo is not None:
+            dataset_database = "geo"
+        else:
+            dataset_database = sources[0].database.value if sources else ""
         return [
             {
                 "dataset_id": dataset_id,
                 "source_id": primary_source_id,
-                "database": sources[0].database.value,
+                "database": dataset_database,
                 "accession": dataset_accession,
                 "title": geo.title if geo else dataset_title,
                 "organism": geo.organism if geo else "",

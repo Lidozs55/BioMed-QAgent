@@ -16,6 +16,7 @@ from app.domain.contracts import ValidationSummary
 from app.pipeline.stages.validation.checks.lineage import check_source_value_lineage
 from app.pipeline.stages.validation.checks.main_data import (
     check_cleaning_report_consistency,
+    check_core_data_existence,
     check_field_descriptions,
     check_foreign_keys,
     check_main_data_nonempty,
@@ -57,6 +58,7 @@ def validate_package(
 
     checks: list[dict[str, object]] = []
     checks.append(check_main_data_nonempty(ctx))
+    checks.append(check_core_data_existence(ctx))
     checks.append(check_foreign_keys(ctx))
     checks.extend(check_reactome(ctx))
     checks.append(check_sample_foreign_keys(ctx))

@@ -76,3 +76,110 @@
     中英文领域意图扩展、字段加权评分和稳定排序；Gateway 在策略运行前保留
     enabled、数据库 allowlist、category 和 source 硬过滤。
   - 扩展：未来可注入快速 LLM/Embedding 策略，但本次不调用模型、不新增网络依赖。
+
+---
+
+## 2026-08-03 Agent 工具调用受阻根因分析
+
+> 来源：task_df9e953d（"下载清洗 METTL5 在胰腺癌的差异表达"，2026-08-03 12:32
+> 启动，1.5 分钟后 failed，260 事件）。Agent 4 次 pipeline 调用失败、2 个工具
+> 完全不可用、GEO suppl 下载 5 次全空。下述 1-3 已修复，4-7 待处理。
+
+- [X] (260803) `run_research_pipeline` 的 `databases` 参数被 Qwen 序列化为 JSON 字符串导致 4 次重试全失败。
+  - 状态：已修复（2026-08-03）。
+  - 根因：Qwen 把 list 参数序列化成 str（`'["geo","pubmed"]'`），SDK
+    strict_schema 在调用函数前就用 Pydantic 校验，`databases: list[str]`
+    不接受 str，报 `list_type` 错误。函数体内的 `isinstance` 修复根本
+    没有机会执行。
+  - 修复：① `tool.py` L205 参数类型改为 `list[str] | str | None`（strict_schema
+    支持 anyOf，见 `agents/strict_schema.py` L82-88），让 SDK 接受 str；
+    ② L218-232 函数体内 `isinstance(databases, str)` 时 `json.loads` 解析，
+    解析失败返回 `invalid_input`。回归测试：
+    `test_pipeline_function_tool_accepts_json_string_databases`。
+
+- [X] (260803) `databases=null` 时 Pipeline 因 preferred_sources 含 PDB/PubChem 被整体拒绝。
+  - 状态：已修复（2026-08-03）。
+  - 根因：`tool.py` 原 L218-219 `databases = list(preferred_sources)` 直接
+    采用用户 UI 勾选的所有数据库；L260-269 把 RESEARCH_ONLY（PDB/PubChem）
+    加入 `rejected` 后**直接拒绝整个调用**（`unsupported_databases`,
+    `retryable: false`），而非过滤掉 RESEARCH_ONLY 继续。Agent 被迫传 null，
+    却又触发此路径，陷入死锁。
+  - 修复：回退到 preferred_sources 时静默过滤掉非 PIPELINE_SUPPORTED
+    数据库；仅当过滤后为空才返回 `invalid_input`。Agent 显式传 RESEARCH_ONLY
+    时仍走原拒绝逻辑（保留 capability 告知）。
+
+- [X] (260803) `review_query_strategy` / `compress_query_log` 因 instructions callable 签名错误完全不可用。
+  - 状态：已修复（2026-08-03）。
+  - 根因：OpenAI Agents SDK 0.18.2 `Agent.get_system_prompt`
+    （`agents/agent.py` L947）强制 instructions callable 接受 `(context, agent)`
+    二参数；`backend/app/agent_loop/reviewer.py` L22 与
+    `summarizer.py` L25 的 `_xxx_instructions(ctx)` 仅接受 1 参数，调用即抛
+    `TypeError: 'instructions' callable must accept exactly 2 arguments`。
+    这是 260721 同类 bug 的回归——当时只修了 `test_agent.py` 的动态
+    instructions，漏了这两个 as_tool 子 Agent。
+  - 修复：两个函数签名改为 `async def _xxx_instructions(ctx, agent)`，
+    `agent` 参数未使用但必须存在以满足契约。47 个相关测试通过。
+
+- [X] (260803) `download_geo` 的 `filename` 参数虽是 `Optional[str]=None`，invoke_skill 网关仍报 `'filename' is a required property`。
+  - 状态：已修复（2026-08-03）。
+  - 根因：`backend/app/skills/gateway.py` L208-212 的 defaulted 检测只看
+    schema properties 的 `default` 键；但 Pydantic 对 `Optional[X] = None`
+    **不写 `default` 字段**（`download_geo` 的 filename schema 仅有
+    `anyOf: [{string}, {null}]`，无 default）。导致 gateway 修复失效，
+    filename 仍被标 required。Agent 必须瞎猜 filename。
+  - 修复：gateway 新增 `_is_nullable_union` 辅助函数，检测 `anyOf`/`oneOf`
+    含 `{"type":"null"}` 分支的字段，视为可选并从 required 列表移除。
+    覆盖所有 `Optional[X]=None` 参数（filename、expected_size 等）。
+
+- [X] (260803) `describe_geo` 无法列举 supplementary 文件，Agent 只能瞎猜 filename。
+  - 状态：已修复（2026-08-03）。
+  - 根因：`backend/app/skills/builtin/acquisition/geo.py` L336 `describe_geo`
+    只接受 `accession`，不返回 suppl 文件列表；其 `note` 字段误导 Agent
+    "用 download_geo(file_type='suppl') 列举"，但 `download_geo` 只能下载
+    不能列举（`_resolve_download` L216-217 多候选时抛 "multiple files found"，
+    L215 无候选时抛 "no matching file found"）。Agent 调
+    `describe_geo(include_supplementary_files=true)` 又因 schema 不接受
+    附加属性被拒。
+  - 修复：新增 `list_geo_supplementary_files(accession)` function_tool，HTTP GET
+    GEO FTP suppl/ 目录列表并返回 filename/url/media_type/data_level 清单。
+    geo_skill 升级到 0.3.0，instructions 指导 Agent "suppl 下载前先调
+    list_geo_supplementary_files 获取确切 filename"。
+
+- [X] (260803) GEO 老数据集（GSE28735/GSE15471）supplementary 表达矩阵下载全空。
+  - 状态：已修复（2026-08-03，配合问题 5）。
+  - 根因：① Agent 把 matrix 文件名（`GSE28735_series_matrix.txt.gz`）误传给
+    `file_type=suppl`（语义错误，suppl 目录下无此文件）；② 这两个老数据集
+    可能确实未上传标准 suppl 表达矩阵文件，仅 RAW.tar 或无 suppl。即使
+    Agent 正确传 `file_type=matrix`，series_matrix.txt.gz 的表达值当前
+    也无法被 processing 解析（`_build_minimal_parsed_dataset` 仅提取样本 ID）。
+  - 修复：① 新增 `list_geo_supplementary_files` 工具（见上一条）避免瞎猜；
+    ② `_resolve_download` 在 filename 不匹配或无候选时，错误消息中返回
+    `available files: [...]` 候选列表，帮助 Agent 自纠正而非重复试错；
+    ③ series matrix 表达值解析器（`docs/RESEARCH_SYSTEM_REVIEW_2026-08-03.md`
+    §9.1）由工作区未提交的 geo_tximport.py 提供。
+
+- [X] (260803) `search_geo` 参数名 `term` 与 `search_pubmed` 的 `query` 不一致，Agent 首次调用猜错。
+  - 状态：已修复（2026-08-03）。
+  - 根因：`geo.py` L323 `search_geo(term, ...)` 用 `term`，但
+    `search_pubmed` 用 `query`；Agent 直觉用 `query` 调 search_geo，报
+    `'term' is a required property`，浪费一轮工具调用。
+  - 修复：search_geo 参数改为 `query: str = "", term: str = ""`，函数内
+    `effective_term = query or term`，两者任一非空即可。description 标注
+    `query` 为推荐参数名，`term` 为 legacy alias。
+
+- [ ] (260803) RNA-seq 数据集 series_matrix 表达块为空时，pipeline 未下载 suppl 表达矩阵文件。
+  - 状态：未解决（API 任务流验证发现）。
+  - 根因：现代 GEO RNA-seq 数据集（如 GSE174503）的 `*_series_matrix.txt.gz`
+    表达块常为空（只有 header），真实表达数据在 supplementary 文件中
+    （如 `GSE174503_*_counts.csv.gz` / `*_TPM.txt.gz`）。
+    `process_geo_series_matrix_expression` 正确检测空块并返回 None，
+    fallback 到 `_build_minimal_parsed_dataset`（仅 sample_metadata 行），
+    导致 `core_data_existence` 检查失败（expression_value 0/5 non-empty）。
+    Agent 随后尝试 `download_geo(file_type="series_matrix")` 但 file_type
+    只支持 matrix/soft/suppl，不支持 series_matrix（语义上 matrix 已覆盖）。
+  - 影响：所有 series_matrix 表达块为空的 RNA-seq 数据集都无法通过 validation。
+  - 修复建议（pipeline 增强，非 series matrix 解析器问题）：
+    ① processing 阶段检测到 series_matrix 表达块为空时，调用
+    `list_geo_supplementary_files` 枚举 suppl 文件，启发式选取 counts/TPM
+    表达矩阵文件并下载解析；或 ② Agent prompt 指导其在 series_matrix
+    表达块为空时改用 suppl 文件路径。

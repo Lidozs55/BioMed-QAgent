@@ -210,11 +210,27 @@ async def _resolve_download(
         response.raise_for_status()
         candidates = resolve_geo_supplementary_assets(response.content, listing_url)
         if filename:
-            candidates = [item for item in candidates if item.filename == filename]
+            filtered = [item for item in candidates if item.filename == filename]
+            if not filtered:
+                # Surface the actual available filenames so the agent can
+                # self-correct instead of guessing again. (See docs/ISSUES.md
+                # #260803-6.)
+                available = [item.filename for item in candidates]
+                raise LookupError(
+                    f"no matching GEO supplementary file found for "
+                    f"filename={filename!r}; available files: {available}"
+                )
+            candidates = filtered
         if not candidates:
             raise LookupError("no matching GEO supplementary file found")
         if len(candidates) > 1 and filename is None:
-            raise ValueError("multiple supplementary files found; specify filename")
+            # Surface the candidate filenames so the caller can pick one
+            # without re-fetching the listing.
+            available = [item.filename for item in candidates]
+            raise ValueError(
+                f"multiple supplementary files found; specify filename. "
+                f"available files: {available}"
+            )
         selected_filename = candidates[0].filename
         url = candidates[0].url
     else:
@@ -232,6 +248,57 @@ async def _resolve_download(
         retrieved_at=datetime.now(UTC),
     )
     return source, selected_filename, DataLevel.REPOSITORY_PROCESSED
+
+
+async def list_geo_supplementary_files_adapter(
+    run_ctx: RunContext,
+    accession: str,
+    *,
+    services: NcbiServices,
+) -> str:
+    """List downloadable supplementary files for a GEO series.
+
+    NCBI E-utilities ``esummary`` does not expose supplementary file URLs, so
+    the agent previously had to guess filenames when calling ``download_geo``.
+    This adapter fetches the GEO FTP ``suppl/`` directory listing and returns
+    the parsed candidate list, letting the agent pick an explicit filename
+    before downloading. (See docs/ISSUES.md #260803-5.)
+    """
+
+    try:
+        record = await describe_geo_series(services.eutils, accession)
+        root = _https_ftp_root(record.ftp_root, record.accession)
+        listing_url = f"{root}suppl/"
+        response = await _get_geo_listing(services.http, listing_url)
+        response.raise_for_status()
+        candidates = resolve_geo_supplementary_assets(response.content, listing_url)
+        files = [
+            {
+                "filename": item.filename,
+                "url": item.url,
+                "media_type": item.media_type,
+                "data_level": item.data_level.value,
+            }
+            for item in candidates
+        ]
+        return json.dumps(
+            {
+                "source": "geo",
+                "accession": record.accession,
+                "supplementary_file_count": len(files),
+                "supplementary_files": files,
+                "listing_url": listing_url,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        logger.exception(
+            "GEO supplementary listing failed for accession=%r", accession
+        )
+        return json.dumps(
+            {"source": "geo", "accession": accession, "error": str(exc)},
+            ensure_ascii=False,
+        )
 
 
 async def download_geo_adapter(
@@ -314,18 +381,34 @@ async def download_geo_adapter(
     name_override="search_geo",
     description_override=(
         "Search NCBI GEO for GSE series records. "
-        "Parameters: ``term`` (required, search keyword like 'METTL5' or "
-        "'pancreatic cancer'), ``max_results`` (optional, default 20). "
+        "Parameters: ``query`` (required, search keyword like 'METTL5' or "
+        "'pancreatic cancer') — ``term`` is accepted as a legacy alias; "
+        "``max_results`` (optional, default 20). "
         "Returns JSON with source, count, and structured GSE records "
         "(accession, title, summary, sample_count, platform, etc.)."
     ),
 )
 async def search_geo(
-    ctx: RunContextWrapper[Any], term: str, max_results: int = 20
+    ctx: RunContextWrapper[Any],
+    query: str = "",
+    max_results: int = 20,
+    term: str = "",
 ) -> str:
+    # Accept both ``query`` (consistent with search_pubmed) and ``term``
+    # (legacy parameter name) so the agent doesn't waste a round on a schema
+    # rejection. ``query`` takes precedence. (See docs/ISSUES.md #260803-7.)
+    effective_term = query or term
+    if not effective_term:
+        return json.dumps(
+            {
+                "source": "geo",
+                "error": "either 'query' or 'term' must be provided",
+            },
+            ensure_ascii=False,
+        )
     async with open_ncbi_services() as services:
         return await search_geo_adapter(
-            ctx.context, term, max_results, services=services
+            ctx.context, effective_term, max_results, services=services
         )
 
 
@@ -339,10 +422,30 @@ async def describe_geo(ctx: RunContextWrapper[Any], accession: str) -> str:
 
 
 @function_tool(
+    name_override="list_geo_supplementary_files",
+    description_override=(
+        "List downloadable supplementary files for a GEO series accession. "
+        "Use this BEFORE download_geo(file_type='suppl') so you can pass an "
+        "explicit filename instead of guessing. Returns JSON with "
+        "supplementary_files (filename, url, media_type, data_level)."
+    ),
+)
+async def list_geo_supplementary_files(
+    ctx: RunContextWrapper[Any], accession: str
+) -> str:
+    async with open_ncbi_services() as services:
+        return await list_geo_supplementary_files_adapter(
+            ctx.context, accession, services=services
+        )
+
+
+@function_tool(
     name_override="download_geo",
     description_override=(
         "Download a GEO matrix, SOFT, or supplementary file as an immutable "
-        "repository-processed SourceAsset. Compressed files remain compressed."
+        "repository-processed SourceAsset. Compressed files remain compressed. "
+        "For file_type='suppl', call list_geo_supplementary_files first to get "
+        "the exact filename."
     ),
 )
 async def download_geo(
@@ -372,12 +475,14 @@ geo_skill = SkillDef(
     ),
     instructions=(
         "Use search_geo to find GSE accessions, describe_geo to inspect typed "
-        "metadata, and download_geo to retrieve verified compressed source assets. "
-        "For supplementary listings containing several files, specify filename."
+        "metadata, list_geo_supplementary_files to enumerate supplementary "
+        "files before downloading, and download_geo to retrieve verified "
+        "compressed source assets. For supplementary downloads, always specify "
+        "filename (from list_geo_supplementary_files)."
     ),
-    tools=[search_geo, describe_geo, download_geo],
+    tools=[search_geo, describe_geo, list_geo_supplementary_files, download_geo],
     supported_sources=["geo", "ncbi_geo"],
-    version="0.2.0",
+    version="0.3.0",
 )
 
 skill_registry.register(geo_skill)
