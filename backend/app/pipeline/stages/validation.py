@@ -444,19 +444,20 @@ def _validate_package(
     if not main_path.is_file():
         main_path = staging / "pathway_members.csv"
     main_rows = _read_csv(main_path)
-    dataset_ids = {
-        row["dataset_id"] for row in _read_csv(staging / "dataset_catalog.csv")
-    }
+    dataset_rows = _read_csv(staging / "dataset_catalog.csv")
+    dataset_ids = {row["dataset_id"] for row in dataset_rows}
+    datasets_by_id = {row["dataset_id"]: row for row in dataset_rows}
     sample_rows = _read_csv(staging / "sample_metadata.csv")
     sample_ids = {row["sample_id"] for row in sample_rows}
+    samples_by_id = {row["sample_id"]: row for row in sample_rows}
     source_list_rows = _read_csv(staging / "source_list.csv")
     source_ids = {row["source_id"] for row in source_list_rows}
     reactome_rows = bool(main_rows) and "pathway_id" in main_rows[0]
     asset_rows = _read_csv(staging / "source_assets.csv")
     asset_ids = {row["asset_id"] for row in asset_rows}
     assets_by_id = {row["asset_id"]: row for row in asset_rows}
-    dataset_rows = _read_csv(staging / "dataset_catalog.csv")
     download_rows = _read_csv(staging / "download_log.csv")
+    attempts_by_id = {row["attempt_id"]: row for row in download_rows}
     described = {
         row["field_name"] for row in _read_csv(staging / "field_descriptions.csv")
     }
@@ -522,6 +523,19 @@ def _validate_package(
         or (not reactome_rows and row["sample_id"] not in sample_ids)
         or row["source_id"] not in source_ids
         or row["asset_id"] not in asset_ids
+        or datasets_by_id.get(row["dataset_id"], {}).get("source_id")
+        != row["source_id"]
+        or assets_by_id.get(row["asset_id"], {}).get("source_id")
+        != row["source_id"]
+        or (
+            not reactome_rows
+            and (
+                samples_by_id.get(row["sample_id"], {}).get("dataset_id")
+                != row["dataset_id"]
+                or samples_by_id.get(row["sample_id"], {}).get("source_id")
+                != row["source_id"]
+            )
+        )
         for row in main_rows
     )
     checks.append(
@@ -686,7 +700,10 @@ def _validate_package(
             }
         )
     sample_reference_failures = sum(
-        row["dataset_id"] not in dataset_ids or row["source_id"] not in source_ids
+        row["dataset_id"] not in dataset_ids
+        or row["source_id"] not in source_ids
+        or datasets_by_id.get(row["dataset_id"], {}).get("source_id")
+        != row["source_id"]
         for row in sample_rows
     )
     checks.append(
@@ -720,6 +737,10 @@ def _validate_package(
         asset_failures += (
             row["successful_attempt_id"] not in successful_attempt_ids
             or row["source_id"] not in source_ids
+            or attempts_by_id.get(row["successful_attempt_id"], {}).get(
+                "source_id"
+            )
+            != row["source_id"]
             or not asset_path.is_file()
             or int(row["size_bytes"]) != asset_path.stat().st_size
             or row["sha256"] != _sha256(asset_path)

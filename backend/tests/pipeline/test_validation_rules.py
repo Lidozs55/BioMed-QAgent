@@ -358,6 +358,39 @@ def test_foreign_keys_detects_unknown_source_id(tmp_path: Path) -> None:
     assert fk["failed_count"] == 1
 
 
+def test_foreign_keys_rejects_mixed_but_individually_valid_lineage(
+    tmp_path: Path,
+) -> None:
+    """A row's valid IDs must still belong to one provenance chain."""
+    task_root = tmp_path / "tasks" / "task_mixed_lineage"
+    staging = task_root / "staging"
+    source_path = task_root / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    source_rows = _read_csv(staging / "source_list.csv")
+    source_rows.append(
+        {
+            "source_id": "src_other",
+            "database": "geo",
+            "accession": "GSE111111",
+            "url": "https://example.test/other",
+            "title": "Other valid source",
+            "retrieved_at": "2026-01-01T00:00:00",
+        }
+    )
+    _write_csv(staging / "source_list.csv", _SOURCE_LIST_COLUMNS, source_rows)
+    main_rows = _read_csv(staging / "main_data.csv")
+    main_rows[0]["source_id"] = "src_other"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, main_rows)
+
+    summary, checks = _run_validation(staging, source_path, task_root)
+
+    assert summary.status == "invalid"
+    foreign_keys = _check_by_id(checks, "foreign_keys")
+    assert foreign_keys["status"] == "failed"
+    assert foreign_keys["failed_count"] == 1
+
+
 def test_foreign_keys_detects_unknown_asset_id(tmp_path: Path) -> None:
     staging = tmp_path / "tasks" / "task1" / "staging"
     source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
