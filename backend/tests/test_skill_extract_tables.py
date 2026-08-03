@@ -13,10 +13,16 @@ from app.skills.builtin.processing.extract_tables import (
     extract_pdf_metadata,
     extract_pdf_tables,
 )
+from app.tools.workdir import create_task_workdir
 
 
-def _make_ctx(task_id: str = "test_extract") -> ToolContext:
+def _make_ctx(
+    task_id: str = "test_extract",
+    tmp_path: Path | None = None,
+) -> ToolContext:
     rc = RunContext(task_id=task_id)
+    if tmp_path is not None:
+        rc._work_dir = create_task_workdir(task_id, base_dir=str(tmp_path))
     return ToolContext(
         context=rc,
         tool_name="extract_pdf_tables",
@@ -40,6 +46,19 @@ def _call_metadata(file_path: str, task_id: str = "test_extract_meta") -> dict[s
     return json.loads(result)
 
 
+def _task_file(
+    tmp_path: Path,
+    task_id: str,
+    filename: str,
+    content: bytes,
+) -> tuple[ToolContext, Path]:
+    ctx = _make_ctx(task_id=task_id, tmp_path=tmp_path)
+    run_ctx: RunContext = ctx.context
+    path = run_ctx.work_dir.source_asset_file(filename)
+    path.write_bytes(content)
+    return ctx, path
+
+
 # ---------------------------------------------------------------------------
 # extract_pdf_tables — error cases
 # ---------------------------------------------------------------------------
@@ -55,35 +74,60 @@ def test_extract_tables_file_not_found() -> None:
 
 def test_extract_tables_non_pdf_file(tmp_path: Path) -> None:
     """extract_pdf_tables returns error JSON for non-PDF files."""
-    txt_file = tmp_path / "data.txt"
-    txt_file.write_text("not a pdf", encoding="utf-8")
-    data = _call_tables(str(txt_file))
+    ctx, txt_file = _task_file(
+        tmp_path, "test_extract_non_pdf", "data.txt", b"not a pdf"
+    )
+    args = json.dumps({"file_path": str(txt_file)})
+    data = json.loads(asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args)))
     assert data["status"] == "error"
     assert "不支持" in data["error"] or "pdf" in data["error"].lower()
 
 
+def test_extract_tables_rejects_pdf_outside_task_workdir(tmp_path: Path) -> None:
+    """Table extraction must not open a task-external PDF."""
+    external_pdf = tmp_path / "outside.pdf"
+    external_pdf.write_bytes(b"%PDF-1.4 external")
+    ctx = _make_ctx(task_id="test_extract_boundary", tmp_path=tmp_path)
+
+    with patch(
+        "app.skills.builtin.processing.extract_tables._extract_raw_tables"
+    ) as extract:
+        args = json.dumps({"file_path": str(external_pdf)})
+        data = json.loads(
+            asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args))
+        )
+
+    assert data["status"] == "error"
+    assert "task" in data["error"].lower()
+    extract.assert_not_called()
+
+
 def test_extract_tables_extraction_failure(tmp_path: Path) -> None:
     """extract_pdf_tables returns error JSON when extraction raises."""
-    pdf_file = tmp_path / "test.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_extract_fail", "test.pdf", b"%PDF-1.4 fake pdf"
+    )
     with patch(
         "app.skills.builtin.processing.extract_tables._extract_raw_tables",
         side_effect=RuntimeError("pdfplumber failed"),
     ):
-        data = _call_tables(str(pdf_file), task_id="test_extract_fail")
+        args = json.dumps({"file_path": str(pdf_file)})
+        data = json.loads(asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args)))
     assert data["status"] == "error"
     assert "失败" in data["error"] or "pdfplumber" in data["error"]
 
 
 def test_extract_tables_no_tables_found(tmp_path: Path) -> None:
     """extract_pdf_tables returns ok with empty outputs when no tables found."""
-    pdf_file = tmp_path / "empty.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_extract_empty", "empty.pdf", b"%PDF-1.4 fake pdf"
+    )
     with patch(
         "app.skills.builtin.processing.extract_tables._extract_raw_tables",
         return_value=([], None),
     ):
-        data = _call_tables(str(pdf_file), task_id="test_extract_empty")
+        args = json.dumps({"file_path": str(pdf_file)})
+        data = json.loads(asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args)))
     assert data["status"] == "ok"
     assert data["outputs"] == []
     assert data["summary"]["total_tables"] == 0
@@ -91,8 +135,9 @@ def test_extract_tables_no_tables_found(tmp_path: Path) -> None:
 
 def test_extract_tables_success(tmp_path: Path) -> None:
     """extract_pdf_tables saves CSVs and registers parsed_datasets on success."""
-    pdf_file = tmp_path / "paper.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_extract_ok", "paper.pdf", b"%PDF-1.4 fake pdf"
+    )
     mock_tables = [
         {"header": ["Gene", "FC"], "rows": [["BRCA1", "1.5"], ["TP53", "2.0"]], "page": 1},
     ]
@@ -100,7 +145,6 @@ def test_extract_tables_success(tmp_path: Path) -> None:
         "app.skills.builtin.processing.extract_tables._extract_raw_tables",
         return_value=(mock_tables, None),
     ):
-        ctx = _make_ctx(task_id="test_extract_ok")
         args = json.dumps({"file_path": str(pdf_file)})
         result = asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args))
 
@@ -128,17 +172,42 @@ def test_extract_metadata_file_not_found() -> None:
 
 def test_extract_metadata_non_pdf_file(tmp_path: Path) -> None:
     """extract_pdf_metadata returns error JSON for non-PDF files."""
-    txt_file = tmp_path / "data.txt"
-    txt_file.write_text("not a pdf", encoding="utf-8")
-    data = _call_metadata(str(txt_file))
+    ctx, txt_file = _task_file(
+        tmp_path, "test_metadata_non_pdf", "data.txt", b"not a pdf"
+    )
+    ctx.tool_name = "extract_pdf_metadata"
+    args = json.dumps({"file_path": str(txt_file)})
+    data = json.loads(asyncio.run(extract_pdf_metadata.on_invoke_tool(ctx, args)))
     assert data["status"] == "error"
     assert "不支持" in data["error"] or "pdf" in data["error"].lower()
 
 
+def test_extract_metadata_rejects_pdf_outside_task_workdir(tmp_path: Path) -> None:
+    """Metadata extraction must not open a task-external PDF."""
+    external_pdf = tmp_path / "outside-meta.pdf"
+    external_pdf.write_bytes(b"%PDF-1.4 external")
+    ctx = _make_ctx(task_id="test_metadata_boundary", tmp_path=tmp_path)
+
+    with patch(
+        "app.skills.builtin.processing.extract_tables._extract_text_for_metadata"
+    ) as extract:
+        ctx.tool_name = "extract_pdf_metadata"
+        args = json.dumps({"file_path": str(external_pdf)})
+        data = json.loads(
+            asyncio.run(extract_pdf_metadata.on_invoke_tool(ctx, args))
+        )
+
+    assert data["status"] == "error"
+    assert "task" in data["error"].lower()
+    extract.assert_not_called()
+
+
 def test_extract_metadata_success(tmp_path: Path) -> None:
     """extract_pdf_metadata returns metadata JSON on success."""
-    pdf_file = tmp_path / "paper.pdf"
-    pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_meta_ok", "paper.pdf", b"%PDF-1.4 fake pdf"
+    )
+    ctx.tool_name = "extract_pdf_metadata"
     mock_text = (
         "Gene Expression Analysis in Cancer\n"
         "Smith, J., Doe, A.\n"
@@ -151,7 +220,8 @@ def test_extract_metadata_success(tmp_path: Path) -> None:
         "app.skills.builtin.processing.extract_tables._extract_text_for_metadata",
         return_value=(mock_text, 5),
     ):
-        data = _call_metadata(str(pdf_file), task_id="test_meta_ok")
+        args = json.dumps({"file_path": str(pdf_file)})
+        data = json.loads(asyncio.run(extract_pdf_metadata.on_invoke_tool(ctx, args)))
 
     assert data["status"] == "ok"
     assert "summary" in data

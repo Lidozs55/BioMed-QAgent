@@ -52,7 +52,7 @@ from app.agent_loop.vl_model import (
 )
 from app.domain.contracts import QueryStatus, StageName
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.workdir import TaskWorkDir
+from app.tools.workdir import TaskWorkDir, resolve_task_local_file
 
 logger = logging.getLogger(__name__)
 
@@ -750,12 +750,18 @@ async def extract_chart_data_vlm(
         decide whether to retry with a different source.
     """
     run_ctx: RunContext = ctx.context
-    path = Path(source_path)
-
-    if not path.exists():
+    try:
+        path = resolve_task_local_file(run_ctx.work_dir, source_path)
+    except FileNotFoundError:
         return json.dumps({
             "status": "error",
             "error": f"source file not found: {source_path}",
+            "source_file": Path(source_path).name,
+        }, ensure_ascii=False)
+    except ValueError as exc:
+        return json.dumps({
+            "status": "error",
+            "error": str(exc),
             "source_file": Path(source_path).name,
         }, ensure_ascii=False)
 

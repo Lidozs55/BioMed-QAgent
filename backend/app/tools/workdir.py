@@ -84,6 +84,24 @@ class TaskWorkDir:
         return run_path
 
 
+def resolve_task_local_file(
+    workdir: TaskWorkDir,
+    value: str | Path,
+) -> Path:
+    """Resolve an existing file without permitting task-root escape."""
+    root = workdir.root.resolve(strict=True)
+    requested = Path(value)
+    candidate = requested if requested.is_absolute() else root / requested
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("source path must remain inside the task work directory") from exc
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return resolved
+
+
 def create_task_workdir(
     task_id: str,
     base_dir: str | None = None,

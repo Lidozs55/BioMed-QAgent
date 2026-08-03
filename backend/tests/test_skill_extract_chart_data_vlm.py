@@ -488,10 +488,26 @@ def test_extract_missing_file(tmp_path: Path) -> None:
     """Missing source_path returns error JSON."""
     ctx = _make_ctx(tmp_path=tmp_path)
 
-    data = _call_tool(ctx, "/nonexistent/path/chart.png")
+    data = _call_tool(ctx, "source_assets/nonexistent-chart.png")
 
     assert data["status"] == "error"
     assert "not found" in data["error"]
+
+
+def test_extract_rejects_image_outside_task_workdir(tmp_path: Path) -> None:
+    """A readable image outside the managed task must never reach the VLM."""
+    ctx = _make_ctx(tmp_path=tmp_path)
+    external_path = _write_fake_png(tmp_path / "outside-task.png")
+
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        return_value=_VALID_VLM_JSON,
+    ) as call_vlm:
+        data = _call_tool(ctx, str(external_path))
+
+    assert data["status"] == "error"
+    assert "task" in data["error"].lower()
+    call_vlm.assert_not_called()
 
 
 def test_vlm_returns_non_json_raises_chart_extraction_error(tmp_path: Path) -> None:
