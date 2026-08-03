@@ -13,6 +13,7 @@ from app.domain.contracts.discovery import (
 from app.domain.contracts.enums import (
     DATABASE_IDENTIFIER_ALIASES,
     SOURCE_CAPABILITIES,
+    SUPPORTED_PIPELINE_SOURCE_COMBINATIONS,
     AttemptStatus,
     Database,
     DataLevel,
@@ -30,6 +31,7 @@ from app.domain.contracts.enums import (
     TaskMode,
     TaskState,
     WarningSeverity,
+    is_supported_pipeline_source_combination,
 )
 from app.domain.contracts.events import (
     ArtifactProducedPayload,
@@ -199,8 +201,10 @@ __all__ = [
     "RuntimeEventType",
     "RunManifest",
     "SOURCE_CAPABILITIES",
+    "SUPPORTED_PIPELINE_SOURCE_COMBINATIONS",
     "SourceCapability",
     "SourceCapabilityDeclaration",
+    "is_supported_pipeline_source_combination",
     "SubagentCancelledPayload",
     "SubagentCancelRequestedPayload",
     "SubagentCompletedPayload",

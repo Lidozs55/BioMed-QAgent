@@ -20,6 +20,7 @@ from app.domain.contracts import (
     RequestedOutput,
     SourceCapability,
     TaskSpecification,
+    is_supported_pipeline_source_combination,
 )
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import STANDALONE_RUN_ID
@@ -236,6 +237,7 @@ async def run_research_pipeline(
     # declared capability instead of being silently accepted.
     rejected: list[dict[str, str]] = []
     seen_database: set[str] = set()
+    selected_databases: set[Database] = set()
     for identifier in normalized_databases:
         database = DATABASE_IDENTIFIER_ALIASES.get(identifier)
         if database is None:
@@ -248,6 +250,7 @@ async def run_research_pipeline(
         if database.value in seen_database:
             continue
         seen_database.add(database.value)
+        selected_databases.add(database)
         capability = SOURCE_CAPABILITIES[database]
         if capability is not SourceCapability.PIPELINE_SUPPORTED:
             rejected.append({
@@ -272,6 +275,19 @@ async def run_research_pipeline(
             {
                 "status": "unsupported_databases",
                 "unsupported_databases": ["reactome_mixed_sources"],
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    if not is_supported_pipeline_source_combination(selected_databases):
+        return json.dumps(
+            {
+                "status": "unsupported_databases",
+                "unsupported_databases": list(dict.fromkeys(normalized_databases)),
+                "message": (
+                    "unsupported pipeline source combination; each selected "
+                    "source must participate in one implemented deterministic path"
+                ),
                 "retryable": False,
             },
             ensure_ascii=False,

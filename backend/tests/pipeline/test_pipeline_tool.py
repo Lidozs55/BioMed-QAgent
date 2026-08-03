@@ -511,6 +511,56 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("databases", "extra_arguments"),
+    [
+        (["pubmed"], {"pmid": "34180400"}),
+        (
+            ["pubmed", "gdc"],
+            {
+                "pmid": "34180400",
+                "gdc_project_id": "TCGA-BRCA",
+                "gdc_data_type": "gene-expression",
+            },
+        ),
+    ],
+)
+async def test_pipeline_function_tool_rejects_unsupported_source_combinations(
+    tmp_path: Path,
+    databases: list[str],
+    extra_arguments: dict[str, str],
+) -> None:
+    context = RunContext(task_id="task_tool_source_combination")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        "task_tool_source_combination", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_source_combination",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "unsupported combination",
+                "databases": databases,
+                "mode": "fixture",
+                **extra_arguments,
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "unsupported_databases"
+    assert payload["unsupported_databases"] == databases
+    assert payload["retryable"] is False
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
 async def test_pipeline_function_tool_forwards_run_cancellation_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
