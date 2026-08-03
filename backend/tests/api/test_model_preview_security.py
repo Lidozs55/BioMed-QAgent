@@ -63,6 +63,96 @@ async def test_model_preview_connects_to_validated_ip_with_original_host_and_sni
 
 
 @pytest.mark.asyncio
+async def test_model_preview_does_not_send_saved_key_to_different_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    requests: list[httpx.Request] = []
+    https_requirements: list[bool] = []
+
+    def resolve_target(_: str, *, require_https: bool) -> PublicHttpTarget:
+        https_requirements.append(require_https)
+        return PublicHttpTarget(
+            connect_url="https://8.8.8.8/v1",
+            host_header="other.provider.example",
+            sni_hostname="other.provider.example",
+        )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr(settings_api, "resolve_public_http_target", resolve_target)
+    async with application.router.lifespan_context(application):
+        await application.state.model_preview_client.aclose()
+        application.state.model_preview_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://localhost"
+        ) as client:
+            saved = await client.put(
+                "/api/v1/settings",
+                json={
+                    "base_url": "https://saved.provider.example/v1",
+                    "api_key": "stored-secret",
+                },
+            )
+            response = await client.post(
+                "/api/v1/models",
+                json={
+                    "preview_base_url": "https://other.provider.example/v1",
+                    "preview_api_key": "",
+                },
+            )
+
+    assert saved.status_code == 200
+    assert response.status_code == 200
+    assert https_requirements == [False]
+    assert "authorization" not in requests[0].headers
+
+
+@pytest.mark.asyncio
+async def test_model_preview_reuses_saved_key_for_same_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr(settings_api, "resolve_public_http_target", _target)
+    async with application.router.lifespan_context(application):
+        await application.state.model_preview_client.aclose()
+        application.state.model_preview_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://localhost"
+        ) as client:
+            saved = await client.put(
+                "/api/v1/settings",
+                json={
+                    "base_url": "https://models.provider.example/v1/",
+                    "api_key": "stored-secret",
+                },
+            )
+            response = await client.post(
+                "/api/v1/models",
+                json={
+                    "preview_base_url": "https://models.provider.example/v1",
+                    "preview_api_key": "",
+                },
+            )
+
+    assert saved.status_code == 200
+    assert response.status_code == 200
+    assert requests[0].headers["authorization"] == "Bearer stored-secret"
+
+
+@pytest.mark.asyncio
 async def test_model_preview_rejects_http_when_preview_key_is_supplied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
