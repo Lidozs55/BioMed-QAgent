@@ -125,10 +125,10 @@ async def test_invalid_readiness_preserves_existing_request_and_blocks_continuat
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_settings_admit_model_backed_task_via_inference(
+async def test_unknown_model_settings_reject_model_backed_task_without_window(
     tmp_path: Path,
 ) -> None:
-    # Given — unknown model gets inferred 128K window, so tasks are admitted
+    # Given — unknown model has no trusted context-window metadata.
     settings_path = tmp_path / "settings" / "model.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -154,6 +154,7 @@ async def test_unknown_model_settings_admit_model_backed_task_via_inference(
         )
         await manager.wait_until_idle()
 
-        # Then — unknown model is admitted via inferred context window
-        assert accepted.status_code == 202
-        assert len(executions) == 1
+        # Then — admission fails before any execution is enqueued.
+        assert accepted.status_code == 422
+        assert "positive context window" in accepted.json()["detail"]
+        assert executions == []

@@ -128,7 +128,7 @@ def resolve_context_budget(
 
 
 def _resolve_context_window(settings: BudgetSettings) -> int:
-    """Prefer a positive explicit override, then catalog, then name-based inference."""
+    """Prefer a positive explicit override, then trusted catalog metadata."""
 
     if settings.context_window is not None:
         return settings.context_window
@@ -137,52 +137,7 @@ def _resolve_context_window(settings: BudgetSettings) -> int:
     model = get_known_model(settings.model_name)
     if model is not None:
         return model.context_window
-    # Fallback: infer from model name so unknown models still get a usable budget.
-    return _infer_context_window_from_name(settings.model_name)
-
-
-def _infer_context_window_from_name(model_id: str) -> int:
-    """Heuristic context-window inference for models absent from the catalog."""
-
-    ml = model_id.lower()
-    if ml.startswith("deepseek"):
-        return 1_000_000
-    if "qwen" in ml:
-        return 128_000
-    # OpenAI: more specific prefixes first
-    if ml.startswith("gpt-5"):
-        return 400_000
-    if ml.startswith("gpt-4.1"):
-        return 1_047_576
-    if ml.startswith("gpt-4") or ml.startswith("gpt4"):
-        return 128_000
-    if ml.startswith("gpt-3.5") or ml.startswith("gpt3.5"):
-        return 16_384
-    if ml.startswith("o3") or ml.startswith("o4"):
-        return 200_000
-    if ml.startswith("claude"):
-        return 200_000
-    if ml.startswith("gemini"):
-        return 1_000_000
-    if ml.startswith("grok"):
-        return 262_000
-    if ml.startswith("moonshot") or ml.startswith("kimi"):
-        return 262_144
-    if ml.startswith("glm") or ml.startswith("chatglm"):
-        return 128_000
-    if ml.startswith("baichuan"):
-        return 128_000
-    if ml.startswith("yi-") or ml.startswith("01-ai"):
-        return 128_000
-    if ml.startswith("minimax"):
-        return 1_000_000
-    if ml.startswith("mistral") or ml.startswith("mixtral"):
-        return 128_000
-    if ml.startswith("llama"):
-        return 128_000
-    if ml.startswith("command") or ml.startswith("cohere"):
-        return 256_000
-    return 128_000
+    raise ContextBudgetConfigurationError("a positive context window is required")
 
 
 def _validate_ratios(settings: BudgetSettings) -> None:

@@ -12,10 +12,10 @@ from app.runtime.manager import RunExecution
 
 
 @pytest.mark.asyncio
-async def test_import_admits_unknown_model_via_inferred_window(
+async def test_import_rejects_unknown_model_without_context_window(
     tmp_path: Path,
 ) -> None:
-    # Given — unknown model gets inferred 128K window, so import is admitted
+    # Given — unknown model has no trusted context-window metadata.
     settings_path = tmp_path / "settings" / "model.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -43,7 +43,8 @@ async def test_import_admits_unknown_model_via_inferred_window(
         )
         await manager.wait_until_idle()
 
-        # Then — unknown model is admitted via inferred context window
-        assert response.status_code == 202
-        assert await repository.find_request("req-inferred-import") is not None
-        assert len(executions) == 1
+        # Then — admission fails and staged uploads do not create a request.
+        assert response.status_code == 422
+        assert "positive context window" in response.json()["detail"]
+        assert await repository.find_request("req-inferred-import") is None
+        assert executions == []
