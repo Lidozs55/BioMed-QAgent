@@ -449,6 +449,50 @@ def _validate_package(
             "details": "",
         }
     )
+    core_rows: list[dict[str, str]] = []
+    if not reactome_rows:
+        for row in main_rows:
+            try:
+                source_line = int(row.get("source_line_number", "0"))
+                source_column = int(row.get("source_column_index", "-1"))
+            except (TypeError, ValueError):
+                continue
+            if not (
+                row.get("source_raw_value")
+                and source_line > 0
+                and source_column >= 0
+            ):
+                continue
+            expression_value = row.get("expression_value", "")
+            if expression_value:
+                try:
+                    float(expression_value)
+                except ValueError:
+                    continue
+                if not row.get("gene_id"):
+                    continue
+            if row.get("sample_id") or row.get("gene_id"):
+                core_rows.append(row)
+    core_values_valid = bool(main_rows) and (reactome_rows or bool(core_rows))
+    checks.append(
+        {
+            "check_id": "core_scientific_values",
+            "scope": "main_data",
+            "check_name": "main data contains source-derived scientific values",
+            "status": "passed" if core_values_valid else "failed",
+            "checked_count": len(main_rows) if reactome_rows else len(core_rows),
+            "failed_count": 0 if core_values_valid else 1,
+            "details": json.dumps(
+                {
+                    "total_rows": len(main_rows),
+                    "metadata_only_rows": sum(
+                        row.get("measurement_type") == "sample_metadata"
+                        for row in main_rows
+                    ),
+                }
+            ),
+        }
+    )
     reference_failures = sum(
         row["dataset_id"] not in dataset_ids
         or (not reactome_rows and row["sample_id"] not in sample_ids)
@@ -724,8 +768,9 @@ def _validate_package(
             if raw != row["source_raw_value"] or raw != row["participant_id"]:
                 lineage_failures += 1
             continue
-        # Skip sample-metadata rows: they have no expression value to verify.
-        if row.get("measurement_type") == "sample_metadata":
+        # Placeholder metadata has no source value or locator. Traceable
+        # non-expression records (for example GDC clinical rows) are checked.
+        if not row.get("source_raw_value"):
             sampled_skipped += 1
             continue
         line_index = int(row["source_line_number"]) - 1
@@ -735,17 +780,26 @@ def _validate_package(
         except (IndexError, ValueError):
             lineage_failures += 1
             continue
-        if raw != row["source_raw_value"] or float(raw) != float(
-            row["expression_value"]
-        ):
+        if raw != row["source_raw_value"]:
             lineage_failures += 1
+            continue
+        if row.get("expression_value"):
+            try:
+                values_match = float(raw) == float(row["expression_value"])
+            except ValueError:
+                values_match = False
+            if not values_match:
+                lineage_failures += 1
+    lineage_checked_count = len(sampled_rows) - sampled_skipped
+    if main_rows and lineage_checked_count == 0:
+        lineage_failures += 1
     checks.append(
         {
             "check_id": "source_value_lineage",
             "scope": "main_data",
             "check_name": "sampled values match source locator",
             "status": "passed" if lineage_failures == 0 else "failed",
-            "checked_count": len(sampled_rows) - sampled_skipped,
+            "checked_count": lineage_checked_count,
             "failed_count": lineage_failures,
             "details": json.dumps(
                 {

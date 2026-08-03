@@ -274,6 +274,43 @@ def test_main_data_nonempty_rejects_header_only_artifact(tmp_path: Path) -> None
     assert nonempty["failed_count"] == 1
 
 
+def test_core_scientific_values_rejects_metadata_only_main_data(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "tasks" / "metadata_only"
+    staging = task_root / "staging"
+    source_path = task_root / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    with (staging / "main_data.csv").open(
+        "r", encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        row.update(
+            {
+                "gene_id_raw": "",
+                "gene_id": "",
+                "gene_id_namespace": "",
+                "measurement_type": "sample_metadata",
+                "value_semantics": "metadata_only",
+                "expression_value": "",
+                "expression_unit": "na",
+                "source_line_number": "0",
+                "source_column_index": "0",
+                "source_raw_value": "",
+            }
+        )
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, task_root)
+    by_id = {check["check_id"]: check for check in checks}
+
+    assert "core_scientific_values" in by_id
+    assert by_id["core_scientific_values"]["status"] == "failed"
+    assert summary.status == "invalid"
+
+
 def test_foreign_keys_detects_unknown_dataset_id(tmp_path: Path) -> None:
     staging = tmp_path / "tasks" / "task1" / "staging"
     source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"

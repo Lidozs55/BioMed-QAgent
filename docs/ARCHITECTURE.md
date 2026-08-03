@@ -111,12 +111,14 @@ Gate。
   `run_research_pipeline` 按能力表拒绝非 pipeline-supported 来源并返回
   `capabilities` 明细；skill catalog 的 `pipeline_supported` 与 `/databases`
   的 `capability` 字段均从该表派生，避免两套声明漂移。
-- GDC Pipeline 首期仅接受显式 `project_id` + `data_type`（`gene-expression` 或
-  `clinical`），Discovery 生成 GDC `SourceRecord`，Acquisition 通过 `/files` 选择
-  稳定 TSV/TSV.GZ 文件并使用 `acquire_source()` 下载，Processing 严格拒绝不符合
-  fixture 表布局的输入；mutation、CNV 和多源合并不在此支持边界内。
-- 多源确定性合并（TODO §1.2/§1.5.4）：当 `TaskSpecification` 选择 ≥2 个数据型数据集
-  （GDC/Xena）时，Processing 为每个数据集解析独立 `ParsedDataset`，通过
+- GDC Pipeline 首期接受显式 `project_id` + `gene-expression`。Live Acquisition 将
+  该内部类型映射为官方 `Gene Expression Quantification`，并通过 `/files` 同时约束
+  `data_format=TSV`；Processing 支持 GDC 官方 augmented STAR-counts（优先使用
+  `tpm_unstranded`）及兼容 fixture 矩阵。Clinical TSV 仅保留 fixture 回归能力；live
+  Clinical Supplement 在 HTTP 请求前 fail-closed，直至 XML 血缘解析器完成。
+- 多源确定性合并（TODO §1.2/§1.5.4）：当 `TaskSpecification` 明确选择一个 GDC 与
+  一个 Xena 数据集时，Discovery 与 Acquisition 保留两套来源/资产，Processing
+  为每个数据集解析独立 `ParsedDataset`，通过
   `alignment.align_fields` 生成真实字段映射、`alignment.merge_datasets` 垂向合并，
   产出 `merged_dataset`（`parsed/{id}_merged.csv`）；Runner 将全部 `parsed_datasets`
   与 `merged_dataset` 传入 Artifact Build，合并结果作为 `main_data.csv` 发布，
@@ -130,10 +132,10 @@ Gate。
 
 以下职责是目标边界；当前后端仍有两类实现差距，不能将目标描述当作已完成能力：
 
-- `PipelineRunner` 已覆盖 PubMed/GEO 主路径，以及 GDC、Xena 和 Reactome 的首期显式
-  单数据集路径；Reactome 仅接受一个显式 pathway，必须作为唯一来源运行，和其它数据库
-  或多个 pathway selection 会被拒绝。`TaskSpecification` 虽可表达通用查询，但尚未成为
-  所有阶段的通用多源路由契约；多源合并、mutation/CNV 与 Reactome 扩展数据类型仍未完成。
+- `PipelineRunner` 已覆盖 PubMed/GEO 主路径，GDC、Xena 和 Reactome 的首期显式
+  单数据集路径，以及一个 GDC + 一个 Xena 的确定性合并路径。Reactome 仅接受一个
+  显式 pathway，必须作为唯一来源运行；通用任意来源组合、mutation/CNV、GDC live
+  clinical 与 Reactome 扩展数据类型仍未完成。
 - Agent-only Skill 的文件记录仍主要通过 `RunContext.add_source()` /
   `add_raw_asset()` 保存到运行时字段；这些文件尚未统一转换为 Pipeline 的
   Pydantic `SourceRecord` / `SourceAsset` / `ParsedDataset`，因此不能直接作为正式
@@ -393,9 +395,10 @@ schema version 和生成步骤。
 负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
 候选、实际查询式、结果顺序和来源 URL。
 
-Discovery 不生成最终科研数据行。对于显式的 UCSC Xena gene-expression 数据集与
+Discovery 不生成最终科研数据行。对于显式 GDC/Xena gene-expression 数据集与
 Reactome pathway participants，Discovery 输出统一的 `SourceRecord` 和数据集选择；
-Reactome 仅支持单来源显式 `pathway_id`，混合来源不得伪装成 Pipeline 支持。
+一个 GDC + 一个 Xena 可作为受支持的双来源组合，Reactome 仍仅支持单来源显式
+`pathway_id`，其它混合来源不得伪装成 Pipeline 支持。
 
 PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
 请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
@@ -415,6 +418,9 @@ PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局
 - Xena gene-expression live acquisition 将显式数据集 accession 映射到 Xena hub
   `download/{dataset_id}.gz`，复用同一 `acquire_source()`、内容寻址缓存和
   `SourceAsset`/`DownloadAttempt` 契约；临床、突变、CNV 等 Xena 类型尚未纳入该闭环。
+- GDC gene-expression live acquisition 使用官方 Files API 类型与 TSV 格式过滤；
+  GDC + Xena 组合按规格顺序聚合全部 `SourceAsset`/`DownloadAttempt`。Live 模式的
+  checkpoint 参数摘要不读取测试 fixture，因此生产包可以不包含 `tests/fixtures/`。
 
 成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
 参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
@@ -436,6 +442,10 @@ decompress
 每一步记录输入、输出、工具版本、参数摘要、处理前后行数、警告和时间。样本和
 gene ID 规范化同时保留 raw value、canonical value 与规则。
 
+GEO tximport counts 使用实际下载的 family SOFT 恢复样本；series matrix fallback
+直接解析其表达矩阵，空表达块失败而不生成占位行。GDC 官方 STAR-counts 跳过统计
+汇总行、规范化 Ensembl 版本号并保留原始值与物理行列定位。
+
 ### 4.4 Artifact Builder
 
 Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数据和最终科研
@@ -450,6 +460,7 @@ Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数
 - 每个 `asset_id` 都存在于 source asset 记录，并关联成功 DownloadAttempt；
 - source asset 存在且 SHA-256 一致；
 - 主数据所有字段都有字段说明；
+- `main_data.csv` 至少包含一条可回溯到来源文件的核心科研记录；
 - 每个源数据派生测量有精确 SourceLocator；
 - 固定案例全量回溯表达值；一般任务全量检查结构并默认抽样 100 个值；
 - processing log 含完整输入输出和行数；
@@ -678,6 +689,8 @@ POST 合并语义：
 
 - 提供 `use_current_settings=true` 或非空 `preview_base_url` 时，服务端向
   供应商 OpenAI 兼容端点发送 `GET /models` 以发现可用模型。
+- 已保存 API Key 仅在预览 URL 与已保存 `base_url` 相同时复用；跨端点预览默认
+  无凭据，除非请求显式提供本次预览 Key。
 - 带凭据发现要求 HTTPS（`http://` + 非空 key 视为不安全）。
 - HTTP 客户端**不**跟随重定向（`follow_redirects=False`，10s 超时）。
 - 服务端仅解析供应商域名一次，校验所有解析结果均为公网地址后，直接连接已校验

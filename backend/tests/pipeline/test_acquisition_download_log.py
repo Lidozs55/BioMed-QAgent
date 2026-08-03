@@ -66,3 +66,32 @@ def test_geo_live_fallback_records_failed_attempt_in_download_log(
     assert attempts[1].attempt_id == output.source_assets[0].successful_attempt_id
     assert any("_tximportCounts" in url for url in requests)
     assert any("_series_matrix" in url for url in requests)
+
+
+def test_geo_live_counts_download_keeps_client_open_for_required_soft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, content=b"verified fixture bytes")
+
+    real_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(acquisition.httpx, "AsyncClient", lambda: real_client)
+
+    try:
+        result = acquisition.run_acquisition(_context(tmp_path), datetime.now(UTC))
+    finally:
+        asyncio.run(real_client.aclose())
+
+    output = result.output
+    assert len(output.source_assets) == 2
+    assert len(output.download_attempts) == 2
+    assert all(
+        attempt.status is DownloadStatus.SUCCEEDED
+        for attempt in output.download_attempts
+    )
+    assert any("_tximportCounts" in url for url in requests)
+    assert any("_family.soft.gz" in url for url in requests)

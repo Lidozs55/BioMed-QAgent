@@ -48,6 +48,78 @@ def test_parse_gdc_expression_tsv_gz_to_long_form(tmp_path: Path) -> None:
     assert rows[0]["source_line_number"] == "2"
 
 
+def test_parse_official_gdc_star_counts_uses_tpm_with_exact_lineage(
+    tmp_path: Path,
+) -> None:
+    workdir = create_task_workdir("gdc_star_counts", base_dir=str(tmp_path / "tasks"))
+    payload = (
+        b"# gene-model: GENCODE v36\n"
+        b"# gdc-workflow: STAR Counts\n"
+        b"gene_id\tgene_name\tgene_type\tunstranded\tstranded_first\tstranded_second\t"
+        b"tpm_unstranded\tfpkm_unstranded\tfpkm_uq_unstranded\n"
+        b"N_unmapped\t\t\t10\t10\t10\t\t\t\n"
+        b"ENSG00000141510.18\tTP53\tprotein_coding\t100\t50\t50\t1.25\t0.5\t0.75\n"
+        b"ENSG00000012048.23\tBRCA1\tprotein_coding\t200\t100\t100\t2.5\t1\t1.5\n"
+    )
+
+    result = parse_gdc_table(
+        _asset(
+            workdir,
+            payload,
+            "sample-01.rna_seq.augmented_star_gene_counts.tsv",
+        ),
+        "ds_gdc_star_counts",
+        workdir,
+        "gene-expression",
+    )
+
+    assert result.row_count == 2
+    assert result.source_row_count == 2
+    with (workdir.root / result.file_asset.relative_path).open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["gene_id"] for row in rows] == [
+        "ENSG00000141510",
+        "ENSG00000012048",
+    ]
+    assert [row["gene_id_raw"] for row in rows] == [
+        "ENSG00000141510.18",
+        "ENSG00000012048.23",
+    ]
+    assert {row["sample_id"] for row in rows} == {"sample-01"}
+    assert [row["expression_value"] for row in rows] == ["1.25", "2.5"]
+    assert {row["expression_unit"] for row in rows} == {"tpm_unstranded"}
+    assert {row["is_normalized"] for row in rows} == {"true"}
+    assert rows[0]["source_line_number"] == "5"
+    assert rows[0]["source_column_index"] == "6"
+    assert rows[0]["source_column_name"] == "tpm_unstranded"
+    assert rows[0]["source_raw_value"] == "1.25"
+
+
+def test_parse_gdc_clinical_preserves_sample_locator(tmp_path: Path) -> None:
+    workdir = create_task_workdir(
+        "gdc_clinical_parser", base_dir=str(tmp_path / "tasks")
+    )
+    payload = b"sample_id\tproject_id\tdiagnosis\nS1\tTCGA-BRCA\tcarcinoma\n"
+
+    result = parse_gdc_table(
+        _asset(workdir, payload, "clinical.tsv"),
+        "ds_gdc_clinical",
+        workdir,
+        "clinical",
+    )
+
+    with (workdir.root / result.file_asset.relative_path).open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        row = next(csv.DictReader(handle))
+    assert row["source_line_number"] == "2"
+    assert row["source_column_index"] == "0"
+    assert row["source_column_name"] == "sample_id"
+    assert row["source_raw_value"] == "S1"
+
+
 @pytest.mark.parametrize("payload", [b"sample\tvalue\nS1\tbad\n", b"gene_id\tS1\n"])
 def test_parse_gdc_rejects_unsupported_layout(tmp_path: Path, payload: bytes) -> None:
     workdir = create_task_workdir("gdc_bad", base_dir=str(tmp_path / "tasks"))

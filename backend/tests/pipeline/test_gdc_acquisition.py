@@ -82,6 +82,60 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
     assert requests[0].startswith("https://api.gdc.cancer.gov/files?")
     assert requests[1] == "https://api.gdc.cancer.gov/data/file-expression-1"
     assert output.source_assets[0].source_id == output.download_attempts[0].source_id
-    assert json.loads(httpx.URL(requests[0]).params["filters"])["content"][0]["content"]["field"] == (
-        "cases.project.project_id"
+    filters = json.loads(httpx.URL(requests[0]).params["filters"])
+    assert filters["content"] == [
+        {
+            "op": "=",
+            "content": {
+                "field": "cases.project.project_id",
+                "value": "TCGA-BRCA",
+            },
+        },
+        {
+            "op": "=",
+            "content": {
+                "field": "data_type",
+                "value": "Gene Expression Quantification",
+            },
+        },
+        {
+            "op": "=",
+            "content": {"field": "data_format", "value": "TSV"},
+        },
+    ]
+
+
+def test_gdc_live_clinical_fails_before_opening_http_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_client():
+        raise AssertionError("HTTP must not be used for unsupported live clinical data")
+
+    monkeypatch.setattr(acquisition.httpx, "AsyncClient", unexpected_client)
+    workdir = create_task_workdir("gdc_live_clinical", base_dir=str(tmp_path / "tasks"))
+    specification = TaskSpecification(
+        topic="GDC live clinical contract",
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_gdc_live_clinical",
+                database=Database.GDC,
+                accession="TCGA-BRCA",
+                source_id="",
+                reason="explicit project",
+                data_type="clinical",
+            )
+        ],
     )
+    context = StageContext(
+        task_id="gdc_live_clinical",
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic=specification.topic,
+        started_at=datetime.now(UTC),
+        mode="live",
+        databases=["gdc"],
+        specification=specification,
+    )
+
+    with pytest.raises(ValueError, match="live clinical is not supported"):
+        acquisition.run_acquisition(context, datetime.now(UTC))

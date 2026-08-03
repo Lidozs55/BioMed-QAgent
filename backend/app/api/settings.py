@@ -63,6 +63,17 @@ class ModelPreviewRequest(BaseModel):
     preview_api_key: str = ""
 
 
+def _preview_api_key(
+    body: ModelPreviewRequest,
+    current: ModelConfiguration,
+) -> str:
+    if body.preview_api_key:
+        return body.preview_api_key
+    if body.preview_base_url.rstrip("/") == str(current.base_url).rstrip("/"):
+        return current.api_key
+    return ""
+
+
 VENDORS = (
     {
         "id": "dashscope",
@@ -182,7 +193,7 @@ async def list_models(
 ) -> dict[str, object]:
     current = store.snapshot()
     base_url = body.preview_base_url
-    api_key = body.preview_api_key or current.api_key
+    api_key = _preview_api_key(body, current)
     try:
         target = resolve_public_http_target(base_url, require_https=bool(api_key))
     except UnsafeUrlError as error:

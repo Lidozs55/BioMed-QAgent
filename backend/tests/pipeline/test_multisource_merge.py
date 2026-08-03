@@ -14,6 +14,7 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from app.domain.contracts import (
     Database,
     DataLevel,
@@ -405,3 +406,80 @@ def test_merged_package_passes_validation_gate(tmp_path: Path) -> None:
     ]
     assert summary.failed_count == 0
     assert (build_result.output.staging_dir / "multi_source_manifest.csv").is_file()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runner_completes_gdc_xena_fixture_from_public_entry(
+    tmp_path: Path,
+) -> None:
+    """The public runner must preserve both selected sources through validation."""
+    from app.domain.contracts import RequestedOutput
+    from app.pipeline.runner import PipelineRunner
+
+    fixture_dir = tmp_path / "fixtures"
+    fixture_dir.mkdir()
+    (fixture_dir / "xena_matrix.tsv").write_bytes(_XENA_PAYLOAD)
+    (fixture_dir / "gdc_expression.tsv").write_bytes(_GDC_PAYLOAD)
+    specification = TaskSpecification(
+        topic="GDC and Xena fixture entry",
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_xena_entry",
+                database=Database.UCSC_XENA,
+                accession="xena.tsv",
+                source_id="",
+                reason="test public entry",
+            ),
+            DatasetSelection(
+                dataset_id="ds_gdc_entry",
+                database=Database.GDC,
+                accession="TCGA-TEST",
+                source_id="",
+                reason="test public entry",
+                data_type="gene-expression",
+            ),
+        ],
+        requested_outputs=[RequestedOutput.MAIN_DATA],
+    )
+
+    manifest = await PipelineRunner(
+        task_id="multisource_public_entry",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=fixture_dir,
+        topic=specification.topic,
+        databases=["ucsc_xena", "gdc"],
+        specification=specification,
+    ).run()
+
+    assert manifest.task_state.value == "completed", manifest.model_dump_json(indent=2)
+    artifacts = tmp_path / "tasks" / "multisource_public_entry" / "artifacts"
+    with (artifacts / "source_list.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        sources = list(csv.DictReader(handle))
+    with (artifacts / "source_assets.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        assets = list(csv.DictReader(handle))
+    with (artifacts / "download_log.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        attempts = list(csv.DictReader(handle))
+    with (artifacts / "multi_source_manifest.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        source_manifest = list(csv.DictReader(handle))
+    with (artifacts / "main_data.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        main_rows = list(csv.DictReader(handle))
+
+    source_ids = {row["source_id"] for row in sources}
+    assert len(source_ids) == 2
+    assert {row["source_id"] for row in assets} == source_ids
+    assert {row["source_id"] for row in attempts} == source_ids
+    assert {row["dataset_id"] for row in source_manifest} == {
+        "ds_xena_entry",
+        "ds_gdc_entry",
+    }
+    assert len(main_rows) == 8
