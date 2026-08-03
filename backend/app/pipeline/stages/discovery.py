@@ -133,18 +133,18 @@ def run_discovery(ctx: StageContext) -> StageResult:
     if len(reactome_datasets) > 1:
         raise ValueError("Reactome supports exactly one explicit DatasetSelection")
 
-    gdc_dataset = next(
-        (dataset for dataset in specification.datasets if dataset.database == Database.GDC),
-        None,
-    )
-    if gdc_dataset is not None:
-        return _run_gdc_discovery(ctx, specification, gdc_dataset)
-    xena_dataset = next(
-        (dataset for dataset in specification.datasets if dataset.database == Database.UCSC_XENA),
-        None,
-    )
-    if xena_dataset is not None:
-        return _run_xena_discovery(ctx, specification, xena_dataset)
+    data_datasets = [
+        dataset
+        for dataset in specification.datasets
+        if dataset.database in {Database.GDC, Database.UCSC_XENA}
+    ]
+    if data_datasets:
+        if len(data_datasets) == 1:
+            dataset = data_datasets[0]
+            if dataset.database == Database.GDC:
+                return _run_gdc_discovery(ctx, specification, dataset)
+            return _run_xena_discovery(ctx, specification, dataset)
+        return _run_gdc_xena_discovery(ctx, specification, data_datasets)
     reactome_dataset = next(
         (dataset for dataset in specification.datasets if dataset.database == Database.REACTOME),
         None,
@@ -417,6 +417,58 @@ def _run_gdc_discovery(
         dataset_url=url,
         dataset_id=resolved.dataset_id,
         retrieved_at=retrieved_at,
+    )
+    return StageResult(output_digest=_digest_discovery(output), output=output)
+
+
+def _run_gdc_xena_discovery(
+    ctx: StageContext,
+    specification: TaskSpecification,
+    datasets: list[DatasetSelection],
+) -> StageResult:
+    databases = {dataset.database for dataset in datasets}
+    if (
+        len(datasets) != 2
+        or databases != {Database.GDC, Database.UCSC_XENA}
+        or len(specification.datasets) != 2
+    ):
+        raise ValueError("multi-source discovery supports exactly one GDC and one Xena dataset")
+
+    results = [
+        _run_gdc_discovery(ctx, specification, dataset)
+        if dataset.database == Database.GDC
+        else _run_xena_discovery(ctx, specification, dataset)
+        for dataset in datasets
+    ]
+    outputs = [result.output for result in results]
+    resolved_by_id = {
+        output.specification.datasets[0].dataset_id: output.specification.datasets[0]
+        for output in outputs
+    }
+    resolved_datasets = [resolved_by_id[dataset.dataset_id] for dataset in datasets]
+    first = outputs[0]
+    retrieved_at = max(output.retrieved_at for output in outputs)
+    output = DiscoveryOutput(
+        sources=[source for item in outputs for source in item.sources],
+        literature=None,
+        geo=None,
+        specification=specification.model_copy(update={"datasets": resolved_datasets}),
+        dataset_source_id=resolved_datasets[0].source_id,
+        dataset_accession=first.dataset_accession,
+        dataset_title=first.dataset_title,
+        dataset_url=first.dataset_url,
+        dataset_id=first.dataset_id,
+        retrieved_at=retrieved_at,
+    )
+    ctx.emit_progress_sync(
+        stage=StageName.DISCOVERY,
+        kind="discovered_records",
+        current=2,
+        total=2,
+        detail={
+            "sources": [dataset.database.value for dataset in resolved_datasets],
+            "dataset_ids": [dataset.dataset_id for dataset in resolved_datasets],
+        },
     )
     return StageResult(output_digest=_digest_discovery(output), output=output)
 

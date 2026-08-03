@@ -171,6 +171,13 @@ def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
     In live mode, streams the source through acquire_source with caching.
     """
     specification = ctx.specification
+    data_datasets = [
+        dataset
+        for dataset in (specification.datasets if specification else [])
+        if dataset.database in {Database.GDC, Database.UCSC_XENA}
+    ]
+    if len(data_datasets) > 1:
+        return _run_gdc_xena_acquisition(ctx, retrieved_at, data_datasets)
     gdc_dataset = next(
         (
             d
@@ -367,8 +374,10 @@ async def _run_xena_acquisition_live(
         "https://toil-xena-hub.s3.us-east-1.amazonaws.com/download/"
         f"{dataset.accession.removesuffix('.gz')}.gz"
     )
+    identity_url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
     source = SourceRecord(
-        source_id=make_source_id(Database.UCSC_XENA, dataset.accession, url),
+        source_id=dataset.source_id
+        or make_source_id(Database.UCSC_XENA, dataset.accession, identity_url),
         database=Database.UCSC_XENA,
         accession=dataset.accession,
         url=url,
@@ -568,7 +577,7 @@ def _run_xena_acquisition_fixture(
     if not source_path.exists():
         source_path.write_bytes(payload)
     url = f"https://xenabrowser.net/datapages/?dataset={dataset.accession}"
-    source_id = make_source_id(Database.UCSC_XENA, dataset.accession, url)
+    source_id = dataset.source_id or make_source_id(Database.UCSC_XENA, dataset.accession, url)
     attempt_id = f"download_attempt_fixture_xena_{dataset.accession.lower()}"
     asset = SourceAsset(
         asset_id=asset_id_from_sha256(checksum),
@@ -599,6 +608,55 @@ def _run_xena_acquisition_fixture(
             retrieved_at=retrieved_at,
         ),
     )
+
+
+def _run_gdc_xena_acquisition(
+    ctx: StageContext,
+    retrieved_at: datetime,
+    datasets: list[DatasetSelection],
+) -> StageResult:
+    databases = {dataset.database for dataset in datasets}
+    if len(datasets) != 2 or databases != {Database.GDC, Database.UCSC_XENA}:
+        raise ValueError("multi-source acquisition supports exactly one GDC and one Xena dataset")
+    if ctx.specification is None or len(ctx.specification.datasets) != 2:
+        raise ValueError("GDC + Xena acquisition cannot be combined with other datasets")
+    if ctx.mode == "live":
+        results = asyncio.run(_run_gdc_xena_acquisition_live(ctx, retrieved_at, datasets))
+    else:
+        results = [
+            _run_gdc_acquisition_fixture(ctx, retrieved_at, dataset)
+            if dataset.database == Database.GDC
+            else _run_xena_acquisition_fixture(ctx, retrieved_at, dataset)
+            for dataset in datasets
+        ]
+    assets = [asset for result in results for asset in result.output.source_assets]
+    attempts = [attempt for result in results for attempt in result.output.download_attempts]
+    digest = hashlib.sha256(
+        json.dumps([asset.sha256 for asset in assets], separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return StageResult(
+        output_digest=digest,
+        output=AcquisitionOutput(
+            source_assets=assets,
+            download_attempts=attempts,
+            source_path=ctx.workdir.root / assets[0].relative_path,
+            retrieved_at=retrieved_at,
+        ),
+    )
+
+
+async def _run_gdc_xena_acquisition_live(
+    ctx: StageContext,
+    retrieved_at: datetime,
+    datasets: list[DatasetSelection],
+) -> list[StageResult]:
+    results: list[StageResult] = []
+    for dataset in datasets:
+        if dataset.database == Database.GDC:
+            results.append(await _run_gdc_acquisition_live(ctx, retrieved_at, dataset))
+        else:
+            results.append(await _run_xena_acquisition_live(ctx, retrieved_at, dataset))
+    return results
 
 
 def _run_acquisition_fixture(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
