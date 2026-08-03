@@ -19,12 +19,15 @@ from app.agent_loop.context import RunContext
 from app.agent_loop.model import LazyDashScopeModel
 
 
-async def _reviewer_instructions(ctx: RunContextWrapper) -> str:
+async def _reviewer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
     """动态指令：从 RunContext 读取完整 query log 并注入子 Agent 上下文。
 
     project_memory 硬约束："压缩前完整传递 query log 给 ReviewerAgent" —— 这里
     传递的是压缩前的完整 query_log（调用 review_query_strategy 工具的时机由
     主 Agent 决定，INSTRUCTIONS 指导其在 run_research_pipeline 前调用）。
+
+    SDK 0.18.2 强制 instructions callable 接受 (context, agent) 二参数契约
+    （见 agents/agent.py Agent.get_system_prompt），单参数签名会抛 TypeError。
     """
     run_ctx: RunContext = ctx.context
     log_json = json.dumps(run_ctx.query_log, ensure_ascii=False, indent=2)

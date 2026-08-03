@@ -22,8 +22,12 @@ KEEP_RECENT = 5  # 压缩时保留的最近查询条数
 COMPRESS_THRESHOLD_CHARS = 8000  # 触发压缩的字符数阈值（约 2000 token）
 
 
-async def _summarizer_instructions(ctx: RunContextWrapper) -> str:
-    """动态指令：从 RunContext 读取 query_log 并注入子 Agent 上下文。"""
+async def _summarizer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
+    """动态指令：从 RunContext 读取 query_log 并注入子 Agent 上下文。
+
+    SDK 0.18.2 强制 instructions callable 接受 (context, agent) 二参数契约
+    （见 agents/agent.py Agent.get_system_prompt），单参数签名会抛 TypeError。
+    """
     run_ctx: RunContext = ctx.context
     log_json = json.dumps(run_ctx.query_log, ensure_ascii=False, indent=2)
     return (

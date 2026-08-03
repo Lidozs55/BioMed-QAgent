@@ -57,6 +57,16 @@ class PipelineCancelledError(RuntimeError):
     """Raised when cooperative cancellation reaches a stage boundary."""
 
 
+class DownloadError(RuntimeError):
+    """Raised when all download candidates fail in the acquisition stage.
+
+    The pipeline runner maps this to ``ErrorCode.NETWORK_ERROR`` with
+    ``retryable=True`` so the Agent can retry with an alternative accession
+    or request human-in-the-loop guidance, instead of treating it as an
+    unrecoverable internal error (TODO §2.8 / RESEARCH_SYSTEM_REVIEW §9.2).
+    """
+
+
 @dataclass
 class StageContext:
     """Immutable context shared by all stages in one pipeline run."""

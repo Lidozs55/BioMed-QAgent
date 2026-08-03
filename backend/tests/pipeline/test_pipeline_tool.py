@@ -511,6 +511,120 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_function_tool_accepts_json_string_databases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qwen serializes list params as JSON strings; tool must accept both.
+
+    Reproduces task_df9e953d [89-94]: Agent passed databases='["geo","pubmed"]'
+    (string) and got list_type validation errors 4 times. The parameter type
+    must accept str so the SDK does not reject before the function body runs.
+    """
+    context = RunContext(task_id="task_tool_str_dbs")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        "task_tool_str_dbs", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_str_dbs",
+        tool_arguments="{}",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            self.state = SimpleNamespace(stage_attempts=[])
+
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "json string databases",
+                "databases": '["geo","pubmed"]',
+                "pmid": "39847131",
+                "gse": "GSE28735",
+                "mode": "fixture",
+            }
+        ),
+    )
+    payload = json.loads(result)
+    assert payload["status"] == "completed"
+    assert captured["databases"] == ["geo", "pubmed"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_filters_research_only_from_preferred_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When databases is null, RESEARCH_ONLY sources in preferred_sources
+    must be silently filtered rather than rejecting the whole call.
+
+    Reproduces task_df9e953d [99-100]: Agent passed databases=null, tool fell
+    back to preferred_sources (containing pdb/pubchem), and the whole call was
+    rejected with unsupported_databases/retryable=false — a deadlock since the
+    agent cannot remove sources from preferred_sources.
+    """
+    context = RunContext(task_id="task_tool_filter_ro")
+    context.preferred_sources = ["pdb", "pubchem", "geo", "pubmed"]
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        "task_tool_filter_ro", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_filter_ro",
+        tool_arguments="{}",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            self.state = SimpleNamespace(stage_attempts=[])
+
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+            )
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "filter research only",
+                "databases": None,
+                "pmid": "39847131",
+                "gse": "GSE28735",
+                "mode": "fixture",
+            }
+        ),
+    )
+    payload = json.loads(result)
+    assert payload["status"] == "completed"
+    # pdb/pubchem filtered out; only pipeline-supported sources remain.
+    assert captured["databases"] == ["geo", "pubmed"]
+
+
+@pytest.mark.asyncio
 async def test_pipeline_function_tool_forwards_run_cancellation_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

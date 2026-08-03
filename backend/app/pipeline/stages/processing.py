@@ -14,6 +14,7 @@ from app.pipeline.processing.geo_tximport import (
     GeoSampleMetadata,
     parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
+    process_geo_series_matrix_expression,
     process_geo_tximport_counts,
 )
 from app.pipeline.processing.reactome import parse_reactome_table
@@ -433,6 +434,45 @@ def _recover_samples_from_series_matrix(
         return []
 
 
+def _try_series_matrix_expression_or_minimal(
+    source_asset: SourceAsset,
+    dataset_id: str,
+    ctx: StageContext,
+    samples: list[GeoSampleMetadata],
+) -> ParsedDataset:
+    """Try parsing the series_matrix expression block; fall back to minimal.
+
+    When the series_matrix has a non-empty ``!series_matrix_table_begin``/
+    ``!series_matrix_table_end`` block, produces real expression rows.
+    Otherwise falls back to ``_build_minimal_parsed_dataset`` (metadata-only).
+    """
+    if samples:
+        try:
+            expression_parsed = process_geo_series_matrix_expression(
+                source_asset=source_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                samples=samples,
+            )
+            if expression_parsed is not None:
+                logger.info(
+                    "processing: parsed %d expression rows from series_matrix",
+                    expression_parsed.row_count,
+                )
+                return expression_parsed
+            logger.info(
+                "processing: series_matrix expression block is empty; "
+                "falling back to sample_metadata rows",
+            )
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "processing: series_matrix expression parse failed (%s); "
+                "falling back to sample_metadata rows",
+                exc,
+            )
+    return _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
+
+
 def _run_multi_dataset_processing(
     ctx: StageContext,
     assets: list[SourceAsset],
@@ -673,27 +713,16 @@ def run_processing(
                 len(samples),
             )
         except (ValueError, FileNotFoundError, OSError) as exc:
-            # Fixture-mode fallback: series_matrix recovery for fixture
-            # series whose expression block is empty.
+            # Fixture-mode fallback: try series_matrix expression parsing,
+            # then fall back to sample_metadata rows.
             logger.warning(
-                "processing: tximport parse failed (%s); attempting series_matrix sample recovery",
+                "processing: tximport parse failed (%s); attempting series_matrix recovery",
                 exc,
             )
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            parsed = _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
-            if samples:
-                logger.info(
-                    "processing: recovered %d samples from series_matrix; "
-                    "main_data.csv will contain %d sample_metadata rows "
-                    "(expression block is empty)",
-                    len(samples),
-                    parsed.row_count,
-                )
-            else:
-                logger.warning(
-                    "processing: series_matrix recovery yielded no samples; "
-                    "main_data.csv will be schema-only (0 rows)"
-                )
+            parsed = _try_series_matrix_expression_or_minimal(
+                source_asset, dataset_id, ctx, samples
+            )
     else:
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
             soft_bytes = (ctx.workdir.root / soft_asset.relative_path).read_bytes()
@@ -707,10 +736,17 @@ def run_processing(
             samples = parse_geo_soft_samples(soft_bytes)
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            parsed = _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
+            parsed = _try_series_matrix_expression_or_minimal(
+                source_asset, dataset_id, ctx, samples
+            )
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
             logger.info(
                 "processing: live mode parsed %d expression rows from downloaded tximport counts",
+                parsed.row_count,
+            )
+        elif parsed.processing_parameters.get("measurement_type") == "series_matrix_expression":
+            logger.info(
+                "processing: live mode parsed %d expression rows from series_matrix",
                 parsed.row_count,
             )
         elif samples:

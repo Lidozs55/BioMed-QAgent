@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from app.domain.contracts import (
     AttemptStatus,
+    ErrorCode,
     StageName,
     TaskState,
     UserInputRequiredPayload,
@@ -25,7 +26,7 @@ from app.pipeline.runner import (
     PipelineEventSinkError,
     PipelineRunner,
 )
-from app.pipeline.stages import PipelineCancelledError
+from app.pipeline.stages import DownloadError, PipelineCancelledError
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -298,6 +299,42 @@ def test_runner_terminalizes_inflight_attempt_on_stage_failure(
     assert [
         json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
     ] == [attempt.model_dump(mode="json") for attempt in runner.state.stage_attempts]
+
+
+def test_download_failure_is_retryable_network_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DownloadError in acquisition must surface as NETWORK_ERROR + retryable.
+
+    When all download candidates fail, the Agent should see ``retryable=True``
+    so it can retry with an alternative accession or request HIL — not a
+    terminal ``INTERNAL_ERROR`` (RESEARCH_SYSTEM_REVIEW §9.2).
+    """
+
+    def failing_acquisition(ctx, retrieved_at):
+        raise DownloadError("all candidate URLs failed")
+
+    monkeypatch.setattr("app.pipeline.runner.run_acquisition", failing_acquisition)
+    runner = PipelineRunner(
+        task_id="task_download_fail",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.FAILED
+    # Discovery succeeds, then acquisition fails — two stage attempts.
+    failed = next(
+        attempt
+        for attempt in runner.state.stage_attempts
+        if attempt.status is AttemptStatus.FAILED
+    )
+    assert failed.stage is StageName.ACQUISITION
+    assert failed.error is not None
+    assert failed.error.code is ErrorCode.NETWORK_ERROR
+    assert failed.error.retryable is True
+    assert "all candidate URLs failed" in failed.error.message
 
 
 def test_stage_failure_is_durable_before_stage_failed_event_is_awaited(

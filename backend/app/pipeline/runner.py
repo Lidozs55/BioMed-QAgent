@@ -59,6 +59,7 @@ from app.pipeline.stages import (
     AcquisitionOutput,
     ArtifactBuildOutput,
     DiscoveryOutput,
+    DownloadError,
     PipelineCancelledError,
     ProcessingOutput,
     StageContext,
@@ -748,6 +749,12 @@ class PipelineRunner:
                     )
                 except PipelineCancelledError:
                     return await self._finalize_cancelled()
+                except DownloadError as exc:
+                    return await self._finalize_stage_failed(
+                        stage,
+                        exc,
+                        ErrorCode.NETWORK_ERROR,
+                    )
                 except Exception as exc:
                     return await self._finalize_stage_failed(
                         stage,
@@ -1265,7 +1272,7 @@ class PipelineRunner:
         error = ErrorDetail(
             code=error_code,
             message=str(exc),
-            retryable=error_code is ErrorCode.TIMEOUT,
+            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
             stage=stage,
         )
         attempt = self._build_attempt(
@@ -1298,7 +1305,7 @@ class PipelineRunner:
             stage_error = ErrorDetail(
                 code=error_code,
                 message=str(exc),
-                retryable=error_code is ErrorCode.TIMEOUT,
+                retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
                 stage=inflight.stage,
             )
             failed = self._build_attempt(
@@ -1319,7 +1326,7 @@ class PipelineRunner:
         error = ErrorDetail(
             code=error_code,
             message=str(exc),
-            retryable=error_code is ErrorCode.TIMEOUT,
+            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
         )
         await self._emit_event(TaskFailedPayload(error=error))
         self._persist_logs()

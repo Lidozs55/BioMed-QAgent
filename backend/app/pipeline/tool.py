@@ -202,7 +202,7 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
 async def run_research_pipeline(
     ctx: RunContextWrapper[RunContext],
     topic: str,
-    databases: list[str] | None = None,
+    databases: list[str] | str | None = None,
     pmid: str | None = None,
     gse: str | None = None,
     xena_dataset_id: str | None = None,
@@ -212,19 +212,48 @@ async def run_research_pipeline(
     mode: Literal["fixture", "live"] = "live",
 ) -> str:
     run_context = ctx.context
+    # Qwen serializes list params as JSON strings (e.g. '["geo","pubmed"]')
+    # instead of native lists, which fails SDK strict_schema list_type
+    # validation. Accept both forms so the agent doesn't get stuck retrying.
+    if isinstance(databases, str):
+        try:
+            databases = json.loads(databases)
+        except json.JSONDecodeError:
+            return json.dumps(
+                {
+                    "status": "invalid_input",
+                    "message": (
+                        f"databases must be a list or JSON list string, "
+                        f"got: {databases!r}"
+                    ),
+                    "retryable": False,
+                },
+                ensure_ascii=False,
+            )
     # databases defaults to the user's UI-selected preferred_sources (issue #1).
     # Handle None, empty list, and the LLM "unset optional param as empty
-    # string" edge case uniformly.
+    # string" edge case uniformly.  When falling back, silently filter out
+    # RESEARCH_ONLY sources (PDB/PubChem) — they are agent-investigation
+    # sources and must not cause the whole pipeline call to be rejected just
+    # because the agent omitted databases.  The agent may still explicitly
+    # request them and get a clear capability rejection below.
     if not isinstance(databases, list) or not databases:
-        databases = list(run_context.preferred_sources)
+        databases = [
+            src
+            for src in run_context.preferred_sources
+            if (db := DATABASE_IDENTIFIER_ALIASES.get(src.strip().lower())) is not None
+            and SOURCE_CAPABILITIES[db] is SourceCapability.PIPELINE_SUPPORTED
+        ]
     normalized_databases = [value.strip().lower() for value in databases]
     if not normalized_databases:
         return json.dumps(
             {
                 "status": "invalid_input",
                 "message": (
-                    "databases is empty and no preferred_sources were set. "
-                    "Pass a non-empty databases list or select databases in the UI."
+                    "databases is empty and no pipeline-supported "
+                    "preferred_sources were set. Select at least one "
+                    "pipeline-supported database (pubmed/geo/gdc/xena/reactome) "
+                    "in the UI or pass a non-empty databases list."
                 ),
                 "retryable": False,
             },

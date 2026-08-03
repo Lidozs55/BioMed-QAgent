@@ -33,6 +33,7 @@ from app.domain.contracts import (
 from app.integrations.acquisition import AcquisitionResult, acquire_source
 from app.pipeline.stages.base import (
     AcquisitionOutput,
+    DownloadError,
     StageContext,
     StageResult,
 )
@@ -323,7 +324,7 @@ async def _run_gdc_acquisition_live(
             expected_sha256=hit.get("md5sum") if len(hit.get("md5sum", "")) == 64 else None,
         )
     if result.asset is None:
-        raise RuntimeError(f"GDC download failed: {result.attempt.error_message}")
+        raise DownloadError(f"GDC download failed: {result.attempt.error_message}")
     return StageResult(
         output_digest=result.asset.sha256,
         output=AcquisitionOutput(
@@ -355,7 +356,7 @@ async def _run_xena_acquisition_live(
     async with httpx.AsyncClient() as http:
         result = await _try_acquire(source, filename, ctx, cache, http, dataset.accession)
     if result.asset is None:
-        raise RuntimeError(f"live Xena download failed for {dataset.accession}")
+        raise DownloadError(f"live Xena download failed for {dataset.accession}")
     ctx.emit_progress_sync(
         stage=StageName.ACQUISITION,
         kind="downloaded_bytes",
@@ -456,7 +457,7 @@ async def _run_reactome_acquisition_live(
             accept="application/json",
         )
     if result.asset is None:
-        raise RuntimeError(f"live Reactome download failed for {dataset.accession}")
+        raise DownloadError(f"live Reactome download failed for {dataset.accession}")
     source_path = ctx.workdir.root / result.asset.relative_path
     try:
         _validate_reactome_content_service_json(source_path)
@@ -475,7 +476,9 @@ async def _run_reactome_acquisition_live(
             with contextlib.suppress(OSError):
                 cache.metadata_path(request_hash).unlink()
                 cache.blob_path(result.asset.sha256).unlink()
-        raise RuntimeError(f"live Reactome download failed for {dataset.accession}: {exc}") from exc
+        raise DownloadError(
+            f"live Reactome download failed for {dataset.accession}: {exc}"
+        ) from exc
     return StageResult(
         output_digest=normalized_asset.sha256,
         output=AcquisitionOutput(
@@ -679,7 +682,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                     break
 
         if result is None or result.asset is None:
-            raise RuntimeError(f"live download failed for {gse}: all candidate URLs failed")
+            raise DownloadError(f"live download failed for {gse}: all candidate URLs failed")
 
         assets = [result.asset]
         if "tximportCounts" in used_filename:
@@ -695,7 +698,7 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                 soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
             )
             if soft_result.asset is None:
-                raise RuntimeError(
+                raise DownloadError(
                     f"live download failed for {gse}: family SOFT required "
                     "when tximport counts are available"
                 )

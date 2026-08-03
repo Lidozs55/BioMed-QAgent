@@ -30,6 +30,27 @@ def _matches_preferred_source(
     )
 
 
+def _is_nullable_union(property_schema: Any) -> bool:
+    """Return True when a JSON schema property allows ``null``.
+
+    Pydantic emits ``Optional[X]`` (i.e. ``X | None``) as either
+    ``{"anyOf": [<X-schema>, {"type": "null"}]}`` or, for a plain
+    ``Optional[X] = None`` without an explicit default, the same shape without
+    a ``default`` key. Detecting the null branch lets the gateway treat such
+    fields as optional so callers may omit them — matching the function
+    signature's intent.
+    """
+    if not isinstance(property_schema, dict):
+        return False
+    for key in ("anyOf", "oneOf"):
+        branches = property_schema.get(key)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict) and branch.get("type") == "null":
+                    return True
+    return False
+
+
 def _error(
     code: str,
     message: str,
@@ -204,11 +225,20 @@ def build_skill_gateway(
             # The SDK marks every strict-schema property as required even when
             # the parameter carries a default (see ensure_strict_json_schema).
             # Treat defaulted properties as optional so callers may omit them.
+            #
+            # Pydantic does NOT emit a ``default`` key for ``Optional[X] = None``
+            # parameters — instead the property schema becomes
+            # ``{"anyOf": [{"type": "string"}, {"type": "null"}]}``. Such
+            # fields are semantically optional too, so we detect them by
+            # checking whether ``anyOf``/``oneOf`` includes a ``{"type":"null"}``
+            # branch. (See docs/ISSUES.md #260803-4.)
             required = list(schema.get("required", []))
+            properties = schema.get("properties", {})
             defaulted = {
                 name
                 for name in required
-                if "default" in schema.get("properties", {}).get(name, {})
+                if "default" in properties.get(name, {})
+                or _is_nullable_union(properties.get(name, {}))
             }
             if defaulted:
                 effective = schema | {
