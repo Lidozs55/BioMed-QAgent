@@ -60,7 +60,7 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
         "evidence_type", "evidence_value", "evidence_url",
     ],
     "source_assets.csv": [
-        "asset_id", "source_id", "successful_attempt_id", "data_level",
+        "asset_id", "source_id", "successful_attempt_id", "derived_from_asset_id", "data_level",
         "relative_path", "size_bytes", "sha256", "media_type", "schema_version",
     ],
     "download_log.csv": [
@@ -394,6 +394,10 @@ def _build_dataset_catalog_rows(
     the merged ``main_data.csv`` closes against the catalog (TODO §1.5.4).
     """
     if not is_merged:
+        parsed_rows = _read_parsed_rows(parsed_path)
+        parsed_sample_count = len(
+            {row["sample_id"] for row in parsed_rows if row.get("sample_id")}
+        )
         return [
             {
                 "dataset_id": dataset_id,
@@ -408,9 +412,12 @@ def _build_dataset_catalog_rows(
                     else (geo.experiment_type if geo else "gene_expression")
                 ),
                 "sample_count": (
-                    len(_read_parsed_rows(parsed_path))
+                    len(parsed_rows)
                     if is_reactome
-                    else (geo.sample_count if geo else 2)
+                    else (
+                        parsed_sample_count
+                        or (geo.sample_count if geo else 0)
+                    )
                 ),
                 "platform_ids": (
                     "[]"
@@ -831,39 +838,50 @@ def run_artifact_build(
 
     processing_log_rows = [
         {
-            "step_id": primary.file_asset.generated_by_step_id,
+            "step_id": asset.generated_by_step_id,
             "stage_attempt_id": stage_attempt_id,
             "stage": "processing",
-            "operation": primary.parser_name,
-            # input_refs points at the source asset (the raw file the
-            # parser read from); output_refs points at the parsed
-            # dataset's file_asset (the long-form CSV the parser wrote).
-            # Previously both referenced source_asset.asset_id, which
-            # made the processing_log falsely claim the parser produced
-            # no new artifact (TODO §1.3).
-            "input_refs": json.dumps([source_asset.asset_id]),
-            "output_refs": json.dumps([primary.file_asset.asset_id]),
-            "tool_version": primary.parser_version,
-            # rows_before is the upstream source file's data-row count
-            # (e.g. gene-row count in a tximport matrix); rows_after is
-            # the long-form parsed row count (gene × sample). The
-            # previous hardcoded ``4`` was a placeholder that didn't
-            # reflect reality (TODO §1.3).
+            "operation": "reactome_json_to_tsv",
+            "input_refs": json.dumps([asset.derived_from_asset_id]),
+            "output_refs": json.dumps([asset.asset_id]),
+            "tool_version": "1.0.0",
             "rows_before": primary.source_row_count,
-            "rows_after": primary.row_count,
-            # parameters comes from the parser itself so judges audit
-            # the actual measurement_type / value_semantics / sample_count
-            # instead of a hardcoded ``{"measurement": "counts"}``
-            # (TODO §1.3).
+            "rows_after": primary.source_row_count,
             "parameters": json.dumps(
-                primary.processing_parameters, sort_keys=True
+                {"format": "reactome_participants_json_to_tsv"},
+                sort_keys=True,
             ),
             "status": "succeeded",
             "started_at": ctx.started_at.isoformat(),
             "finished_at": datetime.now(UTC).isoformat(),
-            "warnings": processing_log_warnings,
+            "warnings": "[]",
         }
+        for asset in source_assets
+        if asset.derived_from_asset_id is not None
     ]
+    processing_log_rows.extend(
+        [
+        {
+            "step_id": dataset.file_asset.generated_by_step_id,
+            "stage_attempt_id": stage_attempt_id,
+            "stage": "processing",
+            "operation": dataset.parser_name,
+            "input_refs": json.dumps([dataset.source_asset_id]),
+            "output_refs": json.dumps([dataset.file_asset.asset_id]),
+            "tool_version": dataset.parser_version,
+            "rows_before": dataset.source_row_count,
+            "rows_after": dataset.row_count,
+            "parameters": json.dumps(
+                dataset.processing_parameters, sort_keys=True
+            ),
+            "status": "succeeded",
+            "started_at": ctx.started_at.isoformat(),
+            "finished_at": datetime.now(UTC).isoformat(),
+            "warnings": "[]" if is_merged else processing_log_warnings,
+        }
+        for dataset in all_parsed
+        ]
+    )
     if is_merged:
         processing_log_rows.append(
             {
@@ -892,7 +910,7 @@ def run_artifact_build(
                 "status": "succeeded",
                 "started_at": ctx.started_at.isoformat(),
                 "finished_at": datetime.now(UTC).isoformat(),
-                "warnings": "[]",
+                "warnings": processing_log_warnings,
             }
         )
 
@@ -953,7 +971,8 @@ def run_artifact_build(
             {
                 "asset_id": asset.asset_id,
                 "source_id": asset.source_id,
-                "successful_attempt_id": asset.successful_attempt_id,
+                "successful_attempt_id": asset.successful_attempt_id or "",
+                "derived_from_asset_id": asset.derived_from_asset_id or "",
                 "data_level": asset.data_level.value,
                 "relative_path": asset.relative_path,
                 "size_bytes": asset.size_bytes,

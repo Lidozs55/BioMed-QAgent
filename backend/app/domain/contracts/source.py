@@ -99,13 +99,27 @@ class FileAsset(ContractModel):
 class SourceAsset(FileAsset):
     kind: Literal["source"] = "source"
     source_id: str = Field(min_length=1)
-    successful_attempt_id: str = Field(min_length=1)
+    successful_attempt_id: str | None = Field(default=None, min_length=1)
+    derived_from_asset_id: str | None = Field(default=None, min_length=1)
     data_level: DataLevel
 
     @model_validator(mode="after")
     def validate_source_path(self) -> SourceAsset:
         if PurePosixPath(self.relative_path).parts[0] != "source_assets":
             raise ValueError("SourceAsset path must be inside source_assets")
+        lineage_fields = (
+            self.successful_attempt_id is not None,
+            self.derived_from_asset_id is not None,
+        )
+        if sum(lineage_fields) != 1:
+            raise ValueError(
+                "SourceAsset requires exactly one download or derivation lineage"
+            )
+        if self.derived_from_asset_id is not None:
+            if self.derived_from_asset_id == self.asset_id:
+                raise ValueError("derived SourceAsset cannot reference itself")
+            if not self.generated_by_step_id:
+                raise ValueError("derived SourceAsset requires generated_by_step_id")
         return self
 
 

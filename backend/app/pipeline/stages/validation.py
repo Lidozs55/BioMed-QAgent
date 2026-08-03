@@ -781,13 +781,24 @@ def _validate_package(
         source_rel_base = source_path.parents[len(parts) - sa_index - 1]
     for row in asset_rows:
         asset_path = source_rel_base / row["relative_path"]
-        asset_failures += (
-            row["successful_attempt_id"] not in successful_attempt_ids
-            or row["source_id"] not in source_ids
-            or attempts_by_id.get(row["successful_attempt_id"], {}).get(
-                "source_id"
+        attempt_id = row.get("successful_attempt_id", "")
+        derived_from_asset_id = row.get("derived_from_asset_id", "")
+        has_exactly_one_lineage = bool(attempt_id) != bool(derived_from_asset_id)
+        if attempt_id:
+            lineage_valid = (
+                attempt_id in successful_attempt_ids
+                and attempts_by_id.get(attempt_id, {}).get("source_id")
+                == row["source_id"]
             )
-            != row["source_id"]
+        else:
+            parent_asset = assets_by_id.get(derived_from_asset_id, {})
+            lineage_valid = bool(parent_asset) and (
+                parent_asset.get("source_id") == row["source_id"]
+            )
+        asset_failures += (
+            not has_exactly_one_lineage
+            or not lineage_valid
+            or row["source_id"] not in source_ids
             or not asset_path.is_file()
             or int(row["size_bytes"]) != asset_path.stat().st_size
             or row["sha256"] != _sha256(asset_path)

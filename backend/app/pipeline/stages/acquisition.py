@@ -434,7 +434,6 @@ def _normalize_reactome_json_asset(
     ctx: StageContext,
     dataset: DatasetSelection,
     json_asset: SourceAsset,
-    attempt: DownloadAttempt,
 ) -> SourceAsset:
     """Convert validated ContentService JSON into the TSV consumed by Validation."""
     from app.pipeline.processing.reactome import _open_reactome_json
@@ -454,8 +453,10 @@ def _normalize_reactome_json_asset(
         sha256=checksum,
         size_bytes=len(payload),
         media_type="text/tab-separated-values",
+        generated_by_step_id="step_reactome_json_to_tsv_v1",
         source_id=json_asset.source_id,
-        successful_attempt_id=attempt.attempt_id,
+        successful_attempt_id=None,
+        derived_from_asset_id=json_asset.asset_id,
         data_level=json_asset.data_level,
     )
 
@@ -495,7 +496,7 @@ async def _run_reactome_acquisition_live(
     try:
         _validate_reactome_content_service_json(source_path)
         normalized_asset = _normalize_reactome_json_asset(
-            ctx, dataset, result.asset, result.attempt
+            ctx, dataset, result.asset
         )
     except ValueError as exc:
         source_path.unlink(missing_ok=True)

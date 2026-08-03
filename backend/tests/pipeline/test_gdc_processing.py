@@ -87,6 +87,8 @@ def test_parse_official_gdc_star_counts_uses_tpm_with_exact_lineage(
         "ENSG00000141510.18",
         "ENSG00000012048.23",
     ]
+    assert [row["gene_id_version"] for row in rows] == ["18", "23"]
+    assert {row["is_integer_expected"] for row in rows} == {"false"}
     assert {row["sample_id"] for row in rows} == {"sample-01"}
     assert [row["expression_value"] for row in rows] == ["1.25", "2.5"]
     assert {row["expression_unit"] for row in rows} == {"tpm_unstranded"}
@@ -173,6 +175,46 @@ async def test_gdc_expression_fixture_pipeline_reaches_validation(tmp_path: Path
     assert manifest.task_state.value == "completed"
     assert manifest.validation.status == "valid"
     assert (tmp_path / "tasks" / "gdc_pipeline_fixture" / "artifacts" / "main_data.csv").is_file()
+
+
+@pytest.mark.asyncio
+async def test_gdc_dataset_catalog_derives_single_sample_count(tmp_path: Path) -> None:
+    from app.domain.contracts import Database, DatasetSelection, TaskSpecification
+    from app.pipeline.runner import PipelineRunner
+
+    fixture_dir = tmp_path / "gdc_single_sample"
+    fixture_dir.mkdir()
+    (fixture_dir / "gdc_expression.tsv").write_bytes(
+        b"gene_id\tONLY_SAMPLE\nTP53\t1\nBRCA1\t2\n"
+    )
+    specification = TaskSpecification(
+        topic="single-sample GDC",
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_gdc_single",
+                database=Database.GDC,
+                accession="TCGA-TEST",
+                reason="single sample regression",
+                data_type="gene-expression",
+            )
+        ],
+    )
+    runner = PipelineRunner(
+        task_id="gdc_single_sample",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=fixture_dir,
+        databases=["gdc"],
+        specification=specification,
+    )
+
+    manifest = await runner.run()
+
+    assert manifest.task_state.value == "completed"
+    with (runner.workdir.artifacts / "dataset_catalog.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        catalog = next(csv.DictReader(handle))
+    assert catalog["sample_count"] == "1"
 
 
 @pytest.mark.asyncio

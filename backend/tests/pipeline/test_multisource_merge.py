@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -273,7 +274,25 @@ def test_artifact_build_publishes_merged_dataset_as_main_data(tmp_path: Path) ->
         "r", encoding="utf-8-sig", newline=""
     ) as handle:
         log_rows = list(_csv.DictReader(handle))
-    assert any("merge_datasets" in row["operation"] for row in log_rows)
+    assert {row["operation"] for row in log_rows} == {
+        "xena_gene_expression",
+        "gdc_gene_expression",
+        "alignment.merge_datasets",
+    }
+    parsed_by_operation = {
+        dataset.parser_name: dataset for dataset in processing_result.output.parsed_datasets
+    }
+    source_assets_by_id = {asset.source_id: asset for asset in (xena_asset, gdc_asset)}
+    for row in log_rows:
+        if row["operation"] == "alignment.merge_datasets":
+            continue
+        parsed_dataset = parsed_by_operation[row["operation"]]
+        assert json.loads(row["input_refs"]) == [
+            source_assets_by_id[parsed_dataset.source_id].asset_id
+        ]
+        assert json.loads(row["output_refs"]) == [
+            parsed_dataset.file_asset.asset_id
+        ]
     # Multi-source manifest lists one row per input dataset (TODO §1.5.4).
     with (staging / "multi_source_manifest.csv").open(
         "r", encoding="utf-8-sig", newline=""
