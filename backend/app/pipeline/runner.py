@@ -24,6 +24,7 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     AttemptStatus,
     CancelRequestedPayload,
+    DownloadAttempt,
     ErrorCode,
     ErrorDetail,
     EventEnvelope,
@@ -73,6 +74,7 @@ from app.pipeline.stages import (
     run_validation,
 )
 from app.pipeline.state import (
+    DownloadAttemptAuditRecord,
     StageOutputFile,
     TaskLock,
     load_stage_output,
@@ -219,6 +221,7 @@ class PipelineRunner:
             specification=self.specification,
             cancellation_requested=self._is_cancelled,
             progress_emitter=self._emit_progress_event,
+            download_attempt_recorder=self._record_download_attempt,
         )
         self.events: list[EventEnvelope] = []
         self._persisted_attempt_count = self._load_persisted_attempt_count()
@@ -1414,6 +1417,23 @@ class PipelineRunner:
             [attempt.model_dump(mode="json") for attempt in new_attempts],
         )
         self._persisted_attempt_count += len(new_attempts)
+
+    def _record_download_attempt(self, attempt: DownloadAttempt) -> None:
+        """Persist one URL attempt before Acquisition can fail or crash."""
+
+        inflight = self.state.inflight_attempt
+        if inflight is None or inflight.stage is not StageName.ACQUISITION:
+            raise RuntimeError("download attempt requires an inflight acquisition")
+        record = DownloadAttemptAuditRecord(
+            task_id=self.task_id,
+            run_id=self.ctx.run_id,
+            stage_attempt_id=inflight.stage_attempt_id,
+            attempt=attempt,
+        )
+        append_jsonl_records(
+            self.workdir.logs / "download_attempts.jsonl",
+            [record.model_dump(mode="json")],
+        )
 
 
 def _sha256_json(payload: Any) -> str:

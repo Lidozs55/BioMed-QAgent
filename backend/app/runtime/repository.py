@@ -421,6 +421,8 @@ class TaskRepository:
                             run.task_id == accepted.task_id
                             and run.run_id == accepted.run_id
                             and run.request_id == accepted.request_id
+                            and run.request_fingerprint
+                            == accepted.request_fingerprint
                             for run in snapshot.runs
                         )
                         if not authoritative:

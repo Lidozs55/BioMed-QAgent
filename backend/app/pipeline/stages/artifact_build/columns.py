@@ -39,7 +39,7 @@ _ARTIFACT_COLUMNS: dict[str, list[str]] = {
         "evidence_type", "evidence_value", "evidence_url",
     ],
     "source_assets.csv": [
-        "asset_id", "source_id", "successful_attempt_id", "data_level",
+        "asset_id", "source_id", "successful_attempt_id", "derived_from_asset_id", "data_level",
         "relative_path", "size_bytes", "sha256", "media_type", "schema_version",
     ],
     "download_log.csv": [

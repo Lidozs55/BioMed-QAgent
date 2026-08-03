@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
+from app.domain.contracts import FileAsset, ParsedDataset, asset_id_from_sha256
 from app.pipeline.runner import PipelineRunner
+from app.pipeline.stages.base import StageContext
+from app.pipeline.stages.processing import _clean_parsed_dataset
+from app.tools.workdir import create_task_workdir
 
 FIXTURE_DIR = (
     Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -35,6 +41,67 @@ def _run_pinned_pipeline(tmp_path: Path) -> Path:
         f"pinned pipeline must complete; got {manifest.task_state}"
     )
     return tmp_path / "tasks" / "task_cleaning_test" / "artifacts"
+
+
+def test_cleaning_persists_safe_transformations_and_refreshes_asset(
+    tmp_path: Path,
+) -> None:
+    workdir = create_task_workdir("task_cleaning_unit", root_dir=tmp_path / "task")
+    csv_path = workdir.parsed / "dirty.csv"
+    csv_path.write_text(
+        "sample,value,note\n"
+        " S1 , 1 , keep \n"
+        "S1,1,keep\n"
+        "S2,N/A,NULL\n",
+        encoding="utf-8",
+    )
+    original = csv_path.read_bytes()
+    checksum = hashlib.sha256(original).hexdigest()
+    parsed = ParsedDataset(
+        dataset_id="dataset_cleaning",
+        source_id="source_cleaning",
+        source_asset_id="asset_source",
+        file_asset=FileAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="parsed",
+            relative_path="parsed/dirty.csv",
+            sha256=checksum,
+            size_bytes=len(original),
+            media_type="text/csv",
+            generated_by_step_id="step_parser",
+        ),
+        columns=["sample", "value", "note"],
+        row_count=3,
+        parser_name="test_parser",
+        parser_version="1.0",
+        source_row_count=3,
+    )
+    ctx = StageContext(
+        task_id="task_cleaning_unit",
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="cleaning",
+        started_at=datetime.now(UTC),
+    )
+
+    cleaned, report = _clean_parsed_dataset(ctx, parsed)
+
+    assert _read_csv(csv_path) == [
+        {"sample": "S1", "value": "1", "note": "keep"},
+        {"sample": "S2", "value": "", "note": ""},
+    ]
+    assert report.duplicate_count == 1
+    assert report.format_corrections == {
+        "trimmed_values": 3,
+        "normalized_missing_values": 2,
+        "removed_duplicate_rows": 1,
+    }
+    assert cleaned.row_count == 2
+    assert cleaned.file_asset.size_bytes == csv_path.stat().st_size
+    assert cleaned.file_asset.sha256 == hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    assert cleaned.file_asset.asset_id == asset_id_from_sha256(
+        cleaned.file_asset.sha256
+    )
 
 
 def test_cleaning_report_csv_is_produced(tmp_path: Path) -> None:

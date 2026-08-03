@@ -49,6 +49,7 @@ from app.domain.contracts import (
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
+    RequestIdSemanticConflictError,
     RunAdmissionRejectedError,
     RunQueueFullError,
     TaskDeletionConflictError,
@@ -310,6 +311,11 @@ async def create_task(
         raise HTTPException(status_code=422, detail=error.reason) from error
     except RunQueueFullError as error:
         raise HTTPException(status_code=429, detail="Run queue is full") from error
+    except RequestIdSemanticConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID was reused with different request content",
+        ) from error
     except RuntimeError as error:
         if str(error) == "task manager is not running":
             raise HTTPException(
@@ -396,8 +402,10 @@ async def create_import_task(
             uploads_root.mkdir(parents=True, exist_ok=True)
             staging_dir = Path(tempfile.mkdtemp(prefix="import-", dir=uploads_root))
         grand_total = 0
+        upload_metadata: list[dict[str, str | int]] = []
         for upload, name in zip(files, sanitized_names, strict=True):
             staged_file = staging_dir / name
+            digest = hashlib.sha256()
             with staged_file.open("wb") as output:
                 total = 0
                 while True:
@@ -423,6 +431,10 @@ async def create_import_task(
                             ),
                         )
                     output.write(chunk)
+                    digest.update(chunk)
+            upload_metadata.append(
+                {"name": name, "size_bytes": total, "sha256": digest.hexdigest()}
+            )
 
         # 构造 IMPORT 任务的输入文本。文件列表由 IMPORT agent 通过
         # ``list_files('source_assets')`` 自行发现，输入文本仅用于任务标题
@@ -444,6 +456,7 @@ async def create_import_task(
             request_id=request_id.strip(),
             input=composed_input,
             mode=TaskMode.IMPORT,
+            idempotency_metadata={"uploads": upload_metadata},
         )
         manager = get_task_manager(http_request)
 
@@ -458,6 +471,11 @@ async def create_import_task(
             raise HTTPException(status_code=422, detail=error.reason) from error
         except RunQueueFullError as error:
             raise HTTPException(status_code=429, detail="Run queue is full") from error
+        except RequestIdSemanticConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="Request ID was reused with different request content",
+            ) from error
         except RuntimeError as error:
             if str(error) == "task manager is not running":
                 raise HTTPException(
@@ -555,6 +573,11 @@ async def continue_task(
         raise HTTPException(
             status_code=409,
             detail="Request ID belongs to another task",
+        ) from error
+    except RequestIdSemanticConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Request ID was reused with different request content",
         ) from error
     except TaskRunConflictError as error:
         raise HTTPException(

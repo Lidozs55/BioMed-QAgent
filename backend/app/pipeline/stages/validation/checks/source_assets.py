@@ -23,8 +23,23 @@ def check_source_asset_integrity(ctx: ValidationContext) -> dict[str, object]:
     source_rel_base = ctx.source_rel_base
     for row in asset_rows:
         asset_path = source_rel_base / row["relative_path"]
+        attempt_id = row.get("successful_attempt_id", "")
+        derived_from_asset_id = row.get("derived_from_asset_id", "")
+        has_exactly_one_lineage = bool(attempt_id) != bool(derived_from_asset_id)
+        if attempt_id:
+            lineage_valid = (
+                attempt_id in successful_attempt_ids
+                and ctx.attempts_by_id.get(attempt_id, {}).get("source_id")
+                == row["source_id"]
+            )
+        else:
+            parent_asset = ctx.assets_by_id.get(derived_from_asset_id, {})
+            lineage_valid = bool(parent_asset) and (
+                parent_asset.get("source_id") == row["source_id"]
+            )
         asset_failures += (
-            row["successful_attempt_id"] not in successful_attempt_ids
+            not has_exactly_one_lineage
+            or not lineage_valid
             or row["source_id"] not in source_ids
             or not asset_path.is_file()
             or int(row["size_bytes"]) != asset_path.stat().st_size

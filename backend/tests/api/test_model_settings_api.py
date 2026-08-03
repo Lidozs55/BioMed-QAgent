@@ -110,6 +110,7 @@ def test_model_factory_snapshots_hot_user_configuration(
     from app.agent_loop import model as model_module
     from app.model_config import RunModelSettings
     from app.model_settings import ModelSettingsStore
+    from app.tools.network_safety import PublicHttpTarget
 
     store = ModelSettingsStore(
         tmp_path / "model.json",
@@ -119,10 +120,20 @@ def test_model_factory_snapshots_hot_user_configuration(
     created: list[dict[str, str]] = []
 
     class FakeClient:
-        def __init__(self, *, api_key: str, base_url: str) -> None:
+        def __init__(self, *, api_key: str, base_url: str, http_client: object) -> None:
             created.append({"api_key": api_key, "base_url": base_url})
 
     monkeypatch.setattr(model_module, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        model_module,
+        "resolve_public_http_target",
+        lambda url, *, require_https: PublicHttpTarget(
+            connect_url=url,
+            host_header="provider.example",
+            sni_hostname="provider.example",
+        ),
+    )
     first = model_module.get_model(
         model_module.to_run_model_settings(store.snapshot())
     )

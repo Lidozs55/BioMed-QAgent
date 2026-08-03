@@ -14,11 +14,9 @@ import re
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from openai import AsyncOpenAI
-
 from app.agent_loop.model import (
+    build_openai_client,
     require_model_credentials,
-    validate_credentialed_public_url,
 )
 from app.model_config import RunModelSettings
 from app.skills.catalog import SkillDescriptor
@@ -119,12 +117,7 @@ class LLMRerankingSkillSearchStrategy:
         model_settings: RunModelSettings,
     ) -> tuple[SkillDescriptor, ...]:
         require_model_credentials(model_settings)
-        base_url = validate_credentialed_public_url(model_settings.base_url)
-        client = AsyncOpenAI(
-            api_key=model_settings.api_key,
-            base_url=base_url,
-            max_retries=0,
-        )
+        client = build_openai_client(model_settings, max_retries=0)
         try:
             response = await client.chat.completions.create(
                 model=self._model_name,

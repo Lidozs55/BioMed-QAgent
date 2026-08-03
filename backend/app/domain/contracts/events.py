@@ -198,6 +198,10 @@ class RunQueuedPayload(ContractModel):
     type: Literal[RuntimeEventType.RUN_QUEUED] = RuntimeEventType.RUN_QUEUED
     request_id: str = Field(min_length=1)
     input: str = Field(min_length=1)
+    request_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class RunStartedPayload(ContractModel):

@@ -21,6 +21,10 @@ from __future__ import annotations
 import os  # noqa: F401
 import shutil  # noqa: F401
 
+from app.pipeline.stages.validation.checks_common import (
+    deterministic_sample as _deterministic_sample,
+)
+
 # _validate_package and _publish_artifacts are re-exported (private) so tests
 # importing them directly from the package keep working after the split.
 from app.pipeline.stages.validation.package import (  # noqa: F401
@@ -32,9 +36,14 @@ from app.pipeline.stages.validation.publish import (  # noqa: F401
     _write_publish_completed_marker,
     publish_artifacts,
 )
-from app.pipeline.stages.validation.runner import run_validation
+from app.pipeline.stages.validation.runner import (
+    _requires_full_lineage_validation,
+    run_validation,
+)
 
 __all__ = [
+    "_deterministic_sample",
+    "_requires_full_lineage_validation",
     "publish_artifacts",
     "run_validation",
     "validate_package",

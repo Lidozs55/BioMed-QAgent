@@ -473,6 +473,57 @@ def test_source_relations_returns_empty_when_sources_missing() -> None:
     )
 
 
+def test_source_relations_omit_unsubstantiated_article_dataset_link() -> None:
+    retrieved_at = datetime.now(UTC)
+    literature = LiteratureRecord(
+        pmid="99999999",
+        title="Unrelated article",
+        authors=[],
+        journal="",
+        abstract="",
+        source_url="https://pubmed.ncbi.nlm.nih.gov/99999999/",
+    )
+    geo = GeoSeriesRecord(
+        uid="200178352",
+        accession="GSE178352",
+        title="GSE178352 series",
+        summary="",
+        organism="Homo sapiens",
+        experiment_type="Expression profiling by high throughput sequencing",
+        sample_count=0,
+        samples=[],
+        pubmed_ids=[],
+    )
+    geo_url = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352"
+    sources = [
+        SourceRecord(
+            source_id="src_pubmed_unrelated",
+            database=Database.PUBMED,
+            accession=literature.pmid,
+            url=literature.source_url,
+            title=literature.title,
+            retrieved_at=retrieved_at,
+        ),
+        SourceRecord(
+            source_id="src_geo_gse178352",
+            database=Database.GEO,
+            accession=geo.accession,
+            url=geo_url,
+            title=geo.title,
+            retrieved_at=retrieved_at,
+        ),
+    ]
+
+    relations = _build_source_relations_artifact(
+        sources=sources,
+        literature=literature,
+        geo=geo,
+        geo_url=geo_url,
+    )
+
+    assert relations == []
+
+
 # ---------------------------------------------------------------------------
 # §1.3 processing_log rows_before / output_refs / parameters
 # ---------------------------------------------------------------------------

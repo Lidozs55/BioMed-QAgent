@@ -31,14 +31,14 @@ def sha256(path: Path) -> str:
 
 
 def deterministic_sample(
-    rows: list[dict[str, str]], max_samples: int
+    rows: list[dict[str, str]], max_samples: int | None
 ) -> list[dict[str, str]]:
     """Select up to ``max_samples`` rows deterministically by record_id hash.
 
     The sampling is stable across runs: the same input always yields the same
     subset, which makes validation failures reproducible.
     """
-    if len(rows) <= max_samples:
+    if max_samples is None or len(rows) <= max_samples:
         return rows
     scored = [
         (hashlib.sha256(row["record_id"].encode("utf-8")).digest(), row)
@@ -77,19 +77,23 @@ class ValidationContext:
     staging: Path
     source_path: Path
     report_path: Path
-    max_lineage_checks: int
+    max_lineage_checks: int | None
     main_path: Path
     main_rows: list[dict[str, str]]
     dataset_rows: list[dict[str, str]]
     dataset_ids: set[str]
+    datasets_by_id: dict[str, dict[str, str]]
     sample_rows: list[dict[str, str]]
     sample_ids: set[str]
+    samples_by_id: dict[str, dict[str, str]]
     source_list_rows: list[dict[str, str]]
     source_ids: set[str]
+    sources_by_id: dict[str, dict[str, str]]
     asset_rows: list[dict[str, str]]
     asset_ids: set[str]
     assets_by_id: dict[str, dict[str, str]]
     download_rows: list[dict[str, str]]
+    attempts_by_id: dict[str, dict[str, str]]
     described: set[str]
     reactome_rows: bool
     source_rel_base: Path
@@ -104,7 +108,7 @@ def load_validation_context(
     source_path: Path,
     report_path: Path,
     *,
-    max_lineage_checks: int = DEFAULT_MAX_LINEAGE_CHECKS,
+    max_lineage_checks: int | None = DEFAULT_MAX_LINEAGE_CHECKS,
 ) -> ValidationContext:
     """Load every CSV the validation checks need into a ``ValidationContext``.
 
@@ -119,15 +123,19 @@ def load_validation_context(
     main_rows = read_csv(main_path)
     dataset_rows = read_csv(staging / "dataset_catalog.csv")
     dataset_ids = {row["dataset_id"] for row in dataset_rows}
+    datasets_by_id = {row["dataset_id"]: row for row in dataset_rows}
     sample_rows = read_csv(staging / "sample_metadata.csv")
     sample_ids = {row["sample_id"] for row in sample_rows}
+    samples_by_id = {row["sample_id"]: row for row in sample_rows}
     source_list_rows = read_csv(staging / "source_list.csv")
     source_ids = {row["source_id"] for row in source_list_rows}
+    sources_by_id = {row["source_id"]: row for row in source_list_rows}
     reactome_rows = bool(main_rows) and "pathway_id" in main_rows[0]
     asset_rows = read_csv(staging / "source_assets.csv")
     asset_ids = {row["asset_id"] for row in asset_rows}
     assets_by_id = {row["asset_id"]: row for row in asset_rows}
     download_rows = read_csv(staging / "download_log.csv")
+    attempts_by_id = {row["attempt_id"]: row for row in download_rows}
     described = {
         row["field_name"] for row in read_csv(staging / "field_descriptions.csv")
     }
@@ -146,14 +154,18 @@ def load_validation_context(
         main_rows=main_rows,
         dataset_rows=dataset_rows,
         dataset_ids=dataset_ids,
+        datasets_by_id=datasets_by_id,
         sample_rows=sample_rows,
         sample_ids=sample_ids,
+        samples_by_id=samples_by_id,
         source_list_rows=source_list_rows,
         source_ids=source_ids,
+        sources_by_id=sources_by_id,
         asset_rows=asset_rows,
         asset_ids=asset_ids,
         assets_by_id=assets_by_id,
         download_rows=download_rows,
+        attempts_by_id=attempts_by_id,
         described=described,
         reactome_rows=reactome_rows,
         source_rel_base=source_rel_base,

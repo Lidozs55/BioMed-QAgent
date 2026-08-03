@@ -10,11 +10,14 @@ import hashlib
 import json
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from app.domain.contracts import (
     AttemptStatus,
+    DownloadAttempt,
+    DownloadStatus,
     ErrorCode,
     StageName,
     TaskState,
@@ -27,8 +30,55 @@ from app.pipeline.runner import (
     PipelineRunner,
 )
 from app.pipeline.stages import DownloadError, PipelineCancelledError
+from app.pipeline.state import DownloadAttemptAuditRecord
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+
+
+def test_failed_acquisition_attempts_are_persisted_for_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.pipeline import runner as runner_module
+
+    recorded_at = datetime.now(UTC)
+    download_attempt = DownloadAttempt(
+        attempt_id="download_attempt_failed_audit",
+        source_id="src_failed_audit",
+        url="https://example.org/data.tsv",
+        status=DownloadStatus.FAILED,
+        bytes_received=17,
+        error_code=ErrorCode.NETWORK_ERROR,
+        error_message="download returned HTTP 503",
+        started_at=recorded_at,
+        finished_at=recorded_at,
+    )
+
+    def fail_acquisition(ctx, *_args, **_kwargs):
+        ctx.record_download_attempt(download_attempt)
+        raise RuntimeError("all acquisition candidates failed")
+
+    monkeypatch.setattr(runner_module, "run_acquisition", fail_acquisition)
+    runner = PipelineRunner(
+        task_id="task_failed_download_audit",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="fixture",
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.FAILED
+    audit_path = runner.workdir.logs / "download_attempts.jsonl"
+    records = [
+        DownloadAttemptAuditRecord.model_validate_json(line)
+        for line in audit_path.read_text("utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0].task_id == "task_failed_download_audit"
+    assert records[0].run_id == runner.ctx.run_id
+    assert records[0].stage_attempt_id.startswith("stage_attempt_")
+    assert records[0].attempt == download_attempt
 
 
 def test_live_parameter_digest_does_not_read_missing_fixture_directory(
@@ -46,6 +96,36 @@ def test_live_parameter_digest_does_not_read_missing_fixture_directory(
     assert not missing_fixture_dir.exists()
     digest = runner._compute_parameter_digest(StageName.DISCOVERY)
     assert len(digest) == 64
+
+
+def test_download_failure_is_retryable_network_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acquisition download failures surface as retryable network errors."""
+
+    def failing_acquisition(ctx, retrieved_at):
+        raise DownloadError("all candidate URLs failed")
+
+    monkeypatch.setattr("app.pipeline.runner.run_acquisition", failing_acquisition)
+    runner = PipelineRunner(
+        task_id="task_download_fail",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+
+    manifest = asyncio.run(runner.run())
+
+    assert manifest.task_state is TaskState.FAILED
+    failed = next(
+        attempt
+        for attempt in runner.state.stage_attempts
+        if attempt.status is AttemptStatus.FAILED
+    )
+    assert failed.stage is StageName.ACQUISITION
+    assert failed.error is not None
+    assert failed.error.code is ErrorCode.NETWORK_ERROR
+    assert failed.error.retryable is True
+    assert "all candidate URLs failed" in failed.error.message
 
 
 @pytest.mark.asyncio
@@ -180,7 +260,7 @@ async def test_user_input_wait_does_not_consume_total_timeout_budget(
 
     async def event_sink(event) -> None:
         if isinstance(event.payload, UserInputRequiredPayload):
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.25)
             assert runner.submit_user_input(
                 UserInputResumedPayload(
                     request_id=event.payload.request_id,
@@ -193,7 +273,7 @@ async def test_user_input_wait_does_not_consume_total_timeout_budget(
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
         mode="live",
-        total_timeout=0.05,
+        total_timeout=0.20,
         user_input_timeout=0.5,
         event_sink=event_sink,
     )
@@ -316,42 +396,6 @@ def test_runner_terminalizes_inflight_attempt_on_stage_failure(
     assert [
         json.loads(line) for line in attempts_path.read_text("utf-8").splitlines()
     ] == [attempt.model_dump(mode="json") for attempt in runner.state.stage_attempts]
-
-
-def test_download_failure_is_retryable_network_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A DownloadError in acquisition must surface as NETWORK_ERROR + retryable.
-
-    When all download candidates fail, the Agent should see ``retryable=True``
-    so it can retry with an alternative accession or request HIL — not a
-    terminal ``INTERNAL_ERROR`` (RESEARCH_SYSTEM_REVIEW §9.2).
-    """
-
-    def failing_acquisition(ctx, retrieved_at):
-        raise DownloadError("all candidate URLs failed")
-
-    monkeypatch.setattr("app.pipeline.runner.run_acquisition", failing_acquisition)
-    runner = PipelineRunner(
-        task_id="task_download_fail",
-        base_dir=tmp_path / "tasks",
-        fixture_dir=FIXTURE_DIR,
-    )
-
-    manifest = asyncio.run(runner.run())
-
-    assert manifest.task_state is TaskState.FAILED
-    # Discovery succeeds, then acquisition fails — two stage attempts.
-    failed = next(
-        attempt
-        for attempt in runner.state.stage_attempts
-        if attempt.status is AttemptStatus.FAILED
-    )
-    assert failed.stage is StageName.ACQUISITION
-    assert failed.error is not None
-    assert failed.error.code is ErrorCode.NETWORK_ERROR
-    assert failed.error.retryable is True
-    assert "all candidate URLs failed" in failed.error.message
 
 
 def test_stage_failure_is_durable_before_stage_failed_event_is_awaited(

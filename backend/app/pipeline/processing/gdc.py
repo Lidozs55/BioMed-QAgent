@@ -16,7 +16,7 @@ from app.domain.contracts import (
     asset_id_from_sha256,
     make_record_id,
 )
-from app.pipeline.processing.xena_matrix import _OUTPUT_COLUMNS
+from app.pipeline.processing.xena_matrix import _OUTPUT_COLUMNS, _split_gene_identifier
 from app.tools.workdir import TaskWorkDir
 
 
@@ -141,18 +141,23 @@ def _write_expression_matrix(
                 float(raw)
             except ValueError as exc:
                 raise ValueError(f"non-numeric GDC expression value at line {line}") from exc
+            gene_id, gene_version, gene_namespace = _split_gene_identifier(values[0])
             writer.writerow(
                 _expression_row(
                     source_asset=source_asset,
                     dataset_id=dataset_id,
                     source_name=source_name,
                     gene_id_raw=values[0],
-                    gene_id=values[0],
-                    gene_id_namespace="gdc_gene",
+                    gene_id=gene_id,
+                    gene_id_namespace=(
+                        gene_namespace if gene_version else "gdc_gene"
+                    ),
+                    gene_id_version=gene_version,
                     sample_id=sample_id,
                     raw=raw,
                     semantics="expression_value",
                     normalized=False,
+                    integer_expected=False,
                     unit="expression_value",
                     line=line,
                     column=column,
@@ -193,6 +198,7 @@ def _write_star_counts(
         gene_id, separator, version = gene_id_raw.rpartition(".")
         if not separator or not version.isdigit():
             gene_id = gene_id_raw
+            version = ""
         writer.writerow(
             _expression_row(
                 source_asset=source_asset,
@@ -201,12 +207,14 @@ def _write_star_counts(
                 gene_id_raw=gene_id_raw,
                 gene_id=gene_id,
                 gene_id_namespace="ensembl_gene",
+                gene_id_version=version,
                 sample_id=sample_id,
                 raw=raw,
                 semantics=(
                     "normalized_expression" if metric == "tpm_unstranded" else "raw_count"
                 ),
                 normalized=metric == "tpm_unstranded",
+                integer_expected=metric == "unstranded",
                 unit=metric,
                 line=line,
                 column=metric_column,
@@ -226,10 +234,12 @@ def _expression_row(
     gene_id_raw: str,
     gene_id: str,
     gene_id_namespace: str,
+    gene_id_version: str,
     sample_id: str,
     raw: str,
     semantics: str,
     normalized: bool,
+    integer_expected: bool,
     unit: str,
     line: int,
     column: int,
@@ -243,11 +253,13 @@ def _expression_row(
         "gene_id_raw": gene_id_raw,
         "gene_id": gene_id,
         "gene_id_namespace": gene_id_namespace,
+        "gene_id_version": gene_id_version,
         "sample_id": sample_id,
         "measurement_type": "gene_expression",
         "value_semantics": semantics,
         "value_scale": "linear",
         "is_normalized": str(normalized).lower(),
+        "is_integer_expected": str(integer_expected).lower(),
         "expression_value": raw,
         "expression_unit": unit,
         "source_logical_file": source_name,

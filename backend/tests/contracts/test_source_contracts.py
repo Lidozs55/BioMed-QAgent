@@ -126,6 +126,34 @@ def test_source_asset_requires_source_kind_and_source_assets_directory() -> None
         SourceAsset(**{**asset.model_dump(), "relative_path": "parsed/counts.tsv"})
 
 
+def test_source_asset_requires_exactly_one_download_or_derivation_lineage() -> None:
+    values = {
+        "asset_id": f"asset_{SHA256}",
+        "kind": "source",
+        "relative_path": "source_assets/normalized.tsv",
+        "sha256": SHA256,
+        "size_bytes": 10,
+        "media_type": "text/tab-separated-values",
+        "source_id": "src_reactome",
+        "data_level": DataLevel.REPOSITORY_PROCESSED,
+        "generated_by_step_id": "step_normalize_v1",
+    }
+    derived = SourceAsset(
+        **values,
+        derived_from_asset_id=f"asset_{'cd' * 32}",
+    )
+    assert derived.successful_attempt_id is None
+
+    with pytest.raises(ValidationError, match="exactly one"):
+        SourceAsset(**values)
+    with pytest.raises(ValidationError, match="exactly one"):
+        SourceAsset(
+            **values,
+            successful_attempt_id="attempt_1",
+            derived_from_asset_id=f"asset_{'cd' * 32}",
+        )
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

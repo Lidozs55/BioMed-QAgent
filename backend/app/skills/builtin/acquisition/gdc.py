@@ -555,7 +555,8 @@ async def download_gdc(
     )
     run_ctx.add_source(source_record)
 
-    return json.dumps({
+    downloaded_count = len(local_files) - 1
+    response: dict[str, Any] = {
         "source": "gdc",
         "accession": project_id,
         "data_type": data_type,
@@ -563,9 +564,12 @@ async def download_gdc(
         "local_files": local_files,
         "format_hint": format_hint,
         "file_count": total_files,
-        "downloaded": download_limit,
+        "downloaded": downloaded_count,
         "retrieved_at": retrieved_at.isoformat(),
-    }, ensure_ascii=False)
+    }
+    if downloaded_count == 0:
+        response["error"] = "failed to download any matching GDC data files"
+    return json.dumps(response, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

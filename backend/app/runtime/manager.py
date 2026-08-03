@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -13,6 +15,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeVar
 
 from app.agent_loop.context import RunContext
+from app.agent_loop.model import to_run_model_settings
 from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantStreamFrame,
@@ -44,6 +47,8 @@ from app.domain.contracts import (
     generate_task_id,
 )
 from app.domain.contracts.runtime import validate_task_databases
+from app.model_config import RunModelSettings
+from app.model_settings import get_current_model_configuration
 from app.runtime.hub import AssistantStreamHub, EventHub
 from app.runtime.repository import TaskNotFoundError, TaskRepository
 from app.subagents.event_sink import DurableSubagentEventSink
@@ -104,6 +109,7 @@ class RunExecution:
     request_id: str
     input: str
     context: RunContext
+    model_settings: RunModelSettings | None = field(default=None, repr=False)
     mode: TaskMode = TaskMode.AGENT
     databases: list[str] = field(default_factory=list)
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
@@ -474,6 +480,57 @@ class RequestIdConflictError(RuntimeError):
         )
 
 
+class RequestIdSemanticConflictError(RuntimeError):
+    """Raised when one request ID is reused for different semantics."""
+
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+        super().__init__(
+            f"request_id {request_id} was reused with different request semantics"
+        )
+
+
+def _request_fingerprint(
+    *,
+    request_kind: str,
+    input_value: str,
+    task_id: str | None = None,
+    mode: TaskMode | str | None = None,
+    databases: list[str] | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> str:
+    payload = {
+        "request_kind": request_kind,
+        "task_id": task_id,
+        "input": input_value,
+        "mode": TaskMode(mode).value if mode is not None else None,
+        "databases": sorted(
+            {value.strip().lower() for value in (databases or [])}
+        ),
+        "metadata": metadata or {},
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _require_matching_request_fingerprint(
+    existing: TaskRunAccepted,
+    expected: str,
+) -> None:
+    # Pre-fingerprint event logs remain replayable after upgrade. Every newly
+    # admitted request carries a digest, so current requests always compare.
+    if (
+        existing.request_fingerprint is not None
+        and existing.request_fingerprint != expected
+    ):
+        raise RequestIdSemanticConflictError(existing.request_id)
+
+
 class RunQueueFullError(RuntimeError):
     """Raised when all configured waiting-Run slots are occupied."""
 
@@ -502,6 +559,7 @@ class TaskDeletionConflictError(RuntimeError):
 class _QueuedRun:
     accepted: TaskRunAccepted
     input: str
+    model_settings: RunModelSettings = field(repr=False)
 
 
 @dataclass(slots=True)
@@ -746,6 +804,12 @@ class TaskManager:
     ) -> TaskRunAccepted:
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
+        request_fingerprint = _request_fingerprint(
+            request_kind="continue_task",
+            task_id=task_id,
+            input_value=request.input,
+            metadata=request.idempotency_metadata,
+        )
         async with self._admission_lock:
             if not self._started or self._closing:
                 raise RuntimeError("task manager is not running")
@@ -760,6 +824,10 @@ class TaskManager:
                         existing.task_id,
                         task_id,
                     )
+                _require_matching_request_fingerprint(
+                    existing,
+                    request_fingerprint,
+                )
                 return existing
             lock = self._task_locks.setdefault(task_id, asyncio.Lock())
             async with lock:
@@ -780,6 +848,7 @@ class TaskManager:
                     request_id=request.request_id,
                     task_id=task_id,
                     run_id=generate_run_id(),
+                    request_fingerprint=request_fingerprint,
                 )
                 return await self._shield_and_drain_locked(
                     self._admit_run_locked(
@@ -796,11 +865,22 @@ class TaskManager:
     ) -> TaskRunAccepted:
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
+        request_fingerprint = _request_fingerprint(
+            request_kind="create_task",
+            input_value=request.input,
+            mode=request.mode,
+            databases=request.databases,
+            metadata=request.idempotency_metadata,
+        )
         async with self._admission_lock:
             if not self._started or self._closing:
                 raise RuntimeError("task manager is not running")
             existing = await self.repository.find_request(request.request_id)
             if existing is not None:
+                _require_matching_request_fingerprint(
+                    existing,
+                    request_fingerprint,
+                )
                 return existing
             validate_task_databases(request.mode, request.databases)
             self._check_run_admission(request.mode)
@@ -811,6 +891,7 @@ class TaskManager:
                 request_id=request.request_id,
                 task_id=generate_task_id(),
                 run_id=generate_run_id(),
+                request_fingerprint=request_fingerprint,
             )
             created_at = datetime.now(UTC)
             snapshot = TaskSnapshot(
@@ -917,6 +998,7 @@ class TaskManager:
             payload=RunQueuedPayload(
                 request_id=accepted.request_id,
                 input=input_value,
+                request_fingerprint=accepted.request_fingerprint,
             ),
         )
         try:
@@ -927,7 +1009,15 @@ class TaskManager:
             await self.repository.record_request(accepted)
             await self.event_hub.publish(event)
         finally:
-            self._queue.put_nowait(_QueuedRun(accepted=accepted, input=input_value))
+            self._queue.put_nowait(
+                _QueuedRun(
+                    accepted=accepted,
+                    input=input_value,
+                    model_settings=to_run_model_settings(
+                        get_current_model_configuration()
+                    ),
+                )
+            )
         return accepted
 
     async def cancel_run(
@@ -1251,6 +1341,7 @@ class TaskManager:
                     request_id=run.request_id,
                     task_id=summary.task_id,
                     run_id=run.run_id,
+                    request_fingerprint=run.request_fingerprint,
                 )
                 await self.repository.task_session(
                     summary.task_id
@@ -1264,7 +1355,13 @@ class TaskManager:
                             run.created_at,
                             summary.task_id,
                             run.run_id,
-                            _QueuedRun(accepted=accepted, input=run.input),
+                            _QueuedRun(
+                                accepted=accepted,
+                                input=run.input,
+                                model_settings=to_run_model_settings(
+                                    get_current_model_configuration()
+                                ),
+                            ),
                         )
                     )
                 else:
@@ -1425,6 +1522,7 @@ class TaskManager:
                     request_id=accepted.request_id,
                     input=queued.input,
                     context=context,
+                    model_settings=queued.model_settings,
                     mode=snapshot.task.mode,
                     databases=list(snapshot.task.databases),
                     _event_emitter=(

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
+import app.skills.llm_search as llm_search_module
 import pytest
 from agents import RunContextWrapper, function_tool
 from app.agent_loop.context import RunContext
-from app.model_config import RunModelSettings
+from app.model_config import RunModelSettings, UserSettings
 from app.skills.catalog import SkillDescriptor
 from app.skills.llm_search import (
     LLMRerankingSkillSearchStrategy,
@@ -56,6 +59,49 @@ def test_parse_ranking_response_dedupes_names() -> None:
     assert _parse_ranking_response(
         '{"skills": ["geo", "geo", "xena"]}', {"geo", "xena"}
     ) == ("geo", "xena")
+
+
+@pytest.mark.asyncio
+async def test_default_ranker_uses_pinned_shared_client_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    geo = _descriptor("geo", "GEO datasets.", sources=["geo"])
+    settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="runtime-api-key",
+            base_url="https://provider.example/v1",
+            context_window=65_536,
+        )
+    )
+    completion = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content='{"skills": ["geo"]}')
+                )
+            ]
+        )
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion)),
+        close=AsyncMock(),
+    )
+    client_builder = Mock(return_value=client)
+    monkeypatch.setattr(
+        llm_search_module,
+        "build_openai_client",
+        client_builder,
+    )
+
+    result = await LLMRerankingSkillSearchStrategy()._default_ranker(
+        (geo,),
+        "gene expression",
+        settings,
+    )
+
+    assert result == (geo,)
+    client_builder.assert_called_once_with(settings, max_retries=0)
+    client.close.assert_awaited_once_with()
 
 
 def test_empty_text_fastpath_returns_all_candidates_no_model() -> None:

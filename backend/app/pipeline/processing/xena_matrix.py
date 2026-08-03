@@ -24,11 +24,13 @@ _OUTPUT_COLUMNS = [
     "gene_id_raw",
     "gene_id",
     "gene_id_namespace",
+    "gene_id_version",
     "sample_id",
     "measurement_type",
     "value_semantics",
     "value_scale",
     "is_normalized",
+    "is_integer_expected",
     "expression_value",
     "expression_unit",
     "source_logical_file",
@@ -37,6 +39,13 @@ _OUTPUT_COLUMNS = [
     "source_column_name",
     "source_raw_value",
 ]
+
+
+def _split_gene_identifier(value: str) -> tuple[str, str, str]:
+    gene_id, separator, version = value.rpartition(".")
+    if separator and version.isdigit() and gene_id.startswith("ENSG"):
+        return gene_id, version, "ensembl_gene"
+    return value, "", "xena_gene"
 
 
 def parse_xena_matrix(
@@ -80,6 +89,9 @@ def parse_xena_matrix(
                 gene_id = values[0]
                 if not gene_id:
                     raise ValueError("Xena matrix gene_id must not be blank")
+                canonical_gene_id, gene_version, gene_namespace = (
+                    _split_gene_identifier(gene_id)
+                )
                 source_row_count += 1
                 for column_index, sample_id in enumerate(sample_headers, start=1):
                     raw_value = values[column_index]
@@ -96,13 +108,15 @@ def parse_xena_matrix(
                             "source_id": source_asset.source_id,
                             "asset_id": source_asset.asset_id,
                             "gene_id_raw": gene_id,
-                            "gene_id": gene_id,
-                            "gene_id_namespace": "xena_gene",
+                            "gene_id": canonical_gene_id,
+                            "gene_id_namespace": gene_namespace,
+                            "gene_id_version": gene_version,
                             "sample_id": sample_id,
                             "measurement_type": "gene_expression",
                             "value_semantics": "expression_value",
                             "value_scale": "linear",
                             "is_normalized": "false",
+                            "is_integer_expected": "false",
                             "expression_value": raw_value,
                             "expression_unit": "expression_value",
                             "source_logical_file": source_file,

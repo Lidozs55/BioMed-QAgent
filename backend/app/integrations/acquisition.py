@@ -8,6 +8,7 @@ import ipaddress
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -273,6 +274,7 @@ async def acquire_source(
     expected_sha256: str | None = None,
     expected_media_types: frozenset[str] | None = None,
     accept: str = "text/tab-separated-values",
+    request_headers: Mapping[str, str] | None = None,
 ) -> AcquisitionResult:
     attempt_id = generate_prefixed_uuid("download_attempt")
     started_at = datetime.now(UTC)
@@ -294,6 +296,34 @@ async def acquire_source(
             cached_sha = cached["sha256"]
             cached_blob = cache.blob_path(cached_sha)
             if cached_blob.is_file() and _sha256_file(cached_blob) == cached_sha:
+                cached_size = cached_blob.stat().st_size
+                cached_media_type = cached.get(
+                    "media_type", "application/octet-stream"
+                ).split(";", 1)[0].strip().lower()
+                if cached_size > max_bytes:
+                    raise AcquisitionFailure(
+                        ErrorCode.DOWNLOAD_INCOMPLETE,
+                        "cached download exceeds maximum size",
+                    )
+                if expected_size is not None and cached_size != expected_size:
+                    raise AcquisitionFailure(
+                        ErrorCode.DOWNLOAD_INCOMPLETE,
+                        "cached download expected size mismatch",
+                    )
+                if expected_sha256 and cached_sha != expected_sha256.lower():
+                    raise AcquisitionFailure(
+                        ErrorCode.CHECKSUM_MISMATCH,
+                        "cached download expected SHA-256 mismatch",
+                    )
+                if (
+                    expected_media_types
+                    and cached_media_type not in expected_media_types
+                ):
+                    raise AcquisitionFailure(
+                        ErrorCode.VALIDATION_ERROR,
+                        f"unexpected cached content type: "
+                        f"{cached_media_type or 'missing'}",
+                    )
                 asset_id = asset_id_from_sha256(cached_sha)
                 destination = _publish_task_asset(
                     cached_blob, workdir, asset_id, filename, cached_sha
@@ -304,7 +334,7 @@ async def acquire_source(
                     source_id=source.source_id,
                     url=source.url,
                     status=DownloadStatus.SUCCEEDED,
-                    bytes_received=int(cached.get("size_bytes", "0")),
+                    bytes_received=cached_size,
                     started_at=started_at,
                     finished_at=finished_at,
                 )
@@ -315,8 +345,8 @@ async def acquire_source(
                         kind="source",
                         relative_path=destination.relative_to(workdir.root).as_posix(),
                         sha256=cached_sha,
-                        size_bytes=int(cached.get("size_bytes", "0")),
-                        media_type=cached.get("media_type", "application/octet-stream"),
+                        size_bytes=cached_size,
+                        media_type=cached_media_type,
                         source_id=source.source_id,
                         successful_attempt_id=attempt_id,
                         data_level=data_level,
@@ -328,11 +358,13 @@ async def acquire_source(
         current_url = source.url
         redirect_count = 0
         media_type = "application/octet-stream"
+        headers = dict(request_headers or {})
+        headers["Accept"] = accept
         while True:
             async with http.stream(
                 "GET",
                 current_url,
-                headers={"Accept": accept},
+                headers=headers,
                 follow_redirects=False,
                 timeout=timeout,
             ) as response:

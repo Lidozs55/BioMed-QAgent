@@ -23,6 +23,7 @@ from app.pipeline.stages.validation.checks.main_data import (
     check_warnings_metrics_consistency,
 )
 from app.pipeline.stages.validation.checks.reactome import check_reactome
+from app.pipeline.stages.validation.checks.relations import check_source_relation_evidence
 from app.pipeline.stages.validation.checks.sample_metadata import (
     check_sample_foreign_keys,
 )
@@ -40,7 +41,7 @@ def validate_package(
     source_path: Path,
     report_path: Path,
     *,
-    max_lineage_checks: int = DEFAULT_MAX_LINEAGE_CHECKS,
+    max_lineage_checks: int | None = DEFAULT_MAX_LINEAGE_CHECKS,
 ) -> tuple[ValidationSummary, list[dict[str, object]]]:
     """Run all validation checks on the staging package.
 
@@ -57,6 +58,7 @@ def validate_package(
     )
 
     checks: list[dict[str, object]] = []
+    checks.append(check_source_relation_evidence(ctx))
     checks.append(check_main_data_nonempty(ctx))
     checks.append(check_core_data_existence(ctx))
     checks.append(check_foreign_keys(ctx))

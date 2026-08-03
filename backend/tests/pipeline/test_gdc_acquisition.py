@@ -59,6 +59,7 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
             )
         ],
     )
+    recorded_attempts = []
     context = StageContext(
         task_id="gdc_live",
         workdir=workdir,
@@ -68,6 +69,7 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
         mode="live",
         databases=["gdc"],
         specification=specification,
+        download_attempt_recorder=recorded_attempts.append,
     )
 
     try:
@@ -82,6 +84,7 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
     assert requests[0].startswith("https://api.gdc.cancer.gov/files?")
     assert requests[1] == "https://api.gdc.cancer.gov/data/file-expression-1"
     assert output.source_assets[0].source_id == output.download_attempts[0].source_id
+    assert recorded_attempts == output.download_attempts
     filters = json.loads(httpx.URL(requests[0]).params["filters"])
     assert filters["content"] == [
         {

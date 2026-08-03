@@ -187,6 +187,43 @@ def test_extract_from_image_l1_success(tmp_path: Path) -> None:
     assert run_ctx.query_log[0]["records_count"] == 1
 
 
+def test_repeated_extractions_accumulate_distinct_chart_sources(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path=tmp_path)
+    run_ctx: RunContext = ctx.context
+    first = _write_fake_png(
+        run_ctx.work_dir.source_asset_file("first.png"),
+        content=b"\x89PNG\r\n\x1a\nfirst",
+    )
+    second = _write_fake_png(
+        run_ctx.work_dir.source_asset_file("second.png"),
+        content=b"\x89PNG\r\n\x1a\nsecond",
+    )
+
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        return_value=_VALID_VLM_JSON,
+    ):
+        first_result = _call_tool(ctx, str(first))
+        second_result = _call_tool(ctx, str(second))
+
+    chart_csv = Path(second_result["outputs"][0])
+    points_csv = Path(second_result["outputs"][1])
+    with chart_csv.open(encoding="utf-8-sig", newline="") as handle:
+        charts = list(csv.DictReader(handle))
+    with points_csv.open(encoding="utf-8-sig", newline="") as handle:
+        points = list(csv.DictReader(handle))
+
+    assert len(charts) == 2
+    assert len(points) == 6
+    assert {row["source_asset_id"] for row in charts} == {
+        first_result["metas"][0]["source_asset_id"],
+        second_result["metas"][0]["source_asset_id"],
+    }
+    assert {row["chart_id"] for row in points} == {
+        row["chart_id"] for row in charts
+    }
+
+
 def test_extract_from_image_passes_run_owned_settings_to_vlm(tmp_path: Path) -> None:
     # Given
     ctx = _make_ctx(tmp_path=tmp_path)
@@ -488,10 +525,26 @@ def test_extract_missing_file(tmp_path: Path) -> None:
     """Missing source_path returns error JSON."""
     ctx = _make_ctx(tmp_path=tmp_path)
 
-    data = _call_tool(ctx, "/nonexistent/path/chart.png")
+    data = _call_tool(ctx, "source_assets/nonexistent-chart.png")
 
     assert data["status"] == "error"
     assert "not found" in data["error"]
+
+
+def test_extract_rejects_image_outside_task_workdir(tmp_path: Path) -> None:
+    """A readable image outside the managed task must never reach the VLM."""
+    ctx = _make_ctx(tmp_path=tmp_path)
+    external_path = _write_fake_png(tmp_path / "outside-task.png")
+
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        return_value=_VALID_VLM_JSON,
+    ) as call_vlm:
+        data = _call_tool(ctx, str(external_path))
+
+    assert data["status"] == "error"
+    assert "task" in data["error"].lower()
+    call_vlm.assert_not_called()
 
 
 def test_vlm_returns_non_json_raises_chart_extraction_error(tmp_path: Path) -> None:

@@ -51,6 +51,7 @@ StageProgressEmitter = Callable[
     [StageName, str, int, int | None, dict[str, object]],
     Awaitable[None],
 ]
+DownloadAttemptRecorder = Callable[[DownloadAttempt], None]
 
 
 class PipelineCancelledError(RuntimeError):
@@ -83,6 +84,7 @@ class StageContext:
     specification: TaskSpecification | None = None
     cancellation_requested: Callable[[], bool] | None = None
     progress_emitter: StageProgressEmitter | None = None
+    download_attempt_recorder: DownloadAttemptRecorder | None = None
     _event_loop: asyncio.AbstractEventLoop | None = field(
         default=None,
         init=False,
@@ -95,6 +97,12 @@ class StageContext:
     def check_cancelled(self) -> None:
         if self.cancellation_requested is not None and self.cancellation_requested():
             raise PipelineCancelledError("pipeline was cancelled")
+
+    def record_download_attempt(self, attempt: DownloadAttempt) -> None:
+        """Durably hand off a completed URL attempt before stage completion."""
+
+        if self.download_attempt_recorder is not None:
+            self.download_attempt_recorder(attempt)
 
     def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the main event loop for sync→async progress bridging.

@@ -11,10 +11,10 @@ from app.main import create_app
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_preview_uses_inferred_budget(
+async def test_unknown_model_preview_requires_explicit_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unknown discovered models receive the generic inferred budget."""
+    """Unknown discovered models must not receive a guessed window."""
     from app.api import settings as settings_api
     from app.tools.network_safety import PublicHttpTarget
 
@@ -51,7 +51,7 @@ async def test_unknown_model_preview_uses_inferred_budget(
     assert response.status_code == 200
     models = response.json()["models"]
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 128_000
+    assert unknown["context_window"] == 0
     assert unknown["suggested_max_tokens"] == 4_096
 
 
@@ -59,7 +59,7 @@ async def test_unknown_model_preview_uses_inferred_budget(
 async def test_known_model_preview_uses_catalog_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known previews use catalog values and unknown previews use inferred defaults."""
+    """Known previews use catalog values while unknown windows remain unset."""
     from app.api import settings as settings_api
     from app.tools.network_safety import PublicHttpTarget
 
@@ -105,5 +105,5 @@ async def test_known_model_preview_uses_catalog_values(
     assert known["context_window"] == 32_768
     assert known["suggested_max_tokens"] == 8_192
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 128_000
+    assert unknown["context_window"] == 0
     assert unknown["suggested_max_tokens"] == 4_096

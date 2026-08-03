@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 from datetime import UTC, datetime
@@ -585,6 +586,11 @@ async def test_download_supplementary_adapter_uses_eutils_and_httpx(
     )
     # raw asset tracked
     assert context.raw_assets == [str(local_path)]
+    assert context.source_asset_ids == [payload["source_assets"][0]["asset_id"]]
+    assert payload["source_assets"][0]["sha256"] == hashlib.sha256(
+        supp_content
+    ).hexdigest()
+    assert payload["download_attempts"][0]["status"] == "succeeded"
 
 
 @pytest.mark.asyncio
