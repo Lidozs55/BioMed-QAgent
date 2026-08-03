@@ -125,6 +125,7 @@ async def test_queued_run_keeps_admission_time_model_settings(
             base_url=f"https://{name}.example/v1",
             api_key=api_key,
             model_name=name,
+            context_window=65_536,
             advanced=AdvancedModelSettings(),
         )
 

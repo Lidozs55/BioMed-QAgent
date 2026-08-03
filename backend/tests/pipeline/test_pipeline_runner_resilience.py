@@ -230,7 +230,7 @@ async def test_user_input_wait_does_not_consume_total_timeout_budget(
 
     async def event_sink(event) -> None:
         if isinstance(event.payload, UserInputRequiredPayload):
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.25)
             assert runner.submit_user_input(
                 UserInputResumedPayload(
                     request_id=event.payload.request_id,
@@ -243,7 +243,7 @@ async def test_user_input_wait_does_not_consume_total_timeout_budget(
         base_dir=tmp_path / "tasks",
         fixture_dir=FIXTURE_DIR,
         mode="live",
-        total_timeout=0.05,
+        total_timeout=0.20,
         user_input_timeout=0.5,
         event_sink=event_sink,
     )
