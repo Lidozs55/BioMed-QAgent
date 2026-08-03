@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -35,6 +35,7 @@ class SubagentInputBroker:
         task_id: str,
         run_id: str,
         payload: SubagentInputRequiredPayload,
+        on_registered: Callable[[], Awaitable[None]] | None = None,
     ) -> SubagentInputResumedPayload:
         future = asyncio.get_running_loop().create_future()
         pending = PendingSubagentInput(
@@ -50,12 +51,15 @@ class SubagentInputBroker:
             self._pending[payload.request_id] = pending
 
         try:
+            if on_registered is not None:
+                await on_registered()
             return await asyncio.shield(future)
-        except asyncio.CancelledError:
+        except BaseException:
             async with self._lock:
                 if self._pending.get(payload.request_id) is pending:
                     self._pending.pop(payload.request_id)
-                    future.cancel()
+                    if not future.done():
+                        future.cancel()
             raise
 
     async def try_resume(

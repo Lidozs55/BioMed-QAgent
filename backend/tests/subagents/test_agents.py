@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from app.domain.contracts import QueryStatus, SubagentRequest, SubagentStatus, S
 from app.model_config import RunModelSettings
 from app.runtime.repository import TaskRepository
 from app.subagents.agents import ChildAgentFactory
+from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.supervisor import SubagentSupervisor
 
 
@@ -153,6 +155,53 @@ def test_child_contexts_share_parent_create_skill_reservations(tmp_path) -> None
 
     with second.reserve_create_skill("geo", "another_capability"):
         pass
+
+
+@pytest.mark.asyncio
+async def test_production_child_context_supports_immediate_credential_resume(
+    tmp_path,
+) -> None:
+    """A real child inherits its Run and is resumable as soon as HIL is visible."""
+    broker = SubagentInputBroker()
+    resume_observed: list[bool] = []
+
+    class ImmediateResumeSink:
+        async def emit(self, *, payload, task_id, run_id, **_kwargs) -> None:
+            if payload.type != "subagent_input_required":
+                return
+            resume_observed.append(
+                await broker.try_resume(
+                    task_id=task_id,
+                    run_id=run_id,
+                    request_id=payload.request_id,
+                    decision="approve",
+                )
+            )
+
+    parent = RunContext(
+        task_id="parent",
+        base_dir=tmp_path,
+        managed_run_id="run-parent",
+    )
+    parent.bind_subagent_runtime(
+        supervisor=object(),
+        runner=object(),
+        event_sink=ImmediateResumeSink(),
+        input_broker=broker,
+    )
+    child = parent.create_child_context("child-one")
+
+    resumed = await asyncio.wait_for(
+        child.request_subagent_input(
+            summary="Approve protected source",
+            prompt_kind="api_key_or_credential",
+        ),
+        timeout=1.0,
+    )
+
+    assert child.managed_run_id == "run-parent"
+    assert resume_observed == [True]
+    assert resumed.decision == "approve"
 
 
 def test_child_context_seeds_parent_query_log_and_summary(tmp_path) -> None:

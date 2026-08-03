@@ -326,6 +326,7 @@ class RunContext:
             task_id=self.task_id,
             work_dir_root=self._work_dir.staging / "subagents" / subagent_id,
             subagent_id=subagent_id,
+            managed_run_id=self.managed_run_id,
             model_settings=self.model_settings,
             preferred_sources=list(preferred_sources or self.preferred_sources),
             query_log=list(parent_query_log) if parent_query_log else [],
@@ -333,6 +334,7 @@ class RunContext:
         )
         child._create_skill_reservations = self._create_skill_reservations
         child._staging_task_root = self._work_dir.root
+        child._subagent_runtime = self._subagent_runtime
         if self._crawler_facade is not None:
             child.bind_crawler_facade(self._crawler_facade)
         if self._create_skill_runtime is not None:
@@ -479,11 +481,14 @@ class RunContext:
             "subagent_id": self.subagent_id,
             "parent_tool_call_id": f"subagent:{self.subagent_id}",
         }
-        await runtime.event_sink.emit(payload=required, **event_kwargs)
+        async def emit_required() -> None:
+            await runtime.event_sink.emit(payload=required, **event_kwargs)
+
         resumed = await runtime.input_broker.request(
             task_id=self.task_id,
             run_id=self.managed_run_id,
             payload=required,
+            on_registered=emit_required,
         )
         await runtime.event_sink.emit(
             payload=SubagentInputResumedPayload(
