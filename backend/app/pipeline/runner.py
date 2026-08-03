@@ -1093,7 +1093,9 @@ class PipelineRunner:
         are included so recovery cannot reuse outputs produced for different
         sources, queries, datasets, or parsing semantics.
         """
-        fixture_hash = _hash_directory(self.fixture_dir)
+        fixture_hash = (
+            _hash_directory(self.fixture_dir) if self.mode == "fixture" else None
+        )
         payload = {
             "stage": stage.value,
             "fixture_hash": fixture_hash,

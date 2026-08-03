@@ -30,6 +30,23 @@ from app.pipeline.stages import PipelineCancelledError
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 
+def test_live_parameter_digest_does_not_read_missing_fixture_directory(
+    tmp_path: Path,
+) -> None:
+    missing_fixture_dir = tmp_path / "packaged-app" / "tests" / "fixtures"
+    runner = PipelineRunner(
+        task_id="task_packaged_live_digest",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=missing_fixture_dir,
+        mode="live",
+        databases=["gdc"],
+    )
+
+    assert not missing_fixture_dir.exists()
+    digest = runner._compute_parameter_digest(StageName.DISCOVERY)
+    assert len(digest) == 64
+
+
 @pytest.mark.asyncio
 async def test_user_input_submission_matches_request_and_is_one_shot(
     tmp_path: Path,
