@@ -1110,21 +1110,31 @@ class PipelineRunner:
         return _sha256_json(payload)
 
     def _compute_parameter_digest(self, stage: StageName) -> str:
-        """Compute parameter digest from stage, fixture content hash, and topic.
+        """Compute a digest of every input that can affect stage behavior.
 
         Uses the combined SHA-256 of all files under ``fixture_dir`` (sorted
         by name) rather than the directory mtime — directory mtime is unstable
         across filesystems and does not change when file contents change but
         filenames stay the same. Includes ``mode`` so a fixture run and a live
         run on the same topic produce different digests and are never reused
-        for each other.
+        for each other. Selected databases and the canonical task specification
+        are included so recovery cannot reuse outputs produced for different
+        sources, queries, datasets, or parsing semantics.
         """
-        fixture_hash = _hash_directory(self.fixture_dir)
+        fixture_hash = (
+            _hash_directory(self.fixture_dir) if self.mode == "fixture" else None
+        )
         payload = {
             "stage": stage.value,
             "fixture_hash": fixture_hash,
             "topic": self.topic,
             "mode": self.mode,
+            "databases": sorted(self.databases),
+            "specification": (
+                self.specification.model_dump(mode="json")
+                if self.specification is not None
+                else None
+            ),
         }
         if stage in {StageName.ARTIFACT_BUILD, StageName.VALIDATION}:
             payload["run_id"] = self.ctx.run_id

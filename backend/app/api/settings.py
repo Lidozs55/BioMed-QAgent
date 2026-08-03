@@ -64,6 +64,42 @@ class ModelPreviewRequest(BaseModel):
     preview_api_key: str = ""
 
 
+def _preview_api_key(
+    body: ModelPreviewRequest,
+    current: ModelConfiguration,
+) -> str:
+    if body.preview_api_key:
+        return body.preview_api_key
+    if body.preview_base_url.rstrip("/") == str(current.base_url).rstrip("/"):
+        return current.api_key
+    return ""
+
+
+VENDORS = (
+    {
+        "id": "dashscope",
+        "name": "DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "description": "阿里云 Qwen 官方 API",
+        "recommended": True,
+    },
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "description": "OpenAI 官方 API",
+        "recommended": False,
+    },
+    {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "description": "DeepSeek 官方 API",
+        "recommended": False,
+    },
+)
+
+
 def get_store(request: Request) -> ModelSettingsStore:
     return request.app.state.model_settings_store
 
@@ -158,7 +194,7 @@ async def list_models(
 ) -> dict[str, object]:
     current = store.snapshot()
     base_url = body.preview_base_url
-    api_key = body.preview_api_key or current.api_key
+    api_key = _preview_api_key(body, current)
     try:
         target = resolve_public_http_target(base_url, require_https=bool(api_key))
     except UnsafeUrlError as error:

@@ -351,6 +351,148 @@ _OUTPUT_COLUMNS = [
 ]
 
 
+def process_geo_series_matrix(
+    source_asset: SourceAsset,
+    dataset_id: str,
+    workdir: TaskWorkDir,
+) -> tuple[ParsedDataset, list[GeoSampleMetadata]]:
+    source_path = workdir.root / source_asset.relative_path
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    compressed = source_path.read_bytes()
+    if hashlib.sha256(compressed).hexdigest() != source_asset.sha256:
+        raise ValueError("source asset checksum mismatch before processing")
+    samples = parse_geo_series_matrix_samples(compressed)
+    samples_by_id = {sample.sample_id: sample for sample in samples}
+    output_path = workdir.parsed / f"{dataset_id}_series_matrix_long.csv"
+    header: list[str] | None = None
+    source_row_count = 0
+    row_count = 0
+    in_table = False
+
+    try:
+        with (
+            gzip.open(source_path, "rt", encoding="utf-8", newline="") as source,
+            output_path.open("w", encoding="utf-8-sig", newline="") as target,
+        ):
+            writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
+            writer.writeheader()
+            for source_line_number, line in enumerate(source, start=1):
+                marker = line.strip()
+                if marker == "!series_matrix_table_begin":
+                    in_table = True
+                    continue
+                if marker == "!series_matrix_table_end":
+                    break
+                if not in_table or not marker:
+                    continue
+                values = next(csv.reader([line], delimiter="\t", quotechar='"'))
+                if header is None:
+                    header = values
+                    if len(header) < 2 or header[0] != "ID_REF":
+                        raise ValueError(
+                            "series_matrix expression table must start with ID_REF"
+                        )
+                    sample_ids = header[1:]
+                    if (
+                        len(set(sample_ids)) != len(sample_ids)
+                        or any(sample_id not in samples_by_id for sample_id in sample_ids)
+                    ):
+                        raise ValueError(
+                            "series_matrix expression columns do not match sample metadata"
+                        )
+                    continue
+                if len(values) != len(header) or not values[0]:
+                    raise ValueError(
+                        f"invalid series_matrix expression row at line {source_line_number}"
+                    )
+                gene_id_raw = values[0]
+                gene_id, separator, version = gene_id_raw.partition(".")
+                namespace = (
+                    "ensembl_gene" if gene_id_raw.upper().startswith("ENSG") else "geo_probe"
+                )
+                source_row_count += 1
+                for column_index, sample_id in enumerate(header[1:], start=1):
+                    raw_value = values[column_index]
+                    try:
+                        float(raw_value)
+                    except ValueError as error:
+                        raise ValueError(
+                            "non-numeric series_matrix value at "
+                            f"line {source_line_number}, column {column_index}"
+                        ) from error
+                    sample = samples_by_id[sample_id]
+                    writer.writerow(
+                        {
+                            "record_id": make_record_id(
+                                dataset_id, gene_id_raw, sample.sample_id
+                            ),
+                            "dataset_id": dataset_id,
+                            "source_id": source_asset.source_id,
+                            "asset_id": source_asset.asset_id,
+                            "gene_id_raw": gene_id_raw,
+                            "gene_id": gene_id,
+                            "gene_id_namespace": namespace,
+                            "gene_id_version": version if separator else "",
+                            "sample_id": sample.sample_id,
+                            "source_sample_alias": sample.source_alias,
+                            "measurement_type": "geo_series_matrix_expression",
+                            "value_semantics": "normalized_expression",
+                            "value_scale": "unknown",
+                            "is_normalized": "true",
+                            "is_integer_expected": "false",
+                            "expression_value": raw_value,
+                            "expression_unit": "series_matrix_value",
+                            "source_logical_file": source_path.name,
+                            "source_line_number": source_line_number,
+                            "source_column_index": column_index,
+                            "source_column_name": sample_id,
+                            "source_raw_value": raw_value,
+                        }
+                    )
+                    row_count += 1
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+
+    if header is None or source_row_count == 0:
+        output_path.unlink(missing_ok=True)
+        raise ValueError("series_matrix expression table contains no expression rows")
+
+    file_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(file_bytes).hexdigest()
+    parsed = ParsedDataset(
+        dataset_id=dataset_id,
+        source_id=source_asset.source_id,
+        source_asset_id=source_asset.asset_id,
+        file_asset=FileAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="parsed",
+            relative_path=output_path.relative_to(workdir.root).as_posix(),
+            sha256=checksum,
+            size_bytes=len(file_bytes),
+            media_type="text/csv",
+            generated_by_step_id="step_geo_series_matrix_v1",
+        ),
+        columns=list(_OUTPUT_COLUMNS),
+        row_count=row_count,
+        parser_name="geo_series_matrix",
+        parser_version="1.0.0",
+        source_row_count=source_row_count,
+        processing_parameters={
+            "measurement_type": "geo_series_matrix_expression",
+            "value_semantics": "normalized_expression",
+            "value_scale": "unknown",
+            "is_normalized": True,
+            "is_integer_expected": False,
+            "sample_count": len(samples),
+            "source_logical_file": source_path.name,
+            "gene_id_namespace": "geo_probe_or_ensembl_gene",
+        },
+    )
+    return parsed, samples
+
+
 def process_geo_tximport_counts(
     *,
     source_asset: SourceAsset,
