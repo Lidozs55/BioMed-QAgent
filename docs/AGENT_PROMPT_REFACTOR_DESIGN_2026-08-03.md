@@ -1,5 +1,10 @@
 # Agent 系统改进设计：问题分类、数据流、模型能力与 Prompt 重构
 
+> **⚠️ 本文档已整合至 [RESEARCH_SYSTEM_REVIEW_2026-08-03.md](RESEARCH_SYSTEM_REVIEW_2026-08-03.md)**
+>
+> 以下内容保留为历史参考，最新综合分析（含 RAGFlow 调研、Pipeline 能力短板、
+> 工具能力评估）见上述整合报告。
+>
 > 日期：2026-08-03
 > 背景：基于 ARTIFACT_ANALYSIS 报告的独立科研工作流比对，进一步分析泛化性、
 > 数据流架构、模型能力瓶颈，并设计 prompt 的连贯化重构方案。
