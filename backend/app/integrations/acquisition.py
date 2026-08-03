@@ -8,6 +8,7 @@ import ipaddress
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -273,6 +274,7 @@ async def acquire_source(
     expected_sha256: str | None = None,
     expected_media_types: frozenset[str] | None = None,
     accept: str = "text/tab-separated-values",
+    request_headers: Mapping[str, str] | None = None,
 ) -> AcquisitionResult:
     attempt_id = generate_prefixed_uuid("download_attempt")
     started_at = datetime.now(UTC)
@@ -356,11 +358,13 @@ async def acquire_source(
         current_url = source.url
         redirect_count = 0
         media_type = "application/octet-stream"
+        headers = dict(request_headers or {})
+        headers["Accept"] = accept
         while True:
             async with http.stream(
                 "GET",
                 current_url,
-                headers={"Accept": accept},
+                headers=headers,
                 follow_redirects=False,
                 timeout=timeout,
             ) as response:
