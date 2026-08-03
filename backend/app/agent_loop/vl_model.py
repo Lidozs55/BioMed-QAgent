@@ -22,11 +22,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from openai import APIError, AsyncOpenAI
+from openai import APIError
 
-from app.agent_loop.model import require_model_credentials
+from app.agent_loop.model import build_openai_client, require_model_credentials
 from app.model_config import RunModelSettings
-from app.tools.network_safety import validate_credentialed_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -129,14 +128,10 @@ async def call_vl_model(
             or the VLM API call fails after retry budget is exhausted.
     """
     require_model_credentials(model_settings)
-    base_url = validate_credentialed_public_url(model_settings.base_url)
     mime = _infer_mime(image_path)
     b64 = _encode_image_b64(image_path)
     data_url = f"data:{mime};base64,{b64}"
-    client = AsyncOpenAI(
-        api_key=model_settings.api_key,
-        base_url=base_url,
-    )
+    client = build_openai_client(model_settings)
 
     try:
         response = await client.chat.completions.create(

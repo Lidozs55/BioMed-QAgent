@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import app.agent_loop.model as model_module
 import app.config as config_module
 import app.settings_manager as settings_manager
+import httpx
 import pytest
 from app.agent_loop.agent import create_agent
 from app.agent_loop.model import (
@@ -15,7 +16,7 @@ from app.agent_loop.model import (
 )
 from app.model_config import AdvancedParams, RunModelSettings, UserSettings
 from app.model_settings import AdvancedModelSettings, ModelConfiguration
-from app.tools.network_safety import UnsafeUrlError
+from app.tools.network_safety import PublicHttpTarget, UnsafeUrlError
 
 
 def configure_model(
@@ -49,7 +50,16 @@ def configure_model(
         )
 
     monkeypatch.setattr(model_module, "get_current_model_configuration", current_configuration)
-    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(
+        model_module,
+        "resolve_public_http_target",
+        lambda url, *, require_https: PublicHttpTarget(
+            connect_url=url,
+            host_header="provider.example",
+            sni_hostname="provider.example",
+        ),
+    )
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", Mock(return_value=object()))
     return runtime_getter
 
 
@@ -209,6 +219,52 @@ def test_build_client_requires_https_for_credentials(
 
 
 @pytest.mark.asyncio
+async def test_build_client_pins_resolved_ip_and_preserves_host_and_sni(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="runtime-api-key",
+            base_url="https://provider.example:8443/v1",
+            context_window=65_536,
+        )
+    )
+    target = PublicHttpTarget(
+        connect_url="https://203.0.113.10:8443/v1",
+        host_header="provider.example:8443",
+        sni_hostname="provider.example",
+    )
+    resolver = Mock(return_value=target)
+    monkeypatch.setattr(model_module, "resolve_public_http_target", resolver)
+    observed: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["url"] = str(request.url)
+        observed["host"] = request.headers["host"]
+        observed["sni"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200, json={"object": "list", "data": []})
+
+    client = model_module.build_openai_client(settings)
+    http_client = client._client  # noqa: SLF001 - verify owned transport policy
+    await http_client._transport.aclose()  # noqa: SLF001
+    http_client._transport = httpx.MockTransport(handler)  # noqa: SLF001
+    try:
+        await client.models.list()
+    finally:
+        await client.close()
+
+    resolver.assert_called_once_with(
+        "https://provider.example:8443/v1",
+        require_https=True,
+    )
+    assert observed["url"] == "https://203.0.113.10:8443/v1/models"
+    assert observed["host"] == "provider.example:8443"
+    assert observed["sni"] == "provider.example"
+    assert http_client.follow_redirects is False
+    assert http_client.trust_env is False
+
+
+@pytest.mark.asyncio
 async def test_lazy_model_closes_owned_client_when_delegate_close_is_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -246,6 +302,7 @@ async def test_lazy_model_closes_owned_client_when_delegate_close_is_noop(
     client_factory.assert_called_once_with(
         api_key="runtime-api-key",
         base_url="https://runtime.example/v1",
+        http_client=ANY,
     )
     delegate_factory.assert_called_once_with(
         model="runtime-model",
@@ -319,6 +376,7 @@ def test_lazy_model_uses_explicit_settings_snapshot_after_runtime_change(
     client_factory.assert_called_once_with(
         api_key="run-api-key",
         base_url="https://run.example/v1",
+        http_client=ANY,
     )
     delegate_factory.assert_called_once_with(
         model="run-model",
@@ -356,6 +414,7 @@ def test_lazy_model_keeps_its_first_runtime_settings_for_the_run(
     client_factory.assert_called_once_with(
         api_key="first-api-key",
         base_url="https://first.example/v1",
+        http_client=ANY,
     )
     delegate_factory.assert_called_once()
     runtime_getter.assert_called_once_with()
@@ -393,8 +452,22 @@ def test_fresh_lazy_model_uses_runtime_settings_persisted_between_runs(
     assert LazyDashScopeModel().stream_response("second") == "second-stream"
 
     assert client_factory.call_args_list == [
-        ((), {"api_key": "first-api-key", "base_url": "https://first.example/v1"}),
-        ((), {"api_key": "second-api-key", "base_url": "https://second.example/v1"}),
+        (
+            (),
+            {
+                "api_key": "first-api-key",
+                "base_url": "https://first.example/v1",
+                "http_client": ANY,
+            },
+        ),
+        (
+            (),
+            {
+                "api_key": "second-api-key",
+                "base_url": "https://second.example/v1",
+                "http_client": ANY,
+            },
+        ),
     ]
     assert delegate_factory.call_args_list[0].kwargs["model"] == "first-model"
     assert delegate_factory.call_args_list[1].kwargs["model"] == "second-model"
