@@ -16,9 +16,13 @@ from pathlib import Path
 import pytest
 from app.domain.contracts import (
     AttemptStatus,
+    Database,
+    DatasetSelection,
     EventEnvelope,
+    QuerySpecification,
     RunManifest,
     StageName,
+    TaskSpecification,
     TaskState,
 )
 from app.pipeline.runner import PipelineRunner
@@ -30,6 +34,71 @@ FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 class HardPipelineInterruption(BaseException):
     """Simulate process death without runner-owned terminalization."""
+
+
+def _gdc_specification(*, data_type: str) -> TaskSpecification:
+    return TaskSpecification(
+        topic="lung cancer",
+        queries=[
+            QuerySpecification(
+                query_id="query_gdc_1",
+                database=Database.GDC,
+                query="TCGA-LUAD",
+                generated_by="agent",
+                purpose="explicit GDC project",
+                order=1,
+            )
+        ],
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_gdc_tcga_luad",
+                database=Database.GDC,
+                accession="TCGA-LUAD",
+                reason="agent-selected project",
+                data_type=data_type,
+            )
+        ],
+    )
+
+
+def test_parameter_digest_changes_with_selected_databases(tmp_path: Path) -> None:
+    pubmed_geo = PipelineRunner(
+        task_id="task_database_digest",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        databases=["pubmed", "geo"],
+    )
+    geo_only = PipelineRunner(
+        task_id="task_database_digest",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        databases=["geo"],
+    )
+
+    assert pubmed_geo._compute_parameter_digest(
+        StageName.DISCOVERY
+    ) != geo_only._compute_parameter_digest(StageName.DISCOVERY)
+
+
+def test_parameter_digest_changes_with_task_specification(tmp_path: Path) -> None:
+    expression = PipelineRunner(
+        task_id="task_specification_digest",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        databases=["gdc"],
+        specification=_gdc_specification(data_type="gene-expression"),
+    )
+    clinical = PipelineRunner(
+        task_id="task_specification_digest",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        databases=["gdc"],
+        specification=_gdc_specification(data_type="clinical"),
+    )
+
+    assert expression._compute_parameter_digest(
+        StageName.DISCOVERY
+    ) != clinical._compute_parameter_digest(StageName.DISCOVERY)
 
 
 def _canonical_json_sha256(payload: object) -> str:
