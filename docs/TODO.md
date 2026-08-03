@@ -20,9 +20,8 @@
 
 ### 1.2 字段对齐能力接入
 
-> 当前 Processing 对单数据集只生成字段规范化映射；多数据集分支虽然调用
-> `alignment.align_fields`，但 Runner 尚未传入多个 ParsedDataset，且未调用
-> `alignment.merge_datasets`，所以尚未形成真实多源合并。
+> 一个 GDC + 一个 Xena 的显式组合已从 Discovery、Acquisition、Processing、
+> Artifact Build 到 Validation Gate 形成正式入口闭环；其它任意来源组合仍不支持。
 
 - [x] **P0** Pipeline 在多源数据路径中调用 `alignment.align_fields`——2026-07-31 执行：`run_processing` 新增多数据集分支（`_run_multi_dataset_processing`），当 spec 选择 ≥2 个数据型数据集（GDC/Xena）时逐个解析，`_build_field_alignment` 多数据集分支真实调用 `align_fields`；`merge_parsed_datasets` 公开函数直接调用 `align_fields` 构建映射
 - [x] **P0** Pipeline 中调用 `alignment.merge_datasets`（多源数据合并）——2026-07-31 执行：`merge_parsed_datasets` 通过旧模型适配器（`_to_legacy_parsed_datasets`）调用 `merge_datasets` 垂向合并，写入 `parsed/{id}_merged.csv` 并返回 `ParsedDataset`；`ProcessingOutput` 新增 `merged_dataset` 字段，Runner 将全部 `parsed_datasets` + `merged_dataset` 传入 artifact_build
@@ -46,14 +45,14 @@
 
 ### 1.5 Pipeline 数据库完整性
 
-> Pipeline 已覆盖 PubMed/GEO 主路径，以及 GDC、Xena、Reactome 的首期显式单源路径；
+> Pipeline 已覆盖 PubMed/GEO 主路径，GDC、Xena、Reactome 的首期显式单源路径，
+> 以及一个 GDC + 一个 Xena 的确定性合并路径；
 > 其它数据库仍为 Agent-only 或待接入。Reactome 仅接受显式单个 pathway，且必须单独作为
-> 来源运行；Reactome 与其它数据库或多个 pathway 选择会被拒绝。多源合并、mutation/CNV
-> 以及 Reactome 更广泛的数据类型和查询扩展仍未完成。
+> 来源运行；Reactome 与其它数据库或多个 pathway 选择会被拒绝。通用多源组合、
+> mutation/CNV、GDC live clinical 以及 Reactome 更广泛的数据类型仍未完成。
 > 1. 用户选择尚未接入的数据库时，Pipeline 不产出伪成功 artifact
 > 2. Agent-only 工具获取的数据尚未自动进入 Pipeline CSV（数据孤岛）
-> 3. `source_list.csv` 和 `source_relations.csv` 的完整多源覆盖仍待实现
-> 4. `field_mapping.csv` 的真实多源映射和确定性合并仍未完成
+> 3. GDC + Xena 以外来源组合的统一路由和确定性冲突策略仍待实现
 
 #### 1.5.1 Discovery 扩展（P0）
 
@@ -63,7 +62,7 @@
 
 - [x] **P0** Pipeline Discovery 支持从 Agent 传入的 `TaskSpecification` 中解析 Xena gene-expression、GDC project/data_type 与 Reactome 显式单 pathway 查询；Reactome 不支持多 pathway 或混合来源
 - [x] **P0** Discovery 阶段对 Xena gene-expression、GDC fixture/显式选择及 Reactome 显式单 pathway 产出统一 `SourceRecord`；Reactome 与其它数据库或多个 pathway 选择明确拒绝
-- [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库——2026-07-31 核对：各路由分支均已覆盖——pubmed+geo 双 source；GDC/Xena/Reactome 单源各产出唯一 SourceRecord（artifact_build 写入全部 `discovery.sources`）；pubmed-only 时 GEO 作为隐式数据集来源保留。新增 `tests/pipeline/test_discovery_source_coverage.py` 契约测试锁定各分支 source 数据库集合
+- [x] **P0** `source_list.csv` 覆盖 Pipeline 实际查询过的所有数据库——2026-08-03 核对：除既有 pubmed+geo 与 GDC/Xena/Reactome 单源外，一个 GDC + 一个 Xena 的正式入口会保留两条 SourceRecord，并与 source_assets/download_log 的 source_id 集合闭合
 - [x] **P1** Discovery 产出统一的多源 `QuerySpecification` 列表（而非当前隐式假设 PubMed+GEO）——2026-07-31 执行：`_digest_discovery` 纳入规范化多源 queries/datasets（按 order 排序），查询变化必然改变 discovery digest，checkpoint 复用不再误判；契约测试覆盖 query/主题变化
 
 #### 1.5.2 Acquisition 扩展（P0）
@@ -71,8 +70,9 @@
 > 当前 Pipeline Acquisition 只解析 GEO accession 并下载 GEO counts/series matrix；其它
 > 数据库 Skill 的下载结果尚未成为 Pipeline 的 `AcquisitionOutput`。
 
-- [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/data_type 下载（files API → `acquire_source()` → `source_assets/`；首期 TSV/TSV.GZ）
+- [x] **P0** Acquisition 阶段支持 GDC 显式 project_id/gene-expression 下载（Files API 官方 `Gene Expression Quantification` + `data_format=TSV` → `acquire_source()` → `source_assets/`）；live Clinical Supplement 在 HTTP 前明确拒绝
 - [x] **P0** Acquisition 阶段支持 Xena fixture 与 live hub 下载适配（TSV/TSV.GZ → `source_assets/`，统一产出 `SourceAsset`/`DownloadAttempt`）；live 输入契约测试已覆盖
+- [x] **P0** 一个 GDC + 一个 Xena 的 Acquisition 按规格顺序保留两份资产和两条 attempt，且 Xena discovery/download 使用同一 source_id——2026-08-03 端到端入口测试覆盖
 - [x] **P1** Acquisition 阶段支持 Reactome 单 pathway 参与者导出（ContentService JSON/fixture → `source_assets/`，fixture/live acquisition 已有协议测试）；多 pathway/多源下载仍未实现
 - [x] **P1** `download_log.csv` 记录非 GEO 下载的 attempt 与结果——2026-07-31 执行：`_try_acquire` 不再丢弃失败 attempt（返回 FAILED attempt + asset=None）；GEO live 回退链（counts 404 → series matrix）两条 attempt 全部进入 download_log；artifact_build 透传 error_code/error_message（原先硬编码空串）；测试 `test_acquisition_download_log.py` 覆盖
 - [ ] **P2** `acquire_source()` 抽象为协议，各数据库实现各自的下载策略
@@ -83,7 +83,7 @@
 > 表达解析；Runner 和 Artifact Build 也只消费第一个资产/解析数据集。
 
 - [x] **P0** Processing 阶段按资产类型路由解析器（已覆盖 Xena、GDC gene-expression/clinical 与 Reactome 单 pathway participants；通用多源路由仍待扩展）
-- [x] **P0** 新增 GDC 数据解析器（首期严格支持 fixture 契约的 gene-expression/clinical TSV/TSV.GZ；mutation/CNV/多源合并未实现）
+- [x] **P0** 新增 GDC 数据解析器（兼容 fixture gene-expression/clinical，并支持官方 augmented STAR-counts 注释行、Ensembl version 与 `tpm_unstranded` 精确血缘；live clinical、mutation/CNV 未实现）
 - [x] **P0** 新增 Xena gene-expression 解析器（TSV/TSV.GZ 表达矩阵 → 带 source locator 的长格式 CSV）；clinical/mutation/CNV 等类型仍未支持
 - [x] **P1** 新增 Reactome 单 pathway 通路数据解析器（participants → `pathway_members.csv` artifact）；Reactome 扩展数据类型仍未完成
 - [x] **P1** `field_mapping.csv` 扩展为多源映射（每个 SourceAsset 独立一组映射记录）——2026-07-31 执行：`field_mapping.csv` 新增 `source_id` 列，`_build_field_mapping_rows` 按 source 分组；schema 就绪，多源合并（§1.2）时每组记录独立
@@ -116,6 +116,7 @@
 > publication slot。完整重跑可复用 digest 一致的已验证阶段输出；参数、来源或处理
 > 规则变化必须生成新的 run/version，不覆盖旧 Artifact。
 
+- [x] **P0** checkpoint `parameter_digest` 覆盖排序后的数据库集合与完整 canonical `TaskSpecification`；数据库、query、dataset/data_type 或 requested output 变化不会误复用旧阶段——2026-08-03 回归测试覆盖
 - [ ] **P1** 新 Run 支持携带版本化 `TaskSpecification`，并记录输入、来源和参数摘要；当前 `TaskSpecification` 已有基础模型，但新 Run API 仍只接收字符串 input，未接入该契约
 - [ ] **P1** 完整重跑完成新版本 Artifact 的原子发布和旧版本保留；当前 Pipeline 有新的 `run_id` staging 和原子发布，但 `artifacts/` 发布会替换当前目录，不提供历史版本保留/API 选择
 - [ ] **P2** 受控局部重跑增加 `rerun_from`，服务端按阶段依赖闭包决定实际重跑范围
@@ -212,11 +213,11 @@
 
 ### 2.8 GEO 主产物数据恢复
 
-> 现有 live Acquisition 可能下载 tximport counts，但 Processing 将其按 series matrix
-> 解析，无法恢复样本时会生成零行占位数据。Validation Gate 已拒绝零行
-> `main_data.csv`，但真实表达数据恢复仍需修正 acquisition/processing 契约。
+> Live Acquisition 的 tximport + family SOFT 与 series matrix fallback 均已只从真实
+> 来源生成表达记录；无法恢复核心科研值时 fail-closed，不再生成零行或合成占位数据。
 
 - [x] **P0** Acquisition 在 live tximport counts 成功后同步获取对应 `family.soft.gz`；Processing 使用实际下载的 SOFT 解析样本并生成真实表达记录；已有 live 回归测试覆盖 counts + SOFT 路径
+- [x] **P0** Series matrix fallback 解析真实表达块并保留精确物理行列；空矩阵删除部分输出并失败；Validation Gate 要求至少一条可回溯核心科研记录——2026-08-03 回归测试覆盖
 
 ---
 
@@ -314,6 +315,8 @@
 
 ### 5.3 配置硬编码治理
 
+- [x] **P0** 模型跨端点预览不得隐式携带已保存 API Key；仅同 `base_url` 复用，显式 preview key 仍可覆盖——2026-08-03 安全回归测试覆盖
+- [x] **P0** Live Pipeline 的 checkpoint 参数摘要不读取 `tests/fixtures`，生产打包可不含测试目录——2026-08-03 resilience 回归测试覆盖
 - [ ] **P2** `config.py` 扩展配置项（`crawler_ua` / `crawler_rate_limit_seconds` / `compaction_*` / `stage_timeouts` / `max_download_bytes`）
 - [ ] **P2** 启动时校验 `DASHSCOPE_API_KEY` 非空（fail fast）
 - [ ] **P2** `OUTPUT_DIR` 改为绝对路径默认值（当前相对路径 cwd 依赖）
