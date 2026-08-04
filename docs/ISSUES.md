@@ -35,24 +35,46 @@
 
 ### DurableTaskSession `_replay_cache` 全量历史驻留 + 深拷贝放大
 
-- [ ] `app/runtime/session.py:182-204` — 每个 task 的 `DurableTaskSession` 持有 `_replay_cache`，缓存该 task 完整对话历史的内存副本（`session_items.jsonl` 可达 50-500 MB）。`get_items()` 每次调用 `copy.deepcopy` 全量历史，压缩 preflight 每轮触发一次，临时把整个历史再复制一份。4 并发 task × (缓存原始 + 深拷贝) ≈ 0.4-4 GB。是周期性内存膨胀（~16GB）的核心来源之一。修复方向：`get_items` 返回迭代器或按需切片而非全量深拷贝；preflight 估算 token 时仅需要条目数量和摘要长度，不需完整 item 内容。
+- [ ] `app/runtime/session.py:182-204` — 每个 task 的 `DurableTaskSession` 持有 `_replay_cache`，缓存该 task 完整对话历史的内存副本。`get_items()` 每次调用 `copy.deepcopy` 全量历史，压缩 preflight 每轮触发一次。
+- **审查结论（2026-08-04）**：**暂缓**。`read_file` 256KB 守卫已从源头阻止 1.74 GB JSONL 写入，`session_items.jsonl` 典型大小回落到 5-50 MB/task。`_replay_cache` 是性能必要缓存（避免每轮重读 JSONL），不宜移除。`get_items` 的 `copy.deepcopy` 是防御性契约（允许调用方修改返回值不影响内部状态），移除需审计全部调用方——当前仅在压缩 preflight 路径调用，风险可控但收益有限（4 并发 × 50 MB × 2 ≈ 400 MB 峰值，非 16 GB 来源）。修复方向（低优先级）：`get_items` 增加只读模式参数跳过 deepcopy。
 
 ### 压缩流程多次全量深拷贝
 
-- [ ] `app/runtime/compaction_execution.py:64-88` + `app/runtime/compaction_history.py:47-59,163-175` — 压缩 preflight 链路存在 5-6 处 `copy.deepcopy`：`get_items()` 深拷贝 #1 → `EffectiveSession.__init__` 深拷贝 #2 → `EffectiveSession.get_items` 深拷贝 #3 → `flatten`/`flatten_segments`/`flatten_groups` 深拷贝 #4-6。单次 preflight 临时占用 = 历史 × 3-4 倍深拷贝 ≈ 150-2000 MB 峰值。修复方向：压缩流程改为流式处理，仅在写出压缩后历史时做一次拷贝；`EffectiveSession` 持有引用而非深拷贝。
+- [ ] `app/runtime/compaction_execution.py:64-88` + `app/runtime/compaction_history.py:47-59,163-175` — 压缩 preflight 链路存在 5-6 处 `copy.deepcopy`。
+- **审查结论（2026-08-04）**：**暂缓**。深拷贝是防御性的（SDK 可能修改 item 引用），移除有破坏 SDK 契约的风险。单次 preflight 峰值 = 历史 × 3-4 倍深拷贝，但是瞬态（preflight 完成后 GC 回收），且 `read_file` 守卫后历史已受限。修复方向（低优先级）：压缩流程改为流式处理，仅在写出压缩后历史时做一次拷贝；需先验证 SDK 不修改 `get_items` 返回值。
 
 ### TaskManager `_task_locks` 字典永不清理
 
-- [ ] `app/runtime/manager.py:718` + `app/runtime/repository.py:134` — `_task_locks: dict[str, asyncio.Lock]` 每个 task ID 永久持有一个 `asyncio.Lock`，`setdefault` 创建后永不 `pop`。服务器运行数月处理数万个 task 后字典持续增长。更严重的是，若 `_finalize_run` 未执行（进程崩溃恢复后），`_running` 中的 `RunExecution`（含 `RunContext` 的 query_log/records/sources）会泄漏，每个 50-500 MB。修复方向：task 进入终态后从 `_task_locks` 移除；`_running` 在 task recovery 时清理残留 entry。
+- [ ] `app/runtime/manager.py:718` — `_task_locks: dict[str, asyncio.Lock]` 每个 task ID 永久持有一个 `asyncio.Lock`，`setdefault` 创建后永不 `pop`。
+- **审查结论（2026-08-04）**：**暂缓**。每个 `asyncio.Lock` ≈ 128 字节，10,000 task ≈ 1.2 MB，可忽略。ISSUES.md 原文提到的 "`_running` 泄漏 `RunExecution` 50-500 MB" 是理论性的：`_finalize_run` 在 `_execute` 的 `finally` 中无条件执行（manager.py:1490-1491），`_running` 在 `retain_cancellation=False` 时必然 `pop`（manager.py:1755）。进程崩溃后 `_running` 是内存态、重启即空。修复方向（极低优先级）：task 进入终态后从 `_task_locks` 移除，但需确认无后续操作（如 `delete_task`）仍需该锁。
 
 ### RunContext 字段在 run 期间只追加不清理
 
-- [ ] `app/agent_loop/context.py:148-156,690-734` — `RunContext` 的 `sources`、`raw_assets`、`parsed_datasets`、`records`、`query_log` 列表在整个 run 生命周期内只追加不清理。`compress_query_log` 能压缩 `query_log`，但仅当 LLM 主动调用 `compress_query_log` 工具时才触发（常见情况下不触发）。240-960 轮对话可累积数千条 query_log 记录。修复方向：query_log 超过阈值时自动触发压缩；或改为环形缓冲 + 溢出落盘。
+- [ ] `app/agent_loop/context.py:148-156,690-734` — `RunContext` 的 `sources`、`raw_assets`、`parsed_datasets`、`records`、`query_log` 列表在整个 run 生命周期内只追加不清理。
+- **审查结论（2026-08-04）**：**暂缓**。`RunContext` 生命周期 = 单次 run（`_prepare_execution` 创建，`_finalize_run` 后随 `RunExecution` 一起 GC）。单 run 内 `query_log` 每条 ≈ 100-200 字节，1,000 条 ≈ 100-200 KB，可忽略。`records` 取决于 `DataRecord` 内容，但同样随 run 结束而释放。修复方向（低优先级）：`query_log` 超过阈值时自动触发 `compress_log`，而非依赖 LLM 主动调用。
 
 ### Pipeline `events` 列表在 run 期间无限增长
 
-- [ ] `app/pipeline/runner.py:232,1226-1234` — `PipelineRunner.events: list[EventEnvelope]` 在整个 run 期间只追加不清理。`FixtureRunExecutor.__call__` 还会 `for event in list(runner.events)` 二次遍历。单个长 Pipeline run 产生数千事件，`stage_progress`/`assistant_delta` 等事件无截断。修复方向：事件写入 JSONL 后从内存列表移除；或改为 `collections.deque(maxlen=N)` 只保留最近事件供二次遍历。
+- [ ] `app/pipeline/runner.py:232,1226-1234` — `PipelineRunner.events: list[EventEnvelope]` 在整个 run 期间只追加不清理。
+- **审查结论（2026-08-04）**：**暂缓**。`PipelineRunner` 生命周期 = 单次 pipeline run（`FixtureRunExecutor.__call__` 创建，结束后 GC）。`FixtureRunExecutor` 在 `streams_events=True`（正常路径，runner.py:1402）时跳过 `list(runner.events)` 遍历（runner.py:1409-1411），仅在 legacy 非 streaming 路径才二次遍历。单 run 数千事件 ≈ 1-10 MB 瞬态。修复方向（低优先级）：streaming 路径下 `_publish_event` 后不追加 `self.events`，仅在 legacy 路径保留。
 
 ### SubagentSupervisor 异常退出时字典泄漏
 
-- [ ] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。若 run 异常退出未触发 `_terminate_owned_subagents`，`_SubagentEntry`（含 `task: asyncio.Task`、`result: SubagentResult`）泄漏。修复方向：在 `manager.py` 的 `_finalize_run` 中无条件调用 `_terminate_owned_subagents`；或使用 `contextlib.ExitStack` 绑定 supervisor 生命周期到 run。
+- [ ] `app/subagents/supervisor.py:115-127` — `_entries`、`_run_semaphores`、`_admissions`、`_owner_lifecycle_sinks` 字典在 `start_batch` 中 `setdefault` 创建，仅 `release_run` 清理。
+- **审查结论（2026-08-04）**：**暂缓**。清理路径已存在且被调用：`_terminate_owned_subagents`（manager.py:2032-2068）在 `_append_status` 和 `_append_completion_status` 中对 `RunCompleted/Failed/Cancelled/Interrupted` payload 无条件调用 `cancel_run` + `release_run`。`_finalize_run` 的 `finally` 保证 `_append_completion_status` 必然执行。泄漏仅在工作线程被强制取消且 `finally` 未跑完时发生——此时进程通常也在关闭（`shutdown` 会清理全部 entry）。修复方向（极低优先级）：在 `manager.close` 中增加 supervisor 兜底清理断言。
+
+### Processing 阶段 `_CLEANING_MAX_ROWS = 500_000` 静默截断数据（治标）
+
+- [ ] `app/pipeline/stages/processing.py:41,165-170` — 数据清洗阶段对 CSV 行数硬截断在 500,000 行，超出部分仅 `logger.warning` 后 `break`，不进入清洗产物。GSE183795（4,695,780 行）等大型表达谱矩阵会被截断到 500k 行，导致产物数据不完整。
+- **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
+- **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
+- **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
+
+### `read_file` 256KB 硬上限过于激进（已调整）
+
+- [x] `app/tools/io.py:84` — `read_file` 原先 256KB 硬上限是在 `parsed/` 下 1.74 GB JSONL 导致 LLM API 400 错误时紧急加入的。现已提供 `read_file_head`（流式读前 N 行）和 `search_file`（grep 式检索）作为大文件专用工具，256KB 硬拒过于激进——Agent 无法读取 500KB-2MB 的中等文件（JSON 配置、小型 CSV）。
+- **修复（2026-08-04）**：上限提升至 1 MB（`_READ_FILE_MAX_BYTES = 1024 * 1024`），覆盖大多数中等文件；超过 1 MB 仍硬拒并引导到 `read_file_head`/`search_file`。1 MB ≈ 250k tokens，在大多数模型上下文窗口内。
+
+### `@cache` → `@lru_cache` 修复诊断修正
+
+- [x] `app/runtime/compaction_history.py:129` — 先前将 `@cache` 改为 `@lru_cache(maxsize=4096)` 时，ISSUES.md 诊断"跨 task 累积缓存条目导致内存增长"是**误诊**。`mapping_count` 是定义在 `align_groups_to_records` 内部的嵌套函数，每次调用 `align_groups_to_records` 会创建新的函数对象 + 新的 cache，调用结束后随函数对象一起 GC。原 `@cache` 不会跨 task 累积。`@lru_cache(maxsize=4096)` 的实际作用是限制单次调用内的缓存上限（防止极端 case 如 1000 groups × 1000 records = 1M 条目），是合理的安全优化但非内存泄漏修复。

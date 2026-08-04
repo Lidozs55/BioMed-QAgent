@@ -24,7 +24,6 @@ export interface ModelSettingsSectionProps {
   vendors: VendorInfo[];
   models: RichModelInfo[];
   modelsLoading: boolean;
-  modelsLoaded: boolean;
   draft: ModelDraftState;
   dirty: boolean;
   saving: boolean;

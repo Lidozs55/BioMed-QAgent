@@ -177,6 +177,24 @@ describe("SettingsPanel", () => {
     expect(secret.type).toBe("password");
   });
 
+  it("shows the saved model name in the manual input before loading the model list and allows editing it", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+
+    // Wait for settings to load; the model input is rendered because no models have been fetched.
+    const modelInput = (await screen.findByPlaceholderText(
+      "输入模型名称（如 qwen-plus）",
+    )) as HTMLInputElement;
+
+    // Regression: previously value was forced to "" when modelsLoaded was false,
+    // which prevented the user from seeing or editing the saved model name.
+    expect(modelInput.value).toBe("qwen-plus");
+
+    // The user must be able to type a custom model name without loading the list first.
+    fireEvent.change(modelInput, { target: { value: "qwen-custom" } });
+    expect(modelInput.value).toBe("qwen-custom");
+  });
+
   it("model dropdown options contain no descendant interactive elements and capability icons have accessible labels", async () => {
     const api = mockApi({
       // Return settings with a valid base URL so model fetch works

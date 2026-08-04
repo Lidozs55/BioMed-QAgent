@@ -67,7 +67,7 @@ IMPORT_INSTRUCTIONS = """\
 
 ### 2. 检查文件格式
 调用 ``read_file('source_assets/<filename>')`` 读取前若干行（或全文，
-若不大）判断格式。注意 ``read_file`` 有 256KB 大小限制——大文件（如超大
+若不大）判断格式。注意 ``read_file`` 上限 1 MB——大文件（如超大
 CSV/TSV）用 ``read_file_head`` 读取前若干行查看表头/结构，用
 ``search_file`` 按关键词（如基因名、样本 ID）定位具体行，两者均流式读取
 不会加载整个文件：

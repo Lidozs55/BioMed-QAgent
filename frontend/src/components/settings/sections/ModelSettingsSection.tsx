@@ -67,7 +67,6 @@ export function ModelSettingsSection({
   vendors,
   models,
   modelsLoading,
-  modelsLoaded,
   draft,
   dirty,
   saving,
@@ -85,8 +84,7 @@ export function ModelSettingsSection({
   const saveDisabled =
     !dirty ||
     saving ||
-    (!draft.apiKey.trim() && !settings?.api_key_configured) ||
-    !modelsLoaded;
+    (!draft.apiKey.trim() && !settings?.api_key_configured);
 
   return (
     <div className="space-y-8">
@@ -184,7 +182,7 @@ export function ModelSettingsSection({
                     {models.length === 0 ? (
                       <Input
                         id="settings-model"
-                        value={modelsLoaded ? draft.modelName : ""}
+                        value={draft.modelName}
                         onChange={(event) => {
                           onDraftChange({ modelName: event.target.value });
                         }}

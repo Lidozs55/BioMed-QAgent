@@ -180,10 +180,10 @@ def test_read_file_absolute_rejected() -> None:
 
 
 def test_read_file_rejects_oversized_file(tmp_path: Path) -> None:
-    """read_file must reject files larger than the 256KB guard with guidance."""
+    """read_file must reject files larger than the 1MB guard with guidance."""
     rc = _isolated_run_ctx(tmp_path, "test_read_large")
     big_file = rc.work_dir.parsed / "big.csv"
-    big_file.write_text("x" * (256 * 1024 + 1), encoding="utf-8")
+    big_file.write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
 
     ctx = _make_ctx(rc, "read_file")
     result = _call(read_file, ctx, path="parsed/big.csv")
@@ -194,7 +194,7 @@ def test_read_file_rejects_oversized_file(tmp_path: Path) -> None:
 
 
 def test_read_file_allows_exactly_at_limit(tmp_path: Path) -> None:
-    """A file at or under the 256KB limit should still be readable."""
+    """A file at or under the 1MB limit should still be readable."""
     rc = _isolated_run_ctx(tmp_path, "test_read_at_limit")
     ok_file = rc.work_dir.parsed / "ok.csv"
     ok_file.write_text("a,b\n1,2", encoding="utf-8")

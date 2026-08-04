@@ -198,7 +198,10 @@ async def list_models(
     try:
         target = resolve_public_http_target(base_url, require_https=bool(api_key))
     except UnsafeUrlError as error:
-        raise HTTPException(status_code=422, detail="Model preview URL is not allowed") from error
+        raise HTTPException(
+            status_code=422,
+            detail=f"模型预览地址不可用：{error}",
+        ) from error
     headers = {"Host": target.host_header}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"

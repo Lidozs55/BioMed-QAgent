@@ -104,7 +104,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
   const [vendors, setVendors] = useState<VendorInfo[]>([]);
   const [models, setModels] = useState<RichModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
 
   const [draft, setDraft] = useState<ModelDraftState>(INITIAL_DRAFT);
   const [dirty, setDirty] = useState(false);
@@ -184,7 +183,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setModelsLoaded(false);
       void load();
     }, 0);
     return () => window.clearTimeout(timer);
@@ -251,7 +249,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       })) as RichModelInfo[];
       if (!abort.signal.aborted) {
         setModels(fresh);
-        setModelsLoaded(true);
         applyModelContext(draft.modelName, fresh, draft.baseUrl, settings);
       }
     } catch (error) {
@@ -319,7 +316,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       }));
       apiKeyDirtyRef.current = false;
       setDirty(false);
-      setModelsLoaded(true);
       toast.success("模型设置已保存");
 
       setModelsLoading(true);
@@ -597,7 +593,6 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                       vendors={vendors}
                       models={models}
                       modelsLoading={modelsLoading}
-                      modelsLoaded={modelsLoaded}
                       draft={draft}
                       dirty={dirty}
                       saving={saving}

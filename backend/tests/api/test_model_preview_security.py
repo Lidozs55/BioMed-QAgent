@@ -184,6 +184,33 @@ async def test_model_preview_rejects_http_when_preview_key_is_supplied(
 
 
 @pytest.mark.asyncio
+async def test_model_preview_surfaces_specific_unsafe_url_reason(tmp_path: Path) -> None:
+    """Regression: the 422 response must include the specific UnsafeUrlError
+    reason so users can diagnose DNS failures, localhost, or private IPs."""
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with (
+        application.router.lifespan_context(application),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://localhost"
+        ) as client,
+    ):
+        response = await client.post(
+            "/api/v1/models",
+            json={
+                "preview_base_url": "http://localhost:8080/v1",
+                "preview_api_key": "",
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # The generic "Model preview URL is not allowed" must be replaced with a
+    # reason that tells the user *why* the URL is unsafe.
+    assert "Model preview URL is not allowed" not in detail
+    assert "public hostname" in detail
+
+
+@pytest.mark.asyncio
 async def test_model_preview_sanitizes_upstream_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
