@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from app.model_config.catalog import get_known_model
+from app.model_config.catalog import get_known_model, guess_context_window
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
@@ -263,7 +263,7 @@ def _model_preview_item(
         "id": model_id,
         "name": model_id,
         "description": "API discovered model",
-        "context_window": 0,
+        "context_window": guess_context_window(model_id),
         "suggested_max_tokens": _infer_suggested_max_tokens(model_id),
         "capabilities": {"text": True, "image": False, "video": False, "audio": False},
         "recommended": model_id == current.model_name,

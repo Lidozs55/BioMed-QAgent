@@ -1189,6 +1189,23 @@ MODELS: dict[str, ModelDetail] = {
         recommended=False,
         model_family="qwen",
     ),
+    # -- qwen3.8-max (2026-08-03 Alibaba Qwen3.8 release) --
+    "qwen3.8-max": ModelDetail(
+        id="qwen3.8-max",
+        name="Qwen3.8 Max",
+        description=(
+            "Qwen3.8 最强多模态旗舰模型，2.4T 稀疏 MoE，1M 超长上下文，"
+            "支持图像与视频理解。"
+        ),
+        vendor_id="dashscope",
+        input_context_window=1000000,
+        max_output_tokens=64000,
+        suggested_max_tokens=64000,
+        capabilities=ModelCapabilities(text=True, image=True, video=True, audio=False),
+        knowledge_cutoff="2026-08",
+        recommended=True,
+        model_family="qwen",
+    ),
     "qwq-32b": ModelDetail(
         id="qwq-32b",
         name="QWQ 32B",
