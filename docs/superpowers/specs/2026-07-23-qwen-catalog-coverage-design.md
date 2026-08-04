@@ -50,8 +50,9 @@ documentation contradicts their stored metadata.
 - One focused table-driven regression set resolves representative exact IDs
   from each delivered batch and asserts their window, suggested output, and
   capabilities.
-- Existing unknown-model tests remain unchanged: an undocumented ID without a
-  positive user override must not become runnable.
+- Unknown-model behavior (per the 2026-08-04 model-context change): an
+  undocumented ID without a positive override now resolves a guessed window
+  (default 512K) instead of being blocked.
 - Each catalog batch runs its focused pytest target and Ruff before its commit.
 
 ## Non-Goals

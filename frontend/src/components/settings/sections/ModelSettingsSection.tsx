@@ -11,6 +11,7 @@ import {
 import type { ModelSettingsSectionProps } from "@/components/settings/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -191,87 +192,94 @@ export function ModelSettingsSection({
                         className="w-full"
                       />
                     ) : (
-                      <>
-                        <button
-                          type="button"
-                          id="settings-model"
-                          className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm ring-offset-background focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                          onClick={() => onUiChange({ showModelDropdown: !draft.showModelDropdown })}
-                        >
-                          {modelsLoading ? (
-                            <span className="flex items-center gap-2 text-muted-foreground">
-                              <Spinner className="size-3.5" />
-                              正在加载模型列表...
-                            </span>
-                          ) : (
-                            <span className="truncate">
-                              {selectedModel ? selectedModel.name : "选择模型"}
-                            </span>
-                          )}
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {models.length > 0 ? `${models.length} 个可用` : ""}
-                          </span>
-                        </button>
-
-                        {draft.showModelDropdown && (
-                          <div className="absolute top-full right-0 left-0 z-50 mt-1 overflow-hidden rounded-lg border bg-popover shadow-md">
-                            <div className="p-2">
-                              <Input
-                                placeholder="搜索模型..."
-                                value={draft.modelSearch}
-                                onChange={(event) => onUiChange({ modelSearch: event.target.value })}
-                                className="h-9 text-sm"
-                                autoFocus
-                              />
-                            </div>
-                            <ScrollArea className="h-72">
-                              {models.length === 0 ? (
-                                <div className="p-4 text-center text-sm text-muted-foreground">
-                                  没有匹配的模型
-                                </div>
+                      <Popover
+                        open={draft.showModelDropdown}
+                        onOpenChange={(next) => onUiChange({ showModelDropdown: next })}
+                      >
+                        <PopoverTrigger
+                          render={
+                            <button
+                              type="button"
+                              id="settings-model"
+                              className="flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm ring-offset-background focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                            >
+                              {modelsLoading ? (
+                                <span className="flex items-center gap-2 text-muted-foreground">
+                                  <Spinner className="size-3.5" />
+                                  正在加载模型列表...
+                                </span>
                               ) : (
-                                models
-                                  .filter((model) => {
-                                    const query = draft.modelSearch.trim().toLowerCase();
-                                    return (
-                                      !query ||
-                                      model.name.toLowerCase().includes(query) ||
-                                      model.id.toLowerCase().includes(query)
-                                    );
-                                  })
-                                  .map((model) => (
-                                    <button
-                                      key={model.id}
-                                      type="button"
-                                      className={cn(
-                                        "flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-accent",
-                                        model.id === draft.modelName && "bg-accent font-medium",
-                                      )}
-                                      onClick={() => onDraftChange({ modelName: model.id })}
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="flex items-center gap-2">
-                                          <span className="truncate">{model.name}</span>
-                                          {model.recommended && (
-                                            <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                                              推荐
-                                            </span>
-                                          )}
-                                        </div>
-                                        <p className="truncate text-xs text-muted-foreground">
-                                          {model.description}
-                                        </p>
-                                      </div>
-                                      <div className="ml-3 flex shrink-0 items-center">
-                                        <SelectedModelCapabilities model={model} />
-                                      </div>
-                                    </button>
-                                  ))
+                                <span className="truncate">
+                                  {selectedModel ? selectedModel.name : "选择模型"}
+                                </span>
                               )}
-                            </ScrollArea>
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {models.length > 0 ? `${models.length} 个可用` : ""}
+                              </span>
+                            </button>
+                          }
+                        />
+                        <PopoverContent
+                          align="start"
+                          sideOffset={4}
+                          className="w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border bg-popover p-0 shadow-md"
+                        >
+                          <div className="p-2">
+                            <Input
+                              placeholder="搜索模型..."
+                              value={draft.modelSearch}
+                              onChange={(event) => onUiChange({ modelSearch: event.target.value })}
+                              className="h-9 text-sm"
+                              autoFocus
+                            />
                           </div>
-                        )}
-                      </>
+                          <ScrollArea className="h-72">
+                            {models.length === 0 ? (
+                              <div className="p-4 text-center text-sm text-muted-foreground">
+                                没有匹配的模型
+                              </div>
+                            ) : (
+                              models
+                                .filter((model) => {
+                                  const query = draft.modelSearch.trim().toLowerCase();
+                                  return (
+                                    !query ||
+                                    model.name.toLowerCase().includes(query) ||
+                                    model.id.toLowerCase().includes(query)
+                                  );
+                                })
+                                .map((model) => (
+                                  <button
+                                    key={model.id}
+                                    type="button"
+                                    className={cn(
+                                      "flex w-full items-center justify-between px-3 py-2.5 text-left text-sm hover:bg-accent",
+                                      model.id === draft.modelName && "bg-accent font-medium",
+                                    )}
+                                    onClick={() => onDraftChange({ modelName: model.id })}
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <span className="truncate">{model.name}</span>
+                                        {model.recommended && (
+                                          <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                            推荐
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="truncate text-xs text-muted-foreground">
+                                        {model.description}
+                                      </p>
+                                    </div>
+                                    <div className="ml-3 flex shrink-0 items-center">
+                                      <SelectedModelCapabilities model={model} />
+                                    </div>
+                                  </button>
+                                ))
+                            )}
+                          </ScrollArea>
+                        </PopoverContent>
+                      </Popover>
                     )}
                   </div>
                   <Button

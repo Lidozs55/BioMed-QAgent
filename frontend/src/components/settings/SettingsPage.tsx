@@ -216,6 +216,29 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     setDraft((previous) => ({ ...previous, ...patch }));
   }, []);
 
+  /**
+   * Mirror the explicit-selection context adaptation for the model that is
+   * default-selected after a list load (the saved/current model). Skip when
+   * the user already overrode the context window so a reload never clobbers
+   * their choice, and skip redundant writes when nothing changed.
+   */
+  const applyModelContext = useCallback(
+    (modelId: string, modelList: RichModelInfo[], baseUrl: string, current: ModelSettings | null) => {
+      if (!current) return;
+      if (baseUrl.replace(/\/+$/, "") !== current.base_url.replace(/\/+$/, "")) return;
+      const model = modelList.find((item) => item.id === modelId);
+      if (!model || model.context_window <= 0) return;
+      if (current.context_window_source === "user") return;
+      if (model.context_window === current.context_window) return;
+      void api
+        .saveSettings({ model_name: modelId, context_window: model.context_window })
+        .then((updated) => setSettings(updated))
+        .catch(() => {
+          // Non-fatal: the explicit save action retries.
+        });
+    },
+    [api],
+  );
   const previewModels = useCallback(async () => {
     abortRef.current?.abort();
     const abort = new AbortController();
@@ -229,6 +252,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
       if (!abort.signal.aborted) {
         setModels(fresh);
         setModelsLoaded(true);
+        applyModelContext(draft.modelName, fresh, draft.baseUrl, settings);
       }
     } catch (error) {
       if (!abort.signal.aborted) {
@@ -237,7 +261,7 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
     } finally {
       if (!abort.signal.aborted) setModelsLoading(false);
     }
-  }, [api, draft.baseUrl, draft.apiKey]);
+  }, [api, draft.baseUrl, draft.apiKey, draft.modelName, settings, applyModelContext]);
 
   const saveModel = async () => {
     if (!draft.modelName.trim()) {
@@ -303,7 +327,10 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
         const freshModels = (await api.fetchModels({
           baseUrl: updated.base_url,
         })) as RichModelInfo[];
-        if (saveSeqRef.current === seq) setModels(freshModels);
+        if (saveSeqRef.current === seq) {
+          setModels(freshModels);
+          applyModelContext(updated.model_name, freshModels, updated.base_url, updated);
+        }
       } catch {
         // Discovery failure must not revert the save success.
       } finally {

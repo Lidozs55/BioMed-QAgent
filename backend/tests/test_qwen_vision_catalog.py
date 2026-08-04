@@ -25,6 +25,8 @@ _ALL_VISION_MODELS = [
     pytest.param("qwen3-vl-30b-a3b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-30b-a3b-instruct"),
     pytest.param("qwen3-vl-8b-instruct", 131_072, 8_000, _VISION_CHAT, id="qwen3-vl-8b-instruct"),
     # existing
+    # qwen3.8-max multimodal flagship (2026-08-03 Alibaba Qwen3.8 release)
+    pytest.param("qwen3.8-max", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.8-max"),
     pytest.param("qwen3.7-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.7-plus"),
     pytest.param("qwen3.6-plus", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-plus"),
     pytest.param("qwen3.6-flash", 1_000_000, 64_000, _VISION_CHAT, id="qwen3.6-flash"),

@@ -90,14 +90,14 @@ async def test_explicit_null_context_window_clears_to_catalog_source(
     assert '"context_window"' not in persisted
 
 
-# ── Scenario 10: Explicit null for unknown model → blocked budget ─────
+# ── Scenario 10: Explicit null for unknown model → inferred window ─────
 
 
 @pytest.mark.asyncio
-async def test_explicit_null_context_window_for_unknown_model_blocks_runs(
+async def test_explicit_null_context_window_for_unknown_model_uses_inferred_window(
     tmp_path: Path,
 ) -> None:
-    """Scenario 10: Clearing an unknown model window persists but blocks runs."""
+    """Scenario 10: Clearing an unknown model window falls back to the inferred window."""
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
@@ -121,9 +121,9 @@ async def test_explicit_null_context_window_for_unknown_model_blocks_runs(
         assert response.status_code == 200
         data = response.json()
         assert data["model_name"] == "compatible-unknown"
-        assert data["context_window"] == 0
-        assert data["context_window_source"] == "unknown"
-        assert data["run_ready"] is False
+        assert data["context_window"] == 524_288
+        assert data["context_window_source"] == "inferred"
+        assert data["run_ready"] is True
 
 
 # ── Scenario 11: Cleared override survives reload ──────────────────────

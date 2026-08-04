@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ArrowUpIcon,
   CaretDownIcon,
@@ -35,6 +35,7 @@ import {
   AttachmentTitle,
 } from "@/components/ui/attachment";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { formatSize } from "@/lib/fileUtils";
@@ -132,22 +133,9 @@ export function AgentComposer({
   // Model selector state (new settings integration)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Legacy model selector (backward compat when models prop is absent)
   const [model, setModel] = useState("default");
-
-  useEffect(() => {
-    if (!modelDropdownOpen) return;
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setModelDropdownOpen(false);
-        setModelSearch("");
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [modelDropdownOpen]);
 
   const modelsList = useMemo(() => models ?? [], [models]);
 
@@ -382,91 +370,100 @@ export function AgentComposer({
         )}
 
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <div className="relative" ref={dropdownRef}>
+          <div className="relative">
             {models !== undefined ? (
               // New searchable model selector (settings integration)
               hasApiKey && sortedModels.length > 0 ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="max-w-40 gap-1 px-2 text-muted-foreground"
-                    onClick={() => {
-                      setModelDropdownOpen((v) => !v);
-                      setModelSearch("");
-                    }}
-                    disabled={disabled}
-                    aria-label={selectedModelDisplay ? `当前模型 ${selectedModelDisplay.name}，点击切换` : "点击选择模型"}
+                <Popover
+                  open={modelDropdownOpen}
+                  onOpenChange={(next) => {
+                    setModelDropdownOpen(next);
+                    if (next) setModelSearch("");
+                  }}
+                >
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="max-w-40 gap-1 px-2 text-muted-foreground"
+                        disabled={disabled}
+                        aria-label={selectedModelDisplay ? `当前模型 ${selectedModelDisplay.name}，点击切换` : "点击选择模型"}
+                      >
+                        <span className="truncate max-w-28">{selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}</span>
+                        <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                      </Button>
+                    }
+                  />
+                  <PopoverContent
+                    align="end"
+                    side="top"
+                    sideOffset={4}
+                    className="w-64 gap-0 overflow-hidden rounded-lg border bg-popover p-0 shadow-md"
                   >
-                    <span className="truncate max-w-28">{selectedModelDisplay?.name ?? selectedModelId ?? "选择模型"}</span>
-                    <CaretDownIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                  </Button>
-                  {modelDropdownOpen && (
-                    <div className="absolute right-0 bottom-full mb-1 z-50 w-64 overflow-hidden rounded-lg border bg-popover shadow-md">
-                      <div className="p-2 pb-1">
-                        <div className="relative">
-                          <MagnifyingGlassIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                          <Input
-                            placeholder="搜索模型..."
-                            value={modelSearch}
-                            onChange={(e) => setModelSearch(e.target.value)}
-                            className="h-8 pl-7 text-sm"
-                            autoFocus
-                          />
-                        </div>
-                      </div>
-                      <div className="max-h-72 overflow-y-auto [scrollbar-width:thin]">
-                        <div className="p-1 pt-0">
-                          {filteredModels.length === 0 ? (
-                            <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                              {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
-                            </div>
-                          ) : (
-                            <>
-                              {filteredModels.map((m) => (
-                                <button
-                                  key={m.id}
-                                  type="button"
-                                  className={cn(
-                                    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
-                                    m.id === selectedModelId && "bg-accent font-medium",
-                                  )}
-                                  onClick={() => {
-                                    onModelChange?.(m.id);
-                                    setModelDropdownOpen(false);
-                                    setModelSearch("");
-                                  }}
-                                >
-                                  <span className="flex-1 truncate">{m.name}</span>
-                                  {m.recommended && (
-                                    <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
-                                  )}
-                                  {m.capabilities?.image && (
-                                    <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
-                                  )}
-                                </button>
-                              ))}
-                              <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
-                                管理模型请前往
-                                <button
-                                  type="button"
-                                  className="ml-1 text-primary underline-offset-2 hover:underline"
-                                  onClick={() => {
-                                    setModelDropdownOpen(false);
-                                    handleOpenSettings();
-                                  }}
-                                >
-                                  设置
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
+                    <div className="p-2 pb-1">
+                      <div className="relative">
+                        <MagnifyingGlassIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          placeholder="搜索模型..."
+                          value={modelSearch}
+                          onChange={(e) => setModelSearch(e.target.value)}
+                          className="h-8 pl-7 text-sm"
+                          autoFocus
+                        />
                       </div>
                     </div>
-                  )}
-                </>
+                    <div className="max-h-72 overflow-y-auto [scrollbar-width:thin]">
+                      <div className="p-1 pt-0">
+                        {filteredModels.length === 0 ? (
+                          <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                            {modelSearch ? "没有匹配的模型" : "暂无可用模型"}
+                          </div>
+                        ) : (
+                          <>
+                            {filteredModels.map((m) => (
+                              <button
+                                key={m.id}
+                                type="button"
+                                className={cn(
+                                  "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-accent transition-colors",
+                                  m.id === selectedModelId && "bg-accent font-medium",
+                                )}
+                                onClick={() => {
+                                  onModelChange?.(m.id);
+                                  setModelDropdownOpen(false);
+                                  setModelSearch("");
+                                }}
+                              >
+                                <span className="flex-1 truncate">{m.name}</span>
+                                {m.recommended && (
+                                  <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">推荐</span>
+                                )}
+                                {m.capabilities?.image && (
+                                  <span className="shrink-0 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">图</span>
+                                )}
+                              </button>
+                            ))}
+                            <div className="border-t mt-1 px-3 py-2 text-center text-[11px] text-muted-foreground">
+                              管理模型请前往
+                              <button
+                                type="button"
+                                className="ml-1 text-primary underline-offset-2 hover:underline"
+                                onClick={() => {
+                                  setModelDropdownOpen(false);
+                                  handleOpenSettings();
+                                }}
+                              >
+                                设置
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               ) : (
                 <Button
                   type="button"

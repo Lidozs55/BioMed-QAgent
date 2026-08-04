@@ -106,14 +106,14 @@ async def test_positive_user_window_override_persists_as_user_source(
     assert '"context_window": 65536' in persisted
 
 
-# ── Scenario 4: Unknown model saved as not run-ready ────────────────────
+# ── Scenario 4: Unknown model saved with inferred 512K window ───────────
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_saved_without_guessed_window(
+async def test_unknown_model_saved_with_inferred_window(
     tmp_path: Path,
 ) -> None:
-    """Scenario 4: Unknown model persists but needs an explicit window."""
+    """Scenario 4: Unknown model persists and resolves a conservative 512K window."""
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
@@ -136,9 +136,9 @@ async def test_unknown_model_saved_without_guessed_window(
         assert response.status_code == 200
         data = response.json()
         assert data["model_name"] == "compatible-unknown"
-        assert data["context_window"] == 0
-        assert data["context_window_source"] == "unknown"
-        assert data["run_ready"] is False
+        assert data["context_window"] == 524_288
+        assert data["context_window_source"] == "inferred"
+        assert data["run_ready"] is True
 
 
 # ── Scenario 5: Partial update validates merged candidate ───────────────

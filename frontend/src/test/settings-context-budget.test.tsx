@@ -207,6 +207,48 @@ describe("SettingsPanel model selector", () => {
     });
   });
 
+  it("adapts the context window for the default-selected model after loading", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...SETTINGS,
+        model_name: "qwen-max",
+        context_window: 16384,
+        context_window_source: "catalog" as const,
+      }),
+    });
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByLabelText("API Key");
+
+    fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
+
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith({
+        model_name: "qwen-max",
+        context_window: 32768,
+      }),
+    );
+  });
+
+  it("keeps a user-overridden context window after loading models", async () => {
+    const api = mockApi({
+      fetchSettings: vi.fn().mockResolvedValue({
+        ...SETTINGS,
+        model_name: "qwen-max",
+        context_window: 65536,
+        context_window_source: "user" as const,
+      }),
+    });
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByLabelText("API Key");
+
+    fireEvent.click(screen.getByRole("button", { name: /加载模型/ }));
+    await waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>("#settings-model")).not.toBeNull();
+    });
+
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
   it("persists changes from the output-token slider", async () => {
     const api = mockApi();
     render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);

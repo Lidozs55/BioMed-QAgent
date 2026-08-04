@@ -11,10 +11,10 @@ from app.main import create_app
 
 
 @pytest.mark.asyncio
-async def test_unknown_model_preview_requires_explicit_budget(
+async def test_unknown_model_preview_receives_guessed_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unknown discovered models must not receive a guessed window."""
+    """Unknown discovered models receive a conservative 512K guessed window."""
     from app.api import settings as settings_api
     from app.tools.network_safety import PublicHttpTarget
 
@@ -51,8 +51,9 @@ async def test_unknown_model_preview_requires_explicit_budget(
     assert response.status_code == 200
     models = response.json()["models"]
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 0
+    assert unknown["context_window"] == 524_288
     assert unknown["suggested_max_tokens"] == 4_096
+    assert unknown["capability_source"] == "api"
 
 
 @pytest.mark.asyncio
@@ -81,6 +82,7 @@ async def test_known_model_preview_uses_catalog_values(
                     json={
                         "data": [
                             {"id": "qwen-max"},
+                            {"id": "qwen3.8-max"},
                             {"id": "unknown-custom-model"},
                         ]
                     },
@@ -104,6 +106,11 @@ async def test_known_model_preview_uses_catalog_values(
     known = next(m for m in models if m["id"] == "qwen-max")
     assert known["context_window"] == 32_768
     assert known["suggested_max_tokens"] == 8_192
+    qwen38 = next(m for m in models if m["id"] == "qwen3.8-max")
+    assert qwen38["context_window"] == 1_000_000
+    assert qwen38["suggested_max_tokens"] == 64_000
+    assert qwen38["capability_source"] == "catalog"
     unknown = next(m for m in models if m["id"] == "unknown-custom-model")
-    assert unknown["context_window"] == 0
+    assert unknown["context_window"] == 524_288
     assert unknown["suggested_max_tokens"] == 4_096
+    assert unknown["capability_source"] == "api"

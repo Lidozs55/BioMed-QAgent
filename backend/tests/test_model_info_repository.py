@@ -158,6 +158,17 @@ class TestModelInfoRepository:
         assert repo.get_model("gpt-4o") is not None
         assert repo.get_model("deepseek-chat") is not None
 
+    def test_qwen38_max_registered_in_warehouse(self) -> None:
+        """The 2026-08-03 Qwen3.8-Max release must be present with exact specs."""
+        repo = ModelInfoRepository()
+        model = repo.get_model("qwen3.8-max")
+        assert model is not None
+        assert model.vendor_id == "dashscope"
+        assert model.input_context_window == 1_000_000
+        assert model.max_output_tokens == 64_000
+        assert model.capabilities.image is True
+        assert model.capabilities.video is True
+
     def test_get_model_missing(self) -> None:
         repo = ModelInfoRepository()
         assert repo.get_model("nonexistent-model-v42") is None
