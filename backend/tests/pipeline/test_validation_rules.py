@@ -52,6 +52,11 @@ _SOURCE_LIST_COLUMNS = [
     "source_id", "database", "accession", "url", "title", "retrieved_at",
 ]
 
+_SOURCE_RELATION_COLUMNS = [
+    "relation_id", "from_source_id", "to_source_id", "relation_type",
+    "evidence_type", "evidence_value", "evidence_url",
+]
+
 _SOURCE_ASSET_COLUMNS = [
     "asset_id", "source_id", "successful_attempt_id", "data_level",
     "relative_path", "size_bytes", "sha256", "media_type", "schema_version",
@@ -254,6 +259,37 @@ def test_valid_package_passes_all_checks(tmp_path: Path) -> None:
         assert check["status"] == "passed", f"{check['check_id']} unexpectedly failed"
 
 
+def test_source_relation_validation_rejects_unclosed_or_false_evidence(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "tasks" / "bad_relation"
+    staging = task_root / "staging"
+    source_path = task_root / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+    _write_csv(
+        staging / "source_relations.csv",
+        _SOURCE_RELATION_COLUMNS,
+        [
+            {
+                "relation_id": "rel_false",
+                "from_source_id": "src_missing_pubmed",
+                "to_source_id": "src_geo",
+                "relation_type": "article_describes_dataset",
+                "evidence_type": "geo_pubmed_id",
+                "evidence_value": "99999999",
+                "evidence_url": "https://hostile.example/fabricated",
+            }
+        ],
+    )
+
+    summary, checks = _run_validation(staging, source_path, task_root)
+
+    relation_check = _check_by_id(checks, "source_relation_evidence")
+    assert summary.status == "invalid"
+    assert relation_check["status"] == "failed"
+    assert relation_check["failed_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Rule 1: foreign_keys — main_data dataset/sample/source/asset must exist
 # ---------------------------------------------------------------------------
@@ -319,6 +355,39 @@ def test_foreign_keys_detects_unknown_source_id(tmp_path: Path) -> None:
     fk = _check_by_id(checks, "foreign_keys")
     assert fk["status"] == "failed"
     assert fk["failed_count"] == 1
+
+
+def test_foreign_keys_rejects_mixed_but_individually_valid_lineage(
+    tmp_path: Path,
+) -> None:
+    """A row's valid IDs must still belong to one provenance chain."""
+    task_root = tmp_path / "tasks" / "task_mixed_lineage"
+    staging = task_root / "staging"
+    source_path = task_root / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    source_rows = _read_csv(staging / "source_list.csv")
+    source_rows.append(
+        {
+            "source_id": "src_other",
+            "database": "geo",
+            "accession": "GSE111111",
+            "url": "https://example.test/other",
+            "title": "Other valid source",
+            "retrieved_at": "2026-01-01T00:00:00",
+        }
+    )
+    _write_csv(staging / "source_list.csv", _SOURCE_LIST_COLUMNS, source_rows)
+    main_rows = _read_csv(staging / "main_data.csv")
+    main_rows[0]["source_id"] = "src_other"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, main_rows)
+
+    summary, checks = _run_validation(staging, source_path, task_root)
+
+    assert summary.status == "invalid"
+    foreign_keys = _check_by_id(checks, "foreign_keys")
+    assert foreign_keys["status"] == "failed"
+    assert foreign_keys["failed_count"] == 1
 
 
 def test_foreign_keys_detects_unknown_asset_id(tmp_path: Path) -> None:
@@ -649,6 +718,87 @@ def test_lineage_full_when_rows_under_max(tmp_path: Path) -> None:
     details = json.loads(svl["details"])
     assert details["total_rows"] == len(rows)
     assert details["sampled"] == len(rows)
+
+
+def test_lineage_unlimited_checks_row_omitted_by_default_sample(
+    tmp_path: Path,
+) -> None:
+    """Unlimited validation must catch corruption outside the default sample."""
+    import app.pipeline.stages.validation as validation_module
+
+    staging = tmp_path / "tasks" / "task_unlimited" / "staging"
+    source_path = (
+        tmp_path / "tasks" / "task_unlimited" / "source_assets" / "source.tsv.gz"
+    )
+    _build_valid_staging(staging, source_path, num_genes=101, num_samples=1)
+
+    rows = _read_csv(staging / "main_data.csv")
+    sampled_ids = {
+        row["record_id"]
+        for row in validation_module._deterministic_sample(rows, 100)
+    }
+    omitted = next(row for row in rows if row["record_id"] not in sampled_ids)
+    omitted["expression_value"] = "999999.0"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    sampled_summary, _ = validation_module._validate_package(
+        staging,
+        source_path,
+        tmp_path / "tasks" / "task_unlimited" / "logs" / "sampled.json",
+    )
+    full_summary, full_checks = validation_module._validate_package(
+        staging,
+        source_path,
+        tmp_path / "tasks" / "task_unlimited" / "logs" / "full.json",
+        max_lineage_checks=None,
+    )
+
+    assert sampled_summary.status == "valid"
+    assert full_summary.status == "invalid"
+    lineage = _check_by_id(full_checks, "source_value_lineage")
+    assert lineage["checked_count"] == len(rows)
+    assert lineage["failed_count"] == 1
+
+
+def test_only_canonical_pinned_specification_requires_full_lineage() -> None:
+    """The official acceptance pair gets full checks; lookalikes stay sampled."""
+    import app.pipeline.stages.validation as validation_module
+    from app.domain.contracts import (
+        Database,
+        DatasetSelection,
+        QuerySpecification,
+        TaskSpecification,
+    )
+
+    def specification(pmid: str) -> TaskSpecification:
+        return TaskSpecification(
+            topic="pinned acceptance",
+            queries=[
+                QuerySpecification(
+                    query_id="q_pubmed",
+                    database=Database.PUBMED,
+                    query=f"{pmid}[PMID]",
+                    generated_by="pipeline",
+                    purpose="acceptance literature",
+                    order=1,
+                )
+            ],
+            datasets=[
+                DatasetSelection(
+                    dataset_id="ds_geo_gse178352",
+                    database=Database.GEO,
+                    accession="gse178352",
+                    reason="acceptance dataset",
+                )
+            ],
+        )
+
+    assert validation_module._requires_full_lineage_validation(
+        specification("34180400")
+    )
+    assert not validation_module._requires_full_lineage_validation(
+        specification("99999999")
+    )
 
 
 def test_lineage_sampling_is_deterministic(tmp_path: Path) -> None:

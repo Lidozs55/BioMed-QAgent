@@ -428,6 +428,69 @@ def test_download_gdc_success() -> None:
     assert rc.sources[0].database.value == "gdc"
 
 
+def test_download_gdc_reports_only_successfully_saved_files() -> None:
+    files_api_response = {
+        "data": {
+            "hits": [
+                {"file_id": "ok", "file_name": "ok.tsv"},
+                {"file_id": "failed", "file_name": "failed.tsv"},
+            ],
+            "pagination": {"total": 2},
+        }
+    }
+    ctx = _make_ctx(task_id="test_gdc_partial_download")
+    ctx.tool_name = "download_gdc"
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[
+            _mock_urlopen_json(files_api_response),
+            _mock_urlopen_binary(b"gene\tsample\nTP53\t1\n"),
+            ConnectionError("download failed"),
+        ],
+    ):
+        result = asyncio.run(
+            download_gdc.on_invoke_tool(
+                ctx,
+                json.dumps({"project_id": "TCGA-LUAD", "data_type": "RNA-Seq"}),
+            )
+        )
+
+    data = json.loads(result)
+    assert data["file_count"] == 2
+    assert data["downloaded"] == 1
+    assert len(data["local_files"]) == 2
+    assert "error" not in data
+
+
+def test_download_gdc_zero_saved_files_is_an_error() -> None:
+    files_api_response = {
+        "data": {
+            "hits": [{"file_id": "failed", "file_name": "failed.tsv"}],
+            "pagination": {"total": 1},
+        }
+    }
+    ctx = _make_ctx(task_id="test_gdc_zero_download")
+    ctx.tool_name = "download_gdc"
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[
+            _mock_urlopen_json(files_api_response),
+            ConnectionError("download failed"),
+        ],
+    ):
+        result = asyncio.run(
+            download_gdc.on_invoke_tool(
+                ctx,
+                json.dumps({"project_id": "TCGA-LUAD", "data_type": "RNA-Seq"}),
+            )
+        )
+
+    data = json.loads(result)
+    assert data["downloaded"] == 0
+    assert len(data["local_files"]) == 1
+    assert "failed to download any" in data["error"]
+
+
 def test_download_gdc_no_files_returns_error() -> None:
     """download_gdc returns error JSON when no files match."""
     files_api_response = {

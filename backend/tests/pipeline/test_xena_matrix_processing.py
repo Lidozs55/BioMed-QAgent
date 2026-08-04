@@ -142,6 +142,28 @@ def test_parse_xena_gzip_matrix_writes_long_form_with_source_lineage(tmp_path: P
     assert rows[1]["source_column_index"] == "2"
 
 
+def test_parse_xena_preserves_ensembl_version_and_integer_expectation(
+    tmp_path: Path,
+) -> None:
+    workdir = create_task_workdir("task_xena_schema", base_dir=str(tmp_path / "tasks"))
+    payload = b"gene_id\tS1\nENSG00000141510.18\t7\n"
+
+    result = parse_xena_matrix(
+        _source_asset(workdir, payload, "matrix.tsv"),
+        "ds_xena_schema",
+        workdir,
+    )
+
+    with (workdir.root / result.file_asset.relative_path).open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        row = next(csv.DictReader(handle))
+    assert row["gene_id_raw"] == "ENSG00000141510.18"
+    assert row["gene_id"] == "ENSG00000141510"
+    assert row["gene_id_version"] == "18"
+    assert row["is_integer_expected"] == "false"
+
+
 @pytest.mark.parametrize(
     "payload, message",
     [

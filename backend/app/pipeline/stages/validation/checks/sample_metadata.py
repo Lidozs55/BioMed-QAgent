@@ -8,7 +8,10 @@ def check_sample_foreign_keys(ctx: ValidationContext) -> dict[str, object]:
     """Sample dataset and source closure against the catalog/source list."""
     sample_rows = ctx.sample_rows
     sample_reference_failures = sum(
-        row["dataset_id"] not in ctx.dataset_ids or row["source_id"] not in ctx.source_ids
+        row["dataset_id"] not in ctx.dataset_ids
+        or row["source_id"] not in ctx.source_ids
+        or ctx.datasets_by_id.get(row["dataset_id"], {}).get("source_id")
+        != row["source_id"]
         for row in sample_rows
     )
     return {

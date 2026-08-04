@@ -38,6 +38,10 @@ def _build_dataset_catalog_rows(
     the merged ``main_data.csv`` closes against the catalog (TODO §1.5.4).
     """
     if not is_merged:
+        parsed_rows = _read_parsed_rows(parsed_path)
+        parsed_sample_count = len(
+            {row["sample_id"] for row in parsed_rows if row.get("sample_id")}
+        )
         # Derive the dataset's own database rather than sources[0].database.
         # The sources list orders PubMed first then GEO (see discovery
         # ``_build_output``), so sources[0].database is PubMed even for a GEO
@@ -64,9 +68,9 @@ def _build_dataset_catalog_rows(
                     else (geo.experiment_type if geo else "gene_expression")
                 ),
                 "sample_count": (
-                    len(_read_parsed_rows(parsed_path))
+                    len(parsed_rows)
                     if is_reactome
-                    else (geo.sample_count if geo else 2)
+                    else (parsed_sample_count or (geo.sample_count if geo else 0))
                 ),
                 "platform_ids": (
                     "[]"

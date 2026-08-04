@@ -5,8 +5,16 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
+import os
+import tempfile
+from contextlib import suppress
 
-from app.domain.contracts import ParsedDataset, SourceAsset, StageName
+from app.domain.contracts import (
+    ParsedDataset,
+    SourceAsset,
+    StageName,
+    asset_id_from_sha256,
+)
 from app.domain.processing import ParsedDataset as OldParsedDataset
 from app.pipeline.processing.gdc import parse_gdc_table
 from app.pipeline.processing.geo_tximport import (
@@ -135,17 +143,18 @@ def _build_minimal_parsed_dataset(
 def _clean_parsed_dataset(
     ctx: StageContext,
     parsed: ParsedDataset,
-) -> CleaningReportModel:
-    """Analyze a parsed CSV for data quality issues.
+) -> tuple[ParsedDataset, CleaningReportModel]:
+    """Apply conservative deterministic cleaning and analyze data quality.
 
-    Returns a ``CleaningReportModel`` with missing value stats, duplicate
-    detection, type-consistency checks, and anomaly flags that can be
-    persisted to ``warnings.csv`` and ``cleaning_report.csv``.
+    Trims surrounding whitespace, normalizes unambiguous missing sentinels,
+    and removes exact duplicate rows while preserving first-seen order. The
+    transformed CSV is atomically replaced and its immutable file identity is
+    refreshed before downstream artifact construction.
     """
     csv_path = ctx.workdir.root / parsed.file_asset.relative_path
     if not csv_path.is_file():
         logger.warning("cleaning: parsed CSV not found at %s", csv_path)
-        return CleaningReportModel()
+        return parsed, CleaningReportModel()
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -153,24 +162,38 @@ def _clean_parsed_dataset(
         columns = reader.fieldnames or []
 
     if not all_rows:
-        return CleaningReportModel()
+        return parsed, CleaningReportModel()
+
+    normalized_rows: list[dict[str, str]] = []
+    seen_rows: set[tuple[str, ...]] = set()
+    trimmed_values = 0
+    normalized_missing_values = 0
+    duplicate_count = 0
+    missing_sentinels = {"n/a", "null", "none"}
+    for row in all_rows:
+        normalized: dict[str, str] = {}
+        for col in columns:
+            raw_value = row.get(col) or ""
+            value = raw_value.strip()
+            if value != raw_value:
+                trimmed_values += 1
+            if value.casefold() in missing_sentinels:
+                value = ""
+                normalized_missing_values += 1
+            normalized[col] = value
+        fingerprint = tuple(normalized[col] for col in columns)
+        if fingerprint in seen_rows:
+            duplicate_count += 1
+            continue
+        seen_rows.add(fingerprint)
+        normalized_rows.append(normalized)
 
     # --- missing value stats ---
     missing_stats: dict[str, int] = {}
     for col in columns:
-        count = sum(1 for row in all_rows if row.get(col) is None or row.get(col, "").strip() == "")
+        count = sum(1 for row in normalized_rows if row.get(col, "") == "")
         if count > 0:
             missing_stats[col] = count
-
-    # --- duplicate detection ---
-    seen: set[str] = set()
-    duplicate_count = 0
-    for row in all_rows:
-        fingerprint = repr(tuple(str(row.get(c, "")) for c in columns))
-        if fingerprint in seen:
-            duplicate_count += 1
-        else:
-            seen.add(fingerprint)
 
     # --- type-consistency check ---
     # Heuristic: for each column, try to infer the most common type and flag
@@ -181,7 +204,7 @@ def _clean_parsed_dataset(
         # Collect non-empty values for type inference
         values = [
             row.get(col, "")
-            for row in all_rows
+            for row in normalized_rows
             if row.get(col) is not None and row.get(col, "").strip() != ""
         ]
         if not values:
@@ -206,7 +229,7 @@ def _clean_parsed_dataset(
             continue
         if majority == ints and ints / total >= 0.8:
             # Expect ints — flag non-int values
-            for row in all_rows:
+            for row in normalized_rows:
                 val = row.get(col, "")
                 if val and val.strip():
                     try:
@@ -215,7 +238,7 @@ def _clean_parsed_dataset(
                         mismatch += 1
         elif majority == floats and (ints + floats) / total >= 0.8:
             # Expect numeric — flag non-numeric values
-            for row in all_rows:
+            for row in normalized_rows:
                 val = row.get(col, "")
                 if val and val.strip():
                     try:
@@ -236,13 +259,72 @@ def _clean_parsed_dataset(
 
     total_anomalies = sum(missing_stats.values()) + duplicate_count + sum(type_issues.values())
 
-    return CleaningReportModel(
+    format_corrections = {
+        name: count
+        for name, count in {
+            "trimmed_values": trimmed_values,
+            "normalized_missing_values": normalized_missing_values,
+            "removed_duplicate_rows": duplicate_count,
+        }.items()
+        if count > 0
+    }
+    transformed = bool(format_corrections)
+    cleaned = parsed
+    if transformed:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8-sig",
+                newline="",
+                dir=csv_path.parent,
+                prefix=f".{csv_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = handle.name
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=columns,
+                    extrasaction="raise",
+                )
+                writer.writeheader()
+                writer.writerows(normalized_rows)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, csv_path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_path)
+
+        file_bytes = csv_path.read_bytes()
+        checksum = hashlib.sha256(file_bytes).hexdigest()
+        cleaned_asset = parsed.file_asset.model_copy(
+            update={
+                "asset_id": asset_id_from_sha256(checksum),
+                "sha256": checksum,
+                "size_bytes": len(file_bytes),
+                "generated_by_step_id": "step_deterministic_cleaning_v1",
+            }
+        )
+        cleaned = parsed.model_copy(
+            update={
+                "file_asset": cleaned_asset,
+                "row_count": len(normalized_rows),
+            }
+        )
+
+    report = CleaningReportModel(
         missing_stats=missing_stats,
         duplicate_count=duplicate_count,
         type_issues=type_issues,
+        format_corrections=format_corrections,
         anomaly_flags=anomaly_flags,
         total_anomalies=total_anomalies,
     )
+    return cleaned, report
 
 
 def _build_field_alignment(
@@ -565,7 +647,7 @@ def _run_multi_dataset_processing(
     merged = merge_parsed_datasets(
         ctx, parsed_datasets, merged_dataset_id=f"{parsed_datasets[0].dataset_id}_merged"
     )
-    cleaning_report = _clean_parsed_dataset(ctx, merged)
+    merged, cleaning_report = _clean_parsed_dataset(ctx, merged)
     output = ProcessingOutput(
         parsed_datasets=parsed_datasets,
         samples=[],
@@ -642,10 +724,11 @@ def run_processing(
         if not dataset_type:
             raise ValueError("GDC processing requires data_type")
         parsed = parse_gdc_table(assets[0], dataset_id, ctx.workdir, dataset_type)
+        parsed, cleaning_report = _clean_parsed_dataset(ctx, parsed)
         output = ProcessingOutput(
             parsed_datasets=[parsed],
             samples=[],
-            cleaning_report=_clean_parsed_dataset(ctx, parsed),
+            cleaning_report=cleaning_report,
             field_alignment=_build_field_alignment([parsed], ctx),
         )
         return StageResult(
@@ -671,7 +754,7 @@ def run_processing(
             None,
         )
         parsed = parse_reactome_table(reactome_asset, dataset_id, ctx.workdir, pathway_id)
-        cleaning_report = _clean_parsed_dataset(ctx, parsed)
+        parsed, cleaning_report = _clean_parsed_dataset(ctx, parsed)
         field_alignment = _build_field_alignment([parsed], ctx)
         output = ProcessingOutput(
             parsed_datasets=[parsed],
@@ -692,7 +775,7 @@ def run_processing(
         if len(assets) != 1:
             raise ValueError("Xena gene-expression processing requires one source asset")
         parsed = parse_xena_matrix(assets[0], dataset_id, ctx.workdir)
-        cleaning_report = _clean_parsed_dataset(ctx, parsed)
+        parsed, cleaning_report = _clean_parsed_dataset(ctx, parsed)
         field_alignment = _build_field_alignment([parsed], ctx)
         output = ProcessingOutput(
             parsed_datasets=[parsed],
@@ -782,6 +865,9 @@ def run_processing(
                 "main_data.csv will be schema-only (0 rows)"
             )
 
+    # --- cleaning ---
+    parsed, cleaning_report = _clean_parsed_dataset(ctx, parsed)
+
     # Surface processing progress: "Processing: cleaned N rows".
     # See docs/REVIEW_2026-07-18.md §4.
     ctx.emit_progress_sync(
@@ -794,9 +880,6 @@ def run_processing(
             "file_asset": parsed.file_asset.relative_path,
         },
     )
-
-    # --- cleaning ---
-    cleaning_report = _clean_parsed_dataset(ctx, parsed)
 
     # --- field alignment ---
     field_alignment = _build_field_alignment([parsed], ctx)

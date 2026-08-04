@@ -54,8 +54,10 @@ class FakeWebSocket:
         application: FastAPI,
         *,
         block_next_event: bool = False,
+        origin: str | None = None,
     ) -> None:
-        self.scope = {"app": application}
+        headers = [] if origin is None else [(b"origin", origin.encode("ascii"))]
+        self.scope = {"app": application, "headers": headers}
         self.inbound: asyncio.Queue[object] = asyncio.Queue()
         self.outbound: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self.accepted = asyncio.Event()
@@ -128,6 +130,53 @@ class FakeWebSocket:
 
     async def wait_until_closed(self) -> None:
         await asyncio.wait_for(self.closed.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin",
+    [None, "http://localhost:5173", "http://127.0.0.1:5173"],
+)
+async def test_websocket_accepts_non_browser_and_local_ui_origins(
+    monkeypatch: pytest.MonkeyPatch,
+    origin: str | None,
+) -> None:
+    session_started = False
+
+    async def fake_session(websocket, send_lock) -> None:
+        nonlocal session_started
+        del websocket, send_lock
+        session_started = True
+
+    monkeypatch.setattr(ws_module, "_run_event_session", fake_session)
+    websocket = FakeWebSocket(FastAPI(), origin=origin)
+
+    await ws_module.agent_ws(websocket)
+
+    assert websocket.accepted.is_set()
+    assert session_started is True
+    assert websocket.close_code is None
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_hostile_browser_origin_before_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_started = False
+
+    async def fake_session(websocket, send_lock) -> None:
+        nonlocal session_started
+        del websocket, send_lock
+        session_started = True
+
+    monkeypatch.setattr(ws_module, "_run_event_session", fake_session)
+    websocket = FakeWebSocket(FastAPI(), origin="https://hostile.example")
+
+    await ws_module.agent_ws(websocket)
+
+    assert websocket.accepted.is_set() is False
+    assert websocket.close_code == 1008
+    assert session_started is False
 
 
 @asynccontextmanager

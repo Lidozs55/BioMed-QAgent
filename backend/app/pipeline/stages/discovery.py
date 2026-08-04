@@ -16,6 +16,7 @@ from app.domain.contracts import (
     SourceRecord,
     StageName,
     TaskSpecification,
+    is_supported_pipeline_source_combination,
     make_dataset_id,
     make_source_id,
 )
@@ -27,6 +28,47 @@ _DEFAULT_PMID = "34180400"
 _DEFAULT_GSE = "GSE178352"
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_pipeline_source_specification(
+    specification: TaskSpecification,
+) -> set[Database]:
+    """Reject source selections the deterministic Pipeline cannot close."""
+
+    selected = {
+        query.database for query in specification.queries
+    } | {dataset.database for dataset in specification.datasets}
+    if Database.REACTOME in selected and selected != {Database.REACTOME}:
+        raise ValueError("Reactome cannot be combined with other data sources")
+    if not is_supported_pipeline_source_combination(selected):
+        values = ", ".join(sorted(database.value for database in selected)) or "none"
+        raise ValueError(f"unsupported pipeline source combination: {values}")
+
+    query_counts = {
+        database: sum(1 for query in specification.queries if query.database == database)
+        for database in selected
+    }
+    dataset_counts = {
+        database: sum(
+            1 for dataset in specification.datasets if dataset.database == database
+        )
+        for database in selected
+    }
+    if Database.GEO in selected:
+        if query_counts.get(Database.GEO, 0) > 1 or dataset_counts.get(Database.GEO, 0) > 1:
+            raise ValueError("pipeline supports exactly one GEO dataset")
+        if Database.PUBMED in selected and query_counts.get(Database.PUBMED, 0) != 1:
+            raise ValueError("pipeline supports exactly one linked PubMed query")
+        return selected
+
+    for database in selected:
+        if dataset_counts.get(database, 0) != 1:
+            raise ValueError(
+                f"pipeline requires exactly one {database.value} dataset selection"
+            )
+        if query_counts.get(database, 0) > 1:
+            raise ValueError(f"pipeline supports at most one {database.value} query")
+    return selected
 
 
 def _extract_pmid(query: str) -> str | None:
@@ -116,11 +158,7 @@ def run_discovery(ctx: StageContext) -> StageResult:
             ctx.topic[:80],
         )
 
-    selected_databases = {
-        query.database for query in specification.queries
-    } | {dataset.database for dataset in specification.datasets}
-    if Database.REACTOME in selected_databases and selected_databases != {Database.REACTOME}:
-        raise ValueError("Reactome cannot be combined with other data sources")
+    selected_databases = _validate_pipeline_source_specification(specification)
     reactome_datasets = [
         dataset for dataset in specification.datasets if dataset.database == Database.REACTOME
     ]
@@ -148,6 +186,7 @@ def run_discovery(ctx: StageContext) -> StageResult:
 
     pmid = _resolve_pmid(specification)
     gse = _resolve_gse(specification)
+    include_literature = Database.PUBMED in selected_databases
     logger.info(
         "discovery: resolved pmid=%s gse=%s (mode=%s, topic=%r)",
         pmid,
@@ -170,22 +209,35 @@ def run_discovery(ctx: StageContext) -> StageResult:
                 "a relevant GSE accession and pass it via the gse parameter "
                 "to run_research_pipeline."
             )
-        literature, geo, retrieved_at = _run_discovery_live(pmid, gse, topic=ctx.topic)
+        literature, geo, retrieved_at = _run_discovery_live(
+            pmid,
+            gse,
+            topic=ctx.topic,
+            include_literature=include_literature,
+        )
     else:
         literature, geo, retrieved_at = _run_discovery_fixture(
-            ctx.fixture_dir, pmid or _DEFAULT_PMID, gse or _DEFAULT_GSE
+            ctx.fixture_dir,
+            pmid if include_literature else None,
+            gse or _DEFAULT_GSE,
         )
+    logger.info(
+        "discovery: success pmid=%s gse=%s title=%r",
+        literature.pmid if literature else None,
+        geo.accession,
+        literature.title[:80] if literature else geo.title[:80],
+    )
 
     # Surface discovery progress: "Discovery: found 1 PubMed record + 1 GEO series".
     # See docs/REVIEW_2026-07-18.md §4.
     ctx.emit_progress_sync(
         stage=StageName.DISCOVERY,
         kind="discovered_records",
-        current=2,
-        total=2,
+        current=2 if literature else 1,
+        total=2 if literature else 1,
         detail={
             "source": "ncbi",
-            "pmid": literature.pmid,
+            "pmid": literature.pmid if literature else None,
             "gse": geo.accession,
         },
     )
@@ -304,14 +356,16 @@ def _resolve_gse(specification: TaskSpecification) -> str | None:
 
 def _run_discovery_fixture(
     fixture_dir,
-    pmid: str,
+    pmid: str | None,
     gse: str,
-) -> tuple[LiteratureRecord, GeoSeriesRecord, datetime]:
+) -> tuple[LiteratureRecord | None, GeoSeriesRecord, datetime]:
     fixture_manifest = json.loads((fixture_dir / "manifest.json").read_text("utf-8"))
     retrieved_at: datetime = datetime.fromisoformat(fixture_manifest["retrieved_at"])
-    literature: LiteratureRecord = parse_pubmed_xml(
-        (fixture_dir / f"pubmed_{pmid}.xml").read_bytes()
-    )[0]
+    literature = (
+        parse_pubmed_xml((fixture_dir / f"pubmed_{pmid}.xml").read_bytes())[0]
+        if pmid is not None
+        else None
+    )
     geo: GeoSeriesRecord = parse_geo_esummary((fixture_dir / "geo_esummary.json").read_bytes())[0]
     return literature, geo, retrieved_at
 
@@ -321,7 +375,8 @@ def _run_discovery_live(
     gse: str | None,
     *,
     topic: str,
-) -> tuple[LiteratureRecord, GeoSeriesRecord, datetime]:
+    include_literature: bool = True,
+) -> tuple[LiteratureRecord | None, GeoSeriesRecord, datetime]:
     """Fetch real PubMed and GEO metadata via NCBI E-utilities.
 
     When ``pmid``/``gse`` is None, searches NCBI by ``topic`` and uses the
@@ -335,15 +390,16 @@ def _run_discovery_live(
 
     retrieved_at = datetime.now(UTC)
 
-    async def _fetch() -> tuple[LiteratureRecord, GeoSeriesRecord]:
+    async def _fetch() -> tuple[LiteratureRecord | None, GeoSeriesRecord]:
         async with open_ncbi_services() as svc:
-            if pmid is not None:
+            literature: LiteratureRecord | None = None
+            if include_literature and pmid is not None:
                 pubmed_xml = await svc.eutils.efetch(db="pubmed", ids=[pmid], retmode="xml")
                 pubmed_records = parse_pubmed_xml(pubmed_xml)
                 if not pubmed_records:
                     raise LookupError(f"PubMed article not found: PMID {pmid}")
                 literature = pubmed_records[0]
-            else:
+            elif include_literature:
                 # Search PubMed by topic, with fallback to simplified query.
                 literature = await _search_pubmed_with_fallback(svc.eutils, topic)
 
@@ -553,26 +609,33 @@ def _run_reactome_discovery(
 
 def _build_output(
     ctx: StageContext,
-    literature: LiteratureRecord,
+    literature: LiteratureRecord | None,
     geo: GeoSeriesRecord,
     specification: TaskSpecification,
     retrieved_at: datetime,
 ) -> StageResult:
-    pubmed_url = literature.source_url
     geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={geo.accession}"
-    pubmed_source_id = make_source_id(Database.PUBMED, literature.pmid, pubmed_url)
+    pubmed_source_id = (
+        make_source_id(Database.PUBMED, literature.pmid, literature.source_url)
+        if literature is not None
+        else None
+    )
     geo_source_id = make_source_id(Database.GEO, geo.accession, geo_url)
     dataset_id = make_dataset_id(Database.GEO, geo.accession)
 
-    sources = [
-        SourceRecord(
-            source_id=pubmed_source_id,
-            database=Database.PUBMED,
-            accession=literature.pmid,
-            url=pubmed_url,
-            title=literature.title,
-            retrieved_at=retrieved_at,
-        ),
+    sources = []
+    if literature is not None and pubmed_source_id is not None:
+        sources.append(
+            SourceRecord(
+                source_id=pubmed_source_id,
+                database=Database.PUBMED,
+                accession=literature.pmid,
+                url=literature.source_url,
+                title=literature.title,
+                retrieved_at=retrieved_at,
+            )
+        )
+    sources.append(
         SourceRecord(
             source_id=geo_source_id,
             database=Database.GEO,
@@ -580,8 +643,8 @@ def _build_output(
             url=geo_url,
             title=geo.title,
             retrieved_at=retrieved_at,
-        ),
-    ]
+        )
+    )
 
     # Use the passed specification but ensure IDs match the resolved records.
     resolved_datasets = [
@@ -590,7 +653,11 @@ def _build_output(
             database=Database.GEO,
             accession=geo.accession,
             source_id=geo_source_id,
-            reason=f"linked from PMID {literature.pmid}",
+            reason=(
+                f"linked from PMID {literature.pmid}"
+                if literature is not None
+                else "explicit GEO dataset selection"
+            ),
         )
     ]
     output_specification = specification.model_copy(update={"datasets": resolved_datasets})

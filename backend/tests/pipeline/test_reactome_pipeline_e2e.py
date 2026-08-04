@@ -64,9 +64,22 @@ def test_reactome_live_json_pipeline_normalizes_source_before_validation(
     assert manifest.task_state is TaskState.COMPLETED, manifest.model_dump_json(indent=2)
     assert manifest.validation.status == "valid"
     root = tmp_path / "tasks" / "task_reactome_live_format"
-    assets = list((root / "artifacts" / "source_assets.csv").read_text("utf-8-sig").splitlines())
-    assert any("application/json" in row for row in assets)
-    assert any("text/tab-separated-values" in row for row in assets)
+    with (root / "artifacts" / "source_assets.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        assets = list(csv.DictReader(handle))
+    raw_asset = next(row for row in assets if row["media_type"] == "application/json")
+    normalized_asset = next(
+        row for row in assets if row["media_type"] == "text/tab-separated-values"
+    )
+    assert normalized_asset["successful_attempt_id"] == ""
+    assert normalized_asset["derived_from_asset_id"] == raw_asset["asset_id"]
+    with (root / "artifacts" / "processing_log.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        operations = {row["operation"] for row in csv.DictReader(handle)}
+    assert "reactome_json_to_tsv" in operations
+    assert "reactome_pathway_participants" in operations
     assert (root / "artifacts" / "pathway_members.csv").is_file()
 
 

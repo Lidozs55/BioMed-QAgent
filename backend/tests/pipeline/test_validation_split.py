@@ -28,6 +28,7 @@ _REACTOME_FIXTURE = Path(__file__).parents[1] / "fixtures" / "reactome"
 
 # Golden check_id sequence emitted by the original monolithic _validate_package.
 _GEO_CHECK_IDS = [
+    "source_relation_evidence",
     "main_data_nonempty",
     "core_data_existence",
     "foreign_keys",
@@ -40,6 +41,7 @@ _GEO_CHECK_IDS = [
 ]
 
 _REACTOME_CHECK_IDS = [
+    "source_relation_evidence",
     "main_data_nonempty",
     "core_data_existence",
     "foreign_keys",
@@ -208,10 +210,14 @@ def test_validation_context_carries_shared_state(tmp_path: Path) -> None:
     assert ctx.download_rows, "download_rows must be loaded"
     # Derived lookups.
     assert ctx.dataset_ids, "dataset_ids must be derived"
+    assert ctx.datasets_by_id, "datasets_by_id must be derived"
     assert ctx.sample_ids, "sample_ids must be derived"
+    assert ctx.samples_by_id, "samples_by_id must be derived"
     assert ctx.source_ids, "source_ids must be derived"
+    assert ctx.sources_by_id, "sources_by_id must be derived"
     assert ctx.asset_ids, "asset_ids must be derived"
     assert ctx.assets_by_id, "assets_by_id must be derived"
+    assert ctx.attempts_by_id, "attempts_by_id must be derived"
     assert ctx.described, "described fields must be derived"
     # Reactome flag is False for a GEO package.
     assert ctx.reactome_rows is False

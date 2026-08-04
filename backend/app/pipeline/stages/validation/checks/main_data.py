@@ -130,6 +130,19 @@ def check_foreign_keys(ctx: ValidationContext) -> dict[str, object]:
         or (not ctx.reactome_rows and row["sample_id"] not in ctx.sample_ids)
         or row["source_id"] not in ctx.source_ids
         or row["asset_id"] not in ctx.asset_ids
+        or ctx.datasets_by_id.get(row["dataset_id"], {}).get("source_id")
+        != row["source_id"]
+        or ctx.assets_by_id.get(row["asset_id"], {}).get("source_id")
+        != row["source_id"]
+        or (
+            not ctx.reactome_rows
+            and (
+                ctx.samples_by_id.get(row["sample_id"], {}).get("dataset_id")
+                != row["dataset_id"]
+                or ctx.samples_by_id.get(row["sample_id"], {}).get("source_id")
+                != row["source_id"]
+            )
+        )
         for row in main_rows
     )
     return {

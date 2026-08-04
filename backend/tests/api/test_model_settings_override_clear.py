@@ -90,15 +90,14 @@ async def test_explicit_null_context_window_clears_to_catalog_source(
     assert '"context_window"' not in persisted
 
 
-# ── Scenario 10: Explicit null for unknown model → inferred window ─────
+# ── Scenario 10: Explicit null for unknown model → blocked budget ─────
 
 
 @pytest.mark.asyncio
-async def test_explicit_null_context_window_for_unknown_model_uses_inference(
+async def test_explicit_null_context_window_for_unknown_model_blocks_runs(
     tmp_path: Path,
 ) -> None:
-    """Scenario 10: Clearing context_window for an unknown model succeeds —
-    the model gets a name-based inferred window (128K default)."""
+    """Scenario 10: Clearing an unknown model window persists but blocks runs."""
     application = create_app(Settings(output_dir=str(tmp_path / "output")))
     async with application.router.lifespan_context(application), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=application), base_url="http://localhost"
@@ -122,8 +121,9 @@ async def test_explicit_null_context_window_for_unknown_model_uses_inference(
         assert response.status_code == 200
         data = response.json()
         assert data["model_name"] == "compatible-unknown"
-        assert data["context_window"] == 128_000
-        assert data["run_ready"] is True
+        assert data["context_window"] == 0
+        assert data["context_window_source"] == "unknown"
+        assert data["run_ready"] is False
 
 
 # ── Scenario 11: Cleared override survives reload ──────────────────────
@@ -174,12 +174,11 @@ def test_clears_idempotent_on_already_cleared_field(tmp_path: Path) -> None:
     assert store.snapshot().max_tokens == 2048
 
 
-# ── Scenario 13: Unknown model with clears succeeds via inference ──────
+# ── Scenario 13: Unknown model with clears persists blocked state ──────
 
 
-def test_clears_for_unknown_model_succeeds_with_inferred_window(tmp_path: Path) -> None:
-    """Scenario 13: When clears + unknown model is used, the store succeeds
-    because the model gets a name-based inferred context window."""
+def test_clears_for_unknown_model_persists_without_window(tmp_path: Path) -> None:
+    """Scenario 13: clears persist an unknown model without inventing a window."""
     from app.model_settings import ModelSettingsStore
 
     settings_path = tmp_path / "settings" / "model.json"

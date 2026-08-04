@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 from agents import ModelSettings, OpenAIChatCompletionsModel, set_tracing_disabled
 from agents.models.interface import Model
 from openai import AsyncOpenAI
@@ -20,7 +21,7 @@ from app.model_settings import (
     calibration_margin_for,
     get_current_model_configuration,
 )
-from app.tools.network_safety import validate_credentialed_public_url
+from app.tools.network_safety import resolve_public_http_target
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
     "run_model_settings",
@@ -117,13 +118,43 @@ def require_model_credentials(
         raise ModelConfigurationError("DASHSCOPE_API_KEY is required to run the model")
 
 
+def build_openai_client(
+    model_settings: RunModelSettings,
+    *,
+    max_retries: int | None = None,
+) -> AsyncOpenAI:
+    """Build a credentialed client pinned to one validated public IP."""
+
+    require_model_credentials(model_settings)
+    target = resolve_public_http_target(
+        model_settings.base_url,
+        require_https=True,
+    )
+
+    async def pin_original_authority(request: httpx.Request) -> None:
+        request.headers["Host"] = target.host_header
+        request.extensions["sni_hostname"] = target.sni_hostname
+
+    http_client = httpx.AsyncClient(
+        follow_redirects=False,
+        trust_env=False,
+        event_hooks={"request": [pin_original_authority]},
+    )
+    options: dict[str, Any] = {
+        "api_key": model_settings.api_key,
+        "base_url": target.connect_url,
+        "http_client": http_client,
+    }
+    if max_retries is not None:
+        options["max_retries"] = max_retries
+    return AsyncOpenAI(**options)
+
+
 def _build_client(model_settings: RunModelSettings) -> AsyncOpenAI:
     """Create one credentialed client for an already-resolved Run snapshot."""
 
-    require_model_credentials(model_settings)
-    return AsyncOpenAI(
-        api_key=model_settings.api_key,
-        base_url=validate_credentialed_public_url(model_settings.base_url),
+    return build_openai_client(
+        model_settings,
     )
 
 

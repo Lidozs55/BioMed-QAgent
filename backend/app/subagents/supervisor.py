@@ -24,6 +24,7 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.events import EventPayload
 from app.subagents.input_broker import SubagentInputBroker
+from app.subagents.result_safety import sanitize_subagent_result
 
 
 class SubagentEventSink(Protocol):
@@ -602,6 +603,7 @@ class SubagentSupervisor:
             result = self._cancelled_result(result.subagent_id)
         elif pending is not None:
             result = pending
+        result = sanitize_subagent_result(result)
         entry.pending_result = result
 
         payload = self._terminal_payload(result)
@@ -765,6 +767,7 @@ class SubagentSupervisor:
 
     @staticmethod
     def _terminal_payload(result: SubagentResult) -> EventPayload:
+        result = sanitize_subagent_result(result)
         if result.status is SubagentStatus.COMPLETED:
             return SubagentCompletedPayload(
                 subagent_id=result.subagent_id,

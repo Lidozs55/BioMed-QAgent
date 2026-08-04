@@ -85,16 +85,20 @@ def test_resolve_context_budget_accepts_pydantic_url_configuration() -> None:
     assert budget.provider_origin == "https://dashscope.aliyuncs.com"
 
 
-def test_resolve_context_budget_infers_window_for_unknown_model() -> None:
-    # Given — model not in catalog gets name-based inference (default 128K)
-    settings = UserSettings(model_name="compatible-unknown", max_tokens=4096)
+@pytest.mark.parametrize(
+    "model_name",
+    ["compatible-unknown", "kimi-private-16k", "mistral-custom"],
+)
+def test_resolve_context_budget_requires_window_for_unknown_model(
+    model_name: str,
+) -> None:
+    settings = UserSettings(model_name=model_name, max_tokens=4096)
 
-    # When
-    budget = resolve_context_budget(settings)
-
-    # Then
-    assert budget.context_window == 128_000
-    assert budget.input_capacity > 0
+    with pytest.raises(
+        ContextBudgetConfigurationError,
+        match="a positive context window is required",
+    ):
+        resolve_context_budget(settings)
 
 
 def test_context_budget_is_frozen_after_resolution() -> None:

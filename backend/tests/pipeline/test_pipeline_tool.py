@@ -511,16 +511,61 @@ async def test_pipeline_function_tool_rejects_unsupported_databases(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("databases", "extra_arguments"),
+    [
+        (["pubmed"], {"pmid": "34180400"}),
+        (
+            ["pubmed", "gdc"],
+            {
+                "pmid": "34180400",
+                "gdc_project_id": "TCGA-BRCA",
+                "gdc_data_type": "gene-expression",
+            },
+        ),
+    ],
+)
+async def test_pipeline_function_tool_rejects_unsupported_source_combinations(
+    tmp_path: Path,
+    databases: list[str],
+    extra_arguments: dict[str, str],
+) -> None:
+    context = RunContext(task_id="task_tool_source_combination")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        "task_tool_source_combination", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_source_combination",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "unsupported combination",
+                "databases": databases,
+                "mode": "fixture",
+                **extra_arguments,
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "unsupported_databases"
+    assert payload["unsupported_databases"] == databases
+    assert payload["retryable"] is False
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
 async def test_pipeline_function_tool_accepts_json_string_databases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Qwen serializes list params as JSON strings; tool must accept both.
-
-    Reproduces task_df9e953d [89-94]: Agent passed databases='["geo","pubmed"]'
-    (string) and got list_type validation errors 4 times. The parameter type
-    must accept str so the SDK does not reject before the function body runs.
-    """
+    """Qwen serializes list params as JSON strings; tool must accept both."""
     context = RunContext(task_id="task_tool_str_dbs")
     context._work_dir = create_task_workdir(  # noqa: SLF001
         "task_tool_str_dbs", base_dir=str(tmp_path / "tasks")
@@ -547,7 +592,6 @@ async def test_pipeline_function_tool_accepts_json_string_databases(
             )
 
     monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
-
     result = await run_research_pipeline.on_invoke_tool(
         tool_context,
         json.dumps(
@@ -560,8 +604,7 @@ async def test_pipeline_function_tool_accepts_json_string_databases(
             }
         ),
     )
-    payload = json.loads(result)
-    assert payload["status"] == "completed"
+    assert json.loads(result)["status"] == "completed"
     assert captured["databases"] == ["geo", "pubmed"]
 
 
@@ -570,14 +613,6 @@ async def test_pipeline_function_tool_filters_research_only_from_preferred_sourc
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When databases is null, RESEARCH_ONLY sources in preferred_sources
-    must be silently filtered rather than rejecting the whole call.
-
-    Reproduces task_df9e953d [99-100]: Agent passed databases=null, tool fell
-    back to preferred_sources (containing pdb/pubchem), and the whole call was
-    rejected with unsupported_databases/retryable=false — a deadlock since the
-    agent cannot remove sources from preferred_sources.
-    """
     context = RunContext(task_id="task_tool_filter_ro")
     context.preferred_sources = ["pdb", "pubchem", "geo", "pubmed"]
     context._work_dir = create_task_workdir(  # noqa: SLF001
@@ -605,7 +640,6 @@ async def test_pipeline_function_tool_filters_research_only_from_preferred_sourc
             )
 
     monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", FakeRunner)
-
     result = await run_research_pipeline.on_invoke_tool(
         tool_context,
         json.dumps(
@@ -618,9 +652,7 @@ async def test_pipeline_function_tool_filters_research_only_from_preferred_sourc
             }
         ),
     )
-    payload = json.loads(result)
-    assert payload["status"] == "completed"
-    # pdb/pubchem filtered out; only pipeline-supported sources remain.
+    assert json.loads(result)["status"] == "completed"
     assert captured["databases"] == ["geo", "pubmed"]
 
 

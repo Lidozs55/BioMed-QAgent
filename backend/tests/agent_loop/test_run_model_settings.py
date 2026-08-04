@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import app.agent_loop.model as model_module
 import app.agent_loop.runner as runner_module
@@ -15,6 +15,7 @@ from app.agent_loop.model import run_model_settings_scope
 from app.model_config import AdvancedParams, RunModelSettings, UserSettings
 from app.model_settings import AdvancedModelSettings, ModelConfiguration
 from app.runtime.manager import RunExecution
+from app.tools.network_safety import PublicHttpTarget
 
 
 class NoopCompactor:
@@ -113,7 +114,16 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     delegate_factory = Mock(return_value=delegate)
     monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
     monkeypatch.setattr(model_module, "OpenAIChatCompletionsModel", delegate_factory)
-    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(
+        model_module,
+        "resolve_public_http_target",
+        lambda url, *, require_https: PublicHttpTarget(
+            connect_url=url,
+            host_header="dashscope.aliyuncs.com",
+            sni_hostname="dashscope.aliyuncs.com",
+        ),
+    )
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", Mock(return_value=object()))
     context = RunContext(
         task_id="task_model_snapshot",
         base_dir=tmp_path,
@@ -164,6 +174,7 @@ async def test_executor_keeps_run_start_settings_before_first_model_call(
     client_factory.assert_called_once_with(
         api_key="run-api-key",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        http_client=ANY,
     )
     delegate_factory.assert_called_once_with(
         model="qwen-plus",
@@ -194,7 +205,16 @@ def test_attachment_agent_uses_active_run_settings_snapshot(
     delegate_factory = Mock(return_value=Mock(stream_response=Mock(return_value="stream")))
     monkeypatch.setattr(model_module, "AsyncOpenAI", client_factory)
     monkeypatch.setattr(model_module, "OpenAIChatCompletionsModel", delegate_factory)
-    monkeypatch.setattr(model_module, "validate_credentialed_public_url", lambda url: url)
+    monkeypatch.setattr(
+        model_module,
+        "resolve_public_http_target",
+        lambda url, *, require_https: PublicHttpTarget(
+            connect_url=url,
+            host_header="attachment.example",
+            sni_hostname="attachment.example",
+        ),
+    )
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", Mock(return_value=object()))
 
     # When
     with run_model_settings_scope(RunModelSettings.from_user_settings(run_settings)):
@@ -206,6 +226,7 @@ def test_attachment_agent_uses_active_run_settings_snapshot(
     client_factory.assert_called_once_with(
         api_key="attachment-api-key",
         base_url="https://attachment.example/v1",
+        http_client=ANY,
     )
     delegate_factory.assert_called_once_with(
         model="attachment-model",

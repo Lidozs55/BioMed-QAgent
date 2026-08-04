@@ -22,6 +22,7 @@ class RunRecord(ContractModel):
     run_id: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
+    request_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: RunStatus
     input: str = Field(min_length=1)
     created_at: datetime
@@ -156,6 +157,10 @@ class MessagePage(ContractModel):
 class _StartRequest(ContractModel):
     request_id: str = Field(min_length=1)
     input: str
+    idempotency_metadata: dict[str, JsonValue] = Field(
+        default_factory=dict,
+        exclude=True,
+    )
 
     @field_validator("request_id")
     @classmethod
@@ -208,3 +213,8 @@ class TaskRunAccepted(ContractModel):
     task_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     status: Literal[RunStatus.QUEUED] = RunStatus.QUEUED
+    request_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude=True,
+    )

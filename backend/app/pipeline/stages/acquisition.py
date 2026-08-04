@@ -219,7 +219,7 @@ async def _try_acquire(
     publish the complete fallback chain in ``download_log.csv`` (§1.5.2).
     """
     try:
-        return await acquire_source(
+        result = await acquire_source(
             source=source,
             filename=filename,
             workdir=ctx.workdir,
@@ -232,7 +232,7 @@ async def _try_acquire(
         logger.warning("acquisition: download failed for %s: %s", source.url, exc)
         attempt_id = generate_prefixed_uuid("download_attempt")
         started_at = datetime.now(UTC)
-        return AcquisitionResult(
+        result = AcquisitionResult(
             attempt=DownloadAttempt(
                 attempt_id=attempt_id,
                 source_id=source.source_id,
@@ -244,8 +244,9 @@ async def _try_acquire(
                 started_at=started_at,
                 finished_at=datetime.now(UTC),
             ),
-            asset=None,
         )
+    ctx.record_download_attempt(result.attempt)
+    return result
 
 
 def run_acquisition(ctx: StageContext, retrieved_at: datetime) -> StageResult:
@@ -424,8 +425,9 @@ async def _run_gdc_acquisition_live(
             max_bytes=_MAX_BYTES,
             expected_sha256=hit.get("md5sum") if len(hit.get("md5sum", "")) == 64 else None,
         )
+    ctx.record_download_attempt(result.attempt)
     if result.asset is None:
-        raise DownloadError(f"GDC download failed: {result.attempt.error_message}")
+        raise RuntimeError(f"GDC download failed: {result.attempt.error_message}")
     return StageResult(
         output_digest=result.asset.sha256,
         output=AcquisitionOutput(
@@ -476,7 +478,7 @@ async def _run_xena_acquisition_live(
     async with httpx.AsyncClient() as http:
         result = await _try_acquire(source, filename, ctx, cache, http, dataset.accession)
     if result.asset is None:
-        raise DownloadError(f"live Xena download failed for {dataset.accession}")
+        raise RuntimeError(f"live Xena download failed for {dataset.accession}")
     ctx.emit_progress_sync(
         stage=StageName.ACQUISITION,
         kind="downloaded_bytes",
@@ -521,7 +523,6 @@ def _normalize_reactome_json_asset(
     ctx: StageContext,
     dataset: DatasetSelection,
     json_asset: SourceAsset,
-    attempt: DownloadAttempt,
 ) -> SourceAsset:
     """Convert validated ContentService JSON into the TSV consumed by Validation."""
     from app.pipeline.processing.reactome import _open_reactome_json
@@ -541,8 +542,10 @@ def _normalize_reactome_json_asset(
         sha256=checksum,
         size_bytes=len(payload),
         media_type="text/tab-separated-values",
+        generated_by_step_id="step_reactome_json_to_tsv_v1",
         source_id=json_asset.source_id,
-        successful_attempt_id=attempt.attempt_id,
+        successful_attempt_id=None,
+        derived_from_asset_id=json_asset.asset_id,
         data_level=json_asset.data_level,
     )
 
@@ -576,13 +579,14 @@ async def _run_reactome_acquisition_live(
             expected_media_types=frozenset({"application/json"}),
             accept="application/json",
         )
+    ctx.record_download_attempt(result.attempt)
     if result.asset is None:
-        raise DownloadError(f"live Reactome download failed for {dataset.accession}")
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}")
     source_path = ctx.workdir.root / result.asset.relative_path
     try:
         _validate_reactome_content_service_json(source_path)
         normalized_asset = _normalize_reactome_json_asset(
-            ctx, dataset, result.asset, result.attempt
+            ctx, dataset, result.asset
         )
     except ValueError as exc:
         source_path.unlink(missing_ok=True)
@@ -596,9 +600,7 @@ async def _run_reactome_acquisition_live(
             with contextlib.suppress(OSError):
                 cache.metadata_path(request_hash).unlink()
                 cache.blob_path(result.asset.sha256).unlink()
-        raise DownloadError(
-            f"live Reactome download failed for {dataset.accession}: {exc}"
-        ) from exc
+        raise RuntimeError(f"live Reactome download failed for {dataset.accession}: {exc}") from exc
     return StageResult(
         output_digest=normalized_asset.sha256,
         output=AcquisitionOutput(
@@ -742,9 +744,10 @@ async def _run_gdc_xena_acquisition_live(
     results: list[StageResult] = []
     for dataset in datasets:
         if dataset.database == Database.GDC:
-            results.append(await _run_gdc_acquisition_live(ctx, retrieved_at, dataset))
+            result = await _run_gdc_acquisition_live(ctx, retrieved_at, dataset)
         else:
-            results.append(await _run_xena_acquisition_live(ctx, retrieved_at, dataset))
+            result = await _run_xena_acquisition_live(ctx, retrieved_at, dataset)
+        results.append(result)
     return results
 
 
@@ -849,7 +852,9 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                     break
 
             if result is None or result.asset is None:
-                raise DownloadError(f"live download failed for {gse}: all candidate URLs failed")
+                raise DownloadError(
+                    f"live download failed for {gse}: all candidate URLs failed"
+                )
 
             assets = [result.asset]
             if "tximportCounts" in used_filename:
@@ -864,13 +869,13 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                 soft_result = await _try_acquire(
                     soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
                 )
+                attempts.append(soft_result.attempt)
                 if soft_result.asset is None:
                     raise DownloadError(
                         f"live download failed for {gse}: family SOFT required "
                         "when tximport counts are available"
                     )
                 assets.append(soft_result.asset)
-                attempts.append(soft_result.attempt)
             elif "series_matrix" in used_filename:
                 # RNA-seq 数据集的 series_matrix 表达块常为空，真实表达数据
                 # 在 supplementary 文件中。尝试发现并下载 suppl 表达矩阵。

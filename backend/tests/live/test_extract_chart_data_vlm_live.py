@@ -18,11 +18,13 @@ instruction "视觉模型应设法处理任何获得方法的论文 例如PubMed
    This represents the ``download_supplementary`` channel where the Agent
    has acquired a PDF from PubMed.
 
-Both tests skip gracefully when:
+Tests skip only when a required precondition is absent:
 - ``DASHSCOPE_API_KEY`` is not set (the VLM client cannot be built).
-- The PDF download fails (network unavailable, EPMC rate-limited).
-- The VLM call itself fails (the test then verifies the L2/L3 fallback
-  chain still produces non-empty CSVs, OR skips if all tiers fail).
+- The PDF download fails before extraction (network unavailable or EPMC
+  rate-limited).
+
+Once extraction is invoked, provider or fallback-chain failures fail the live
+gate instead of being converted into a skip.
 
 Run explicitly::
 
@@ -169,15 +171,10 @@ async def test_extract_chart_data_from_png_image_live(tmp_path: Path) -> None:
     result = await extract_chart_data_vlm.on_invoke_tool(ctx, args)
     data = json.loads(result)
 
-    # If the VLM call failed (rate limit, transient 5xx), skip — the
-    # unit tests cover the error path; live test only validates success.
-    if data.get("status") != "ok":
-        pytest.skip(
-            f"qwen-vl-max live call did not succeed (status={data.get('status')}, "
-            f"error={data.get('error')}); skipping live success assertion"
-        )
-
-    assert data["status"] == "ok"
+    assert data.get("status") == "ok", (
+        f"qwen-vl-max live extraction failed: status={data.get('status')}, "
+        f"error={data.get('error')}"
+    )
     assert data["source_file"] == "fig_test_bar_chart.png"
     assert data["total_charts"] >= 1
     assert data["total_data_points"] >= 1
@@ -267,14 +264,10 @@ async def test_extract_chart_data_from_pmc_pdf_live(tmp_path: Path) -> None:
     result = await extract_chart_data_vlm.on_invoke_tool(ctx, args)
     data = json.loads(result)
 
-    # If all tiers failed, skip — the unit tests cover the all-fail path.
-    if data.get("status") != "ok":
-        pytest.skip(
-            f"all extraction tiers failed for PMC{_EPMC_TEST_PMCID} "
-            f"(error={data.get('error')}); skipping live success assertion"
-        )
-
-    assert data["status"] == "ok"
+    assert data.get("status") == "ok", (
+        f"all extraction tiers failed for PMC{_EPMC_TEST_PMCID}: "
+        f"error={data.get('error')}"
+    )
     assert data["source_file"] == f"PMC{_EPMC_TEST_PMCID}.pdf"
     assert data["total_charts"] >= 1
     assert len(data["outputs"]) == 2

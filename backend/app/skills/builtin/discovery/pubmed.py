@@ -25,7 +25,15 @@ import httpx
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, QueryStatus, SourceRecord, StageName, make_source_id
+from app.domain.contracts import (
+    Database,
+    DataLevel,
+    QueryStatus,
+    SourceRecord,
+    StageName,
+    make_source_id,
+)
+from app.integrations.acquisition import acquire_source
 from app.integrations.ncbi.discovery import search_pubmed as discover_pubmed
 from app.integrations.ncbi.factory import NcbiServices, open_ncbi_services
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
@@ -356,9 +364,19 @@ async def download_supplementary_adapter(
         }, ensure_ascii=False)
 
     # ---- 3. Download each file to raw/ ----------------------------------------
-    raw_dir = run_ctx.work_dir.raw
     downloaded: list[str] = []
     errors: list[str] = []
+    assets = []
+    attempts = []
+    retrieved_at = datetime.now(UTC)
+    source_record = SourceRecord(
+        source_id=make_source_id(Database.PUBMED, pmid, pmc_url),
+        database=Database.PUBMED,
+        accession=pmid,
+        url=pmc_url,
+        title=f"PubMed supplementary materials for {pmid}",
+        retrieved_at=retrieved_at,
+    )
 
     for link_href, _link_text in supp_links:
         # Resolve relative URLs
@@ -372,27 +390,30 @@ async def download_supplementary_adapter(
         filename = os.path.basename(link_href.split("?")[0])
         if not filename:
             filename = f"supplementary_{pmcid}_{len(downloaded)}"
-        local_path = raw_dir / filename
-
-        try:
-            file_response = await services.http.get(
-                file_url,
-                headers=BROWSER_HEADERS,
-                timeout=run_ctx.model_settings.runtime_limits.http_download_timeout_seconds,
-                follow_redirects=True,
+        file_source = source_record.model_copy(
+            update={"url": file_url, "title": f"Supplementary file {filename}"}
+        )
+        result = await acquire_source(
+            source=file_source,
+            filename=filename,
+            workdir=run_ctx.work_dir,
+            cache=services.cache,
+            http=services.http,
+            data_level=DataLevel.SUBMITTER_PROCESSED,
+            max_bytes=max_size_bytes,
+            accept="*/*",
+            request_headers=BROWSER_HEADERS,
+        )
+        attempts.append(result.attempt)
+        if result.asset is None:
+            errors.append(
+                f"Failed to download {filename}: "
+                f"{result.attempt.error_message or result.attempt.error_code}"
             )
-            file_response.raise_for_status()
-            content = file_response.content
-            if len(content) > max_size_bytes:
-                errors.append(
-                    f"Skipped {filename}: {len(content)} bytes exceeds "
-                    f"{max_size_mb} MB limit"
-                )
-                continue
-            local_path.write_bytes(content)
-            downloaded.append(str(local_path))
-        except (httpx.HTTPError, OSError) as exc:
-            errors.append(f"Failed to download {filename}: {exc}")
+            continue
+        assets.append(result.asset)
+        local_path = run_ctx.work_dir.root / result.asset.relative_path
+        downloaded.append(str(local_path))
 
     if not downloaded:
         return json.dumps({
@@ -401,27 +422,26 @@ async def download_supplementary_adapter(
             "source_url": pmc_url,
             "error": "Failed to download any supplementary files",
             "details": errors,
+            "download_attempts": [
+                attempt.model_dump(mode="json") for attempt in attempts
+            ],
         }, ensure_ascii=False)
 
     # ---- 4. Track via SourceRecord --------------------------------------------
-    retrieved_at = datetime.now(UTC)
-    source_record = SourceRecord(
-        source_id=make_source_id(Database.PUBMED, pmid, pmc_url),
-        database=Database.PUBMED,
-        accession=pmid,
-        url=pmc_url,
-        title=f"PubMed supplementary materials for {pmid}",
-        retrieved_at=retrieved_at,
-    )
     run_ctx.add_source(source_record)
-    for f in downloaded:
-        run_ctx.add_raw_asset(f)
+    for path, asset in zip(downloaded, assets, strict=True):
+        run_ctx.add_raw_asset(path)
+        run_ctx.record_source_asset_id(asset.asset_id)
 
     result: dict[str, object] = {
         "source": "pubmed",
         "accession": pmid,
         "source_url": pmc_url,
         "local_files": downloaded,
+        "source_assets": [asset.model_dump(mode="json") for asset in assets],
+        "download_attempts": [
+            attempt.model_dump(mode="json") for attempt in attempts
+        ],
         "format_hint": "supplementary",
         "retrieved_at": retrieved_at.isoformat(),
     }

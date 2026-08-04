@@ -199,6 +199,72 @@ async def test_content_cache_is_reused_across_tasks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("constraints", "expected_code"),
+    [
+        ({"max_bytes": 4}, ErrorCode.DOWNLOAD_INCOMPLETE),
+        ({"expected_size": 999}, ErrorCode.DOWNLOAD_INCOMPLETE),
+        ({"expected_sha256": "aa" * 32}, ErrorCode.CHECKSUM_MISMATCH),
+        (
+            {"expected_media_types": frozenset({"application/json"})},
+            ErrorCode.VALIDATION_ERROR,
+        ),
+    ],
+)
+async def test_request_cache_hit_revalidates_current_constraints(
+    tmp_path: Path,
+    constraints: dict[str, object],
+    expected_code: ErrorCode,
+) -> None:
+    """A cached blob is reusable only when it satisfies this invocation."""
+    content = b"cached tabular content"
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            content=content,
+            headers={"Content-Type": "text/tab-separated-values"},
+        )
+
+    cache = ContentCache(tmp_path / "cache")
+    second_options: dict[str, object] = {"max_bytes": 1024}
+    second_options.update(constraints)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        first = await acquire_source(
+            source=source_record(),
+            filename="counts.tsv",
+            workdir=create_task_workdir(
+                "task_cache_seed", base_dir=str(tmp_path / "tasks")
+            ),
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=1024,
+        )
+        second = await acquire_source(
+            source=source_record(),
+            filename="counts.tsv",
+            workdir=create_task_workdir(
+                f"task_cache_{expected_code.value}",
+                base_dir=str(tmp_path / "tasks"),
+            ),
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            **second_options,
+        )
+
+    assert first.asset is not None
+    assert calls == 1
+    assert second.asset is None
+    assert second.attempt.status is DownloadStatus.FAILED
+    assert second.attempt.error_code is expected_code
+
+
+@pytest.mark.asyncio
 async def test_url_credentials_are_rejected_without_network(tmp_path: Path) -> None:
     calls = 0
 

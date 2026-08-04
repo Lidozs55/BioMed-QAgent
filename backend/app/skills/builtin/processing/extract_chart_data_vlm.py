@@ -36,8 +36,11 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -51,8 +54,9 @@ from app.agent_loop.vl_model import (
     call_vl_model,
 )
 from app.domain.contracts import QueryStatus, StageName
+from app.pipeline.state import TaskLock
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
-from app.tools.workdir import TaskWorkDir
+from app.tools.workdir import TaskWorkDir, resolve_task_local_file
 
 logger = logging.getLogger(__name__)
 
@@ -394,17 +398,78 @@ def _write_chart_csvs(
     chart_csv = chart_data_dir / "chart_data.csv"
     points_csv = chart_data_dir / "chart_data_points.csv"
 
-    # Write chart_data.csv (overwrite — each tool call produces a fresh
-    # snapshot for this source)
-    with open(chart_csv, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=_CHART_DATA_COLUMNS)
-        writer.writeheader()
-        writer.writerows(chart_rows)
+    def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
+        if not path.is_file():
+            return []
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != columns:
+                raise ValueError(f"existing chart CSV schema mismatch: {path.name}")
+            return list(reader)
 
-    with open(points_csv, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=_CHART_DATA_POINTS_COLUMNS)
-        writer.writeheader()
-        writer.writerows(point_rows)
+    def _merge_by_id(
+        existing: list[dict[str, Any]],
+        incoming: list[dict[str, Any]],
+        key: str,
+    ) -> list[dict[str, Any]]:
+        merged = list(existing)
+        positions = {str(row[key]): index for index, row in enumerate(merged)}
+        for row in incoming:
+            identifier = str(row[key])
+            if identifier in positions:
+                merged[positions[identifier]] = row
+            else:
+                positions[identifier] = len(merged)
+                merged.append(row)
+        return merged
+
+    def _stage_csv(
+        path: Path,
+        columns: list[str],
+        rows: list[dict[str, Any]],
+    ) -> Path:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+            return Path(handle.name)
+
+    with TaskLock(chart_data_dir / ".chart-csv.lock"):
+        existing_charts = _read_rows(chart_csv, _CHART_DATA_COLUMNS)
+        existing_points = _read_rows(points_csv, _CHART_DATA_POINTS_COLUMNS)
+        merged_charts = _merge_by_id(existing_charts, chart_rows, "chart_id")
+        incoming_chart_ids = {str(row["chart_id"]) for row in chart_rows}
+        preserved_points = [
+            row
+            for row in existing_points
+            if row.get("chart_id") not in incoming_chart_ids
+        ]
+        merged_points = _merge_by_id(preserved_points, point_rows, "point_id")
+
+        chart_temp = _stage_csv(chart_csv, _CHART_DATA_COLUMNS, merged_charts)
+        points_temp = _stage_csv(
+            points_csv,
+            _CHART_DATA_POINTS_COLUMNS,
+            merged_points,
+        )
+        try:
+            os.replace(chart_temp, chart_csv)
+            os.replace(points_temp, points_csv)
+        finally:
+            with suppress(FileNotFoundError):
+                chart_temp.unlink()
+            with suppress(FileNotFoundError):
+                points_temp.unlink()
 
     return chart_csv, points_csv
 
@@ -750,12 +815,18 @@ async def extract_chart_data_vlm(
         decide whether to retry with a different source.
     """
     run_ctx: RunContext = ctx.context
-    path = Path(source_path)
-
-    if not path.exists():
+    try:
+        path = resolve_task_local_file(run_ctx.work_dir, source_path)
+    except FileNotFoundError:
         return json.dumps({
             "status": "error",
             "error": f"source file not found: {source_path}",
+            "source_file": Path(source_path).name,
+        }, ensure_ascii=False)
+    except ValueError as exc:
+        return json.dumps({
+            "status": "error",
+            "error": str(exc),
             "source_file": Path(source_path).name,
         }, ensure_ascii=False)
 

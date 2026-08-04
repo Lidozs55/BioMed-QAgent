@@ -25,6 +25,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.tools.workdir import resolve_task_local_file
 
 logger = logging.getLogger(__name__)
 
@@ -346,12 +347,18 @@ def extract_pdf_tables(
         an optional warning when running without a real PDF library.
     """
     run_ctx: RunContext = ctx.context
-    path = Path(file_path)
-
-    if not path.exists():
+    try:
+        path = resolve_task_local_file(run_ctx.work_dir, file_path)
+    except FileNotFoundError:
         return json.dumps({
             "status": "error",
             "error": f"文件不存在: {file_path}",
+            "source_file": file_path,
+        }, ensure_ascii=False)
+    except ValueError as exc:
+        return json.dumps({
+            "status": "error",
+            "error": str(exc),
             "source_file": file_path,
         }, ensure_ascii=False)
 
@@ -474,12 +481,18 @@ def extract_pdf_metadata(
         containing all extracted metadata fields.
     """
     run_ctx: RunContext = ctx.context
-    path = Path(file_path)
-
-    if not path.exists():
+    try:
+        path = resolve_task_local_file(run_ctx.work_dir, file_path)
+    except FileNotFoundError:
         return json.dumps({
             "status": "error",
             "error": f"文件不存在: {file_path}",
+            "source_file": file_path,
+        }, ensure_ascii=False)
+    except ValueError as exc:
+        return json.dumps({
+            "status": "error",
+            "error": str(exc),
             "source_file": file_path,
         }, ensure_ascii=False)
 

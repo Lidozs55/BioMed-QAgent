@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from app.domain.contracts import (
     Database,
     DatasetSelection,
@@ -67,27 +68,71 @@ def test_pubmed_geo_specification_covers_both_sources(tmp_path: Path) -> None:
     assert result.output.geo_source_id is not None
 
 
-def test_pubmed_only_specification_still_covers_implicit_geo_dataset(
-    tmp_path: Path,
-) -> None:
-    """PubMed-only keeps the GEO row: GEO remains the implicit dataset source.
-
-    The pipeline always needs a dataset for main_data; with only a PubMed
-    query selected, discovery resolves the default GEO series and records it
-    as the dataset source, so source_list reflects every database actually
-    used (literature + dataset).
-    """
+def test_geo_only_specification_does_not_invent_literature(tmp_path: Path) -> None:
     specification = TaskSpecification(
         topic="contract",
-        queries=[_query(Database.PUBMED, "34180400[PMID]")],
+        queries=[_query(Database.GEO, "GSE178352[Accession]")],
     )
     result = discovery.run_discovery(
         _context(tmp_path, specification, fixture_dir=_NCBI_FIXTURE)
     )
-    assert {source.database for source in result.output.sources} == {
-        Database.PUBMED,
-        Database.GEO,
-    }
+    assert [source.database for source in result.output.sources] == [Database.GEO]
+    assert result.output.literature is None
+    assert result.output.pubmed_source_id is None
+
+
+def test_pubmed_only_specification_is_rejected_before_implicit_geo_fallback(
+    tmp_path: Path,
+) -> None:
+    specification = TaskSpecification(
+        topic="contract",
+        queries=[_query(Database.PUBMED, "34180400[PMID]")],
+    )
+    with pytest.raises(ValueError, match="unsupported pipeline source combination"):
+        discovery.run_discovery(
+            _context(tmp_path, specification, fixture_dir=_NCBI_FIXTURE)
+        )
+
+
+def test_multiple_geo_datasets_are_rejected_before_discovery(tmp_path: Path) -> None:
+    specification = TaskSpecification(
+        topic="contract",
+        datasets=[
+            DatasetSelection(
+                dataset_id=f"ds_geo_{accession.lower()}",
+                database=Database.GEO,
+                accession=accession,
+                reason="contract test",
+            )
+            for accession in ("GSE178352", "GSE999999")
+        ],
+    )
+    with pytest.raises(ValueError, match="exactly one GEO dataset"):
+        discovery.run_discovery(
+            _context(tmp_path, specification, fixture_dir=_NCBI_FIXTURE)
+        )
+
+
+def test_literature_plus_gdc_specification_is_rejected_before_discovery(
+    tmp_path: Path,
+) -> None:
+    specification = TaskSpecification(
+        topic="contract",
+        queries=[_query(Database.PUBMED, "34180400[PMID]")],
+        datasets=[
+            DatasetSelection(
+                dataset_id="ds_gdc_tcga-paad",
+                database=Database.GDC,
+                accession="TCGA-PAAD",
+                reason="contract test",
+                data_type="gene-expression",
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="unsupported pipeline source combination"):
+        discovery.run_discovery(
+            _context(tmp_path, specification, fixture_dir=_GDC_FIXTURE)
+        )
 
 
 def test_gdc_specification_covers_only_gdc_source(tmp_path: Path) -> None:

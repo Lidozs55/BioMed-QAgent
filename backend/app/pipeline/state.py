@@ -18,12 +18,23 @@ from pydantic import Field, field_validator
 from app.domain.contracts import (
     AttemptStatus,
     ContractModel,
+    DownloadAttempt,
     StageAttempt,
     StageName,
     TaskState,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class DownloadAttemptAuditRecord(ContractModel):
+    """Attempt-bound audit envelope written before Acquisition can finish."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    task_id: str
+    run_id: str
+    stage_attempt_id: str
+    attempt: DownloadAttempt
 
 
 class StageOutputFile(ContractModel):

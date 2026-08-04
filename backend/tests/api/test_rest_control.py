@@ -431,7 +431,9 @@ async def test_concurrent_duplicate_create_returns_one_acceptance_without_orphan
             assert page.items == []
             assert stored is not None
             assert [run.run_id for run in stored.runs] == [accepted.run_id]
-            assert await repository.find_request(body["request_id"]) == accepted
+            indexed = await repository.find_request(body["request_id"])
+            assert indexed is not None
+            assert indexed.model_dump(mode="json") == accepted.model_dump(mode="json")
             assert (
                 sum(isinstance(event.payload, RunQueuedPayload) for event in events)
                 == 1

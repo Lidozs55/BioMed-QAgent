@@ -109,6 +109,8 @@ def test_gdc_download_live_returns_files() -> None:
     assert data["source"] == "gdc"
     assert data["accession"] == "TCGA-LUAD"
     assert data["file_count"] >= 1
+    assert data["downloaded"] >= 1
+    assert len(data["local_files"]) >= 2
     _assert_source_record(ctx, Database.GDC, "TCGA-LUAD")
 
 
@@ -239,10 +241,9 @@ def test_xena_download_live_returns_file() -> None:
     data = json.loads(result)
     assert data["source"] == "xena"
     assert data["dataset_id"] == "probeMap/hugo_gencode_v24"
-    # Download may fail due to large file size or 403; check if it succeeded
-    if "error" not in data:
-        assert len(data["local_files"]) >= 1
-        _assert_source_record(ctx, Database.UCSC_XENA, "probeMap/hugo_gencode_v24")
+    assert "error" not in data, f"Xena download failed: {data.get('error')}"
+    assert len(data["local_files"]) >= 2
+    _assert_source_record(ctx, Database.UCSC_XENA, "probeMap/hugo_gencode_v24")
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +270,10 @@ def test_pubmed_search_live_returns_records(tmp_path: Path) -> None:
             return result
     result_str = asyncio.run(asyncio.wait_for(_run(), timeout=60))
     data = json.loads(result_str)
-    assert data["count"] >= 1
+    assert data["records_count"] >= 1
+    assert data["total_count"] >= data["records_count"]
     assert len(data["records"]) >= 1
+    assert data["records"][0]["pmid"] == "34180400"
 
 
 @pytest.mark.skipif(
@@ -291,5 +294,5 @@ def test_geo_search_live_returns_series(tmp_path: Path) -> None:
             return result
     result_str = asyncio.run(asyncio.wait_for(_run(), timeout=60))
     data = json.loads(result_str)
-    assert data["count"] >= 1
-    assert "GSE178352" in data["accessions"]
+    assert data["total_count"] >= 1
+    assert data["accessions"] == ["GSE178352"]
