@@ -53,14 +53,22 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
-# TODO §1.7: structured JSON logging for pipeline audit events.
-# Each EventEnvelope published by PipelineRunner._publish_event is logged as
-# a single JSON line via logging.getLogger("app.pipeline"). The JSONL file
-# is the audit artifact for metrics analysis and ablation studies.
+# 结构化 JSON 审计日志：PipelineRunner._publish_event 通过
+# logging.getLogger("app.pipeline") 输出每个 EventEnvelope 的 JSON 表示。
+# FileHandler 上加 filter 只接受 logger name 恰好为 "app.pipeline" 的记录，
+# 防止子 logger（app.pipeline.stages.* 等文本日志）污染 JSONL 文件。
 _pipeline_log_dir = Path("logs")
 _pipeline_log_dir.mkdir(parents=True, exist_ok=True)
 _pipeline_log_handler = logging.FileHandler(_pipeline_log_dir / "pipeline.jsonl", encoding="utf-8")
 _pipeline_log_handler.setFormatter(logging.Formatter("%(message)s"))
+
+
+class _AuditOnlyFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.name == "app.pipeline"
+
+
+_pipeline_log_handler.addFilter(_AuditOnlyFilter())
 logging.getLogger("app.pipeline").addHandler(_pipeline_log_handler)
 
 _STORAGE_WORKER_THREADS = 2

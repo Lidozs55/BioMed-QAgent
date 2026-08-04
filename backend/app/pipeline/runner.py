@@ -22,6 +22,7 @@ from typing import Any, Literal, Protocol
 from app.core.metrics import MetricsTracker
 from app.domain.contracts import (
     ArtifactManifestEntry,
+    ArtifactProducedPayload,
     AttemptStatus,
     CancelRequestedPayload,
     ErrorCode,
@@ -84,6 +85,11 @@ from app.runtime.event_store import append_jsonl_records, read_jsonl
 from app.tools.workdir import create_task_workdir
 
 logger = logging.getLogger("app.pipeline")
+
+# 人类可读摘要日志：与结构化 JSON 审计日志互补，仅覆盖关键事件
+# （stage 开始/完成/失败、产物生成、任务完成/失败、警告），便于人类
+# 和 LLM 直接阅读，无需逐条解析 JSON 事件。
+_readable_logger = logging.getLogger("app.pipeline.readable")
 
 DEFAULT_STAGE_TIMEOUTS: dict[StageName, float] = {
     StageName.DISCOVERY: 30.0,
@@ -1225,11 +1231,58 @@ class PipelineRunner:
         self.events.append(event)
         if self._event_queue is not None:
             self._event_queue.put_nowait(event)
-        # TODO §1.7: structured JSON log for audit/metrics analysis.
-        # Covers stage_started / stage_completed / artifact_produced /
-        # validation_failed (and all other event types) because they all
-        # flow through this single chokepoint.
+        # 结构化 JSON 审计日志（写入 logs/pipeline.jsonl）
         logger.info(json.dumps(event.model_dump(mode="json"), default=str))
+        # 人类可读摘要日志（输出到 stdout）
+        self._log_readable(event)
+
+    @staticmethod
+    def _log_readable(event: EventEnvelope) -> None:
+        """对关键事件输出人类可读的单行摘要。
+
+        仅覆盖 stage 开始/完成/失败、产物生成、任务完成/失败、警告等
+        关键节点；tool_called/tool_completed/stage_progress 等细碎事件
+        不输出，避免噪音。错误摘要包含根因和错误码。
+        """
+        payload = event.payload
+        if isinstance(payload, StageStartedPayload):
+            _readable_logger.info("stage started: %s", payload.stage.value)
+        elif isinstance(payload, StageCompletedPayload):
+            _readable_logger.info("stage completed: %s", payload.stage.value)
+        elif isinstance(payload, StageFailedPayload):
+            _readable_logger.error(
+                "stage failed: %s — %s [%s]",
+                payload.stage.value,
+                payload.error.message,
+                payload.error.code.value,
+            )
+        elif isinstance(payload, StageSkippedPayload):
+            _readable_logger.info(
+                "stage skipped: %s — %s", payload.stage.value, payload.reason,
+            )
+        elif isinstance(payload, ArtifactProducedPayload):
+            _readable_logger.info(
+                "artifact produced: %s (%d bytes)",
+                payload.artifact.name,
+                payload.artifact.size_bytes,
+            )
+        elif isinstance(payload, TaskCompletedPayload):
+            v = payload.validation
+            _readable_logger.info(
+                "task completed: validation %s (%d checks, %d failed)",
+                v.status, v.checked_count, v.failed_count,
+            )
+        elif isinstance(payload, TaskFailedPayload):
+            _readable_logger.error(
+                "task failed: %s [%s]",
+                payload.error.message,
+                payload.error.code.value,
+            )
+        elif isinstance(payload, WarningPayload):
+            if payload.warning is not None:
+                _readable_logger.warning("warning: %s", payload.warning.message)
+            elif payload.message:
+                _readable_logger.warning("warning: %s", payload.message)
 
     async def _emit_event(self, payload: Any) -> None:
         await self._publish_event(self._build_event(payload))

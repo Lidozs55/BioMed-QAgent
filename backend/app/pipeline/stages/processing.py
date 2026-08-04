@@ -15,6 +15,7 @@ from app.pipeline.processing.geo_tximport import (
     parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
     process_geo_series_matrix_expression,
+    process_geo_supplementary_expression,
     process_geo_tximport_counts,
 )
 from app.pipeline.processing.reactome import parse_reactome_table
@@ -439,12 +440,16 @@ def _try_series_matrix_expression_or_minimal(
     dataset_id: str,
     ctx: StageContext,
     samples: list[GeoSampleMetadata],
+    suppl_asset: SourceAsset | None = None,
 ) -> ParsedDataset:
     """Try parsing the series_matrix expression block; fall back to minimal.
 
     When the series_matrix has a non-empty ``!series_matrix_table_begin``/
     ``!series_matrix_table_end`` block, produces real expression rows.
-    Otherwise falls back to ``_build_minimal_parsed_dataset`` (metadata-only).
+    When the block is empty but a supplementary expression asset is available
+    (downloaded by the acquisition stage for RNA-seq series), parses that
+    instead. Otherwise falls back to ``_build_minimal_parsed_dataset``
+    (metadata-only).
     """
     if samples:
         try:
@@ -460,6 +465,29 @@ def _try_series_matrix_expression_or_minimal(
                     expression_parsed.row_count,
                 )
                 return expression_parsed
+            # series_matrix 表达块为空 —— 尝试 supplementary 表达矩阵
+            if suppl_asset is not None:
+                try:
+                    suppl_parsed = process_geo_supplementary_expression(
+                        source_asset=suppl_asset,
+                        dataset_id=dataset_id,
+                        workdir=ctx.workdir,
+                        samples=samples,
+                    )
+                    if suppl_parsed is not None:
+                        logger.info(
+                            "processing: parsed %d expression rows from supplementary file",
+                            suppl_parsed.row_count,
+                        )
+                        return suppl_parsed
+                    logger.info(
+                        "processing: supplementary expression file yielded no rows",
+                    )
+                except (ValueError, FileNotFoundError, OSError) as exc:
+                    logger.warning(
+                        "processing: supplementary expression parse failed (%s)",
+                        exc,
+                    )
             logger.info(
                 "processing: series_matrix expression block is empty; "
                 "falling back to sample_metadata rows",
@@ -693,6 +721,15 @@ def run_processing(
         assets[0],
     )
     soft_asset = next((asset for asset in assets if "family.soft" in asset.relative_path), None)
+    suppl_asset = next(
+        (
+            asset for asset in assets
+            if "tximportCounts" not in asset.relative_path
+            and "series_matrix" not in asset.relative_path
+            and "family.soft" not in asset.relative_path
+        ),
+        None,
+    )
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset
     if ctx.mode == "fixture":
@@ -721,7 +758,7 @@ def run_processing(
             )
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
             parsed = _try_series_matrix_expression_or_minimal(
-                source_asset, dataset_id, ctx, samples
+                source_asset, dataset_id, ctx, samples, suppl_asset=suppl_asset
             )
     else:
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
@@ -737,30 +774,12 @@ def run_processing(
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
             parsed = _try_series_matrix_expression_or_minimal(
-                source_asset, dataset_id, ctx, samples
+                source_asset, dataset_id, ctx, samples, suppl_asset=suppl_asset
             )
-        if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
-            logger.info(
-                "processing: live mode parsed %d expression rows from downloaded tximport counts",
-                parsed.row_count,
-            )
-        elif parsed.processing_parameters.get("measurement_type") == "series_matrix_expression":
-            logger.info(
-                "processing: live mode parsed %d expression rows from series_matrix",
-                parsed.row_count,
-            )
-        elif samples:
-            logger.info(
-                "processing: live mode recovered %d samples from "
-                "series_matrix; main_data.csv will contain %d "
-                "sample_metadata rows",
-                len(samples),
-                parsed.row_count,
-            )
-        else:
+        if not samples and not parsed.row_count:
             logger.warning(
-                "processing: live mode series_matrix recovery yielded no "
-                "samples; main_data.csv will be schema-only (0 rows)"
+                "processing: series_matrix recovery yielded no samples; "
+                "main_data.csv will be schema-only (0 rows)"
             )
 
     # Surface processing progress: "Processing: cleaned N rows".
