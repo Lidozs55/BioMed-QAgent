@@ -258,16 +258,18 @@ def _decompress_gz(path: Path) -> Path:
 @function_tool(
     description_override=(
         "Search UCSC Xena public hub datasets by keyword. "
-        "Parameters: ``term`` (required, search keyword like 'breast cancer' "
-        "or 'TCGA'), ``max_results`` (optional, default 20). "
+        "Parameters: ``query`` (required, search keyword like 'breast cancer' "
+        "or 'TCGA') — ``term`` is accepted as a legacy alias; "
+        "``max_results`` (optional, default 20). "
         "Returns JSON with dataset name, type, cohort, and dataset_id. "
         "Use ``download_xena`` to fetch data files for a specific dataset_id."
     ),
 )
 async def search_xena(
     ctx: RunContextWrapper[Any],
-    term: str,
+    query: str = "",
     max_results: int = 20,
+    term: str = "",
 ) -> str:
     """Search UCSC Xena public hub datasets by term.
 
@@ -277,37 +279,40 @@ async def search_xena(
 
     Args:
         ctx: Agent SDK run context wrapper.
-        term: Search keyword or phrase (e.g. "BRCA", "mutation", "clinical").
+        query: Search keyword or phrase (e.g. "BRCA", "mutation", "clinical").
+            Recommended parameter name; ``term`` is accepted as a legacy alias.
         max_results: Maximum number of matching datasets to return (default 20).
+        term: Legacy alias for ``query``. Ignored when ``query`` is non-empty.
 
     Returns:
         JSON string with keys: source, term, count, records.
     """
     run_ctx: RunContext = ctx.context
+    effective_term = query or term
     try:
         all_datasets = await _fetch_hub_index_for_run(run_ctx)
     except Exception as exc:
-        run_ctx.log_query(term, "xena", QueryStatus.FAILED, 0)
+        run_ctx.log_query(effective_term, "xena", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "xena",
-            "term": term,
+            "term": effective_term,
             "count": 0,
             "records": [],
             "error": str(exc),
         }, ensure_ascii=False)
 
     # Filter by term — substring match across relevant fields
-    if term.strip():
-        matched = [d for d in all_datasets if _match_term(d, term.strip())]
+    if effective_term.strip():
+        matched = [d for d in all_datasets if _match_term(d, effective_term.strip())]
     else:
         matched = all_datasets
 
     count = len(matched)
-    run_ctx.log_query(term, "xena", QueryStatus.SUCCESS, count)
+    run_ctx.log_query(effective_term, "xena", QueryStatus.SUCCESS, count)
 
     return json.dumps({
         "source": "xena",
-        "term": term,
+        "term": effective_term,
         "count": count,
         "records": matched[:max_results],
     }, ensure_ascii=False)

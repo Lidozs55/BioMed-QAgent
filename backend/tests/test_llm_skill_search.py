@@ -121,6 +121,31 @@ async def test_search_async_exact_hit_skips_model_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_async_stopword_padded_exact_hit_skips_model_call() -> None:
+    """"search pubmed" should be treated as an exact identity hit on the
+    pubmed skill (token "pubmed" matches the skill name), so the LLM
+    reranker must not be invoked — otherwise it may reorder pubchem/geo
+    ahead of pubmed."""
+    spy = _SpyRanker()
+    strategy = LLMRerankingSkillSearchStrategy()
+    strategy._model_ranker = spy
+    pubmed = _descriptor("pubmed", "Search biomedical literature.", sources=["pubmed"])
+    pubchem = _descriptor(
+        "pubchem", "Search chemical compounds.", sources=["pubchem"]
+    )
+    geo = _descriptor("geo", "GEO datasets.", sources=["geo"])
+
+    result = await strategy.search_async(
+        (pubchem, geo, pubmed),
+        "search pubmed",
+        RunModelSettings.default(),
+    )
+
+    assert [d.name for d in result] == ["pubmed"]
+    assert spy.calls == []
+
+
+@pytest.mark.asyncio
 async def test_search_async_model_failure_falls_back_to_lexical() -> None:
     """ranker raises -> return the lexical result, never raise."""
     strategy = LLMRerankingSkillSearchStrategy()
