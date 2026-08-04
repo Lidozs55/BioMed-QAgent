@@ -55,7 +55,7 @@ The usable input capacity is:
 input_capacity = context_window - max_output_tokens - safety_reserve_tokens
 ```
 
-Token counts derived from ratios are rounded up to the nearest integer. The configuration boundary requires `context_window > 0`, `max_output_tokens > 0`, `0 <= safety_reserve_ratio <= 0.25`, and `0 < compaction_target_ratio < compaction_trigger_ratio < 1`. It rejects any setting where `input_capacity <= 0`. The active model configuration must carry a positive context window. Known catalog models populate it from versioned metadata. Users may explicitly override the catalog value for compatible deployments that reuse a model ID; the persisted settings record whether the source is `catalog` or `user`. Dynamically discovered models are visible but cannot run until the user explicitly supplies a valid context window.
+Token counts derived from ratios are rounded up to the nearest integer. The configuration boundary requires `context_window > 0`, `max_output_tokens > 0`, `0 <= safety_reserve_ratio <= 0.25`, and `0 < compaction_target_ratio < compaction_trigger_ratio < 1`. It rejects any setting where `input_capacity <= 0`. The active model configuration must carry a positive context window. Known catalog models populate it from versioned metadata. Users may explicitly override the catalog value for compatible deployments that reuse a model ID; the persisted settings record whether the source is `catalog` or `user`. Dynamically discovered models are visible and resolve a conservative inferred context window (naming heuristics, falling back to 512K) so a missing configured window never blocks execution; feasibility is decided by remaining input capacity.
 
 Catalog resolution preserves the exact documented capacity for each versioned model. Large current-model windows do not justify silently raising genuine smaller entries to a shared minimum.
 
@@ -98,7 +98,7 @@ The active settings API and frontend contracts expose:
 - available input budget derived from the selected model;
 - advanced safety reserve and compaction trigger/target ratios.
 
-Known models populate context metadata automatically and permit an explicit override. Unknown models require an explicit positive context-window value before save/run. The UI displays context capacity, metadata source, reserved output, safety reserve, and available input capacity. Advanced ratios are editable only in advanced settings. API validation is authoritative and rejects invalid combinations regardless of UI behavior.
+Known models populate context metadata automatically (via the legacy catalog plus the model_info warehouse) and permit an explicit override. Unknown models resolve an inferred window (guess by naming convention, default 512K) and remain runnable without an explicit value. The UI displays context capacity, metadata source, reserved output, safety reserve, and available input capacity. Advanced ratios are editable only in advanced settings. API validation is authoritative and rejects invalid combinations regardless of UI behavior.
 
 The model settings page keeps model selection and generation parameters on one
 page (parallel layout) rather than a serial wizard: model selection is the
@@ -125,4 +125,4 @@ The implementation is test-first and must add tests before production changes.
 - Do not make every production request depend on a second DashScope network call.
 - Do not replace the durable append-only session with destructive history rewriting.
 - Do not add a generic Responses-API auto-compaction dependency to the Qwen Chat Completions path.
-- Do not support unknown models by silently assuming a default context window.
+- Do not require a configured context window before saving or running: unknown models use a conservative guessed window (default 512K) and execution depends on remaining input capacity, not on whether the window was configured.

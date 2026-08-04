@@ -9,12 +9,11 @@ import pytest
 from app.config import Settings
 from app.main import create_app
 from app.model_config import RunModelSettings, UserSettings
-from app.model_config.context_budget import ContextBudgetConfigurationError
 from app.model_settings import ModelConfiguration
 
 
 @pytest.mark.asyncio
-async def test_get_settings_exposes_blocked_budget_for_unknown_model(
+async def test_get_settings_resolves_inferred_budget_for_unknown_model(
     tmp_path: Path,
 ) -> None:
     # Given
@@ -37,15 +36,16 @@ async def test_get_settings_exposes_blocked_budget_for_unknown_model(
     ) as client:
         response = await client.get("/api/v1/settings")
 
-    # Then — unknown model remains configurable but cannot run without a window.
+    # Then - the unknown model gets a conservative 512K inferred window and
+    # remains runnable; a missing context never blocks execution by itself.
     assert response.status_code == 200
     data = response.json()
     assert data["model_name"] == "unregistered-current-model"
-    assert data["context_window"] == 0
-    assert data["context_window_source"] == "unknown"
-    assert data["available_input_tokens"] == 0
-    assert data["run_ready"] is False
-    assert data["run_block_reason"] == "a positive context window is required"
+    assert data["context_window"] == 524_288
+    assert data["context_window_source"] == "inferred"
+    assert data["available_input_tokens"] > 0
+    assert data["run_ready"] is True
+    assert data["run_block_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,9 @@ async def test_get_settings_marks_known_qwen36_flash_as_run_ready(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_put_preserves_unknown_model_as_not_run_ready(tmp_path: Path) -> None:
+async def test_put_keeps_unknown_model_run_ready_with_inferred_window(
+    tmp_path: Path,
+) -> None:
     # Given
     application = create_app(
         Settings(
@@ -115,19 +117,18 @@ async def test_put_preserves_unknown_model_as_not_run_ready(tmp_path: Path) -> N
     ) as client:
         response = await client.put("/api/v1/settings", json={"max_tokens": 4096})
 
-    # Then — persistence succeeds, but execution remains fail-closed.
+    # Then - persistence succeeds and the inferred window keeps execution open.
     assert response.status_code == 200
     data = response.json()
-    assert data["context_window"] == 0
-    assert data["context_window_source"] == "unknown"
-    assert data["run_ready"] is False
+    assert data["context_window"] == 524_288
+    assert data["context_window_source"] == "inferred"
+    assert data["run_ready"] is True
 
 
-def test_run_model_settings_rejects_unknown_model_without_window() -> None:
+def test_run_model_settings_resolves_unknown_model_with_default_window() -> None:
     settings = UserSettings(model_name="unregistered-current-model")
 
-    with pytest.raises(
-        ContextBudgetConfigurationError,
-        match="a positive context window is required",
-    ):
-        RunModelSettings.from_user_settings(settings)
+    run_settings = RunModelSettings.from_user_settings(settings)
+
+    assert run_settings.context_budget.context_window == 524_288
+    assert run_settings.context_budget.input_capacity > 0

@@ -603,6 +603,15 @@ QWEN_MODELS: dict[str, QwenModelEntry] = {
         suggested_max_tokens=64_000,
         capabilities=Capabilities(text=True),
     ),
+    # qwen3.8-max multimodal flagship batch (2026-08-03 Alibaba Qwen3.8 release)
+    "qwen3.8-max": QwenModelEntry(
+        id="qwen3.8-max",
+        name="Qwen3.8 Max",
+        description="Qwen3.8 最强多模态旗舰模型，1M 超长上下文，支持图像与视频理解。",
+        context_window=1_000_000,
+        suggested_max_tokens=64_000,
+        capabilities=Capabilities(text=True, image=True, video=True),
+    ),
     "qwen-vl-max-0319": QwenModelEntry(
         id="qwen-vl-max-0319",
         name="Qwen VL Max 0319",

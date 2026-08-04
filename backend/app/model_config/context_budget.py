@@ -128,16 +128,22 @@ def resolve_context_budget(
 
 
 def _resolve_context_window(settings: BudgetSettings) -> int:
-    """Prefer a positive explicit override, then trusted catalog metadata."""
+    """Resolve the total context window for one budget.
+
+    Prefer a positive explicit override, then trusted catalog metadata
+    (including the model-info warehouse), then a conservative guess so a
+    missing context window never blocks a task - feasibility is decided by
+    remaining input capacity, not by whether the window was configured.
+    """
 
     if settings.context_window is not None:
         return settings.context_window
-    from .catalog import get_known_model
+    from .catalog import get_known_model, guess_context_window
 
     model = get_known_model(settings.model_name)
     if model is not None:
         return model.context_window
-    raise ContextBudgetConfigurationError("a positive context window is required")
+    return guess_context_window(settings.model_name)
 
 
 def _validate_ratios(settings: BudgetSettings) -> None:
