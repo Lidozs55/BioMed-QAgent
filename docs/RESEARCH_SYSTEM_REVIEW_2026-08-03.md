@@ -1,8 +1,12 @@
 # 生物医学研究系统综合评估报告
 
-> **日期**：2026-08-03
+> **日期**：2026-08-03（**2026-08-04 修订**）
 > **范围**：系统产物审查 → 独立科研工作流比对 → 研究主题分类泛化 →
 > 数据流架构分析 → Pipeline 能力短板 → 工具能力评估
+>
+> **修订说明**：本版基于 2026-08-04 新一轮实际运行（任务 `task_8daec896`，
+> AD/OP 共病主题）与后续代码改动，更新已修复问题、移除已解决缺陷、补充
+> 新发现的数据缺失/覆盖不足问题。
 
 ---
 
@@ -12,7 +16,17 @@
 方面达标，但在**数据查找完备性**（覆盖率 ~2.5%）、**清洗整合可靠性**（核心数据
 100% 缺失却通过验证）和**输出内容实质性**（main_data 全空）三个维度严重不足。
 
-本轮工作聚焦四个方向：
+0803 识别出的两大 P0 缺陷（series matrix 表达值解析、下载失败回退）**已在
+0804 修复并验证**。但 0804 实际运行暴露了**新的数据覆盖问题**：
+
+- **共病"双侧"覆盖缺失**：AD/OP 共病主题最终只发布 AD 侧一个数据集
+  （GSE245929，mitophagy 聚焦阵列），骨质疏松侧完全缺失；
+- **4 个 GSE 被静默丢弃 3 个**：`_resolve_gse` 单数据集限制使 Agent 意图被截断；
+- **基因符号不可用**：`main_data.csv` 无 `gene_symbol` 列，通路/机制分析不可行；
+- **空心下载复发**：GSE339404 的 series_matrix 仅 2316 字节（空壳），首次 run
+  因 validation 拒绝而失败，需人工"继续"恢复。
+
+本轮（0803→0804）主要工作：
 
 1. **研究主题分类泛化**：将"共病双侧分解"泛化为五类主题策略，调研 RAGFlow 确认
    该模式与 Agentic RAG 的 query routing 同构
@@ -20,6 +34,8 @@
    bug，核心矛盾是 pipeline 能力太弱而非数据流断裂
 3. **Pipeline 能力短板**：识别 5 大确定性短板，按 ROI 排序设计改进
 4. **工具能力评估**：区分"必须工具实现"与"可 prompt 引导"，补充高价值工具建议
+5. **0804 修复落地**：series matrix 表达值解析器、下载失败回退、大文件工具、
+   skill 发现协议修复、模型上下文窗口兜底
 
 ---
 
@@ -29,11 +45,11 @@
 
 | # | 缺陷 | 根因 | 已修复 |
 |---|------|------|--------|
-| 1 | 表达数据下载 404，Pipeline 以空数据继续 | 无下载回退策略 | ❌ 见 §六 |
-| 2 | main_data.csv 核心字段 100% 缺失 | `_build_minimal_parsed_dataset` 占位符 | ❌ 见 §六 |
+| 1 | 表达数据下载 404，Pipeline 以空数据继续 | 无下载回退策略 | ✅ 见 §六（0804 修复） |
+| 2 | main_data.csv 核心字段 100% 缺失 | `_build_minimal_parsed_dataset` 占位符 | ✅ 见 §六（0804 修复） |
 | 3 | 验证门禁未检测核心数据缺失 | `main_data_nonempty` 仅查行数 | ✅ `core_data_existence` |
 | 4 | dataset_catalog database 字段错误 | sources[0] 取 PubMed 而非 GEO | ✅ catalog.py |
-| 5 | GEO 数据集与主题不匹配 | Agent 未充分 vetting GSE | ⚠️ prompt 引导 |
+| 5 | GEO 数据集与主题不匹配 | Agent 未充分 vetting GSE | ⚠️ prompt 引导（0804 仍暴露） |
 
 ### 2.2 数据覆盖率
 
@@ -43,6 +59,10 @@
 | GEO 数据集 | 1 个(仅 AD) | 23+ 个(AD+OP) | ~4% |
 | GWAS/PDB/Reactome/PubChem | 0 | 36+ | 0% |
 | **总计** | **2 来源** | **80+ 数据点** | **~2.5%** |
+
+> **0804 复查**：发布产物已从"空数据"转为**真实表达矩阵**（GSE245929，
+> 30 样本、768 基因、23040 行），但**覆盖率仍低**——共病主题仅发布 AD 侧
+> 单数据集，未达到覆盖门禁目标（见 §六.2 新发现）。
 
 ---
 
@@ -162,14 +182,15 @@ download → parse → validate 闭环。
 科研数据**。问题不在数据流设计（RESEARCH_ONLY 隔离是合理的），而在 pipeline
 自身能力太弱：
 
-1. GEO 仅支持单数据集，无法处理多数据集交叉
-2. 下载失败无回退，一个 404 就导致整个产物空心化
-3. series matrix 仅提取样本 ID，表达值无法解析
-4. PubMed 仅处理单篇文献
-5. Reactome 仅支持单通路且必须作为唯一来源
+1. GEO 仅支持单数据集，无法处理多数据集交叉（❌ 0804 仍开放）
+2. 下载失败无回退，一个 404 就导致整个产物空心化（✅ 0804 已修复）
+3. series matrix 仅提取样本 ID，表达值无法解析（✅ 0804 已修复）
+4. PubMed 仅处理单篇文献（❌ 0804 仍开放）
+5. Reactome 仅支持单通路且必须作为唯一来源（❌ 仍开放）
 
 **因此本轮优先提升 pipeline 工作能力（用户指示 2.3），数据流通道扩展（方案 B）
-暂缓**。
+暂缓**。0804 已落地第 2、3 项修复；第 1、4 项及新发现的"下载体量校验/基因符号
+映射"仍为后续优先级（详见 §六、§九）。
 
 ### 5.4 方案 B 设计（暂不实施，记录备查）
 
@@ -185,45 +206,59 @@ download → parse → validate 闭环。
 
 ## 六、Pipeline 能力短板与改进优先级
 
-### 6.1 能力短板清单
+### 6.1 能力短板清单（0804 更新）
 
-| # | 短板 | 影响 | 当前代码位置 | 严重度 |
-|---|------|------|-------------|--------|
-| 1 | 下载失败无回退 | 404 → 空数据 → 空心产物 | acquisition.py | P0 |
-| 2 | series matrix 仅解析样本元数据 | 表达值无法提取 | processing.py `_build_minimal_parsed_dataset` | P0 |
-| 3 | GEO 单数据集限制 | 无法交叉验证 | discovery.py `_resolve_gse` | P1 |
-| 4 | PubMed 仅单篇文献 | 覆盖率极低 | discovery.py `_search_pubmed_with_fallback` | P1 |
-| 5 | 无数据可用性预检 | Agent 无法提前判断 GSE 是否可下载 | 无（需新增） | P1 |
+| # | 短板 | 影响 | 当前代码位置 | 严重度 | 状态 |
+|---|------|------|-------------|--------|------|
+| 1 | 下载失败无回退 | 404 → 空数据 → 空心产物 | acquisition.py | P0 | ✅ 已修复 |
+| 2 | series matrix 仅解析样本元数据 | 表达值无法提取 | processing.py `_build_minimal_parsed_dataset` | P0 | ✅ 已修复 |
+| 3 | GEO 单数据集限制 | 无法交叉验证 / 共病双侧缺失 | discovery.py `_resolve_gse` | P1 | ❌ **仍开放** |
+| 4 | PubMed 仅单篇文献 | 覆盖率极低 | discovery.py `_search_pubmed_with_fallback` | P1 | ❌ **仍开放** |
+| 5 | 无数据可用性预检 | Agent 无法提前判断 GSE 是否可下载 | 无（需新增） | P1 | ❌ **仍开放** |
+| 6 | **下载最小体积校验缺失** | 空壳 series_matrix（如 2316 字节）被当作成功 | acquisition.py（0804 新增） | P0 | ❌ 新增 |
+| 7 | **基因符号映射缺失** | `main_data.csv` 无 `gene_symbol`，通路分析不可行 | processing.py（0804 新增） | P1 | ❌ 新增 |
+| 8 | **数据集相关性预检缺失** | Agent 选中 mitophagy 聚焦阵列做共病机制主题 | 无（0804 新增） | P1 | ❌ 新增 |
 
 ### 6.2 关键代码证据
 
-**短板 1：下载失败无回退**
+**短板 1：下载失败无回退（已修复）**
 
 [acquisition.py](file:///d:/Code/BioMedQAgent/backend/app/pipeline/stages/acquisition.py)
-构建 GEO supplemental counts URL 后直接下载，404 时不尝试替代 URL 或数据集。
+现对 GEO 候选 URL 做链式回退：`DownloadError` → `NETWORK_ERROR`，primary 失败时
+尝试 supplementary 表达矩阵等替代 URL。0804 已通过实际 run 验证。
 
-**短板 2：series matrix 仅解析样本元数据**
+**短板 2：series matrix 仅解析样本元数据（已修复）**
 
 [processing.py](file:///d:/Code/BioMedQAgent/backend/app/pipeline/stages/processing.py)
-的 `_build_minimal_parsed_dataset` 在 tximport 解析失败时，从 series matrix 提取
-样本 ID 作为 `metadata_only` 行，表达值字段全部留空。
+新增 `process_geo_series_matrix_expression` 与 `process_geo_supplementary_expression`，
+tximport 失败时从 series matrix 表达块（`!series_matrix_table_begin/end`）提取
+基因 × 样本表达值，并输出人类可读审计日志。0804 实际验证：GSE245929 产出
+23040 行真实表达矩阵。
 
-**短板 3：GEO live 模式刻意拒绝 topic 搜索**
+**短板 3：GEO live 模式刻意拒绝 topic 搜索（仍开放）**
 
 [discovery.py](file:///d:/Code/BioMedQAgent/backend/app/pipeline/stages/discovery.py)
-`run_discovery` 函数在 live 模式下当 `gse is None` 时直接 `raise LookupError`，
-注释标明"Issue #2: the pipeline must not auto-search GEO by topic"。
-`_search_geo_with_fallback` 函数存在但因前置检查而成为死代码。
+`_resolve_gse` 只返回**第一个**匹配的 GSE accession（`_extract_gse_accession`
+取首个匹配），多 GSE 传入被静默截断。0804 实际复现：`gse="GSE245929,GSE339404,
+GSE335667,GSE58474"` 最终只发布 GSE245929，其余 3 个被丢弃且无任何提示。
 
-### 6.3 改进优先级（按 ROI 排序）
+**短板 6（新增）：下载最小体积校验缺失**
+
+0804 实际复现：GSE339404 的 series_matrix 下载"成功"（HTTP 200）但仅 **2316 字节**
+（空壳/占位），进 acquisition 后被 validation 拒绝，导致首次 run 硬失败
+（`task_failed`），需用户"继续"恢复。真实 series_matrix 通常 >50KB，应新增
+acquire 层最小体积校验（如 <20KB 视为失败并触发候选 URL 回退）。
+
+### 6.3 改进优先级（按 ROI 排序，0804 更新）
 
 | 优先级 | 改进 | ROI 理由 | 改动规模 |
 |--------|------|---------|---------|
-| P0 | series matrix 表达值解析器 | 直接解决 main_data 空心化 | 中 |
-| P0 | 下载失败回退 + HIL | 防止单点 404 导致全产物废弃 | 中 |
+| P0 | 下载最小体积校验 | 拦截空壳下载，消除"失败→人工恢复"链路 | 小 |
+| P1 | GEO 多数据集支持 | 共病/比对类主题刚需，直接解决双侧缺失 | 大 |
+| P1 | 基因符号映射 | 使通路/机制分析落地，`main_data` 加 `gene_symbol` | 中 |
 | P1 | 数据可用性预检工具 | Agent 提前 vetting GSE，减少无效 pipeline 调用 | 小 |
 | P1 | PubMed 多篇文献支持 | 覆盖率从 ~7% 提升 | 中 |
-| P2 | GEO 多数据集支持 | 交叉验证能力 | 大 |
+| P1 | 数据集相关性预检 | 避免选中与主题不匹配的数据集 | 中 |
 
 ---
 
@@ -233,8 +268,10 @@ download → parse → validate 闭环。
 
 | 能力 | 理由 | 当前状态 |
 |------|------|---------|
-| 下载失败回退 | 404 是确定性事件，LLM 无法干预 | ❌ 未实现 |
-| series matrix 表达值解析 | 解析是确定性操作，非推理 | ❌ 仅元数据 |
+| 下载失败回退 | 404 是确定性事件，LLM 无法干预 | ✅ 已实现（0804） |
+| series matrix 表达值解析 | 解析是确定性操作，非推理 | ✅ 已实现（0804） |
+| 下载最小体积校验 | 空壳下载是确定性可判事件 | ❌ 未实现（0804 新增） |
+| 基因符号映射 | RefSeq→symbol 是确定性映射 | ❌ 未实现（0804 新增） |
 | 数据可用性预检 | HTTP HEAD 检查是确定性操作 | ❌ 未实现 |
 | 核心数据存在性验证 | 验证门禁必须确定性 | ✅ 已实现 |
 | 覆盖率确定性统计 | 统计 query_log 是确定性操作 | ⚠️ 部分（reviewer） |
@@ -247,20 +284,25 @@ download → parse → validate 闭环。
 | 机制驱动检索策略 | LLM 从综述提取候选基因 | ✅ prompt 指导 |
 | 覆盖率自评估 | LLM 检查"已查询/未查询" | ✅ 覆盖门禁 |
 | 基因-疾病双向验证 | LLM 多步推理 | ✅ prompt 指导 |
+| 数据集相关性 vetting | 判断数据集是否匹配主题 | ⚠️ prompt 引导（0804 仍不足） |
 
 ### 7.3 高价值工具建议（未实现）
 
 | # | 工具 | 价值 | 实现代价 |
 |---|------|------|---------|
 | 1 | GEO supplementary 文件可用性检查 | 防止 404 空心化，Agent 可提前 vetting | 小（HTTP HEAD） |
-| 2 | GEO series matrix 表达矩阵解析器 | 从 series_matrix.txt 提取表达值，不依赖 tximport | 中（解析器） |
+| 2 | GEO series matrix 表达矩阵解析器 | 从 series_matrix.txt 提取表达值，不依赖 tximport | ✅ 已实现（0804） |
 | 3 | PubMed 批量检索 + 综述优先 | 覆盖率从 1 篇提升到多篇 | 中（discovery 扩展） |
 | 4 | 下载失败 HIL 机制 | Agent 可请求用户选择替代数据集 | 中（HIL 集成） |
 | 5 | Reactome 多通路支持 | 通路网络分析类主题需要 | 中（去掉单源限制） |
+| 6 | 下载最小体积校验 | 拦截空壳 series_matrix，避免硬失败 | 小（0804 新增） |
+| 7 | 基因符号映射 | RefSeq→symbol，使 main_data 可分析 | 中（0804 新增） |
 
 ---
 
 ## 八、本轮已实施的改动
+
+### 8.1 0803 已实施改动
 
 | 改动 | 文件 | 类型 |
 |------|------|------|
@@ -270,7 +312,7 @@ download → parse → validate 闭环。
 | 更新 test_validation_split.py 黄金序列 | tests/pipeline/test_validation_split.py | P0 已实施 |
 | 更新 test_agent_build.py 断言 | tests/agent_loop/test_agent_build.py | 配套 |
 
-### 8.1 Agent prompt 重构详情
+### 8.2 0803 Agent prompt 重构详情
 
 将补丁式独立小节（"多数据库联合检索要求"、"共病双侧分解"、"数据可用性预检"）
 重构为连贯的六步工作流：
@@ -284,29 +326,46 @@ download → parse → validate 闭环。
 
 新增"数据库与数据流"小节，明确 RESEARCH_ONLY 数据库的调研结果不进入正式产物。
 
+### 8.3 0804 新增修复（已验证）
+
+| 改动 | 文件 | 类型 |
+|------|------|------|
+| series matrix 表达值解析器（`process_geo_series_matrix_expression`） | pipeline/processing.py | P0 已实施 |
+| GEO supplementary 表达矩阵解析（`process_geo_supplementary_expression`） | pipeline/processing.py | P0 已实施 |
+| 下载失败回退（`DownloadError` → `NETWORK_ERROR` + 候选 URL 链式回退） | pipeline/stages/acquisition.py | P0 已实施 |
+| 大文件工具（`read_file` 守卫 + `read_file_head`/`search_file` 流式） | tools/io.py | P1 已实施 |
+| skill 发现协议修复（`find_skill` source+category 硬过滤误伤） | registry/gateway | P1 已实施 |
+| 模型上下文窗口兜底（`guess_context_window` + 前端默认模型自适应） | api/settings.py + ContextWindowSelect | P1 已实施 |
+| 手动模型名输入修复 + URL 错误信息透出 | 前端 ModelSettingsSection | P1 已实施 |
+
+> 验证：后端 pipeline 273 通过、tools/skill 81 通过、model 38 通过；前端 tsc 0
+> 错误、vitest 621 通过（0804 实测）。
+
 ---
 
 ## 九、后续设计（需确认后实施）
 
-### 9.1 series matrix 表达值解析器（P0，建议优先）
+### 9.1 series matrix 表达值解析器（P0）✅ 已实施（0804）
 
-**问题**：当 tximport counts 文件 404 时，`_build_minimal_parsed_dataset` 仅从
+**原问题**：当 tximport counts 文件 404 时，`_build_minimal_parsed_dataset` 仅从
 series matrix 提取样本 ID，表达值全部留空。
 
 **方案**：解析 `series_matrix.txt` 中的表达矩阵块（`!series_matrix_table_begin`
 到 `!series_matrix_table_end`），提取基因 × 样本表达值。
 
-**改动**：扩展 `processing.py` 的 GEO 处理路径，当 tximport 失败时回退到
-series matrix 解析（而非仅提取元数据）。
+**现状**：已由 `process_geo_series_matrix_expression` 实现，0804 实测通过。
 
-### 9.2 下载失败回退 + HIL（P0）
+### 9.2 下载失败回退 + HIL（P0）✅ 回退已实施，HIL 待评估
 
-**问题**：HTTP 404 后无替代策略，空数据继续。
+**原问题**：HTTP 404 后无替代策略，空数据继续。
 
 **方案**：
 1. 下载失败时，在 `download_log.csv` 标记 failed
 2. Pipeline 返回 `status="download_failed"` + 失败详情
 3. Agent 收到后可选择替代 GSE 重试，或请求 HIL 让用户选择
+
+**现状**：候选 URL 链式回退已实现；HIL 通道（pipeline 内 `user_input_required`）
+已存在但下载失败时未主动触发，待评估是否接入。
 
 ### 9.3 数据可用性预检工具（P1）
 
@@ -315,7 +374,31 @@ series matrix 解析（而非仅提取元数据）。
 **方案**：新增 `check_geo_availability(gse)` 工具，HTTP HEAD 检查
 supplementary 文件 URL，返回可用性报告。
 
-### 9.4 方案 B：agent_research_notes 产物通道（暂缓）
+### 9.4 下载最小体积校验（P0，0804 新增）
+
+**问题**：0804 实测 GSE339404 的 series_matrix 下载"成功"但仅 2316 字节（空壳），
+进 validation 后被拒，导致首次 run 硬失败、需人工恢复。
+
+**方案**：acquisition 层下载后校验最小体积（如 <20KB 视为失败），触发候选 URL
+回退或返回 `download_failed`，避免空壳进入后续阶段。
+
+### 9.5 GEO 多数据集支持（P1，0804 升级）
+
+**问题**：`_resolve_gse` 单数据集限制是共病/比对类主题双侧缺失的直接根因。
+0804 实测 4 个 GSE 被静默丢弃 3 个。
+
+**方案**：支持多 GSE 并行解析与合并，或至少让每个 GSE 独立产出并保留全部
+数据集，避免静默截断。
+
+### 9.6 基因符号映射（P1，0804 新增）
+
+**问题**：`main_data.csv` 无 `gene_symbol` 列，`gene_id` 为 RefSeq `NM_*` 号，
+Agent 无法按 `CTNNB1`/`RUNX2` 等符号查询，通路/机制分析不可行。
+
+**方案**：清洗/归一化阶段增加 RefSeq→symbol 映射（mygene 或物种注释），
+发布 `gene_symbol` 列。
+
+### 9.7 方案 B：agent_research_notes 产物通道（暂缓）
 
 当 pipeline 能力提升后实施，详见 §5.4。
 
@@ -327,11 +410,16 @@ supplementary 文件 URL，返回可用性报告。
 自身能力不足**——即使 Agent 完美执行多数据库调研，pipeline 也无法将调研成果
 转化为完整的正式产物。
 
-改进优先级：
-1. **series matrix 表达值解析器**（P0）——直接解决 main_data 空心化
-2. **下载失败回退 + HIL**（P0）——防止单点 404 废弃整个产物
-3. **数据可用性预检工具**（P1）——Agent 提前 vetting，减少无效调用
-4. **PubMed 多篇 + GEO 多数据集**（P1-P2）——提升覆盖率
+**0804 进展**：两大 P0 缺陷（series matrix 表达值解析、下载失败回退）已修复并
+验证，发布产物从"空数据"转为真实表达矩阵。但 0804 实际运行暴露了新的覆盖短板。
+
+**当前改进优先级（0804 更新）**：
+1. **下载最小体积校验**（P0）——拦截空壳下载，消除"失败→人工恢复"链路
+2. **GEO 多数据集支持**（P1）——共病/比对类主题刚需，直接解决双侧缺失
+3. **基因符号映射**（P1）——加 `gene_symbol` 列，使通路/机制分析落地
+4. **数据可用性预检工具**（P1）——Agent 提前 vetting，减少无效调用
+5. **PubMed 多篇 + 数据集相关性预检**（P1）——提升覆盖率与主题匹配度
 
 研究主题分类（五类策略）已通过 prompt 实施，与 RAGFlow 的 Categorize 同属
-Agentic RAG 模式，方向正确，本轮不做实质修改。
+Agentic RAG 模式，方向正确。0804 运行证实"共病双侧分解"策略已被 Agent 采用但
+**受限于单数据集管线无法落地**，印证了多数据集支持是覆盖提升的关键前提。
