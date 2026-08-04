@@ -571,3 +571,56 @@ async def test_invoke_skill_accepts_omitted_defaulted_parameter() -> None:
 
     assert result["status"] == "ok"
     assert result["result"]["limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_find_skill_locates_pubmed_by_source_without_category() -> None:
+    """Regression: PubMed skill is discoverable via source-only find_skill.
+
+    The 2026-08-04 run log showed the Agent passing category="acquisition"
+    alongside source="pubmed", which filtered out the pubmed skill (it is a
+    discovery-class skill) and made the Agent wrongly conclude PubMed was
+    unavailable. This test pins the source-only discovery path so the catalog
+    and gateway never silently drop the pubmed skill again.
+    """
+    from app.skills.builtin import load_builtin_skill_descriptors
+
+    catalog = SkillCatalog(load_builtin_skill_descriptors())
+    find_skill, _ = build_skill_gateway(catalog)
+
+    found = await _call(
+        find_skill,
+        _context(sources=["pubmed"]),
+        text="PubMed literature",
+        source="pubmed",
+    )
+
+    assert found["status"] == "ok"
+    names = [item["name"] for item in found["skills"]]
+    assert "pubmed" in names
+
+
+@pytest.mark.asyncio
+async def test_find_skill_source_pubmed_with_acquisition_category_returns_empty() -> None:
+    """Regression baseline: source="pubmed" + category="acquisition" yields none.
+
+    PubMed is a discovery-class skill, so combining source="pubmed" with
+    category="acquisition" (as the Agent did in the 2026-08-04 run) filters it
+    out via the gateway's category hard-filter. This test documents that
+    behaviour so future changes to the filter logic are intentional.
+    """
+    from app.skills.builtin import load_builtin_skill_descriptors
+
+    catalog = SkillCatalog(load_builtin_skill_descriptors())
+    find_skill, _ = build_skill_gateway(catalog)
+
+    found = await _call(
+        find_skill,
+        _context(sources=["pubmed"]),
+        text="PubMed literature",
+        category="acquisition",
+        source="pubmed",
+    )
+
+    assert found["status"] == "ok"
+    assert found["skills"] == []
