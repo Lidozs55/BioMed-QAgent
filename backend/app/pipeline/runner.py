@@ -372,9 +372,11 @@ class PipelineRunner:
         finally:
             # TODO §1.7: save MetricsTracker regardless of run outcome
             # (success, failure, cancellation) so ablation data is never lost.
-            with suppress(Exception):
-                self.metrics.save(self.workdir.logs / "metrics.json")
-            lock.release()
+            try:
+                with suppress(Exception):
+                    self.metrics.save(self.workdir.logs / "metrics.json")
+            finally:
+                lock.release()
 
     async def run_streamed(self) -> AsyncIterator[EventEnvelope]:
         """Execute the pipeline, yielding each EventEnvelope as it is emitted.

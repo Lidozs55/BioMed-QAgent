@@ -81,6 +81,34 @@ def _resolve_safe_write_path(path: str, work_dir: WorkDirLike) -> Path:
         raise ValueError(f"路径穿越被拒绝: {path}（目标在 Agent 暂存目录之外）") from None
 
 
+_READ_FILE_MAX_BYTES = 256 * 1024  # 256 KB
+_READ_FILE_HEAD_DEFAULT_LINES = 50
+_READ_FILE_HEAD_MAX_LINE_CHARS = 200
+_SEARCH_FILE_DEFAULT_MAX_RESULTS = 20
+_SEARCH_FILE_MAX_LINE_CHARS = 300
+_IO_LINE_HARD_LIMIT = 64 * 1024  # 64 KB：单行内存硬上限，防超长行 OOM
+
+
+def _read_line_bounded(f: Any, limit: int = _IO_LINE_HARD_LIMIT) -> str | None:
+    """流式读取一个逻辑行，但限制该行在内存中保留的字符数。
+
+    超长行只保留前 ``limit`` 个字符，其余部分被读取后丢弃，使后续读取
+    仍从下一行开始。返回 ``None`` 表示 EOF。
+    """
+    chunk = f.readline(limit + 1)
+    if not chunk:
+        return None
+    if chunk.endswith(("\n", "\r")) or len(chunk) <= limit:
+        return chunk
+    while True:
+        rest = f.readline(limit + 1)
+        if not rest:
+            break
+        if rest.endswith(("\n", "\r")) or len(rest) <= limit:
+            break
+    return chunk[:limit] + "…"
+
+
 @function_tool
 def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
     """读取任务工作目录内的文件内容。path 为相对于任务根目录的相对路径。"""
@@ -92,7 +120,107 @@ def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
 
     if not safe_path.exists():
         return f"文件不存在: {safe_path}"
+    file_size = safe_path.stat().st_size
+    if file_size > _READ_FILE_MAX_BYTES:
+        return (
+            f"文件过大（{file_size:,} 字节），超过读取上限（{_READ_FILE_MAX_BYTES:,} 字节）。"
+            f"请用 read_file_head 查看文件头部结构，或用 search_file 在文件中检索关键词。"
+        )
     return safe_path.read_text(encoding="utf-8")
+
+
+@function_tool
+def read_file_head(
+    ctx: RunContextWrapper[Any],
+    path: str,
+    max_lines: int = _READ_FILE_HEAD_DEFAULT_LINES,
+) -> str:
+    """读取大文件的前 N 行（默认 50 行），用于查看表头/结构，不会加载整个文件。
+
+    path 为相对于任务根目录的相对路径；max_lines 为要读取的行数上限。
+    """
+    work_dir: WorkDirLike = ctx.context.work_dir
+    try:
+        safe_path = _resolve_safe_path(path, work_dir)
+    except ValueError as e:
+        return f"路径错误: {e}"
+
+    if not safe_path.exists():
+        return f"文件不存在: {safe_path}"
+    if max_lines <= 0:
+        return "参数错误: max_lines 必须大于 0"
+    file_size = safe_path.stat().st_size
+    lines: list[str] = []
+    with safe_path.open(encoding="utf-8-sig", errors="replace") as f:
+        while len(lines) < max_lines:
+            line = _read_line_bounded(f)
+            if line is None:
+                break
+            rendered = line.rstrip("\n").rstrip("\r")
+            if len(rendered) > _READ_FILE_HEAD_MAX_LINE_CHARS:
+                rendered = rendered[:_READ_FILE_HEAD_MAX_LINE_CHARS] + "…"
+            lines.append(f"{len(lines) + 1:>6} | {rendered}")
+    truncated = len(lines) == max_lines
+    size_hint = f"{file_size:,} 字节"
+    note = f"（仅前 {max_lines} 行，文件更大，如需更多请调大 max_lines）" if truncated else ""
+    return (
+        f"文件: {path}\n大小: {size_hint}\n"
+        f"前 {len(lines)} 行{note}:\n" + "\n".join(lines)
+    )
+
+
+@function_tool
+def search_file(
+    ctx: RunContextWrapper[Any],
+    path: str,
+    query: str,
+    max_results: int = _SEARCH_FILE_DEFAULT_MAX_RESULTS,
+    case_sensitive: bool = False,
+) -> str:
+    """在文件中按关键词检索（grep 式），返回匹配行的行号与内容片段。
+
+    适合在超大文件（如 parsed/ 下的大型 CSV）中定位特定基因/样本/条目，
+    逐行流式扫描，不会把整个文件加载到内存。path 为相对任务根目录的路径；
+    query 为要检索的关键词；max_results 限制返回条数（默认 20）；
+    case_sensitive 为 True 时区分大小写。
+    """
+    work_dir: WorkDirLike = ctx.context.work_dir
+    try:
+        safe_path = _resolve_safe_path(path, work_dir)
+    except ValueError as e:
+        return f"路径错误: {e}"
+
+    if not safe_path.exists():
+        return f"文件不存在: {safe_path}"
+    if not query:
+        return "参数错误: query 不能为空"
+    if max_results <= 0:
+        return "参数错误: max_results 必须大于 0"
+    needle = query if case_sensitive else query.casefold()
+    matches: list[str] = []
+    scanned = 0
+    with safe_path.open(encoding="utf-8-sig", errors="replace") as f:
+        while True:
+            line = _read_line_bounded(f)
+            if line is None:
+                break
+            scanned += 1
+            haystack = line if case_sensitive else line.casefold()
+            if needle in haystack:
+                rendered = line.rstrip("\n").rstrip("\r")
+                if len(rendered) > _SEARCH_FILE_MAX_LINE_CHARS:
+                    rendered = rendered[:_SEARCH_FILE_MAX_LINE_CHARS] + "…"
+                matches.append(f"{scanned:>7} | {rendered}")
+                if len(matches) >= max_results:
+                    break
+    hit_note = f"{len(matches)} 条匹配（已达上限，可缩小关键词或调大 max_results）" if (
+        len(matches) >= max_results
+    ) else f"{len(matches)} 条匹配"
+    return (
+        f"文件: {path}\n检索: {query!r}（共扫描 {scanned:,} 行，{hit_note}）:\n"
+        + "\n".join(matches)
+        + ("\n（未找到匹配）" if not matches else "")
+    )
 
 
 @function_tool

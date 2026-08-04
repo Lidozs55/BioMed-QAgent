@@ -50,6 +50,8 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
         "invoke_skill",
         "run_research_pipeline",
         "read_file",
+        "read_file_head",
+        "search_file",
         "write_file",
         "list_files",
         "compress_query_log",

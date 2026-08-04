@@ -70,6 +70,8 @@ interface ChatPanelProps {
   selectedModelId?: string;
   /** Context window capacity in tokens from model settings */
   contextWindow?: number;
+  /** Non-null when model settings block task creation (e.g. missing context window) */
+  runBlockReason?: string | null;
 }
 
 const TERMINAL_STATUSES = new Set([
@@ -137,6 +139,7 @@ export function ChatPanel({
   onModelChange,
   selectedModelId,
   contextWindow,
+  runBlockReason,
 }: ChatPanelProps) {
   const isMobile = useIsMobile();
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
@@ -264,6 +267,10 @@ export function ChatPanel({
     if (!input || isSubmitting) return;
     if (selectedDatabases.length === 0) {
       setDraftError("请至少选择一个数据源");
+      return;
+    }
+    if (runBlockReason) {
+      setDraftError(`模型配置不完整：${runBlockReason}。请在设置中配置上下文窗口或选择已有模型。`);
       return;
     }
     const submissionKey = draftKey(input, selectedDatabases);

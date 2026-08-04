@@ -35,7 +35,7 @@ from app.model_config.token_estimation import (
     serialize_function_tool_schemas,
 )
 from app.tools.cache_tools import commit_to_cache
-from app.tools.io import list_files, read_file, write_file
+from app.tools.io import list_files, read_file, read_file_head, search_file, write_file
 from app.tools.sandbox import run_python_script
 
 #: 附件解析 Agent 的 max_turns 上限（D5 决策）。
@@ -67,7 +67,10 @@ IMPORT_INSTRUCTIONS = """\
 
 ### 2. 检查文件格式
 调用 ``read_file('source_assets/<filename>')`` 读取前若干行（或全文，
-若不大）判断格式：
+若不大）判断格式。注意 ``read_file`` 有 256KB 大小限制——大文件（如超大
+CSV/TSV）用 ``read_file_head`` 读取前若干行查看表头/结构，用
+``search_file`` 按关键词（如基因名、样本 ID）定位具体行，两者均流式读取
+不会加载整个文件：
   - CSV/TSV — 看分隔符和表头
   - JSON — 看是对象、数组、还是嵌套结构
   - Markdown 表格 — 看是否有 ``|---|---|`` 分隔行
@@ -265,6 +268,8 @@ def build_attachment_parsing_agent(
     model = get_model(model_settings) if model_settings is not None else get_model()
     tools = [
         read_file,
+        read_file_head,
+        search_file,
         write_file,
         list_files,
         run_python_script,

@@ -199,6 +199,7 @@ export default function App() {
                 onModelChange={handleModelChange}
                 onOpenSettings={() => setSettingsOpen(true)}
                 contextWindow={settings?.context_window}
+                runBlockReason={settings?.run_block_reason}
               />
             </SubagentWorkspace>
           </div>

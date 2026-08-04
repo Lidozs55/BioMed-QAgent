@@ -58,6 +58,12 @@ function optBoolean(v: unknown, path: string): boolean | undefined {
   return v;
 }
 
+function optString(v: unknown, path: string): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") throw new APIError(502, `Expected optional string at ${path}, got ${typeof v}`);
+  return v;
+}
+
 /* ---- Concrete parsers ---- */
 
 /** Parse a settings response body into ModelSettings, rejecting malformed shapes. */
@@ -84,6 +90,7 @@ export function parseModelSettings(body: unknown): ModelSettings {
     compaction_target_ratio: assertNumber(Reflect.get(obj, "compaction_target_ratio"), "settings.compaction_target_ratio"),
     available_input_tokens: availableInputTokens,
     advanced: parseAdvanced(Reflect.get(obj, "advanced"), "settings.advanced"),
+    run_block_reason: optString(Reflect.get(obj, "run_block_reason"), "settings.run_block_reason") ?? null,
   };
 }
 

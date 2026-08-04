@@ -7,7 +7,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import cache
+from functools import lru_cache
 from typing import Any
 
 from agents.items import TResponseInputItem
@@ -126,7 +126,7 @@ def align_groups_to_records(
 
     inputs = [content_text(item_value(group[0], "content", "")).strip() for group in groups]
 
-    @cache
+    @lru_cache(maxsize=4096)
     def mapping_count(group_index: int, record_index: int) -> int:
         if group_index == len(groups):
             return 1

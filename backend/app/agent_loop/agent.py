@@ -33,7 +33,7 @@ from app.subagents.tools import (
     delegate_research,
     get_subagent_results,
 )
-from app.tools.io import list_files, read_file, write_file
+from app.tools.io import list_files, read_file, read_file_head, search_file, write_file
 
 AGENT_MAX_TURNS: int = 240
 
@@ -117,6 +117,8 @@ Pipeline 生成。你的核心价值在于**研究策略的质量**：选对数�
 - `find_skill` / `invoke_skill` — 发现和调用业务技能（检索、下载、解析等）
 - `run_research_pipeline` — 执行确定性 Pipeline，生成正式产物
 - `read_file` / `write_file` / `list_files` — 管理本地文件
+- `read_file_head` — 读取大文件前 N 行（查看表头/结构，不加载全文）
+- `search_file` — 在文件中按关键词检索（grep 式，返回行号与内容片段）
 - `review_query_strategy` — 让 ReviewerAgent 审查检索策略合理性
 - `compress_query_log` — 压缩查询日志以控制上下文体积
 - `delegate_research` / `get_subagent_results` / `cancel_subagent` — 子 Agent 委托
@@ -201,7 +203,11 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 - `parsed/` — 解析后的结构化数据
 
 下载与解析严格分离：下载技能只保存原始文件，不读取内容；解析技能从本地文件开始
-工作。使用 `read_file`/`write_file`/`list_files` 管理本地文件。
+工作。使用 `read_file`/`write_file`/`list_files` 管理本地文件。`read_file` 有 256KB
+大小限制——`parsed/` 和 `source_assets/` 下的数据文件通常很大，不要直接 `read_file`
+读取整个文件。大文件用 `read_file_head` 查看前若干行了解表头/结构，用
+`search_file` 按关键词（如基因名、样本 ID）定位具体行；两者均只流式读取，不会
+加载整个文件。
 
 ## 调用 run_research_pipeline
 正式产物必须借助 `run_research_pipeline` 生成，不要自行拼装或直接写最终 CSV。
@@ -422,6 +428,8 @@ def build_agent(
         invoke_skill,
         run_research_pipeline,
         read_file,
+        read_file_head,
+        search_file,
         write_file,
         list_files,
         build_compress_query_log_tool(model),
