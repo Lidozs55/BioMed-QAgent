@@ -53,6 +53,8 @@ def test_build_import_agent_returns_agent_build_with_expected_tools() -> None:
     tool_names = {tool.name for tool in build.agent.tools}
     assert tool_names == {
         "read_file",
+        "read_file_head",
+        "search_file",
         "write_file",
         "list_files",
         "run_python_script",

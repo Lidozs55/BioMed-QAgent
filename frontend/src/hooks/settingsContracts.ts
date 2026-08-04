@@ -33,6 +33,8 @@ export interface ModelSettings extends ContextBudgetSettings {
     enable_search?: boolean;
     thinking_mode?: boolean;
   };
+  /** Non-null when the backend cannot resolve a valid context budget; task creation will be rejected. */
+  run_block_reason: string | null;
 }
 
 export interface ModelSettingsUpdate {

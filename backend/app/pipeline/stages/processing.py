@@ -38,6 +38,8 @@ from app.tools.alignment import normalize_field_names
 
 logger = logging.getLogger(__name__)
 
+_CLEANING_MAX_ROWS = 500_000
+
 
 def _build_minimal_parsed_dataset(
     source_asset: SourceAsset,
@@ -158,7 +160,15 @@ def _clean_parsed_dataset(
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
-        all_rows = list(reader)
+        all_rows = []
+        for row in reader:
+            if len(all_rows) >= _CLEANING_MAX_ROWS:
+                logger.warning(
+                    "cleaning: row limit (%d) reached for %s, truncating",
+                    _CLEANING_MAX_ROWS, csv_path.name,
+                )
+                break
+            all_rows.append(row)
         columns = reader.fieldnames or []
 
     if not all_rows:
