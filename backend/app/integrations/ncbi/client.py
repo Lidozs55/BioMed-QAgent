@@ -147,7 +147,7 @@ class NcbiEutilsClient:
                         )
                     except httpx.HTTPError as error:
                         raise NcbiRequestError(
-                            f"NCBI request failed: {error}",
+                            f"NCBI request failed: {type(error).__name__}: {error}",
                             status_code=None,
                             retryable=True,
                         ) from error
