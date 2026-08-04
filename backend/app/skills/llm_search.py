@@ -189,12 +189,24 @@ class LLMRerankingSkillSearchStrategy:
         lexical_result: Sequence[SkillDescriptor],
         text: str,
     ) -> bool:
-        """True when the lexical result contains an exact name or source match."""
+        """True when the lexical result contains an exact name or source match.
+
+        Also matches individual query tokens (length >= 3) against skill
+        names/sources, so stop-word-padded queries like "search pubmed" are
+        treated as exact identity hits without invoking the LLM reranker.
+        """
         normalized = normalize_skill_search_text(text)
-        return any(
-            normalize_skill_search_text(d.name) == normalized
-            or normalized in {
-                normalize_skill_search_text(s) for s in d.supported_sources
-            }
-            for d in lexical_result
-        )
+        tokens = [t for t in normalized.split() if len(t) >= 3]
+
+        def _matches(candidate: str) -> bool:
+            return any(
+                normalize_skill_search_text(d.name) == candidate
+                or candidate in {
+                    normalize_skill_search_text(s) for s in d.supported_sources
+                }
+                for d in lexical_result
+            )
+
+        if _matches(normalized):
+            return True
+        return any(_matches(token) for token in tokens)

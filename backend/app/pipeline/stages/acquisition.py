@@ -118,6 +118,92 @@ def _series_matrix_url(gse: str) -> str:
     )
 
 
+def _suppl_directory_url(gse: str) -> str:
+    """Build the NCBI GEO supplementary files directory URL."""
+    prefix = gse[:6].upper()
+    return f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/{gse}/suppl/"
+
+
+# 启发式关键词优先级：counts > tpm > fpkm > expression
+_SUPPL_EXPRESSION_KEYWORDS = ["counts", "count_", "tpm", "fpkm", "expression", "expr", "normalized"]
+_SUPPL_EXCLUDE_KEYWORDS = ["raw", "clinical", "phenotype", "sample", "readme", "pheno", "meta"]
+
+
+def _select_suppl_expression_file(filenames: list[str], gse: str) -> str | None:
+    """从 suppl 目录文件列表中启发式选取表达矩阵文件。
+
+    优先级：counts > tpm > fpkm > expression。
+    排除 raw/clinical/phenotype/sample/README 等非表达矩阵文件。
+    """
+    candidates: list[tuple[int, str]] = []
+    for filename in filenames:
+        lower = filename.lower()
+        # 排除非表达矩阵文件
+        if any(excl in lower for excl in _SUPPL_EXCLUDE_KEYWORDS):
+            continue
+        # 只考虑压缩文件或文本文件
+        if not lower.endswith((".gz", ".csv", ".txt", ".tsv")):
+            continue
+        # 匹配表达矩阵关键词
+        for priority, keyword in enumerate(_SUPPL_EXPRESSION_KEYWORDS):
+            if keyword in lower:
+                candidates.append((priority, filename))
+                break
+    if not candidates:
+        return None
+    # 按优先级排序，选取最优候选
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+async def _try_download_suppl_expression(
+    gse: str,
+    ctx: StageContext,
+    cache: ContentCache,
+    http: httpx.AsyncClient,
+    source_id: str,
+    retrieved_at: datetime,
+) -> tuple[SourceAsset | None, DownloadAttempt | None]:
+    """尝试发现并下载 supplementary 表达矩阵文件。
+
+    当 series_matrix 表达块为空（RNA-seq 数据集常见）时，真实表达数据在
+    supplementary 文件中。本函数请求 GEO FTP suppl 目录列表，启发式选取
+    表达矩阵文件（counts/TPM/FPKM）并下载。
+
+    返回 (source_asset, download_attempt)。失败时返回 (None, attempt)。
+    """
+    listing_url = _suppl_directory_url(gse)
+    try:
+        resp = await http.get(listing_url, timeout=30)
+        if resp.status_code != 200:
+            return None, None
+    except httpx.HTTPError as exc:
+        logger.warning("acquisition: suppl directory listing failed for %s: %s", gse, exc)
+        return None, None
+
+    # 从 HTML 中提取文件名
+    filenames = re.findall(r'href="([^"]+)"', resp.text)
+    # 过滤掉目录引用和父目录
+    filenames = [f for f in filenames if not f.endswith("/") and f != "../"]
+
+    selected = _select_suppl_expression_file(filenames, gse)
+    if selected is None:
+        logger.info("acquisition: no suppl expression file found for %s", gse)
+        return None, None
+
+    download_url = f"{listing_url}{selected}"
+    source = SourceRecord(
+        source_id=source_id,
+        database=Database.GEO,
+        accession=gse,
+        url=download_url,
+        title=f"{gse} supplementary expression",
+        retrieved_at=retrieved_at,
+    )
+    result = await _try_acquire(source, selected, ctx, cache, http, gse)
+    return result.asset, result.attempt
+
+
 async def _try_acquire(
     source: SourceRecord,
     filename: str,
@@ -748,7 +834,6 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
             attempts: list[DownloadAttempt] = []
             used_filename = ""
             for download_url, filename, title in candidates:
-                logger.info("acquisition: trying %s", download_url)
                 source = SourceRecord(
                     source_id=source_id,
                     database=Database.GEO,
@@ -761,34 +846,43 @@ def _run_acquisition_live(ctx: StageContext, retrieved_at: datetime, gse: str) -
                 attempts.append(result.attempt)
                 if result.asset is not None:
                     used_filename = filename
-                    logger.info("acquisition: success via %s", download_url)
                     break
 
-        if result is None or result.asset is None:
-            raise DownloadError(f"live download failed for {gse}: all candidate URLs failed")
+            if result is None or result.asset is None:
+                raise DownloadError(f"live download failed for {gse}: all candidate URLs failed")
 
-        assets = [result.asset]
-        if "tximportCounts" in used_filename:
-            soft_source = SourceRecord(
-                source_id=source_id,
-                database=Database.GEO,
-                accession=gse,
-                url=_family_soft_url(gse),
-                title=f"{gse} family SOFT",
-                retrieved_at=retrieved_at,
-            )
-            soft_result = await _try_acquire(
-                soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
-            )
-            if soft_result.asset is None:
-                raise DownloadError(
-                    f"live download failed for {gse}: family SOFT required "
-                    "when tximport counts are available"
+            assets = [result.asset]
+            if "tximportCounts" in used_filename:
+                soft_source = SourceRecord(
+                    source_id=source_id,
+                    database=Database.GEO,
+                    accession=gse,
+                    url=_family_soft_url(gse),
+                    title=f"{gse} family SOFT",
+                    retrieved_at=retrieved_at,
                 )
-            assets.append(soft_result.asset)
-            attempts.append(soft_result.attempt)
+                soft_result = await _try_acquire(
+                    soft_source, f"{gse}_family.soft.gz", ctx, cache, http, gse
+                )
+                if soft_result.asset is None:
+                    raise DownloadError(
+                        f"live download failed for {gse}: family SOFT required "
+                        "when tximport counts are available"
+                    )
+                assets.append(soft_result.asset)
+                attempts.append(soft_result.attempt)
+            elif "series_matrix" in used_filename:
+                # RNA-seq 数据集的 series_matrix 表达块常为空，真实表达数据
+                # 在 supplementary 文件中。尝试发现并下载 suppl 表达矩阵。
+                suppl_asset, suppl_attempt = await _try_download_suppl_expression(
+                    gse, ctx, cache, http, source_id, retrieved_at
+                )
+                if suppl_attempt is not None:
+                    attempts.append(suppl_attempt)
+                if suppl_asset is not None:
+                    assets.append(suppl_asset)
 
-        # Surface live acquisition progress. See docs/REVIEW_2026-07-18.md §4.
+        # Surface live acquisition progress.
         ctx.emit_progress_sync(
             stage=StageName.ACQUISITION,
             kind="downloaded_bytes",

@@ -455,13 +455,13 @@ async def acquire_source(
         error_message = str(error)
     except httpx.TimeoutException as error:
         error_code = ErrorCode.TIMEOUT
-        error_message = f"download timed out: {error}"
+        error_message = f"download timed out: {type(error).__name__}: {error}"
     except httpx.HTTPError as error:
         error_code = ErrorCode.NETWORK_ERROR
-        error_message = f"download failed: {error}"
+        error_message = f"download failed: {type(error).__name__}: {error}"
     except (OSError, ValueError) as error:
         error_code = ErrorCode.INTERNAL_ERROR
-        error_message = f"download failed: {error}"
+        error_message = f"download failed: {type(error).__name__}: {error}"
     finally:
         part_path.unlink(missing_ok=True)
 

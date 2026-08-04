@@ -95,6 +95,40 @@ def test_search_xena_success() -> None:
     assert rc.query_log[0]["status"] == "success"
 
 
+def test_search_xena_accepts_query_parameter() -> None:
+    """search_xena accepts ``query`` as the recommended parameter name."""
+    mock_datasets = [
+        {"dataset_id": "TCGA.BRCA.sampleMap/HiSeqV2", "name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "gene_expression", "cohort": "TCGA-BRCA", "size_bytes": 50000, "last_modified": "2024-01-01"},
+    ]
+
+    ctx = _make_ctx(task_id="test_xena_query")
+    with patch("app.skills.builtin.acquisition.xena._fetch_hub_index", return_value=mock_datasets):
+        args = json.dumps({"query": "BRCA", "max_results": 10})
+        result = asyncio.run(search_xena.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["source"] == "xena"
+    assert data["term"] == "BRCA"
+    assert data["count"] == 1
+
+
+def test_search_xena_query_preferred_over_term() -> None:
+    """When both ``query`` and ``term`` are given, ``query`` wins."""
+    mock_datasets = [
+        {"dataset_id": "TCGA.BRCA.sampleMap/HiSeqV2", "name": "TCGA.BRCA.sampleMap/HiSeqV2", "type": "gene_expression", "cohort": "TCGA-BRCA", "size_bytes": 50000, "last_modified": "2024-01-01"},
+        {"dataset_id": "TCGA.LUAD.sampleMap/HiSeqV2", "name": "TCGA.LUAD.sampleMap/HiSeqV2", "type": "gene_expression", "cohort": "TCGA-LUAD", "size_bytes": 40000, "last_modified": "2024-01-01"},
+    ]
+
+    ctx = _make_ctx(task_id="test_xena_both")
+    with patch("app.skills.builtin.acquisition.xena._fetch_hub_index", return_value=mock_datasets):
+        args = json.dumps({"query": "BRCA", "term": "LUAD"})
+        result = asyncio.run(search_xena.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["term"] == "BRCA"  # query wins
+    assert data["count"] == 1
+
+
 def test_managed_search_xena_uses_bound_crawler_facade(
     monkeypatch,
     tmp_path,

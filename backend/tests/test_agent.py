@@ -82,7 +82,9 @@ def test_model_is_configured() -> None:
 # ---------------------------------------------------------------------------
 
 # Acquisition skills that should be filtered by database selection.
-_ACQUISITION_SKILLS = {"geo", "gdc", "pdb", "xena", "reactome", "pubchem", "browser_fallback"}
+# browser_fallback is excluded — it is always available as a last-resort tool
+# (like local_cache), not tied to a specific database selection.
+_ACQUISITION_SKILLS = {"geo", "gdc", "pdb", "xena", "reactome", "pubchem"}
 
 
 def test_database_filter_loads_only_selected_acquisition_skills() -> None:
@@ -119,6 +121,15 @@ def test_database_filter_none_loads_all_skills() -> None:
     assert "geo" in loaded
     assert "gdc" in loaded
     assert "pdb" in loaded
+
+
+def test_browser_fallback_always_available() -> None:
+    """browser_fallback is always in skill_names regardless of database selection."""
+    for databases in (["geo"], ["pubmed"], ["geo", "pdb"], None):
+        build = build_agent(databases=databases)
+        assert "browser_fallback" in set(build.skill_names), (
+            f"browser_fallback missing when databases={databases}"
+        )
 
 
 def test_database_filter_always_loads_non_acquisition_skills() -> None:

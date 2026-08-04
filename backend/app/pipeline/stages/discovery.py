@@ -115,12 +115,6 @@ def run_discovery(ctx: StageContext) -> StageResult:
             ctx.mode,
             ctx.topic[:80],
         )
-    else:
-        logger.info(
-            "discovery: using agent specification (%d queries, %d datasets)",
-            len(specification.queries),
-            len(specification.datasets),
-        )
 
     selected_databases = {
         query.database for query in specification.queries
@@ -181,12 +175,6 @@ def run_discovery(ctx: StageContext) -> StageResult:
         literature, geo, retrieved_at = _run_discovery_fixture(
             ctx.fixture_dir, pmid or _DEFAULT_PMID, gse or _DEFAULT_GSE
         )
-    logger.info(
-        "discovery: success pmid=%s gse=%s title=%r",
-        literature.pmid,
-        geo.accession,
-        literature.title[:80],
-    )
 
     # Surface discovery progress: "Discovery: found 1 PubMed record + 1 GEO series".
     # See docs/REVIEW_2026-07-18.md §4.

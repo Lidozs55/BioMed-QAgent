@@ -603,3 +603,192 @@ def process_geo_tximport_counts(
         source_row_count=source_row_count,
         processing_parameters=processing_parameters,
     )
+
+
+# ---------------------------------------------------------------------------
+# Supplementary expression matrix parsing
+# ---------------------------------------------------------------------------
+
+_SUPPL_KEYWORD_MAP: list[tuple[str, str, str, str, bool]] = [
+    # (keyword, measurement_type, value_semantics, value_scale, is_normalized)
+    ("counts", "supplementary_counts", "estimated_count", "raw_count", False),
+    ("count_", "supplementary_counts", "estimated_count", "raw_count", False),
+    ("tpm", "supplementary_tpm", "tpm", "log2", True),
+    ("fpkm", "supplementary_fpkm", "fpkm", "log2", True),
+    ("expression", "supplementary_expression", "normalized_expression_value", "log2", True),
+    ("expr", "supplementary_expression", "normalized_expression_value", "log2", True),
+    ("normalized", "supplementary_expression", "normalized_expression_value", "log2", True),
+]
+
+
+def _infer_suppl_semantics(filename: str) -> tuple[str, str, str, bool]:
+    """从 suppl 文件名推断 measurement_type / value_semantics / value_scale / is_normalized。"""
+    lower = filename.lower()
+    for keyword, measurement, semantics, scale, normalized in _SUPPL_KEYWORD_MAP:
+        if keyword in lower:
+            return measurement, semantics, scale, normalized
+    return "supplementary_expression", "normalized_expression_value", "log2", True
+
+
+def _detect_delimiter(sample_line: str) -> str:
+    """自动检测分隔符：逗号或制表符。"""
+    if "\t" in sample_line:
+        return "\t"
+    return ","
+
+
+def process_geo_supplementary_expression(
+    *,
+    source_asset: SourceAsset,
+    dataset_id: str,
+    workdir: TaskWorkDir,
+    samples: list[GeoSampleMetadata],
+) -> ParsedDataset | None:
+    """解析 GEO supplementary 表达矩阵文件。
+
+    当 series_matrix 表达块为空（RNA-seq 数据集常见）时，acquisition 阶段
+    会额外下载 supplementary 表达矩阵文件（如 ``*_counts.csv.gz``、
+    ``*_TPM.txt.gz``）。本函数解析这些文件，自动检测分隔符（CSV/TSV），
+    推断 measurement_type（counts/TPM/FPKM/expression）。
+
+    第一列视为基因 ID，其余列视为样本表达值。样本列名优先与已知的
+    GSM accession 匹配；若不匹配则按列序使用原始列名。
+
+    返回 ``ParsedDataset``（含真实表达行），或 ``None``（文件为空或无有效行）。
+    """
+    source_path = workdir.root / source_asset.relative_path
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    raw_bytes = source_path.read_bytes()
+    if hashlib.sha256(raw_bytes).hexdigest() != source_asset.sha256:
+        raise ValueError("source asset checksum mismatch before processing")
+
+    filename = source_asset.relative_path.rsplit("/", 1)[-1]
+    measurement_type, value_semantics, value_scale, is_normalized = (
+        _infer_suppl_semantics(filename)
+    )
+
+    # 解压
+    if filename.endswith(".gz"):
+        text = gzip.decompress(raw_bytes).decode("utf-8", errors="replace")
+    else:
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return None
+
+    delimiter = _detect_delimiter(lines[0])
+    header_parts = [p.strip().strip('"') for p in lines[0].split(delimiter)]
+    if len(header_parts) < 2:
+        return None
+
+    sample_columns = header_parts[1:]
+
+    # 构建 sample_id → source_alias 映射
+    sample_map: dict[str, str] = {}
+    for s in samples:
+        sample_map[s.sample_id] = s.source_alias
+        # 也支持列名只有 GSM 后缀数字的情况
+        if s.sample_id.startswith("GSM"):
+            sample_map[s.sample_id[3:]] = s.source_alias
+
+    output_path = workdir.parsed / f"{dataset_id}_suppl_expression_long.csv"
+    row_count = 0
+    source_row_count = 0
+
+    with output_path.open("w", encoding="utf-8-sig", newline="") as target:
+        writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
+        writer.writeheader()
+
+        for line_idx, line in enumerate(lines[1:], start=2):
+            values = [v.strip().strip('"') for v in line.split(delimiter)]
+            if len(values) < 2:
+                continue
+            gene_id_raw = values[0]
+            if not gene_id_raw:
+                continue
+            source_row_count += 1
+
+            for col_idx, col_name in enumerate(sample_columns):
+                physical_index = col_idx + 1
+                raw_value = values[physical_index] if physical_index < len(values) else ""
+                if not raw_value or raw_value in {"NA", "null", "NaN", ""}:
+                    continue
+                try:
+                    float(raw_value)
+                except (ValueError, TypeError):
+                    continue
+
+                # 匹配样本
+                source_alias = sample_map.get(col_name, col_name)
+                sample_id = col_name
+                # 如果列名不是 GSM 格式，尝试匹配 samples 中的 source_alias
+                if not col_name.startswith("GSM"):
+                    for s in samples:
+                        if s.source_alias == col_name:
+                            sample_id = s.sample_id
+                            break
+
+                writer.writerow({
+                    "record_id": make_record_id(dataset_id, gene_id_raw, sample_id),
+                    "dataset_id": dataset_id,
+                    "source_id": source_asset.source_id,
+                    "asset_id": source_asset.asset_id,
+                    "gene_id_raw": gene_id_raw,
+                    "gene_id": gene_id_raw,
+                    "gene_id_namespace": "gene_symbol",
+                    "gene_id_version": "",
+                    "sample_id": sample_id,
+                    "source_sample_alias": source_alias,
+                    "measurement_type": measurement_type,
+                    "value_semantics": value_semantics,
+                    "value_scale": value_scale,
+                    "is_normalized": "true" if is_normalized else "false",
+                    "is_integer_expected": "false" if is_normalized else "true",
+                    "expression_value": raw_value,
+                    "expression_unit": value_semantics,
+                    "source_logical_file": "supplementary_expression",
+                    "source_line_number": line_idx,
+                    "source_column_index": physical_index,
+                    "source_column_name": col_name,
+                    "source_raw_value": raw_value,
+                })
+                row_count += 1
+
+    if row_count == 0:
+        return None
+
+    file_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(file_bytes).hexdigest()
+    file_asset = FileAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="parsed",
+        relative_path=output_path.relative_to(workdir.root).as_posix(),
+        sha256=checksum,
+        size_bytes=len(file_bytes),
+        media_type="text/csv",
+        generated_by_step_id="step_geo_suppl_expression_v1",
+    )
+    processing_parameters = {
+        "measurement_type": measurement_type,
+        "value_semantics": value_semantics,
+        "value_scale": value_scale,
+        "is_normalized": is_normalized,
+        "sample_count": len(sample_columns),
+        "source_logical_file": "supplementary_expression",
+        "gene_id_namespace": "gene_symbol",
+        "source_filename": filename,
+    }
+    return ParsedDataset(
+        dataset_id=dataset_id,
+        source_id=source_asset.source_id,
+        source_asset_id=source_asset.asset_id,
+        file_asset=file_asset,
+        columns=list(_OUTPUT_COLUMNS),
+        row_count=row_count,
+        parser_name="geo_supplementary_expression",
+        parser_version="1.0.0",
+        source_row_count=source_row_count,
+        processing_parameters=processing_parameters,
+    )

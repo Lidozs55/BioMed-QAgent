@@ -262,6 +262,38 @@ async def test_interrupted_stream_never_publishes_source_asset(
 
 
 @pytest.mark.asyncio
+async def test_error_message_keeps_exception_type_when_message_is_empty(
+    tmp_path: Path,
+) -> None:
+    """A network error whose str() is empty must still surface the type name.
+
+    Regression for the 2026-08-04 run log symptom "download failed: " (colon
+    then blank). httpx connection errors can carry an empty message, so the
+    error_message must include the exception class name to stay diagnosable.
+    """
+    error = httpx.ReadError("")  # str() == ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=FailingStream(error))
+
+    workdir = create_task_workdir("task_empty_msg", base_dir=str(tmp_path / "tasks"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await acquire_source(
+            source=source_record(),
+            filename="counts.gz",
+            workdir=workdir,
+            cache=ContentCache(tmp_path / "cache"),
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=1024,
+        )
+
+    assert result.attempt.status is DownloadStatus.FAILED
+    assert result.attempt.error_code is ErrorCode.NETWORK_ERROR
+    assert "ReadError" in (result.attempt.error_message or "")
+
+
+@pytest.mark.asyncio
 async def test_cancelled_stream_cleans_partial_file_without_publishing_asset(
     tmp_path: Path,
 ) -> None:
