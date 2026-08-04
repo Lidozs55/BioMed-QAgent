@@ -203,11 +203,11 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 - `parsed/` — 解析后的结构化数据
 
 下载与解析严格分离：下载技能只保存原始文件，不读取内容；解析技能从本地文件开始
-工作。使用 `read_file`/`write_file`/`list_files` 管理本地文件。`read_file` 有 256KB
-大小限制——`parsed/` 和 `source_assets/` 下的数据文件通常很大，不要直接 `read_file`
-读取整个文件。大文件用 `read_file_head` 查看前若干行了解表头/结构，用
-`search_file` 按关键词（如基因名、样本 ID）定位具体行；两者均只流式读取，不会
-加载整个文件。
+工作。使用 `read_file`/`write_file`/`list_files` 管理本地文件。`read_file` 上限
+1 MB，可读取中小型配置/JSON/短表；`parsed/` 和 `source_assets/` 下的数据文件
+（表达谱矩阵、series matrix 等）通常远超此上限，不要直接 `read_file`。大文件用
+`read_file_head` 查看前 N 行了解表头/结构，用 `search_file` 按关键词（如基因名、
+样本 ID）定位具体行；两者均流式读取，不加载整个文件。
 
 ## 调用 run_research_pipeline
 正式产物必须借助 `run_research_pipeline` 生成，不要自行拼装或直接写最终 CSV。

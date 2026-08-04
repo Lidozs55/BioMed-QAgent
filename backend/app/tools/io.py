@@ -81,7 +81,7 @@ def _resolve_safe_write_path(path: str, work_dir: WorkDirLike) -> Path:
         raise ValueError(f"路径穿越被拒绝: {path}（目标在 Agent 暂存目录之外）") from None
 
 
-_READ_FILE_MAX_BYTES = 256 * 1024  # 256 KB
+_READ_FILE_MAX_BYTES = 1024 * 1024  # 1 MB — 覆盖中等文件;超大文件用 read_file_head/search_file
 _READ_FILE_HEAD_DEFAULT_LINES = 50
 _READ_FILE_HEAD_MAX_LINE_CHARS = 200
 _SEARCH_FILE_DEFAULT_MAX_RESULTS = 20
@@ -123,8 +123,9 @@ def read_file(ctx: RunContextWrapper[Any], path: str) -> str:
     file_size = safe_path.stat().st_size
     if file_size > _READ_FILE_MAX_BYTES:
         return (
-            f"文件过大（{file_size:,} 字节），超过读取上限（{_READ_FILE_MAX_BYTES:,} 字节）。"
-            f"请用 read_file_head 查看文件头部结构，或用 search_file 在文件中检索关键词。"
+            f"文件过大（{file_size:,} 字节，上限 {_READ_FILE_MAX_BYTES:,} 字节）。"
+            f"大文件请用 read_file_head 查看前 N 行结构，或用 search_file 按关键词"
+            f"（基因名/样本 ID/条目名）定位具体行——两者均流式读取，不加载全文。"
         )
     return safe_path.read_text(encoding="utf-8")
 
