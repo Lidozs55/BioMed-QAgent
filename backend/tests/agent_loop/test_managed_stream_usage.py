@@ -11,7 +11,7 @@ import app.agent_loop.runner as runner_module
 import pytest
 from agents import ModelSettings
 from agents.usage import Usage
-from app.model_config import RunModelSettings, UserSettings
+from app.model_config import AdvancedParams, RunModelSettings, UserSettings
 from app.runtime.manager import RunExecution
 
 
@@ -35,9 +35,32 @@ def test_managed_model_settings_request_authoritative_stream_usage() -> None:
         extra_body={
             "repetition_penalty": run_settings.repetition_penalty,
             "enable_search": run_settings.enable_search,
-            "enable_thinking": run_settings.thinking_mode,
         },
     )
+    # DashScope rejects enable_thinking=False (restricted to True); with the
+    # default thinking_mode=False the field must be omitted entirely.
+    assert "enable_thinking" not in (request_settings.extra_body or {})
+
+
+def test_managed_model_settings_omits_enable_thinking_when_off_and_sends_true_when_on() -> None:
+    off = model_module.build_sdk_model_settings(
+        RunModelSettings.from_user_settings(UserSettings(model_name="qwen-plus"))
+    )
+    assert off.extra_body == {"repetition_penalty": 1.0, "enable_search": False}
+
+    on = model_module.build_sdk_model_settings(
+        RunModelSettings.from_user_settings(
+            UserSettings(
+                model_name="qwen3.7-max-preview",
+                advanced=AdvancedParams(thinking_mode=True),
+            )
+        )
+    )
+    assert on.extra_body == {
+        "repetition_penalty": 1.0,
+        "enable_search": False,
+        "enable_thinking": True,
+    }
 
 
 @pytest.mark.asyncio
