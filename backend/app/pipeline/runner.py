@@ -920,6 +920,7 @@ class PipelineRunner:
             acquisition = self._get_output(stage_outputs, StageName.ACQUISITION, AcquisitionOutput)
             return run_processing(
                 self.ctx, acquisition.source_assets, discovery.dataset_id,
+                geo=discovery.geo,
             )
         if stage is StageName.ARTIFACT_BUILD:
             discovery = self._get_output(stage_outputs, StageName.DISCOVERY, DiscoveryOutput)

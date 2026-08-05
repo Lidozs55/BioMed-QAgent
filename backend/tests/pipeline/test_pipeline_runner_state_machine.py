@@ -56,7 +56,7 @@ def test_runner_emits_input_parameter_output_digests(tmp_path: Path) -> None:
 def test_runner_stops_downstream_on_stage_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def failing_processing(ctx, source_asset, dataset_id):
+    def failing_processing(ctx, source_asset, dataset_id, geo=None):
         raise ValueError("processing failed")
 
     monkeypatch.setattr(
@@ -137,7 +137,7 @@ def test_runner_appends_new_attempt_on_retry(
     original_processing = runner_module.run_processing
     call_count = {"n": 0}
 
-    def flaky_processing(ctx, source_asset, dataset_id):
+    def flaky_processing(ctx, source_asset, dataset_id, geo=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise ValueError("first attempt fails")

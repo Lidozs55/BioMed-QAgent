@@ -124,7 +124,7 @@ def test_recovery_appends_events_without_overwriting_prior_ones(
     import app.pipeline.runner as runner_module
     original_processing = runner_module.run_processing
 
-    def flaky_processing(ctx, source_asset, dataset_id):
+    def flaky_processing(ctx, source_asset, dataset_id, geo=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("simulated crash")
@@ -169,7 +169,7 @@ def test_stage_failure_preserves_prior_events_in_jsonl(
     """
     import app.pipeline.runner as runner_module
 
-    def failing_processing(ctx, source_asset, dataset_id):
+    def failing_processing(ctx, source_asset, dataset_id, geo=None):
         raise RuntimeError("simulated processing failure")
 
     monkeypatch.setattr(runner_module, "run_processing", failing_processing)
