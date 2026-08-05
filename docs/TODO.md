@@ -110,7 +110,8 @@
   - 实现：`app/pipeline/processing/geo_annotation.py`（FTP `suppl/*.txt.gz` / `annot/*.annot.gz` 目录发现 + SOFT `!platform_table_begin/end` 解析 + ContentCache 缓存；GPL19072 实测 unmapped）；`process_geo_series_matrix_expression` 命中映射写 `gene_id_namespace="gene_symbol"`；`builder.py` 对 `probe_gene_mapping` ∈ {unmapped, no_gene_annotation, annotation_unavailable} 注入 warning
 - [x] **P0** 主产物体积治理：probe 级全基因组长格式提供按目标基因过滤输出，避免 950MB 单文件（REVIEW §2.3）
   - 实现：`builder.py` 从 `ctx.topic` 提取基因 token，`main_data.csv` 中按 `gene_id`/`gene_id_raw` 过滤生成 `{gene}_expression.csv` 副产物（无匹配则不出文件）
-- [ ] **P1** discovery/plan 引导：单基因差异分析优先 GDC/Xena 基因级矩阵（TCGA-PAAD 178 tumor+4 normal 实证可用），微阵列作验证（REVIEW §3.2）
+- [x] **P1** discovery/plan 引导：单基因差异分析优先 GDC/Xena 基因级矩阵（TCGA-PAAD 178 tumor+4 normal 实证可用），微阵列作验证（REVIEW §3.2）
+  - 实现：`agent.py` INSTRUCTIONS 局部重构——第 1 步策略列表新增"单基因/靶基因差异分析"；第 2 步数据源参考新增"优先 GDC/Xena 基因级 RNA-seq 矩阵（gene symbol 直接可用、无需 probe→gene 注释映射）、GEO 微阵列作配对样本/交叉验证"；`core_data_existence` 失败场景由"一律优先 microarray"修正为"单基因目标优先 GDC/Xena 基因级矩阵，GEO 内才优先 microarray"；`run_research_pipeline` 工具描述补充同款引导（`xena_dataset_id`/`gdc_project_id` 参数）
 - [x] **P1** plan 确认（`user_input_required`）超时策略：自动批准并打标而非失败，run 不因未确认 plan 作废（REVIEW §3.3）
   - 实现：`runner._await_user_input` 中 `plan_confirmation` 超时不再 raise，构造 `decision="approve"` 且 `detail.auto_approved=True / auto_approve_reason=plan_confirmation_timeout` 的 resume 事件后继续执行；其他 prompt_kind（data_correction 等）保持超时失败
 - [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（REVIEW §2.4）

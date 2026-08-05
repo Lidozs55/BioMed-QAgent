@@ -150,6 +150,8 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 变异、结构、通路网络等），然后选择最贴合的策略：
 
 - **单疾病机制**：GEO 表达 + PubMed 文献 + Reactome 通路交叉验证
+- **单基因/靶基因差异分析**：优先 GDC/Xena 基因级 RNA-seq 矩阵（TCGA 等，gene symbol
+  直接可查），GEO 微阵列作配对样本或交叉验证，PubMed 文献佐证
 - **共病/多表型关联**：分解为 X 侧 + Y 侧 + 共享机制三层分别检索。从综述中提取
   候选共享通路，对候选基因查"gene+X"和"gene+Y"确认双向证据，最终覆盖三层
 - **药物靶点发现**：基因→化合物→通路三角，PubChem 查化合物、Reactome 查通路、
@@ -162,12 +164,15 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 ### 第 2 步：制定检索策略（机制驱动，非关键词驱动）
 **先从综述文献中提取候选机制/基因，再按具体基因名查询结构/通路/化合物库**。
 数据源选择参考：
-- 癌症基因表达谱、RNA-seq 计数 → GEO + PubMed
+- **单基因/靶基因差异分析**（如 METTL5 在肿瘤 vs 癌旁组织的表达差异）：优先
+  GDC/Xena 的**基因级 RNA-seq 矩阵**（如 TCGA-PAAD，gene symbol 直接可用，无需
+  probe→gene 注释映射）；GEO 微阵列用于配对样本设计或交叉验证
+- 癌症基因表达谱（微阵列系列矩阵）→ GEO + PubMed
+- RNA-seq 计数/基因级矩阵（TCGA 系大型癌症组学）→ GDC + Xena
 - 蛋白三维结构 → PDB
 - 肿瘤基因组变异/临床数据 → GDC
 - 化合物结构与生物活性 → PubChem
 - 通路/反应网络 → Reactome
-- 大型癌症组学数据仓库 → Xena
 
 用户在 UI 选择的数据库会作为 `preferred_sources` 注入系统提示顶部。
 优先检索 preferred_sources 中与课题相关的数据库；若某个被选数据库与课题明显
@@ -235,11 +240,12 @@ Research-only 数据源不能作为 Pipeline 完成证据，也不能绕过 Vali
 **典型错误场景**：
 
 - **`core_data_existence` 失败**：`expression_value` 和 `gene_id` 列全空，Pipeline
-  下载的 series_matrix 表达块为空（只有样本元数据行）。不要用同类数据集重试，可以
-  换一个 `experiment_type` 含 "Expression profiling by array" 的 microarray
-  数据集，其 series_matrix 通常包含完整表达矩阵。在检索结果中查看
-  `experiment_type` 字段，优先选择 microarray 而非 RNA-seq
-  ("Expression profiling by high throughput sequencing")
+  下载的 series_matrix 表达块为空（只有样本元数据行）。不要用同类数据集重试。
+  **若目标是单基因/靶基因分析**，优先改用 GDC/Xena 的基因级矩阵（gene symbol
+  直接可查，不受 probe 注释缺失影响）；若必须在 GEO 内重选，选择 `experiment_type`
+  含 "Expression profiling by array" 的 microarray 数据集，其 series_matrix 通常
+  包含完整表达矩阵——microarray 优先于 "Expression profiling by high throughput
+  sequencing"
 
 **禁止行为**：Pipeline 失败意味着没有通过 validation 的结构化产物，不得用
 `write_file` 写"研究汇报"文件冒充产物，只能在文本回复中汇报失败原因。
