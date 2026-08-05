@@ -44,4 +44,16 @@ def _build_cleaning_report_rows(
             "message": f"字段 '{col}' 有 {count} 个类型不匹配值",
         })
 
+    # Truncation (REVIEW 2026-08-05 P0-1): 数据被截断必须可见
+    if cleaning_report.truncated_rows > 0:
+        rows.append({
+            "rule": "truncated_rows",
+            "field_name": "",
+            "affected_count": str(cleaning_report.truncated_rows),
+            "message": (
+                f"数据行数超过清洗上限，截断 {cleaning_report.truncated_rows} 行，"
+                "产物可能不完整"
+            ),
+        })
+
     return rows

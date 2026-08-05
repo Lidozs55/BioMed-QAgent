@@ -23,7 +23,6 @@ from app.skills.builtin.acquisition._download_io import (
     _write_download,
     download_file,
     fetch_json,
-    rate_limit,
 )
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
@@ -35,11 +34,6 @@ _FILES_BASE = "https://files.rcsb.org/download/"
 
 #: search_pdb 内部对前 N 条结果补全详情，避免 N+1 查询阻塞 agent loop。
 _DESCRIBE_BATCH_LIMIT = 3
-
-
-def _rate_limit() -> None:
-    """Rate limit (delegates to shared ``_download_io.rate_limit``)."""
-    rate_limit()
 
 
 def _post_json(url: str, body: dict) -> dict:

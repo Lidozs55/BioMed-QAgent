@@ -762,6 +762,12 @@ class PipelineRunner:
                 ToolCalledPayload(
                     tool_name=f"run_{stage.value}",
                     arguments_digest=parameter_digest,
+                    # REVIEW 2026-08-05 P3-1: 注入截断参数供前端渲染标签
+                    arguments={
+                        "topic": self.topic,
+                        "databases": sorted(self.databases),
+                        "mode": self.mode,
+                    },
                 ),
                 stage_attempt_id=stage_attempt_id,
             )
@@ -1381,6 +1387,15 @@ class PipelineRunner:
         self.state.inflight_attempt = None
         save_state(self.workdir.state, self.state)
         self._persist_logs()
+        # REVIEW 2026-08-05 P1-3: 失败路径补发 is_error tool_completed，闭合
+        # stage_started → tool_called → (tool_completed) → stage_failed 事件流。
+        await self._emit_stage_event(
+            ToolCompletedPayload(
+                tool_name=f"run_{stage.value}",
+                is_error=True,
+            ),
+            stage_attempt_id=inflight.stage_attempt_id,
+        )
         await self._emit_stage_event(
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
             stage_attempt_id=inflight.stage_attempt_id,
@@ -1433,6 +1448,15 @@ class PipelineRunner:
     async def _finalize_cancelled(self) -> RunManifest:
         inflight = self.state.inflight_attempt
         if inflight is not None:
+            # REVIEW 2026-08-05 P1-3: 取消路径补发 is_error tool_completed，
+            # 避免 stage_started/tool_called 悬空无终止事件。
+            await self._emit_stage_event(
+                ToolCompletedPayload(
+                    tool_name=f"run_{inflight.stage.value}",
+                    is_error=True,
+                ),
+                stage_attempt_id=inflight.stage_attempt_id,
+            )
             cancelled = self._build_attempt(
                 inflight.stage,
                 inflight.input_digest,

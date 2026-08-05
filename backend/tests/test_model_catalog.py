@@ -119,26 +119,6 @@ def test_catalog_preserves_legacy_model_ids() -> None:
     assert legacy_model_ids <= model_ids
 
 
-def test_catalog_lists_recommended_prefix_and_sorted_groups() -> None:
-    # Given
-    legacy_recommended_ids = {"gpt-4o", "qwen-plus", "qwen-plus-0419"}
-
-    # When
-    known_models = model_config.list_known_models()
-    recommended_models = [model for model in known_models if model.recommended]
-    non_recommended_models = [model for model in known_models if not model.recommended]
-
-    # Then
-    assert known_models == [*recommended_models, *non_recommended_models]
-    assert [model.id for model in recommended_models] == sorted(
-        model.id for model in recommended_models
-    )
-    assert [model.id for model in non_recommended_models] == sorted(
-        model.id for model in non_recommended_models
-    )
-    assert legacy_recommended_ids <= {model.id for model in recommended_models}
-
-
 def test_catalog_marks_qwen_vl_max_as_image_capable() -> None:
     # Given / When
     capabilities = model_config.QWEN_MODELS_DB["qwen-vl-max"].capabilities

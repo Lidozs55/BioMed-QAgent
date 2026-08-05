@@ -82,15 +82,19 @@ export function parsePipelineEventPayload(payloadObj: Record<string, unknown>, p
       const detail = assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail");
       return { type: "stage_progress", stage, kind, current, total, detail };
     }
-    case "tool_called":
-      return { type: "tool_called", tool_name: assertString(Reflect.get(payloadObj, "tool_name"), path + ".tool_name"), arguments_digest: assertHex64(Reflect.get(payloadObj, "arguments_digest"), path + ".arguments_digest") };
+    case "tool_called": {
+      const tool_name = assertString(Reflect.get(payloadObj, "tool_name"), path + ".tool_name");
+      const arguments_digest = assertHex64(Reflect.get(payloadObj, "arguments_digest"), path + ".arguments_digest");
+      const arguments_ = assertOptionalNull(Reflect.get(payloadObj, "arguments"), path + ".arguments", assertJsonRecord);
+      return { type: "tool_called", tool_name, arguments_digest, arguments: arguments_ };
+    }
     case "tool_completed": {
       const tool_name = assertString(Reflect.get(payloadObj, "tool_name"), path + ".tool_name");
       const output_digest = assertOptionalNull(Reflect.get(payloadObj, "output_digest"), path + ".output_digest", assertHex64);
       const tool_call_id = assertOptionalNull(Reflect.get(payloadObj, "tool_call_id"), path + ".tool_call_id", assertString);
       const output = assertOptionalNull(Reflect.get(payloadObj, "output"), path + ".output", assertString);
       const is_error = assertBoolean(Reflect.get(payloadObj, "is_error"), path + ".is_error");
-      if (output_digest === null && tool_call_id === null) throw new APIError(502, "Tool completion requires output_digest or tool_call_id at " + path);
+      if (!is_error && output_digest === null && tool_call_id === null) throw new APIError(502, "Tool completion requires output_digest or tool_call_id at " + path);
       return { type: "tool_completed", tool_name, output_digest, tool_call_id, output, is_error };
     }
     case "warning": {

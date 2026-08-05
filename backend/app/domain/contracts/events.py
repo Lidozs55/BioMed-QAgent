@@ -128,6 +128,9 @@ class ToolCalledPayload(ContractModel):
     type: Literal[PipelineEventType.TOOL_CALLED] = PipelineEventType.TOOL_CALLED
     tool_name: str = Field(min_length=1)
     arguments_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # REVIEW 2026-08-05 P3-1: 截断后的参数（深度受限），前端据此渲染
+    # "检索 PubMed · 查询: ..." 等标签，无需回放 digest。
+    arguments: dict[str, object] | None = Field(default=None)
 
 
 class ToolCompletedPayload(ContractModel):
@@ -140,7 +143,9 @@ class ToolCompletedPayload(ContractModel):
 
     @model_validator(mode="after")
     def validate_fixture_or_runtime_shape(self) -> Self:
-        if self.output_digest is None and self.tool_call_id is None:
+        # REVIEW 2026-08-05 P1-3: 失败/取消路径补发 is_error=True 的 tool_completed
+        # 以闭合事件流，此时既无 digest 也无 tool_call_id（pipeline 无 agent call id）。
+        if not self.is_error and self.output_digest is None and self.tool_call_id is None:
             raise ValueError("tool completion requires output_digest or tool_call_id")
         return self
 

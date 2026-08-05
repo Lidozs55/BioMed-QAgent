@@ -83,7 +83,9 @@ def _https_ftp_root(value: str, accession: str) -> str:
     if root.startswith("ftp://ftp.ncbi.nlm.nih.gov/"):
         root = "https://" + root.removeprefix("ftp://")
     if not root:
-        prefix = accession[:-3] + "nnn"
+        # REVIEW 2026-08-05 P3-2: 与 pipeline 层 _geo_series_dir 对齐，强制大写
+        # （NCBI FTP 路径大小写敏感，小写 accession 会构造出 404 目录）。
+        prefix = accession[:-3].upper() + "nnn"
         root = f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/{accession}/"
     return root.rstrip("/") + "/"
 

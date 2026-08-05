@@ -44,7 +44,10 @@ from app.tools.content_cache import ContentCache
 
 logger = logging.getLogger(__name__)
 
-_CLEANING_MAX_ROWS = 500_000
+# REVIEW 2026-08-05 P0-1: 原 500_000 会静默截断 GSE183795（4,695,780 行）。
+# 流式清洗后内存不再依赖行数，上限提高为防御值；超出部分经
+# CleaningReportModel.truncated_rows + warnings.csv 对用户可见。
+_CLEANING_MAX_ROWS = 5_000_000
 
 
 def _build_minimal_parsed_dataset(
@@ -158,137 +161,23 @@ def _clean_parsed_dataset(
     and removes exact duplicate rows while preserving first-seen order. The
     transformed CSV is atomically replaced and its immutable file identity is
     refreshed before downstream artifact construction.
+
+    REVIEW 2026-08-05 P0-1: 改为**流式**处理（逐行读 + 写临时文件），不再全量
+    加载 ``all_rows``，避免大矩阵内存溢出；超过 ``_CLEANING_MAX_ROWS`` 的行
+    计数为 ``truncated_rows`` 并通过 cleaning_report / warnings 对用户可见，
+    不再静默截断。去重用行指纹哈希（碰撞概率 2^-64 量级，可忽略）。
     """
     csv_path = ctx.workdir.root / parsed.file_asset.relative_path
     if not csv_path.is_file():
         logger.warning("cleaning: parsed CSV not found at %s", csv_path)
         return parsed, CleaningReportModel()
 
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        all_rows = []
-        for row in reader:
-            if len(all_rows) >= _CLEANING_MAX_ROWS:
-                logger.warning(
-                    "cleaning: row limit (%d) reached for %s, truncating",
-                    _CLEANING_MAX_ROWS, csv_path.name,
-                )
-                break
-            all_rows.append(row)
-        columns = reader.fieldnames or []
-
-    if not all_rows:
-        return parsed, CleaningReportModel()
-
-    normalized_rows: list[dict[str, str]] = []
-    seen_rows: set[tuple[str, ...]] = set()
-    trimmed_values = 0
-    normalized_missing_values = 0
-    duplicate_count = 0
     missing_sentinels = {"n/a", "null", "none"}
-    for row in all_rows:
-        normalized: dict[str, str] = {}
-        for col in columns:
-            raw_value = row.get(col) or ""
-            value = raw_value.strip()
-            if value != raw_value:
-                trimmed_values += 1
-            if value.casefold() in missing_sentinels:
-                value = ""
-                normalized_missing_values += 1
-            normalized[col] = value
-        fingerprint = tuple(normalized[col] for col in columns)
-        if fingerprint in seen_rows:
-            duplicate_count += 1
-            continue
-        seen_rows.add(fingerprint)
-        normalized_rows.append(normalized)
-
-    # --- missing value stats ---
-    missing_stats: dict[str, int] = {}
-    for col in columns:
-        count = sum(1 for row in normalized_rows if row.get(col, "") == "")
-        if count > 0:
-            missing_stats[col] = count
-
-    # --- type-consistency check ---
-    # Heuristic: for each column, try to infer the most common type and flag
-    # rows where the value does not match.
-    type_issues: dict[str, int] = {}
-    for col in columns:
-        mismatch = 0
-        # Collect non-empty values for type inference
-        values = [
-            row.get(col, "")
-            for row in normalized_rows
-            if row.get(col) is not None and row.get(col, "").strip() != ""
-        ]
-        if not values:
-            continue
-        # Quick majority-type inference
-        ints = 0
-        floats = 0
-        others = 0
-        for v in values:
-            try:
-                int(v)
-                ints += 1
-            except (ValueError, TypeError):
-                try:
-                    float(v)
-                    floats += 1
-                except (ValueError, TypeError):
-                    others += 1
-        total = ints + floats + others
-        majority = max(ints, floats, others)
-        if majority == 0:
-            continue
-        if majority == ints and ints / total >= 0.8:
-            # Expect ints — flag non-int values
-            for row in normalized_rows:
-                val = row.get(col, "")
-                if val and val.strip():
-                    try:
-                        int(val.strip())
-                    except (ValueError, TypeError):
-                        mismatch += 1
-        elif majority == floats and (ints + floats) / total >= 0.8:
-            # Expect numeric — flag non-numeric values
-            for row in normalized_rows:
-                val = row.get(col, "")
-                if val and val.strip():
-                    try:
-                        float(val.strip())
-                    except (ValueError, TypeError):
-                        mismatch += 1
-        if mismatch > 0:
-            type_issues[col] = mismatch
-
-    # --- anomaly flags ---
-    anomaly_flags: list[str] = []
-    for col, count in missing_stats.items():
-        anomaly_flags.append(f"字段 '{col}' 有 {count} 个缺失值")
-    if duplicate_count > 0:
-        anomaly_flags.append(f"检测到 {duplicate_count} 个精确重复行")
-    for col, count in type_issues.items():
-        anomaly_flags.append(f"字段 '{col}' 有 {count} 个类型不匹配值")
-
-    total_anomalies = sum(missing_stats.values()) + duplicate_count + sum(type_issues.values())
-
-    format_corrections = {
-        name: count
-        for name, count in {
-            "trimmed_values": trimmed_values,
-            "normalized_missing_values": normalized_missing_values,
-            "removed_duplicate_rows": duplicate_count,
-        }.items()
-        if count > 0
-    }
-    transformed = bool(format_corrections)
-    cleaned = parsed
-    if transformed:
-        temporary_path = None
-        try:
+    temporary_path: str | None = None
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            columns = reader.fieldnames or []
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8-sig",
@@ -297,50 +186,162 @@ def _clean_parsed_dataset(
                 prefix=f".{csv_path.name}.",
                 suffix=".tmp",
                 delete=False,
-            ) as handle:
-                temporary_path = handle.name
+            ) as out_handle:
+                temporary_path = out_handle.name
                 writer = csv.DictWriter(
-                    handle,
+                    out_handle,
                     fieldnames=columns,
                     extrasaction="raise",
                 )
                 writer.writeheader()
-                writer.writerows(normalized_rows)
-                handle.flush()
-                os.fsync(handle.fileno())
+                seen_rows: set[int] = set()
+                trimmed_values = 0
+                normalized_missing_values = 0
+                duplicate_count = 0
+                truncated_rows = 0
+                processed_rows = 0
+                missing_counts: dict[str, int] = {}
+                # 每列类型投票 [ints, floats, others]，基于去重后的非空值
+                type_votes: dict[str, list[int]] = {}
+                for row in reader:
+                    if processed_rows >= _CLEANING_MAX_ROWS:
+                        truncated_rows += 1
+                        continue
+                    normalized: dict[str, str] = {}
+                    for col in columns:
+                        raw_value = row.get(col) or ""
+                        value = raw_value.strip()
+                        if value != raw_value:
+                            trimmed_values += 1
+                        if value.casefold() in missing_sentinels:
+                            value = ""
+                            normalized_missing_values += 1
+                        normalized[col] = value
+                    fingerprint = tuple(normalized[col] for col in columns)
+                    if hash(fingerprint) in seen_rows:
+                        duplicate_count += 1
+                        continue
+                    seen_rows.add(hash(fingerprint))
+                    writer.writerow(normalized)
+                    processed_rows += 1
+                    for col in columns:
+                        value = normalized[col]
+                        if value == "":
+                            missing_counts[col] = missing_counts.get(col, 0) + 1
+                            continue
+                        votes = type_votes.setdefault(col, [0, 0, 0])
+                        try:
+                            int(value)
+                            votes[0] += 1
+                        except (ValueError, TypeError):
+                            try:
+                                float(value)
+                                votes[1] += 1
+                            except (ValueError, TypeError):
+                                votes[2] += 1
+                out_handle.flush()
+                os.fsync(out_handle.fileno())
+
+        if truncated_rows:
+            logger.warning(
+                "cleaning: row limit (%d) reached for %s, %d rows truncated",
+                _CLEANING_MAX_ROWS, csv_path.name, truncated_rows,
+            )
+
+        if processed_rows == 0:
+            return parsed, CleaningReportModel()
+
+        # --- missing value stats（基于去重后的行） ---
+        missing_stats: dict[str, int] = {
+            col: count for col, count in missing_counts.items() if count > 0
+        }
+
+        # --- type-consistency check（复刻原 0.8 多数类型阈值语义） ---
+        type_issues: dict[str, int] = {}
+        with open(temporary_path, encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                for col, (ints, floats, others) in type_votes.items():
+                    total = ints + floats + others
+                    if total == 0:
+                        continue
+                    majority = max(ints, floats, others)
+                    if majority == ints and ints / total >= 0.8:
+                        expected = "int"
+                    elif majority == floats and (ints + floats) / total >= 0.8:
+                        expected = "float"
+                    else:
+                        continue
+                    val = row.get(col, "")
+                    if val and val.strip():
+                        try:
+                            if expected == "int":
+                                int(val.strip())
+                            else:
+                                float(val.strip())
+                        except (ValueError, TypeError):
+                            type_issues[col] = type_issues.get(col, 0) + 1
+
+        # --- anomaly flags ---
+        anomaly_flags: list[str] = []
+        for col, count in missing_stats.items():
+            anomaly_flags.append(f"字段 '{col}' 有 {count} 个缺失值")
+        if duplicate_count > 0:
+            anomaly_flags.append(f"检测到 {duplicate_count} 个精确重复行")
+        for col, count in type_issues.items():
+            anomaly_flags.append(f"字段 '{col}' 有 {count} 个类型不匹配值")
+        if truncated_rows > 0:
+            anomaly_flags.append(f"数据行数超过清洗上限，截断 {truncated_rows} 行")
+
+        total_anomalies = (
+            sum(missing_stats.values()) + duplicate_count + sum(type_issues.values())
+        )
+
+        format_corrections = {
+            name: count
+            for name, count in {
+                "trimmed_values": trimmed_values,
+                "normalized_missing_values": normalized_missing_values,
+                "removed_duplicate_rows": duplicate_count,
+            }.items()
+            if count > 0
+        }
+        transformed = bool(format_corrections)
+        cleaned = parsed
+        if transformed:
             os.replace(temporary_path, csv_path)
             temporary_path = None
-        finally:
-            if temporary_path is not None:
-                with suppress(FileNotFoundError):
-                    os.unlink(temporary_path)
 
-        file_bytes = csv_path.read_bytes()
-        checksum = hashlib.sha256(file_bytes).hexdigest()
-        cleaned_asset = parsed.file_asset.model_copy(
-            update={
-                "asset_id": asset_id_from_sha256(checksum),
-                "sha256": checksum,
-                "size_bytes": len(file_bytes),
-                "generated_by_step_id": "step_deterministic_cleaning_v1",
-            }
-        )
-        cleaned = parsed.model_copy(
-            update={
-                "file_asset": cleaned_asset,
-                "row_count": len(normalized_rows),
-            }
-        )
+            file_bytes = csv_path.read_bytes()
+            checksum = hashlib.sha256(file_bytes).hexdigest()
+            cleaned_asset = parsed.file_asset.model_copy(
+                update={
+                    "asset_id": asset_id_from_sha256(checksum),
+                    "sha256": checksum,
+                    "size_bytes": len(file_bytes),
+                    "generated_by_step_id": "step_deterministic_cleaning_v1",
+                }
+            )
+            cleaned = parsed.model_copy(
+                update={
+                    "file_asset": cleaned_asset,
+                    "row_count": processed_rows,
+                }
+            )
 
-    report = CleaningReportModel(
-        missing_stats=missing_stats,
-        duplicate_count=duplicate_count,
-        type_issues=type_issues,
-        format_corrections=format_corrections,
-        anomaly_flags=anomaly_flags,
-        total_anomalies=total_anomalies,
-    )
-    return cleaned, report
+        report = CleaningReportModel(
+            missing_stats=missing_stats,
+            duplicate_count=duplicate_count,
+            type_issues=type_issues,
+            format_corrections=format_corrections,
+            anomaly_flags=anomaly_flags,
+            total_anomalies=total_anomalies,
+            truncated_rows=truncated_rows,
+        )
+        return cleaned, report
+    finally:
+        if temporary_path is not None:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary_path)
 
 
 def _build_field_alignment(

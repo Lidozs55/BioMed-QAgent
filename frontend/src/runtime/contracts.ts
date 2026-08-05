@@ -334,7 +334,12 @@ export type EventPayload =
       total: number | null;
       detail: Record<string, JsonValue>;
     }
-  | { type: "tool_called"; tool_name: string; arguments_digest: string }
+  | {
+      type: "tool_called";
+      tool_name: string;
+      arguments_digest: string;
+      arguments?: Record<string, JsonValue> | null;
+    }
   | {
       type: "tool_completed";
       tool_name: string;

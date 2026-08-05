@@ -75,31 +75,6 @@ def _preview_api_key(
     return ""
 
 
-VENDORS = (
-    {
-        "id": "dashscope",
-        "name": "DashScope",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "description": "阿里云 Qwen 官方 API",
-        "recommended": True,
-    },
-    {
-        "id": "openai",
-        "name": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "description": "OpenAI 官方 API",
-        "recommended": False,
-    },
-    {
-        "id": "deepseek",
-        "name": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
-        "description": "DeepSeek 官方 API",
-        "recommended": False,
-    },
-)
-
-
 def get_store(request: Request) -> ModelSettingsStore:
     return request.app.state.model_settings_store
 

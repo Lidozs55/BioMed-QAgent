@@ -208,6 +208,9 @@ class CleaningReportModel(ContractModel):
     format_corrections: dict[str, int] = {}
     anomaly_flags: list[str] = []
     total_anomalies: int = 0
+    # REVIEW 2026-08-05 P0-1: 超过清洗行数上限被截断的行数（>0 表示数据不完整，
+    # 必须通过 cleaning_report.csv 与 warnings.csv 对用户/Agent 可见）。
+    truncated_rows: int = 0
 
 
 class ProcessingOutput(ContractModel):

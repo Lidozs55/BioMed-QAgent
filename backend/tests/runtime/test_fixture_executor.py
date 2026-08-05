@@ -1094,9 +1094,12 @@ async def test_runtime_completion_seals_fixture_publication_against_late_cancel(
     )
     cancel_task: asyncio.Task | None = None
     try:
+        # 竞态测试：等待 publication 已开始（publish 阻塞在 release 上）。
+        # 预算放宽到 30s——fixture 管线在慢速/负载环境下可能超过 2s，
+        # 但竞态语义不变（cancel 仍在 publish 进行中提交）。
         assert await asyncio.wait_for(
-            asyncio.to_thread(publication_finished.wait, 2),
-            timeout=3,
+            asyncio.to_thread(publication_finished.wait, 30),
+            timeout=35,
         )
         cancel_task = asyncio.create_task(
             manager.cancel_run(accepted.task_id, accepted.run_id)

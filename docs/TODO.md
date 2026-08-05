@@ -192,3 +192,39 @@
 - [ ] **P2** `config.py` 扩展配置项（crawler_ua / rate_limit / stage_timeouts 等）
 - [ ] **P2** 启动时校验 `DASHSCOPE_API_KEY` 非空
 - [ ] **P2** `OUTPUT_DIR` 改为绝对路径默认值
+
+---
+
+## 6. 数据置信度与非 pipeline 数据准入（SURVEY_2026-08-05-data-confidence）
+
+> 调研与设计见 `docs/SURVEY_2026-08-05-data-confidence.md`。§6.1 为先决条件；
+> §6.2 依赖 §6.1，将 §1.5.5 / §1.4 / §2.4 中"Agent 数据入产物"相关 TODO
+> 统一重构为"来源分级与准入"主线。
+
+### 6.1 数据置信度（先决条件）
+
+- [ ] **P1** `app/pipeline/processing/confidence.py` 确定性统计检测器：
+      `benford_distance` / `last_digit_chi2` / `detect_constant_column` /
+      `detect_arithmetic_progression` / `aggregate_confidence_metrics`
+      （纯函数 + 单元测试，含 `is_benford_applicable` 前置判定防误报）
+- [ ] **P1** processing 接入检测器：异常写 `anomaly_flags` + `warnings.csv`
+      （code=`statistical_anomaly_*`）
+- [ ] **P1** 产出 `confidence_report.csv` artifact（每数据集置信度画像
+      `overall_score` 0-1）
+- [ ] **P1** validation 增加 `data_confidence` 补充检查：低分 →
+      `valid_with_warnings`（不阻断发布但强制显式标记）
+- [ ] **P2** 前端 `ResultsViewer` 展示置信度画像
+
+### 6.2 非 pipeline 数据进入最终成果（依赖 §6.1，需重新设计）
+
+> 原则：**进入 `artifacts/` 的每条记录必须有 source-of-record**；非 pipeline
+> 数据必须过置信度评估并携带 provenance 等级，防止 LLM 内容冒充产物的
+> "伪成功通道"（agent.py 铁律 2 边界澄清）。
+
+- [ ] **P1** `SourceRecord` / `SourceAsset` 契约扩展到 Agent 手动来源
+      （强制 `source_id` = URL/DOI/文件路径 + 获取时间戳）
+- [ ] **P1** 新增 `provenance_level`（`pipeline_validated` /
+      `agent_research_annotated`）；validation gate 对 annotated 记录强制
+      source_id 校验，缺失即拒绝
+- [ ] **P1** 非 pipeline 数据产出 `confidence_report.csv` 条目（沿用 §6.1 Phase 2）
+- [ ] **P2** Agent 决策日志持久化（`agent_results/`，吸收 §1.5.5 部分条目）

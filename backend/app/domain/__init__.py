@@ -10,26 +10,13 @@
   取代，待后续清理。
 
 新代码应直接从 ``app.domain.contracts`` 导入，不要使用本包的顶层导出。
+
+REVIEW 2026-08-05: 已删除生产零引用的 ``domain.task`` / ``domain.events``
+（旧 TaskStateMachine / EventFactory 已由 ``contracts`` 运行时体系取代）。
 """
-from app.domain.events import EventFactory, EventType, TaskEvent
 from app.domain.processing import CleaningReport, ParsedDataset
-from app.domain.task import (
-    InvalidTaskTransition,
-    TaskRecord,
-    TaskRequest,
-    TaskStateMachine,
-    TaskStatus,
-)
 
 __all__ = [
-    "EventFactory",
-    "EventType",
-    "TaskEvent",
-    "InvalidTaskTransition",
-    "TaskRecord",
-    "TaskRequest",
-    "TaskStateMachine",
-    "TaskStatus",
     "CleaningReport",
     "ParsedDataset",
 ]

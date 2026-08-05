@@ -25,7 +25,6 @@ from app.skills.builtin.acquisition._download_io import (
     _write_download,
     download_file,
     fetch_json,
-    rate_limit,
 )
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
 
@@ -35,11 +34,6 @@ _GDC_API_BASE = "https://api.gdc.cancer.gov"
 
 #: Token 短于该字符数时不参与 OR 匹配（避免 "and"/"or" 等噪声词）。
 _MIN_TOKEN_LEN = 3
-
-
-def _rate_limit() -> None:
-    """Rate limit (delegates to shared ``_download_io.rate_limit``)."""
-    rate_limit()
 
 
 # ---------------------------------------------------------------------------

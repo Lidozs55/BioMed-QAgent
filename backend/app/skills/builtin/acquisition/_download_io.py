@@ -22,7 +22,7 @@ import shutil
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from app.agent_loop.context import RunContext
 from app.model_config import RuntimeLimitsSettings
@@ -145,18 +145,3 @@ async def download_file_for_run(run_ctx: RunContext, url: str, dest: Path) -> No
     """Download a URL to ``dest`` through facade or urllib."""
     content = await download_bytes_for_run(run_ctx, url)
     await asyncio.to_thread(_write_download, content, dest)
-
-
-def copyfileobj_to_path(source: BinaryIO, dest: Path) -> None:
-    """Copy a file-like object to ``dest`` (atomic via temp file).
-
-    Used by tests that mock ``urllib.request.urlopen`` with a streaming
-    response object.
-    """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with open(tmp, "wb") as target:
-        shutil.copyfileobj(source, target)
-    if dest.exists():
-        dest.unlink()
-    tmp.rename(dest)

@@ -100,4 +100,21 @@ def _build_warnings_rows(
         })
         idx += 1
 
+    # Truncation → warning (REVIEW 2026-08-05 P0-1): 数据被截断必须可见
+    if cleaning_report.truncated_rows > 0:
+        warnings.append({
+            "warning_id": f"warn_cleaning_{idx}",
+            "severity": "warning",
+            "stage": "processing",
+            "code": "cleaning_truncated",
+            "message": (
+                f"数据行数超过清洗上限，截断 {cleaning_report.truncated_rows} 行，"
+                "产物可能不完整"
+            ),
+            "source_id": geo_source_id,
+            "asset_id": asset_id,
+            "record_id": "",
+            "created_at": retrieved_at.isoformat(),
+        })
+
     return warnings

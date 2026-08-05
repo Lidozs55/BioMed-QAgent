@@ -442,6 +442,7 @@ async def _run_gdc_acquisition_live(
             data_level=DataLevel.REPOSITORY_PROCESSED,
             max_bytes=_MAX_BYTES,
             expected_sha256=hit.get("md5sum") if len(hit.get("md5sum", "")) == 64 else None,
+            expected_md5=hit.get("md5sum") or None,
         )
     ctx.record_download_attempt(result.attempt)
     if result.asset is None:

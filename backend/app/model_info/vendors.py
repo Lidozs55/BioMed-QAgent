@@ -65,11 +65,6 @@ VENDORS: list[Vendor] = [
 ]
 
 
-def get_vendors() -> list[Vendor]:
-    """Return a shallow copy of the built-in vendor list."""
-    return list(VENDORS)
-
-
 def list_vendors() -> list[dict[str, str | bool]]:
     """Return built-in vendors as API-ready mappings."""
     return [

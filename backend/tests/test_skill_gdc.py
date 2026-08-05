@@ -17,13 +17,6 @@ from app.skills.builtin.acquisition.gdc import (
 from app.tools.crawler import DownloadResult, FetchResult
 
 
-@pytest.fixture(autouse=True)
-def _disable_gdc_rate_limit() -> Any:
-    """Skip GDC module-level 2s rate limiting during tests."""
-    with patch("app.skills.builtin.acquisition.gdc._rate_limit"):
-        yield
-
-
 def _make_ctx(task_id: str = "test_gdc") -> ToolContext:
     rc = RunContext(task_id=task_id)
     return ToolContext(

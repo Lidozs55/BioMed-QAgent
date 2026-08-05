@@ -19,6 +19,7 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
 ) -> None:
     payload = b"gene_id\tS1\nTP53\t1.5\n"
     checksum = hashlib.sha256(payload).hexdigest()
+    md5sum = hashlib.md5(payload).hexdigest()
     requests: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -33,7 +34,7 @@ def test_gdc_live_acquisition_queries_files_and_downloads_verified_asset(
                                 "file_id": "file-expression-1",
                                 "file_name": "expression.tsv",
                                 "data_format": "TSV",
-                                "md5sum": "not-a-sha256",
+                                "md5sum": md5sum,
                             }
                         ]
                     }

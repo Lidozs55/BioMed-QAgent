@@ -272,6 +272,7 @@ async def acquire_source(
     max_bytes: int,
     expected_size: int | None = None,
     expected_sha256: str | None = None,
+    expected_md5: str | None = None,
     expected_media_types: frozenset[str] | None = None,
     accept: str = "text/tab-separated-values",
     request_headers: Mapping[str, str] | None = None,
@@ -354,6 +355,7 @@ async def acquire_source(
                 )
 
         digest = hashlib.sha256()
+        md5_digest = hashlib.md5()
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
         current_url = source.url
         redirect_count = 0
@@ -411,6 +413,7 @@ async def acquire_source(
                             )
                         target.write(chunk)
                         digest.update(chunk)
+                        md5_digest.update(chunk)
                     target.flush()
                     os.fsync(target.fileno())
 
@@ -442,6 +445,13 @@ async def acquire_source(
         if expected_sha256 and checksum != expected_sha256.lower():
             raise AcquisitionFailure(
                 ErrorCode.CHECKSUM_MISMATCH, "expected SHA-256 mismatch"
+            )
+        # GDC files API exposes ``md5sum`` (32-char MD5) but not SHA-256;
+        # REVIEW 2026-08-05 P1-4: verify against the official MD5 when provided
+        # (previously the sha256-only branch silently skipped it).
+        if expected_md5 and md5_digest.hexdigest() != expected_md5.lower():
+            raise AcquisitionFailure(
+                ErrorCode.CHECKSUM_MISMATCH, "expected MD5 mismatch"
             )
 
         blob_path = _publish_cache(part_path, cache, checksum)

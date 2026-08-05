@@ -2,11 +2,7 @@
 
 from .catalog import (
     QWEN_MODELS_DB,
-    augment_capabilities,
-    get_advanced_defaults,
     get_known_model,
-    infer_capabilities,
-    list_known_models,
 )
 from .context_budget import ContextBudget, ContextBudgetOverflowError
 from .schemas import (
@@ -28,9 +24,5 @@ __all__ = [
     "RunModelSettings",
     "RuntimeLimitsSettings",
     "UserSettings",
-    "augment_capabilities",
-    "get_advanced_defaults",
     "get_known_model",
-    "infer_capabilities",
-    "list_known_models",
 ]
