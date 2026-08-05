@@ -484,8 +484,13 @@ class PipelineRunner:
         emitted but the pipeline auto-approves without blocking. In live
         mode the pipeline blocks on an ``asyncio.Event`` until
         ``submit_user_input`` is called by the runtime, or until ``timeout``
-        seconds elapse (which raises ``PipelineUserInputTimeoutError`` handled
-        by ``run``).
+        seconds elapse.
+
+        A ``plan_confirmation`` timeout does NOT fail the run: the plan is
+        auto-approved with an explicit ``auto_approved`` marker on the resume
+        event (REVIEW §3.3, 0805) so an unconfirmed plan cannot void the
+        whole run. Other prompt kinds keep the historical behaviour and
+        raise ``PipelineUserInputTimeoutError`` (handled by ``run``).
         """
 
         timeout_seconds = self.user_input_timeout if timeout is None else timeout
@@ -548,15 +553,32 @@ class PipelineRunner:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:
-                    raise PipelineUserInputTimeoutError(
-                        f"user input timeout for request {request_id} "
-                        f"after {timeout_seconds}s"
-                    )
+                    if prompt_kind == "plan_confirmation":
+                        # REVIEW §3.3 (0805): a plan-confirmation timeout must
+                        # not void the run. Auto-approve with an explicit
+                        # marker so the pipeline proceeds instead of failing;
+                        # the resume event lets the UI show that execution
+                        # started without an explicit human decision.
+                        decision = UserInputResumedPayload(
+                            request_id=request_id,
+                            decision="approve",
+                            detail={
+                                "auto_approved": True,
+                                "auto_approve_reason": "plan_confirmation_timeout",
+                                "timeout_seconds": timeout_seconds,
+                            },
+                        )
+                    else:
+                        raise PipelineUserInputTimeoutError(
+                            f"user input timeout for request {request_id} "
+                            f"after {timeout_seconds}s"
+                        )
                 if self._is_cancelled():
                     raise PipelineCancelledError(
                         "pipeline was cancelled while paused"
                     )
-                decision = self._user_input_decision
+                if self._user_input_decision is not None:
+                    decision = self._user_input_decision
         finally:
             for waiter in waiters:
                 if not waiter.done():

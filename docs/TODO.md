@@ -111,7 +111,8 @@
 - [x] **P0** 主产物体积治理：probe 级全基因组长格式提供按目标基因过滤输出，避免 950MB 单文件（REVIEW §2.3）
   - 实现：`builder.py` 从 `ctx.topic` 提取基因 token，`main_data.csv` 中按 `gene_id`/`gene_id_raw` 过滤生成 `{gene}_expression.csv` 副产物（无匹配则不出文件）
 - [ ] **P1** discovery/plan 引导：单基因差异分析优先 GDC/Xena 基因级矩阵（TCGA-PAAD 178 tumor+4 normal 实证可用），微阵列作验证（REVIEW §3.2）
-- [ ] **P1** plan 确认（`user_input_required`）超时策略：挂起而非失败，保留已 discovery 结果（REVIEW §3.3）
+- [x] **P1** plan 确认（`user_input_required`）超时策略：自动批准并打标而非失败，run 不因未确认 plan 作废（REVIEW §3.3）
+  - 实现：`runner._await_user_input` 中 `plan_confirmation` 超时不再 raise，构造 `decision="approve"` 且 `detail.auto_approved=True / auto_approve_reason=plan_confirmation_timeout` 的 resume 事件后继续执行；其他 prompt_kind（data_correction 等）保持超时失败
 - [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（REVIEW §2.4）
 
 ### 1.6 Agent 编排与 Pipeline 重跑闭环
