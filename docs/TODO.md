@@ -31,7 +31,8 @@
 - [x] **P0** `SOURCE_CAPABILITIES` 单一事实表区分 `pipeline_supported` 与 `research_only`
 - [x] **P0** 未支持来源返回 `status=unsupported_databases`，不产生伪成功 artifact
 - [ ] **P1** Acquisition 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
-- [ ] **P2** 新增 EuropePMC/Unpaywall/UniProt/ChEMBL 等能力
+- [x] **P2** EuropePMC / Unpaywall 能力（pdf_url → Unpaywall → EPMC fullTextXML 三级回退，0804 已实现，`acquire_publication_with_fallback`）
+- [ ] **P2** 新增 UniProt/ChEMBL 等能力（仍 Agent-only，未接入 pipeline）
 
 ### 1.5 Pipeline 数据库完整性
 
@@ -61,6 +62,7 @@
 - [x] **P0** Xena gene-expression 解析器
 - [x] **P1** Reactome 单 pathway 通路数据解析器
 - [x] **P1** `field_mapping.csv` 扩展为多源映射
+- [ ] **P1** 基因符号映射：先确权 namespace 分布（`ensembl_gene`/`geo_probe` 为主；0804 suppl 解析器已产出 `gene_symbol`）；优先本地映射（避免 mygene 在线依赖），定义多对一聚合策略；`main_data.csv` 增加 `gene_symbol` 列（0805 复核修正，REVIEW §9.6）
 
 #### 1.5.4 Artifact 完整性
 
@@ -83,9 +85,17 @@
 - [ ] **P2** 任务目录增加 `agent_results/` 保存 Agent 决策日志
 - [ ] **P2** Agent 发现的 accession 可生成新 `TaskSpecification` 触发重跑
 
+#### 1.5.6 GEO 多数据集支持（0805 复核修正，REVIEW §9.5）
+
+> 共病/比对类主题刚需（0804 实测 4 个 GSE 被静默丢弃 3 个）。设计先于实现。
+
+- [ ] **P1** 消除 `_resolve_gse` 静默截断：多 GSE 全部保留（`dataset_catalog` / `source_list`）
+- [ ] **P1** 多 GSE **各数据集独立发布**（不做表达值行级合并——跨数据集合并引入 batch effect，非当前 pipeline 范围）；每 GSE 独立走 acquisition→processing→artifact 链，`source_relations` 记录双侧关系
+
 ### 1.6 Agent 编排与 Pipeline 重跑闭环
 
 - [x] **P0** checkpoint `parameter_digest` 覆盖排序后的数据库集合与完整 `TaskSpecification`
+- [ ] **P1** `run_research_pipeline` 前对每个候选 GSE 强制调用 `describe_geo`（prompt gate），解决数据集相关性 vetting 的执行纪律问题——0804 选错数据集（mitophagy 聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（0805 复核，REVIEW §7.2）
 - [ ] **P1** 新 Run 支持携带版本化 `TaskSpecification`
 - [ ] **P1** 完整重跑完成新版本 Artifact 的原子发布和旧版本保留
 - [ ] **P2** 受控局部重跑增加 `rerun_from`
@@ -94,6 +104,10 @@
 - [ ] **P2** Pipeline 结果分类为 `validated_intermediate` / `validated_final`
 
 ### 1.7 人在回路：数据修正闭环
+
+> 0805 复核：`request_human_correction` 是 **Agent 层**工具（Agent 主动请求用户修正数据）。
+> pipeline 内"下载失败时自动触发 `user_input_required`"的 HIL **已否决**——会阻塞自动化场景，
+> Agent 收到失败详情后已有决策权（REVIEW §9.2）。
 
 - [ ] **P2** 新增 `request_human_correction` function_tool
 - [ ] **P2** `UserInputDialog` 增加 `data_correction` 分支渲染
@@ -123,14 +137,15 @@
 
 ### 2.4 统一 SourceAsset 契约
 
-- [ ] **P1** GDC/PDB/Xena/browser 下载路径走 `acquire_source()`
+- [x] **P1** GDC / Xena 下载路径走 `acquire_source()`（0804 已实现，live acquisition 均经 `acquire_source`）
+- [ ] **P1** PDB / browser 下载路径走 `acquire_source()`（仍待办）
 - [ ] **P1** 所有 acquisition skill 产出合规 `SourceAsset`
 
 ### 2.5 PubMed XML 注册为 SourceAsset + download_log 完整性
 
 - [ ] **P1** `download_supplementary` 改为走 `acquire_source()`
-- [ ] **P1** `acquire_source` 返回所有 attempt（含失败）
-- [ ] **P1** `download_log.csv` 记录失败 attempt 与 reason
+- [x] **P1** `acquire_source` 返回所有 attempt（含失败）（0804 已实现，见 §1.5.2 与 `test_acquisition_download_log.py`）
+- [x] **P1** `download_log.csv` 记录失败 attempt 与 reason（0804 已实现）
 - [ ] **P1** 大文件下载增加 progress 事件
 
 ### 2.7 赛题加分项
@@ -163,7 +178,7 @@
 #### 2.7.6 视觉采集与 VLM 联调
 
 - [ ] **P2** `web_visual_capture` 与 `extract_chart_data_vlm` 联调
-- [ ] **P2** BrowserPool 接入 `crawler.py`
+- [x] **P2** BrowserPool 接入 `crawler.py`（已由 §5.2 完成）
 
 ### 2.8 GEO 主产物数据恢复
 
@@ -241,6 +256,13 @@
 
 - [x] **P1** 轮次限制移除方案（token 预算门控 + 无进展检测器）
 - [ ] **P2** INSTRUCTIONS 新增"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"指导
+
+### 4.6 覆盖率确定性统计（0805 复核新增，REVIEW §7.1）
+
+> ReviewerAgent 现为纯 LLM 统计 query_log（大数统计是 LLM 幻觉高发区）。
+> 确定性聚合应作为 reviewer 的前置数据供给，而非独立工具。
+
+- [ ] **P1** query_log 按 source 确定性聚合（success / not_found / failed / 记录数），喂给 `review_query_strategy` 前注入
 
 ---
 
