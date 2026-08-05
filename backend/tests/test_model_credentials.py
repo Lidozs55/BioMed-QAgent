@@ -471,3 +471,70 @@ def test_fresh_lazy_model_uses_runtime_settings_persisted_between_runs(
     ]
     assert delegate_factory.call_args_list[0].kwargs["model"] == "first-model"
     assert delegate_factory.call_args_list[1].kwargs["model"] == "second-model"
+
+
+@pytest.mark.asyncio
+async def test_model_error_response_body_is_logged_and_sdk_still_reads_it(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 4xx model call must print the upstream error body (truncated).
+
+    Regression for the 2026-08-05 incident: the DashScope-compatible
+    endpoint answered ``HTTP/1.1 400 Bad Request`` on every task start,
+    but the backend console only showed the httpx status line, hiding the
+    real error detail (model id / parameter validation). The response hook
+    must log the body's first characters, and must not break the OpenAI
+    SDK, which still needs to read the same bytes for its error object.
+    """
+    import logging
+
+    import openai
+
+    settings = RunModelSettings.from_user_settings(
+        UserSettings(
+            api_key="runtime-api-key",
+            base_url="https://provider.example/v1",
+            model_name="qwen3.7-max-preview",
+            context_window=65_536,
+        )
+    )
+    target = PublicHttpTarget(
+        connect_url="https://203.0.113.10/v1",
+        host_header="provider.example",
+        sni_hostname="provider.example",
+    )
+    monkeypatch.setattr(model_module, "resolve_public_http_target", Mock(return_value=target))
+    error_body = {
+        "error": {
+            "message": "The model `qwen3.7-max-preview` does not exist or you do "
+            "not have access to it.",
+            "type": "invalid_request_error",
+            "code": "model_not_found",
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=error_body, request=request)
+
+    client = model_module.build_openai_client(settings)
+    http_client = client._client  # noqa: SLF001 - inject the mocked transport
+    await http_client._transport.aclose()  # noqa: SLF001
+    http_client._transport = httpx.MockTransport(handler)  # noqa: SLF001
+    try:
+        with (
+            caplog.at_level(logging.ERROR, logger="app.agent_loop.model"),
+            pytest.raises(openai.BadRequestError, match="does not exist"),
+        ):
+            await client.chat.completions.create(
+                model="qwen3.7-max-preview",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+    finally:
+        await client.close()
+
+    assert any(
+        "model request failed: HTTP 400" in record.message
+        and "model_not_found" in record.message
+        for record in caplog.records
+    )

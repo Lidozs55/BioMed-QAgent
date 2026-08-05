@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -22,6 +23,8 @@ from app.model_settings import (
     get_current_model_configuration,
 )
 from app.tools.network_safety import resolve_public_http_target
+
+logger = logging.getLogger(__name__)
 
 _run_model_settings: ContextVar[RunModelSettings | None] = ContextVar(
     "run_model_settings",
@@ -118,6 +121,35 @@ def require_model_credentials(
         raise ModelConfigurationError("DASHSCOPE_API_KEY is required to run the model")
 
 
+_MODEL_ERROR_BODY_SNIPPET = 500
+
+
+async def _log_model_error_response(response: httpx.Response) -> None:
+    """Surface the upstream error body (truncated) for failed model calls.
+
+    The OpenAI SDK collapses non-2xx responses into a generic
+    ``APIError``; the DashScope-compatible endpoint usually returns a
+    JSON error detail (invalid model id, unsupported parameter, quota,
+    ...) that would otherwise never reach the backend console. This
+    hook logs the first ``_MODEL_ERROR_BODY_SNIPPET`` characters of the
+    body so the root cause is visible without extra tooling. ``aread``
+    caches the bytes, so the SDK can still read them afterwards.
+    """
+    if response.status_code < 400:
+        return
+    try:
+        body = await response.aread()
+    except Exception:  # noqa: BLE001 — a logging hook must never break the call
+        body = b""
+    snippet = body[:_MODEL_ERROR_BODY_SNIPPET].decode("utf-8", errors="replace")
+    logger.error(
+        "model request failed: HTTP %s %s body=%s",
+        response.status_code,
+        response.url,
+        snippet or "<empty body>",
+    )
+
+
 def build_openai_client(
     model_settings: RunModelSettings,
     *,
@@ -138,7 +170,10 @@ def build_openai_client(
     http_client = httpx.AsyncClient(
         follow_redirects=False,
         trust_env=False,
-        event_hooks={"request": [pin_original_authority]},
+        event_hooks={
+            "request": [pin_original_authority],
+            "response": [_log_model_error_response],
+        },
     )
     options: dict[str, Any] = {
         "api_key": model_settings.api_key,
