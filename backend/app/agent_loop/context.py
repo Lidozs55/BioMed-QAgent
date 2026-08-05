@@ -27,6 +27,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.model_config import RunModelSettings
+from app.model_settings import get_runtime_limits
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
@@ -112,6 +113,19 @@ class _CreateSkillReservations:
             raise
 
 
+def _default_run_model_settings() -> RunModelSettings:
+    """Store-aware default Run snapshot for contexts without explicit settings.
+
+    REVIEW 2026-08-05 §5.5 (B5): ``RunModelSettings.default()`` derives from
+    the legacy ``UserSettings`` shape and drops the persisted runtime limits;
+    rebind them from the active store so timeouts are real, not nominal.
+    """
+
+    return RunModelSettings.default().model_copy(
+        update={"runtime_limits": get_runtime_limits()}
+    )
+
+
 @dataclass
 class RunContext:
     """任务级共享状态，通过 Runner.run(..., context=ctx) 注入。
@@ -137,7 +151,7 @@ class RunContext:
     subagent_id: str | None = field(default=None, repr=False, kw_only=True)
     managed_run_id: str | None = field(default=None, repr=False, kw_only=True)
     model_settings: RunModelSettings = field(
-        default_factory=RunModelSettings.default,
+        default_factory=_default_run_model_settings,
         repr=False,
         kw_only=True,
     )

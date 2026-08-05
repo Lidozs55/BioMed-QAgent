@@ -1,4 +1,10 @@
-"""Public compaction API with stable durable-runtime imports."""
+"""Public compaction API with stable durable-runtime imports.
+
+Consolidated from the former ``compaction.py`` + ``compaction_types.py``
+(REVIEW 2026-08-05 §5.4 compaction 8→3 merge). The shared request/preparation
+types live in ``compaction_planning`` (the dependency leaf) to keep this
+module free of import cycles.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +19,9 @@ from agents.memory import Session
 from app.domain.contracts import ConversationCompactedPayload
 from app.model_config.context_budget import ContextBudgetOverflowError
 
-from . import compaction_summary as _summary
-from .compaction_execution import prepare_compaction
-from .compaction_types import (
+from . import compaction_execution as _execution
+from .compaction_execution import prepare_compaction, summarize_with_model
+from .compaction_planning import (
     CompactionCancelledError,
     CompactionPreparation,
     CompactionRequest,
@@ -25,8 +31,6 @@ from .compaction_types import (
 type Summarize = Callable[..., Awaitable[str]]
 type EventEmitter = Callable[[object], Awaitable[object]]
 type CompactionCommit = Callable[[Mapping[str, Any], ConversationCompactedPayload], Awaitable[bool]]
-
-_extract_finish_reason = _summary.extract_finish_reason
 
 
 async def _summarize_with_model(
@@ -38,8 +42,11 @@ async def _summarize_with_model(
 ) -> str:
     """Run one bounded summarizer request through the patchable SDK runner."""
 
-    _summary.Runner = Runner
-    return await _summary.summarize_with_model(
+    # Keep the patchable Runner reference visible to the execution module so
+    # tests that stub ``compaction_module.Runner`` keep working after the
+    # 8→3 file consolidation.
+    _execution.Runner = Runner
+    return await summarize_with_model(
         model_handle=model_handle,
         history=history,
         previous_summary=previous_summary,

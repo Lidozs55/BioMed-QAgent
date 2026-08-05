@@ -19,15 +19,19 @@ from app.model_config.token_estimation import (
     PromptTokenEstimator,
     select_text_token_counter,
 )
-from app.runtime.compaction_types import CompactionRequest
+from app.runtime.compaction import CompactionRequest
 
 if TYPE_CHECKING:
     from agents.items import TResponseInputItem
     from agents.memory import Session
 
     from app.agent_loop.context import RunContext
-    from app.runtime.compaction import CompactionCommit, ConversationCompactor, EventEmitter
-    from app.runtime.compaction_types import CompactionPreparation
+    from app.runtime.compaction import (
+        CompactionCommit,
+        CompactionPreparation,
+        ConversationCompactor,
+        EventEmitter,
+    )
 
 
 @dataclass(frozen=True, slots=True)

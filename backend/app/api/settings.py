@@ -36,6 +36,7 @@ class SettingsUpdate(BaseModel):
     repetition_penalty: float | None = None
     enable_search: bool | None = None
     thinking_mode: bool | None = None
+    runtime_limits: dict[str, Any] | None = None
 
 
 class PublicSettings(BaseModel):
@@ -54,6 +55,7 @@ class PublicSettings(BaseModel):
     available_input_tokens: int
     run_ready: bool
     run_block_reason: str | None
+    runtime_limits: dict[str, Any]
 
 
 class ModelPreviewRequest(BaseModel):
@@ -102,6 +104,7 @@ def _public(value: ModelConfiguration) -> PublicSettings:
             available_input_tokens=0,
             run_ready=False,
             run_block_reason=error.reason,
+            runtime_limits=value.runtime_limits.model_dump(),
         )
     if value.context_window is not None:
         source: Literal["catalog", "user", "inferred", "unknown"] = "user"
@@ -125,6 +128,7 @@ def _public(value: ModelConfiguration) -> PublicSettings:
         available_input_tokens=budget.input_capacity,
         run_ready=True,
         run_block_reason=None,
+        runtime_limits=value.runtime_limits.model_dump(),
     )
 
 

@@ -243,6 +243,17 @@ def get_current_model_configuration() -> ModelConfiguration:
     return _current_store.snapshot()
 
 
+def get_runtime_limits() -> RuntimeLimitsSettings:
+    """Return the persisted runtime limits from the active store.
+
+    REVIEW 2026-08-05 §5.5 (B5): replaces the former ``RuntimeLimitsSettings()``
+    module-level defaults so every consumer reads the real persisted value
+    instead of a fake standalone default.
+    """
+
+    return _current_store.snapshot().runtime_limits
+
+
 def calibration_margin_for(budget: ContextBudget) -> int:
     """Read active-store calibration without changing its model configuration."""
 

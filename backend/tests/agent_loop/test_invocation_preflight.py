@@ -15,7 +15,7 @@ from app.model_config.token_estimation import (
     PromptTokenEstimator,
 )
 from app.model_settings import ModelSettingsStore, set_current_model_settings_store
-from app.runtime.compaction_types import CompactionCancelledError
+from app.runtime.compaction import CompactionCancelledError
 
 
 def _budget(*, calibration_margin_tokens: int = 0) -> Mock:

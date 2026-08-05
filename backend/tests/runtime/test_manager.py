@@ -45,6 +45,8 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
     TaskSummary,
+    UserInputRequiredPayload,
+    UserInputResumedPayload,
     WarningPayload,
     build_event,
 )
@@ -5765,3 +5767,126 @@ async def test_manager_retains_compaction_warning_when_warning_wins_lock(
     finally:
         release_executor.set()
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_emit_user_input_resumed_clears_stale_pending_for_auto_approved_plan() -> None:
+    """C4: plan 自动批准直发 resume 事件后应清除 stale pending。
+
+    A plan-confirmation timeout is auto-approved inside the pipeline and
+    emitted as ``UserInputResumedPayload`` without ever passing through
+    ``submit_user_input``. Without the emit-time cleanup the same Run's next
+    HIL (e.g. data_correction) would be blocked by "already pending".
+    """
+    manager_module = importlib.import_module("app.runtime.manager")
+    emitted: list[object] = []
+
+    async def emit_durable(payload: object) -> TaskSnapshot:
+        emitted.append(payload)
+        return SimpleNamespace(
+            task_id="task_c4_resume",
+            run_id="run_c4_resume",
+            status=RunStatus.RUNNING,
+        )
+
+    def submitter(decision: UserInputResumedPayload) -> bool:
+        raise AssertionError("resume must not route through submit_user_input")
+
+    execution = manager_module.RunExecution(
+        task_id="task_c4_resume",
+        run_id="run_c4_resume",
+        request_id="req_c4_resume",
+        input="c4",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+    )
+    execution.set_user_input_submitter(submitter)
+
+    await execution.emit(
+        UserInputRequiredPayload(
+            request_id="req_plan_confirm",
+            prompt_kind="plan_confirmation",
+            summary="confirm the execution plan",
+        )
+    )
+    with pytest.raises(RuntimeError, match="already pending"):
+        await execution.emit(
+            UserInputRequiredPayload(
+                request_id="req_data_correction",
+                prompt_kind="data_correction",
+                summary="correct the data",
+            )
+        )
+
+    await execution.emit(
+        UserInputResumedPayload(
+            request_id="req_plan_confirm",
+            decision="approve",
+        )
+    )
+    # stale pending is cleared → the next HIL is no longer blocked
+    await execution.emit(
+        UserInputRequiredPayload(
+            request_id="req_data_correction",
+            prompt_kind="data_correction",
+            summary="correct the data",
+        )
+    )
+
+    assert (
+        sum(
+            isinstance(payload, UserInputRequiredPayload) for payload in emitted
+        )
+        == 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_emit_user_input_resumed_with_unknown_id_keeps_pending() -> None:
+    """Guard: 非匹配 request_id 的 resume 事件不得清除 pending 状态。"""
+    manager_module = importlib.import_module("app.runtime.manager")
+    emitted: list[object] = []
+
+    async def emit_durable(payload: object) -> TaskSnapshot:
+        emitted.append(payload)
+        return SimpleNamespace(
+            task_id="task_c4_guard",
+            run_id="run_c4_guard",
+            status=RunStatus.RUNNING,
+        )
+
+    def submitter(decision: UserInputResumedPayload) -> bool:
+        del decision
+        return True
+
+    execution = manager_module.RunExecution(
+        task_id="task_c4_guard",
+        run_id="run_c4_guard",
+        request_id="req_c4_guard",
+        input="c4",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit_durable,
+    )
+    execution.set_user_input_submitter(submitter)
+
+    await execution.emit(
+        UserInputRequiredPayload(
+            request_id="req_plan_confirm",
+            prompt_kind="plan_confirmation",
+            summary="confirm the execution plan",
+        )
+    )
+    await execution.emit(
+        UserInputResumedPayload(
+            request_id="req_unrelated",
+            decision="approve",
+        )
+    )
+    with pytest.raises(RuntimeError, match="already pending"):
+        await execution.emit(
+            UserInputRequiredPayload(
+                request_id="req_data_correction",
+                prompt_kind="data_correction",
+                summary="correct the data",
+            )
+        )

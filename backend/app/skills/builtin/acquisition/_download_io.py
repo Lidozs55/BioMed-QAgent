@@ -25,21 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from app.agent_loop.context import RunContext
-from app.model_config import RuntimeLimitsSettings
+from app.model_settings import get_runtime_limits
+from app.tools.crawler import BROWSER_UA, DEFAULT_RATE_LIMIT_SECONDS
 
-#: 浏览器 User-Agent，避免被反爬识别（AGENTS.md 硬约束）。
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
-#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request）。
-_RATE_LIMIT_SECONDS = 2.0
-
-#: Centralized timeout defaults from RuntimeLimitsSettings.
-_DEFAULTS = RuntimeLimitsSettings()
-
+#: 每次外部请求间隔（AGENTS.md 硬约束：2s per request；与 crawler 共用唯一常量）。
 _last_request_ts: float = 0.0
 
 
@@ -48,11 +37,13 @@ def rate_limit() -> None:
 
     Single global timestamp shared across all acquisition skills — stricter
     than per-skill independent windows, matching AGENTS.md's "2s per request"
-    global constraint.
+    global constraint. Kept as a synchronous helper because the urllib
+    fallback transport (main-agent runs without a bound crawler facade)
+    cannot reuse the async ``crawler.AsyncHostRateLimiter``.
     """
     global _last_request_ts
     now = time.monotonic()
-    wait = _RATE_LIMIT_SECONDS - (now - _last_request_ts)
+    wait = DEFAULT_RATE_LIMIT_SECONDS - (now - _last_request_ts)
     if wait > 0:
         time.sleep(wait)
     _last_request_ts = time.monotonic()
@@ -63,16 +54,17 @@ def fetch_json(
     *,
     method: str = "GET",
     json_body: dict | None = None,
-    timeout: float = _DEFAULTS.http_timeout_seconds,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     """Fetch and parse JSON from a REST API endpoint via urllib.
 
     Sends a real browser User-Agent, rate-limits calls to 2s apart
     (AGENTS.md hard constraint), and returns the parsed JSON dict.
+    ``timeout`` defaults to the persisted runtime limit.
     """
     rate_limit()
     headers: dict[str, str] = {
-        "User-Agent": _USER_AGENT,
+        "User-Agent": BROWSER_UA,
         "Accept": "application/json",
     }
     data = None
@@ -80,7 +72,14 @@ def fetch_json(
         data = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(
+        req,
+        timeout=(
+            timeout
+            if timeout is not None
+            else get_runtime_limits().http_timeout_seconds
+        ),
+    ) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -88,16 +87,23 @@ def download_file(
     url: str,
     dest: Path,
     *,
-    timeout: float = _DEFAULTS.http_download_timeout_seconds,
+    timeout: float | None = None,
 ) -> None:
     """Download a file to *dest*, atomically via a .part temp file."""
     rate_limit()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     req = urllib.request.Request(
-        url, headers={"User-Agent": _USER_AGENT}, method="GET"
+        url, headers={"User-Agent": BROWSER_UA}, method="GET"
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp, "wb") as f:
+    with urllib.request.urlopen(
+        req,
+        timeout=(
+            timeout
+            if timeout is not None
+            else get_runtime_limits().http_download_timeout_seconds
+        ),
+    ) as resp, open(tmp, "wb") as f:
         shutil.copyfileobj(resp, f)
     if dest.exists():
         dest.unlink()
@@ -109,10 +115,13 @@ def _download_bytes(url: str) -> bytes:
     rate_limit()
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": _USER_AGENT},
+        headers={"User-Agent": BROWSER_UA},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=_DEFAULTS.http_download_timeout_seconds) as resp:
+    with urllib.request.urlopen(
+        request,
+        timeout=get_runtime_limits().http_download_timeout_seconds,
+    ) as resp:
         return resp.read()
 
 

@@ -44,14 +44,14 @@ def resolve_agent_max_turns(
     """Return the configured main-agent segment max_turns.
 
     Reads the run's immutable model settings when available (so per-run
-    configuration flows through), falling back to the standalone default.
+    configuration flows through), falling back to the persisted store value.
     """
 
-    from app.model_config import RuntimeLimitsSettings
+    from app.model_settings import get_runtime_limits
 
     if model_settings is not None:
         return model_settings.runtime_limits.agent_max_turns
-    return RuntimeLimitsSettings().agent_max_turns
+    return get_runtime_limits().agent_max_turns
 
 """
 Instructions for INSTRUCTIONS

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import httpx
+
+from app.tools.crawler import AsyncHostRateLimiter
 
 
 @dataclass(frozen=True)
@@ -46,42 +47,6 @@ class NcbiRequestError(RuntimeError):
         self.retryable = retryable
 
 
-class AsyncRateLimiter:
-    """Serialize request starts to a fixed process-local rate."""
-
-    def __init__(
-        self,
-        rate: int,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    ) -> None:
-        if rate <= 0:
-            raise ValueError("rate must be positive")
-        self.rate = rate
-        self._interval = 1.0 / rate
-        self._clock = clock
-        self._sleeper = sleeper
-        self._lock = asyncio.Lock()
-        self._last_started_at: float | None = None
-
-    async def acquire(self) -> None:
-        async with self._lock:
-            now = self._clock()
-            if self._last_started_at is not None:
-                delay = self._last_started_at + self._interval - now
-                if delay > 0:
-                    await self._sleeper(delay)
-                    now = self._clock()
-            self._last_started_at = now
-
-
-_PROCESS_LIMITERS = {
-    3: AsyncRateLimiter(rate=3),
-    10: AsyncRateLimiter(rate=10),
-}
-
-
 def parse_retry_after(value: str | None, *, now: datetime) -> float:
     if not value:
         return 0.0
@@ -97,13 +62,23 @@ def parse_retry_after(value: str | None, *, now: datetime) -> float:
         return max(0.0, (retry_at - now).total_seconds())
 
 
+#: NCBI E-utilities policy: 3 requests/s without an API key, 10 requests/s
+#: with one. Implemented with the unified ``crawler.AsyncHostRateLimiter``
+#: (REVIEW 2026-08-05 §5.3) — E-utilities is a single host, so the per-host
+#: limiter is equivalent to the old process-global rate limiter it replaces.
+_PROCESS_LIMITERS = {
+    3: AsyncHostRateLimiter(min_interval=1 / 3),
+    10: AsyncHostRateLimiter(min_interval=1 / 10),
+}
+
+
 class NcbiEutilsClient:
     def __init__(
         self,
         *,
         http: httpx.AsyncClient,
         config: NcbiClientConfig,
-        limiter: AsyncRateLimiter | None = None,
+        limiter: AsyncHostRateLimiter | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -137,7 +112,7 @@ class NcbiEutilsClient:
         try:
             async with asyncio.timeout(self.config.total_timeout):
                 for attempt in range(self.config.max_retries + 1):
-                    await self.limiter.acquire()
+                    await self.limiter.wait(url)
                     try:
                         response = await self._http.get(
                             url,

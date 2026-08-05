@@ -19,14 +19,11 @@ from __future__ import annotations
 
 import httpx
 
+from app.tools.crawler import BROWSER_UA
+
 _EPMC_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 #: EPMC is domestically reachable; allow a longer timeout than Unpaywall.
 _EPMC_TIMEOUT = 30.0
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
 
 
 class EuropePmcError(RuntimeError):
@@ -70,7 +67,7 @@ async def fetch_full_text_xml(
 
     url = f"{_EPMC_BASE}/PMC{digits}/fullTextXML"
     headers = {
-        "User-Agent": _BROWSER_UA,
+        "User-Agent": BROWSER_UA,
         "Accept": "application/xml, text/xml, */*",
     }
 

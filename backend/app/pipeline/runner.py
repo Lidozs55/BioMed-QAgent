@@ -642,6 +642,21 @@ class PipelineRunner:
         if decision.decision == "reject":
             raise PipelinePlanRejectedError("research plan was rejected by user")
 
+    def _discovery_reuse_blocked(self, stage: StageName) -> bool:
+        """C1: block live DISCOVERY reuse for a deliberately re-run task.
+
+        REVIEW 2026-08-05 P1-1: digest reuse would silently skip fresh
+        PubMed/GEO retrieval on a re-run of an already-completed task,
+        hiding upstream updates (new papers, re-annotated GEO series).
+        Recovery from a crash/interrupt (previous run never reached
+        COMPLETED) may still reuse the last successful DISCOVERY output.
+        """
+        return (
+            self.mode != "fixture"
+            and stage is StageName.DISCOVERY
+            and self.state.task_state is TaskState.COMPLETED
+        )
+
     async def _try_reuse_stage(
         self,
         stage: StageName,
@@ -660,6 +675,7 @@ class PipelineRunner:
             self.state.find_reusable(stage, input_digest, parameter_digest)
             if reuse_allowed
             and not (self.defer_publication and stage is StageName.VALIDATION)
+            and not self._discovery_reuse_blocked(stage)
             else None
         )
         completed_digest = self.state.completed_stages.get(stage.value)

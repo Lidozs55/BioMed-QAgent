@@ -90,11 +90,11 @@ def resolve_max_turns_resume_limit(
 ) -> int:
     """Return the configured max_turns resume limit (default 3)."""
 
-    from app.model_config import RuntimeLimitsSettings
+    from app.model_settings import get_runtime_limits
 
     if model_settings is not None:
         return model_settings.runtime_limits.max_turns_resume_limit
-    return RuntimeLimitsSettings().max_turns_resume_limit
+    return get_runtime_limits().max_turns_resume_limit
 
 
 class NoProgressDetected(Exception):

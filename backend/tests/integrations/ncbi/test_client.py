@@ -5,15 +5,15 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from app.integrations.ncbi.client import (
-    AsyncRateLimiter,
     NcbiClientConfig,
     NcbiEutilsClient,
     NcbiRequestError,
     parse_retry_after,
 )
+from app.tools.crawler import AsyncHostRateLimiter
 
 
-def immediate_limiter() -> AsyncRateLimiter:
+def immediate_limiter() -> AsyncHostRateLimiter:
     now = 0.0
 
     def clock() -> float:
@@ -23,7 +23,7 @@ def immediate_limiter() -> AsyncRateLimiter:
         nonlocal now
         now += delay
 
-    return AsyncRateLimiter(rate=10, clock=clock, sleeper=sleep)
+    return AsyncHostRateLimiter(min_interval=0.1, clock=clock, sleeper=sleep)
 
 
 @pytest.mark.asyncio
@@ -92,11 +92,11 @@ async def test_rate_limiter_enforces_three_requests_per_second_without_key() -> 
         delays.append(delay)
         now += delay
 
-    limiter = AsyncRateLimiter(rate=3, clock=clock, sleeper=sleep)
+    limiter = AsyncHostRateLimiter(min_interval=1 / 3, clock=clock, sleeper=sleep)
 
-    await limiter.acquire()
-    await limiter.acquire()
-    await limiter.acquire()
+    await limiter.wait("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
+    await limiter.wait("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
+    await limiter.wait("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
 
     assert delays == pytest.approx([1 / 3, 1 / 3])
 
@@ -114,8 +114,8 @@ def test_default_clients_share_process_limiter_by_quota() -> None:
     keyed = NcbiEutilsClient(http=httpx.AsyncClient(), config=with_key)
 
     assert first.limiter is second.limiter
-    assert first.limiter.rate == 3
-    assert keyed.limiter.rate == 10
+    assert first.limiter.min_interval == pytest.approx(1 / 3)
+    assert keyed.limiter.min_interval == pytest.approx(0.1)
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_client_retries_429_and_5xx_then_returns_response() -> None:
         user_agent="agent",
         max_retries=3,
     )
-    limiter = AsyncRateLimiter(rate=10, sleeper=lambda _: _completed_sleep())
+    limiter = AsyncHostRateLimiter(min_interval=0.1, sleeper=lambda _: _completed_sleep())
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = NcbiEutilsClient(
             http=http,

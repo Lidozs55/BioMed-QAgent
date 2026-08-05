@@ -228,3 +228,54 @@
       source_id 校验，缺失即拒绝
 - [ ] **P1** 非 pipeline 数据产出 `confidence_report.csv` 条目（沿用 §6.1 Phase 2）
 - [ ] **P2** Agent 决策日志持久化（`agent_results/`，吸收 §1.5.5 部分条目）
+
+---
+
+## 7. REVIEW 后续决策记录（REVIEW_2026-08-05-comprehensive-codebase）
+
+> 用户在 0805 会话中逐项拍板；标"暂缓/保留"的项仅记录、不实现，
+> 避免重复评估。
+
+- [ ] **P1（暂缓）** 模型元数据四源归一（REVIEW §5.1）：删 `catalog_qwen.py` /
+      `catalog_compatible.py`，`get_known_model` 直连 `model_info` 仓库；
+      `qwen.py` 瘦身为纯 dashscope 表。待 §6 数据置信度设计定稿后作为独立批次
+- [ ] **P1（调研完成，结论：暂不直接接入）** 旧工具链接入工作流（REVIEW §5.2）：
+      `app/tools/parse_pdb/parse_geo/parse_excel/cleaning/alignment/processing`
+      为 MVP 遗留（`domain/__init__.py` 权威声明），功能已由 pipeline 专用
+      processor（`geo_tximport.py` + processing stage）取代；`_to_legacy_dataset`
+      （`stages/processing.py:382`）为**零调用死桥接**，待删除。直接注册为
+      agent 工具不推荐：产出旧 dataclass、绕过 contracts 契约与 Validation
+      Gate，且与 skill 体系职责重复。正确路径：随 §6.2 非 pipeline 数据准入
+      （Agent 手动来源需解析任意格式文件时）**迁移到 contracts.ParsedDataset
+      后接入**。前置清理：删 `_to_legacy_dataset` + 旧 domain.processing import
+- [ ] **P2（保留现状）** metadata-only 样本下限（REVIEW P1-2）：不改 validation
+      阈值；空壳包识别交由 §6.1 数据置信度检测器覆盖（`confidence_report.csv`
+      低分 → `valid_with_warnings`）
+- [ ] **P2（保留现状）** 缓存 TTL / 新鲜度（REVIEW P1-5）：不改缓存键与 TTL；
+      风险（平台注释可能陈旧）在 §6.1 数据置信度调研中持续跟踪
+
+### 7.1 已执行（0805 本批次，commit `feat/review-2026-08-05-b3-b5-c1-c4`）
+
+- [x] **B3 限流/UA/超时归一**（REVIEW §5.3）：保留 `crawler.AsyncHostRateLimiter`
+      唯一实现 + 单 UA 常量 `browser_pool.BROWSER_UA`（crawler re-export）；
+      `_download_io` 删除本地 UA/限流常量（同步 `rate_limit()` 保留，因 urllib
+      回退路径无法复用异步限流器，常量统一引用 crawler）；ncbi 删除
+      `AsyncRateLimiter`，改用 `crawler.AsyncHostRateLimiter`（3/10 rps 政策 →
+      `min_interval=1/3`、`1/10`，单 host 下等价）；`xena`/`europepmc` UA 收敛；
+      超时注入见 B5
+- [x] **B4 compaction 8→3 文件**（REVIEW §5.4）：`compaction_planning.py` 为
+      依赖 leaf 持有全部 types；`compaction.py` = types re-export +
+      `_execution.Runner` patch；删除 5 个原文件；114 项 compaction 测试通过
+- [x] **B5 超时配置真实化**（REVIEW §5.5）：`get_runtime_limits()` 从持久化
+      store 读 runtime_limits；`PUT /settings` 支持写入；移除模块级
+      `RuntimeLimitsSettings()` 伪配置；crawler/`_download_io`/main/subagents/
+      agent_loop fallback 全部改走注入值；`RunContext.model_settings` 默认继承
+      store 值
+- [x] **C1 checkpoint 复用新鲜度**（REVIEW P1-1）：live 模式下已 COMPLETED 任务
+      禁止复用 DISCOVERY（防静默跳过上游更新）；崩溃/中断恢复（未 COMPLETED）
+      仍可复用
+- [x] **C4 plan pending 残留清理**（REVIEW P2-3）：`RunExecution.emit()` 遇
+      `UserInputResumedPayload`（pipeline 自动批准直发，未经
+      `submit_user_input`）时清除 stale pending id，同 Run 下一次 HIL
+      （如 data_correction）不再被 "already pending" 阻断
+
