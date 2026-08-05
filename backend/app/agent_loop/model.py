@@ -83,15 +83,18 @@ def get_active_model_settings() -> RunModelSettings:
 def build_sdk_model_settings(model_settings: RunModelSettings) -> ModelSettings:
     """Translate one Run snapshot into Agents SDK request settings."""
 
-    extra_body = (
-        {
+    extra_body = None
+    if _uses_dashscope_compatible_qwen(model_settings):
+        extra_body = {
             "repetition_penalty": model_settings.repetition_penalty,
             "enable_search": model_settings.enable_search,
-            "enable_thinking": model_settings.thinking_mode,
         }
-        if _uses_dashscope_compatible_qwen(model_settings)
-        else None
-    )
+        if model_settings.thinking_mode:
+            # DashScope restricts enable_thinking to True and rejects
+            # enable_thinking=False with HTTP 400 InvalidParameter. When
+            # thinking is off, omit the field so the endpoint's default
+            # (thinking disabled) applies.
+            extra_body["enable_thinking"] = True
     return ModelSettings(
         max_tokens=model_settings.max_tokens,
         temperature=model_settings.temperature,
