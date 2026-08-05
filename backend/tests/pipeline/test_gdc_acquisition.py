@@ -142,3 +142,20 @@ def test_gdc_live_clinical_fails_before_opening_http_client(
 
     with pytest.raises(ValueError, match="live clinical is not supported"):
         acquisition.run_acquisition(context, datetime.now(UTC))
+
+
+def test_gdc_live_experimental_strategy_error_lists_supported_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: an Agent passing a GDC experimental_strategy value (e.g.
+    ``transcriptome_profiling``, stage attempt #3 of task_662b8435) must get
+    an actionable error that names valid data_type values instead of a bare
+    "unsupported GDC live data type" message."""
+    def unexpected_client():
+        raise AssertionError("HTTP must not be used before data_type validation")
+
+    monkeypatch.setattr(acquisition.httpx, "AsyncClient", unexpected_client)
+    with pytest.raises(ValueError, match="transcriptome_profiling") as exc_info:
+        acquisition._gdc_live_data_type("transcriptome_profiling")
+    assert "gene-expression" in str(exc_info.value)
+    assert "Gene Expression Quantification" in str(exc_info.value)

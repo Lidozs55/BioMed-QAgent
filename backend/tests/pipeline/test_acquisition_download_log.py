@@ -32,6 +32,45 @@ def _context(
     )
 
 
+def test_geo_series_dir_matches_ncbi_ftp_layout() -> None:
+    """Regression: NCBI GEO series directories are ``GSE{num//1000}nnn``.
+
+    The pipeline previously sliced ``gse[:6]`` (GSE154nnn for GSE15471),
+    which 404s for every 5-digit accession. The fixture series GSE178352 is
+    a 6-digit accession, so ``gse[:6]`` happened to be correct there and the
+    bug went unnoticed. Verified live (2026-08-05): with the corrected prefix
+    (GSE15nnn/GSE28nnn/GSE71nnn) all three series matrices download and parse.
+    """
+    assert acquisition._geo_series_dir("GSE15471") == "GSE15nnn"
+    assert acquisition._geo_series_dir("GSE28735") == "GSE28nnn"
+    assert acquisition._geo_series_dir("GSE71989") == "GSE71nnn"
+    assert acquisition._geo_series_dir("GSE178352") == "GSE178nnn"
+    assert acquisition._geo_series_dir("gse15471") == "GSE15nnn"
+
+
+def test_geo_url_builders_use_correct_series_prefix() -> None:
+    assert acquisition._counts_download_url("GSE15471") == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE15nnn/GSE15471/"
+        "suppl/GSE15471_tximportCounts.txt.gz"
+    )
+    assert acquisition._series_matrix_url("GSE15471") == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE15nnn/GSE15471/"
+        "matrix/GSE15471_series_matrix.txt.gz"
+    )
+    assert acquisition._family_soft_url("GSE15471") == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE15nnn/GSE15471/"
+        "soft/GSE15471_family.soft.gz"
+    )
+    assert acquisition._suppl_directory_url("GSE15471") == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE15nnn/GSE15471/suppl/"
+    )
+    # 6-digit fixture accession keeps its previous (correct) layout.
+    assert acquisition._series_matrix_url("GSE178352") == (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE178nnn/GSE178352/"
+        "matrix/GSE178352_series_matrix.txt.gz"
+    )
+
+
 def test_geo_live_fallback_records_failed_attempt_in_download_log(
     tmp_path: Path,
     monkeypatch,

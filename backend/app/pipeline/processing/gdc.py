@@ -39,7 +39,16 @@ def parse_gdc_table(
         raise ValueError("source asset checksum mismatch before processing")
     normalized = data_type.strip().lower().replace("_", "-")
     source_name = source_path.name
-    if normalized in {"gene-expression", "gene expression", "expression"}:
+    # Keep this set in sync with acquisition._gdc_live_data_type() — the
+    # acquisition stage accepts the official GDC label "Gene Expression
+    # Quantification" when querying the files API, and processing must accept
+    # the same value or a successfully downloaded dataset is rejected here.
+    if normalized in {
+        "gene-expression",
+        "gene expression",
+        "expression",
+        "gene expression quantification",
+    }:
         return _parse_expression(source_asset, dataset_id, workdir, source_path, source_name)
     if normalized == "clinical":
         return _parse_clinical(source_asset, dataset_id, workdir, source_path, source_name)

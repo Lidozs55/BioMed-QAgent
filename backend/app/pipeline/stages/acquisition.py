@@ -95,33 +95,51 @@ def _default_specification(ctx: StageContext) -> TaskSpecification:
     )
 
 
+def _geo_series_dir(gse: str) -> str:
+    """Return the NCBI GEO series directory prefix for a GSE accession.
+
+    NCBI stores series under ``geo/series/GSE{prefix}nnn/`` where the numeric
+    prefix is the accession number with its last three digits replaced by
+    ``nnn`` (e.g. GSE15471 → GSE15nnn, GSE178352 → GSE178nnn). This matches
+    the convention used by the skill layer (``app/skills/builtin/acquisition/geo.py``).
+
+    The previous implementation sliced ``gse[:6]``, which only happened to
+    match 6-digit accessions (e.g. the fixture GSE178352) and produced dead
+    404 directories (``GSE154nnn``) for the far more common 5-digit series —
+    the root cause of repeated live GEO acquisition failures.
+    """
+    return f"{gse[:-3].upper()}nnn"
+
+
 def _counts_download_url(gse: str) -> str:
     """Build the NCBI GEO supplemental counts URL for a GSE accession."""
-    prefix = gse[:6].upper()
     return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
         f"{gse}/suppl/{gse}_tximportCounts.txt.gz"
     )
 
 
 def _family_soft_url(gse: str) -> str:
-    prefix = gse[:6].upper()
-    return f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/{gse}/soft/{gse}_family.soft.gz"
+    return (
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
+        f"{gse}/soft/{gse}_family.soft.gz"
+    )
 
 
 def _series_matrix_url(gse: str) -> str:
     """Build the NCBI GEO series matrix URL (universally available fallback)."""
-    prefix = gse[:6].upper()
     return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/"
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
         f"{gse}/matrix/{gse}_series_matrix.txt.gz"
     )
 
 
 def _suppl_directory_url(gse: str) -> str:
     """Build the NCBI GEO supplementary files directory URL."""
-    prefix = gse[:6].upper()
-    return f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}nnn/{gse}/suppl/"
+    return (
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
+        f"{gse}/suppl/"
+    )
 
 
 # 启发式关键词优先级：counts > tpm > fpkm > expression
@@ -453,7 +471,14 @@ def _gdc_live_data_type(data_type: str) -> str:
             "GDC live clinical is not supported: Clinical Supplement files require "
             "an XML lineage parser"
         )
-    raise ValueError(f"unsupported GDC live data type: {data_type}")
+    raise ValueError(
+        f"unsupported GDC live data type: {data_type}. Supported values: "
+        "gene-expression / gene expression / expression / "
+        "gene expression quantification (official GDC label: "
+        "'Gene Expression Quantification'; 'clinical' is rejected with its "
+        "own limitation message). Note: GDC experimental_strategy values "
+        "such as 'transcriptome_profiling' are not data_type filters."
+    )
 
 
 async def _run_xena_acquisition_live(
