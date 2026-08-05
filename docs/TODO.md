@@ -92,6 +92,14 @@
 - [ ] **P1** 消除 `_resolve_gse` 静默截断：多 GSE 全部保留（`dataset_catalog` / `source_list`）
 - [ ] **P1** 多 GSE **各数据集独立发布**（不做表达值行级合并——跨数据集合并引入 batch effect，非当前 pipeline 范围）；每 GSE 独立走 acquisition→processing→artifact 链，`source_relations` 记录双侧关系
 
+#### 1.5.7 0805 实测修复：GEO 前缀目录与 GDC data_type 一致性
+
+> 0805 对 task_662b8435 全流程失败的真实网络验证结论（GEO 反复失败的根因，已修复）。
+
+- [x] **P0** GEO FTP 系列目录前缀规则：`GSE{编号去掉后3位}nnn`（GSE15471→GSE15nnn、GSE178352→GSE178nnn）。此前 `acquisition.py` 用 `gse[:6]` 只对 6 位编号（fixture GSE178352）碰巧正确，5 位编号全部 404。已修复为 `_geo_series_dir`，与 skill 层 `geo.py` 的 `accession[:-3] + "nnn"` 约定一致
+- [x] **P0** GDC `data_type` 双路径必须一致：`acquisition._gdc_live_data_type` 接受官方标签 `Gene Expression Quantification`，`processing.parse_gdc_table` 必须接受同一值（已加 `"gene expression quantification"`），否则下载成功的数据集在 processing 被拒
+- [x] **P1** GDC 未知 `data_type`（如 `transcriptome_profiling`，是 experimental_strategy 而非 data_type）错误信息列出全部合法值，帮助 Agent 自纠错
+
 ### 1.6 Agent 编排与 Pipeline 重跑闭环
 
 - [x] **P0** checkpoint `parameter_digest` 覆盖排序后的数据库集合与完整 `TaskSpecification`

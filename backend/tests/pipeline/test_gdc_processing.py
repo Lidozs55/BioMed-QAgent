@@ -48,6 +48,29 @@ def test_parse_gdc_expression_tsv_gz_to_long_form(tmp_path: Path) -> None:
     assert rows[0]["source_line_number"] == "2"
 
 
+def test_parse_gdc_accepts_official_data_type_label(tmp_path: Path) -> None:
+    """Regression: a dataset downloaded by the acquisition stage using the
+    official GDC data_type label must not be rejected in processing.
+
+    ``acquisition._gdc_live_data_type`` normalizes "Gene Expression
+    Quantification" for the GDC files API, but ``parse_gdc_table`` previously
+    rejected the same value, so a successfully downloaded GDC asset died in
+    the processing stage ("unsupported GDC data type: Gene Expression
+    Quantification" — stage attempt #2 of task_662b8435)."""
+    workdir = create_task_workdir(
+        "gdc_official_label", base_dir=str(tmp_path / "tasks")
+    )
+    payload = gzip.compress(b"gene_id\tS1\nTP53\t1.5\n", mtime=0)
+    result = parse_gdc_table(
+        _asset(workdir, payload, "expression.tsv.gz"),
+        "ds_gdc_tcga",
+        workdir,
+        "Gene Expression Quantification",
+    )
+    assert result.parser_name == "gdc_gene_expression"
+    assert result.row_count == 1
+
+
 def test_parse_official_gdc_star_counts_uses_tpm_with_exact_lineage(
     tmp_path: Path,
 ) -> None:
