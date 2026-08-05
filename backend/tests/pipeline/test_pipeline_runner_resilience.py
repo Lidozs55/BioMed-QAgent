@@ -832,3 +832,52 @@ async def test_stage_timeout_drains_worker_before_terminal_state(
 
     assert manifest.task_state == TaskState.FAILED
     assert worker_exited.is_set()
+
+
+def test_live_discovery_reuse_blocked_only_for_completed_task(tmp_path: Path) -> None:
+    """C1: live DISCOVERY reuse is blocked for a completed task only."""
+    runner = PipelineRunner(
+        task_id="task_c1_reuse",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        databases=["gdc"],
+    )
+    # 新建 state（CREATED）→ 崩溃/中断恢复场景允许复用。
+    assert runner._discovery_reuse_blocked(StageName.DISCOVERY) is False
+    # 主动重跑：上次任务已 COMPLETED → 禁止复用（上游更新不可被静默跳过）。
+    runner.state.task_state = TaskState.COMPLETED
+    assert runner._discovery_reuse_blocked(StageName.DISCOVERY) is True
+    # 其它 stage 与 fixture 模式不受影响。
+    assert runner._discovery_reuse_blocked(StageName.ACQUISITION) is False
+    fixture_runner = PipelineRunner(
+        task_id="task_c1_fixture",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    fixture_runner.state.task_state = TaskState.COMPLETED
+    assert fixture_runner._discovery_reuse_blocked(StageName.DISCOVERY) is False
+
+
+def test_live_completed_task_discovery_reuse_short_circuits(tmp_path: Path) -> None:
+    """C1: a completed live task never reuses a digest-matched DISCOVERY."""
+    runner = PipelineRunner(
+        task_id="task_c1_short_circuit",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        databases=["gdc"],
+    )
+    runner.state.task_state = TaskState.COMPLETED
+    input_digest = runner._compute_input_digest(StageName.DISCOVERY, {})
+    parameter_digest = runner._compute_parameter_digest(StageName.DISCOVERY)
+    reused = asyncio.run(
+        runner._try_reuse_stage(
+            StageName.DISCOVERY,
+            input_digest,
+            parameter_digest,
+            {},
+            reuse_allowed=True,
+        )
+    )
+    assert reused is False

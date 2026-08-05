@@ -27,9 +27,10 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from app.domain.contracts import DataLevel
-from app.model_config import RuntimeLimitsSettings
+from app.model_settings import get_runtime_limits
 from app.subagents.staging import SubagentStagingWorkspace
 from app.tools.browser_pool import (
+    BROWSER_UA,
     BrowserPool,
     BrowserRequestAuthorizer,
     BrowserScreenshotResult,
@@ -41,16 +42,6 @@ from app.tools.network_safety import (
 
 logger = logging.getLogger(__name__)
 
-# Centralized HTTP timeout default (RuntimeLimitsSettings.http_timeout_seconds).
-_HTTP_TIMEOUT: float = RuntimeLimitsSettings().http_timeout_seconds
-
-# Real Chrome User-Agent (project_memory L11: real browser UA required)
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-
 # Default headers for all requests (project_memory L11: Referer + Accept required)
 BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": BROWSER_UA,
@@ -60,7 +51,7 @@ BROWSER_HEADERS: dict[str, str] = {
 }
 
 # Rate limiting: 2s between requests (project_memory L11)
-_RATE_LIMIT_SECONDS = 2.0
+DEFAULT_RATE_LIMIT_SECONDS = 2.0
 MAX_CRAWLER_RESPONSE_BYTES = 10 * 1024 * 1024
 MAX_CRAWLER_DOWNLOAD_BYTES = 100 * 1024 * 1024
 MAX_CRAWLER_REDIRECTS = 10
@@ -135,12 +126,17 @@ class _AsyncHostState:
 
 
 class AsyncHostRateLimiter:
-    """Apply request pacing independently for each normalized hostname."""
+    """Apply request pacing independently for each normalized hostname.
+
+    This is the project's single rate-limiter implementation (REVIEW
+    2026-08-05 §5.3); acquisition/download paths must route pacing through
+    it instead of maintaining private limiter copies.
+    """
 
     def __init__(
         self,
         *,
-        min_interval: float = _RATE_LIMIT_SECONDS,
+        min_interval: float = DEFAULT_RATE_LIMIT_SECONDS,
         max_hosts: int = 256,
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -155,6 +151,10 @@ class AsyncHostRateLimiter:
         self._sleeper = sleeper
         self._hosts: dict[str, _AsyncHostState] = {}
         self._registry_lock = asyncio.Lock()
+
+    @property
+    def min_interval(self) -> float:
+        return self._min_interval
 
     @property
     def tracked_host_count(self) -> int:
@@ -223,7 +223,7 @@ class CrawlerFacade:
         self,
         *,
         browser_pool: BrowserPool | None = None,
-        min_interval: float = _RATE_LIMIT_SECONDS,
+        min_interval: float = DEFAULT_RATE_LIMIT_SECONDS,
         http_transport: httpx.AsyncBaseTransport | None = None,
         target_resolver: Callable[[str], Awaitable[PublicHttpTarget]] | None = None,
     ) -> None:
@@ -597,7 +597,7 @@ class CrawlerFacade:
         if self._closed:
             raise RuntimeError("crawler facade is closed")
         return httpx.AsyncClient(
-            timeout=_HTTP_TIMEOUT,
+            timeout=get_runtime_limits().http_timeout_seconds,
             follow_redirects=False,
             trust_env=False,
             transport=self._http_transport,

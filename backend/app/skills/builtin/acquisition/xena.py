@@ -28,12 +28,12 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.skills.builtin.acquisition._download_io import (
-    _USER_AGENT,
     _write_download,
     download_file,
     rate_limit,
 )
 from app.skills.registry import SkillCategory, SkillDef, skill_registry
+from app.tools.crawler import BROWSER_UA
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def _fetch_hub_index() -> list[dict[str, Any]]:
         _rate_limit()
         request = urllib.request.Request(
             list_url,
-            headers={"User-Agent": _USER_AGENT},
+            headers={"User-Agent": BROWSER_UA},
         )
         with urllib.request.urlopen(request, timeout=60) as resp:
             root_xml = ET.parse(resp).getroot()

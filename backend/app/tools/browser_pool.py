@@ -20,7 +20,8 @@ MAX_BROWSER_CONTENT_BYTES = 10 * 1024 * 1024
 MAX_BROWSER_SCREENSHOT_BYTES = 25 * 1024 * 1024
 MAX_BROWSER_EXTRACT_BYTES = 10 * 1024 * 1024
 MAX_BROWSER_SCREENSHOT_PIXELS = 25_000_000
-_DEFAULT_USER_AGENT = (
+#: 全项目唯一浏览器 User-Agent 常量（REVIEW 2026-08-05 §5.3 单 UA 归一）。
+BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
@@ -433,7 +434,7 @@ class BrowserPool:
             proxy_lease = self._egress_proxy.create_lease()
             route_errors: list[BaseException] = []
             context = await browser.new_context(
-                user_agent=_DEFAULT_USER_AGENT,
+                user_agent=BROWSER_UA,
                 extra_http_headers=extra_headers or {},
                 viewport=viewport or _DEFAULT_VIEWPORT,
                 locale="en-US",

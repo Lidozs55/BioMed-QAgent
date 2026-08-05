@@ -36,11 +36,11 @@ def resolve_child_agent_max_turns(
 ) -> int:
     """Return the configured child-agent max_turns (default 30)."""
 
-    from app.model_config import RuntimeLimitsSettings
+    from app.model_settings import get_runtime_limits
 
     if model_settings is not None:
         return model_settings.runtime_limits.child_agent_max_turns
-    return RuntimeLimitsSettings().child_agent_max_turns
+    return get_runtime_limits().child_agent_max_turns
 
 
 def _make_child_instructions(

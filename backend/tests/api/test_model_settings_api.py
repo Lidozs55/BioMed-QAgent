@@ -212,3 +212,49 @@ def test_model_factory_omits_dashscope_body_for_openai_endpoint(tmp_path: Path) 
         get_model(model_module.to_run_model_settings(store.snapshot())).model_settings.extra_body
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_limits_are_read_write_via_settings_api(tmp_path: Path) -> None:
+    """B5: persisted runtime limits must be adjustable through PUT /settings."""
+    application = create_app(Settings(output_dir=str(tmp_path / "output")))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application), base_url="http://localhost"
+    ) as client:
+        saved = await client.put(
+            "/api/v1/settings",
+            json={
+                "runtime_limits": {
+                    "http_timeout_seconds": 12.5,
+                    "agent_max_turns": 300,
+                }
+            },
+        )
+        loaded = await client.get("/api/v1/settings")
+
+    assert saved.status_code == 200
+    assert saved.json()["runtime_limits"]["http_timeout_seconds"] == 12.5
+    assert saved.json()["runtime_limits"]["agent_max_turns"] == 300
+    assert loaded.json()["runtime_limits"]["http_timeout_seconds"] == 12.5
+    persisted = (tmp_path / "settings" / "model.json").read_text("utf-8")
+    assert '"http_timeout_seconds": 12.5' in persisted
+
+
+def test_run_context_default_model_settings_use_store_runtime_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B5: a default RunContext must inherit persisted runtime limits."""
+    from app import model_settings as model_settings_module
+    from app.agent_loop.context import RunContext
+    from app.model_settings import ModelSettingsStore
+
+    store = ModelSettingsStore(
+        tmp_path / "model.json",
+        defaults=Settings(dashscope_api_key="key", model_name="qwen-plus"),
+    )
+    store.update({"runtime_limits": {"http_timeout_seconds": 42.0}})
+    monkeypatch.setattr(model_settings_module, "_current_store", store)
+
+    context = RunContext(task_id="task_b5_limits")
+
+    assert context.model_settings.runtime_limits.http_timeout_seconds == 42.0

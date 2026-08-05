@@ -1,43 +1,52 @@
-"""Execution of one token-targeted conversation compaction preparation."""
+"""Execution, degraded-history fallback and model-backed summarization.
+
+Consolidated from the former ``compaction_execution.py`` +
+``compaction_fallback.py`` + ``compaction_summary.py``
+(REVIEW 2026-08-05 §5.4 compaction 8→3 merge).
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from agents import Agent, ModelSettings, Runner
 from agents.items import TResponseInputItem
 from agents.memory import Session
+from agents.stream_events import RawResponsesStreamEvent
 
 from app.domain.contracts import ConversationCompactedPayload, WarningPayload
 from app.model_config.context_budget import ContextBudgetOverflowError
 
-from .compaction_fallback import fallback
-from .compaction_history import EffectiveSession
 from .compaction_planning import (
-    HistoryView,
-    build_history_view,
-    effective_items,
-    estimate,
-    summary_record,
-)
-from .compaction_reduction import (
-    items_for_segments,
-    select_coverage_prefix,
-    shorten_summary,
-    summary_marker,
-)
-from .compaction_types import (
     CompactionCancelledError,
     CompactionPreparation,
     CompactionRequest,
     ConversationSummarizerTruncatedError,
+    EffectiveSession,
     HistoryAlignmentError,
+    HistoryView,
+    build_history_view,
+    effective_items,
+    estimate,
+    items_for_segments,
+    select_coverage_prefix,
+    shorten_summary,
+    split_session_runs,
+    summary_marker,
+    summary_record,
 )
 
 type Summarize = Callable[..., Awaitable[str]]
 type EventEmitter = Callable[[object], Awaitable[object]]
 type CompactionCommit = Callable[[Mapping[str, Any], ConversationCompactedPayload], Awaitable[bool]]
+
+
+# ---------------------------------------------------------------------------
+# Execution orchestration
+# ---------------------------------------------------------------------------
 
 
 async def prepare_compaction(
@@ -207,8 +216,130 @@ def raise_if_cancelled(cancellation_requested: asyncio.Event | None) -> None:
 
 
 def split_groups(items: list[TResponseInputItem]) -> list[tuple[TResponseInputItem, ...]]:
-    """Import locally to keep the execution module focused on orchestration."""
-
-    from .compaction_history import split_session_runs
+    """Group raw session items into complete user-started exchanges."""
 
     return split_session_runs(items)
+
+
+# ---------------------------------------------------------------------------
+# Degraded-history fallback
+# ---------------------------------------------------------------------------
+
+
+async def fallback(
+    session: Session,
+    groups: list[tuple[TResponseInputItem, ...]],
+    request: CompactionRequest,
+    emit: EventEmitter,
+    error: Exception,
+    cancellation_requested: asyncio.Event | None,
+) -> CompactionPreparation:
+    """Warn and retain only the newest complete groups that fit every bound."""
+
+    _raise_if_cancelled(cancellation_requested)
+    await emit(
+        WarningPayload(
+            message=f"conversation compaction failed: {error}",
+            code="compaction_failed",
+        )
+    )
+    _raise_if_cancelled(cancellation_requested)
+    limit = min(request.budget.target_tokens, request.budget.input_capacity)
+    retained = _newest_groups_within_limit(groups, request, limit)
+    effective = [item for group in retained for item in group]
+    current_estimate = estimate(request, effective)
+    if current_estimate.total > limit:
+        raise ContextBudgetOverflowError(
+            estimated_tokens=current_estimate.total,
+            limit_tokens=limit,
+        )
+    return CompactionPreparation(
+        session=EffectiveSession(session, effective),
+        agent_input=request.agent_input,
+        estimate=current_estimate,
+        fallback=True,
+    )
+
+
+def _newest_groups_within_limit(
+    groups: list[tuple[TResponseInputItem, ...]],
+    request: CompactionRequest,
+    limit: int,
+) -> list[tuple[TResponseInputItem, ...]]:
+    """Return one newest-first-selected, chronological suffix of complete groups."""
+
+    retained: list[tuple[TResponseInputItem, ...]] = []
+    for group in reversed(groups):
+        candidate = [group, *retained]
+        candidate_items = [item for run in candidate for item in run]
+        if estimate(request, candidate_items).total > limit:
+            break
+        retained = candidate
+    return retained
+
+
+def _raise_if_cancelled(cancellation_requested: asyncio.Event | None) -> None:
+    """Abort the fallback after cancellation wins the race."""
+
+    if cancellation_requested is not None and cancellation_requested.is_set():
+        raise CompactionCancelledError("conversation compaction was cancelled")
+
+
+# ---------------------------------------------------------------------------
+# Model-backed summary generation
+# ---------------------------------------------------------------------------
+
+
+def extract_finish_reason(data: object) -> str | None:
+    """Extract a Chat Completions finish reason from one raw event."""
+
+    choices = getattr(data, "choices", None)
+    if not choices:
+        return None
+    finish_reason = getattr(choices[0], "finish_reason", None)
+    if isinstance(finish_reason, str) and finish_reason:
+        return finish_reason
+    return None
+
+
+async def summarize_with_model(
+    *,
+    model_handle: object,
+    history: list[TResponseInputItem],
+    previous_summary: str | None,
+    max_tokens: int | None = None,
+) -> str:
+    """Request one faithful, non-truncated conversation summary."""
+
+    summarizer = Agent(
+        name="ConversationSummarizer",
+        instructions=(
+            "Summarize the conversation faithfully for continuation. Preserve user "
+            "goals, biomedical entities, tool findings, decisions, warnings, and "
+            "unresolved work. Do not call tools."
+        ),
+        tools=[],
+        model=model_handle,
+        model_settings=ModelSettings(max_tokens=max_tokens),
+    )
+    payload = {"previous_summary": previous_summary, "history": history}
+    result = Runner.run_streamed(
+        summarizer,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+        max_turns=1,
+    )
+    finish_reason: str | None = None
+    async for event in result.stream_events():
+        if isinstance(event, RawResponsesStreamEvent):
+            event_reason = extract_finish_reason(event.data)
+            if event_reason:
+                finish_reason = event_reason
+    if finish_reason == "length":
+        raise ConversationSummarizerTruncatedError(
+            "conversation summarizer LLM output was truncated "
+            "(finish_reason=length); refusing to use a partial summary"
+        )
+    summary = result.final_output
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("conversation summarizer returned no text")
+    return summary.strip()

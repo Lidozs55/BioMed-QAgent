@@ -249,6 +249,16 @@ class RunExecution:
                 raise RuntimeError("user input request is already pending")
             pending_request_id = payload.request_id
             self._pending_user_input_request_id = pending_request_id
+        elif (
+            isinstance(payload, UserInputResumedPayload)
+            and payload.request_id == self._pending_user_input_request_id
+        ):
+            # REVIEW 2026-08-05 P2-3 (C4): a plan-confirmation timeout is
+            # auto-approved inside the pipeline and emitted as a resume event
+            # without ever passing through ``submit_user_input``. Clear the
+            # stale pending id here, otherwise the same Run's next HIL
+            # (e.g. data_correction) is blocked by "already pending".
+            self._pending_user_input_request_id = None
         try:
             if stage_attempt_id is None and timestamp is None:
                 return await self._event_emitter(payload)
