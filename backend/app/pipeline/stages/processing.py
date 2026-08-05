@@ -15,8 +15,13 @@ from app.domain.contracts import (
     StageName,
     asset_id_from_sha256,
 )
+from app.domain.contracts.discovery import GeoSeriesRecord
 from app.domain.processing import ParsedDataset as OldParsedDataset
 from app.pipeline.processing.gdc import parse_gdc_table
+from app.pipeline.processing.geo_annotation import (
+    NOT_ATTEMPTED,
+    fetch_platform_annotation,
+)
 from app.pipeline.processing.geo_tximport import (
     _OUTPUT_COLUMNS,
     GeoSampleMetadata,
@@ -35,6 +40,7 @@ from app.pipeline.stages.base import (
     StageResult,
 )
 from app.tools.alignment import normalize_field_names
+from app.tools.content_cache import ContentCache
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +539,8 @@ def _try_series_matrix_expression_or_minimal(
     ctx: StageContext,
     samples: list[GeoSampleMetadata],
     suppl_asset: SourceAsset | None = None,
+    gene_map: dict[str, str] | None = None,
+    probe_gene_mapping: str = NOT_ATTEMPTED,
 ) -> ParsedDataset:
     """Try parsing the series_matrix expression block; fall back to minimal.
 
@@ -542,6 +550,10 @@ def _try_series_matrix_expression_or_minimal(
     (downloaded by the acquisition stage for RNA-seq series), parses that
     instead. Otherwise falls back to ``_build_minimal_parsed_dataset``
     (metadata-only).
+
+    ``gene_map`` / ``probe_gene_mapping`` are forwarded to the expression
+    parser so probe rows can be rewritten to gene symbols and the annotation
+    status (mapped/unmapped/...) is recorded in processing_parameters.
     """
     if samples:
         try:
@@ -550,6 +562,8 @@ def _try_series_matrix_expression_or_minimal(
                 dataset_id=dataset_id,
                 workdir=ctx.workdir,
                 samples=samples,
+                gene_map=gene_map,
+                probe_gene_mapping=probe_gene_mapping,
             )
             if expression_parsed is not None:
                 logger.info(
@@ -693,10 +707,35 @@ def _data_type_datasets(
     ]
 
 
+def _load_geo_gene_map(
+    ctx: StageContext, geo: GeoSeriesRecord | None
+) -> tuple[dict[str, str] | None, str]:
+    """Load the platform probe → gene map for the first GPL of *geo*.
+
+    Returns ``(map, status)``. When *geo* carries no platform, returns
+    ``(None, NOT_ATTEMPTED)``. Download/discovery failures degrade to
+    ``(None, "annotation_unavailable")`` — a missing probe→gene map is a
+    data-quality warning, not a processing failure.
+    """
+    if geo is None or not geo.platform_ids:
+        return None, NOT_ATTEMPTED
+    gpl = geo.platform_ids[0]
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
+    try:
+        return fetch_platform_annotation(gpl, cache)
+    except Exception as exc:
+        logger.warning(
+            "processing: GEO annotation fetch failed for %s (%s: %s)",
+            gpl, type(exc).__name__, exc,
+        )
+        return None, "annotation_unavailable"
+
+
 def run_processing(
     ctx: StageContext,
     source_assets: SourceAsset | list[SourceAsset],
     dataset_id: str,
+    geo: GeoSeriesRecord | None = None,
 ) -> StageResult:
     """Parse the GEO tximport counts file into a long-form ParsedDataset.
 
@@ -866,8 +905,12 @@ def run_processing(
             samples = parse_geo_soft_samples(soft_bytes)
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
+            gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
             parsed = _try_series_matrix_expression_or_minimal(
-                source_asset, dataset_id, ctx, samples, suppl_asset=suppl_asset
+                source_asset, dataset_id, ctx, samples,
+                suppl_asset=suppl_asset,
+                gene_map=gene_map,
+                probe_gene_mapping=probe_gene_mapping,
             )
         if not samples and not parsed.row_count:
             logger.warning(

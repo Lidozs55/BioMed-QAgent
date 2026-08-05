@@ -6,8 +6,10 @@ field_mapping, cleaning) and writes the staging package (TODO §1.2).
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,6 +61,74 @@ def _is_metadata_only(primary: ParsedDataset) -> bool:
     file was found.
     """
     return primary.parser_name == "geo_minimal_placeholder"
+
+
+# Tokens that occur in real task topics but are not gene symbols. The list is
+# intentionally conservative: a false negative (no subset artifact) is far
+# less harmful than a false positive (a meaningless ``{gene}_expression.csv``).
+_GENE_TOKEN_STOP = frozenset({
+    "THE", "AND", "OR", "OF", "IN", "WITH", "VS", "FOR", "ON", "AT", "BY",
+    "A", "AN", "AS", "TO", "IS", "ARE", "BE", "BETWEEN", "AMONG",
+    "RNA", "DNA", "MRNA", "MIRNA", "LNCRNA", "SIRNA", "SHRNA", "GENE",
+    "GENES", "GEO", "TCGA", "PAAD", "PDAC", "CRC", "NSCLC", "HCC", "CC",
+    "OS", "DFS", "PFS", "RFS", "IHC", "PCR", "WT", "KO", "NA", "NGS",
+    "TUMOR", "TUMOUR", "NORMAL", "CANCER", "CELL", "CELLS", "LINE",
+    "LINES", "TISSUE", "TISSUES", "SAMPLE", "SAMPLES", "PATIENT",
+    "PATIENTS", "EXPRESSION", "DIFFERENTIAL", "TRANSCRIPTOME",
+    "TRANSCRIPTOMIC", "ANALYSIS", "STUDY", "STUDIES", "PANCREATIC",
+    "PANCREAS", "BREAST", "LUNG", "LIVER", "COLON", "GASTRIC", "RENAL",
+    "HEPATIC", "OVARIAN", "PROSTATE", "BRAIN", "BLOOD", "SERUM",
+})
+
+
+def _extract_target_gene(topic: str) -> str | None:
+    """Extract the most likely gene-symbol token from a free-text topic.
+
+    Gene symbols are all-caps alphanumeric tokens (e.g. METTL5, BRCA1,
+    TP53). The longest candidate that is not a stopword/accession is chosen —
+    a concrete gene symbol is longer than the common uppercase noise tokens
+    in biomedical topics. Returns ``None`` when nothing plausible is found.
+    """
+    candidates = re.findall(r"[A-Z][A-Z0-9]{1,14}", topic)
+    accession = re.compile(r"(?:GSE|GSM|GPL|SRR|SAMN|SAMEA|PRJNA|PRJEB)\d+")
+    viable = [
+        token for token in candidates
+        if token not in _GENE_TOKEN_STOP
+        and not token.isdigit()
+        and not accession.fullmatch(token)
+    ]
+    if not viable:
+        return None
+    return max(viable, key=len)
+
+
+def _write_target_gene_subset(staging: Path, main_name: str, topic: str) -> str | None:
+    """Write ``{gene}_expression.csv`` for the gene token extracted from *topic*.
+
+    Reads ``main_data.csv`` and keeps the rows whose ``gene_id`` (or
+    ``gene_id_raw``) equals the extracted token, case-insensitively. Returns
+    the written filename, or ``None`` when no gene token is found or no rows
+    match (e.g. metadata-only packages). The file lands in staging before the
+    artifact list is computed, so it ships as a secondary artifact.
+    """
+    gene = _extract_target_gene(topic)
+    if gene is None:
+        return None
+    main_path = staging / main_name
+    with main_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = list(reader.fieldnames or [])
+        needle = gene.upper()
+        matched = [
+            row for row in reader
+            if row.get("gene_id", "").upper() == needle
+            or row.get("gene_id_raw", "").upper() == needle
+        ]
+    if not matched:
+        return None
+    filename = f"{gene}_expression.csv"
+    write_csv(staging / filename, columns, matched)
+    return filename
 
 
 def _build_processing_log_rows(
@@ -299,6 +369,30 @@ def run_artifact_build(
                 "created_at": retrieved_at.isoformat(),
             }
         )
+    # A series_matrix parsed at probe level whose platform annotation provided
+    # no probe→gene mapping cannot be queried by gene symbol. Surface the
+    # status so the Agent sees why ``main_data.csv`` is probe-IDs-only and can
+    # switch to a gene-annotated dataset. (task_db204f6b review, 0805.)
+    probe_mapping = primary.processing_parameters.get("probe_gene_mapping")
+    if probe_mapping in {"unmapped", "no_gene_annotation", "annotation_unavailable"}:
+        platform = geo.platform_ids[0] if geo and geo.platform_ids else ""
+        all_warnings.append(
+            {
+                "warning_id": "geo_probe_unmapped",
+                "severity": "warning",
+                "stage": "processing",
+                "code": "probe_gene_mapping_unavailable",
+                "message": (
+                    f"{dataset_accession} 平台注释{platform or ''}未能提供 "
+                    f"probe→基因映射 (status={probe_mapping})，表达值仅以探针 "
+                    "ID 标识、无法按基因符号查询；建议更换为带基因注释的数据集"
+                ),
+                "source_id": geo_source_id or primary_source_id,
+                "asset_id": source_asset.asset_id,
+                "record_id": "",
+                "created_at": retrieved_at.isoformat(),
+            }
+        )
 
     sample_rows = _build_sample_metadata_rows(
         samples=samples,
@@ -412,6 +506,14 @@ def run_artifact_build(
 
     for name, columns in _ARTIFACT_COLUMNS.items():
         write_csv(staging / name, columns, rows_by_file.get(name, []))
+
+    # Target-gene subset artifact (P0-2): when the task topic names a gene
+    # symbol that exists in main_data.csv, ship a filtered ``{gene}_expression.csv``
+    # so the Agent/analyst can query the target gene without filtering the
+    # full long-form table. Reactome pathway packages are excluded (their
+    # rows are pathway members, not per-sample expression).
+    if not is_reactome:
+        _write_target_gene_subset(staging, main_name, ctx.topic)
 
     # Multi-source manifest (TODO §1.5.4): produced only when a deterministic
     # multi-source merge exists, so single-source runs keep the historic

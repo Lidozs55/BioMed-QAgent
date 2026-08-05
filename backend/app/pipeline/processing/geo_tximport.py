@@ -186,6 +186,8 @@ def process_geo_series_matrix_expression(
     dataset_id: str,
     workdir: TaskWorkDir,
     samples: list[GeoSampleMetadata],
+    gene_map: dict[str, str] | None = None,
+    probe_gene_mapping: str = "not_attempted",
 ) -> ParsedDataset | None:
     """Parse the expression matrix block from a GEO ``*_series_matrix.txt.gz``.
 
@@ -194,6 +196,14 @@ def process_geo_series_matrix_expression(
     contains data rows. Returns ``None`` when the block is empty (only a
     header row, as is common for snRNAseq/RNA-seq series whose expression
     matrices ship as supplementary files rather than in the series matrix).
+
+    When ``gene_map`` (probe ID → gene symbol, from the platform annotation)
+    is provided, probes present in the map are emitted with
+    ``gene_id_namespace="gene_symbol"``; unmatched probes keep the raw probe
+    ID and ``geo_id_ref`` namespace. ``probe_gene_mapping`` records the
+    annotation status (mapped/unmapped/no_gene_annotation/...) in
+    ``processing_parameters`` so the artifact builder can surface a warning
+    when the platform provides no usable gene mapping.
 
     Raises ``ValueError`` for malformed data within the block (e.g. a header
     row with no sample columns), and ``FileNotFoundError`` when the source
@@ -234,6 +244,7 @@ def process_geo_series_matrix_expression(
     output_path = workdir.parsed / f"{dataset_id}_series_matrix_long.csv"
     row_count = 0
     source_row_count = 0
+    mapped_probes: set[str] = set()
 
     with output_path.open("w", encoding="utf-8-sig", newline="") as target:
         writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
@@ -243,6 +254,11 @@ def process_geo_series_matrix_expression(
             if len(values) < 2:
                 continue
             gene_id_raw = values[0]
+            mapped_gene = (gene_map or {}).get(gene_id_raw)
+            if mapped_gene:
+                mapped_probes.add(gene_id_raw)
+            gene_id_out = mapped_gene or gene_id_raw
+            gene_namespace = "gene_symbol" if mapped_gene else "geo_id_ref"
             source_row_count += 1
             source_line_number = begin_idx + 3 + offset
             for col_idx, sample_id in enumerate(sample_ids):
@@ -262,8 +278,8 @@ def process_geo_series_matrix_expression(
                     "source_id": source_asset.source_id,
                     "asset_id": source_asset.asset_id,
                     "gene_id_raw": gene_id_raw,
-                    "gene_id": gene_id_raw,
-                    "gene_id_namespace": "geo_id_ref",
+                    "gene_id": gene_id_out,
+                    "gene_id_namespace": gene_namespace,
                     "gene_id_version": "",
                     "sample_id": sample_id,
                     "source_sample_alias": source_alias,
@@ -285,6 +301,15 @@ def process_geo_series_matrix_expression(
     if row_count == 0:
         return None
 
+    if mapped_probes:
+        gene_namespace_summary = (
+            "gene_symbol"
+            if len(mapped_probes) == source_row_count
+            else "mixed_geo_probe_gene_symbol"
+        )
+    else:
+        gene_namespace_summary = "geo_id_ref"
+
     file_bytes = output_path.read_bytes()
     checksum = hashlib.sha256(file_bytes).hexdigest()
     file_asset = FileAsset(
@@ -304,7 +329,8 @@ def process_geo_series_matrix_expression(
         "is_integer_expected": False,
         "sample_count": len(sample_ids),
         "source_logical_file": "series_matrix_expression",
-        "gene_id_namespace": "geo_id_ref",
+        "gene_id_namespace": gene_namespace_summary,
+        "probe_gene_mapping": probe_gene_mapping,
     }
     return ParsedDataset(
         dataset_id=dataset_id,

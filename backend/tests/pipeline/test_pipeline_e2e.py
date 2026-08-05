@@ -248,7 +248,7 @@ def test_e2e_mid_pipeline_crash_recovery_resumes_from_failure(
     call_count = {"n": 0}
     original_processing = runner_module.run_processing
 
-    def flaky_processing(ctx, source_asset, dataset_id):
+    def flaky_processing(ctx, source_asset, dataset_id, geo=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("simulated crash during processing")

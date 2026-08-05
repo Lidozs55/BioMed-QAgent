@@ -975,3 +975,98 @@ def test_run_processing_live_mode_uses_series_matrix_expression(
     assert all(r["expression_value"] != "" for r in rows)
     assert {r["gene_id_raw"] for r in rows} == {"BRCA1", "TP53"}
     assert {r["sample_id"] for r in rows} == {"GSM9000400", "GSM9000401"}
+
+
+# --- probe → gene mapping (P0-1, 0805) ------------------------------------
+#
+# A GEO platform annotation (geo_annotation.parse_platform_annotation) can
+# rewrite probe IDs to gene symbols. The expression parser must:
+#   * write gene_id = mapped symbol + gene_id_namespace="gene_symbol" for
+#     probes found in the map,
+#   * keep gene_id = raw probe + "geo_id_ref" for unmatched probes,
+#   * record the annotation status in processing_parameters.probe_gene_mapping.
+
+PROBE_MATRIX = """\
+!Series_title\t"Probe-level series"
+!Sample_geo_accession\t"GSM9000500"\t"GSM9000501"
+!Sample_title\t"Control rep. 1"\t"Treatment rep. 2"
+!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"
+!series_matrix_table_begin
+"ID_REF"\t"GSM9000500"\t"GSM9000501"
+"A_19_P00000001"\t"5.2"\t"3.1"
+"A_19_P00000002"\t"8.7"\t"6.4"
+"A_19_P00000009"\t"1.1"\t"2.2"
+!series_matrix_table_end
+"""
+
+
+def test_series_matrix_expression_rewrites_mapped_probes_to_gene_symbols(
+    tmp_path: Path,
+) -> None:
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    ctx, source_asset = _make_series_matrix_asset(tmp_path, PROBE_MATRIX, "task_probe")
+    compressed = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+    gene_map = {"A_19_P00000001": "METTL5", "A_19_P00000002": "BRCA1"}
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_probe",
+        workdir=ctx.workdir,
+        samples=samples,
+        gene_map=gene_map,
+        probe_gene_mapping="mapped",
+    )
+
+    assert result is not None
+    assert result.processing_parameters["probe_gene_mapping"] == "mapped"
+    assert result.processing_parameters["gene_id_namespace"] == (
+        "mixed_geo_probe_gene_symbol"
+    )
+    output_path = ctx.workdir.root / result.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    by_probe = {row["gene_id_raw"]: row for row in rows}
+    # Mapped probes keep their raw ID in gene_id_raw but expose the symbol.
+    assert by_probe["A_19_P00000001"]["gene_id"] == "METTL5"
+    assert by_probe["A_19_P00000001"]["gene_id_namespace"] == "gene_symbol"
+    assert by_probe["A_19_P00000002"]["gene_id"] == "BRCA1"
+    assert by_probe["A_19_P00000002"]["gene_id_namespace"] == "gene_symbol"
+    # Unmatched probe stays probe-level.
+    assert by_probe["A_19_P00000009"]["gene_id"] == "A_19_P00000009"
+    assert by_probe["A_19_P00000009"]["gene_id_namespace"] == "geo_id_ref"
+
+
+def test_series_matrix_expression_keeps_probes_without_gene_map(
+    tmp_path: Path,
+) -> None:
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    ctx, source_asset = _make_series_matrix_asset(tmp_path, PROBE_MATRIX, "task_nomap")
+    compressed = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_nomap",
+        workdir=ctx.workdir,
+        samples=samples,
+        gene_map=None,
+        probe_gene_mapping="unmapped",
+    )
+
+    assert result is not None
+    assert result.processing_parameters["probe_gene_mapping"] == "unmapped"
+    assert result.processing_parameters["gene_id_namespace"] == "geo_id_ref"
+    output_path = ctx.workdir.root / result.file_asset.relative_path
+    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert all(r["gene_id"] == r["gene_id_raw"] for r in rows)
+    assert all(r["gene_id_namespace"] == "geo_id_ref" for r in rows)

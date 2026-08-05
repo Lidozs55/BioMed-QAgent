@@ -106,8 +106,10 @@
 > 数据集（50 对配对 PDAC）选择合理、溯源完整、验证通过，但 950MB probe 级主产物无法定位 METTL5——
 > GPL19072 平台注释（GEO 侧）所有基因映射列均为空，probe→gene 无法构建。单基因分析应优先 TCGA 基因级矩阵。
 
-- [ ] **P0** processing 增加平台注释解析：GEO 注释可下载时构建 probe→gene 映射；不可用时 validation gate 标记 `geo_probe_unmapped` 并生成显式 warning（REVIEW §3.1）
-- [ ] **P0** 主产物体积治理：probe 级全基因组长格式提供按目标基因过滤/分块输出，避免 950MB 单文件（REVIEW §2.3）
+- [x] **P0** processing 增加平台注释解析：GEO 注释可下载时构建 probe→gene 映射；不可用时 artifact build 注入 `geo_probe_unmapped` 显式 warning（REVIEW §3.1）
+  - 实现：`app/pipeline/processing/geo_annotation.py`（FTP `suppl/*.txt.gz` / `annot/*.annot.gz` 目录发现 + SOFT `!platform_table_begin/end` 解析 + ContentCache 缓存；GPL19072 实测 unmapped）；`process_geo_series_matrix_expression` 命中映射写 `gene_id_namespace="gene_symbol"`；`builder.py` 对 `probe_gene_mapping` ∈ {unmapped, no_gene_annotation, annotation_unavailable} 注入 warning
+- [x] **P0** 主产物体积治理：probe 级全基因组长格式提供按目标基因过滤输出，避免 950MB 单文件（REVIEW §2.3）
+  - 实现：`builder.py` 从 `ctx.topic` 提取基因 token，`main_data.csv` 中按 `gene_id`/`gene_id_raw` 过滤生成 `{gene}_expression.csv` 副产物（无匹配则不出文件）
 - [ ] **P1** discovery/plan 引导：单基因差异分析优先 GDC/Xena 基因级矩阵（TCGA-PAAD 178 tumor+4 normal 实证可用），微阵列作验证（REVIEW §3.2）
 - [ ] **P1** plan 确认（`user_input_required`）超时策略：挂起而非失败，保留已 discovery 结果（REVIEW §3.3）
 - [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（REVIEW §2.4）
