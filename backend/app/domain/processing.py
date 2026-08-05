@@ -1,14 +1,11 @@
-"""Processing 领域模型 — ParsedDataset 和清洗结果。
+"""Legacy processing domain model — ParsedDataset only.
 
-对应 TODO.md Section 8.2：
-- 数据集 ID
-- 原始文件路径
-- 表/Sheet/区块名称
-- 字段名和推断类型
-- 数据行
-- 来源定位
-- 解析器名称和版本
-- warnings
+Kept solely as the in-memory row model consumed by the deterministic merge
+path: ``pipeline.stages.processing`` adapts Pipeline ``contracts.ParsedDataset``
+entries through ``_to_legacy_parsed_datasets`` into this dataclass so
+``app.tools.alignment`` can align and vertically merge them (REVIEW
+2026-08-05 B2). The ``CleaningReport`` counterpart was removed together with
+the legacy ``app.tools.cleaning`` module.
 """
 from __future__ import annotations
 
@@ -44,24 +41,3 @@ class ParsedDataset:
     @property
     def col_count(self) -> int:
         return len(self.field_names)
-
-
-@dataclass
-class CleaningReport:
-    """清洗报告 — 记录清洗规则和影响行数。
-
-    对应 Section 8.3：清洗规则记录影响行数，不静默删除或覆盖原始记录。
-    """
-
-    missing_stats: dict[str, int] = field(default_factory=dict)  # 字段名 → 缺失数
-    duplicate_count: int = 0  # 精确重复行数
-    type_issues: dict[str, int] = field(default_factory=dict)  # 字段名 → 类型不匹配数
-    format_corrections: dict[str, int] = field(default_factory=dict)  # 字段名 → 格式修正数
-    anomaly_flags: list[str] = field(default_factory=list)  # 异常标记列表
-    rules_applied: list[str] = field(default_factory=list)  # 应用的清洗规则
-    total_affected: int = 0  # 总影响行数
-
-    def add_rule(self, rule: str, affected: int) -> None:
-        """记录一条清洗规则及其影响行数。"""
-        self.rules_applied.append(rule)
-        self.total_affected += affected

@@ -239,15 +239,25 @@
 - [ ] **P1（暂缓）** 模型元数据四源归一（REVIEW §5.1）：删 `catalog_qwen.py` /
       `catalog_compatible.py`，`get_known_model` 直连 `model_info` 仓库；
       `qwen.py` 瘦身为纯 dashscope 表。待 §6 数据置信度设计定稿后作为独立批次
-- [ ] **P1（调研完成，结论：暂不直接接入）** 旧工具链接入工作流（REVIEW §5.2）：
-      `app/tools/parse_pdb/parse_geo/parse_excel/cleaning/alignment/processing`
-      为 MVP 遗留（`domain/__init__.py` 权威声明），功能已由 pipeline 专用
-      processor（`geo_tximport.py` + processing stage）取代；`_to_legacy_dataset`
-      （`stages/processing.py:382`）为**零调用死桥接**，待删除。直接注册为
-      agent 工具不推荐：产出旧 dataclass、绕过 contracts 契约与 Validation
-      Gate，且与 skill 体系职责重复。正确路径：随 §6.2 非 pipeline 数据准入
-      （Agent 手动来源需解析任意格式文件时）**迁移到 contracts.ParsedDataset
-      后接入**。前置清理：删 `_to_legacy_dataset` + 旧 domain.processing import
+- [ ] **P1（调研修正，结论：仅 parse_*/cleaning 为遗留，alignment/processing 活跃保留）**
+      旧工具链接入工作流（REVIEW §5.2）：代码核查（0805 修订）表明 REVIEW
+      原"整组删除"建议与事实不符——
+      - `app/tools/alignment.py` **活跃接入**：`pipeline/stages/processing.py`
+        单数据集路径用 `normalize_field_names`（L368），GDC+Xena 多数据集
+        确定性合并路径（TODO §1.2）经 `_to_legacy_parsed_datasets` 适配后调
+        `align_fields` + `merge_datasets`（L454-463，`merge_parsed_datasets`
+        由 L672 真实调用）。**不可删除**，REVIEW §5.2 对 alignment 的判断有误。
+      - `app/tools/processing.py` 的 `_infer_field_types`/`_infer_type` 被
+        parse_*/cleaning/alignment 引用，为公共类型推断工具，随上层存活。
+      - `app/tools/parse_pdb.py`/`parse_geo.py`/`parse_excel.py`/`cleaning.py`
+        app 内零引用者（仅 `tests/test_processing.py` 覆盖 cleaning/processing），
+        MVP 遗留，功能已被 pipeline 专用 processor（`geo_tximport.py`
+        `parse_geo_series_matrix_samples`/`parse_geo_soft_samples` 等）取代；
+        **不接入**。删除前需同步清理 `tests/test_processing.py` 与
+        `tests/test_config.py` 的 openpyxl 依赖检查（L138-145）。
+      - 0804 调研记录"_to_legacy_dataset 零调用死桥接"有误：实际函数名为
+        `_to_legacy_parsed_datasets`（`stages/processing.py:378`），是
+        多数据集合并路径的活跃适配器，**保留**。
 - [ ] **P2（保留现状）** metadata-only 样本下限（REVIEW P1-2）：不改 validation
       阈值；空壳包识别交由 §6.1 数据置信度检测器覆盖（`confidence_report.csv`
       低分 → `valid_with_warnings`）
