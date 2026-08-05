@@ -111,9 +111,7 @@ backend/
 │   │   └── learned/                  # 后天 Skill（默认禁用；AST + 路径白名单安全校验）
 │   └── tools/                        # Function Tools
 │       ├── _registry.py / io.py / workdir.py / crawler.py
-│       ├── cleaning.py / alignment.py / processing.py
-│       ├── parse_geo.py / parse_pdb.py / parse_excel.py
-│       ├── content_cache.py / network_safety.py
+│       ├── alignment.py / content_cache.py / network_safety.py
 ├── tests/                            # pytest（86 文件 / 1025+ 测试，详见下方）
 │   ├── agent_loop/ api/ contracts/ integration/ integrations/ live/
 │   ├── pipeline/ runtime/ fixtures/ncbi/gse178352/

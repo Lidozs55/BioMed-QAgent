@@ -75,7 +75,7 @@ def _read_pyproject_runtime_deps() -> set[str]:
     """Return the set of runtime dependency package names declared in
     ``backend/pyproject.toml`` under ``[project].dependencies``.
 
-    Each entry like ``"openpyxl>=3.1.0"`` is normalized to ``"openpyxl"``.
+    Each entry like ``"pdfplumber>=0.11.0"`` is normalized to ``"pdfplumber"``.
     Extras like ``"uvicorn[standard]>=0.30.0"`` become ``"uvicorn"``.
 
     Uses ``tomllib`` (Python 3.11+ stdlib) instead of regex — a regex approach
@@ -129,21 +129,6 @@ def test_pyproject_does_not_declare_dead_deps() -> None:
     assert "geoparse" not in deps, (
         "geoparse is dead dep — never imported in app/ or tests/; "
         "remove from pyproject.toml [project].dependencies"
-    )
-
-
-def test_pyproject_declares_openpyxl() -> None:
-    """TODO §1.6 P0: pyproject.toml must declare openpyxl.
-
-    ``app/tools/parse_excel.py`` imports ``openpyxl`` directly. Without
-    declaring it, ``uv sync`` would still resolve it transitively (via
-    pandas or similar), but the dep would be a phantom — breakage would
-    surface only after a transitive provider is removed.
-    """
-    deps = _read_pyproject_runtime_deps()
-    assert "openpyxl" in deps, (
-        "openpyxl is used in app/tools/parse_excel.py but not declared in "
-        "pyproject.toml [project].dependencies"
     )
 
 

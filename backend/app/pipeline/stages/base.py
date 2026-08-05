@@ -198,8 +198,9 @@ class AcquisitionOutput(ContractModel):
 class CleaningReportModel(ContractModel):
     """Cleaning report produced during the processing stage.
 
-    Mirrors ``app.domain.processing.CleaningReport`` but uses Pydantic
-    and omits the dataclass dependency so the pipeline is self-contained.
+    The legacy ``app.domain.processing.CleaningReport`` was removed with
+    ``app.tools.cleaning`` (REVIEW 2026-08-05 B2); this is the only cleaning
+    report model and keeps the pipeline self-contained.
     """
 
     missing_stats: dict[str, int] = {}

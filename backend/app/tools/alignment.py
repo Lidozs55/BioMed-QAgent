@@ -285,7 +285,6 @@ def merge_datasets(
         for row in merged_rows:
             val = row.get(field)
             if val is not None and str(val).strip():
-                from app.tools.processing import _infer_type
                 t = _infer_type(str(val))
                 field_types[field] = "string" if t == "null" else t
                 break
@@ -304,3 +303,33 @@ def merge_datasets(
         parser_name="alignment_merger",
         parser_version="0.1.0",
     )
+
+
+def _infer_type(value: str) -> str:
+    """Infer the column type of a single string value.
+
+    Moved here from the removed ``app.tools.processing`` legacy parser
+    module (REVIEW 2026-08-05 B2) — it is the only surviving consumer of
+    that helper.
+    """
+    if value is None or value == "":
+        return "null"
+    # bool
+    if value.lower() in ("true", "false"):
+        return "bool"
+    # int
+    try:
+        int(value)
+        return "int"
+    except ValueError:
+        pass
+    # float
+    try:
+        float(value)
+        return "float"
+    except ValueError:
+        pass
+    # date (简单匹配 YYYY-MM-DD)
+    if len(value) == 10 and value[4] == "-" and value[7] == "-":
+        return "date"
+    return "string"
