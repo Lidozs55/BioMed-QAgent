@@ -1,7 +1,7 @@
 # BioMed-QAgent 架构
 
 > 本文描述当前批准的目标架构。详细数据契约与验收条件见
-> [Backend Data Closure Design](superpowers/specs/2026-07-12-backend-data-closure-design.md)。
+> [Backend Data Closure Design](archive/superpowers/specs/2026-07-12-backend-data-closure-design.md)。
 
 ## 1. 产品目标
 

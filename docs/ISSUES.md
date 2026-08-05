@@ -1,9 +1,7 @@
 # 已知问题追踪
 
-### Agent `read_file` 读取超大文件 → 磁盘/内存膨胀（已修复）
-
-- [x] 根因：`read_file` 无大小守卫，Agent 对 parsed/ 下 GB 级长表（如 GSE183795 `*_series_matrix_long.csv`，244 样本 × 19,246 探针 ≈ 470 万行）直接 `read_text` 全文读取，全文进入工具返回值并作为 `function_call_output` 原样写入 `session_items.jsonl`（单行 1.74 GB）。单任务日志可膨胀至 3+ GB。
-- [x] 修复（2026-08-04）：`read_file` 增加 256KB 守卫（拒绝并引导替代工具）；新增流式工具 `read_file_head`（读前 N 行看表头/结构）与 `search_file`（grep 式按关键词定位行，流式扫描不加载全文），已注册到主 Agent + Import Agent；配套 14 项测试。已清理受影响任务目录（释放 ~4.1 GB）。
+> 仅保留未解决项；已修复项的根因与修复说明见 git 历史（commit message 含根因）。
+> 标注"审查结论：暂缓"的条目为已评估、优先级极低或无需处理的项。
 
 ### 设置界面 skill 管理不可用
 
@@ -69,12 +67,3 @@
 - **根因**：`_clean_csv` 使用 `csv.DictReader` 全量加载行到 `all_rows: list[dict]`，4.7M 行 × 每行 dict 开销 → 内存溢出 + 超时。500k 截断是紧急止血，不是正确解。
 - **影响**：Agent 对大型数据集的产物缺少后 4.2M 行数据，但不会报错——用户可能不知道数据被截断。
 - **修复方向**：改为流式清洗（`csv.reader` 逐行处理 + 流式写出），不累积 `all_rows` 列表；或在截断时向 `RunContext.warnings` 追加用户可见警告，让 Agent 知晓数据不完整。
-
-### `read_file` 256KB 硬上限过于激进（已调整）
-
-- [x] `app/tools/io.py:84` — `read_file` 原先 256KB 硬上限是在 `parsed/` 下 1.74 GB JSONL 导致 LLM API 400 错误时紧急加入的。现已提供 `read_file_head`（流式读前 N 行）和 `search_file`（grep 式检索）作为大文件专用工具，256KB 硬拒过于激进——Agent 无法读取 500KB-2MB 的中等文件（JSON 配置、小型 CSV）。
-- **修复（2026-08-04）**：上限提升至 1 MB（`_READ_FILE_MAX_BYTES = 1024 * 1024`），覆盖大多数中等文件；超过 1 MB 仍硬拒并引导到 `read_file_head`/`search_file`。1 MB ≈ 250k tokens，在大多数模型上下文窗口内。
-
-### `@cache` → `@lru_cache` 修复诊断修正
-
-- [x] `app/runtime/compaction_history.py:129` — 先前将 `@cache` 改为 `@lru_cache(maxsize=4096)` 时，ISSUES.md 诊断"跨 task 累积缓存条目导致内存增长"是**误诊**。`mapping_count` 是定义在 `align_groups_to_records` 内部的嵌套函数，每次调用 `align_groups_to_records` 会创建新的函数对象 + 新的 cache，调用结束后随函数对象一起 GC。原 `@cache` 不会跨 task 累积。`@lru_cache(maxsize=4096)` 的实际作用是限制单次调用内的缓存上限（防止极端 case 如 1000 groups × 1000 records = 1M 条目），是合理的安全优化但非内存泄漏修复。

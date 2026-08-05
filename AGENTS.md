@@ -131,8 +131,9 @@ Before starting any task, consult:
   (repository root).
 - [docs/TODO.md](docs/TODO.md) — current development TODOs and approved
   architecture decisions.
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` — phase design specs
-  and plans.
+- `docs/archive/superpowers/specs/` and `docs/archive/superpowers/plans/` —
+  archived phase design specs and plans (implemented history; consult for
+  design rationale, do not edit).
 
 ### 4. Common Commands
 
