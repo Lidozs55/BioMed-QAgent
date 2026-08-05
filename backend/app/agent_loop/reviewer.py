@@ -18,6 +18,39 @@ from agents.result import RunResult, RunResultStreaming
 from app.agent_loop.context import RunContext
 from app.agent_loop.model import LazyDashScopeModel
 
+# query_log entry 的 status 取值（app/domain/contracts/enums.py QueryStatus）
+_QUERY_STATUS_KEYS = ("success", "not_found", "failed", "skipped", "page_fallback")
+
+
+def aggregate_query_log_by_source(query_log: list[dict]) -> dict[str, dict[str, int]]:
+    """按 source 确定性聚合 query_log（TODO §4.6，REVIEW §7.1）。
+
+    大数统计是 LLM 幻觉高发区，reviewer 不应自行计数——此纯函数产出
+    精确的按 source 状态分布与记录数，作为 ``_reviewer_instructions`` 的
+    前置数据供给注入。
+
+    返回 ``{source: {"total": N, "success": N, "not_found": N, "failed": N,
+    "skipped": N, "page_fallback": N, "records": N}}``。
+    """
+    aggregates: dict[str, dict[str, int]] = {}
+    for entry in query_log:
+        source = entry.get("source") or "unknown"
+        status = entry.get("status") or "unknown"
+        try:
+            records = int(entry.get("records_count", 0) or 0)
+        except (TypeError, ValueError):
+            records = 0
+        agg = aggregates.setdefault(
+            source,
+            {"total": 0, "success": 0, "not_found": 0, "failed": 0,
+             "skipped": 0, "page_fallback": 0, "records": 0},
+        )
+        agg["total"] += 1
+        if status in _QUERY_STATUS_KEYS:
+            agg[status] += 1
+        agg["records"] += records
+    return aggregates
+
 
 async def _reviewer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
     """动态指令：从 RunContext 读取完整 query log 并注入子 Agent 上下文。
@@ -26,16 +59,28 @@ async def _reviewer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
     传递的是压缩前的完整 query_log（调用 review_query_strategy 工具的时机由
     主 Agent 决定，INSTRUCTIONS 指导其在 run_research_pipeline 前调用）。
 
+    TODO §4.6（REVIEW §7.1）: 除完整日志外，同时注入按 source 的确定性
+    聚合统计（``aggregate_query_log_by_source``），引导 LLM 直接引用统计
+    结果，避免自行计数产生幻觉。
+
     SDK 0.18.2 强制 instructions callable 接受 (context, agent) 二参数契约
     （见 agents/agent.py Agent.get_system_prompt），单参数签名会抛 TypeError。
     """
     run_ctx: RunContext = ctx.context
     log_json = json.dumps(run_ctx.query_log, ensure_ascii=False, indent=2)
+    agg_json = json.dumps(
+        aggregate_query_log_by_source(run_ctx.query_log),
+        ensure_ascii=False,
+        indent=2,
+    )
     return (
         "你是查询策略审查专家（ReviewerAgent）。以下是当前任务的完整查询日志 JSON：\n\n"
         f"{log_json}\n\n"
+        "以下为按数据源（source）的**确定性统计**（由程序精确聚合，请直接引用，"
+        "不要自行重新计数）：\n\n"
+        f"{agg_json}\n\n"
         "请审查查询策略并给出建议：\n"
-        "- 按数据源（source）分组统计查询次数、成功/not_found/失败数\n"
+        "- 基于上述确定性统计，判断各 source 的查询覆盖情况（success/not_found/failed）\n"
         "- 指出哪些 source 已充分覆盖（有足够 success 记录）\n"
         "- 指出哪些 not_found 查询不应重试（关键词已穷尽或该 source 确无相关数据）\n"
         "- 建议是否需要换关键词、换 source，或已可进入 pipeline 阶段\n"

@@ -119,7 +119,8 @@
 ### 1.6 Agent 编排与 Pipeline 重跑闭环
 
 - [x] **P0** checkpoint `parameter_digest` 覆盖排序后的数据库集合与完整 `TaskSpecification`
-- [ ] **P1** `run_research_pipeline` 前对每个候选 GSE 强制调用 `describe_geo`（prompt gate），解决数据集相关性 vetting 的执行纪律问题——0804 选错数据集（mitophagy 聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（0805 复核，REVIEW §7.2）
+- [x] **P1** `run_research_pipeline` 前对每个候选 GSE 强制调用 `describe_geo`（prompt gate），解决数据集相关性 vetting 的执行纪律问题——0804 选错数据集（mitophagy 聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（0805 复核，REVIEW §7.2）
+  - 实现：`tool.py` `run_research_pipeline` 描述新增 "Before passing any ``gse`` you MUST first call describe_geo..."；`agent.py` INSTRUCTIONS 第 4 步新增"GEO 数据集提交前强制 vetting"小节（样本数/tumor-normal 分组/platform 与主题匹配），调用段落实"未 vetting 或 vetting 不匹配的 GSE 不得提交"；`test_prompt_shape_integration.py::test_describe_geo_is_mandatory_vetting_gate_before_pipeline` 覆盖
 - [ ] **P1** 新 Run 支持携带版本化 `TaskSpecification`
 - [ ] **P1** 完整重跑完成新版本 Artifact 的原子发布和旧版本保留
 - [ ] **P2** 受控局部重跑增加 `rerun_from`
@@ -286,7 +287,8 @@
 > ReviewerAgent 现为纯 LLM 统计 query_log（大数统计是 LLM 幻觉高发区）。
 > 确定性聚合应作为 reviewer 的前置数据供给，而非独立工具。
 
-- [ ] **P1** query_log 按 source 确定性聚合（success / not_found / failed / 记录数），喂给 `review_query_strategy` 前注入
+- [x] **P1** query_log 按 source 确定性聚合（success / not_found / failed / 记录数），喂给 `review_query_strategy` 前注入
+  - 实现：`reviewer.py` 新增 `aggregate_query_log_by_source` 纯函数（total/success/not_found/failed/skipped/page_fallback/records），`_reviewer_instructions` 注入确定性统计 JSON 并引导"直接引用、不要自行重新计数"；`tests/agent_loop/test_reviewer_aggregation.py` 5 测试覆盖
 
 ---
 

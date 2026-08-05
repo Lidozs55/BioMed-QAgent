@@ -71,6 +71,25 @@ def test_instructions_guide_single_gene_analysis_to_gene_level_matrix() -> None:
     assert "microarray 优先于" in INSTRUCTIONS
 
 
+def test_describe_geo_is_mandatory_vetting_gate_before_pipeline() -> None:
+    """TODO §1.6 (0805 复核, REVIEW §7.2): GEO 候选数据集提交 pipeline 前
+    必须强制调用 describe_geo 做相关性 vetting——0804 选错数据集（mitophagy
+    聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（skill 层），
+    需要的是执行纪律的 prompt gate。"""
+    from app.agent_loop.agent import INSTRUCTIONS
+    from app.pipeline.tool import run_research_pipeline
+
+    # INSTRUCTIONS 必须把 describe_geo 设为 GEO 提交前的强制步骤，
+    # 并要求不匹配主题的数据集不得提交。
+    assert "describe_geo" in INSTRUCTIONS
+    assert "vetting" in INSTRUCTIONS.lower() or "不匹配" in INSTRUCTIONS
+    # 工具描述必须把 describe_geo 提升为提交 gse 前的强制 vetting，
+    # 而非仅提及工具名。
+    description = run_research_pipeline.description
+    assert "describe_geo" in description
+    assert "must" in description.lower() or "必须" in description
+
+
 # ---------------------------------------------------------------------------
 # C1/N1: SDK callback → shared resolver → estimator integration
 # ---------------------------------------------------------------------------

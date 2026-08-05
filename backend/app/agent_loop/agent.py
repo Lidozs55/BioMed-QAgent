@@ -189,6 +189,12 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 成熟数据集（supplementary 文件已上传且可下载）。下载失败时换同主题成熟数据集重试，
 不要用相同 GSE 反复重试。
 
+**GEO 数据集提交前强制 vetting**：对每个候选 GSE，先用 `invoke_skill` 调用
+`describe_geo`（operation="describe"）检查样本构成与平台是否匹配主题——样本数、
+tumor/normal 分组、platform 类型（microarray vs RNA-seq）都要与课题目标相符。
+**未 vetting 的 GSE 不得提交给 `run_research_pipeline`**；vetting 不匹配（如平台
+不可分析、无目标分组）时换数据集，不得硬塞。
+
 当结构化 API（GEO/PubMed/Xena 等）返回 HTTP 403/404 或网络错误时，可通过
 `find_skill(source="browser")` 发现 `browser_fallback` 技能，再用 `invoke_skill`
 调用 `navigate_page`（渲染页面并提取标题/正文）或 `download_from_page`（通过浏览器
@@ -222,8 +228,9 @@ Research-only 数据源不能作为 Pipeline 完成证据，也不能绕过 Vali
 - `databases`（可选）：用户选择的数据源列表；不传时自动使用 `preferred_sources`
 - `pmid`/`gse`（强烈建议）：你先前通过技能调用发现的 accession。**Pipeline 不会
   按 topic 自动搜索 GEO**——如果 databases 包含 GEO，你必须先通过 `find_skill` +
-  `invoke_skill` 发现具体的 GSE accession 并传入 `gse` 参数，否则 Pipeline 会在
-  discovery 阶段失败
+  `invoke_skill` 发现具体的 GSE accession，**并对每个候选 GSE 先调用 `describe_geo`
+  完成相关性 vetting（样本构成/平台与主题匹配）**，再传入 `gse` 参数；未 vetting
+  或 vetting 不匹配的 GSE 不得提交，否则 Pipeline 会在 discovery 阶段失败
 
 ## Pipeline 失败处理
 `run_research_pipeline` 最多允许调用 5 次。失败时按以下策略应对：
