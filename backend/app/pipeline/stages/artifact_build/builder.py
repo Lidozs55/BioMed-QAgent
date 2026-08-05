@@ -50,6 +50,17 @@ from app.pipeline.stages.base import (
 )
 
 
+def _is_metadata_only(primary: ParsedDataset) -> bool:
+    """True when the primary parsed dataset is a metadata-only fallback.
+
+    The GEO minimal placeholder emits one row per sample with
+    ``measurement_type="sample_metadata"`` and no expression values — the
+    series_matrix expression block was empty and no supplementary expression
+    file was found.
+    """
+    return primary.parser_name == "geo_minimal_placeholder"
+
+
 def _build_processing_log_rows(
     *,
     primary: ParsedDataset,
@@ -264,6 +275,30 @@ def run_artifact_build(
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
     )
+    # A metadata-only package has no downloadable expression data (empty
+    # series_matrix block and no supplementary expression file). Surface a
+    # warning so the Agent sees why the artifact is metadata-only and can
+    # switch datasets instead of retrying the same download. The warning is
+    # folded into processing_log by _build_processing_log_rows, keeping
+    # warnings_metrics_consistency satisfied. (GSE339404 regression, 0805.)
+    if _is_metadata_only(primary):
+        all_warnings.append(
+            {
+                "warning_id": "warn_no_expression_data",
+                "severity": "warning",
+                "stage": "processing",
+                "code": "no_expression_data",
+                "message": (
+                    f"{dataset_accession} series_matrix 表达块为空且未找到 "
+                    "supplementary 表达文件，产物仅含样本元数据；如需表达数据 "
+                    "请更换数据集或检查数据集相关性"
+                ),
+                "source_id": geo_source_id or primary_source_id,
+                "asset_id": source_asset.asset_id,
+                "record_id": "",
+                "created_at": retrieved_at.isoformat(),
+            }
+        )
 
     sample_rows = _build_sample_metadata_rows(
         samples=samples,

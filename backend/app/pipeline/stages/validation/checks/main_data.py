@@ -87,6 +87,33 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
             "failed_count": 0,
             "details": "non-expression package (no expression_value/gene_id column); skipped",
         }
+    # A metadata-only package (e.g. a GEO series whose series_matrix
+    # expression block is empty and no supplementary expression file was
+    # found) explicitly declares ``value_semantics="metadata_only"`` on every
+    # row. The fixed 22-column schema still carries ``expression_value`` /
+    # ``gene_id`` columns but leaves them blank by design, so the non-empty
+    # rate check must be skipped here — otherwise every legitimate
+    # metadata-only package would fail as "claims expression but is 100%
+    # empty". Row presence is still guarded by ``main_data_nonempty``, so a
+    # hollow 0-row placeholder cannot slip through. (GSE339404 regression,
+    # 0805.)
+    is_metadata_only = all(
+        row.get("value_semantics", "").strip() == "metadata_only"
+        for row in main_rows
+    )
+    if is_metadata_only:
+        return {
+            "check_id": "core_data_existence",
+            "scope": "main_data",
+            "check_name": "core data fields have sufficient non-empty records",
+            "status": "passed",
+            "checked_count": len(main_rows),
+            "failed_count": 0,
+            "details": (
+                f"metadata-only package: {len(main_rows)} sample_metadata "
+                "rows; expression fields intentionally blank"
+            ),
+        }
     total = len(main_rows)
     has_expr = "expression_value" in columns
     has_gene = "gene_id" in columns

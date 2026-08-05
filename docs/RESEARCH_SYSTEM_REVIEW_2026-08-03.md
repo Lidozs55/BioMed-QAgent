@@ -7,6 +7,18 @@
 > **修订说明**：本版基于 2026-08-04 新一轮实际运行（任务 `task_8daec896`，
 > AD/OP 共病主题）与后续代码改动，更新已修复问题、移除已解决缺陷、补充
 > 新发现的数据缺失/覆盖不足问题。
+>
+> **2026-08-05 修订**：§6.1 #6 重新诊断并落地修复。原"下载最小体积校验"
+> 方案（20KB 阈值）经审查被否决——体积不是"空壳"的可靠代理，会误杀真实
+> 小数据集（pinned fixture counts 仅 2002 字节），且把"数据集无表达数据"
+> 误报为"下载失败"。真实根因：metadata-only 包（series_matrix 无表达块 +
+> suppl 无表达文件）的固定 22 列 schema 含空的 `expression_value`/`gene_id`
+> 列，`core_data_existence` 见列即查非空率 → 0% < 10% → 误拒。修复：
+> ①`core_data_existence` 识别 `value_semantics="metadata_only"` 包并放行
+> （0 行占位仍由 `main_data_nonempty` 拦截）；②artifact_build 为
+> metadata-only 包注入 `no_expression_data` warning（severity=warning，
+> 含可操作建议），经 `warnings.csv` → `WarningPayload` 事件让 Agent 感知
+> 并更换数据集。后端全量测试通过，ruff 0 告警。
 
 ---
 
@@ -215,7 +227,7 @@ download → parse → validate 闭环。
 | 3 | GEO 单数据集限制 | 无法交叉验证 / 共病双侧缺失 | discovery.py `_resolve_gse` | P1 | ❌ **仍开放** |
 | 4 | PubMed 仅单篇文献 | 覆盖率极低 | discovery.py `_search_pubmed_with_fallback` | P1 | ❌ **仍开放** |
 | 5 | 无数据可用性预检 | Agent 无法提前判断 GSE 是否可下载 | 无（需新增） | P1 | ❌ **仍开放** |
-| 6 | **下载最小体积校验缺失** | 空壳 series_matrix（如 2316 字节）被当作成功 | acquisition.py（0804 新增） | P0 | ❌ 新增 |
+| 6 | **无表达数据包被 validation 误拒 + Agent 无提示** | metadata-only 包（22 列含空表达列）被 `core_data_existence` 误拒，Agent 只看到泛化失败 | validation/checks/main_data.py + artifact_build/builder.py | P0 | ✅ 已修复（0805，内容级方案） |
 | 7 | **基因符号映射缺失** | `main_data.csv` 无 `gene_symbol`，通路分析不可行 | processing.py（0804 新增） | P1 | ❌ 新增 |
 | 8 | **数据集相关性预检缺失** | Agent 选中 mitophagy 聚焦阵列做共病机制主题 | 无（0804 新增） | P1 | ❌ 新增 |
 
@@ -242,18 +254,38 @@ tximport 失败时从 series matrix 表达块（`!series_matrix_table_begin/end`
 取首个匹配），多 GSE 传入被静默截断。0804 实际复现：`gse="GSE245929,GSE339404,
 GSE335667,GSE58474"` 最终只发布 GSE245929，其余 3 个被丢弃且无任何提示。
 
-**短板 6（新增）：下载最小体积校验缺失**
+**短板 6（0804 初判为"下载最小体积校验缺失"，0805 重新诊断为"无表达数据包被误拒"）**
 
-0804 实际复现：GSE339404 的 series_matrix 下载"成功"（HTTP 200）但仅 **2316 字节**
-（空壳/占位），进 acquisition 后被 validation 拒绝，导致首次 run 硬失败
-（`task_failed`），需用户"继续"恢复。真实 series_matrix 通常 >50KB，应新增
-acquire 层最小体积校验（如 <20KB 视为失败并触发候选 URL 回退）。
+0804 实际复现：GSE339404 的 series_matrix 下载"成功"（HTTP 200）但仅 **2316 字节**，
+进 validation 后被拒，导致首次 run 硬失败（`task_failed`），需用户"继续"恢复。
+
+0805 重新诊断结论：**2316 字节不是下载异常，而是该数据集 series_matrix 的
+合法形态**（RNA-seq 的 series_matrix 无表达块是常态，0804 的
+`process_geo_series_matrix_expression` 内容级回退正是为此设计）。真实失败链：
+series_matrix 无表达块 → supplementary 也无表达文件 → processing 回退
+`_build_minimal_parsed_dataset` 产出 metadata-only 行（固定 22 列 schema 仍
+声明空的 `expression_value`/`gene_id` 列）→ `check_core_data_existence` 见列
+即查非空率 0% < 10% → 误拒。Agent 只看到泛化的 validation 失败，无法得知
+"该数据集无可用表达数据"，因而重复重试同一数据集。
+
+0805 修复（内容级判定 + Agent 提示，不再依赖体积阈值）：
+- [validation/checks/main_data.py](file:///d:/Code/BioMedQAgent/backend/app/pipeline/stages/validation/checks/main_data.py)：
+  `core_data_existence` 识别 `value_semantics="metadata_only"` 覆盖全部行的包并
+  passed（0 行占位仍由 `main_data_nonempty` 拦截，0803 门禁"拦截伪成功"原意保留）；
+- [artifact_build/builder.py](file:///d:/Code/BioMedQAgent/backend/app/pipeline/stages/artifact_build/builder.py)：
+  对 `geo_minimal_placeholder` 包注入 `no_expression_data` warning（severity=warning，
+  消息含可操作建议"如需表达数据请更换数据集"），经 `warnings.csv` →
+  `WarningPayload` 事件让 Agent 感知；warning 自动折入 `processing_log`，
+  `warnings_metrics_consistency` 保持一致。
+
+新增 4 个测试（`tests/pipeline/test_metadata_only_package.py`）：metadata-only 包
+放行、0803 门禁保留（全空表达仍拒）、混合包仍拒、builder warning 注入 + 一致性。
 
 ### 6.3 改进优先级（按 ROI 排序，0804 更新）
 
 | 优先级 | 改进 | ROI 理由 | 改动规模 |
 |--------|------|---------|---------|
-| P0 | 下载最小体积校验 | 拦截空壳下载，消除"失败→人工恢复"链路 | 小 |
+| P0 | 无表达数据包误拒修复 + Agent 提示（原"体积校验"） | 消除"失败→人工恢复"链路；体积阈值方案已被否决 | ✅ 已实施（0805，内容级方案） |
 | P1 | GEO 多数据集支持 | 共病/比对类主题刚需，直接解决双侧缺失 | 大 |
 | P1 | 基因符号映射 | 使通路/机制分析落地，`main_data` 加 `gene_symbol` | 中 |
 | P1 | 数据可用性预检工具 | Agent 提前 vetting GSE，减少无效 pipeline 调用 | 小 |
@@ -270,7 +302,7 @@ acquire 层最小体积校验（如 <20KB 视为失败并触发候选 URL 回退
 |------|------|---------|
 | 下载失败回退 | 404 是确定性事件，LLM 无法干预 | ✅ 已实现（0804） |
 | series matrix 表达值解析 | 解析是确定性操作，非推理 | ✅ 已实现（0804） |
-| 下载最小体积校验 | 空壳下载是确定性可判事件 | ❌ 未实现（0804 新增） |
+| 下载最小体积校验 | ~~空壳下载是确定性可判事件~~ **方案否决**：体积非"空壳"可靠代理，误杀真实小数据集 | ❌ 否决（0805）→ 改内容级判定 |
 | 基因符号映射 | RefSeq→symbol 是确定性映射 | ❌ 未实现（0804 新增） |
 | 数据可用性预检 | HTTP HEAD 检查是确定性操作 | ❌ 未实现 |
 | 核心数据存在性验证 | 验证门禁必须确定性 | ✅ 已实现 |
@@ -295,7 +327,7 @@ acquire 层最小体积校验（如 <20KB 视为失败并触发候选 URL 回退
 | 3 | PubMed 批量检索 + 综述优先 | 覆盖率从 1 篇提升到多篇 | 中（discovery 扩展） |
 | 4 | 下载失败 HIL 机制 | Agent 可请求用户选择替代数据集 | 中（HIL 集成） |
 | 5 | Reactome 多通路支持 | 通路网络分析类主题需要 | 中（去掉单源限制） |
-| 6 | 下载最小体积校验 | 拦截空壳 series_matrix，避免硬失败 | 小（0804 新增） |
+| 6 | 下载最小体积校验 | ~~拦截空壳 series_matrix，避免硬失败~~ 方案否决：体积非可靠代理 | ❌ 否决（0805），改内容级判定 + Agent 提示 |
 | 7 | 基因符号映射 | RefSeq→symbol，使 main_data 可分析 | 中（0804 新增） |
 
 ---
@@ -374,13 +406,24 @@ series matrix 提取样本 ID，表达值全部留空。
 **方案**：新增 `check_geo_availability(gse)` 工具，HTTP HEAD 检查
 supplementary 文件 URL，返回可用性报告。
 
-### 9.4 下载最小体积校验（P0，0804 新增）
+### 9.4 无表达数据包误拒修复 + Agent 提示（原"下载最小体积校验"，0805 重诊断）
 
-**问题**：0804 实测 GSE339404 的 series_matrix 下载"成功"但仅 2316 字节（空壳），
-进 validation 后被拒，导致首次 run 硬失败、需人工恢复。
+**问题**：0804 实测 GSE339404 的 series_matrix 下载"成功"但仅 2316 字节，进
+validation 后被拒，导致首次 run 硬失败、需人工恢复。0804 初判为"体积校验缺失"。
 
-**方案**：acquisition 层下载后校验最小体积（如 <20KB 视为失败），触发候选 URL
-回退或返回 `download_failed`，避免空壳进入后续阶段。
+**0805 重新诊断**：2316 字节是该数据集 series_matrix 的**合法形态**（无表达块）。
+真实根因是 metadata-only 包（固定 22 列含空表达列）被 `core_data_existence`
+误拒，且 Agent 无法得知"数据集无表达数据"，只能重复重试。
+
+**方案（内容级，已实施）**：①`core_data_existence` 识别
+`value_semantics="metadata_only"` 包并放行（0 行占位仍被拦截）；
+②artifact_build 注入 `no_expression_data` warning，经 `warnings.csv` →
+`WarningPayload` 事件让 Agent 感知并更换数据集。
+
+> **方案演进记录**：0805 曾先实现"acquire_source 最小体积阈值（20KB）"并已合并，
+> 经严格审查确认设计缺陷（体积非"空壳"可靠代理、阈值无依据且误杀真实小数据集、
+> 语义误报为下载失败、未触及根因），已整体回退（main reset 到 a2bf6e7），改为
+> 上述内容级方案。
 
 ### 9.5 GEO 多数据集支持（P1，0804 升级）
 
@@ -413,9 +456,10 @@ Agent 无法按 `CTNNB1`/`RUNX2` 等符号查询，通路/机制分析不可行�
 **0804 进展**：两大 P0 缺陷（series matrix 表达值解析、下载失败回退）已修复并
 验证，发布产物从"空数据"转为真实表达矩阵。但 0804 实际运行暴露了新的覆盖短板。
 
-**当前改进优先级（0804 更新）**：
-1. **下载最小体积校验**（P0）——拦截空壳下载，消除"失败→人工恢复"链路
-2. **GEO 多数据集支持**（P1）——共病/比对类主题刚需，直接解决双侧缺失
+**当前改进优先级（0804 更新，0805 重诊断并落地第 1 项）**：
+1. ~~下载最小体积校验（P0）~~ ❌ 方案否决（0805）→ 已改为内容级方案落地：
+   metadata-only 包误拒修复 + `no_expression_data` Agent 提示
+2. **GEO 多数据集支持**（P1）——共病/比对类主题刚需，直接解决双侧缺失（当前最高优先级开放项）
 3. **基因符号映射**（P1）——加 `gene_symbol` 列，使通路/机制分析落地
 4. **数据可用性预检工具**（P1）——Agent 提前 vetting，减少无效调用
 5. **PubMed 多篇 + 数据集相关性预检**（P1）——提升覆盖率与主题匹配度
