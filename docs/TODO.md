@@ -100,6 +100,18 @@
 - [x] **P0** GDC `data_type` 双路径必须一致：`acquisition._gdc_live_data_type` 接受官方标签 `Gene Expression Quantification`，`processing.parse_gdc_table` 必须接受同一值（已加 `"gene expression quantification"`），否则下载成功的数据集在 processing 被拒
 - [x] **P1** GDC 未知 `data_type`（如 `transcriptome_profiling`，是 experimental_strategy 而非 data_type）错误信息列出全部合法值，帮助 Agent 自纠错
 
+#### 1.5.8 0805 task_db204f6b 审查：probe→gene 映射与单基因分析可用性（REVIEW_2026-08-05-task-db204f6b）
+
+> 0805 对 task_db204f6b（METTL5 胰腺癌 tumor vs normal，GSE102238）的产物审查 + 自主调研实证：
+> 数据集（50 对配对 PDAC）选择合理、溯源完整、验证通过，但 950MB probe 级主产物无法定位 METTL5——
+> GPL19072 平台注释（GEO 侧）所有基因映射列均为空，probe→gene 无法构建。单基因分析应优先 TCGA 基因级矩阵。
+
+- [ ] **P0** processing 增加平台注释解析：GEO 注释可下载时构建 probe→gene 映射；不可用时 validation gate 标记 `geo_probe_unmapped` 并生成显式 warning（REVIEW §3.1）
+- [ ] **P0** 主产物体积治理：probe 级全基因组长格式提供按目标基因过滤/分块输出，避免 950MB 单文件（REVIEW §2.3）
+- [ ] **P1** discovery/plan 引导：单基因差异分析优先 GDC/Xena 基因级矩阵（TCGA-PAAD 178 tumor+4 normal 实证可用），微阵列作验证（REVIEW §3.2）
+- [ ] **P1** plan 确认（`user_input_required`）超时策略：挂起而非失败，保留已 discovery 结果（REVIEW §3.3）
+- [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（REVIEW §2.4）
+
 ### 1.6 Agent 编排与 Pipeline 重跑闭环
 
 - [x] **P0** checkpoint `parameter_digest` 覆盖排序后的数据库集合与完整 `TaskSpecification`
