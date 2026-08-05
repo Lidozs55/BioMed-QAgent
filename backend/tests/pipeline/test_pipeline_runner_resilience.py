@@ -28,6 +28,7 @@ from app.pipeline.runner import (
     DEFAULT_STAGE_TIMEOUTS,
     PipelineEventSinkError,
     PipelineRunner,
+    PipelineUserInputTimeoutError,
 )
 from app.pipeline.stages import DownloadError, PipelineCancelledError
 from app.pipeline.state import DownloadAttemptAuditRecord
@@ -222,7 +223,10 @@ def test_fixture_plan_confirmation_emits_required_and_auto_resume_in_order(
 @pytest.mark.asyncio
 async def test_user_input_timeout_is_distinct_and_populates_expiry(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Non-plan HITL (data_correction) timeout still fails the run, and the
+    required event carries a future ``expires_at``."""
     runner = PipelineRunner(
         task_id="task_user_input_timeout",
         base_dir=tmp_path / "tasks",
@@ -231,10 +235,20 @@ async def test_user_input_timeout_is_distinct_and_populates_expiry(
         total_timeout=1,
         user_input_timeout=0.02,
     )
+    expected = object()
 
-    manifest = await runner.run()
+    async def controlled_inner() -> object:
+        with pytest.raises(PipelineUserInputTimeoutError):
+            await runner._await_user_input(  # noqa: SLF001
+                request_id="correction-timeout",
+                prompt_kind="data_correction",
+                summary="correct data",
+            )
+        return expected
 
-    assert manifest.task_state is TaskState.FAILED
+    monkeypatch.setattr(runner, "_run_inner", controlled_inner)
+
+    assert await runner.run() is expected
     required = next(
         event
         for event in runner.events
@@ -242,13 +256,48 @@ async def test_user_input_timeout_is_distinct_and_populates_expiry(
     )
     assert required.payload.expires_at is not None
     assert required.payload.expires_at > required.timestamp
-    failed = next(
-        event for event in runner.events if event.payload.type.value == "task_failed"
+
+
+@pytest.mark.asyncio
+async def test_plan_confirmation_timeout_auto_approves(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan-confirmation timeout auto-approves the plan (REVIEW §3.3, 0805)
+    instead of raising: the resume payload carries an ``auto_approved`` marker
+    so the run proceeds rather than voiding the invested plan work."""
+    runner = PipelineRunner(
+        task_id="task_plan_auto_approve",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+        mode="live",
+        total_timeout=10,
+        user_input_timeout=0.02,
     )
-    assert "user input timeout" in failed.payload.error.message.lower()
-    assert not any(
-        event.payload.type.value == "stage_started" for event in runner.events
-    )
+    expected = object()
+
+    async def controlled_inner() -> object:
+        decision = await runner._await_user_input(  # noqa: SLF001
+            request_id="plan-timeout",
+            prompt_kind="plan_confirmation",
+            summary="confirm timeout plan",
+        )
+        assert decision.decision == "approve"
+        assert decision.detail["auto_approved"] is True
+        assert decision.detail["auto_approve_reason"] == "plan_confirmation_timeout"
+        return expected
+
+    monkeypatch.setattr(runner, "_run_inner", controlled_inner)
+
+    assert await runner.run() is expected
+    # The auto-approval surfaces a resume event in the pipeline stream.
+    resumed = [
+        event.payload
+        for event in runner.events
+        if isinstance(event.payload, UserInputResumedPayload)
+    ]
+    assert len(resumed) == 1
+    assert resumed[0].detail["auto_approved"] is True
 
 
 @pytest.mark.asyncio

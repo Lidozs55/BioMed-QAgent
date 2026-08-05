@@ -2775,15 +2775,20 @@ async def test_real_sdk_live_pipeline_rejection_fails_authoritative_run(
 
 
 @pytest.mark.asyncio
-async def test_real_sdk_live_pipeline_user_input_timeout_fails_run(
+async def test_real_sdk_live_pipeline_plan_timeout_auto_approves_and_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A plan-confirmation timeout auto-approves the plan (REVIEW §3.3, 0805):
+    the run proceeds through discovery instead of failing, and the resume
+    event carries an ``auto_approved`` marker."""
     discovery_started = asyncio.Event()
 
-    def unexpected_discovery(context):
+    original_discovery = pipeline_runner_module.run_discovery
+
+    def discovery_spy(context):
         discovery_started.set()
-        raise AssertionError("Discovery must not start after user-input timeout")
+        return original_discovery(context)
 
     def timeout_runner(**kwargs: object) -> PipelineRunner:
         return PipelineRunner(**kwargs, user_input_timeout=0.02)
@@ -2791,15 +2796,15 @@ async def test_real_sdk_live_pipeline_user_input_timeout_fails_run(
     monkeypatch.setattr(
         pipeline_runner_module,
         "run_discovery",
-        unexpected_discovery,
+        discovery_spy,
     )
     monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", timeout_runner)
     model = ScriptedPipelineModel(
         mode="live",
-        topic="durable live user-input timeout",
+        topic="durable live plan auto-approve",
     )
     agent = Agent[RunContext](
-        name="Scripted live timeout Agent",
+        name="Scripted live plan timeout Agent",
         instructions="Call run_research_pipeline, then answer.",
         tools=[run_research_pipeline],
         model=model,
@@ -2813,21 +2818,27 @@ async def test_real_sdk_live_pipeline_user_input_timeout_fails_run(
     try:
         accepted = await manager.create_task(
             StartTaskRequest(
-                request_id="request_real_sdk_live_input_timeout",
-                input="let the real live Tool prompt expire",
+                request_id="request_real_sdk_live_plan_timeout",
+                input="let the real live plan prompt time out",
                 databases=["pubmed", "geo"],
             )
         )
         await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
         model.release_final_answer.set()
         model.allow_tool_call.set()
-        await asyncio.wait_for(manager.wait_until_idle(), timeout=3)
+        await asyncio.wait_for(manager.wait_until_idle(), timeout=10)
 
-        failed = await repository.get_snapshot(accepted.task_id)
-        assert failed is not None
-        assert failed.runs[-1].status.value == "failed"
-        assert "user input timeout" in (failed.runs[-1].error or "").lower()
-        assert not discovery_started.is_set()
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        # Plan timeout auto-approves: the run proceeds to discovery instead of
+        # being voided by the user-input timeout. (Live topic-driven runs have
+        # no explicit GSE, so discovery may still fail downstream — but never
+        # because of the plan-confirmation timeout.)
+        assert discovery_started.is_set()
+        assert not any(
+            "user input timeout" in (run.error or "").lower()
+            for run in snapshot.runs
+        )
         events = await repository.list_events(accepted.task_id)
         required = next(
             event
@@ -2835,16 +2846,24 @@ async def test_real_sdk_live_pipeline_user_input_timeout_fails_run(
             if isinstance(event.payload, UserInputRequiredPayload)
         )
         assert required.payload.expires_at is not None
-        assert any(isinstance(event.payload, TaskFailedPayload) for event in events)
-        assert any(isinstance(event.payload, RunFailedPayload) for event in events)
-        assert not any(
+        resumed = next(
+            event
+            for event in events
+            if isinstance(event.payload, UserInputResumedPayload)
+        )
+        assert resumed.payload.decision == "approve"
+        assert resumed.payload.detail["auto_approved"] is True
+        assert resumed.payload.detail["auto_approve_reason"] == (
+            "plan_confirmation_timeout"
+        )
+        assert any(
             event.payload.type.value == "stage_started" for event in events
         )
         assert not any(
-            isinstance(event.payload, ArtifactProducedPayload) for event in events
-        )
-        assert not any(
-            isinstance(event.payload, RunCompletedPayload) for event in events
+            isinstance(event.payload, TaskFailedPayload)
+            and "user input timeout"
+            in (event.payload.error.message or "").lower()
+            for event in events
         )
     finally:
         model.allow_tool_call.set()
