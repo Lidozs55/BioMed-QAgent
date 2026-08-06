@@ -27,6 +27,8 @@ MANIFEST
 node_modules/
 dist/
 build/
+# V2 dataset build-chain source package lives under app/datasets/build
+!backend/app/datasets/build/
 .npm
 .pnpm-store/
 .yarn/

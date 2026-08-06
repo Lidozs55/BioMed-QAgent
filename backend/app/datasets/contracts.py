@@ -167,6 +167,7 @@ class DataBatch(ContractModel):
     parser_version: str = Field(min_length=1)
     statistics: dict[str, JsonValue] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    declared_mappings: list[FieldMapping] = Field(default_factory=list)
 
 
 class FieldMapping(ContractModel):
@@ -375,4 +376,32 @@ class ValidationProfile(ContractModel):
     profile_id: str = Field(min_length=1)
     dataset_family: str = Field(min_length=1)
     acceptance: AcceptancePolicy = Field(default_factory=AcceptancePolicy)
+    description: str = ""
+
+
+class UnitConversionRule(ContractModel):
+    """A provably-equivalent unit conversion declared by the server (Design §8.5)."""
+
+    rule_id: str = Field(min_length=1)
+    from_unit: str = Field(min_length=1)
+    to_unit: str = Field(min_length=1)
+    formula: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+
+
+class NormalizationProfile(ContractModel):
+    """Versioned entity/unit normalization policy (ARCHITECTURE §8; Design §8.5).
+
+    Authorizes gene-id namespaces, the units and value semantics a source may
+    declare, and the many-to-one aggregation policy.  Conversions are opt-in:
+    without a declared rule, two units are never silently merged.
+    """
+
+    profile_id: str = Field(min_length=1)
+    dataset_family: str = Field(min_length=1)
+    allowed_namespaces: list[str] = Field(min_length=1)
+    allowed_units: list[str] = Field(min_length=1)
+    allowed_semantics: list[str] = Field(min_length=1)
+    unit_conversions: list[UnitConversionRule] = Field(default_factory=list)
+    aggregation_policy: str = Field(default="keep_all", min_length=1)
     description: str = ""
