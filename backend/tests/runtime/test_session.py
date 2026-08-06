@@ -16,6 +16,28 @@ def assistant_item(content: str) -> dict[str, str]:
     return {"role": "assistant", "content": content}
 
 
+def function_call_item(
+    call_id: str,
+    arguments: str,
+    *,
+    name: str = "invoke_skill",
+) -> dict[str, str]:
+    return {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments,
+    }
+
+
+def function_output_item(call_id: str) -> dict[str, str]:
+    return {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": "tool output",
+    }
+
+
 @pytest.mark.asyncio
 async def test_durable_session_implements_sdk_add_get_pop_and_clear(
     tmp_path,
@@ -41,6 +63,30 @@ async def test_durable_session_implements_sdk_add_get_pop_and_clear(
     assert '"content":"answer"' in persisted
     assert '"op":"pop"' in persisted
     assert '"op":"clear"' in persisted
+
+
+@pytest.mark.asyncio
+async def test_discard_invalid_function_calls_preserves_valid_history(tmp_path) -> None:
+    session = DurableTaskSession("task_123", tmp_path / "tasks", run_id="run_1")
+    valid_call = function_call_item("valid", '{"query":"BRCA1"}')
+    invalid_call = function_call_item("invalid", '{"query": "broken"')
+    await session.add_items(
+        [
+            user_item("question"),
+            invalid_call,
+            function_output_item("invalid"),
+            valid_call,
+            function_output_item("valid"),
+        ]
+    )
+
+    assert await session.discard_invalid_function_calls() == 1
+    assert await session.get_items() == [
+        user_item("question"),
+        valid_call,
+        function_output_item("valid"),
+    ]
+    assert '"op":"pop"' in session.path.read_text("utf-8")
 
 
 @pytest.mark.asyncio

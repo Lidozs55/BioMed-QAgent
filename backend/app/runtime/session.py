@@ -109,6 +109,18 @@ def _same_user_input(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+def _valid_function_arguments(value: object) -> bool:
+    """Return whether a persisted function call has a JSON object payload."""
+
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict)
+
+
 def _is_existing_run_input(
     record: dict[str, Any],
     run_id: str,
@@ -219,6 +231,17 @@ class DurableTaskSession:
 
     async def pop_item(self) -> TResponseInputItem | None:
         return await self._run_storage(self._pop_item)
+
+    async def discard_invalid_function_calls(self) -> int:
+        """Remove malformed function calls and their matching tool outputs.
+
+        Some OpenAI-compatible providers accept a malformed tool call in one
+        response, but reject that same call when the Agents SDK sends it back
+        in the next request.  The retry path must remove both sides of the
+        failed tool exchange while preserving the rest of the conversation.
+        """
+
+        return await self._run_storage(self._discard_invalid_function_calls)
 
     async def clear_session(self) -> None:
         await self._run_storage(self._clear_session)
@@ -490,6 +513,53 @@ class DurableTaskSession:
             active.pop(target_index)
             self._remember(active, highest_ordinal)
             return latest["item"]
+
+    def _discard_invalid_function_calls(self) -> int:
+        with path_lock(self.path):
+            active, highest_ordinal = self._replay()
+            invalid_call_ids = {
+                item["call_id"]
+                for record in active
+                if isinstance(item := record.get("item"), dict)
+                and item.get("type") == "function_call"
+                and isinstance(item.get("call_id"), str)
+                and not _valid_function_arguments(item.get("arguments"))
+            }
+            if not invalid_call_ids:
+                return 0
+
+            target_indexes = {
+                index
+                for index, record in enumerate(active)
+                if (
+                    isinstance(item := record.get("item"), dict)
+                    and (
+                        (
+                            item.get("type") == "function_call"
+                            and item.get("call_id") in invalid_call_ids
+                        )
+                        or (
+                            item.get("type") == "function_call_output"
+                            and item.get("call_id") in invalid_call_ids
+                        )
+                    )
+                )
+            }
+            operations = []
+            for index in sorted(target_indexes, reverse=True):
+                record = active[index]
+                operation = {
+                    "schema_version": "1.0",
+                    "op": "pop",
+                    "target_ordinal": record["ordinal"],
+                }
+                if index != len(active) - 1:
+                    operation["sdk_visible_pop"] = True
+                operations.append(operation)
+                active.pop(index)
+            append_jsonl_records(self.path, operations)
+            self._remember(active, highest_ordinal)
+            return len(invalid_call_ids)
 
     def _clear_session(self) -> None:
         with path_lock(self.path):
