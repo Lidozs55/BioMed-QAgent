@@ -3,15 +3,21 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.datasets.contracts import BuildResult, BuildResultStatus
 from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
+    RunInterruptedPayload,
     RunQueuedPayload,
+    RunRecord,
     RunStartedPayload,
     RunStatus,
     TaskMode,
@@ -19,6 +25,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.enums import ErrorCode, StageName
 from app.runtime.state import reduce_task_event
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -251,3 +258,221 @@ def test_queued_run_can_be_cancelled_without_starting() -> None:
     assert snapshot.runs[0].status is RunStatus.CANCELLED
     assert snapshot.runs[0].started_at is None
     assert snapshot.runs[0].finished_at == NOW + timedelta(seconds=3)
+
+
+def _envelope(
+    sequence: int,
+    payload: object,
+    *,
+    task_id: str = "task_1",
+    run_id: str = "run_1",
+) -> EventEnvelope:
+    return build_event(
+        task_id=task_id,
+        run_id=run_id,
+        sequence=sequence,
+        timestamp=NOW + timedelta(seconds=sequence),
+        payload=payload,
+    )
+
+
+def _snapshot_fixture() -> TaskSnapshot:
+    """Two COMPLETED runs; publication events may reference either."""
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id="task_1",
+            mode=TaskMode.AGENT,
+            title="TP53 datasets",
+            status=RunStatus.COMPLETED,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id="run_1",
+                task_id="task_1",
+                request_id="req_1",
+                status=RunStatus.COMPLETED,
+                input="first question",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+            RunRecord(
+                run_id="run_2",
+                task_id="task_1",
+                request_id="req_2",
+                status=RunStatus.COMPLETED,
+                input="second question",
+                created_at=NOW,
+                updated_at=NOW,
+            ),
+        ],
+    )
+
+
+def _queued_run_fixture() -> TaskSnapshot:
+    """One QUEUED run that can legally reach any terminal status."""
+    return TaskSnapshot(
+        task=TaskSummary(
+            task_id="task_1",
+            mode=TaskMode.AGENT,
+            title="TP53 datasets",
+            status=RunStatus.QUEUED,
+            active_run_id="run_1",
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+        runs=[
+            RunRecord(
+                run_id="run_1",
+                task_id="task_1",
+                request_id="req_1",
+                status=RunStatus.QUEUED,
+                input="first question",
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        ],
+    )
+
+
+def test_publication_events_build_chain() -> None:
+    snapshot = _snapshot_fixture()
+    first = reduce_task_event(
+        snapshot,
+        _envelope(
+            2,
+            PublicationCreatedPayload(
+                publication_id="pub-run_1",
+                run_id="run_1",
+                manifest_sha256="a" * 64,
+                published_at=NOW + timedelta(seconds=2),
+            ),
+        ),
+    )
+    assert first.current_publication_id == "pub-run_1"
+    assert first.publications[0].supersedes_publication_id is None
+    second = reduce_task_event(
+        first,
+        _envelope(
+            3,
+            PublicationCreatedPayload(
+                publication_id="pub-run_2",
+                run_id="run_2",
+                manifest_sha256="b" * 64,
+                published_at=NOW + timedelta(seconds=3),
+            ),
+            run_id="run_2",
+        ),
+    )
+    assert second.current_publication_id == "pub-run_2"
+    assert second.publications[1].supersedes_publication_id == "pub-run_1"
+    # Publication events never touch run or task status.
+    assert second.task.status is RunStatus.COMPLETED
+    assert [run.status for run in second.runs] == [
+        RunStatus.COMPLETED,
+        RunStatus.COMPLETED,
+    ]
+
+
+def test_publication_events_honor_explicit_supersedes() -> None:
+    reduced = reduce_task_event(
+        _snapshot_fixture(),
+        _envelope(
+            2,
+            PublicationCreatedPayload(
+                publication_id="pub-latest",
+                run_id="run_1",
+                manifest_sha256="c" * 64,
+                supersedes_publication_id="pub-earlier",
+                published_at=NOW + timedelta(seconds=2),
+            ),
+        ),
+    )
+    assert reduced.current_publication_id == "pub-latest"
+    assert reduced.publications[0].supersedes_publication_id == "pub-earlier"
+
+
+def test_terminal_events_populate_run_summary() -> None:
+    snapshot = _queued_run_fixture()
+    for sequence, payload in enumerate(
+        [RunStartedPayload(), RunFinalizingPayload()], start=2
+    ):
+        snapshot = reduce_task_event(snapshot, _envelope(sequence, payload))
+    snapshot = reduce_task_event(
+        snapshot,
+        _envelope(
+            4,
+            RunCompletedPayload(
+                build_result=BuildResult(
+                    status=BuildResultStatus.NO_DATA,
+                    valid_row_count=0,
+                    reason_codes=["no_primary_data"],
+                    user_summary="No primary dataset found",
+                )
+            ),
+        ),
+    )
+    run = next(r for r in snapshot.runs if r.run_id == "run_1")
+    assert run.summary is not None
+    assert run.summary.run_status is RunStatus.COMPLETED
+    assert run.summary.build_result is not None
+    assert run.summary.build_result.status is BuildResultStatus.NO_DATA
+    assert run.summary.user_message == "No primary dataset found"
+
+
+def test_terminal_events_populate_run_summary_failed() -> None:
+    snapshot = _queued_run_fixture()
+    snapshot = reduce_task_event(snapshot, _envelope(2, RunStartedPayload()))
+    snapshot = reduce_task_event(
+        snapshot,
+        _envelope(
+            3,
+            RunFailedPayload(
+                error="network unreachable",
+                error_code=ErrorCode.NETWORK_ERROR,
+            ),
+        ),
+    )
+    run = next(r for r in snapshot.runs if r.run_id == "run_1")
+    assert run.summary is not None
+    assert run.summary.run_status is RunStatus.FAILED
+    assert run.summary.error_code is ErrorCode.NETWORK_ERROR
+    assert run.summary.user_message == "network unreachable"
+    assert run.summary.build_result is None
+
+
+def test_terminal_events_populate_run_summary_cancelled() -> None:
+    snapshot = _queued_run_fixture()
+    snapshot = reduce_task_event(
+        snapshot,
+        _envelope(2, RunCancelRequestedPayload(reason="user requested")),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        _envelope(
+            3,
+            RunCancelledPayload(
+                reason="user requested",
+                cancelled_at_stage=StageName.ACQUISITION,
+            ),
+        ),
+    )
+    run = next(r for r in snapshot.runs if r.run_id == "run_1")
+    assert run.summary is not None
+    assert run.summary.run_status is RunStatus.CANCELLED
+    assert run.summary.cancelled_at_stage is StageName.ACQUISITION
+    assert run.summary.user_message == "user requested"
+
+
+def test_terminal_events_populate_run_summary_interrupted() -> None:
+    snapshot = _queued_run_fixture()
+    snapshot = reduce_task_event(snapshot, _envelope(2, RunStartedPayload()))
+    snapshot = reduce_task_event(
+        snapshot,
+        _envelope(3, RunInterruptedPayload(reason="agent stopped")),
+    )
+    run = next(r for r in snapshot.runs if r.run_id == "run_1")
+    assert run.summary is not None
+    assert run.summary.run_status is RunStatus.INTERRUPTED
+    assert run.summary.user_message == "agent stopped"

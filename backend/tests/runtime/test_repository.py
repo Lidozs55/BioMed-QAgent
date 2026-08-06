@@ -14,9 +14,12 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     EventEnvelope,
+    RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
     RunQueuedPayload,
     RunRecord,
+    RunStartedPayload,
     RunStatus,
     SubagentCompletedPayload,
     SubagentQueuedPayload,
@@ -604,6 +607,91 @@ async def test_cancelled_summary_save_waits_for_atomic_write_before_unlocking(
         elif lock_probe is not None:
             lock_probe.cancel()
             await asyncio.gather(lock_probe, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_events_replay_without_string_scan(tmp_path) -> None:
+    # Old-style journal: run_failed carries only error (no error_code),
+    # run_completed has no build_result, and no publication events exist.
+    # Replay must build the snapshot, project partial run summaries, and
+    # leave current_publication_id unset.
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_legacy_replay"
+    await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    try:
+        for event in (
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=1,
+                timestamp=NOW + timedelta(seconds=1),
+                payload=RunQueuedPayload(request_id="req_legacy", input="question"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=2,
+                timestamp=NOW + timedelta(seconds=2),
+                payload=RunStartedPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=3,
+                timestamp=NOW + timedelta(seconds=3),
+                payload=RunFailedPayload(error="legacy failure"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=4,
+                timestamp=NOW + timedelta(seconds=4),
+                payload=RunQueuedPayload(request_id="req_456", input="second"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=5,
+                timestamp=NOW + timedelta(seconds=5),
+                payload=RunStartedPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=6,
+                timestamp=NOW + timedelta(seconds=6),
+                payload=RunFinalizingPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=7,
+                timestamp=NOW + timedelta(seconds=7),
+                payload=RunCompletedPayload(),
+            ),
+        ):
+            await asyncio.to_thread(repository.events.append, event)
+
+        loaded = await repository.get_snapshot(task_id)
+
+        assert loaded is not None
+        assert loaded.task.latest_sequence == 7
+        failed = next(run for run in loaded.runs if run.run_id == "run_123")
+        assert failed.status is RunStatus.FAILED
+        assert failed.summary is not None
+        assert failed.summary.error_code is None
+        assert failed.summary.build_result is None
+        assert failed.summary.user_message == "legacy failure"
+        completed = next(run for run in loaded.runs if run.run_id == "run_456")
+        assert completed.status is RunStatus.COMPLETED
+        assert completed.summary is not None
+        assert completed.summary.build_result is None
+        assert completed.summary.user_message is None
+        assert loaded.current_publication_id is None
+        assert loaded.publications == []
+    finally:
         await repository.close()
 
 

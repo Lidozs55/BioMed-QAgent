@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 
 from app.domain.contracts import (
     ArtifactProducedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -33,6 +35,7 @@ from app.domain.contracts import (
     UserInputRequiredPayload,
     UserInputResumedPayload,
 )
+from app.domain.contracts.runtime import PublicationSummary, RunSummary
 
 _STATUS_PAYLOADS = {
     RunStartedPayload: RunStatus.RUNNING,
@@ -193,6 +196,8 @@ def reduce_task_event(
 
     runs = list(snapshot.runs)
     subagents = list(snapshot.subagents)
+    publications = list(snapshot.publications)
+    current_publication_id = snapshot.current_publication_id
     payload = event.payload
 
     if isinstance(payload, RunQueuedPayload):
@@ -215,6 +220,23 @@ def reduce_task_event(
             )
         )
         status = RunStatus.QUEUED
+    elif isinstance(payload, PublicationCreatedPayload):
+        if event.run_id is None:
+            raise ValueError("publication events require run_id")
+        _run_index(snapshot, event.run_id)
+        previous = current_publication_id
+        publications.append(
+            PublicationSummary(
+                publication_id=payload.publication_id,
+                manifest_sha256=payload.manifest_sha256,
+                supersedes_publication_id=(
+                    payload.supersedes_publication_id or previous
+                ),
+                published_at=payload.published_at,
+            )
+        )
+        current_publication_id = payload.publication_id
+        status = snapshot.task.status
     elif type(payload) in _STATUS_PAYLOADS:
         if event.run_id is None:
             raise ValueError("run-scoped events require run_id")
@@ -237,6 +259,9 @@ def reduce_task_event(
             updates["started_at"] = event.timestamp
         if status in _TERMINAL_STATUSES:
             updates["finished_at"] = event.timestamp
+        summary = _run_summary_for(payload, status, event.timestamp)
+        if summary is not None:
+            updates["summary"] = summary
         if isinstance(payload, RunFailedPayload):
             updates["error"] = payload.error
         runs[index] = RunRecord.model_validate(
@@ -356,8 +381,50 @@ def reduce_task_event(
         }
     )
     return snapshot.model_copy(
-        update={"task": task, "runs": runs, "subagents": subagents}
+        update={
+            "task": task,
+            "runs": runs,
+            "subagents": subagents,
+            "publications": publications,
+            "current_publication_id": current_publication_id,
+        }
     )
+
+
+def _run_summary_for(
+    payload: object, status: RunStatus, timestamp: datetime
+) -> RunSummary | None:
+    """Project a server-generated per-run outcome summary from a terminal event.
+
+    Partial projection is legal: legacy events may lack ``build_result``
+    (RunCompletedPayload) or ``error_code`` (RunFailedPayload).
+    """
+
+    if isinstance(payload, RunCompletedPayload):
+        return RunSummary(
+            run_status=status,
+            build_result=payload.build_result,
+            user_message=(
+                payload.build_result.user_summary
+                if payload.build_result is not None
+                else None
+            ),
+        )
+    if isinstance(payload, RunFailedPayload):
+        return RunSummary(
+            run_status=status,
+            error_code=payload.error_code,
+            user_message=payload.error,
+        )
+    if isinstance(payload, RunCancelledPayload):
+        return RunSummary(
+            run_status=status,
+            cancelled_at_stage=payload.cancelled_at_stage,
+            user_message=payload.reason,
+        )
+    if isinstance(payload, RunInterruptedPayload):
+        return RunSummary(run_status=status, user_message=payload.reason)
+    return None
 
 
 def count_artifact_produced_events(
