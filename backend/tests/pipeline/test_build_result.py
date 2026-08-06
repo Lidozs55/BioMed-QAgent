@@ -11,23 +11,27 @@ failure is expressible without error-string guessing.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from app.domain.contracts import (
     ArtifactManifestEntry,
     ErrorCode,
     ErrorDetail,
     RunManifest,
+    TaskCompletedPayload,
     TaskRequest,
     TaskSpecification,
     TaskState,
     ValidationSummary,
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
-from app.pipeline.runner import _build_failed_manifest, _compute_build_result
+from app.pipeline.runner import PipelineRunner, _build_failed_manifest, _compute_build_result
 
 _SHA = "a" * 64
 _NOW = datetime.now(UTC)
+FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
 
 def _manifest_with_artifacts(names: list[str]) -> RunManifest:
@@ -76,7 +80,7 @@ def test_completed_with_primary_is_succeeded() -> None:
     manifest = _manifest_with_artifacts(["main_data.csv", "source_list.csv"])
     result = _compute_build_result(manifest)
     assert result.status is BuildResultStatus.SUCCEEDED
-    assert result.valid_row_count >= 0
+    assert result.valid_row_count == 0
     assert result.successful_sources == manifest.source_ids
 
 
@@ -106,3 +110,37 @@ def test_failed_manifest_carries_error_code() -> None:
     )
     assert manifest.task_state is TaskState.FAILED
     assert manifest.error_code is ErrorCode.TIMEOUT
+
+
+def test_completed_run_finalize_carries_build_result(tmp_path: Path) -> None:
+    """A full non-deferred run returns a finalize-time build_result on the
+    manifest, emits a TaskCompletedPayload carrying it, and leaves no orphan
+    staging package (the staging manifest rewrite is deferred-only)."""
+    runner = PipelineRunner(
+        task_id="task_build_result_finalize",
+        base_dir=tmp_path / "tasks",
+        fixture_dir=FIXTURE_DIR,
+    )
+    manifest = asyncio.run(runner.run())
+    assert manifest.task_state is TaskState.COMPLETED
+    assert manifest.build_result is not None
+    assert manifest.build_result.status is BuildResultStatus.SUCCEEDED
+
+    completed = next(
+        event
+        for event in runner.events
+        if isinstance(event.payload, TaskCompletedPayload)
+    )
+    assert completed.payload.build_result is not None
+    assert completed.payload.build_result.status is BuildResultStatus.SUCCEEDED
+
+    # Non-deferred validation already moved the staging package into
+    # artifacts/, so finalize must not recreate a staging package (an orphan
+    # run_manifest.json rewrite) — the published artifacts manifest is the
+    # only on-disk manifest left behind.
+    orphan_manifests = list(
+        (tmp_path / "tasks" / "task_build_result_finalize" / "staging").glob(
+            "*/run_manifest.json"
+        )
+    )
+    assert orphan_manifests == []

@@ -45,6 +45,9 @@ class BuildResult(ContractModel):
     successful_sources: list[str] = Field(default_factory=list)
     rejected_sources: list[str] = Field(default_factory=list)
     available_artifact_roles: list[ArtifactRole] = Field(default_factory=list)
+    # In a pipeline manifest, this field may hold a placeholder until
+    # publication; the authoritative publication identity for a run lives in
+    # the PublicationCreatedPayload event and the run summary.
     publication_id: str | None = None
     reason_codes: list[str] = Field(default_factory=list)
     user_summary: str = ""

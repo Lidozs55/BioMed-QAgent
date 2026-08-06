@@ -1122,10 +1122,11 @@ class PipelineRunner:
             physical_manifest = RunManifest.model_validate_json(
                 run_manifest_path.read_text("utf-8")
             )
-            # The physical manifest may carry the finalize-time ``build_result``
-            # enrichment (_finalize_completed writes it back to the staging
-            # package); the validation output never does. Compare the
-            # stage-owned fields, excluding the enrichment.
+            # In deferred-publication mode the physical manifest may carry the
+            # finalize-time ``build_result`` enrichment (_finalize_completed
+            # writes it back to the staging package); the validation output
+            # never does. Compare the stage-owned fields, excluding the
+            # enrichment.
             if physical_manifest.model_dump(
                 exclude={"build_result"}
             ) != validation.manifest.model_dump(exclude={"build_result"}):
@@ -1517,17 +1518,19 @@ class PipelineRunner:
         manifest = manifest.model_copy(
             update={"build_result": _compute_build_result(manifest)}
         )
-        # Keep the staging package's run_manifest.json in sync with the
-        # enriched in-memory manifest so a deferred publication (and its
+        # Keep the deferred staging package's run_manifest.json in sync with
+        # the enriched in-memory manifest so a deferred publication (and its
         # pending_publication() reader) carries the computed BuildResult.
-        staging_dir = (
-            self._pending_publication
-            if self._pending_publication is not None
-            else self.workdir.staging_run(self.ctx.run_id)
-        )
-        (staging_dir / "run_manifest.json").write_text(
-            manifest.model_dump_json(indent=2) + "\n", "utf-8"
-        )
+        # This rewrite is deferred-publication-only: in the non-deferred path
+        # validation already moved the staging package into artifacts/, so
+        # rewriting would recreate an orphan staging directory while the
+        # published artifacts/run_manifest.json stays untouched. The published
+        # manifest lacking build_result is acceptable — the authoritative
+        # build_result lives in the run events.
+        if self._pending_publication is not None:
+            (self._pending_publication / "run_manifest.json").write_text(
+                manifest.model_dump_json(indent=2) + "\n", "utf-8"
+            )
 
         for entry in manifest.artifacts:
             await self._emit_event_with_payload(
@@ -1674,6 +1677,10 @@ def _compute_build_result(manifest: RunManifest) -> BuildResult:
             valid_row_count=0,
             successful_sources=list(manifest.source_ids),
             reason_codes=[],
+            # Deterministic placeholder required by BuildResult.validate_state
+            # (a SUCCEEDED build must carry a non-None publication_id). Task 5
+            # stamps the real ``pub-<run_id>`` onto the run-level build_result
+            # copy at commit time; this placeholder is not authoritative.
             publication_id=f"pub-{manifest.task_id}",
             user_summary="完成：主数据已发布。",
             recommended_next_action="可在产物区查看主表与审计报告。",
