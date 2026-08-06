@@ -100,7 +100,7 @@ staging、Validation Gate、原子发布、fixture/live 区分。
 包含：
 
 - `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
-- `row_grain`：行粒度定义（如 "基因 × 样本 × 测量"）；
+- `row_granularity`：行粒度定义（如 "基因 × 样本 × 测量"）；
 - `schema_ref`：目标 Schema 的注册引用（见 §3.3）；
 - `required_fields`：必需字段清单；
 - `source_bindings`：每个来源的 SourceBinding（来源、获取方式、Adapter、
@@ -114,12 +114,12 @@ staging、Validation Gate、原子发布、fixture/live 区分。
 阈值、部分成功策略与人工复核要求属于服务端版本化 Profile。复合需求由 Agent
 拆成多个 `DatasetBuildSpec`，在同一会话下独立构建。
 
-### 3.2 dataset_family 与 row_grain
+### 3.2 dataset_family 与 row_granularity
 
 一个 DatasetBuild 的主数据必须满足以下四元组均明确且兼容：
 
 ```text
-dataset_family + row_grain + key_semantics + measurement_semantics
+dataset_family + row_granularity + key_semantics + measurement_semantics
 ```
 
 **可以合并**的示例：
@@ -136,7 +136,7 @@ dataset_family + row_grain + key_semantics + measurement_semantics
 - 通路节点与临床样本；
 - 原始 count 与 TPM，除非明确转换或保持可区分语义。
 
-`row_grain` 不是字符串标签，而是结构化定义：一行代表什么实体、什么测量、什么
+`row_granularity` 不是字符串标签，而是结构化定义：一行代表什么实体、什么测量、什么
 时间或条件维度。任何"合并"设计必须先写出一行代表什么，再讨论字段对齐。
 
 ### 3.3 Canonical Schema 与 Schema Registry
@@ -318,7 +318,7 @@ fixture 豁免、是否仅研究用途。以 `SOURCE_CAPABILITIES` 单一事实�
 每次 Build 独立判断，依据：
 
 - `dataset_family` 一致；
-- `row_grain` 兼容；
+- `row_granularity` 兼容；
 - 主键语义兼容；
 - 测量语义可比较（如 TPM vs raw count 必须显式处理）；
 - 单位与尺度可统一或显式标记不可比较；

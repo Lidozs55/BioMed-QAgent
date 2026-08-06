@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from agents import RunContextWrapper, function_tool
+
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     DATABASE_IDENTIFIER_ALIASES,
