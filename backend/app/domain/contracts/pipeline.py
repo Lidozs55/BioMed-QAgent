@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import BuildResult
 from app.domain.contracts.enums import (
     AttemptStatus,
     ErrorCode,
@@ -173,6 +174,8 @@ class RunManifest(ContractModel):
     live_accepted: bool = False
     started_at: datetime
     finished_at: datetime
+    build_result: BuildResult | None = Field(default=None)
+    error_code: ErrorCode | None = Field(default=None)
 
     @field_validator("stage_attempt_ids", "source_ids")
     @classmethod
