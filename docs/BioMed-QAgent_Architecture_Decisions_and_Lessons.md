@@ -427,7 +427,7 @@ Agent 不能直接提交一个数字并声明它来自论文、图表或数据�
 四个状态体系分别回答不同问题：
 
 | 概念 | 回答问题 | 典型值 |
-|---|---|---|
+| --- | --- | --- |
 | `RunStatus` | 执行是否排队、运行、完成、失败或取消 | QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED |
 | `BuildResult` | 正常完成后得到什么数据结果 | SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED |
 | `ValidationResult` | 某个 Manifest digest 是否通过 Profile | PASSED/FAILED |
@@ -771,7 +771,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 问题：编码、列数、warning 计数、特定字段完整率等规则很重要，但都写在架构层会使每次 Profile 变化都像顶层协议变更。
 
-教训：架构只保留 provenance closure、Profile passed 和 atomic promotion；具体规则进入版本化 Profile 和测试。
+教训：架构只保留 provenance closure、Profile passed 和 atomic promotion；具体规则进入版本化 Profile 和测试
 ---
 
 ## 22. 顶层不变量
