@@ -91,19 +91,28 @@
 
 > 目标：GDC + Xena 表达路径迁移为 Adapter + Canonicalizer + Integrator + Profile，
 > 主数据不再依赖 `main_data.csv` 固定文件名。验收见 Design §16 Phase 3。
+> ✅ 组件层已完成（`app/datasets/build/`，commit 0ff757d，50 个新测试；全量 pytest 无回归）：
+> Adapter / Canonicalizer / Compatibility Gate / Integrator / role-based Manifest V2 /
+> `gene_expression.release.v1` Profile / demo 编排链。与 Legacy runner 的接线待 Phase 2。
+> 详细记录见 docs/REVIEW_2026-08-06-phase3-expression-demo.md。
 
-- [ ] **P0** Adapter 化 GDC 与 Xena（获取逻辑进 Acquisition Provider，解析进 Adapter）
-- [ ] **P0** 实现文件型 canonicalization：字段映射、实体 ID 标准化、可证明等价的单位
-      转换，保留原值/转换规则/版本；生成 mapping / normalization / rejected 审计
-- [ ] **P0** 实现表达 Compatibility Gate（单位/尺度/主键语义/映射证据）
-- [ ] **P0** 实现显式 append/dedup 合并规则（`append_by_canonical_row`）
-- [ ] **P0** 生成 role-based DatasetManifest V2（primary / supporting / schema /
-      provenance / audit_report）
-- [ ] **P0** 实现表达 Validation Profile（`gene_expression.release.v1`）
-- [ ] **P1** 基因符号映射：namespace 确权（ensembl_gene / geo_probe / gene_symbol）、
-      优先本地映射、定义多对一聚合策略（原 §1.5.3）
+- [x] **P0** Adapter 化 GDC 与 Xena（获取逻辑进 Acquisition Provider，解析进 Adapter）
+      — 解析侧：`gdc.expression.v1`（matrix + STAR counts）/ `xena.matrix.v1`；
+      获取侧仍属 Acquisition（Phase 2.5）
+- [x] **P0** 实现文件型 canonicalization：字段映射、实体 ID 标准化（namespace 确权
+      + 版本保留）、单位策略（可证明等价转换机制就绪、零规则注册 fail-closed）；
+      保留原值/转换规则/版本；生成 mapping / normalization / rejected 审计
+- [x] **P0** 实现表达 Compatibility Gate（单位/尺度/主键语义/映射证据）
+- [x] **P0** 实现显式 append/dedup 合并规则（`append_by_canonical_row`，镜像去重 + 冲突审计）
+- [x] **P0** 生成 role-based DatasetManifest V2（primary / schema / provenance /
+      audit_report；supporting 暂无侧表）
+- [x] **P0** 实现表达 Validation Profile（`gene_expression.release.v1`：最低行数 /
+      必填字段完整率 / 数值合法性 / 单位一致性 / provenance closure / 列数）
+- [ ] **P1** 基因符号映射：namespace 确权已完成（ensembl_gene / gene_symbol，
+      geo_probe 待 GEO 阶段）；**本地 symbol↔ensembl 映射表未落地**；多对一聚合策略
+      已在 NormalizationProfile 声明（默认 keep_all）
 - [ ] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
-      `tools/alignment` 降级为候选生成器（不再承担正式合并）
+      `tools/alignment` 降级为候选生成器（待 Phase 2 执行内核后执行）
 
 ---
 

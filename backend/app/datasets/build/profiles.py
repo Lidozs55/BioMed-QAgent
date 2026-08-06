@@ -1,0 +1,266 @@
+"""Versioned profiles for the expression demo chain (Phase 3).
+
+Two registries:
+
+- ``NORMALIZATION_PROFILES``: entity/unit normalization policy consumed by the
+  Canonicalizer (namespaces, allowed units/semantics, conversions).
+- ``VALIDATION_PROFILES``: concrete per-family check implementations driven by
+  the contract ``ValidationProfile`` skeleton (acceptance policy included).
+  ``gene_expression.release.v1`` implements the expression demo checks.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+
+from app.datasets.contracts import (
+    AcceptancePolicy,
+    DatasetManifest,
+    DatasetSchema,
+    NormalizationProfile,
+    ValidationProfile,
+    ValidationResult,
+    ValidationResultStatus,
+)
+
+# --- normalization profiles -------------------------------------------------
+
+
+def _expression_normalization_v1() -> NormalizationProfile:
+    return NormalizationProfile(
+        profile_id="gene_expression.normalization.v1",
+        dataset_family="gene_expression",
+        allowed_namespaces=["ensembl_gene", "gene_symbol"],
+        allowed_units=[
+            "expression_value",
+            "tpm_unstranded",
+            "unstranded",
+            "tpm",
+            "fpkm",
+            "log2_expression",
+            "estimated_count",
+        ],
+        allowed_semantics=["expression_value", "normalized_expression", "raw_count"],
+        unit_conversions=[],  # no conversion is silently allowed without a rule
+        aggregation_policy="keep_all",
+        description=(
+            "Expression entity/unit normalization: authorize ensembl_gene or "
+            "gene_symbol namespaces, accept the declared unit/semantics set, "
+            "and require an explicit conversion rule before any unit change."
+        ),
+    )
+
+
+NORMALIZATION_PROFILES: dict[str, NormalizationProfile] = {
+    _expression_normalization_v1().profile_id: _expression_normalization_v1()
+}
+
+
+def get_normalization_profile(profile_ref: str | None) -> NormalizationProfile:
+    """Resolve *profile_ref*; the default expression profile when omitted."""
+    if profile_ref is None:
+        return NORMALIZATION_PROFILES["gene_expression.normalization.v1"]
+    try:
+        return NORMALIZATION_PROFILES[profile_ref]
+    except KeyError as exc:
+        raise KeyError(f"normalization profile {profile_ref!r} is not registered") from exc
+
+
+# --- validation profile -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProfileCheck:
+    """One named check of a validation profile run."""
+
+    check_id: str
+    description: str
+    passed: bool
+    detail: str
+
+
+class ExpressionValidationProfile:
+    """``gene_expression.release.v1`` — server-side acceptance checks.
+
+    Rules live here (and in the versioned profile), never in the Agent or in
+    the build chain, so the Agent cannot smuggle acceptance thresholds.
+    """
+
+    profile_id = "gene_expression.release.v1"
+
+    def __init__(self) -> None:
+        self.profile = ValidationProfile(
+            profile_id=self.profile_id,
+            dataset_family="gene_expression",
+            acceptance=AcceptancePolicy(
+                minimum_valid_rows=1,
+                allow_empty_primary_dataset=False,
+                allow_partial_publish=True,
+            ),
+            description=(
+                "Expression release gate: primary dataset present with valid "
+                "rows, schema-conformant columns, complete required fields, "
+                "numeric values, a single unit, and closed provenance."
+            ),
+        )
+
+    def validate(
+        self,
+        *,
+        manifest: DatasetManifest,
+        primary_path: Path,
+        schema: DatasetSchema,
+        manifest_digest: str,
+        output_dir: Path,
+    ) -> ValidationResult:
+        checks = self._run_checks(manifest, primary_path, schema)
+        report = {
+            "profile_ref": self.profile_id,
+            "manifest_digest": manifest_digest,
+            "checks": [
+                {
+                    "check_id": check.check_id,
+                    "description": check.description,
+                    "passed": check.passed,
+                    "detail": check.detail,
+                }
+                for check in checks
+            ],
+        }
+        report_path = output_dir / "validation_report.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", "utf-8"
+        )
+        failed = [check for check in checks if not check.passed]
+        return ValidationResult(
+            manifest_digest=manifest_digest,
+            profile_ref=self.profile_id,
+            status=(
+                ValidationResultStatus.PASSED
+                if not failed
+                else ValidationResultStatus.FAILED
+            ),
+            checked_count=len(checks),
+            failed_count=len(failed),
+            report_path=report_path.relative_to(output_dir).as_posix(),
+        )
+
+    def _run_checks(
+        self,
+        manifest: DatasetManifest,
+        primary_path: Path,
+        schema: DatasetSchema,
+    ) -> list[ProfileCheck]:
+        if not primary_path.is_file():
+            return [
+                ProfileCheck(
+                    check_id="primary_dataset_exists",
+                    description="primary dataset artifact exists",
+                    passed=False,
+                    detail=f"missing primary dataset file: {primary_path}",
+                )
+            ]
+        checks: list[ProfileCheck] = [
+            self._check_min_rows(manifest),
+            self._check_column_count(primary_path, schema),
+        ]
+        checks.extend(self._check_rows(primary_path, schema))
+        return checks
+
+    def _check_min_rows(self, manifest: DatasetManifest) -> ProfileCheck:
+        minimum = self.profile.acceptance.minimum_valid_rows
+        passed = manifest.row_count >= minimum
+        return ProfileCheck(
+            check_id="minimum_valid_rows",
+            description=f"primary dataset has at least {minimum} row(s)",
+            passed=passed,
+            detail=f"row_count={manifest.row_count}, minimum={minimum}",
+        )
+
+    def _check_column_count(self, primary_path: Path, schema: DatasetSchema) -> ProfileCheck:
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            header = next(csv.reader(handle))
+        expected = len(schema.fields)
+        passed = len(header) == expected
+        return ProfileCheck(
+            check_id="column_count_matches_schema",
+            description="primary dataset column count matches the schema",
+            passed=passed,
+            detail=f"actual={len(header)}, schema={expected}",
+        )
+
+    def _check_rows(
+        self, primary_path: Path, schema: DatasetSchema
+    ) -> list[ProfileCheck]:
+        required = {
+            field.name for field in schema.fields if field.required
+        }
+        row_count = 0
+        blank_required: dict[str, int] = {}
+        non_numeric = 0
+        units: set[str] = set()
+        missing_provenance = 0
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                row_count += 1
+                for field in required:
+                    if not row.get(field, "").strip():
+                        blank_required[field] = blank_required.get(field, 0) + 1
+                try:
+                    if not math.isfinite(float(row.get("expression_value", ""))):
+                        raise ValueError
+                except ValueError:
+                    non_numeric += 1
+                unit = row.get("expression_unit", "")
+                if unit:
+                    units.add(unit)
+                if not row.get("source_logical_file", "").strip() or not row.get(
+                    "asset_id", ""
+                ).strip():
+                    missing_provenance += 1
+        checks = [
+            ProfileCheck(
+                check_id="required_field_completeness",
+                description="required schema fields are non-blank for every row",
+                passed=not blank_required,
+                detail=(
+                    f"{row_count} row(s); blank required fields: "
+                    + (json.dumps(blank_required, sort_keys=True) if blank_required else "none")
+                ),
+            ),
+            ProfileCheck(
+                check_id="expression_value_numeric",
+                description="expression_value parses as a number for every row",
+                passed=non_numeric == 0,
+                detail=f"{non_numeric} non-numeric value(s) in {row_count} row(s)",
+            ),
+            ProfileCheck(
+                check_id="unit_consistency",
+                description="a single expression unit in the primary dataset",
+                passed=len(units) <= 1,
+                detail=f"units={sorted(units)}",
+            ),
+            ProfileCheck(
+                check_id="provenance_closure",
+                description="every row carries source file and asset provenance",
+                passed=missing_provenance == 0,
+                detail=f"{missing_provenance} row(s) missing provenance in {row_count} row(s)",
+            ),
+        ]
+        return checks
+
+
+VALIDATION_PROFILES: dict[str, ExpressionValidationProfile] = {
+    ExpressionValidationProfile.profile_id: ExpressionValidationProfile()
+}
+
+
+def get_validation_profile(profile_ref: str) -> ExpressionValidationProfile:
+    try:
+        return VALIDATION_PROFILES[profile_ref]
+    except KeyError as exc:
+        raise KeyError(f"validation profile {profile_ref!r} is not registered") from exc
