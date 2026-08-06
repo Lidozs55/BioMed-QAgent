@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Literal
 
 from agents import RunContextWrapper, function_tool
-
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     DATABASE_IDENTIFIER_ALIASES,
@@ -24,6 +23,13 @@ from app.domain.contracts import (
 )
 from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
 from app.pipeline.stages import STANDALONE_RUN_ID
+
+_SUPPORTED_GDC_DATA_TYPES = {
+    "gene-expression",
+    "gene expression",
+    "expression",
+    "gene expression quantification",
+}
 
 
 def _build_tool_specification(
@@ -191,7 +197,12 @@ async def _run_sync_cleanup(operation: Callable[[], None]) -> None:
     name_override="run_research_pipeline",
     description_override=(
         "Run the deterministic validated research-data pipeline. "
-        "Call this tool at most 5 times per research task.  Pass ``pmid``/``gse`` "
+        "Call this tool at most 5 times per research task.  Use only these "
+        "supported database paths: geo; geo+pubmed; gdc; ucsc_xena/xena; "
+        "gdc+ucsc_xena; or reactome alone.  Reactome pathway participants "
+        "and PubMed evidence are not row-merge inputs for expression data, "
+        "so run heterogeneous evidence sources as separate pipeline runs.  "
+        "Pass ``pmid``/``gse`` "
         "when you have already discovered explicit accessions via "
         "search_pubmed/search_geo/describe_geo — the pipeline does NOT auto-search "
         "GEO by topic, so ``gse`` is required when GEO is in databases.  "
@@ -305,11 +316,98 @@ async def run_research_pipeline(
             },
             ensure_ascii=False,
         )
-    if "reactome" in normalized_databases and len(set(normalized_databases)) > 1:
+
+    canonical_databases = {database.value for database in selected_databases}
+    missing_arguments: list[str] = []
+    if "gdc" in canonical_databases and not gdc_project_id:
+        missing_arguments.append("gdc_project_id")
+    if gdc_project_id and "gdc" in canonical_databases and not gdc_data_type:
+        missing_arguments.append("gdc_data_type")
+    if (
+        gdc_data_type
+        and "gdc" in canonical_databases
+        and gdc_data_type.strip().lower().replace("_", "-")
+        not in _SUPPORTED_GDC_DATA_TYPES
+    ):
+        return json.dumps(
+            {
+                "status": "capability_gap",
+                "message": (
+                    "The Pipeline currently supports only GDC gene-expression "
+                    "data. GDC mutation/clinical live parsing is not implemented."
+                ),
+                "database": "gdc",
+                "requested_data_type": gdc_data_type,
+                "supported_data_types": ["gene-expression"],
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    if (
+        ("xena" in normalized_databases or "ucsc_xena" in normalized_databases)
+        and not xena_dataset_id
+    ):
+        missing_arguments.append("xena_dataset_id")
+    if "reactome" in canonical_databases and not (reactome_pathway_id or "").strip():
+        missing_arguments.append("reactome_pathway_id")
+    if missing_arguments:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "Missing required pipeline arguments: "
+                    + ", ".join(dict.fromkeys(missing_arguments))
+                ),
+                "missing_arguments": list(dict.fromkeys(missing_arguments)),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+
+    accession_arguments = {
+        "pmid": (pmid, Database.PUBMED.value),
+        "gse": (gse, Database.GEO.value),
+        "xena_dataset_id": (xena_dataset_id, Database.UCSC_XENA.value),
+        "gdc_project_id": (gdc_project_id, Database.GDC.value),
+        "reactome_pathway_id": (reactome_pathway_id, Database.REACTOME.value),
+    }
+    mismatched_arguments = [
+        argument
+        for argument, (value, database) in accession_arguments.items()
+        if value and database not in canonical_databases
+    ]
+    if mismatched_arguments:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "Explicit accessions were supplied for databases that are not "
+                    "selected: " + ", ".join(mismatched_arguments)
+                ),
+                "mismatched_arguments": mismatched_arguments,
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+
+    if "reactome" in canonical_databases and len(canonical_databases) > 1:
         return json.dumps(
             {
                 "status": "unsupported_databases",
                 "unsupported_databases": ["reactome_mixed_sources"],
+                "message": (
+                    "Reactome pathway participants are a different data model and "
+                    "must run as a separate pipeline publication. Keep PubMed/GEO/"
+                    "GDC/Xena evidence in a separate compatible run."
+                ),
+                "supported_paths": [
+                    ["geo"],
+                    ["geo", "pubmed"],
+                    ["gdc"],
+                    ["ucsc_xena"],
+                    ["gdc", "ucsc_xena"],
+                    ["reactome"],
+                ],
                 "retryable": False,
             },
             ensure_ascii=False,
@@ -320,8 +418,22 @@ async def run_research_pipeline(
                 "status": "unsupported_databases",
                 "unsupported_databases": list(dict.fromkeys(normalized_databases)),
                 "message": (
-                    "unsupported pipeline source combination; each selected "
-                    "source must participate in one implemented deterministic path"
+                    "unsupported pipeline source combination; the current runner "
+                    "supports only compatible analytical paths, not arbitrary "
+                    "cross-database row merges"
+                ),
+                "supported_paths": [
+                    ["geo"],
+                    ["geo", "pubmed"],
+                    ["gdc"],
+                    ["ucsc_xena"],
+                    ["gdc", "ucsc_xena"],
+                    ["reactome"],
+                ],
+                "next_step": (
+                    "Choose one compatible analytical path. Use Reactome and "
+                    "literature as separate evidence runs until a heterogeneous "
+                    "bundle contract is implemented."
                 ),
                 "retryable": False,
             },
@@ -332,6 +444,33 @@ async def run_research_pipeline(
             {
                 "status": "invalid_input",
                 "message": "reactome_pathway_id is required when databases is ['reactome']",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+
+    fixture_root = Path(__file__).parents[2] / "tests" / "fixtures"
+    fixture_dir = (
+        fixture_root / "reactome"
+        if "reactome" in normalized_databases
+        else fixture_root / "ncbi" / "gse178352"
+    )
+    try:
+        specification = _build_tool_specification(
+            topic,
+            normalized_databases,
+            pmid,
+            gse,
+            xena_dataset_id,
+            gdc_project_id,
+            gdc_data_type,
+            reactome_pathway_id,
+        )
+    except ValueError as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": str(exc),
                 "retryable": False,
             },
             ensure_ascii=False,
@@ -369,22 +508,6 @@ async def run_research_pipeline(
             },
             ensure_ascii=False,
         )
-    fixture_root = Path(__file__).parents[2] / "tests" / "fixtures"
-    fixture_dir = (
-        fixture_root / "reactome"
-        if "reactome" in normalized_databases
-        else fixture_root / "ncbi" / "gse178352"
-    )
-    specification = _build_tool_specification(
-        topic,
-        normalized_databases,
-        pmid,
-        gse,
-        xena_dataset_id,
-        gdc_project_id,
-        gdc_data_type,
-        reactome_pathway_id,
-    )
     runner: PipelineRunner | None = None
     transferred = False
     reservation_released = False

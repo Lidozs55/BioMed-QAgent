@@ -467,6 +467,147 @@ async def test_pipeline_function_tool_rejects_parallel_managed_invocation(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_function_tool_rejects_accession_for_unselected_database(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_tool_mismatched_accession")
+    context._work_dir = create_task_workdir(
+        "task_tool_mismatched_accession", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_mismatched_accession",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "TP53 colorectal cancer",
+                "databases": ["gdc"],
+                "gse": "GSE256265",
+                "gdc_project_id": "TCGA-COAD",
+                "gdc_data_type": "gene-expression",
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "invalid_input"
+    assert payload["mismatched_arguments"] == ["gse"]
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_validates_gdc_arguments_before_reservation(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_tool_missing_gdc_type")
+    context._work_dir = create_task_workdir(
+        "task_tool_missing_gdc_type", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_missing_gdc_type",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "TP53 colorectal cancer",
+                "databases": ["gdc"],
+                "gdc_project_id": "TCGA-COAD",
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "invalid_input"
+    assert payload["missing_arguments"] == ["gdc_data_type"]
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_reports_gdc_mutation_capability_gap(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_tool_gdc_mutation_gap")
+    context._work_dir = create_task_workdir(
+        "task_tool_gdc_mutation_gap", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_gdc_mutation_gap",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "TP53 colorectal cancer mutations",
+                "databases": ["gdc"],
+                "gdc_project_id": "TCGA-COAD",
+                "gdc_data_type": "somatic",
+                "mode": "live",
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "capability_gap"
+    assert payload["requested_data_type"] == "somatic"
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_function_tool_explains_heterogeneous_path_boundary(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_tool_heterogeneous_sources")
+    context._work_dir = create_task_workdir(
+        "task_tool_heterogeneous_sources", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_heterogeneous_sources",
+        tool_arguments="{}",
+    )
+
+    result = await run_research_pipeline.on_invoke_tool(
+        tool_context,
+        json.dumps(
+            {
+                "topic": "TP53 colorectal cancer",
+                "databases": ["gdc", "geo", "pubmed"],
+                "pmid": "12345678",
+                "gse": "GSE256265",
+                "gdc_project_id": "TCGA-COAD",
+                "gdc_data_type": "gene-expression",
+                "mode": "fixture",
+            }
+        ),
+    )
+
+    payload = json.loads(result)
+    assert payload["status"] == "unsupported_databases"
+    assert payload["unsupported_databases"] == ["gdc", "geo", "pubmed"]
+    assert payload["retryable"] is False
+    assert ["gdc", "ucsc_xena"] in payload["supported_paths"]
+    assert "separate evidence runs" in payload["next_step"]
+    assert context.pipeline_attempt_count == 0
+
+
+@pytest.mark.asyncio
 async def test_pipeline_function_tool_rejects_unsupported_databases(
     tmp_path: Path,
 ) -> None:

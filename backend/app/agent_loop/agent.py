@@ -140,8 +140,15 @@ Pipeline 生成。你的核心价值在于**研究策略的质量**：选对数�
 
 Pipeline 支持的数据源（PubMed, GEO, GDC, Xena, Reactome）可生成 `artifacts/` 正式
 产物，通过 Validation Gate 校验。Research-only 数据源（PDB, PubChem, Browser）用于
-Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `write_file` 保存到工作目录
-供汇报引用，在最终文本中口头引用。
+Agent 调研，数据**无法进入正式 CSV 产物**。
+
+**重要的 Pipeline 组合边界**：当前 Pipeline 支持的是兼容的数据处理路径，不是任意
+数据库的行级合并：`GEO`（可选 `PubMed`）、`GDC`、`Xena`、`GDC+Xena`、以及
+单独的 `Reactome`。Reactome pathway participants 与表达矩阵不是同一行级数据模型，
+不能放进同一个 `main_data.csv`；PubMed 是文献证据，不是表达矩阵。若研究需要
+`GDC/GEO + PubMed + Reactome`，应在不同的 durable Agent/Pipeline run 中分别运行
+兼容路径，再按 manifest/source_id 交叉引用；同一个 Agent run 只允许一次 publication。
+不要把不支持的组合反复提交给 `run_research_pipeline`。
 
 ## 工作流程
 
@@ -149,15 +156,18 @@ Agent 调研，数据**无法进入正式 CSV 产物**——调研结果用 `wri
 从用户研究主题中提取关键实体（疾病、基因、化合物、通路等）和研究目标（表达谱、
 变异、结构、通路网络等），然后选择最贴合的策略：
 
-- **单疾病机制**：GEO 表达 + PubMed 文献 + Reactome 通路交叉验证
-- **单基因/靶基因差异分析**：优先 GDC/Xena 基因级 RNA-seq 矩阵（TCGA 等，gene symbol
-  直接可查），GEO 微阵列作配对样本或交叉验证，PubMed 文献佐证
+- **单疾病机制**：先运行 GEO + PubMed 表达/文献路径；Reactome 通路成员另行运行并
+  通过 accession/source_id 交叉引用，不要求异构表行级合并
+- **单基因/靶基因差异分析**：优先单独运行 GDC/Xena 基因级 RNA-seq 矩阵（TCGA 等，
+  gene symbol 直接可查）；GEO 微阵列作为单独验证路径，PubMed 文献作为独立证据路径
 - **共病/多表型关联**：分解为 X 侧 + Y 侧 + 共享机制三层分别检索。从综述中提取
   候选共享通路，对候选基因查"gene+X"和"gene+Y"确认双向证据，最终覆盖三层
 - **药物靶点发现**：基因→化合物→通路三角，PubChem 查化合物、Reactome 查通路、
   GEO 查表达
-- **生物标志物筛选**：GWAS + 表达 + 临床交叉，GEO + PubMed + GDC
-- **通路网络分析**：通路→基因→表达→结构，Reactome + GEO + PubMed + PDB
+- **生物标志物筛选**：分别运行 GDC/GEO 表达路径与 PubMed 证据路径；当前不能把
+  GDC + GEO + PubMed 作为一个 Pipeline 组合
+- **通路网络分析**：分别运行 Reactome 通路路径与 GEO/GDC 表达路径；PDB 仍是
+  research-only，不能作为正式 Pipeline 输入
 
 主题类型不互斥，必要时组合多种。
 
@@ -226,6 +236,11 @@ Research-only 数据源不能作为 Pipeline 完成证据，也不能绕过 Vali
 调用时传：
 - `topic`（必填）：用户研究主题
 - `databases`（可选）：用户选择的数据源列表；不传时自动使用 `preferred_sources`
+- 只提交下列兼容路径之一：`["geo"]`、`["geo", "pubmed"]`、`["gdc"]`、
+  `["ucsc_xena"]`、`["gdc", "ucsc_xena"]`、`["reactome"]`
+- `gdc_project_id` 必须和 `gdc_data_type` 一起传；`xena_dataset_id`、`gse`、
+  `reactome_pathway_id` 也必须与对应 database 同时选择。不要在未选择的 database
+  上附带 accession 参数
 - `pmid`/`gse`（强烈建议）：你先前通过技能调用发现的 accession。**Pipeline 不会
   按 topic 自动搜索 GEO**——如果 databases 包含 GEO，你必须先通过 `find_skill` +
   `invoke_skill` 发现具体的 GSE accession，**并对每个候选 GSE 先调用 `describe_geo`
