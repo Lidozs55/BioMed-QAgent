@@ -46,6 +46,7 @@ from app.domain.contracts import (
     generate_run_id,
     generate_task_id,
 )
+from app.domain.contracts.dataset_state import BuildResult
 from app.domain.contracts.runtime import validate_task_databases
 from app.model_config import RunModelSettings
 from app.model_settings import get_current_model_configuration
@@ -112,6 +113,7 @@ class RunExecution:
     model_settings: RunModelSettings | None = field(default=None, repr=False)
     mode: TaskMode = TaskMode.AGENT
     databases: list[str] = field(default_factory=list)
+    build_result: BuildResult | None = None
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
     _assistant_stream_emitter: AssistantStreamEmitter | None = field(
         default=None,
@@ -183,6 +185,10 @@ class RunExecution:
             raise RuntimeError("streaming result is already attached")
         self._streaming_result = result
         self._stream_ready.set()
+
+    def set_build_result(self, build_result: BuildResult | None) -> None:
+        """Attach the authoritative BuildResult for this Run (set by executors)."""
+        self.build_result = build_result
 
     def reset_streaming_result(self) -> None:
         """Clear the streaming result so a new one can be attached.

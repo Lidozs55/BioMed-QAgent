@@ -9,14 +9,15 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
+from agents import Runner
 from app.agent_loop.agent import (
     AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
 )
@@ -39,6 +40,7 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     StageName,
     StageProgressPayload,
     TaskCompletedPayload,
@@ -1277,6 +1279,7 @@ class AgentRunExecutor:
         try:
             if pending.run_id != execution.run_id:
                 raise RuntimeError("pending publication run_id does not match execution")
+            execution.set_build_result(pending.manifest.build_result)
             payloads = [
                 ArtifactProducedPayload(artifact=pending.manifest_entry),
                 *(
@@ -1287,6 +1290,28 @@ class AgentRunExecutor:
 
             async def commit_agent_artifacts() -> list[EventEnvelope]:
                 await _run_sync_operation(pending.publish)
+                manifest_digest = hashlib.sha256(
+                    pending.manifest.model_dump_json().encode("utf-8")
+                ).hexdigest()
+                publication_id = f"pub-{execution.run_id}"
+                if execution.build_result is not None:
+                    execution.set_build_result(
+                        execution.build_result.model_copy(
+                            update={"publication_id": publication_id}
+                        )
+                    )
+                publication_event = build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=len(payloads) + 1,
+                    payload=PublicationCreatedPayload(
+                        publication_id=publication_id,
+                        run_id=execution.run_id,
+                        manifest_sha256=manifest_digest,
+                        supersedes_publication_id=None,
+                        published_at=datetime.now(UTC),
+                    ),
+                )
                 return [
                     build_event(
                         task_id=execution.task_id,
@@ -1295,7 +1320,7 @@ class AgentRunExecutor:
                         payload=payload,
                     )
                     for index, payload in enumerate(payloads, start=1)
-                ]
+                ] + [publication_event]
 
             async def abort_agent_artifacts() -> None:
                 await _run_sync_operation(pending.abort)
@@ -1423,6 +1448,7 @@ class FixtureRunExecutor:
             if manifest.task_state is TaskState.FAILED:
                 raise RuntimeError("fixture pipeline failed validation or execution")
             _check_fixture_bridge_cancellation(execution)
+            execution.set_build_result(manifest.build_result)
 
             pending_factory = getattr(runner, "pending_publication", None)
             pending = pending_factory() if callable(pending_factory) else None

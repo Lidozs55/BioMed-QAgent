@@ -41,6 +41,7 @@ def completed_manifest(task_id: str) -> SimpleNamespace:
         task_state=TaskState.COMPLETED,
         artifacts=[],
         validation=SimpleNamespace(status="valid"),
+        build_result=None,
     )
 
 
