@@ -113,9 +113,12 @@
       audit_report；supporting 暂无侧表）
 - [x] **P0** 实现表达 Validation Profile（`gene_expression.release.v1`：最低行数 /
       必填字段完整率 / 数值合法性 / 单位一致性 / provenance closure / 列数）
-- [ ] **P1** 基因符号映射：namespace 确权已完成（ensembl_gene / gene_symbol，
-      geo_probe 待 GEO 阶段）；**本地 symbol↔ensembl 映射表未落地**；多对一聚合策略
-      已在 NormalizationProfile 声明（默认 keep_all）
+- [x] **P1** 基因符号映射：namespace 确权已完成（ensembl_gene / gene_symbol，
+      geo_probe 待 GEO 阶段）；**本地 symbol↔ensembl 映射表已落地**
+      （`app/datasets/build/gene_maps.py` 随包携带，无在线依赖；canonicalizer
+      可选 `gene_symbol_map` 参数：命中转 ensembl_gene + normalization_log 审计，
+      未命中保留原 namespace 不丢弃，statistics 记 `gene_symbol_mapped_count`；
+      多对一聚合策略保持 NormalizationProfile `keep_all` 声明；6 项测试）
 - [ ] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
       `tools/alignment` 降级为候选生成器（待 Phase 2 执行内核后执行）
 
