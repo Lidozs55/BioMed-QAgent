@@ -1,9 +1,10 @@
-# BioMed-QAgent 顶层设计决策、讨论记录与踩坑复盘
+# BioMed-QAgent 顶层设计决策、讨论记录与踩坑复盘 V2
 
-> 文档性质：架构决策记录（ADR 汇总）与项目复盘  
+> 文档性质：架构决策记录（ADR 汇总）与项目复盘 V2  
 > 形成日期：2026-08-06  
-> 输入依据：当前代码仓库、赛题说明、历史 Review/Survey，以及本轮关于 Pipeline、DAG、主数据和产品边界的讨论  
-> 用途：约束后续设计，解释为什么改变方向，防止团队再次沿错误抽象继续扩张
+> 输入依据：当前代码仓库、赛题说明、历史 Review/Survey，以及本轮关于 Pipeline、DAG、Recipe、状态和产物边界的讨论  
+> 用途：约束后续设计，解释为什么改变方向，防止团队再次沿错误抽象继续扩张  
+> V2 变更：删除正式 DatasetRequest 和 BuildRecipe，明确 WorkflowRecipe 仅服务 Acquisition，并拆分 RunStatus、BuildResult、ValidationResult 与 DatasetPublication
 
 ---
 
@@ -15,16 +16,17 @@
 
 最终主产物应描述同一数据域中可比较、可合并的记录。多源异构指来源和载体异构，例如数据库、论文表格、附件、网页和图表，不代表必须将表达、突变、通路、临床和文献元数据强行放进同一张表。
 
-一个正式 DatasetBuild 必须明确：
+一个正式 DatasetBuild 由自包含 `DatasetBuildSpec` 定义，必须明确：
 
+- 目标和实体范围；
 - 数据集族；
 - 行粒度；
 - Canonical Schema；
 - 键和去重语义；
 - 测量、单位和归一化语义；
-- 来源通道；
+- 来源绑定及其内置或 WorkflowRecipe 获取方式；
 - 合并策略；
-- 验证和发布标准。
+- 服务端 Validation Profile 引用。
 
 当前固定五阶段 Pipeline 不应整体删除。应保留其可靠执行能力，替换其错误的业务中心：从固定数据库组合和固定 `main_data.csv`，转向数据集契约驱动的 Dataset Construction Runtime。
 
@@ -52,9 +54,9 @@
 - 当前项目已经有成熟 Runtime，不缺调度基础；
 - DAG 能表达多来源并行和依赖，但完整 DAG Engine 会引入额外调度、重试传播、局部失败、循环验证和图版本成本；
 - 比赛 Demo 的评分不取决于 DAG；
-- 当前任务可用受控步骤序列和来源并行组表达。
+- 当前任务可用服务端固定构建骨架和来源 fan-out/fan-in 表达。
 
-阶段结论：保留依赖思想，不实现完整 DAG；使用声明式计划或 Recipe。
+阶段结论：保留依赖与恢复思想，不实现完整 DAG，也不新增 Agent 可声明的通用构建 Recipe。
 
 ### 2.3 关键纠偏：赛题核心不是多角度研究包
 
@@ -65,20 +67,38 @@
 - 评价对象是可分析、可追溯、可复用的数据整合结果；
 - 因此核心应是“同类数据的跨源整合”，而不是“同一研究对象的所有角度资料集合”。
 
-这意味着此前多表 Artifact Package 方向并非完全错误，但不应成为系统核心。主抽象应从 ResearchPlan 变成 DatasetRequest/DatasetBuildSpec。
+这意味着此前多表 Artifact Package 方向并非完全错误，但不应成为系统核心。主抽象应从 ResearchPlan 收缩为自包含 `DatasetBuildSpec`。
 
-### 2.4 当前定稿方向
+### 2.4 第二次抽象收缩：避免 V2 再造冗余层
+
+V1 重构提案随后暴露五个问题：
+
+- `DatasetRequest` 与 `DatasetBuildSpec` 重复；
+- 新 `BuildRecipe` 与仓库已有 `WorkflowRecipe` 重叠；
+- Artifact 验证状态与 Run 业务终态混为一谈；
+- 发布门禁清单混入 Validator 实现细节；
+- 辅助数据按具体文件名建模，顶层协议过重。
+
+因此 V2 进一步收缩：
+
+- Agent 直接产出自包含 DatasetBuildSpec；
+- Dataset Runtime 使用服务端固定构建骨架；
+- WorkflowRecipe 只负责 Acquisition 并产出 SourceAsset；
+- RunStatus、BuildResult、ValidationResult 和 DatasetPublication 正交；
+- 架构层只保留 provenance closure、Profile passed、atomic promotion 三项发布不变量；
+- Manifest 按 Artifact Role 分类，不固定审计文件清单。
+
+### 2.5 当前定稿方向
 
 - 保留主数据集理念；
 - 删除固定 22 列万能主表假设；
 - 每个 Build 一个 dataset family 和 row grain；
-- 支持辅助表和审计 artifact，但不混淆主数据；
+- 支持 supporting dataset、schema、provenance 和 audit report，但不混淆主数据；
 - 用 Adapter、Schema、Normalization Profile、Compatibility Gate、Validation Profile 扩展；
-- Agent 负责意图和来源规划，服务端控制数据值与发布；
+- Agent 负责意图和来源规划，服务端控制数据值、验收阈值与发布；
 - 无数据时返回 NO_DATA，不用元数据占位；
-- 不引入完整 DAG。
-
----
+- 不引入完整 DAG 或 BuildRecipe；
+- 保留并补齐 WorkflowRecipe 的受控来源获取闭环。
 
 ## 3. ADR-001：产品边界是数据集构建，不是完整科研代理
 
@@ -182,7 +202,7 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 
 ---
 
-## 6. ADR-004：不采用完整 DAG，引入受控 BuildRecipe
+## 6. ADR-004：不采用完整 DAG，也不新增 BuildRecipe
 
 ### 状态
 
@@ -190,34 +210,63 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 
 ### 决策
 
-执行结构采用：
+Dataset Runtime 使用服务端固定、可测试的构建骨架：
 
 ```text
-discover/select
-  -> retrieve per source
-  -> parse per source
-  -> normalize per source
+acquire[*]
+  -> parse[*]
+  -> canonicalize[*]
   -> compatibility gate
   -> integrate
-  -> validate
+  -> validate profile
   -> publish
 ```
 
-来源步骤可以内部并发。依赖由 Recipe 和类型引用确定，不让 Agent 自由生成 nodes/edges。
+来源步骤可以内部并发。Runtime 记录 OperationAttempt、输入输出 digest 和恢复点，但 Agent 不自由生成 nodes/edges，也不声明数据集级 Recipe。
 
-### 为什么不使用 DAG
+### 与现有 WorkflowRecipe 的关系
+
+仓库已有 `WorkflowRecipe`，其步骤限定为受控 API、HTML 和 Browser 操作，并拒绝 Python、JavaScript、Shell 等任意代码字段。它保留，但边界限定为 Acquisition：
+
+```text
+SkillBuilderAgent
+  -> WorkflowRecipe draft
+  -> controlled validation
+  -> VERIFIED/PROMOTED
+  -> RecipeExecutor
+  -> SourceAsset
+  -> SourceAdapter
+```
+
+WorkflowRecipe 不能：
+
+- 产生 Canonical DataBatch；
+- 声明跨来源依赖；
+- 决定合并；
+- 选择 Validation Profile 或阈值；
+- 直接发布 Dataset。
+
+“non-executable”只表示 Recipe 不包含任意可执行代码，不表示 Recipe 不会由可信解释器执行。
+
+### 当前代码缺口
+
+当前 `RecipeExecutor.execute()` 和 `find_verified()` 主要面向 `VERIFIED`，而 `PROMOTED` Recipe 的正式发现和执行闭环不明确。V2 要求：
+
+- `PROMOTED`：生产 Build 可自动发现和执行；
+- `VERIFIED`：仅受限试用或 HIL 确认；
+- `DRAFT/REJECTED`：不得进入生产执行。
+
+### 为什么不使用 DAG 或 BuildRecipe
 
 - 当前流程主体近似线性；
 - 并行来源不等于需要通用图调度器；
 - 完整 DAG 增加大量基础设施，不直接提高评分；
-- LLM 生成 DAG 需要额外循环、类型和资源验证；
-- 代码当前真正缺少的是数据契约和兼容性判断，不是图执行。
+- 新增 BuildRecipe 会与 WorkflowRecipe 命名和生命周期冲突；
+- 代码当前真正缺少的是数据契约、兼容性判断和 Recipe 消费闭环，不是图执行。
 
 ### 重新评估触发条件
 
 只有当用户自定义任意分析链、多级条件分支、节点复用和分布式执行成为核心需求时，才重新评估 DAG。
-
----
 
 ## 7. ADR-005：主数据通过 Manifest 识别，不依赖固定文件名
 
@@ -253,7 +302,7 @@ discover/select
 
 ---
 
-## 8. ADR-006：辅助数据可以多表，主数据不能混粒度
+## 8. ADR-006：Manifest 按 Artifact Role 分类，主数据不能混粒度
 
 ### 状态
 
@@ -261,25 +310,23 @@ discover/select
 
 ### 决策
 
-主数据之外可以保存：
+Manifest 只定义五类稳定角色：
 
-- sample metadata；
-- entity mapping；
-- source list；
-- field mapping；
-- rejected rows；
-- quality report；
-- search report；
-- image/PDF assets；
-- provenance sidecar。
+- `primary_dataset`
+- `supporting_dataset`
+- `schema`
+- `provenance`
+- `audit_report`
 
-多表并不代表回到“多角度研究包”。辅助表服务主数据解释、映射、审计或复算，不与主表争夺业务中心。
+样本元数据、实体映射、来源选择、被拒记录、质量报告、搜索报告、warning 和下载审计均映射到这些角色，不在顶层架构固定各自文件名。
+
+`SourceAsset` 保持独立身份，Manifest 引用其 ID。Publisher 可根据规模和展示需要，将同一角色拆成一个或多个物理文件。
+
+多表并不代表回到“多角度研究包”。Supporting dataset 和审计产物服务主数据解释、映射、复算或质量审查，不与主表争夺业务中心。
 
 ### 特殊情况
 
-如果数据天然是关系型结构，可有主事实表和维表，但必须显式建模关系和主表角色。
-
----
+如果数据天然是关系型结构，可有主事实表和维表，但必须显式建模关系、主表角色、family 和 row grain。
 
 ## 9. ADR-007：Agent 决定计划，不决定科研数据值
 
@@ -292,9 +339,9 @@ discover/select
 - 解析需求；
 - 选择或建议 Schema；
 - 查找候选来源；
-- 选择 Adapter；
+- 选择 Acquisition Provider、Adapter 或已允许的 WorkflowRecipe；
 - 提议字段映射；
-- 生成 BuildSpec；
+- 直接生成自包含 DatasetBuildSpec；
 - 根据诊断重新规划。
 
 ### 服务端权限
@@ -305,6 +352,7 @@ discover/select
 - 执行确定性转换；
 - 批准字段映射；
 - 判断兼容性；
+- 管理验收阈值与 Validation Profile；
 - 计算质量和置信度；
 - 发布。
 
@@ -368,7 +416,7 @@ Agent 不能直接提交一个数字并声明它来自论文、图表或数据�
 
 ---
 
-## 12. ADR-010：无数据是正式业务结果，不是内部失败
+## 12. ADR-010：RunStatus、BuildResult、ValidationResult 与 Publication 正交
 
 ### 状态
 
@@ -376,26 +424,27 @@ Agent 不能直接提交一个数字并声明它来自论文、图表或数据�
 
 ### 决策
 
-新增业务终态：
+四个状态体系分别回答不同问题：
 
-- SUCCEEDED；
-- PARTIAL_SUCCESS；
-- NO_DATA；
-- SPEC_REJECTED；
-- EXECUTION_FAILED；
-- CANCELLED。
+| 概念 | 回答问题 | 典型值 |
+|---|---|---|
+| `RunStatus` | 执行是否排队、运行、完成、失败或取消 | QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED |
+| `BuildResult` | 正常完成后得到什么数据结果 | SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED |
+| `ValidationResult` | 某个 Manifest digest 是否通过 Profile | PASSED/FAILED |
+| `DatasetPublication` | 哪个不可变版本已正式提升 | publication ID + supersedes |
 
-`RunStatus` 表示执行生命周期，业务 outcome 表示数据结果。
+只有 `RunStatus=COMPLETED` 才产生 `BuildResult`。执行异常和用户取消不再重复表示为 `EXECUTION_FAILED` 或 `CANCELLED` BuildResult。
+
+不使用 `validated_intermediate` / `validated_final`。每次成功发布都生成不可变 Publication，后续版本使用 `supersedes_publication_id` 关联。任务或会话只维护 `current_publication_id`。
 
 ### 结果
 
-- 无主数据不再必然触发 `RunFailedPayload`；
+- 无主数据不再必然触发内部失败；
 - 前端不通过错误字符串猜 no_data；
-- 无数据时可以交付搜索、拒绝和诊断报告；
+- 无数据时可以交付审计型 Publication；
 - 内部异常仍然是 failed；
-- 用户始终收到明确终结说明。
-
----
+- 用户始终收到服务端生成的 RunSummary；
+- 新版本不会改变旧 Artifact 的状态。
 
 ## 13. ADR-011：禁止 metadata-only 占位主表
 
@@ -419,7 +468,7 @@ GEO 没有表达矩阵时，当前代码将样本元数据写成 `measurement_ty
 
 ---
 
-## 14. ADR-012：Validation 由数据集 Profile 驱动
+## 14. ADR-012：Validation 由 Profile 驱动，架构层只保留三项发布不变量
 
 ### 状态
 
@@ -427,24 +476,28 @@ GEO 没有表达矩阵时，当前代码将样本元数据写成 `measurement_ty
 
 ### 决策
 
-验证分层：
+架构层只规定：
 
-1. 通用文件和 manifest；
-2. Schema 和类型；
-3. 主键、外键和唯一性；
-4. 数据族语义；
-5. 单位、尺度和归一化；
-6. provenance；
-7. confidence；
-8. 发布策略。
+1. **Provenance closure**：正式记录可追溯到 SourceAsset、源定位、Parser/Adapter 版本、映射和转换；
+2. **Validation Profile passed**：与目标 Manifest digest 对应的 Profile 判定通过；
+3. **Atomic promotion**：只有引用闭合且 staging 完整的已验证 Manifest 才能原子提升。
 
-不同数据族选择不同 Profile，不再通过 Reactome 特例、表达列存在性和 metadata-only 条件分支共享一个万能 Validator。
+具体规则属于版本化 Validation Profile，例如：
+
+- 文件编码和列数稳定；
+- Schema、类型和主键；
+- measurement 完整率；
+- 单位、尺度和归一化；
+- warnings 与 metrics 一致；
+- probe mapping 覆盖率；
+- bbox、模型版本和 confidence；
+- NO_DATA 或 PARTIAL_SUCCESS 的阈值。
+
+Agent 只能选择服务端允许的 Profile 引用，不能在 BuildSpec 中传入 `minimum_valid_rows`、`allow_empty_primary_dataset` 等 acceptance policy。
 
 ### 测试策略
 
-测试应锁定验证不变量和 Profile 结果，不应依赖全局 `check_id` 固定顺序。
-
----
+测试应锁定三项架构不变量和 Profile 结果，不应依赖全局 `check_id` 固定顺序，也不应把某个数据族的具体列规则提升为全局架构。
 
 ## 15. ADR-013：置信度先做可解释等级，不做虚假概率
 
@@ -534,18 +587,19 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 ### 决策
 
-- V2 契约和 V2 表达闭环并行加入；
+- V2 自包含 DatasetBuildSpec 和表达闭环并行加入；
+- 不新增 DatasetRequest 或 BuildRecipe；
 - 旧 `run_research_pipeline` 作为兼容 facade；
 - 先抽取可靠性内核，再迁来源；
+- 单独补齐 WorkflowRecipe 从 PROMOTED 到 SourceAsset 的生产消费闭环；
 - 先迁 GDC/Xena，后迁 GEO；
+- RunStatus、BuildResult、ValidationResult 和 Publication 双轨迁移；
 - V2 前端和缓存双轨；
 - 达到验收门槛后删除 Legacy。
 
 ### 原因
 
-现有 Pipeline 有大量可靠性测试和复杂恢复语义。大爆炸重写风险高，且很容易丢掉比业务流程更成熟的基础设施。
-
----
+现有 Pipeline 有大量可靠性测试和复杂恢复语义。大爆炸重写风险高，且很容易丢掉比业务流程更成熟的基础设施。WorkflowRecipe 和状态体系也有现存消费者，必须以兼容层和特征测试保护迁移。
 
 ## 19. 被否决或修正的方案
 
@@ -583,7 +637,7 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 ### 19.8 通过 artifact 数量判断运行成功
 
-否决。应使用显式 BuildOutcome 和发布状态。
+否决。应分别使用 RunStatus、BuildResult、ValidationResult 和 DatasetPublication。
 
 ---
 
@@ -699,8 +753,25 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 静态扫描发现大量 `except Exception/BaseException`。边界清理和 finalization 中有合理场景，但业务路径中过宽捕获会把数据不兼容、网络失败、解析错误和内部 Bug 混成一个错误。
 
-教训：建立错误分类，并让 BuildOutcome 使用稳定 reason code。
+教训：建立错误分类；执行错误进入 RunStatus/RunSummary，正常业务结果由 BuildResult 使用稳定 reason code。
 
+### 21.16 V2 容易以“通用化”名义重新堆叠抽象
+
+问题：发现固定 Pipeline 过重后，很容易同时引入 DatasetRequest、DatasetBuildSpec、BuildRecipe、BuildStep、Artifact 状态和业务 Outcome，形成另一套难以消费的框架。
+
+教训：每个正式契约必须有独立行为、生命周期和消费方。只用于传递到下一个对象且字段高度重复的 DTO 应保持内部或删除。
+
+### 21.17 用一个状态字段同时回答多个问题
+
+问题：`validated_intermediate/final` 同时表达“是否通过验证”和“是不是当前最新版本”；BuildOutcome 又混入 failed/cancelled 执行状态。
+
+教训：执行生命周期、正常业务结果、验证结果和发布版本必须正交。当前版本用指针表达，不修改历史产物状态。
+
+### 21.18 将 Validator 规则清单误当成架构
+
+问题：编码、列数、warning 计数、特定字段完整率等规则很重要，但都写在架构层会使每次 Profile 变化都像顶层协议变更。
+
+教训：架构只保留 provenance closure、Profile passed 和 atomic promotion；具体规则进入版本化 Profile 和测试。
 ---
 
 ## 22. 顶层不变量
@@ -709,26 +780,30 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 1. 一个主数据集只有一个 family；
 2. 一个主数据集只有一种 row grain；
-3. 主数据记录必须来自真实来源或可复算确定性派生；
-4. Agent 不能直接制造科研值；
-5. 无 SourceAsset/locator 的来源值不得作为高可信正式记录；
-6. 合并前必须通过 Compatibility Gate；
-7. 字段名相似不等于语义相同；
-8. 单位、尺度和归一化状态不得静默丢失；
-9. metadata 不能冒充 measurement；
-10. 空主数据不能标记 succeeded；
-11. NO_DATA 必须有明确用户输出；
-12. 部分成功必须列出失败来源；
-13. Validation 失败不得发布；
-14. 发布必须原子；
-15. 任何已发布数据都能定位到构建版本和处理版本；
-16. fixture 不能伪装 live；
-17. 置信度必须可解释；
-18. 复合需求需要拆分或显式关系模型；
-19. 新来源接入不应修改多个数据库组合分支；
-20. 前端不得通过错误字符串推断业务状态。
-
----
+3. Agent 直接生成自包含 DatasetBuildSpec，不维护重复的 DatasetRequest；
+4. Agent 不能直接制造科研值或修改服务端验收阈值；
+5. 主数据记录必须来自真实来源或可复算确定性派生；
+6. 无 SourceAsset/locator 的来源值不得作为高可信正式记录；
+7. WorkflowRecipe 只产出 SourceAsset，不参与集成、Validation 或发布；
+8. 生产自动发现只使用 PROMOTED WorkflowRecipe；
+9. 合并前必须通过 Compatibility Gate；
+10. 字段名相似不等于语义相同；
+11. 单位、尺度和归一化状态不得静默丢失；
+12. metadata 不能冒充 measurement；
+13. 空主数据不能标记 succeeded；
+14. NO_DATA 必须有明确用户输出；
+15. 部分成功必须列出失败来源；
+16. RunStatus、BuildResult、ValidationResult 和 Publication 不得混用；
+17. Validation 发布架构只依赖 provenance closure、Profile passed 和 atomic promotion；
+18. 发布必须原子；
+19. Publication 不可变，当前版本通过指针选择；
+20. Manifest 按 Artifact Role 分类，不固定审计文件名；
+21. 任何已发布数据都能定位到构建版本和处理版本；
+22. fixture 不能伪装 live；
+23. 置信度必须可解释；
+24. 复合需求需要拆分或显式关系模型；
+25. 新来源接入不应修改多个数据库组合分支；
+26. 前端不得通过错误字符串推断业务状态。
 
 ## 23. 代码评审检查表
 
@@ -747,10 +822,13 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 - provenance 到什么粒度？
 - confidence 如何确定？
 - Validation Profile 是什么？
-- 无数据时返回什么？
+- 产物属于哪个 Artifact Role？
+- 获取方式是 builtin 还是 PROMOTED WorkflowRecipe？
+- WorkflowRecipe 是否只产出 SourceAsset？
+- 无数据时 BuildResult 是什么？
+- 执行失败时是否由 RunStatus 表达？
+- 新版本是否使用 Publication supersedes 和 current pointer？
 - 是否会在其他模块新增来源特例？若是，抽象可能仍不正确。
-
----
 
 ## 24. 当前推荐 Demo 决策
 
@@ -762,7 +840,8 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 - GDC；
 - Xena；
-- GEO 在完成平台、probe mapping、尺度和归一化兼容性后加入。
+- GEO 在完成平台、probe mapping、尺度和归一化兼容性后加入；
+- 一个受控 PROMOTED WorkflowRecipe 来源，用于证明陌生来源获取闭环，但不作为主路径依赖。
 
 ### PubMed 角色
 
@@ -775,14 +854,16 @@ Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为�
 
 独立 `pathway_member` 数据集族，用于证明系统可扩展到第二个 Schema，不与表达数据合并。
 
-### 必测四种结果
+### 必测结果
 
 1. 成功：两来源兼容并合并；
 2. 部分成功：一个来源失败但另一个有效；
 3. 无数据：来源不适合或无目标记录，不生成假表；
-4. 执行失败：文件损坏或 Parser 异常，明确错误并不发布。
-
----
+4. 规格拒绝：复合 family 或非法 Profile 在执行前拒绝；
+5. 执行失败：文件损坏或 Parser 异常，由 RunStatus=FAILED 表达；
+6. 取消：不产生新 BuildResult 或 Publication；
+7. 版本更新：新 Publication supersedes 旧版本，current pointer 更新；
+8. Recipe 获取：PROMOTED WorkflowRecipe 产出 SourceAsset 后由 Adapter 解析。
 
 ## 25. 尚未完全决定的问题
 
@@ -810,7 +891,7 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 
 ### 25.6 聚合粒度
 
-用户有时需要 cohort-level 汇总，而现有表达长表是 gene-sample。应通过明确 aggregation recipe 生成另一个 Schema，不能在同表混合。
+用户有时需要 cohort-level 汇总，而现有表达长表是 gene-sample。应通过明确 aggregation operation/profile 生成另一个 Schema，不能在同表混合。
 
 ### 25.7 人工确认点
 

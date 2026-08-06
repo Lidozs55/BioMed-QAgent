@@ -1,9 +1,10 @@
-# BioMed-QAgent 数据集构建 Pipeline 重构设计
+# BioMed-QAgent 数据集构建 Pipeline 重构设计 V2
 
-> 文档状态：提案，作为下一阶段实现基线  
+> 文档状态：V2 提案，替代同名 V1，作为下一阶段实现基线  
 > 代码基线：用户提供的 `BioMed-QAgent-main.zip`，审计日期 2026-08-06  
-> 适用范围：后端 Agent、Pipeline、数据契约、缓存、事件、前端结果展示与测试迁移  
-> 目标：将当前固定五阶段、固定数据库组合、固定 `main_data.csv` 结构，重构为面向同类科学数据检索、标准化与整合的可信数据集构建系统
+> 适用范围：后端 Agent、Pipeline、WorkflowRecipe、数据契约、缓存、事件、前端结果展示与测试迁移  
+> 目标：将当前固定五阶段、固定数据库组合、固定 `main_data.csv` 结构，重构为面向同类科学数据检索、标准化与整合的可信数据集构建系统  
+> V2 重点：删除冗余 `DatasetRequest` 与 `BuildRecipe`，明确 Run、BuildResult、Validation 和 Publication 的正交边界
 
 ---
 
@@ -23,9 +24,9 @@
 
 本设计建议：
 
-> 保留可信执行内核，将 Pipeline 重构为 **数据集契约驱动的 Dataset Construction Runtime**。每次构建只对应一个主数据集族、一种行粒度和一套明确合并语义。Agent 负责理解需求、拆分复合请求、选择来源和生成构建规格；服务端负责下载、解析、归一化、兼容性判断、合并、校验、置信度、溯源和原子发布。
+> 保留可信执行内核，将 Pipeline 重构为 **数据集契约驱动的 Dataset Construction Runtime**。每次构建只对应一个主数据集族、一种行粒度和一套明确合并语义。Agent 负责理解需求、拆分复合请求、发现来源并直接生成自包含的 `DatasetBuildSpec`；服务端负责下载、解析、归一化、兼容性判断、合并、校验、置信度、溯源和原子发布。
 
-不引入完整 DAG 引擎。执行模型采用受控 `BuildRecipe`：按来源可并行检索、获取、解析和标准化，随后经过兼容性门禁、集成、验证和发布。步骤依赖由服务端模板和输入输出类型隐式确定，不允许 Agent 自由生成图边。
+不引入完整 DAG 引擎，也不新增与现有 `WorkflowRecipe` 重叠的 `BuildRecipe`。Dataset Runtime 使用服务端固定、可测试的构建骨架：来源获取可以 fan-out，随后统一 fan-in 至规范化、兼容性检查、集成、Profile 验证和原子发布。现有 `WorkflowRecipe` 只用于受控获取陌生来源并产出 `SourceAsset`，不得承担数据集级编排、合并、验证或发布。
 
 ---
 
@@ -371,21 +372,18 @@ Primary key: dataset_id + sample_id + gene_id + measurement_type
 
 会话层可将多个 Build 组织为一个复合回答，但不得将三类记录行合并。
 
-### 6.2 主数据与辅助数据分离
+### 6.2 主数据与非主数据按 Artifact Role 分离
 
-每个 Build 可以包含：
+每个 Build 至少声明一个 `primary_dataset`。其余产物按角色分类，不在架构层固定文件清单：
 
-- 一个主数据集；
-- Schema；
-- 样本维表或实体映射表；
-- Provenance sidecar；
-- 字段映射；
-- 质量报告；
-- 来源清单；
-- 被拒记录；
-- 搜索和诊断报告。
+- `supporting_dataset`：样本维表、队列信息或与主数据存在明确关系的辅助结构化数据；
+- `schema`：Canonical Schema、字段定义和关系说明；
+- `provenance`：记录或批次血缘、字段映射、实体映射和转换链；
+- `audit_report`：来源选择、搜索过程、质量报告、被拒记录、warning 和下载审计。
 
-辅助表不能用来制造主表非空。
+`SourceAsset` 保持独立身份，Manifest 通过 ID 引用，不要求复制进正式产物目录。物理文件名和一个角色拆成几个文件属于 Publisher 实现细节，不是顶层协议。
+
+辅助数据不能制造主数据非空，也不能改变主数据的 family、row grain 或测量语义。
 
 ### 6.3 来源通道与数据语义分离
 
@@ -439,13 +437,7 @@ Agent 可以：
 User request
     |
     v
-Dataset Requirement Parser (Agent)
-    |
-    v
-DatasetRequest
-    |
-    v
-Source Discovery / Vetting (Agent + skills)
+Agent intent parsing + source discovery
     |
     v
 DatasetBuildSpec
@@ -455,25 +447,30 @@ Spec Validator (trusted service)
     |
     v
 Dataset Build Runtime
-    |-- retrieve source A/B/...
-    |-- parse source batches
+    |-- acquire source A/B/...
+    |     |-- built-in acquisition
+    |     `-- WorkflowRecipe -> SourceAsset
+    |-- parse through SourceAdapter
     |-- canonicalize + normalize
     |-- compatibility gate
     |-- integrate
-    |-- validation profile
-    |-- confidence + provenance
-    `-- atomic publish
+    |-- Validation Profile
+    `-- atomic publication
     |
     v
-DatasetManifest + primary dataset + audit artifacts
+DatasetPublication
+    |-- DatasetManifest
+    |-- primary/supporting datasets
+    |-- schema + provenance
+    `-- audit reports
     |
     v
-Explicit BuildOutcome + user summary
+BuildResult + server-generated run summary
 ```
 
-### 7.1 为什么不采用完整 DAG
+### 7.1 为什么不采用完整 DAG，也不新增 BuildRecipe
 
-当前需求有并行来源，但不是任意工作流系统。完整 DAG 会引入：
+当前需求需要多来源 fan-out/fan-in，但不是任意工作流系统。完整 DAG 会引入：
 
 - 节点和边版本管理；
 - 图循环检测；
@@ -484,16 +481,31 @@ Explicit BuildOutcome + user summary
 - Agent 生成图的可靠性问题；
 - 更复杂的前端和恢复语义。
 
-这些成本不能直接提高赛题四项评分。
+这些成本不能直接提高赛题四项评分。另一方面，仓库已经存在 `WorkflowRecipe`，它描述受控 API、HTML 和 Browser 获取步骤。再定义一个数据集级 `BuildRecipe` 会产生两套命名相近、生命周期不同的 Recipe。
 
-建议使用受控 BuildRecipe：
+Dataset Runtime 因此采用服务端固定构建骨架：
 
 ```text
-discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
-         -> compatibility_gate -> integrate -> validate -> publish
+acquire[*] -> parse[*] -> canonicalize[*]
+           -> compatibility_gate -> integrate
+           -> validate_profile -> publish
 ```
 
-方括号步骤可按来源并发，依赖由服务端模板确定。需要新数据族时增加 Recipe/Profile，不让 Agent 自由声明图边。内部实现可用输入引用推导依赖，但不对外宣传或暴露 DAG。
+方括号步骤可按来源并发。内部可以记录 OperationAttempt 和输入输出引用，但这些是可靠执行实现，不构成 Agent 可编排 Recipe。
+
+`WorkflowRecipe` 的边界限定为 Acquisition：
+
+```text
+SkillBuilderAgent
+    -> WorkflowRecipe draft
+    -> controlled validation
+    -> verified/promoted recipe
+    -> acquire SourceAsset
+    -> SourceAdapter parse
+    -> source DataBatch
+```
+
+它只能产出 `SourceAsset`，不能产生 Canonical DataBatch、选择合并策略、选择发布阈值或直接发布 Dataset。
 
 ### 7.2 何时才需要升级为 DAG
 
@@ -502,24 +514,22 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 - 用户自定义任意分析链；
 - 多轮分支和条件节点成为常态；
 - 节点需要独立复用、重算和大规模并行；
-- 运行规模超过单机受控 Recipe；
-- 现有 Recipe 无法清晰表达依赖。
+- 运行规模超过单机固定构建骨架；
+- 固定构建骨架无法清晰表达核心任务。
 
 当前 Demo 和赛题均不满足这些条件。
 
----
-
 ## 8. 新核心契约
 
-建议新建 `backend/app/datasets/contracts.py`，所有契约继续继承 `ContractModel`。
+建议新建 `backend/app/datasets/contracts.py`，所有契约继续继承 `ContractModel`。正式领域契约直接从 `DatasetBuildSpec` 开始；自然语言解析中间结果可使用 Agent 内部 `ParsedDatasetIntent`，但不得进入持久化、API 或执行协议。
 
-### 8.1 DatasetRequest
+### 8.1 DatasetBuildSpec
 
-表达用户真正需要的数据集，而非数据库组合。
+Agent 在意图解析和来源发现后直接生成自包含的构建规格：
 
 ```json
 {
-  "request_id": "dsreq_...",
+  "build_id": "build_...",
   "objective": "比较 TP53 在结直肠癌肿瘤与正常样本中的基因表达",
   "dataset_family": "gene_expression",
   "row_granularity": "gene_sample_measurement",
@@ -539,24 +549,15 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
     "measurement_value",
     "measurement_unit"
   ],
-  "preferred_sources": ["gdc", "ucsc_xena"],
-  "output_format": "csv"
-}
-```
-
-### 8.2 DatasetBuildSpec
-
-服务端可执行的声明式构建规格。
-
-```json
-{
-  "build_id": "build_...",
-  "request_ref": "dsreq_...",
   "schema_ref": "gene_expression.long.v1",
   "source_bindings": [
     {
       "binding_id": "srcbind_gdc",
       "source": "gdc",
+      "acquisition": {
+        "mode": "builtin",
+        "provider_id": "gdc.files.v1"
+      },
       "adapter_id": "gdc.expression.star_counts.v1",
       "accession": "TCGA-COAD",
       "parameters": {
@@ -564,26 +565,29 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
       }
     },
     {
-      "binding_id": "srcbind_xena",
-      "source": "ucsc_xena",
-      "adapter_id": "xena.gene_expression.v1",
-      "accession": "...",
+      "binding_id": "srcbind_custom",
+      "source": "example_repository",
+      "acquisition": {
+        "mode": "workflow_recipe",
+        "recipe_id": "recipe_...",
+        "recipe_version": 3
+      },
+      "adapter_id": "generic.tabular.expression.v1",
       "parameters": {}
     }
   ],
-  "normalization_profile": "gene_expression.tcga_compatible.v1",
+  "normalization_profile_ref": "gene_expression.tcga_compatible.v1",
   "merge_strategy": "append_by_canonical_row",
-  "validation_profile": "gene_expression.release.v1",
-  "acceptance_policy": {
-    "minimum_valid_rows": 1,
-    "minimum_successful_sources": 1,
-    "allow_partial_sources": true,
-    "allow_empty_primary_dataset": false
-  }
+  "validation_profile_ref": "gene_expression.release.v1",
+  "output_format": "csv"
 }
 ```
 
-### 8.3 DatasetSchema
+`DatasetBuildSpec` 同时承担用户语义和执行规格，避免 `DatasetRequest -> DatasetBuildSpec` 两个对象之间出现重复、漂移和跨引用读取。
+
+Agent 可以选择服务端允许的 `validation_profile_ref`，但不能直接传入 `minimum_valid_rows`、`allow_empty_primary_dataset` 等验收阈值。阈值、部分成功策略和人工复核要求属于服务端版本化 Profile。
+
+### 8.2 DatasetSchema
 
 ```json
 {
@@ -626,9 +630,14 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 - `description`
 - `derivation_policy`
 
-### 8.4 SourceBinding 与 AdapterDescriptor
+### 8.3 SourceBinding 与 AdapterDescriptor
 
-`SourceBinding` 记录本次使用的来源、查询、accession、版本和 Adapter。`AdapterDescriptor` 在 Registry 中声明：
+`SourceBinding` 记录本次使用的来源、查询、accession、版本、获取方式和解析 Adapter。获取方式只能是：
+
+- `builtin`：由可信内置获取器执行；
+- `workflow_recipe`：生产默认引用已提升的 `WorkflowRecipe`；受限试用可在 HIL 确认后引用已验证版本。可信解释器执行后只产出 `SourceAsset`。
+
+`AdapterDescriptor` 在 Registry 中声明：
 
 - 可处理的 source；
 - 可产生的 dataset family；
@@ -640,7 +649,9 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 - 资源限制；
 - 允许的参数 Schema。
 
-### 8.5 DataBatch
+`WorkflowRecipe` 不属于 Dataset 核心契约。它是 Acquisition 子系统中的声明式、非代码获取描述；“非可执行”应理解为“不包含任意代码”，而不是“不会运行”。
+
+### 8.4 DataBatch
 
 替代当前语义不足的 `ParsedDataset`：
 
@@ -663,7 +674,7 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 
 全程保持文件型和流式处理，不再转换成内存 `rows: list[dict]`。
 
-### 8.6 FieldMapping
+### 8.5 FieldMapping
 
 字段映射必须是正式产物和执行输入，而非字符串算法隐式结果。
 
@@ -684,7 +695,7 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 
 字符串相似度只能生成 `proposed` 映射，未经 Schema Registry、Adapter 或人工确认不得用于正式合并。
 
-### 8.7 ProvenanceRecord
+### 8.6 ProvenanceRecord
 
 建议以 sidecar 保存记录级或批次级血缘，主 CSV 保留最小引用字段：`record_id`、`source_id`、`asset_id`、`provenance_id`。
 
@@ -712,7 +723,7 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 
 对于图表提取需额外记录 PDF/图片 asset、页码、bounding box、模型、模型版本、提示摘要、提取档位和人工复核状态。
 
-### 8.8 ConfidenceRecord
+### 8.7 ConfidenceRecord
 
 置信度不是模型给出的单一神秘概率，建议分通道和组件：
 
@@ -734,89 +745,152 @@ discover -> select -> retrieve[*] -> parse[*] -> normalize[*]
 }
 ```
 
-确定性官方 API 可以批次级默认 high，但仍需保留解析器版本、映射状态和质量异常。模型提取数据必须逐条有置信度，不允许空值通过发布门禁。
+确定性官方 API 可以批次级默认 high，但仍需保留解析器版本、映射状态和质量异常。模型提取数据必须逐条有置信度，是否允许发布由 Validation Profile 判断。
 
-### 8.9 BuildOutcome
+### 8.8 BuildResult
+
+`BuildResult` 只描述一个正常结束的 Dataset Build 的业务结果：
 
 ```text
 SUCCEEDED
 PARTIAL_SUCCESS
 NO_DATA
 SPEC_REJECTED
-EXECUTION_FAILED
-CANCELLED
 ```
 
-每个 outcome 包含：
+每个结果包含：
 
-- `primary_dataset_status`
 - `valid_row_count`
 - `successful_sources`
 - `rejected_sources`
-- `available_artifacts`
+- `available_artifact_roles`
+- `publication_id`（可空）
 - `reason_codes`
 - `user_summary`
 - `recommended_next_action`
 
-`RunStatus` 继续表示执行生命周期，`BuildOutcome` 表示业务结果，二者不要混用。
+`RunStatus` 独立表示执行生命周期：
 
----
+```text
+QUEUED
+RUNNING
+COMPLETED
+FAILED
+CANCELLED
+```
+
+只有 `RunStatus=COMPLETED` 才产生 `BuildResult`。Parser 崩溃对应 `RunStatus=FAILED`，用户取消对应 `RunStatus=CANCELLED`，不再重复映射成 `EXECUTION_FAILED` 或 `CANCELLED` BuildResult。
+
+### 8.9 ValidationResult、DatasetManifest 与 DatasetPublication
+
+三个概念保持正交：
+
+- `ValidationResult`：某个 Manifest digest 是否通过指定 Profile；
+- `DatasetManifest`：不可变产物清单，按 Artifact Role 引用文件和 SourceAsset；
+- `DatasetPublication`：通过门禁后原子提升的正式版本。
+
+不定义 `validated_intermediate` / `validated_final`。第一轮结果和后续修订都是不可变 Publication，使用：
+
+```text
+publication_id
+manifest_ref
+validation_result_ref
+published_at
+supersedes_publication_id
+```
+
+任务或会话只保存 `current_publication_id`。所谓“final”只是当前指针，不是 Artifact 固有状态。
 
 ## 9. 执行模型与组件边界
 
-### 9.1 Requirement Parser
+### 9.1 Agent Intent Parser 与 Source Planner
 
-输入自然语言，输出 `DatasetRequest`。职责：
+输入自然语言，直接输出 `DatasetBuildSpec`。Agent 内部可先形成不持久化的 `ParsedDatasetIntent`，用于：
 
 - 提取目标数据族；
 - 确定一行含义；
 - 提取实体和队列条件；
 - 确定必要字段；
 - 检测复合需求并拆分；
+- 搜索和筛选候选来源；
+- 形成 `source_bindings`；
 - 对无法判断的关键语义请求一次高价值澄清。
 
-不得：选择不存在的 Schema、产生科研数值、绕过 Spec Validator。
+不得：选择不存在的 Schema、产生科研数值、写入服务端验收阈值、绕过 Spec Validator。
 
-### 9.2 Source Discovery 与 Vetting
-
-使用现有 Skill、Subagent 和 Recipe 能力，产出候选来源及其：
-
-- 数据族；
-- 样本/记录范围；
-- 平台和测量类型；
-- 文件可用性；
-- 字段预览；
-- 单位和归一化状态；
-- 选择或拒绝理由。
-
-PubMed 在表达数据 Build 中主要承担来源发现、数据集关联和证据说明，不把论文元数据行追加到表达主表。
-
-### 9.3 Spec Validator
+### 9.2 Spec Validator
 
 在下载大文件前执行：
 
 - Schema 是否存在；
 - 数据族和行粒度是否明确；
-- Adapter 是否支持该数据族；
+- required fields 是否属于 Schema；
+- Adapter 或 WorkflowRecipe 是否支持该数据族；
 - 参数是否合法；
 - 来源组合是否有潜在兼容性；
 - 资源预算是否可接受；
 - 合并策略是否适用；
-- 空结果和部分成功策略是否明确。
+- `validation_profile_ref` 是否在服务端 allowlist 中。
 
 这将替代当前数据库组合 allowlist 作为核心准入机制。可保留来源级安全 allowlist，但不再用来源集合代替语义兼容性。
 
-### 9.4 Source Adapter
+### 9.3 Acquisition Provider
+
+Acquisition Provider 统一两种获取路径：
+
+1. 内置获取器：已有官方 API、受控下载器和固定集成；
+2. `WorkflowRecipeSourceFetcher`：由 `RecipeExecutor` 解释执行 `WorkflowRecipe`，产出 `SourceAsset`。
+
+两条路径都必须：
+
+- 受 egress、host、timeout、rate limit 和凭据边界约束；
+- 生成 DownloadAttempt 或 RecipeAttempt；
+- 校验内容、hash 和 SourceAsset；
+- 只把 SourceAsset 交给后续 Adapter。
+
+### 9.4 WorkflowRecipe 生命周期与消费闭环
+
+仓库当前已有 `WorkflowRecipe`、`WorkflowRecipeStore`、`RecipeExecutor` 和 SkillBuilderAgent，但正式数据集路径尚未形成稳定消费闭环。V2 必须明确：
+
+```text
+DRAFT
+  -> controlled validation
+VERIFIED
+  -> limited trial / promotion request
+PROMOTED
+  -> production Dataset Build discovery and execution
+REJECTED
+  -> never execute
+```
+
+当前代码中需要修正的具体边界：
+
+- `RecipeExecutor.execute()` 当前要求 `VERIFIED`；
+- `find_verified()` 当前只返回 `VERIFIED`；
+- Recipe 提升为 `PROMOTED` 后，正式发现和执行路径反而可能不可达。
+
+V2 应让生产 Build 只自动发现 `PROMOTED`；`VERIFIED` 只能在明确受限试用或 HIL 确认下引用。Recipe 执行结果必须经 Workspace 校验和提交后形成 SourceAsset，再进入 SourceAdapter。
+
+`WorkflowRecipe` 不得：
+
+- 产生 Canonical DataBatch；
+- 声明跨来源依赖；
+- 执行数据集集成；
+- 选择 Validation Profile；
+- 决定发布；
+- 包含 Python、JavaScript、Shell 等任意代码字段。
+
+### 9.5 Source Adapter
 
 每个 Adapter 封装：
 
 ```text
-discover/describe -> acquire -> parse -> emit source DataBatch
+inspect SourceAsset -> parse -> emit source DataBatch
 ```
 
-Adapter 不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipeline/processing/*` 和 `integrations/*` 可逐步迁入 Adapter，而不重写下载安全基础设施。
+Adapter 不负责来源获取，也不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipeline/processing/*` 和 `integrations/*` 需按职责拆分：获取逻辑进入 Acquisition Provider，解析逻辑进入 Adapter，下载安全基础设施继续复用。
 
-### 9.5 Canonicalizer
+### 9.6 Canonicalizer
 
 职责：
 
@@ -826,7 +900,7 @@ Adapter 不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipe
 - 转换可证明等价的单位；
 - 保留原值、转换规则和版本；
 - 生成 Canonical DataBatch；
-- 生成 mapping、normalization 和 rejected-record sidecar。
+- 生成 mapping、normalization 和 rejected-record 审计信息。
 
 禁止：
 
@@ -835,7 +909,7 @@ Adapter 不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipe
 - 丢弃原始单位与尺度；
 - 用列名相似度自动确认语义。
 
-### 9.6 Compatibility Gate
+### 9.7 Compatibility Gate
 
 合并前逐项判断：
 
@@ -852,7 +926,7 @@ Adapter 不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipe
 
 输出：`compatible`、`compatible_after_transform` 或 `incompatible`，附理由和影响行数。
 
-### 9.7 Integrator
+### 9.8 Integrator
 
 只执行显式策略：
 
@@ -871,117 +945,121 @@ Adapter 不负责跨来源合并。现有 `skills/builtin/acquisition/*`、`pipe
 - 保留冲突还是拒绝；
 - 冲突记录的 provenance。
 
-### 9.8 Validation Engine
+### 9.9 Validation Engine
 
-采用 `ValidationProfile`：
+架构层只规定三条发布不变量：
 
-通用规则：
+1. **Provenance closure**：正式记录可追溯到 SourceAsset、源定位、Parser/Adapter 版本以及字段映射和转换版本；
+2. **Validation Profile passed**：当前 dataset family 对应的服务端 Profile 对目标 Manifest digest 判定通过；
+3. **Atomic promotion**：Publisher 只原子提升已验证、引用闭合且 staging 完整的 Manifest。
 
-- 文件存在、hash、编码、Schema、类型；
-- 行数与统计一致；
-- 主键唯一性；
-- 外键闭合；
-- SourceAsset 与 DownloadAttempt 闭合；
-- Provenance 可定位；
-- 映射和转换版本存在；
-- 置信度必填规则；
-- 产物清单闭合。
+CSV 编码、列数稳定、主键唯一、表达值完整率、warnings 与 metrics 一致、probe mapping 覆盖率和 bbox/model 元数据等均属于具体 Profile 的规则与测试，不上升为全局架构门禁。
 
-表达数据规则：
+`NO_DATA` 不要求“必需主 artifact 非空”；它应通过专门 Profile/结果规则证明本次没有可发布主数据，并保留足够审计证据。
 
-- `gene_id`、`sample_id`、测量值完整率；
-- 数值可解析且符合声明尺度；
-- measurement type、unit、normalization state 一致；
-- probe 映射覆盖率；
-- 样本类型有效；
-- 目标实体是否存在；
-- 跨来源重复和冲突报告。
+### 9.10 Publisher
 
-图表提取规则：
+继续使用现有 staging、任务锁、flush、manifest 验证和原子 rename。发布输入为：
 
-- 页码/bbox/asset/model 存在；
-- 轴和单位已解析；
-- confidence 非空；
-- 低置信值按策略进入 rejected 或 requires_review。
+- DatasetManifest；
+- 与该 Manifest digest 对应的通过状态 ValidationResult；
+- 完整 staging 内容。
 
-### 9.9 Publisher
-
-继续使用现有 staging、任务锁、flush、manifest 验证和原子 rename。发布对象改为 DatasetManifest V2，而非固定包文件集合。
-
----
+发布后生成不可变 `DatasetPublication`。新版本通过 `supersedes_publication_id` 关联旧版本，任务只更新 `current_publication_id`，不修改旧 Artifact 的验证状态。
 
 ## 10. 产物设计
 
-建议目录：
+DatasetManifest 使用 Artifact Role，而不是固定物理文件清单：
+
+```text
+primary_dataset
+supporting_dataset
+schema
+provenance
+audit_report
+```
+
+示例目录仅用于说明一种 Publisher 实现，不构成协议：
 
 ```text
 artifacts/
   dataset_manifest.json
   data/
     gene_expression.csv
+    sample_metadata.csv
   schemas/
     gene_expression.long.v1.json
   provenance/
     record_lineage.jsonl
-  mappings/
     field_mapping.csv
-    entity_mapping.csv
-  quality/
+  reports/
     validation_report.json
-    quality_summary.json
+    source_selection.json
     rejected_records.csv
     warnings.csv
-  sources/
-    source_list.csv
-    source_assets.csv
-    download_log.csv
-  auxiliary/
-    sample_metadata.csv
-    search_report.json
+```
+
+Manifest 中每个 artifact 至少声明：
+
+```json
+{
+  "artifact_id": "artifact_...",
+  "role": "audit_report",
+  "media_type": "application/json",
+  "path": "reports/source_selection.json",
+  "sha256": "...",
+  "row_count": null
+}
 ```
 
 `dataset_manifest.json` 至少包含：
 
-- 构建 ID、请求 ID、版本；
-- 主数据路径；
+- 构建 ID、版本和 Manifest digest；
+- 主数据 artifact ID；
 - dataset family；
 - row granularity；
 - Schema 引用；
 - 主键；
 - 行数和 hash；
-- 来源；
+- SourceAsset 引用；
 - Adapter 和 Parser 版本；
 - normalization/validation profile；
-- outcome；
-- 置信度摘要；
+- confidence 摘要；
 - provenance 覆盖率；
-- 辅助 artifact 清单。
+- 按角色分类的 artifact 清单。
 
-为比赛 Demo，可额外在根目录提供易下载的 `dataset.csv`，但所有程序必须从 manifest 识别主数据，不得依赖固定文件名。
+为比赛 Demo，可额外提供易下载的 `dataset.csv`，但所有程序必须从 Manifest 的 `primary_dataset` role 识别主数据，不得依赖固定文件名。
 
 ### 10.1 无数据时的产物
 
-`NO_DATA` 不发布空主数据集。可以发布已验证的过程证据：
+`NO_DATA` 不发布空主数据集。它可以生成一个已验证的审计型 Publication，只包含：
 
-- `search_report.json`
-- `source_candidates.csv`
-- `source_rejection_report.csv`
-- `download_log.csv`
-- `run_summary.json`
+- `schema`
+- `provenance`（如已发生来源定位和转换）
+- `audit_report`
 
-这些文件必须清楚标记为诊断和搜索结果，而非科研测量数据。
+来源候选、拒绝原因、下载日志、搜索过程和运行摘要都归入 `audit_report`，不在架构层为每种报告规定单独文件名。
 
 ### 10.2 部分成功
 
-只有至少一个来源产出大于零的合法主数据记录时，才允许 `PARTIAL_SUCCESS`。Manifest 必须列出：
+只有至少一个来源产出大于零的合法主数据记录，并通过所选 Validation Profile 时，才允许 `PARTIAL_SUCCESS`。Manifest 和 BuildResult 必须列出：
 
 - 成功来源；
 - 失败/拒绝来源；
 - 影响范围；
 - 是否降低覆盖度；
-- 是否仍满足最小验收策略。
+- Profile 是否仍允许正式发布。
 
----
+### 10.3 Publication 版本关系
+
+每次正式发布生成不可变 Publication。后续修订不修改前一版状态，而是：
+
+```text
+publication_v2.supersedes_publication_id = publication_v1
+task.current_publication_id = publication_v2
+```
+
+前端的“当前结果”来自指针，不来自 `validated_final` 等可变 Artifact 状态。
 
 ## 11. 避免会话无输出和空表的完整策略
 
@@ -989,20 +1067,27 @@ artifacts/
 
 Runtime 应直接发布：
 
-- requirement parsed；
+- build spec validated；
 - source candidate found/rejected；
 - download started/completed；
 - parsed row count；
 - normalization coverage；
 - compatibility result；
 - validation result；
-- outcome。
+- publication result；
+- build result。
 
 即使 Agent 暂时没有文本 token，用户也能看到可解释进度。
 
 ### 11.2 终态必须有结构化摘要
 
-每次 Run 无论成功与否都生成 `BuildOutcome`，并由服务端提供基础终结文本。Agent 可补充解释，但不能成为唯一输出来源。
+服务端始终生成 `RunSummary`：
+
+- `RunStatus=COMPLETED` 时附 `BuildResult`；
+- `RunStatus=FAILED` 时附稳定错误分类和已保留诊断；
+- `RunStatus=CANCELLED` 时说明取消点和未发布状态。
+
+Agent 可补充解释，但不能成为唯一输出来源。
 
 ### 11.3 明确禁止以下回退
 
@@ -1011,20 +1096,31 @@ Runtime 应直接发布：
 - 将 warning 当作对语义错误的豁免；
 - 因 artifact 数量为零直接推断内部失败；
 - 通过错误字符串让前端猜测 no_data；
-- 重试同一不适用数据集直到超时。
+- 重试同一不适用数据集直到超时；
+- 用 `validated_intermediate` / `validated_final` 混合表达验证和当前版本。
 
-### 11.4 终态判定示例
+### 11.4 状态正交关系
 
-| 情形 | RunStatus | BuildOutcome | 主数据 |
+| 维度 | 负责问题 | 典型状态 |
+|---|---|---|
+| `RunStatus` | 执行是否仍在运行、失败或取消 | queued/running/completed/failed/cancelled |
+| `BuildResult` | 正常结束后得到了什么数据结果 | succeeded/partial_success/no_data/spec_rejected |
+| `ValidationResult` | 某 Manifest digest 是否通过 Profile | passed/failed |
+| `DatasetPublication` | 哪个不可变版本已正式提升 | publication ID + supersedes |
+| `current_publication_id` | 会话当前展示哪一版 | 指针 |
+
+这些状态不得相互替代。
+
+### 11.5 终态判定示例
+
+| 情形 | RunStatus | BuildResult | Publication |
 |---|---|---|---|
-| 两来源成功并通过验证 | completed | succeeded | 有 |
-| 一来源成功，一来源下载失败，仍满足策略 | completed | partial_success | 有 |
-| 找到来源但全部不兼容 | completed | no_data | 无 |
+| 两来源成功并通过验证 | completed | succeeded | 有主数据 |
+| 一来源成功，一来源下载失败，Profile 允许部分发布 | completed | partial_success | 有主数据 |
+| 找到来源但全部不兼容 | completed | no_data | 可选审计型 Publication |
 | 用户要求表达+突变，未允许拆分 | completed | spec_rejected | 无 |
-| Parser 崩溃 | failed | execution_failed | 无 |
-| 用户取消 | cancelled | cancelled | 无或未发布 |
-
----
+| Parser 崩溃 | failed | 不产生 | 无 |
+| 用户取消 | cancelled | 不产生 | 无新 Publication |
 
 ## 12. 后端重构目录与职责
 
@@ -1035,15 +1131,19 @@ backend/app/datasets/
   contracts.py
   schema_registry.py
   adapter_registry.py
-  recipe.py
   compatibility.py
   integration.py
-  publish.py
-  outcomes.py
+  publication.py
+  results.py
   runtime/
     executor.py
+    operations.py
     attempts.py
     checkpoint.py
+  acquisition/
+    provider.py
+    builtin.py
+    workflow_recipe.py
   adapters/
     base.py
     gdc.py
@@ -1073,36 +1173,39 @@ backend/app/datasets/
 
 | 当前模块 | 目标处理 |
 |---|---|
-| `pipeline/runner.py` | 抽取可靠性内核到 `datasets/runtime/executor.py`；保留 Legacy wrapper |
-| `pipeline/stages/discovery.py` | 来源发现逻辑迁到 Skills/Adapters；不再是全局 Stage |
-| `pipeline/stages/acquisition.py` | 下载编排迁到 Adapter；复用安全下载与 SourceAsset |
+| `pipeline/runner.py` | 抽取可靠性内核到 `datasets/runtime/executor.py`；保留 Legacy facade |
+| `pipeline/stages/discovery.py` | 来源发现逻辑迁到 Agent/Skills；不再是全局 Stage |
+| `pipeline/stages/acquisition.py` | 下载编排迁到 Acquisition Provider；复用安全下载与 SourceAsset |
 | `pipeline/stages/processing.py` | 拆成 Adapter parser、Canonicalizer、Integrator；删除占位行 |
-| `pipeline/stages/artifact_build/` | 改为 manifest-driven Publisher |
+| `pipeline/stages/artifact_build/` | 改为 role-based Manifest 和 DatasetPublication |
 | `pipeline/stages/validation/` | 拆为 profile-driven Validation Engine |
-| `domain/contracts/task.py` | 保留 V1；新增 DatasetRequestV2/BuildSpec |
+| `domain/contracts/task.py` | 保留 V1；新增自包含 `DatasetBuildSpec`，不新增 `DatasetRequestV2` |
 | `domain/contracts/pipeline.py` | StageAttempt 逐步替换为 OperationAttempt/BuildAttempt |
 | `domain/processing.py` | 删除旧内存 ParsedDataset |
+| `domain/contracts/recipe.py` | 保留 Acquisition Recipe；修正文档中的“non-executable”为“non-code declarative”语义 |
+| `recipes/executor.py` | 支持生产执行 PROMOTED Recipe，并明确 VERIFIED 受限试用 |
+| `recipes/store.py` | 增加生产发现接口；修复 promoted 后无法被正式发现的问题 |
+| `skills/builtin/processing/create_skill/` | 保留 Recipe 开发/验证；补齐从推广到 Dataset Build 消费的闭环 |
 | `tools/alignment.py` | 降级为映射候选工具；禁止直接正式合并 |
 | `tools/cache_store.py` | 改成 Schema-aware Dataset Cache |
 | `agent_loop/agent.py` | 改为数据集需求和来源规划 Prompt |
 | `pipeline/tool.py` | 新增 Dataset Build 工具，旧工具作为兼容层 |
-| `runtime/manager.py` | RunStatus 与 BuildOutcome 解耦 |
+| `runtime/manager.py` | RunStatus、BuildResult、ValidationResult 和 Publication 分离 |
 
-### 12.2 不建议使用 `Operator` 作为所有概念的统一名称
+### 12.2 不创建通用 BuildRecipe 或公开 BuildStep
 
 项目当前最需要清晰边界，而非泛化抽象。建议使用明确术语：
 
+- `AcquisitionProvider`
 - `SourceAdapter`
 - `Canonicalizer`
 - `CompatibilityGate`
 - `Integrator`
 - `ValidationProfile`
 - `Publisher`
-- `BuildStep`
+- `OperationAttempt`
 
-这比通用 `Operator` 更容易维护和测试。
-
----
+构建顺序由 `DatasetBuildExecutor` 的固定骨架控制。`OperationAttempt` 用于恢复、事件和摘要，不成为 Agent 可声明的工作流节点。
 
 ## 13. Cache 重构
 
@@ -1146,17 +1249,18 @@ cache/datasets/<namespace>/<dataset_id>/
 1. 识别目标数据集族和行粒度
 2. 检测是否为复合请求，必要时拆分
 3. 搜索并 vet 候选来源
-4. 生成 DatasetBuildSpec
+4. 直接生成自包含 DatasetBuildSpec
 5. 调 validate_dataset_build_spec
 6. 调 execute_dataset_build
-7. 根据 BuildOutcome 汇报或生成新的 Build
+7. 根据 RunStatus/BuildResult 汇报或生成新的 Build
 ```
+
+意图解析中的 `ParsedDatasetIntent` 只在 Agent 内部存在，不持久化，也不作为工具参数。
 
 ### 14.2 建议工具接口
 
-优先三个接口：
+优先两个主接口：
 
-- `validate_dataset_request`
 - `validate_dataset_build_spec`
 - `execute_dataset_build`
 
@@ -1165,8 +1269,9 @@ cache/datasets/<namespace>/<dataset_id>/
 - `list_dataset_schemas`
 - `describe_source_adapter`
 - `preview_dataset_source`
+- `find_promoted_workflow_recipe`
 
-不要把所有来源特有参数继续平铺在一个 function tool 中。`source_bindings[].parameters` 应由 Adapter Schema 校验。
+不要把所有来源特有参数继续平铺在一个 function tool 中。`source_bindings[].parameters` 应由 Adapter 或 WorkflowRecipe input Schema 校验。
 
 ### 14.3 Prompt 关键规则
 
@@ -1175,11 +1280,10 @@ cache/datasets/<namespace>/<dataset_id>/
 - 复合请求拆分，不进行无依据宽表拼接；
 - 文献、网页和图像是来源通道，不自动成为主数据行；
 - Agent 不得传入自称来自论文的裸数字；
+- Agent 不得定义发布阈值或放宽 Validation Profile；
 - 没有合法数据时返回 NO_DATA；
 - 不要求机械查满所有数据库；覆盖度按相关数据源计算；
 - 只选择能提供目标 Schema 字段的来源。
-
----
 
 ## 15. 前端重构
 
@@ -1196,7 +1300,7 @@ operation_failed
 source_candidate_found
 source_candidate_rejected
 compatibility_evaluated
-build_outcome_ready
+build_result_ready
 ```
 
 兼容期可同时发送旧 `stage_*` 事件。前端改为基于 `operation_id`、`label`、`category` 渲染，不再依赖固定 StageName union。
@@ -1219,7 +1323,7 @@ build_outcome_ready
 
 ### 15.3 明确 outcome
 
-删除通过错误字符串识别 no_data 的方式。后端直接返回 `BuildOutcome` 枚举及 reason code。
+删除通过错误字符串识别 no_data 的方式。后端直接返回 `BuildResult` 枚举及 reason code；执行失败和取消由 `RunStatus` 表达。
 
 ---
 
@@ -1245,27 +1349,50 @@ build_outcome_ready
 
 工作：
 
-- 新增 DatasetRequest、DatasetBuildSpec、DatasetSchema、DataBatch、BuildOutcome；
+- 新增自包含 `DatasetBuildSpec`、`DatasetSchema`、`DataBatch`、`BuildResult`、`ValidationResult`、`DatasetManifest` 和 `DatasetPublication`；
+- 不新增正式 `DatasetRequest`；
 - 注册 `gene_expression.long.v1`；
 - 编写 Spec Validator；
+- 将验收阈值放入服务端 Validation Profile；
 - 不修改旧 Pipeline 执行。
 
 验收：
 
 - 复合请求可被拒绝或拆分；
 - 缺 family/granularity 的规格不能执行；
-- Adapter 参数通过正式 Schema 校验。
+- Agent 无法通过 Spec 自行允许空主表；
+- Adapter/Recipe 参数通过正式 Schema 校验。
 
 ### Phase 2：抽取可信执行内核
 
 工作：
 
 - 从 `PipelineRunner` 抽取通用任务锁、Attempt、digest、checkpoint、超时、取消和事件逻辑；
-- 定义 `BuildStep` 和受控 `BuildRecipe`；
-- 用旧五阶段 Recipe 验证行为等价；
+- 实现服务端固定 `DatasetBuildExecutor` 骨架；
+- 使用内部 Operation/OperationAttempt 记录来源 fan-out 和后续 fan-in；
+- 不定义 `BuildRecipe`，不允许 Agent 声明构建步骤；
 - `PipelineRunner` 变成 Legacy facade。
 
-验收：旧测试主要保持通过；新 executor 能运行最小空壳 Recipe。
+验收：旧可靠性测试主要保持通过；新 Executor 能运行最小固定骨架，并证明取消、恢复、digest 和事件行为不退化。
+
+### Phase 2.5：补齐 WorkflowRecipe Acquisition 闭环
+
+工作：
+
+- 明确 `WorkflowRecipe` 只用于 Acquisition；
+- 实现 `WorkflowRecipeSourceFetcher`；
+- `SourceBinding` 支持 `recipe_id + version`；
+- 生产发现只返回 PROMOTED Recipe；
+- VERIFIED Recipe 仅允许受限试用或 HIL 确认；
+- 修复 `RecipeExecutor.execute()`、Store discovery 和 promotion 状态之间的不一致；
+- Recipe 输出提交为 SourceAsset 后再交给 Adapter。
+
+验收：
+
+- promoted Recipe 能被正式 Dataset Build 发现和执行；
+- Recipe 不能绕过 SourceAsset；
+- Recipe 不能参与合并、Validation Profile 选择或发布；
+- 任意代码字段仍 fail closed。
 
 ### Phase 3：实现表达数据 V2 Demo 链路
 
@@ -1275,7 +1402,7 @@ build_outcome_ready
 - 实现文件型 canonicalization；
 - 实现表达 Compatibility Gate；
 - 实现显式 append/dedup 规则；
-- 生成 DatasetManifest V2；
+- 生成 role-based DatasetManifest V2；
 - 实现表达 Validation Profile；
 - 不再依赖 `main_data.csv`。
 
@@ -1284,33 +1411,37 @@ build_outcome_ready
 - 单 GDC、单 Xena、兼容 GDC+Xena 均可生成合法主表；
 - 不兼容单位/尺度会被拒绝；
 - provenance 可抽样回溯；
-- 重跑可复用成功步骤。
+- 重跑可复用成功 Operation。
 
 ### Phase 4：修复空表和终态语义
 
 工作：
 
 - 删除 metadata-only 主表占位路径；
-- 引入 BuildOutcome；
-- Runtime 不再把“无 artifact”自动视为内部失败；
+- 引入 `BuildResult`；
+- `RunStatus` 不再用 artifact 数量推导；
+- 删除 `validated_intermediate` / `validated_final` 类状态；
+- 增加不可变 Publication 与 `current_publication_id`；
 - 服务端保证终态摘要；
 - 前端直接展示 NO_DATA/PARTIAL_SUCCESS；
-- 增加诊断 artifact。
+- 审计报告通过 Artifact Role 发布。
 
 验收：
 
 - 没有表达数据时无假主表；
 - 会话仍给出明确原因和下一步；
-- 空表不能以 SUCCEEDED 发布。
+- 空表不能以 SUCCEEDED 发布；
+- failed/cancelled Run 不产生伪 BuildResult；
+- 新 Publication 不修改旧版本状态。
 
 ### Phase 5：迁移 GEO
 
 工作：
 
-- 将 GEO acquisition/parser 迁为 Adapter；
+- 将 GEO acquisition/parser 按 Acquisition Provider 与 Adapter 拆分；
 - 正式建模 platform、probe mapping、value scale 和 normalization；
 - 只有通过 Compatibility Gate 的 GEO 数据才能与其他表达数据整合；
-- 映射失败时保留独立来源诊断或 NO_DATA，不伪装 gene-level 数据。
+- 映射失败时保留审计报告或 NO_DATA，不伪装 gene-level 数据。
 
 验收：
 
@@ -1322,13 +1453,14 @@ build_outcome_ready
 
 工作：
 
-- Profile 化 Validation；
+- 架构层固定“provenance closure + Profile passed + atomic promotion”三项不变量；
+- 将 CSV、字段完整率、mapping、bbox 等具体规则迁入 Profile；
 - 实现 Confidence Contract；
 - 为 VLM 图表点填充置信度、页码/bbox/model 元数据；
 - 建立模型提取准入门禁；
 - 通用 provenance coverage 统计。
 
-验收：模型提取记录缺置信度或 source-of-record 时发布失败。
+验收：模型提取记录缺置信度或 source-of-record 时对应 Profile 失败，无法发布。
 
 ### Phase 7：Cache、前端和 API 完整迁移
 
@@ -1337,7 +1469,7 @@ build_outcome_ready
 - V2 Dataset Cache；
 - Manifest-driven ResultsViewer；
 - 通用 operation events；
-- API 返回 BuildOutcome；
+- API 分别返回 RunStatus、BuildResult、ValidationResult 和 Publication；
 - 双读双写迁移旧缓存和旧 artifact API。
 
 ### Phase 8：清理 Legacy
@@ -1351,9 +1483,8 @@ build_outcome_ready
 - `app/domain/processing.py` 旧 ParsedDataset；
 - 正式路径上的 `tools/alignment.merge_datasets`；
 - metadata-only 占位；
-- `run_research_pipeline` 旧参数面。
-
----
+- `run_research_pipeline` 旧参数面；
+- 任何 V2 `DatasetRequest` 或 `BuildRecipe` 临时实现。
 
 ## 17. 当前 Demo 的一步到位范围
 
@@ -1373,16 +1504,17 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 
 ### 17.1 Demo 必须展示
 
-- 用户自然语言 -> DatasetRequest；
+- 用户自然语言 -> 自包含 DatasetBuildSpec；
 - 选择来源及理由；
-- DatasetBuildSpec；
-- 下载和 SourceAsset；
+- Spec Validator；
+- 内置获取或 WorkflowRecipe 获取后形成 SourceAsset；
 - 字段映射、实体映射和单位说明；
 - Compatibility Gate；
 - 合并后的标准表；
 - 每条记录或批次来源；
-- Validation 报告；
+- Validation Profile 报告；
 - confidence/provenance 摘要；
+- DatasetPublication 和当前版本；
 - 一个来源失败时的 partial success；
 - 无数据时不生成假表。
 
@@ -1390,25 +1522,36 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 
 - 表达+突变+通路+文献混合大包；
 - Agent 自由 DAG；
+- Agent 自定义 BuildRecipe；
 - 大量研究结论生成；
 - 复杂统计分析；
 - 与评分无直接关系的多 Agent 编排细节。
-
----
 
 ## 18. 测试策略
 
 ### 18.1 契约测试
 
-- DatasetRequest 必填语义；
+- DatasetBuildSpec 同时包含 objective、family、granularity、Schema 和来源绑定；
 - family/granularity 与 Schema 一致；
-- Adapter 参数 Schema；
-- BuildOutcome 状态约束；
-- Manifest 主数据引用闭合。
+- required fields 属于目标 Schema；
+- Agent 不能内联 acceptance thresholds；
+- Adapter 和 WorkflowRecipe 参数 Schema；
+- RunStatus 与 BuildResult 组合约束；
+- ValidationResult 绑定精确 Manifest digest；
+- Publication 的 supersedes 关系与 current pointer；
+- Manifest 主数据引用和 Artifact Role 闭合。
 
-### 18.2 Adapter 合约测试
+### 18.2 Acquisition 与 Adapter 合约测试
 
-所有 Adapter 共享测试套件：
+所有 Acquisition Provider 共享：
+
+- 内置获取和 WorkflowRecipe 获取都只产出已校验 SourceAsset；
+- PROMOTED Recipe 可生产发现和执行；
+- VERIFIED Recipe 不能未经允许进入生产；
+- Recipe 不能包含任意代码字段；
+- Recipe 输出必须通过 Workspace 校验和 commit。
+
+所有 Adapter 共享：
 
 - 只读取成功 SourceAsset；
 - 输出 DataBatch 的 family/granularity 正确；
@@ -1416,7 +1559,7 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 - Parser 版本存在；
 - malformed 输入 fail closed；
 - 不静默截断；
-- 网络失败有明确错误码。
+- 获取失败和解析失败有不同错误码。
 
 ### 18.3 兼容性与集成测试
 
@@ -1426,16 +1569,26 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 - count 与 TPM 不静默合并；
 - GDC/Xena 镜像重复处理；
 - GEO probe mapping 不足拒绝或独立输出；
-- 冲突记录进入报告。
+- 冲突记录进入审计报告。
 
-### 18.4 Validation 测试
+### 18.4 Validation 与 Publication 测试
 
-- 0 行主表不得 success；
+架构不变量：
+
+- provenance 不闭合拒绝；
+- Profile 未通过拒绝；
+- Manifest digest 不匹配拒绝；
+- 原子发布失败不暴露半成品；
+- 新 Publication 不修改旧 Publication；
+- current pointer 只在成功发布后更新。
+
+Profile 规则示例：
+
+- 0 行主表不得 succeeded；
 - metadata 行不能满足表达完整性；
-- 缺 provenance 拒绝；
 - 低 confidence 模型值按策略拒绝；
 - 原文件篡改导致失败；
-- 原子发布失败不暴露半成品。
+- warnings、metrics、行数和映射覆盖率按 Profile 校验。
 
 ### 18.5 Runtime 测试
 
@@ -1445,21 +1598,22 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 - digest 变化触发重算；
 - partial success；
 - no data；
-- execution failed；
+- execution failure；
 - 事件重放；
-- 服务端终态摘要始终存在。
+- 服务端终态摘要始终存在；
+- failed/cancelled 不产生 BuildResult；
+- completed 必须产生合法 BuildResult。
 
 ### 18.6 前端测试
 
-- Manifest 主数据识别；
-- outcome 呈现；
-- 主数据/辅助/诊断分类；
+- Manifest 按 Artifact Role 识别主数据；
+- RunStatus 与 BuildResult 分开展示；
+- Publication 版本和 current pointer；
 - confidence/provenance 展示；
 - operation 事件；
 - 老事件兼容；
-- NO_DATA 不显示为红色内部错误。
-
----
+- NO_DATA 不显示为红色内部错误；
+- failed/cancelled 不伪装成 no_data。
 
 ## 19. 风险与控制
 
@@ -1497,41 +1651,46 @@ PubMed 用于发现和证据；Reactome 作为独立 `pathway_member` Build 展�
 
 重构达到可交付状态需同时满足：
 
-1. Agent 能输出明确 DatasetRequest；
+1. Agent 能直接输出自包含且可验证的 DatasetBuildSpec；
 2. 一个 Build 只能对应一个 family/granularity；
-3. GDC、Xena 表达数据通过 Adapter 和 Canonical Schema；
-4. 合并前执行 Compatibility Gate；
-5. 主数据不含 metadata-only 占位；
-6. 0 行结果为 NO_DATA，不是 success；
-7. 部分来源失败时能返回 PARTIAL_SUCCESS；
-8. 每条或每批数据可追溯到 SourceAsset；
-9. 字段映射、单位、归一化和版本可审计；
-10. 模型提取数据有强制置信度；
-11. Validation Profile 决定发布；
-12. 原子发布、恢复、取消和摘要链能力不退化；
-13. 前端从 manifest 识别主数据并显示 outcome；
-14. 旧 Pipeline 可在迁移期运行，最终有明确删除计划；
-15. 代表性成功、部分成功、无数据和失败案例均有自动化测试。
-
----
+3. Agent 不能通过 BuildSpec 修改服务端验收阈值；
+4. GDC、Xena 表达数据通过 Acquisition Provider、SourceAsset、Adapter 和 Canonical Schema；
+5. promoted WorkflowRecipe 能完成 Acquisition 消费闭环，且不能越权参与集成或发布；
+6. 合并前执行 Compatibility Gate；
+7. 主数据不含 metadata-only 占位；
+8. 0 行结果为 NO_DATA，不是 success；
+9. 部分来源失败时能返回 PARTIAL_SUCCESS；
+10. RunStatus、BuildResult、ValidationResult 和 Publication 状态正交；
+11. 每条或每批数据可追溯到 SourceAsset；
+12. 字段映射、单位、归一化和版本可审计；
+13. 模型提取数据有强制置信度；
+14. 发布只依赖 provenance closure、Profile passed 和 atomic promotion 三项架构不变量；
+15. Manifest 通过 Artifact Role 识别主数据和审计产物；
+16. 新 Publication 不修改旧版本，current pointer 正确更新；
+17. 原子发布、恢复、取消和摘要链能力不退化；
+18. 前端从 Manifest 识别主数据并分开展示执行与业务结果；
+19. 旧 Pipeline 可在迁移期运行，最终有明确删除计划；
+20. 代表性成功、部分成功、无数据、规格拒绝、执行失败和取消案例均有自动化测试。
 
 ## 21. 首批实施任务清单
 
 建议按以下顺序开工：
 
 1. 建立完整可运行基线并保存四类 golden outputs；
-2. 新增 `DatasetRequestV2`、`DatasetBuildSpec`、`DatasetSchema`、`BuildOutcome`；
-3. 注册 `gene_expression.long.v1`；
+2. 新增自包含 `DatasetBuildSpec`、`DatasetSchema`、`DataBatch`、`BuildResult`、`ValidationResult`、`DatasetManifest` 和 `DatasetPublication`；
+3. 注册 `gene_expression.long.v1` 与服务端 `gene_expression.release.v1`；
 4. 编写 Spec Validator 和 Compatibility Gate 单元测试；
-5. 从 PipelineRunner 抽取通用 Attempt/checkpoint/timeout/cancel/event 机制；
-6. 实现 GDC Expression Adapter；
-7. 实现 Xena Expression Adapter；
-8. 实现文件型 Canonicalizer 和显式 merge；
-9. 实现 DatasetManifest V2 和表达 Validation Profile；
-10. 删除 V2 路径中的 metadata-only 主表行为；
-11. 接入 BuildOutcome 与终态摘要；
-12. 前端增加 V2 manifest/outcome 展示；
-13. 完成成功、partial、no-data、tamper/recovery Demo；
-14. 再迁 GEO、Cache、Confidence 和图表通道。
+5. 从 PipelineRunner 抽取通用 Attempt/checkpoint/timeout/cancel/event 机制，实现固定 DatasetBuildExecutor；
+6. 定义 RunStatus、BuildResult、ValidationResult、Publication 和 current pointer 的状态约束；
+7. 修复 WorkflowRecipe VERIFIED/PROMOTED 发现与执行规则，实现 `WorkflowRecipeSourceFetcher`；
+8. 实现 GDC Expression Acquisition/Adapter；
+9. 实现 Xena Expression Acquisition/Adapter；
+10. 实现文件型 Canonicalizer 和显式 merge；
+11. 实现 role-based DatasetManifest V2、表达 Validation Profile 和原子 Publication；
+12. 删除 V2 路径中的 metadata-only 主表行为；
+13. 接入 BuildResult 与服务端终态摘要；
+14. 前端增加 V2 Manifest、Artifact Role、Publication 和 BuildResult 展示；
+15. 完成 success、partial、no-data、spec-rejected、failed、cancelled、tamper/recovery Demo；
+16. 再迁 GEO、Cache、Confidence 和图表通道。
 
-该顺序优先建立正确数据契约和可演示闭环，避免继续向旧 Pipeline 增加数据库组合分支。
+该顺序先建立正确数据契约、Recipe 获取闭环和状态边界，避免继续向旧 Pipeline 增加数据库组合分支，也避免 V2 再造一套通用编排框架。
