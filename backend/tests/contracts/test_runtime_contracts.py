@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from app.datasets.contracts import BuildResult, BuildResultStatus
 from app.domain.contracts import (
     AssistantDeltaPayload,
     AssistantReasoningDeltaPayload,
@@ -61,6 +62,7 @@ from app.domain.contracts import (
     generate_task_id,
 )
 from app.domain.contracts.enums import AttemptStatus
+from app.domain.contracts.runtime import PublicationSummary, RunSummary
 from pydantic import ValidationError
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -539,3 +541,72 @@ def test_subagent_runtime_contracts_validate_terminal_results_and_snapshot() -> 
             status=SubagentStatus.RUNNING,
             summary="Still working",
         )
+
+
+def test_run_summary_partial_projection_allowed() -> None:
+    # 旧事件重放：COMPLETED 无 build_result / FAILED 无 error_code 均合法（投影可部分）。
+    assert RunSummary(run_status="completed").build_result is None
+    assert RunSummary(run_status="failed").error_code is None
+    summary = RunSummary(
+        run_status="completed",
+        build_result=BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            reason_codes=["no_primary_data"],
+        ),
+        user_message="任务完成但未产出可发布的主数据。",
+    )
+    assert summary.build_result.reason_codes == ["no_primary_data"]
+
+
+def test_publication_summary_chain_links() -> None:
+    first = PublicationSummary(
+        publication_id="pub-run_1", manifest_sha256="a" * 64, published_at=datetime.now(UTC)
+    )
+    second = PublicationSummary(
+        publication_id="pub-run_2",
+        manifest_sha256="b" * 64,
+        supersedes_publication_id=first.publication_id,
+        published_at=datetime.now(UTC),
+    )
+    assert second.supersedes_publication_id == "pub-run_1"
+
+
+def test_run_record_summary_and_snapshot_publications() -> None:
+    run = RunRecord(
+        run_id="run_1", task_id="task_1", request_id="req_1", status="completed",
+        input="topic", created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        summary=RunSummary(run_status="completed"),
+    )
+    assert run.summary is not None
+    snapshot = TaskSnapshot(
+        task=TaskSummary(
+            task_id="task_1",
+            mode=TaskMode.AGENT,
+            title="t",
+            status="completed",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
+        runs=[run],
+        current_publication_id="pub-run_1",
+        publications=[
+            PublicationSummary(
+                publication_id="pub-run_1",
+                manifest_sha256="a" * 64,
+                published_at=datetime.now(UTC),
+            )
+        ],
+    )
+    assert snapshot.current_publication_id == "pub-run_1"
+    assert snapshot.publications[0].manifest_sha256 == "a" * 64
+
+
+def test_task_summary_has_no_no_artifact_failure_field() -> None:
+    from app.domain.contracts.runtime import TaskSummary
+
+    task = TaskSummary(
+        task_id="task_1", mode="agent", databases=[], title="t",
+        status="completed", created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+    )
+    assert not hasattr(task, "no_artifact_failure")
