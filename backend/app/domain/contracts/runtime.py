@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import Literal, Self
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import BuildResult
 from app.domain.contracts.enums import (
     ErrorCode,
     MessageRole,
@@ -20,62 +20,8 @@ from app.domain.contracts.enums import (
     TaskMode,
 )
 
-if TYPE_CHECKING:
-    from app.datasets.contracts import BuildResult
 
-
-def _bind_external_forward_refs() -> None:
-    """Bind ``BuildResult`` from ``app.datasets.contracts`` into this module.
-
-    ``RunSummary.build_result`` references a type owned by ``app.datasets``,
-    which cannot be imported at the top of this module: the ``app.domain.
-    contracts`` package ``__init__`` imports this module (via ``events``) while
-    ``app.datasets.contracts`` is itself still importing ``app.domain.contracts``
-    — a module-level import here would hit a partially-initialized module from
-    either side. The name is therefore kept under ``TYPE_CHECKING`` and bound
-    lazily here, before pydantic rebuilds any model that references it (see
-    ``_DeferredDatasetsRefsMixin.model_rebuild``). By the time a model is first
-    used, the full package graph has finished importing and the import below
-    succeeds; the bind is idempotent.
-    """
-
-    if "BuildResult" in globals():
-        return
-    try:
-        from app.datasets.contracts import BuildResult  # noqa: PLC0415
-    except ImportError:
-        return  # still inside the import window; retried on the next rebuild
-    globals()["BuildResult"] = BuildResult
-
-
-class _DeferredDatasetsRefsMixin:
-    """Resolve cross-package forward references before pydantic rebuilds.
-
-    pydantic defers schema generation for models whose annotations reference
-    not-yet-importable names and retries automatically on first use via
-    ``model_rebuild``; this mixin binds those names (``_bind_external_forward_refs``)
-    so the retry can resolve them.
-    """
-
-    @classmethod
-    def model_rebuild(
-        cls,
-        *,
-        force: bool = False,
-        raise_errors: bool = True,
-        _parent_namespace_depth: int = 2,
-        _types_namespace: Mapping[str, Any] | None = None,
-    ) -> bool | None:
-        _bind_external_forward_refs()
-        return super().model_rebuild(
-            force=force,
-            raise_errors=raise_errors,
-            _parent_namespace_depth=_parent_namespace_depth,
-            _types_namespace=_types_namespace,
-        )
-
-
-class RunSummary(_DeferredDatasetsRefsMixin, ContractModel):
+class RunSummary(ContractModel):
     """Server-generated per-run outcome (ARCHITECTURE §9.2/9.4).
 
     Partial projection is legal: legacy events may lack ``build_result``
@@ -98,7 +44,7 @@ class PublicationSummary(ContractModel):
     published_at: datetime
 
 
-class RunRecord(_DeferredDatasetsRefsMixin, ContractModel):
+class RunRecord(ContractModel):
     run_id: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1)
@@ -205,7 +151,7 @@ class SubagentResult(ContractModel):
         return value
 
 
-class TaskSnapshot(_DeferredDatasetsRefsMixin, ContractModel):
+class TaskSnapshot(ContractModel):
     task: TaskSummary
     runs: list[RunRecord] = Field(default_factory=list)
     messages: list[MessageRecord] = Field(default_factory=list)

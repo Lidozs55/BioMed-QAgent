@@ -600,13 +600,3 @@ def test_run_record_summary_and_snapshot_publications() -> None:
     )
     assert snapshot.current_publication_id == "pub-run_1"
     assert snapshot.publications[0].manifest_sha256 == "a" * 64
-
-
-def test_task_summary_has_no_no_artifact_failure_field() -> None:
-    from app.domain.contracts.runtime import TaskSummary
-
-    task = TaskSummary(
-        task_id="task_1", mode="agent", databases=[], title="t",
-        status="completed", created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
-    )
-    assert not hasattr(task, "no_artifact_failure")

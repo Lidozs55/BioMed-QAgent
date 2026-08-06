@@ -7,6 +7,11 @@ Self-contained ``DatasetBuildSpec`` plus the four orthogonal status contracts
 The base model rejects unknown fields, so an Agent cannot smuggle acceptance
 thresholds (``minimum_valid_rows``, ``allow_empty_primary_dataset``, ...) into
 the spec; those belong to the server-side ``ValidationProfile``.
+
+``BuildResultStatus`` / ``ArtifactRole`` / ``BuildResult`` are re-exported from
+``app.domain.contracts.dataset_state`` (which ``app.domain.contracts.runtime``
+imports directly); keeping them here preserves every existing import site while
+breaking the datasets <-> contracts import cycle.
 """
 
 from __future__ import annotations
@@ -17,27 +22,21 @@ from enum import StrEnum
 from pydantic import Field, JsonValue, model_validator
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+)
+from app.domain.contracts.dataset_state import (
+    BuildResult as BuildResult,
+)
+from app.domain.contracts.dataset_state import (
+    BuildResultStatus as BuildResultStatus,
+)
 from app.domain.contracts.source import FileAsset, SourceLocator
-
-
-class BuildResultStatus(StrEnum):
-    SUCCEEDED = "succeeded"
-    PARTIAL_SUCCESS = "partial_success"
-    NO_DATA = "no_data"
-    SPEC_REJECTED = "spec_rejected"
 
 
 class ValidationResultStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
-
-
-class ArtifactRole(StrEnum):
-    PRIMARY_DATASET = "primary_dataset"
-    SUPPORTING_DATASET = "supporting_dataset"
-    SCHEMA = "schema"
-    PROVENANCE = "provenance"
-    AUDIT_REPORT = "audit_report"
 
 
 class AcquisitionMode(StrEnum):
@@ -232,48 +231,6 @@ class ConfidenceRecord(ContractModel):
     components: ConfidenceComponents = Field(default_factory=ConfidenceComponents)
     reasons: list[str] = Field(default_factory=list)
     requires_human_review: bool = False
-
-
-class BuildResult(ContractModel):
-    """Business outcome of a normally completed build (ARCHITECTURE §9.1).
-
-    Only produced when ``RunStatus == COMPLETED``; execution failures and
-    user cancellation are expressed by RunStatus, not by this enum.
-    """
-
-    status: BuildResultStatus
-    valid_row_count: int = Field(ge=0)
-    successful_sources: list[str] = Field(default_factory=list)
-    rejected_sources: list[str] = Field(default_factory=list)
-    available_artifact_roles: list[ArtifactRole] = Field(default_factory=list)
-    publication_id: str | None = None
-    reason_codes: list[str] = Field(default_factory=list)
-    user_summary: str = ""
-    recommended_next_action: str = ""
-
-    @model_validator(mode="after")
-    def validate_state(self) -> BuildResult:
-        if self.status is BuildResultStatus.SUCCEEDED:
-            if not self.successful_sources:
-                raise ValueError("succeeded build requires successful_sources")
-            if self.publication_id is None:
-                raise ValueError("succeeded build requires publication_id")
-        if self.status is BuildResultStatus.NO_DATA and self.valid_row_count != 0:
-            raise ValueError("no_data build must have zero valid rows")
-        if (
-            self.status is BuildResultStatus.SPEC_REJECTED
-            and not self.reason_codes
-        ):
-            raise ValueError("spec_rejected build requires reason_codes")
-        if (
-            self.publication_id is not None
-            and self.status
-            not in (BuildResultStatus.SUCCEEDED, BuildResultStatus.PARTIAL_SUCCESS)
-        ):
-            raise ValueError(
-                "publication_id is only valid for succeeded or partial_success"
-            )
-        return self
 
 
 class ValidationResult(ContractModel):

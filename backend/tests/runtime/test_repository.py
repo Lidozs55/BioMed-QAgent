@@ -130,57 +130,6 @@ async def test_repository_backfills_artifact_count_for_legacy_snapshot(
     finally:
         await repository.close()
 
-@pytest.mark.asyncio
-async def test_repository_backfills_no_artifact_failure_for_legacy_snapshot(
-    tmp_path,
-) -> None:
-    output_dir = tmp_path / "output"
-    repository = TaskRepository(output_dir)
-    await repository.initialize()
-    task_id = "task_legacy_no_artifact"
-    base = snapshot_with_run(
-        task_id=task_id,
-        request_id="req_legacy",
-        run_id="run_legacy",
-    )
-    base = base.model_copy(
-        update={
-            "task": base.task.model_copy(
-                update={"status": RunStatus.FAILED, "active_run_id": None}
-            ),
-            "runs": [
-                base.runs[0].model_copy(
-                    update={
-                        "status": RunStatus.FAILED,
-                        "finished_at": NOW + timedelta(seconds=1),
-                        "error": (
-                            "agent completed without producing any artifacts "
-                            "(manifest missing or unchanged)"
-                        ),
-                    }
-                )
-            ],
-        }
-    )
-    await repository.save_snapshot(base)
-    try:
-        snapshot_path = (
-            output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
-        )
-        raw = json.loads(snapshot_path.read_text("utf-8"))
-        raw["task"].pop("artifact_count")
-        raw["task"].pop("no_artifact_failure")
-        snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
-
-        loaded = await repository.get_snapshot(task_id)
-
-        assert loaded is not None
-        assert loaded.task.no_artifact_failure is True
-        persisted = json.loads(snapshot_path.read_text("utf-8"))
-        assert persisted["task"]["no_artifact_failure"] is True
-    finally:
-        await repository.close()
-
 
 @pytest.mark.asyncio
 async def test_repository_replays_subagent_record_from_events(tmp_path) -> None:

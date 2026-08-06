@@ -35,7 +35,6 @@ from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import (
     count_artifact_produced_events,
-    no_artifact_failure_from_runs,
     reduce_task_event,
 )
 
@@ -592,12 +591,8 @@ class TaskRepository:
                 f"for task {task_id}: "
                 f"{snapshot.task.latest_sequence} > {latest_sequence}"
             )
-        legacy = (
-            "artifact_count" not in raw_snapshot.get("task", {})
-            or "no_artifact_failure" not in raw_snapshot.get("task", {})
-        )
+        legacy = "artifact_count" not in raw_snapshot.get("task", {})
         legacy_artifact_count = 0
-        legacy_no_artifact_failure = False
         if legacy:
             historical_events = self.events.read(task_id, after_sequence=0)
             legacy_artifact_count = count_artifact_produced_events(
@@ -609,17 +604,6 @@ class TaskRepository:
                     update={
                         "task": snapshot.task.model_copy(
                             update={"artifact_count": legacy_artifact_count}
-                        )
-                    }
-                )
-            legacy_no_artifact_failure = no_artifact_failure_from_runs(
-                snapshot.runs
-            )
-            if legacy_no_artifact_failure:
-                snapshot = snapshot.model_copy(
-                    update={
-                        "task": snapshot.task.model_copy(
-                            update={"no_artifact_failure": True}
                         )
                     }
                 )
@@ -636,9 +620,7 @@ class TaskRepository:
                 snapshot = reduce_task_event(snapshot, event)
             snapshot = self._snapshot_without_messages(snapshot)
             atomic_write_json(snapshot_path, snapshot)
-        elif legacy and (
-            legacy_artifact_count > 0 or legacy_no_artifact_failure
-        ):
+        elif legacy and legacy_artifact_count > 0:
             atomic_write_json(
                 snapshot_path,
                 self._snapshot_without_messages(snapshot),

@@ -10,7 +10,6 @@ from app.domain.contracts import (
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
-    RunFailedPayload,
     RunFinalizingPayload,
     RunQueuedPayload,
     RunStartedPayload,
@@ -112,40 +111,6 @@ def test_reducer_counts_artifact_produced_events() -> None:
     )
 
     assert snapshot.task.artifact_count == 1
-
-def test_reducer_marks_no_artifact_failure_from_latest_run_error() -> None:
-    silent = queued_snapshot()
-    silent = reduce_task_event(
-        silent,
-        runtime_event(2, RunStartedPayload()),
-    )
-    silent = reduce_task_event(
-        silent,
-        runtime_event(
-            3,
-            RunFailedPayload(
-                error=(
-                    "agent completed without producing any artifacts "
-                    "(manifest missing or unchanged)"
-                )
-            ),
-        ),
-    )
-    assert silent.task.no_artifact_failure is True
-
-    real = queued_snapshot()
-    real = reduce_task_event(
-        real,
-        runtime_event(2, RunStartedPayload()),
-    )
-    real = reduce_task_event(
-        real,
-        runtime_event(
-            3,
-            RunFailedPayload(error="model connection timeout"),
-        ),
-    )
-    assert real.task.no_artifact_failure is False
 
 
 def runtime_event(
