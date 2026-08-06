@@ -142,9 +142,10 @@ def test_compatible_gdc_xena_merge_succeeds(tmp_path: Path) -> None:
         },
     )
     assert result.status == "succeeded"
-    # Mirror content: 4 rows, deduplicated, not 8.
+    # 3 mirror rows deduplicated, 1 conflict (TP53/S2) kept first-source.
     assert result.manifest.row_count == 4
-    assert result.manifest.provenance_summary["dedup_count"] == 4
+    assert result.manifest.provenance_summary["dedup_count"] == 3
+    assert result.manifest.provenance_summary["conflict_count"] == 1
     assert len(result.manifest.artifacts) >= 5  # primary + schema + provenance + audits
     roles = {entry.role for entry in result.manifest.artifacts}
     assert ArtifactRole.PRIMARY_DATASET in roles
@@ -153,6 +154,96 @@ def test_compatible_gdc_xena_merge_succeeds(tmp_path: Path) -> None:
     assert ArtifactRole.AUDIT_REPORT in roles
     rows = _primary_rows(result)
     assert len(rows) == 4
+
+
+def test_stale_outputs_cleared_on_rejection(tmp_path: Path) -> None:
+    """A rejected rerun into the same output_dir must not leak prior artifacts."""
+    output_dir = tmp_path / "build"
+    first = _run_chain(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+    )
+    assert first.status == "succeeded"
+    assert (output_dir / "merged" / "primary.csv").is_file()
+    assert (output_dir / "dataset_manifest.json").is_file()
+
+    # Same workspace, incompatible pair -> rejection must clear the workspace.
+    rejected = build_expression_dataset(
+        spec=_spec(
+            [
+                _binding("binding_matrix", "gdc", "gdc.expression.v1"),
+                _binding("binding_star", "gdc", "gdc.expression.v1"),
+            ]
+        ),
+        registry=_registry(),
+        source_assets={
+            "binding_matrix": _source_asset("gdc/gdc_expression.tsv", "src_m"),
+            "binding_star": _source_asset("gdc/gdc_star_counts.tsv", "src_s"),
+        },
+        source_paths={
+            "binding_matrix": FIXTURES / "gdc/gdc_expression.tsv",
+            "binding_star": FIXTURES / "gdc/gdc_star_counts.tsv",
+        },
+        output_dir=output_dir,
+    )
+    assert rejected.status == "rejected"
+    assert not (output_dir / "merged" / "primary.csv").exists()
+    assert not (output_dir / "dataset_manifest.json").exists()
+
+
+def test_zero_row_source_rejected(tmp_path: Path) -> None:
+    """A source that canonicalizes to zero rows must not silently vanish."""
+    probe_matrix = tmp_path / "probe_matrix.tsv"
+    probe_matrix.write_text(
+        "gene_id\tS1\n1007_s_at\t1.5\n1053_at\t2.5\n", encoding="utf-8"
+    )
+    probe_checksum = hashlib.sha256(probe_matrix.read_bytes()).hexdigest()
+    probe_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(probe_checksum),
+        kind="source",
+        relative_path="source_assets/probe_matrix.tsv",
+        sha256=probe_checksum,
+        size_bytes=probe_matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_probe",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    healthy = _source_asset("gdc/gdc_expression.tsv", "src_healthy")
+    result = build_expression_dataset(
+        spec=_spec(
+            [
+                _binding("binding_healthy", "gdc", "gdc.expression.v1"),
+                _binding("binding_probe", "gdc", "gdc.expression.v1"),
+            ]
+        ),
+        registry=_registry(),
+        source_assets={
+            "binding_healthy": healthy,
+            "binding_probe": probe_asset,
+        },
+        source_paths={
+            "binding_healthy": FIXTURES / "gdc/gdc_expression.tsv",
+            "binding_probe": probe_matrix,
+        },
+        output_dir=tmp_path / "build",
+    )
+    assert result.status == "rejected"
+    assert "source_yielded_no_rows" in result.reason_codes
+    assert result.manifest is None
+
+
+def test_missing_binding_raises_build_error(tmp_path: Path) -> None:
+    spec = _spec([_binding("binding_gdc", "gdc", "gdc.expression.v1")])
+    with pytest.raises(BuildError, match="no source asset supplied"):
+        build_expression_dataset(
+            spec=spec,
+            registry=_registry(),
+            source_assets={},
+            source_paths={},
+            output_dir=tmp_path / "build",
+        )
 
 
 def test_incompatible_units_rejected(tmp_path: Path) -> None:

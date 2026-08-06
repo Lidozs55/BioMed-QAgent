@@ -16,12 +16,13 @@ Operation reuse in the Phase 2 runtime.
 from __future__ import annotations
 
 import csv
-import hashlib
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.datasets.build.errors import BuildError
+from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import (
     DataBatch,
     DatasetSchema,
@@ -157,13 +158,14 @@ def canonicalize(
                 rejected_count += 1
                 continue
             try:
-                float(row.get("expression_value", ""))
+                if not math.isfinite(float(row.get("expression_value", ""))):
+                    raise ValueError
             except ValueError:
                 rejected_writer.writerow(
                     _rejected_row(
                         row,
                         batch,
-                        "non_numeric_value",
+                        "non_finite_value",
                         f"value={row.get('expression_value')!r}",
                     )
                 )
@@ -171,12 +173,15 @@ def canonicalize(
                 continue
             canonical_row = dict(row)
             canonical_row["record_id"] = make_record_id(
-                row["dataset_id"], gene_id, row["sample_id"]
+                row["dataset_id"], row["gene_id_raw"], row["sample_id"]
             )
             canonical_row["gene_id"] = gene_id
             canonical_row["gene_id_namespace"] = namespace
             canonical_row["gene_id_version"] = version
-            canonical_row["source_sample_alias"] = row.get("source_column_name", "")
+            is_star = batch.statistics.get("format") == "star_counts"
+            canonical_row["source_sample_alias"] = (
+                "" if is_star else row.get("source_column_name", "")
+            )
             writer.writerow(canonical_row)
             log_writer.writerow(
                 {
@@ -210,14 +215,13 @@ def canonicalize(
 
     _write_field_mappings(mappings_path, batch.declared_mappings)
 
-    payload = canonical_path.read_bytes()
-    checksum = hashlib.sha256(payload).hexdigest()
+    payload_checksum = sha256_file(canonical_path)
     file_asset = FileAsset(
-        asset_id=asset_id_from_sha256(checksum),
+        asset_id=asset_id_from_sha256(payload_checksum),
         kind="normalized",
         relative_path=canonical_path.relative_to(output_dir).as_posix(),
-        sha256=checksum,
-        size_bytes=len(payload),
+        sha256=payload_checksum,
+        size_bytes=canonical_path.stat().st_size,
         media_type="text/csv",
         generated_by_step_id="step_canonicalizer_v1",
     )

@@ -14,7 +14,7 @@ from app.datasets.build.canonicalizer import (
 )
 from app.datasets.build.profiles import _expression_normalization_v1
 from app.datasets.schema_registry import build_gene_expression_schema
-from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
+from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256, make_record_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -99,6 +99,10 @@ def test_canonical_star_ensembl_normalization(tmp_path: Path) -> None:
     assert rows[0]["gene_id"] == "ENSG00000141510"
     assert rows[0]["gene_id_namespace"] == "ensembl_gene"
     assert rows[0]["gene_id_version"] == "17"
+    assert rows[0]["source_sample_alias"] == ""  # no column alias in single-sample files
+    assert rows[0]["record_id"] == make_record_id(
+        "build_test", "ENSG00000141510.17", "gdc_star_counts"
+    )
     log = (tmp_path / "canonical" / "binding_1_normalization_log.csv").read_text()
     assert "ensembl_version_split" in log
     assert "ENSG00000141510" in log

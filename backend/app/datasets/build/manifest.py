@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from app.datasets.build.canonicalizer import CanonicalizationResult
+from app.datasets.build.hashing import sha256_file
 from app.datasets.build.integrator import IntegrationResult
 from app.datasets.contracts import (
     ArtifactRole,
@@ -32,12 +33,13 @@ MANIFEST_FILE = "dataset_manifest.json"
 
 
 def file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return sha256_file(path)
 
 
 def package_digest(entries: list[ManifestArtifactEntry]) -> str:
     """Deterministic digest over sorted (relative_path, sha256) artifact pairs."""
     hasher = hashlib.sha256()
+
     for entry in sorted(entries, key=lambda e: e.relative_path):
         hasher.update(entry.relative_path.encode("utf-8"))
         hasher.update(b"\0")
@@ -150,7 +152,7 @@ def _sample_backtraces(primary_path: Path, limit: int = 5) -> list[dict[str, obj
     return backtraces
 
 
-def build_manifest(
+def assemble_manifest(
     *,
     task_id: str,
     build_id: str,
@@ -164,7 +166,13 @@ def build_manifest(
     source_summary: dict[str, object],
     output_dir: Path,
 ) -> DatasetManifest:
-    """Build the immutable role-based manifest and write dataset_manifest.json."""
+    """Assemble the immutable role-based manifest (pure; no manifest file write).
+
+    Writes the deterministic ``schema.json`` artifact (part of the digest
+    inputs), computes the package digest over data artifacts, and returns the
+    manifest object.  Callers write it exactly once via ``write_manifest`` so
+    a crash can never leave a manifest with a stale validation summary.
+    """
     schema_path = output_dir / SCHEMA_FILE
     schema_path.write_text(
         json.dumps(schema.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -180,7 +188,7 @@ def build_manifest(
         for path in sorted(audit_paths)
     )
     digest = package_digest(entries)
-    manifest = DatasetManifest(
+    return DatasetManifest(
         manifest_id=f"manifest_{digest[:16]}",
         task_id=task_id,
         build_id=build_id,
@@ -216,9 +224,45 @@ def build_manifest(
             "conflict_count": integration.conflict_count,
         },
     )
+
+
+def write_manifest(manifest: DatasetManifest, output_dir: Path) -> Path:
+    """Write ``dataset_manifest.json`` for an assembled manifest."""
     manifest_path = output_dir / MANIFEST_FILE
     manifest_path.write_text(
         json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         "utf-8",
     )
+    return manifest_path
+
+
+def build_manifest(
+    *,
+    task_id: str,
+    build_id: str,
+    spec: DatasetBuildSpec,
+    schema: DatasetSchema,
+    integration: IntegrationResult,
+    canonical_results: list[CanonicalizationResult],
+    provenance_path: Path,
+    audit_paths: list[Path],
+    validation: ValidationResult,
+    source_summary: dict[str, object],
+    output_dir: Path,
+) -> DatasetManifest:
+    """Assemble and persist the manifest (convenience wrapper)."""
+    manifest = assemble_manifest(
+        task_id=task_id,
+        build_id=build_id,
+        spec=spec,
+        schema=schema,
+        integration=integration,
+        canonical_results=canonical_results,
+        provenance_path=provenance_path,
+        audit_paths=audit_paths,
+        validation=validation,
+        source_summary=source_summary,
+        output_dir=output_dir,
+    )
+    write_manifest(manifest, output_dir)
     return manifest

@@ -161,7 +161,9 @@ def test_manifest_role_inventory(tmp_path: Path) -> None:
     ]
     assert len(primaries) == 1
     assert primaries[0].relative_path == "merged/primary.csv"
-    assert manifest.row_count == 4  # mirror rows deduplicated
+    assert manifest.row_count == 4  # 3 mirror rows deduped, 1 conflict kept first
+    assert manifest.provenance_summary["dedup_count"] == 3
+    assert manifest.provenance_summary["conflict_count"] == 1
     assert (tmp_path / MANIFEST_FILE).is_file()
     assert (tmp_path / SCHEMA_FILE).is_file()
     assert (tmp_path / PROVENANCE_FILE).is_file()

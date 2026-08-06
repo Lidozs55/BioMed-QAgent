@@ -124,12 +124,13 @@ def test_gdc_star_counts_batch(tmp_path: Path) -> None:
     assert batch.warnings == []
     rows = (tmp_path / batch.file_asset.relative_path).read_text().splitlines()[1:]
     assert len(rows) == 2
-    first = rows[0].split(",")
-    assert first[1] == "build_test"  # dataset_id
-    assert first[4] == "ENSG00000141510.17"  # gene_id_raw verbatim with version
-    assert first[9].lower() == "true"  # is_normalized for tpm
-    assert first[11] == "85.5"  # expression_value
-    assert first[12] == "tpm_unstranded"  # expression_unit
+    header = list(SOURCE_LONG_COLUMNS)
+    first = dict(zip(header, rows[0].split(","), strict=True))
+    assert first["dataset_id"] == "build_test"
+    assert first["gene_id_raw"] == "ENSG00000141510.17"  # verbatim with version
+    assert first["is_normalized"] == "true"  # tpm metric
+    assert first["expression_value"] == "85.5"
+    assert first["expression_unit"] == "tpm_unstranded"
 
 
 def test_gdc_star_rejected_rows_audited(tmp_path: Path) -> None:
@@ -191,20 +192,155 @@ def test_malformed_header_fails_closed(tmp_path: Path) -> None:
         )
 
 
-def test_non_numeric_value_fails_closed(tmp_path: Path) -> None:
+def test_non_finite_value_audited_not_fatal(tmp_path: Path) -> None:
+    """Garbage / blank / NaN / Inf values are row-level rejections, never fatal."""
     malformed = tmp_path / "bad_value.tsv"
-    malformed.write_text("gene_id\tS1\nTP53\tnan-value\n", encoding="utf-8")
+    malformed.write_text(
+        "gene_id\tS1\nTP53\tnan-value\n", encoding="utf-8"
+    )
     asset = _source_asset_for_path(malformed)
-    with pytest.raises(AdapterError, match="non-numeric"):
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        malformed,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.row_count == 0
+    assert batch.statistics["rejected_count"] == 1
+    assert batch.statistics["source_row_count"] == 1
+    rejected = (tmp_path / "batches" / "binding_1_rejected.csv").read_text()
+    assert "non_finite_value" in rejected
+    assert "nan-value" in rejected
+
+
+def test_nan_and_inf_values_audited(tmp_path: Path) -> None:
+    malformed = tmp_path / "special.tsv"
+    malformed.write_text(
+        "gene_id\tS1\tS2\nTP53\tnan\tinf\nBRCA1\t3\t4.25\n",
+        encoding="utf-8",
+    )
+    asset = _source_asset_for_path(malformed)
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        malformed,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.row_count == 2  # only BRCA1 cells survive
+    assert batch.statistics["rejected_count"] == 2
+    rejected = (tmp_path / "batches" / "binding_1_rejected.csv").read_text()
+    assert "nan" in rejected and "inf" in rejected
+
+
+def test_gdc_annotation_columns_ignored(tmp_path: Path) -> None:
+    """GDC files-API exports may include gene_name/gene_type annotation columns."""
+    annotated = tmp_path / "annotated.tsv"
+    annotated.write_text(
+        "gene_id\tgene_name\tgene_type\tS1\tS2\n"
+        "ENSG00000141510\tTP53\tprotein_coding\t1.5\t2\n",
+        encoding="utf-8",
+    )
+    asset = _source_asset_for_path(annotated)
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        annotated,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.statistics["sample_count"] == 2
+    assert batch.row_count == 2
+    rows = (tmp_path / batch.file_asset.relative_path).read_text().splitlines()[1:]
+    assert all("protein_coding" not in row for row in rows)
+    assert all("gene_name" not in row for row in rows)
+
+
+def test_gzip_source_parsed(tmp_path: Path) -> None:
+    import gzip as gzip_module
+
+    gz_path = tmp_path / "gdc_expression.tsv.gz"
+    raw = (FIXTURES / "gdc/gdc_expression.tsv").read_bytes()
+    with gzip_module.open(gz_path, "wb") as handle:
+        handle.write(raw)
+    asset = _source_asset_for_path(gz_path)
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        gz_path,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.row_count == 4
+
+
+def test_star_counts_unstranded_fallback(tmp_path: Path) -> None:
+    """Header without tpm_unstranded falls back to raw unstranded counts."""
+    star = tmp_path / "star_counts_raw.tsv"
+    star.write_text(
+        "gene_id\tgene_name\tgene_type\tunstranded\n"
+        "ENSG00000141510.17\tTP53\tprotein_coding\t120\n",
+        encoding="utf-8",
+    )
+    asset = _source_asset_for_path(star)
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        star,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.statistics["format"] == "star_counts"
+    header = list(SOURCE_LONG_COLUMNS)
+    row = dict(
+        zip(
+            header,
+            (tmp_path / batch.file_asset.relative_path)
+            .read_text()
+            .splitlines()[1]
+            .split(","),
+            strict=True,
+        )
+    )
+    assert row["value_semantics"] == "raw_count"
+    assert row["expression_unit"] == "unstranded"
+    assert row["is_normalized"] == "false"
+    assert row["is_integer_expected"] == "true"
+
+
+def test_blank_line_parity(tmp_path: Path) -> None:
+    """Blank lines: GDC matrix is structurally strict, Xena skips them."""
+    gdc_file = tmp_path / "gdc_blank.tsv"
+    gdc_file.write_text("gene_id\tS1\nTP53\t1.5\n\nBRCA1\t3\n", encoding="utf-8")
+    gdc_asset = _source_asset_for_path(gdc_file)
+    with pytest.raises(AdapterError, match="invalid GDC expression row"):
         GdcExpressionAdapter().parse(
-            asset,
-            malformed,
+            gdc_asset,
+            gdc_file,
             build_id="build_test",
             binding_id="binding_1",
             schema_ref="gene_expression.long.v1",
             output_dir=tmp_path,
         )
-    assert not (tmp_path / "batches" / "binding_1.csv").exists()
+
+    xena_file = tmp_path / "xena_blank.tsv"
+    xena_file.write_text("gene_id\tS1\nTP53\t1.5\n\nBRCA1\t3\n", encoding="utf-8")
+    xena_asset = _source_asset_for_path(xena_file)
+    batch = XenaMatrixAdapter().parse(
+        xena_asset,
+        xena_file,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    assert batch.row_count == 2
 
 
 def test_unknown_adapter_rejected() -> None:
