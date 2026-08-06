@@ -11,12 +11,13 @@ and are recorded in a conflicts audit file.
 from __future__ import annotations
 
 import csv
-import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.datasets.build.canonicalizer import CanonicalizationResult
 from app.datasets.build.errors import IntegratorError
+from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import DataBatch, DatasetSchema, FileAsset, JsonValue
 from app.domain.contracts import asset_id_from_sha256
 
@@ -113,14 +114,13 @@ def integrate(
                     )
                     conflict_count += 1
 
-    payload = merged_path.read_bytes()
-    checksum = hashlib.sha256(payload).hexdigest()
+    payload_checksum = sha256_file(merged_path)
     file_asset = FileAsset(
-        asset_id=asset_id_from_sha256(checksum),
+        asset_id=asset_id_from_sha256(payload_checksum),
         kind="artifact",
         relative_path=merged_path.relative_to(output_dir).as_posix(),
-        sha256=checksum,
-        size_bytes=len(payload),
+        sha256=payload_checksum,
+        size_bytes=merged_path.stat().st_size,
         media_type="text/csv",
         generated_by_step_id="step_integrator_v1",
     )
@@ -166,6 +166,9 @@ def _row_identity(row: dict[str, str]) -> tuple[str, str, str, str]:
 
 def _numerically_equal(left: str, right: str) -> bool:
     try:
-        return float(left) == float(right)
+        left_float, right_float = float(left), float(right)
     except ValueError:
         return left == right
+    if math.isnan(left_float) and math.isnan(right_float):
+        return True  # NaN mirrors are duplicates, not conflicts
+    return left_float == right_float

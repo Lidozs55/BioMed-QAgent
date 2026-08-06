@@ -74,8 +74,41 @@ Phase 2（执行内核）后完成。P1/P2 部分项见文末"未完成项"。
   新写 imports 时注意来源，`app.datasets.contracts` 只放 V2 数据集契约。
 - **Fixture 对齐真实格式**：GDC STAR-counts 表首列必须是 `gene_id`（真实 files API
   输出），fixture 首版写成 `gene_name` 导致 header 校验失败。
+- **`hashlib.file_digest(handle)` 必须用 with 关闭句柄**：直接 `file_digest(path.open("rb"))`
+  泄漏句柄，pytest warnings-as-errors 会以 ResourceWarning 挂掉测试。统一走
+  `app/datasets/build/hashing.py:sha256_file`。
 
-## 6. 未完成项（TODO 原样保留或部分完成）
+## 6. 评审修复（2026-08-06 三轮对抗性评审后）
+
+三轮平行评审（正确性 / 测试质量 / 架构）共 30+ 发现，已落地修复：
+
+1. **非有限数值统一策略**（HIGH）：blank/NaN/Inf 全部按行级 rejected 审计
+   （`non_finite_value`），不再静默进入主表，也不再使整个来源致命失败；
+   canonicalizer 与 `gene_expression.release.v1` 的数值检查改用 `math.isfinite`；
+   integrator 的 `_numerically_equal` 对 NaN 镜像按去重而非冲突处理。
+2. **拒绝重跑不再残留旧产物**（HIGH）：chain 起始清空构建工作区，
+   被 gate/validation 拒绝后不会遗留上一轮的 `primary.csv` / `dataset_manifest.json`。
+3. **manifest 单次落盘**（HIGH）：拆分 `assemble_manifest`（纯）+ `write_manifest`，
+   chain 先 assemble（占位 validation 仅喂 digest，不落盘）→ validate → 带真实结果
+   assemble → 只写一次；崩溃不可能留下"已通过但零检查"的假 manifest。
+4. **GDC 注释列**：`gene_name` / `gene_type` / `gene_version` 从样本列中剔除，
+   列定位改用 `header.index()`（真实 files-API 导出矩阵可解析）。
+5. **STAR 行 `source_sample_alias` 置空**（不再误填指标列名）；
+   **record_id 改用 `gene_id_raw`**（ENSG 不同版本不再碰撞，与 adapter 一致）。
+6. **零行来源拒绝**：任一来源 canonical 0 行 → `source_yielded_no_rows`，
+   不再"成功但吞掉来源"；缺 binding 时抛 `BuildError` 而非裸 `KeyError`。
+7. **流式哈希**：`sha256_file` 取代全文件 `read_bytes()`（GB 级矩阵只流式读一遍）。
+8. **宽表提取合并**：GDC/Xena matrix 共用 `_wide_matrix_mappings` +
+   `_emit_matrix_cells`（消除 ~70 行重复；空行策略差异保留局部）。
+9. **测试增强**：NaN/Inf、`.gz`、STAR `unstranded` 回退、GDC 注释列、空行策略、
+   `1.0` vs `1` 去重、measurement_type 参与 identity、NaN 镜像去重、
+   同目录拒绝清理、零行来源、缺 binding——新增 ~25 个用例。
+10. **Xena fixture 与 GDC 去同**：`xena_matrix.tsv` 改为差异化值（TP53/S2=9.9），
+    镜像去重测试改用同一 fixture 双 binding，避免自证式测试掩盖列偏移 bug。
+
+测试：数据集 75 用例 + 全量 `uv run pytest` 2116 passed；ruff 新增文件零告警。
+
+## 7. 未完成项（TODO 原样保留或部分完成）
 
 - [ ] **P1 基因符号映射"优先本地映射"**：namespace 确权已实现（`authorize_namespace`），
       但本地 symbol↔ensembl 映射表（"优先本地映射"）尚未落地；多对一聚合策略已在

@@ -25,7 +25,12 @@ from app.datasets.build.compat_gate import (
 )
 from app.datasets.build.errors import AdapterError, BuildError, IntegratorError
 from app.datasets.build.integrator import IntegrationResult, integrate
-from app.datasets.build.manifest import build_manifest, build_provenance_document
+from app.datasets.build.manifest import (
+    assemble_manifest,
+    build_manifest,
+    build_provenance_document,
+    write_manifest,
+)
 from app.datasets.build.profiles import (
     ExpressionValidationProfile,
     get_normalization_profile,
@@ -44,6 +49,7 @@ __all__ = [
     "IntegratorError",
     "SourceAdapter",
     "XenaMatrixAdapter",
+    "assemble_manifest",
     "build_expression_dataset",
     "build_manifest",
     "build_provenance_document",
@@ -53,4 +59,5 @@ __all__ = [
     "get_normalization_profile",
     "get_validation_profile",
     "integrate",
+    "write_manifest",
 ]

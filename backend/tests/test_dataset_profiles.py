@@ -139,6 +139,17 @@ def test_non_numeric_value_fails(tmp_path: Path) -> None:
     assert "expression_value_numeric" in report
 
 
+def test_nan_and_inf_values_fail(tmp_path: Path) -> None:
+    for bad in ("nan", "inf", "-inf"):
+        row = _valid_row()
+        row["expression_value"] = bad
+        result, _ = _validate(tmp_path, [row])
+        assert result.status is ValidationResultStatus.FAILED, bad
+        assert "expression_value_numeric" in (
+            tmp_path / "validation_report.json"
+        ).read_text()
+
+
 def test_missing_provenance_fails_closure(tmp_path: Path) -> None:
     row = _valid_row()
     row["source_logical_file"] = ""

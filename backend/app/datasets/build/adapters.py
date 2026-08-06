@@ -7,18 +7,25 @@ matrix or single-sample STAR counts), validates every cell, and streams a
 entity identifiers or units — that is the Canonicalizer's job.  The adapter
 declares formal FieldMappings (method ``adapter_declared``) that become the
 audited mapping evidence for the compatibility gate.
+
+Numeric policy (uniform across adapters): structural malformation (wrong
+field count, bad header, blank gene id) is fatal and fail-closed; a value
+cell that is not a finite number (blank, ``nan``, ``inf``, garbage) is
+rejected row-level into the audit file — never silently accepted, never
+aborting the whole source.
 """
 
 from __future__ import annotations
 
 import csv
 import gzip
-import hashlib
+import math
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, TextIO
 
 from app.datasets.build.errors import AdapterError
+from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import (
     ConfidenceLevel,
     DataBatch,
@@ -67,6 +74,12 @@ REJECTED_COLUMNS: tuple[str, ...] = (
     "source_raw_value",
 )
 
+# GDC files-API expression exports may carry annotation columns next to the
+# gene_id column; they are not samples and must not become long-format rows.
+_GDC_ANNOTATION_COLUMNS = frozenset(
+    {"gene_name", "gene_type", "gene_version", "gene_id_version"}
+)
+
 
 def _open_table(path: Path) -> TextIO:
     if path.suffix.lower() == ".gz":
@@ -75,8 +88,16 @@ def _open_table(path: Path) -> TextIO:
 
 
 def _verify_sha256(path: Path, expected: str) -> None:
-    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+    digest = sha256_file(path)
+    if digest != expected:
         raise AdapterError(f"source asset checksum mismatch before parsing: {path}")
+
+
+def _is_finite_number(value: str) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except ValueError:
+        return False
 
 
 def _mapping(
@@ -100,6 +121,108 @@ def _mapping(
         evidence=evidence,
         review_status=MappingReviewStatus.ACCEPTED,
     )
+
+
+def _wide_matrix_mappings(
+    *,
+    binding_id: str,
+    samples: list[str],
+    gene_evidence: str,
+    sample_evidence: str,
+) -> list[FieldMapping]:
+    """Declared mappings for a wide expression matrix (gene_id + samples)."""
+    mappings = [
+        _mapping(
+            mapping_id="gene_id_to_raw",
+            binding_id=binding_id,
+            source_field="gene_id",
+            target_field="gene_id_raw",
+            transform="identity",
+            evidence=gene_evidence,
+        )
+    ]
+    for sample in samples:
+        mappings.append(
+            _mapping(
+                mapping_id=f"sample_id_{sample}",
+                binding_id=binding_id,
+                source_field=sample,
+                target_field="sample_id",
+                transform="wide_to_long_sample_id",
+                evidence=sample_evidence,
+            )
+        )
+        mappings.append(
+            _mapping(
+                mapping_id=f"value_{sample}",
+                binding_id=binding_id,
+                source_field=sample,
+                target_field="expression_value",
+                transform="wide_to_long_value",
+                evidence=sample_evidence,
+            )
+        )
+    return mappings
+
+
+def _emit_matrix_cells(
+    long_writer: csv.DictWriter[str],
+    rejected_writer: csv.DictWriter[str],
+    *,
+    batch_id: str,
+    source_asset: SourceAsset,
+    build_id: str,
+    source_name: str,
+    line: int,
+    values: list[str],
+    header: list[str],
+    samples: list[str],
+) -> tuple[int, int]:
+    """Emit long rows for one wide-matrix row; returns (emitted, rejected).
+
+    Value cells that are not finite numbers become rejected audit rows.
+    """
+    emitted = rejected = 0
+    gene_id_raw = values[0]
+    for sample_id in samples:
+        column = header.index(sample_id)
+        raw = values[column]
+        if not _is_finite_number(raw):
+            rejected_writer.writerow(
+                _rejected(
+                    batch_id=batch_id,
+                    gene_id_raw=gene_id_raw,
+                    sample_id=sample_id,
+                    reason_code="non_finite_value",
+                    reason=f"value={raw!r} is not a finite number",
+                    source_name=source_name,
+                    line=line,
+                    raw_value=raw,
+                )
+            )
+            rejected += 1
+            continue
+        long_writer.writerow(
+            _long_row(
+                build_id=build_id,
+                source_asset=source_asset,
+                gene_id_raw=gene_id_raw,
+                sample_id=sample_id,
+                measurement_type="gene_expression",
+                value_semantics="expression_value",
+                value_scale="linear",
+                is_normalized=False,
+                is_integer_expected=False,
+                expression_value=raw,
+                expression_unit="expression_value",
+                source_name=source_name,
+                line=line,
+                column=column,
+                column_name=sample_id,
+            )
+        )
+        emitted += 1
+    return emitted, rejected
 
 
 class SourceAdapter(ABC):
@@ -155,14 +278,13 @@ class SourceAdapter(ABC):
             output_path.unlink(missing_ok=True)
             rejected_path.unlink(missing_ok=True)
             raise
-        payload = output_path.read_bytes()
-        checksum = hashlib.sha256(payload).hexdigest()
+        checksum = sha256_file(output_path)
         file_asset = FileAsset(
             asset_id=asset_id_from_sha256(checksum),
             kind="parsed",
             relative_path=output_path.relative_to(output_dir).as_posix(),
             sha256=checksum,
-            size_bytes=len(payload),
+            size_bytes=output_path.stat().st_size,
             media_type="text/csv",
             generated_by_step_id=f"step_{self.adapter_id}",
         )
@@ -198,36 +320,28 @@ class SourceAdapter(ABC):
     ) -> tuple[dict[str, JsonValue], list[str], list[FieldMapping], int]:
         """Stream validated source-long rows; return (statistics, warnings, mappings, rejected)."""
 
-    def _rejected(
-        self,
-        *,
-        batch_id: str,
-        gene_id_raw: str,
-        sample_id: str,
-        reason_code: str,
-        reason: str,
-        source_name: str,
-        line: int,
-        raw_value: str,
-    ) -> dict[str, str]:
-        return {
-            "rejected_id": f"rej_{batch_id}_{line}",
-            "batch_id": batch_id,
-            "gene_id_raw": gene_id_raw,
-            "sample_id": sample_id,
-            "reason_code": reason_code,
-            "reason": reason,
-            "source_logical_file": source_name,
-            "source_line_number": str(line),
-            "source_raw_value": raw_value,
-        }
-
-
-def _parse_float(value: str, *, line: int, context: str) -> float:
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise AdapterError(f"non-numeric {context} at source line {line}") from exc
+def _rejected(
+    *,
+    batch_id: str,
+    gene_id_raw: str,
+    sample_id: str,
+    reason_code: str,
+    reason: str,
+    source_name: str,
+    line: int,
+    raw_value: str,
+) -> dict[str, str]:
+    return {
+        "rejected_id": f"rej_{batch_id}_{line}",
+        "batch_id": batch_id,
+        "gene_id_raw": gene_id_raw,
+        "sample_id": sample_id,
+        "reason_code": reason_code,
+        "reason": reason,
+        "source_logical_file": source_name,
+        "source_line_number": str(line),
+        "source_raw_value": raw_value,
+    }
 
 
 def _long_row(
@@ -308,7 +422,7 @@ class GdcExpressionAdapter(SourceAdapter):
 
     def _extract_matrix(
         self,
-        rows: enumerate,
+        rows: enumerate[list[str]],
         long_writer: csv.DictWriter[str],
         rejected_writer: csv.DictWriter[str],
         *,
@@ -319,69 +433,34 @@ class GdcExpressionAdapter(SourceAdapter):
         binding_id: str,
         source_name: str,
     ) -> tuple[dict[str, JsonValue], list[str], list[FieldMapping], int]:
-        samples = header[1:]
+        samples = [c for c in header[1:] if c not in _GDC_ANNOTATION_COLUMNS]
         if not samples or len(set(samples)) != len(samples) or any(not s for s in samples):
             raise AdapterError("GDC expression sample columns must be non-empty and unique")
-        mappings = [
-            _mapping(
-                mapping_id="gene_id_to_raw",
-                binding_id=binding_id,
-                source_field="gene_id",
-                target_field="gene_id_raw",
-                transform="identity",
-                evidence="GDC files API: gene_id column header",
-            )
-        ]
-        for sample in samples:
-            mappings.append(
-                _mapping(
-                    mapping_id=f"sample_id_{sample}",
-                    binding_id=binding_id,
-                    source_field=sample,
-                    target_field="sample_id",
-                    transform="wide_to_long_sample_id",
-                    evidence="matrix sample column header",
-                )
-            )
-            mappings.append(
-                _mapping(
-                    mapping_id=f"value_{sample}",
-                    binding_id=binding_id,
-                    source_field=sample,
-                    target_field="expression_value",
-                    transform="wide_to_long_value",
-                    evidence="matrix sample column header",
-                )
-            )
+        mappings = _wide_matrix_mappings(
+            binding_id=binding_id,
+            samples=samples,
+            gene_evidence="GDC files API: gene_id column header",
+            sample_evidence="matrix sample column header",
+        )
         source_row_count = row_count = rejected_count = 0
+        batch_id = f"batch_{binding_id}"
         for line, values in rows:
             if line <= header_line or len(values) != len(header) or not values[0]:
                 raise AdapterError(f"invalid GDC expression row at line {line}")
             source_row_count += 1
-            gene_id_raw = values[0]
-            for column, sample_id in enumerate(samples, start=1):
-                raw = values[column]
-                _parse_float(raw, line=line, context="GDC expression value")
-                long_writer.writerow(
-                    _long_row(
-                        build_id=build_id,
-                        source_asset=source_asset,
-                        gene_id_raw=gene_id_raw,
-                        sample_id=sample_id,
-                        measurement_type="gene_expression",
-                        value_semantics="expression_value",
-                        value_scale="linear",
-                        is_normalized=False,
-                        is_integer_expected=False,
-                        expression_value=raw,
-                        expression_unit="expression_value",
-                        source_name=source_name,
-                        line=line,
-                        column=column,
-                        column_name=sample_id,
-                    )
-                )
-                row_count += 1
+            emitted, rejected = _emit_matrix_cells(
+                long_writer, rejected_writer,
+                batch_id=batch_id,
+                source_asset=source_asset,
+                build_id=build_id,
+                source_name=source_name,
+                line=line,
+                values=values,
+                header=header,
+                samples=samples,
+            )
+            row_count += emitted
+            rejected_count += rejected
         if source_row_count == 0:
             raise AdapterError("GDC expression TSV contains no data rows")
         statistics: dict[str, JsonValue] = {
@@ -396,7 +475,7 @@ class GdcExpressionAdapter(SourceAdapter):
 
     def _extract_star_counts(
         self,
-        rows: enumerate,
+        rows: enumerate[list[str]],
         long_writer: csv.DictWriter[str],
         rejected_writer: csv.DictWriter[str],
         *,
@@ -450,7 +529,7 @@ class GdcExpressionAdapter(SourceAdapter):
             gene_id_raw = values[0]
             if not gene_id_raw.startswith("ENSG"):
                 rejected_writer.writerow(
-                    self._rejected(
+                    _rejected(
                         batch_id=batch_id,
                         gene_id_raw=gene_id_raw,
                         sample_id=sample_id,
@@ -467,7 +546,21 @@ class GdcExpressionAdapter(SourceAdapter):
                 rejected_count += 1
                 continue
             raw = values[metric_column]
-            _parse_float(raw, line=line, context=f"GDC {metric} value")
+            if not _is_finite_number(raw):
+                rejected_writer.writerow(
+                    _rejected(
+                        batch_id=batch_id,
+                        gene_id_raw=gene_id_raw,
+                        sample_id=sample_id,
+                        reason_code="non_finite_value",
+                        reason=f"value={raw!r} is not a finite number",
+                        source_name=source_name,
+                        line=line,
+                        raw_value=raw,
+                    )
+                )
+                rejected_count += 1
+                continue
             long_writer.writerow(
                 _long_row(
                     build_id=build_id,
@@ -527,38 +620,14 @@ class XenaMatrixAdapter(SourceAdapter):
             raise AdapterError("Xena matrix sample headers must not be blank")
         if len(set(samples)) != len(samples):
             raise AdapterError("Xena matrix sample headers must be unique")
-        mappings = [
-            _mapping(
-                mapping_id="gene_id_to_raw",
-                binding_id=binding_id,
-                source_field="gene_id",
-                target_field="gene_id_raw",
-                transform="identity",
-                evidence="Xena matrix gene_id column header",
-            )
-        ]
-        for sample in samples:
-            mappings.append(
-                _mapping(
-                    mapping_id=f"sample_id_{sample}",
-                    binding_id=binding_id,
-                    source_field=sample,
-                    target_field="sample_id",
-                    transform="wide_to_long_sample_id",
-                    evidence="matrix sample column header",
-                )
-            )
-            mappings.append(
-                _mapping(
-                    mapping_id=f"value_{sample}",
-                    binding_id=binding_id,
-                    source_field=sample,
-                    target_field="expression_value",
-                    transform="wide_to_long_value",
-                    evidence="matrix sample column header",
-                )
-            )
+        mappings = _wide_matrix_mappings(
+            binding_id=binding_id,
+            samples=samples,
+            gene_evidence="Xena matrix gene_id column header",
+            sample_evidence="matrix sample column header",
+        )
         source_row_count = row_count = rejected_count = 0
+        batch_id = f"batch_{binding_id}"
         for line, values in rows:
             if not values or all(not v for v in values):
                 continue
@@ -570,29 +639,19 @@ class XenaMatrixAdapter(SourceAdapter):
             if not gene_id_raw:
                 raise AdapterError("Xena matrix gene_id must not be blank")
             source_row_count += 1
-            for column_index, sample_id in enumerate(samples, start=1):
-                raw = values[column_index]
-                _parse_float(raw, line=line, context="Xena expression value")
-                long_writer.writerow(
-                    _long_row(
-                        build_id=build_id,
-                        source_asset=source_asset,
-                        gene_id_raw=gene_id_raw,
-                        sample_id=sample_id,
-                        measurement_type="gene_expression",
-                        value_semantics="expression_value",
-                        value_scale="linear",
-                        is_normalized=False,
-                        is_integer_expected=False,
-                        expression_value=raw,
-                        expression_unit="expression_value",
-                        source_name=source_name,
-                        line=line,
-                        column=column_index,
-                        column_name=sample_id,
-                    )
-                )
-                row_count += 1
+            emitted, rejected = _emit_matrix_cells(
+                long_writer, rejected_writer,
+                batch_id=batch_id,
+                source_asset=source_asset,
+                build_id=build_id,
+                source_name=source_name,
+                line=line,
+                values=values,
+                header=header,
+                samples=samples,
+            )
+            row_count += emitted
+            rejected_count += rejected
         if source_row_count == 0:
             raise AdapterError("Xena matrix contains no data rows")
         statistics: dict[str, JsonValue] = {
@@ -606,7 +665,7 @@ class XenaMatrixAdapter(SourceAdapter):
         return statistics, [], mappings, rejected_count
 
 
-def _next_header(rows: enumerate) -> tuple[int, list[str]]:
+def _next_header(rows: enumerate[list[str]]) -> tuple[int, list[str]]:
     for line_number, values in rows:
         if not values or not any(values):
             continue

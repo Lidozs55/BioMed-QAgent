@@ -13,20 +13,26 @@ chain stays pure and testable.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.datasets.build import adapters
-from app.datasets.build.canonicalizer import canonicalize
+from app.datasets.build.canonicalizer import CanonicalizationResult, canonicalize
 from app.datasets.build.compat_gate import CompatibilityReport, check_expression_compatibility
 from app.datasets.build.errors import BuildError
-from app.datasets.build.integrator import integrate
-from app.datasets.build.manifest import build_manifest, build_provenance_document
+from app.datasets.build.integrator import IntegrationResult, integrate
+from app.datasets.build.manifest import (
+    assemble_manifest,
+    build_provenance_document,
+    write_manifest,
+)
 from app.datasets.build.profiles import get_normalization_profile, get_validation_profile
 from app.datasets.contracts import (
     DatasetBuildSpec,
     DatasetManifest,
     ValidationResult,
+    ValidationResultStatus,
 )
 from app.datasets.schema_registry import SchemaRegistry
 from app.domain.contracts.source import SourceAsset
@@ -72,7 +78,13 @@ def build_expression_dataset(
     output_dir: Path,
     task_id: str = "task_demo",
 ) -> BuildChainResult:
-    """Run the expression build chain; raises BuildError on execution failure."""
+    """Run the expression build chain; raises BuildError on execution failure.
+
+    ``output_dir`` is a build-owned workspace: stale outputs from a previous
+    build are cleared so a rejected rerun can never leave a prior
+    ``primary.csv`` / ``dataset_manifest.json`` behind.
+    """
+    _clear_build_workspace(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     schema = registry.get(spec.schema_ref)
     normalization_profile = get_normalization_profile(spec.normalization_profile_ref)
@@ -81,11 +93,17 @@ def build_expression_dataset(
     canonical_results = []
     source_summaries: list[SourceBuildSummary] = []
     for binding in spec.source_bindings:
-        asset = source_assets[binding.binding_id]
+        try:
+            asset = source_assets[binding.binding_id]
+            source_path = source_paths[binding.binding_id]
+        except KeyError as exc:
+            raise BuildError(
+                f"no source asset supplied for binding {binding.binding_id!r}"
+            ) from exc
         adapter = adapters.get_adapter(binding.adapter_id)
         batch = adapter.parse(
             asset,
-            source_paths[binding.binding_id],
+            source_path,
             build_id=spec.build_id,
             binding_id=binding.binding_id,
             schema_ref=spec.schema_ref,
@@ -110,6 +128,22 @@ def build_expression_dataset(
                 unit=", ".join(statistics.get("expression_units", [])),
                 namespace=", ".join(statistics.get("gene_id_namespaces", [])),
             )
+        )
+
+    zero_row_sources = [
+        result.batch.binding_id
+        for result in canonical_results
+        if result.row_count == 0
+    ]
+    if zero_row_sources:
+        return BuildChainResult(
+            status="rejected",
+            manifest=None,
+            validation=None,
+            compatibility=None,
+            reason_codes=("source_yielded_no_rows",),
+            output_dir=output_dir,
+            sources=tuple(source_summaries),
         )
 
     gate = check_expression_compatibility(spec=spec, results=canonical_results)
@@ -151,7 +185,7 @@ def build_expression_dataset(
         }
         for summary in source_summaries
     }
-    manifest = build_manifest(
+    manifest = assemble_manifest(
         task_id=task_id,
         build_id=spec.build_id,
         spec=spec,
@@ -160,7 +194,7 @@ def build_expression_dataset(
         canonical_results=canonical_results,
         provenance_path=provenance_path,
         audit_paths=audit_paths,
-        validation=_placeholder_validation(),  # replaced after the real run
+        validation=_placeholder_validation(),  # never persisted; only feeds the digest
         source_summary=source_summary,
         output_dir=output_dir,
     )
@@ -171,9 +205,9 @@ def build_expression_dataset(
         manifest_digest=manifest.sha256,
         output_dir=output_dir,
     )
-    # Rebuild the manifest with the authoritative validation summary; the
-    # manifest digest is content-based and does not include the summary.
-    manifest = build_manifest(
+    # Re-assemble with the authoritative validation summary and persist the
+    # manifest exactly once — no fail-open manifest is ever written to disk.
+    manifest = assemble_manifest(
         task_id=task_id,
         build_id=spec.build_id,
         spec=spec,
@@ -186,6 +220,7 @@ def build_expression_dataset(
         source_summary=source_summary,
         output_dir=output_dir,
     )
+    write_manifest(manifest, output_dir)
     if validation.status.value != "passed":
         return BuildChainResult(
             status="rejected",
@@ -209,8 +244,8 @@ def build_expression_dataset(
 
 def _collect_audit_paths(
     output_dir: Path,
-    canonical_results,
-    integration,
+    canonical_results: list[CanonicalizationResult],
+    integration: IntegrationResult,
 ) -> list[Path]:
     paths: list[Path] = []
     for result in canonical_results:
@@ -226,8 +261,6 @@ def _collect_audit_paths(
 
 
 def _placeholder_validation() -> ValidationResult:
-    from app.datasets.contracts import ValidationResultStatus
-
     return ValidationResult(
         manifest_digest="0" * 64,
         profile_ref="gene_expression.release.v1",
@@ -235,3 +268,14 @@ def _placeholder_validation() -> ValidationResult:
         checked_count=0,
         failed_count=0,
     )
+
+
+def _clear_build_workspace(output_dir: Path) -> None:
+    """Remove stale outputs of a previous build in *output_dir*."""
+    if not output_dir.exists():
+        return
+    for child in output_dir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()

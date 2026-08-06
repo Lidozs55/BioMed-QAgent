@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -210,7 +211,8 @@ class ExpressionValidationProfile:
                     if not row.get(field, "").strip():
                         blank_required[field] = blank_required.get(field, 0) + 1
                 try:
-                    float(row.get("expression_value", ""))
+                    if not math.isfinite(float(row.get("expression_value", ""))):
+                        raise ValueError
                 except ValueError:
                     non_numeric += 1
                 unit = row.get("expression_unit", "")
