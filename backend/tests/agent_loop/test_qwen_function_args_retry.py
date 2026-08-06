@@ -2,7 +2,7 @@
 
 验证 docs/REVIEW_2026-07-18.md §3 的关键不变量：
 - Qwen 返回非 JSON 的 function.arguments 导致 400 时，AgentRunExecutor
-  识别该错误并用原始 execution.input 重跑 Run
+  清理非法工具调用并用修正指令重试 Run
 - 每次重试发射 ``WarningPayload(code="llm_function_args_retry")``
 - ``QWEN_FUNCTION_ARGS_RETRY_LIMIT`` (2) 次后仍失败则错误向上传播
 - 重试成功后正常产出 artifact 并 ``RunCompletedPayload``
@@ -78,10 +78,26 @@ class _QwenFunctionArgsErrorResult:
 
     final_output = ""  # never reached
 
-    def __init__(self, context: RunContext) -> None:
+    def __init__(self, context: RunContext, session) -> None:
         self.context = context
+        self.session = session
 
     async def stream_events(self):
+        await self.session.add_items(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call_invalid",
+                    "name": "invoke_skill",
+                    "arguments": '{"arguments": {"query": "broken"',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_invalid",
+                    "output": "tool error",
+                },
+            ]
+        )
         if False:
             yield None  # make this an async generator
         raise RuntimeError(
@@ -120,18 +136,17 @@ class _SuccessResult:
 
 
 @pytest.mark.asyncio
-async def test_qwen_function_args_error_retried_with_original_input(
+async def test_qwen_function_args_error_retried_after_discarding_invalid_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """首次 400 → 重试成功。
+    """首次 400 → 丢弃非法调用 → 重试成功。
 
     验证：
     1. 第一次 Runner.run_streamed 的 stream_events 抛 Qwen 400 错误
-    2. AgentRunExecutor 捕获后发射 ``WarningPayload(code=
-       "llm_function_args_retry")`` 并用原始 execution.input 重跑
+    2. AgentRunExecutor 清理非法 function_call 及其 output，并发射 warning
     3. 第二轮成功产出 artifact 并 ``RunCompletedPayload``
-    4. 重试用的 agent_input 是原始 execution.input (str),不是 to_input_list
+    4. 重试使用修正指令，而不是重复整个原始输入
     """
     output_dir = tmp_path / "output"
     repository = TaskRepository(output_dir)
@@ -145,7 +160,7 @@ async def test_qwen_function_args_error_retried_with_original_input(
         captured_inputs.append(args[1])  # 第二个位置参数是 agent_input
         context = kwargs["context"]
         if call_count == 1:
-            return _QwenFunctionArgsErrorResult(context)
+            return _QwenFunctionArgsErrorResult(context, kwargs["session"])
         return _SuccessResult(context, output_dir)
 
     monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
@@ -185,7 +200,18 @@ async def test_qwen_function_args_error_retried_with_original_input(
             if isinstance(p, WarningPayload) and p.code == "llm_function_args_retry"
         ]
         assert len(warnings) == 1
+        assert "discarded 1 invalid tool call(s)" in warnings[0].message
         assert "1/2" in warnings[0].message  # 第 1 次重试 (共 2 次)
+
+        session_items = await repository.task_session(
+            accepted.task_id,
+            run_id=accepted.run_id,
+        ).get_items()
+        assert not any(
+            item.get("call_id") == "call_invalid"
+            for item in session_items
+            if isinstance(item, dict)
+        )
 
         completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
         assert len(completed) == 1
@@ -219,7 +245,7 @@ async def test_qwen_function_args_retry_limit_propagates_error(
         call_count += 1
         context = kwargs["context"]
         # 所有轮次都抛 Qwen 400
-        return _QwenFunctionArgsErrorResult(context)
+        return _QwenFunctionArgsErrorResult(context, kwargs["session"])
 
     monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
     monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)

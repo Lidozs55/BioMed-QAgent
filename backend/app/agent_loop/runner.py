@@ -1064,20 +1064,29 @@ class AgentRunExecutor:
                 ):
                     qwen_retry_count += 1
                     await text_buffer.flush()
+                    discard_invalid_calls = getattr(
+                        task_session,
+                        "discard_invalid_function_calls",
+                        None,
+                    )
+                    discarded_call_count = 0
+                    if callable(discard_invalid_calls):
+                        discarded_call_count = await discard_invalid_calls()
                     await execution.emit(
                         WarningPayload(
                             code="llm_function_args_retry",
                             message=(
                                 f"LLM returned malformed function arguments "
-                                f"(400); retrying Run "
+                                f"(400); discarded {discarded_call_count} invalid "
+                                f"tool call(s); retrying Run "
                                 f"({qwen_retry_count}/"
                                 f"{QWEN_FUNCTION_ARGS_RETRY_LIMIT})"
                             ),
                         )
                     )
                     # 不重放 execution.input（避免重复全部历史工具调用）。
-                    # durable Session 已持有完整历史；追加一条修正指令，
-                    # 让模型仅修正并重发上一次非法的工具调用。
+                    # 先移除 durable Session 中无法再次发送的非法调用，
+                    # 再追加一条修正指令，让模型重新生成合法调用。
                     agent_input = [
                         {
                             "role": "user",
