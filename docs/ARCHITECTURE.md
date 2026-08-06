@@ -66,17 +66,15 @@ OpenAI Agents SDK Main Agent
         v
 Dataset Construction Runtime
         |
-        +-- discover/select     ── 来源发现与候选评估
-        +-- retrieve (per source, parallel)
-        +-- parse (per source)
-        +-- normalize (per source)
-        +-- compatibility gate  ── 数据族/键/单位/尺度兼容性
-        +-- integrate           ── 确定性合并
-        +-- validate            ── Validation Profile 驱动
-        `-- publish             ── 原子发布 + dataset_manifest.json
+        +-- acquire[*]           ── 每来源获取（builtin / WorkflowRecipe）
+        +-- parse[*] + canonicalize[*]  ── 每来源解析与规范化
+        +-- compatibility gate   ── 数据族/键/单位/尺度兼容性
+        +-- integrate            ── 确定性合并
+        +-- validate profile     ── Validation Profile 驱动
+        `-- publish              ── 原子发布 + dataset_manifest.json
                  |
                  v
-        validated artifacts/  (主数据 + 辅助表 + sidecar + manifest)
+        validated artifacts/  (primary + supporting + schema + provenance + audit)
 ```
 
 **保留自 V1 的可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
@@ -85,35 +83,36 @@ staging、Validation Gate、原子发布、fixture/live 区分。
 
 **替换自 V1 的业务中心**：固定 `_STAGES` 列表、`StageName` 作为业务主协议、
 固定数据库组合 allowlist、`StageAttempt` 的阶段专属语义、固定 Artifact 文件集
-合、固定验证顺序、固定 22 列 `main_data.csv` 全局协议。这些 V1 抽象在 V2 中
-降级为兼容 facade 或彻底移除（见 §18）。
+合、固定验证顺序、固定 22 列 `main_data.csv` 全局协议、metadata-only 占位主表。
+这些 V1 抽象在 V2 中降级为兼容 facade 或彻底移除（见 §18）。
 
-> 决策依据：ADR-003（保留可信内核）、ADR-004（受控 BuildRecipe，不引入完整 DAG）。
+> 决策依据：ADR-003（保留可信内核）、ADR-004（服务端固定骨架，不引入
+> DAG / BuildRecipe）。
 
 ---
 
 ## 3. 核心抽象
 
-### 3.1 DatasetRequest 与 DatasetBuildSpec
+### 3.1 DatasetBuildSpec（自包含）
 
-`DatasetRequest` 是用户意图的内部表示，由 Main Agent 从自然语言主题和数据需求
-解析而来。`DatasetBuildSpec` 是 Agent 生成的、提交给 Runtime 的**单一权威输入
-契约**，包含：
+`DatasetBuildSpec` 是 Agent 在意图解析与来源规划后直接生成的**单一权威输入
+契约**（不引入独立的 DatasetRequest 中间层），同时承担用户语义和执行规格，
+包含：
 
 - `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
 - `row_grain`：行粒度定义（如 "基因 × 样本 × 测量"）；
-- `canonical_schema_ref`：规范 Schema 的注册引用（见 §3.3）；
-- `key_semantics`：主键 / 业务键语义；
-- `measurement_semantics`：测量类型、单位、尺度、归一化状态；
-- `sources`：候选 `SourceRecord` 列表及选择理由；
-- `adapter_refs`：每个来源使用的 Adapter 引用；
-- `field_mapping_proposals`：字段映射候选（状态默认 `proposed`，见 §8）；
+- `schema_ref`：目标 Schema 的注册引用（见 §3.3）；
+- `required_fields`：必需字段清单；
+- `source_bindings`：每个来源的 SourceBinding（来源、获取方式、Adapter、
+  accession/参数）；获取方式只能是 `builtin` 或 `workflow_recipe`；
 - `normalization_profile_ref`：归一化 Profile 引用；
-- `validation_profile_ref`：Validation Profile 引用（见 §10）；
-- `cohort_query_params`：队列 / 查询参数。
+- `merge_strategy`：合并策略（如 `append_by_canonical_row`）；
+- `validation_profile_ref`：Validation Profile 引用（见 §10）。
 
-`DatasetBuildSpec` 不是任意代码或自由执行步骤，Agent 不能在其中嵌入可执行逻辑。
-复合需求由 Agent 拆成多个 `DatasetBuildSpec`，在同一会话下独立构建。
+`DatasetBuildSpec` 不是任意代码或自由执行步骤，Agent 不能在其中嵌入可执行逻辑，
+也不能传入 `minimum_valid_rows`、`allow_empty_primary_dataset` 等验收阈值——
+阈值、部分成功策略与人工复核要求属于服务端版本化 Profile。复合需求由 Agent
+拆成多个 `DatasetBuildSpec`，在同一会话下独立构建。
 
 ### 3.2 dataset_family 与 row_grain
 
@@ -159,17 +158,18 @@ V1 的 22 列表达长表可作为 `gene_expression` 数据族的一个 versione
 将迁移为 Schema Registry 中的字段元数据；不再在 Builder / Validation / API /
 前端多处分散定义。
 
-### 3.4 BuildRecipe
+### 3.4 服务端固定构建骨架
 
-`BuildRecipe` 是受控的执行计划模板，替换 V1 的固定五阶段。Recipe 描述步骤序列
-与来源并行组（执行序列见 §2 架构总览的 Runtime 部分），但**不允许 Agent 自由
-生成 nodes/edges**：
+Runtime 使用服务端固定、可测试的构建骨架（替换 V1 固定五阶段，执行序列见 §2
+架构总览的 Runtime 部分），**不允许 Agent 自由生成 nodes/edges**：
 
-- 来源步骤可以内部并发；依赖由 Recipe 模板和输入输出类型引用隐式确定；
-- Agent 不生成图边、不指定调度顺序；
+- 来源步骤可以内部并发；依赖由骨架与输入输出类型引用隐式确定；
+- Agent 不生成图边、不指定调度顺序，也不声明数据集级 Recipe；
 - 不引入完整 DAG 引擎：当前流程主体近似线性，并行来源不等于需要通用图调度器；
   完整 DAG 增加调度、重试传播、局部失败、循环验证和图版本成本，且 LLM 生成
-  DAG 不可靠。
+  DAG 不可靠；
+- 也不新增 `BuildRecipe` 抽象，避免与仓库已有的 `WorkflowRecipe`（仅限
+  Acquisition，见 §16.5）命名和生命周期冲突。
 
 **重新评估触发条件**：仅当用户自定义任意分析链、多级条件分支、节点复用和分布
 式执行成为核心需求时，才重新评估 DAG（见 ADR-004）。
@@ -179,17 +179,13 @@ V1 的 22 列表达长表可作为 `gene_expression` 数据族的一个 versione
 **主数据集**：一个 Build 只有一个主数据集族、一种行粒度。主表只保留最小溯源
 引用字段（见 §12）。
 
-**辅助数据**（可与主数据并存，不与之争夺业务中心）：
+**辅助数据**（可与主数据并存，不与之争夺业务中心）按 Manifest Artifact Role
+分类（见 §3.6）：
 
-- sample metadata；
-- entity mapping；
-- source list；
-- field mapping；
-- rejected rows；
-- quality report；
-- search report；
-- image / PDF assets；
-- provenance sidecar。
+- `supporting_dataset`：sample metadata、entity mapping、field mapping；
+- `provenance`：lineage sidecar、image / PDF assets；
+- `audit_report`：source list、quality report、search report、rejected rows
+  等审计与报告类产物。
 
 多表不代表回到"多角度研究包"。辅助表服务主数据的解释、映射、审计或复算。
 
@@ -199,16 +195,17 @@ V1 的 22 列表达长表可作为 `gene_expression` 数据族的一个 versione
 ### 3.6 dataset_manifest.json
 
 输出包含一个 `dataset_manifest.json`，是程序识别主数据的**唯一权威入口**。
-程序不得硬编码 `main_data.csv` 或任何固定文件名。Manifest 显式标识：
+程序不得硬编码 `main_data.csv` 或任何固定文件名。Manifest 按 Artifact Role
+只定义五类稳定角色：
 
-- 主数据路径；
-- dataset family；
-- row grain；
-- Canonical Schema 引用与版本；
-- 主键；
-- 行数和 hash；
-- 来源、验证、置信度和 provenance 摘要；
-- 辅助表清单及其角色。
+- `primary_dataset`：主数据；
+- `supporting_dataset`：辅助数据集（sample metadata、entity mapping 等）；
+- `schema`：目标 Schema；
+- `provenance`：溯源 sidecar 与来源资产；
+- `audit_report`：来源列表、质量、拒绝与搜索报告。
+
+Manifest 同时标识 dataset family、row grain、Schema 版本、主键、行数和 hash，
+以及来源、验证、置信度和 provenance 摘要。
 
 可为 Demo 提供 `dataset.csv` 别名，但程序不依赖该文件名。
 
@@ -239,29 +236,29 @@ V2 重构目标是**重新组织**这些能力围绕 DatasetBuild 中心，不�
 
 ---
 
-## 5. 执行模型：受控 BuildRecipe
+## 5. 执行模型：服务端固定骨架
 
-### 5.1 步骤序列
+### 5.1 操作与 Attempt
 
-BuildRecipe 由 Runtime 按模板执行（执行序列见 §2 架构总览的 Runtime 部分）。
-每一步创建独立 Attempt，
-记录输入摘要、参数摘要、输出摘要、attempt 序号和状态。步骤操作幂等；恢复时只
-复用摘要一致的成功输出。
+Runtime 按 §2 固定骨架执行。每个 Operation 创建独立 `OperationAttempt`，记录
+输入摘要、参数摘要、输出摘要、attempt 序号和状态；操作幂等，恢复时只复用
+digest 一致的成功输出。OperationAttempt 用于恢复、事件与摘要，不成为 Agent
+可声明的工作流节点。
 
 ### 5.2 局部重跑与版本
 
-- 同一 Agent Run 内只允许一次 publication；反复调用通过新的 durable Run 实现。
+- 同一 Agent Run 内只允许一次发布；反复调用通过新的 durable Run 实现。
 - 完整重跑可以复用输入、参数和上游输出 digest 一致的已验证步骤；topic、来源、
   解析规则或字段映射变化必须形成新的 Run/版本。
-- 局部重跑不是任意 `skip_stages`。服务端根据步骤依赖闭包从指定步骤重新执行，
-  下游步骤不得消费 digest 不匹配的上游输出。
-- 第一轮通过验证的结果标记为 `validated_intermediate`；合并 Agent 补充数据后
-  重新构建并验证，才标记为 `validated_final`。旧版本 Artifact 保留，不被新 Run
-  原地覆盖。
+- 局部重跑不是任意 `skip_stages`。服务端根据依赖闭包从指定操作重新执行，
+  下游操作不得消费 digest 不匹配的上游输出。
+- 每次正式发布生成不可变 Publication（`publication_id + supersedes`），不定义
+  `validated_intermediate` / `validated_final` 类可变状态；任务或会话只维护
+  `current_publication_id`（见 §9）。旧版本 Artifact 保留，不被新 Run 原地覆盖。
 
 ### 5.3 来源并行
 
-`retrieve` / `parse` / `normalize` 三个步骤对每个来源独立执行，可内部并发。
+`acquire` / `parse` / `canonicalize` 对每个来源独立执行，可内部并发。
 `compatibility gate` 之后的 `integrate` 是确定性合并，不接受 Agent 注入的任意
 合并逻辑。
 
@@ -373,30 +370,32 @@ ID、一对一关系。V1 的相似度规则足以将看似相似、实际不同
 
 ## 9. 构建结果与业务终态
 
-### 9.1 业务终态枚举（待落地）
+### 9.1 四类正交状态（待落地）
 
-V2 引入 `BuildOutcome` 与 `RunStatus` 分离：
+V2 将状态拆为四个正交维度，分别回答不同问题：
 
-| 终态 | 含义 | 是否发布主数据 |
+| 概念 | 回答问题 | 典型值 |
 | --- | --- | --- |
-| `SUCCEEDED` | 主数据通过验证并发布 | 是 |
-| `PARTIAL_SUCCESS` | 部分来源失败，剩余来源有效并发布 | 是（带失败来源清单） |
-| `NO_DATA` | 来源不适合或无目标记录，不生成假表 | 否，可发布搜索/拒绝报告 |
-| `SPEC_REJECTED` | BuildSpec 不满足兼容性或 Schema 约束 | 否，返回诊断 |
-| `EXECUTION_FAILED` | 文件损坏、Parser 异常等内部错误 | 否，明确错误并不发布 |
-| `CANCELLED` | 用户或系统取消 | 否 |
+| `RunStatus` | 执行是否排队、运行、完成、失败或取消 | QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED |
+| `BuildResult` | 正常完成后得到什么数据结果 | SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED |
+| `ValidationResult` | 某个 Manifest digest 是否通过 Profile | PASSED/FAILED |
+| `DatasetPublication` | 哪个不可变版本已正式提升 | publication_id + supersedes |
 
-`RunStatus`（V1 已存在：`QUEUED/RUNNING/FINALIZING/COMPLETED/FAILED/
-CANCELLED/INTERRUPTED/AWAITING_USER_INPUT`）表示**执行生命周期**；
-`BuildOutcome` 表示**数据结果**。两者正交。
+只有 `RunStatus=COMPLETED` 才产生 `BuildResult`。执行异常（Parser 崩溃等）对应
+`RunStatus=FAILED`，用户取消对应 `CANCELLED`，不再重复映射为 BuildResult 枚举。
+
+不使用 `validated_intermediate` / `validated_final`：每次成功发布生成不可变
+Publication，后续版本用 `supersedes_publication_id` 关联；任务/会话只维护
+`current_publication_id`。所谓 "final" 只是当前指针，不是 Artifact 固有状态。
+这些状态不得相互替代。
 
 ### 9.2 NO_DATA 是正式业务结果
 
-- 无主数据不再必然触发 `RunFailedPayload`；
+- 无主数据不再必然触发内部失败（`RunStatus` 仍可 COMPLETED）；
 - 前端不通过错误字符串猜 no_data；
-- 无数据时可以交付搜索、拒绝和诊断报告；
-- 内部异常仍然是 `EXECUTION_FAILED`；
-- 用户始终收到明确终结说明。
+- 无数据时可以交付审计型 Publication（schema + provenance + audit_report）；
+- 内部异常仍然是 `RunStatus=FAILED`；
+- 用户始终收到服务端生成的 RunSummary（终态判定示例见实现规格 Design §11.5）。
 
 ### 9.3 禁止 metadata-only 占位主表（P0）
 
@@ -404,16 +403,17 @@ V1 在 GEO 没有表达矩阵时，将样本元数据写成 `measurement_type=sa
 的表达 Schema 行，并在 Validation 中跳过表达值和 lineage 检查。这破坏了主数据
 语义。V2 规定：
 
-- 主表无合法记录时 outcome 为 `NO_DATA`；
+- 主表无合法记录时 BuildResult 为 `NO_DATA`；
 - 样本元数据保存在辅助表；
 - Validation 不允许 warning 或特殊字段豁免目标数据不存在；
 - 空主表不发布为 `SUCCEEDED`；
-- 可发布来源搜索和拒绝报告。
+- 可发布来源搜索和拒绝报告（归入 audit_report）。
 
 ### 9.4 不通过 artifact 数量判断成功
 
 V1 修复 silent completion 时将所有无 artifact 情形标成失败，前端再解析错误文
-本识别 no_data。V2 使用显式 `BuildOutcome` 和发布状态，不靠 artifact 数量。
+本识别 no_data。V2 使用显式 `BuildResult` 和发布状态，`RunStatus` 不再由
+artifact 数量推导。
 
 > 决策依据：ADR-010、ADR-011、ADR §21.4/§21.9（踩坑）。
 
@@ -445,25 +445,25 @@ V2 验证由数据集 Profile 驱动，替换 V1 的单一通用 Validator
 V1 的 validation check 顺序被回归测试固定（`package.py` 注释标注为
 "load-bearing"），重构时大量失败可能只是协议迁移，不代表可靠性退化。
 
-### 10.3 发布门禁
+### 10.3 发布门禁：三项架构不变量
 
-以下条件全部满足后才把 staging 原子提升为 `artifacts/`（语义保留自 V1）：
+架构层只规定三项发布不变量，全部满足后才把 staging 原子提升为 `artifacts/`：
 
-- 主数据每个 `source_id` 都存在；
-- 主键与外键完整；
-- 每个 `asset_id` 都存在于 source asset 记录，并关联成功 DownloadAttempt；
-- source asset 存在且 SHA-256 一致；
-- 主数据所有字段都有字段说明；
-- 主数据至少包含一条可回溯到来源文件的核心科研记录（非 metadata 占位）；
-- 每个源数据派生测量有精确 SourceLocator；
-- processing log 含完整输入输出和行数；
-- CSV 编码和列数稳定；
-- warnings 与 metrics 计数一致；
-- 所有必需 Artifact 存在且非空。
+1. **Provenance closure**：正式记录可追溯到 SourceAsset、源定位、Parser/Adapter
+   版本、映射和转换；主数据至少包含一条可回溯到来源文件的核心科研记录（非
+   metadata 占位）；
+2. **Validation Profile passed**：与目标 Manifest digest 对应的 Profile 判定
+   通过；
+3. **Atomic promotion**：只有引用闭合且 staging 完整的已验证 Manifest 才能
+   原子提升。
 
-失败报告写入 `logs/validation_report.json`，无效文件不得出现在 Artifact API。
+具体检查（文件编码与列数稳定、Schema/类型/主键、measurement 完整率、单位尺度
+与归一化、warnings 与 metrics 一致、probe mapping 覆盖率、NO_DATA/PARTIAL_
+SUCCESS 阈值等）属于版本化 Validation Profile，见实现规格 Design §10/§12。
+
 发布使用任务锁、独立 staging、文件 flush、manifest 验证和同文件系统原子
-rename；发布成功后才产生 artifact 和 completed 事件。
+rename；发布成功后才产生 artifact 和 completed 事件，无效文件不得出现在
+Artifact API。
 
 > 决策依据：ADR-012、ADR §21.5（踩坑）。
 
@@ -554,7 +554,9 @@ V2 缓存身份由 Schema 和构建参数标识，不由关键词或固定列标
 V1 现状：字节级内容缓存（`tools/content_cache.py`）已按
 `(database, accession, url)` 标识，逻辑缓存（`tools/cache_store.py`）按
 `(source_namespace, dataset_id)` 标识并使用 SQLite FTS5 检索——这些已符合
-V2 精神。V1 的 22 列 `main_data.csv` 缓存契约需要迁移为 Schema 版本化身份。
+V2 精神。V2 目标布局为 `cache/datasets/<namespace>/<dataset_id>/`
+（manifest + data + schema + provenance），旧 22 列 `main_data.csv` 缓存
+契约迁移为 `gene_expression.long.legacy.v1` 并双写（见实现规格 Design §13）。
 
 > 决策依据：ADR-015、ADR §21.3（踩坑）。
 
@@ -599,6 +601,12 @@ Agent Tool 桥接的 Pipeline 事件都使用 `schema_version="2.0"`；sequence 
   `TASK_COMPLETED/FAILED`；
 - `RuntimeEventType`（21 类）：`RUN_*`、`ASSISTANT_DELTA/REASONING_DELTA`、
   `TOOL_STARTED`、`CONVERSATION_COMPACTED`、9 个 `SUBAGENT_*` 事件。
+
+V2 逐步新增通用构建事件（`build_spec_ready`、`operation_started/progress/
+completed/failed`、`source_candidate_found/rejected`、`compatibility_evaluated`、
+`build_result_ready`），兼容期与旧 `stage_*` 并存；前端基于 `operation_id` /
+`label` / `category` 渲染，不再依赖固定 StageName union（见实现规格
+Design §15.1）。
 
 `tool_started` 携带可选 `arguments` dict（深度截断 3、字符串 200 字符、列表 20
 项），`tool_completed.output` 截断到 4 KB，前端据此渲染"检索 PubMed · 查询:
@@ -705,7 +713,7 @@ SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 | GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events | ✅ |
 | GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact | ✅ |
 | GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 | ✅ |
-| GET | `/tasks/{task_id}/builds` | 列出 Task 下的 DatasetBuild 与 BuildOutcome | 🚧 |
+| GET | `/tasks/{task_id}/builds` | 列出 Task 下的 DatasetBuild 与 BuildResult / Publication | 🚧 |
 | GET | `/tasks/{task_id}/builds/{build_id}` | 单个 Build 的 manifest 与产物 | 🚧 |
 | POST | `/import/tasks` | 多部分上传 → IMPORT AgentLoop | ✅ |
 | GET | `/cache/export` | 全量缓存 ZIP 导出 | ✅ |
@@ -766,8 +774,8 @@ Main Agent 不直接装载全部业务 Tool 或拼接每个 Skill 的 instructio
 
 - `find_skill` / `invoke_skill` 网关（由 `build_skill_gateway` 构造，绑定
   `SkillCatalog`）；
-- `run_research_pipeline`（V2 将改造为 `build_dataset` 入口，提交
-  `DatasetBuildSpec`）；
+- `validate_dataset_build_spec` / `execute_dataset_build`（校验并提交
+  `DatasetBuildSpec`；旧 `run_research_pipeline` 作为兼容层，见 §18）；
 - 文件读写工具（`read_file` / `read_file_head` / `search_file` / `write_file` /
   `list_files`）；
 - `compress_query_log` / `review_query_strategy`；
@@ -794,8 +802,9 @@ Pipeline，普通 Agent-only Skill 和子 Agent 的自然语言结果都不能�
   DISCOVERY + ACQUISITION Skill，产出 `source_asset_ids`；不能递归委派、调用
   Pipeline 或写入正式 `artifacts/`。失败时返回 `EXTRACTION_FAILED`。
 - **SkillBuilderAgent**：bounded workflow-recipe child agent，使用 DISCOVERY +
-  ACQUISITION + `create_skill`，只能通过 `create_skill` 生成声明式、不可执行的
-  `WorkflowRecipe`；失败时返回 `CAPABILITY_GAP`。
+  ACQUISITION + `create_skill`，只能通过 `create_skill` 生成声明式、非代码的
+  `WorkflowRecipe`（步骤限定为受控 API / HTML / Browser 操作，拒绝任意代码
+  字段）；失败时返回 `CAPABILITY_GAP`。
 
 子 Agent 使用独立 SDK Session，`global_limit=4`、`per_run_limit=3`、
 `batch_limit=8`、`timeout=3600s`。Supervisor 把 queued、running、progress、HIL、
@@ -805,6 +814,21 @@ cancel 和 terminal 状态写入父 Task 的同一 durable event log。
 `SubagentStagingWorkspace` 校验路径、大小、摘要和元数据后，才把文件原子提交为
 不可变 `SourceAsset`，并通过 `SubagentResult.source_asset_ids` 向 Main Agent
 暴露轻量引用。
+
+**WorkflowRecipe Acquisition 闭环**：`WorkflowRecipe` 只用于 Acquisition，不
+属于 Dataset 核心契约。"非可执行"表示 Recipe 不包含任意代码字段，不表示不会由
+可信解释器执行。生命周期 `DRAFT → VERIFIED → PROMOTED / REJECTED`；生产
+Dataset Build 只自动发现 `PROMOTED`，`VERIFIED` 仅限受限试用或 HIL 确认。
+消费链：
+
+```text
+SkillBuilderAgent -> WorkflowRecipe draft -> 受控校验 -> RecipeExecutor
+  -> WorkflowRecipeSourceFetcher -> SourceAsset -> SourceAdapter
+```
+
+Recipe 执行结果必须经 Workspace 校验提交为 SourceAsset 后才进入 Adapter。
+`WorkflowRecipe` 不得产生 Canonical DataBatch、声明跨来源依赖、决定合并、选择
+Validation Profile 或直接发布 Dataset（详见 ADR-004）。
 
 **Agent ↔ Pipeline 边界**：Main Agent 使用子 Agent 的结构化结果规划后续工作并
 提取 PMID、GSE 等 accession，随后调用 `run_research_pipeline`（V2：
@@ -931,9 +955,10 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 
 ### 18.1 迁移步骤
 
-1. **V2 契约与 V2 表达闭环并行加入**：新增 `DatasetBuildSpec`、
-   `BuildOutcome`、`dataset_manifest.json`、Schema Registry、Validation Profile
-   等契约；V1 契约保留；
+1. **V2 契约与 V2 表达闭环并行加入**：新增自包含 `DatasetBuildSpec`、
+   `DatasetSchema`、`DataBatch`、`BuildResult`、`ValidationResult`、
+   `DatasetPublication`、`dataset_manifest.json`、Schema Registry、Validation
+   Profile 等契约（不新增 `DatasetRequest` / `BuildRecipe`）；V1 契约保留；
 2. **旧 `run_research_pipeline` 作为兼容 facade**：内部逐步改为构造
    `DatasetBuildSpec` 并调用 V2 Runtime；
 3. **先抽取可靠性内核，再迁来源**：把 SourceAsset、DownloadAttempt、event、
@@ -941,10 +966,11 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 4. **先迁 GDC / Xena，后迁 GEO**：GDC + Xena 的表达合并路径先迁移到 V2；GEO
    因平台映射、probe mapping、尺度和归一化兼容性复杂，后迁；
 5. **V2 前端和缓存双轨**：前端结果页同时支持 V1 固定产物包和 V2 Manifest 驱动；
-   缓存按 V1 22 列身份和 V2 Schema 版本化身份双轨；
+   缓存按 V1 22 列身份和 V2 Schema 版本化身份双轨（旧 `main_data.csv` 包装为
+   `gene_expression.long.legacy.v1`）；
 6. **达到验收门槛后删除 Legacy**：V2 闭环通过四种必测结果（见 §21）后，删除
    §2 列出的 V1 固定协议（固定五阶段、固定 22 列、组合 allowlist、单一通用
-   Validator）。
+   Validator、metadata-only 占位）。
 
 ### 18.2 迁移期不变量
 
@@ -953,7 +979,7 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 - 内容寻址 `SourceAsset.asset_id` 在 V1 / V2 间相等当且仅当字节相等，跨版本可
   互验；
 - 迁移期测试同时锁定 V1 不变量（取消、恢复、hash、血缘、原子发布）和 V2 不变量
-  （单族单粒度、Profile 驱动验证、BuildOutcome）。
+  （单族单粒度、Profile 驱动验证、BuildResult / Publication）。
 
 ### 18.3 不立即删除历史 Review
 
@@ -983,12 +1009,14 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 12. 部分成功必须列出失败来源；
 13. Validation 失败不得发布；
 14. 发布必须原子；
-15. 任何已发布数据都能定位到构建版本和处理版本；
+15. 任何已发布数据都能定位到构建版本和处理版本（Publication 链）；
 16. fixture 不能伪装 live；
 17. 置信度必须可解释；
 18. 复合需求需要拆分或显式关系模型；
 19. 新来源接入不应修改多个数据库组合分支；
-20. 前端不得通过错误字符串推断业务状态。
+20. 前端不得通过错误字符串推断业务状态；
+21. 状态体系正交：`RunStatus` / `BuildResult` / `ValidationResult` /
+    `DatasetPublication` 不得相互替代。
 
 ---
 
@@ -1027,10 +1055,10 @@ GDC、Xena 优先；GEO 在完成平台、probe mapping、尺度和归一化兼�
 
 ### 21.5 必测四种结果
 
-1. **成功**：两来源兼容并合并；
-2. **部分成功**：一个来源失败但另一个有效；
-3. **无数据**：来源不适合或无目标记录，不生成假表；
-4. **执行失败**：文件损坏或 Parser 异常，明确错误并不发布。
+1. **成功**：两来源兼容并合并，发布 Publication；
+2. **部分成功**：一个来源失败但另一个有效，Profile 允许发布；
+3. **无数据**：来源不适合或无目标记录，返回 `NO_DATA`，不生成假表；
+4. **执行失败**：文件损坏或 Parser 异常，`RunStatus=FAILED`，不发布。
 
 ### 21.6 V1 固定真实验收案例（参考）
 
@@ -1093,8 +1121,10 @@ aggregation recipe 生成另一个 Schema，不能在同表混合。
 ## 23. 非目标
 
 - 替换 OpenAI Agents SDK；
-- 通用 Workflow Engine 或完整 DAG 引擎；
-- 可执行 Recipe 或由模型直接生成 Python Skill；
+- 通用 Workflow Engine、完整 DAG 引擎，或新增 `BuildRecipe` / `DatasetRequest`
+  抽象；
+- 可执行 Recipe（含 Python/JavaScript/Shell 等任意代码字段）或由模型直接生成
+  Python Skill；声明式 `WorkflowRecipe` 仅限 Acquisition，不受此禁令影响；
 - Agent 或 learned Skill 绕过 Compatibility Gate 或 Validation Gate；
 - 将 mock 产物当作正式案例；
 - 自动生成缺乏数据依据的科研或临床结论；
@@ -1103,6 +1133,7 @@ aggregation recipe 生成另一个 Schema，不能在同表混合。
 - 只靠 Prompt 修正架构（Prompt 只保留意图层原则，稳定规则进入契约和服务端
   Validator）；
 - 通过 artifact 数量判断运行成功；
+- 用 `validated_intermediate` / `validated_final` 混合表达验证与当前版本；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
 > 决策依据：ADR §19（被否决或修正的方案）。
@@ -1174,6 +1205,6 @@ aggregation recipe 生成另一个 Schema，不能在同表混合。
 | 万能 22 列 Schema | 否决作为全局 Schema | 可作为历史表达 Schema 或表达数据族一个版本保留 |
 | 用 warning 解释空主数据 | 否决 | Warning 不能改变"主表没有目标科学记录"的事实 |
 | 只靠 Prompt 修正架构 | 否决 | Prompt 不能替代服务端契约、兼容性门禁和发布规则 |
-| 通过 artifact 数量判断运行成功 | 否决 | 应使用显式 BuildOutcome 和发布状态 |
+| 通过 artifact 数量判断运行成功 | 否决 | 应使用显式 BuildResult 和发布状态 |
 
 > 完整决策记录见 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md) 的 §19（被否决或修正的方案）。
