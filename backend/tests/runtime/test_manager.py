@@ -50,6 +50,8 @@ from app.domain.contracts import (
     WarningPayload,
     build_event,
 )
+from app.domain.contracts.dataset_state import BuildResultStatus
+from app.domain.contracts.enums import ErrorCode
 from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.hub import AssistantStreamHub, EventHub
@@ -5890,3 +5892,110 @@ async def test_emit_user_input_resumed_with_unknown_id_keeps_pending() -> None:
                 summary="correct the data",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_completed_run_emits_build_result_no_data(tmp_path) -> None:
+    """零产物完成 → COMPLETED + BuildResult(NO_DATA)，而不是 run_failed。
+
+    复用现有 manager 集成 fixture：executor 模拟真实 AgentRunExecutor
+    跑过（mark_agent_executed）但零 completion_events。Task 7 的 reducer
+    聚合会把该 build_result 投影到 run.summary；本测试断言权威事件日志
+    里的 RunCompletedPayload（Task 6 直接产出物）。
+    """
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        execution.mark_agent_executed()
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_no_data_build"))
+        accepted = await manager.submit_run(
+            "task_no_data_build",
+            StartRunRequest(
+                request_id="req_no_data_build",
+                input="produce no artifacts",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.COMPLETED
+
+        events = await repository.list_events(accepted.task_id)
+        completed = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, RunCompletedPayload)
+        ]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
+        assert completed[0].build_result.valid_row_count == 0
+        assert completed[0].build_result.reason_codes == ["no_primary_data"]
+        assert not any(
+            isinstance(event.payload, RunFailedPayload) for event in events
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (RuntimeError("executor diagnostic"), ErrorCode.INTERNAL_ERROR),
+        (TimeoutError("executor timed out"), ErrorCode.TIMEOUT),
+    ],
+)
+async def test_failed_run_emits_structured_error_code(
+    tmp_path,
+    error: Exception,
+    expected_code: ErrorCode,
+) -> None:
+    """dispatch 异常 → run_failed 且 RunFailedPayload 携带结构化 error_code。
+
+    复用现有 \"dispatch 异常 → run_failed\" 集成 fixture；断言权威事件日志
+    里的 RunFailedPayload.error_code（Task 7 会投影到 run.summary.error_code）。
+    """
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        raise error
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_structured_error"))
+        accepted = await manager.submit_run(
+            "task_structured_error",
+            StartRunRequest(
+                request_id="req_structured_error",
+                input="fail with structured error",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.FAILED
+
+        events = await repository.list_events(accepted.task_id)
+        failed = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, RunFailedPayload)
+        ]
+        assert len(failed) == 1
+        assert failed[0].error_code is expected_code
+        assert failed[0].error
+    finally:
+        await manager.close()

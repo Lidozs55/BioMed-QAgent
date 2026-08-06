@@ -1,13 +1,14 @@
-"""回归测试：LLM 静默完成必须被拒绝。
+"""回归测试：LLM 静默完成必须被结构化处理。
 
 覆盖 docs/REVIEW_2026-07-18.md §1 中三类场景：
 1. LLM 未调用任何 tool，final_output 为空 → executor 抛 RuntimeError
 2. Agent 未产出 pending publication（未调 tool 或 tool 未产出 artifact）
    → 发射 WarningPayload(code="artifact_manifest_missing")
-3. Agent 模式下未产出 artifact 事件 → manager 转 RunFailedPayload
+3. Agent 模式下未产出 artifact 事件 → manager 发射 COMPLETED + BuildResult(NO_DATA)
 
-这些场景下 manager 层的成功证据校验（manager.py 成功证据校验）会把空
-completion_events 转 RunFailedPayload，避免"LLM 完成但无 artifact"。
+phase 4a 语义（见 docs/superpowers/plans/2026-08-06-phase4a-terminal-state.md
+Task 6）：零产物完成不再是 run_failed，而是结构化终态 completed +
+build_result.status == NO_DATA，由 TaskManager 直接构造。
 """
 
 from __future__ import annotations
@@ -24,9 +25,11 @@ from app.domain.contracts import (
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
+    RunStatus,
     StartTaskRequest,
     WarningPayload,
 )
+from app.domain.contracts.dataset_state import BuildResultStatus
 from app.runtime.compaction import CompactionCancelledError
 from app.runtime.manager import RunExecution, TaskManager
 from app.runtime.repository import TaskRepository
@@ -246,14 +249,15 @@ async def test_executor_does_not_warn_when_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_manager_fails_run_when_agent_produces_no_artifacts(
+async def test_manager_completes_run_when_agent_produces_no_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Agent 模式下未产出任何 artifact 事件时，manager 必须发射 RunFailedPayload。
+    """Agent 模式下未产出任何 artifact 事件时，manager 发射 COMPLETED + BuildResult(NO_DATA)。
 
-    覆盖 manager.py 成功证据校验：
-    completion_events 为空 + agent_executed → RunFailedPayload 而非 RunCompletedPayload。
+    phase 4a：零产物完成不再是 run_failed，而是结构化终态 completed +
+    build_result.status == NO_DATA。Task 7 的 reducer 聚合会把该 build_result
+    投影到 run.summary；本测试断言权威事件日志里的 RunCompletedPayload。
     """
 
     output_dir = tmp_path / "output"
@@ -289,15 +293,22 @@ async def test_manager_fails_run_when_agent_produces_no_artifacts(
         )
         await manager.wait_until_idle()
 
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.COMPLETED
+
         events = await repository.list_events(accepted.task_id)
         payloads = [event.payload for event in events]
         # 必须有 RunFinalizingPayload
         assert any(isinstance(p, RunFinalizingPayload) for p in payloads)
-        # 必须有 RunFailedPayload 且 error 提及 "artifact"
-        failures = [p for p in payloads if isinstance(p, RunFailedPayload)]
-        assert len(failures) == 1
-        assert "artifact" in failures[0].error.lower()
-        # 必须没有 RunCompletedPayload
-        assert not any(isinstance(p, RunCompletedPayload) for p in payloads)
+        # 必须有 RunCompletedPayload 且 build_result.status == NO_DATA
+        completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
+        assert completed[0].build_result.valid_row_count == 0
+        assert completed[0].build_result.reason_codes == ["no_primary_data"]
+        # 必须没有 RunFailedPayload
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
     finally:
         await manager.close()
