@@ -428,6 +428,10 @@ class TaskIndex:
                 if not snapshot_path.is_file():
                     continue
                 raw_snapshot = json.loads(snapshot_path.read_text("utf-8"))
+                # Snapshots persisted before the no_artifact_failure field was
+                # removed still carry it; strict ContractModel (extra="forbid")
+                # would reject it.
+                raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
                 snapshot = TaskSnapshot.model_validate(raw_snapshot)
                 if task_dir.name != snapshot.task.task_id:
                     raise ValueError(

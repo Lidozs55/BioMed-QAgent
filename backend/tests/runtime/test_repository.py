@@ -132,6 +132,33 @@ async def test_repository_backfills_artifact_count_for_legacy_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_repository_loads_legacy_snapshot_with_no_artifact_failure_field(
+    tmp_path,
+) -> None:
+    # Snapshots persisted before the no_artifact_failure field was removed carry
+    # it in the task sub-dict; strict ContractModel (extra="forbid") must not
+    # reject the load — the obsolete key is dropped before validation.
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    task_id = "task_legacy_no_artifact_failure"
+    await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    snapshot_path = (
+        output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
+    )
+    raw = json.loads(snapshot_path.read_text("utf-8"))
+    raw["task"]["no_artifact_failure"] = True
+    snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
+
+    loaded = await repository.get_snapshot(task_id)
+
+    assert loaded is not None
+    assert loaded.task.task_id == task_id
+    assert not hasattr(loaded.task, "no_artifact_failure")
+    await repository.close()
+
+
+@pytest.mark.asyncio
 async def test_repository_replays_subagent_record_from_events(tmp_path) -> None:
     repository = TaskRepository(tmp_path / "output")
     await repository.initialize()

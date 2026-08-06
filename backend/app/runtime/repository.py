@@ -583,6 +583,9 @@ class TaskRepository:
         if not snapshot_path.is_file():
             return None
         raw_snapshot = json.loads(snapshot_path.read_text("utf-8"))
+        # Snapshots persisted before the no_artifact_failure field was removed
+        # still carry it; strict ContractModel (extra="forbid") would reject it.
+        raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
         snapshot = TaskSnapshot.model_validate(raw_snapshot)
         latest_sequence = self.events.latest_sequence(task_id)
         if snapshot.task.latest_sequence > latest_sequence:

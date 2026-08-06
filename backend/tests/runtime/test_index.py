@@ -661,6 +661,33 @@ async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
 
 
 @pytest.mark.asyncio
+async def test_index_rebuild_loads_legacy_snapshot_with_no_artifact_failure_field(
+    tmp_path,
+) -> None:
+    # Snapshots persisted before the no_artifact_failure field was removed carry
+    # it in the task sub-dict; the rebuild must tolerate it (the obsolete key is
+    # dropped before validation) instead of failing at startup.
+    tasks_dir = tmp_path / "tasks"
+    task_id = "task_legacy_no_artifact_failure"
+    state_dir = tasks_dir / task_id / "state"
+    state_dir.mkdir(parents=True)
+    raw = snapshot(task_id).model_dump(mode="json")
+    raw["task"]["no_artifact_failure"] = True
+    (state_dir / "task_snapshot.json").write_text(
+        json.dumps(raw, ensure_ascii=False) + "\n",
+        "utf-8",
+    )
+    index = TaskIndex(tasks_dir)
+    await index.initialize()
+    try:
+        await index.rebuild()
+        page = await index.list_tasks()
+        assert [task.task_id for task in page.tasks] == [task_id]
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
 async def test_active_and_inactive_tasks_are_globally_ordered_on_every_page(
     tmp_path,
 ) -> None:
