@@ -1,0 +1,4 @@
+gene_id	gene_name	gene_type	unstranded	tpm_unstranded	fpkm_unstranded
+ENSG00000141510.17	TP53	protein_coding	120	85.5	80.2
+ENSG00000012048.18	BRCA1	protein_coding	45	30.1	28.9
+__no_feature	__no_feature	-	100	0.0	0.0
