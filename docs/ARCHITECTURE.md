@@ -5,24 +5,19 @@
 > - **权威性**：本文件是系统架构的**单一权威来源**（source of truth）。
 >   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订本文或新增 ADR。
 > - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
->   "为什么"由 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)
->   （ADR 索引）承担；实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
->   承担；执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
+>   "为什么"由 ADR 索引（[BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)）承担；
+>   实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md) 承担；
+>   执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
 > - **实现状态**：本文描述 V2 目标架构。当前代码仓库仍为 V1，归档于
 >   [legacy/ARCHITECTURE_V1.md](legacy/ARCHITECTURE_V1.md)。V2 通过绞杀模式
 >   逐步落地，迁移策略见 §18。各章节在涉及"已落地 / 待落地"时以行内标注说明。
-> - **验证节奏**：每个里程碑、每次新增/修订 ADR、每次数据族接入或执行模型
->   变化时，必须对照本文校验一致性。
-> - **失效信号**：与代码现状矛盾且未标注为待落地、或被新 ADR 显式推翻且未同步
->   修订时，本文标记为 `stale`。
-> - **变更触发**：新增 ADR、新增数据族、执行模型调整、API 面变化、迁移阶段
->   推进、Demo 范围调整。
+> - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
+>   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
+>   同步修订时，本文标记为 `stale`。
 > - **最后验证（Last Verified）**：2026-08-06。
 > - **交叉引用约定**：本文档内部章节引用写作 `§N`；引用 ADR 索引的章节写作
 >   `ADR §N`（如 `ADR §21` 指 ADR 索引的踩坑复盘，不是本文 §21 Demo 决策）。
-> - **不重复规则（no-duplication）**：每个架构概念只在一处定义权威表述；
->   其他文档引用本文而不复述。历史 Review 与 Survey 记录问题演进，不作为现行
->   架构依据，已推翻的结论必须标注 `superseded by ADR-xxx`。
+> - **治理规则**：变更触发、不重复规则（no-duplication）等见 §24。
 
 ---
 
@@ -167,21 +162,10 @@ V1 的 22 列表达长表可作为 `gene_expression` 数据族的一个 versione
 ### 3.4 BuildRecipe
 
 `BuildRecipe` 是受控的执行计划模板，替换 V1 的固定五阶段。Recipe 描述步骤序列
-与来源并行组，但**不允许 Agent 自由生成 nodes/edges**：
+与来源并行组（执行序列见 §2 架构总览的 Runtime 部分），但**不允许 Agent 自由
+生成 nodes/edges**：
 
-```text
-discover/select
-  -> retrieve per source (parallel group)
-  -> parse per source
-  -> normalize per source
-  -> compatibility gate
-  -> integrate
-  -> validate
-  -> publish
-```
-
-- 来源步骤可以内部并发；
-- 依赖由 Recipe 模板和输入输出类型引用隐式确定；
+- 来源步骤可以内部并发；依赖由 Recipe 模板和输入输出类型引用隐式确定；
 - Agent 不生成图边、不指定调度顺序；
 - 不引入完整 DAG 引擎：当前流程主体近似线性，并行来源不等于需要通用图调度器；
   完整 DAG 增加调度、重试传播、局部失败、循环验证和图版本成本，且 LLM 生成
@@ -259,7 +243,8 @@ V2 重构目标是**重新组织**这些能力围绕 DatasetBuild 中心，不�
 
 ### 5.1 步骤序列
 
-BuildRecipe 由 Runtime 按模板执行（见 §3.4 序列）。每一步创建独立 Attempt，
+BuildRecipe 由 Runtime 按模板执行（执行序列见 §2 架构总览的 Runtime 部分）。
+每一步创建独立 Attempt，
 记录输入摘要、参数摘要、输出摘要、attempt 序号和状态。步骤操作幂等；恢复时只
 复用摘要一致的成功输出。
 
@@ -639,10 +624,10 @@ WebSocket 端点 `/api/v1/ws` 只接受三类命令：
   的 durable 写入与执行不受影响。
 
 Agent 收到模型文本 chunk 后，先发布 `assistant_stream_delta`，再放入 durable
-buffer。buffer 按 100 ms / 1 KB 批量写为 `assistant_delta`，并在工具调用、正常
-或截断结束、异常与取消路径上强制结束并 flush。durable payload 可携带
-`stream_id + from_chunk_index + through_chunk_index`；三字段必须同时出现或同时
-省略，省略时兼容旧事件。
+buffer，按时间/大小批量写为 `assistant_delta`，并在工具调用、正常或截断结束、
+异常与取消路径上强制 flush。durable payload 可携带 `stream_id +
+from_chunk_index + through_chunk_index`；三字段必须同时出现或同时省略，省略时
+兼容旧事件。
 
 ### 14.4 人在回路与并发
 
@@ -663,21 +648,19 @@ submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
 
 ### 14.5 模型配置与 Run 自有生成设置
 
-五个 REST 端点为前端提供模型配置能力（见 §15）。每个 Run 在构造时捕获不可变
-`RunModelSettings` 快照（通过 `run_model_settings_scope` contextvar），将 Agent
-与并发的设置变更隔离。快照包含模型身份与凭据、六个生成参数，以及不可变
-`ContextBudget`。运行期间的设置变更和新校准只影响后续 Run。
+模型配置 REST 端点见 §15。每个 Run 在构造时捕获不可变 `RunModelSettings` 快照
+（通过 `run_model_settings_scope` contextvar），将 Agent 与并发的设置变更隔离。
+快照包含模型身份与凭据、六个生成参数，以及不可变 `ContextBudget`。运行期间的
+设置变更和新校准只影响后续 Run。
 
 到 OpenAI Agents SDK `ModelSettings` 的映射、DashScope 专有字段的条件发送、
-TrustedHostMiddleware 防 DNS rebinding、Token 估算与压缩校准等细节，V1 已实现，
-V2 保留。`LazyDashScopeModel` 显式持有其创建的 `AsyncOpenAI` 客户端，Run 清理
-时先解除内部引用再关闭 delegate 和底层客户端，构造失败与重复 `close()` 都不会
-泄漏或重复关闭连接池。
+Token 估算与压缩校准沿用 V1。`LazyDashScopeModel` 显式持有其创建的
+`AsyncOpenAI` 客户端，Run 清理时先解除内部引用再关闭，避免连接池泄漏或重复
+关闭。
 
-VLM 调用（`agent_loop/vl_model.py`）执行一次性 `chat.completions.create`，固定
-`model="qwen-vl-max"`、`temperature=0.1`，接收显式 `RunModelSettings` 快照，
-创建全新 `AsyncOpenAI` 客户端，在 `finally` 中关闭。VLM 不是 Agent 模型，不参
-与对话轮次。
+VLM 调用（`agent_loop/vl_model.py`）执行一次性 `chat.completions.create`，接收
+显式 `RunModelSettings` 快照，使用独立 `AsyncOpenAI` 客户端并在 `finally` 关闭。
+VLM 不是 Agent 模型，不参与对话轮次。
 
 ### 14.6 Agent SDK 动态 instructions 契约
 
@@ -839,18 +822,16 @@ Validation Gate 的是同一验证输入。正式 Artifact 仍只由 Validation 
 `source_assets/<asset_id>/`。该 Skill 不允许自行启动 Chromium、创建 HTTP client
 或直接写最终截图路径。不出现在 `GET /databases` 列表中，由 Agent 按需调用。
 
-BrowserPool 只保有一个 Chromium，最多同时打开 4 个隔离 BrowserContext。每个
-Context 强制 `service_workers="block"`，并使用独立凭据访问 loopback-only HTTPS
-CONNECT 代理。代理在实际 CONNECT 层仅解析一次目标域名、拒绝非公网地址并直连该
-固定 IP；Playwright route 继续负责 Recipe / source host allowlist。HTTP API /
-HTML 请求同样逐跳固定 IP、保留原始 Host/SNI、禁用自动重定向并为每次请求使用
-独立 transport，避免 DNS rebinding、跨 SNI 连接池复用和私网重定向。
+BrowserPool 复用一个 Chromium，打开隔离 BrowserContext 并强制
+`service_workers="block"`；网络请求经 loopback-only CONNECT 代理逐跳固定 IP、
+保留原始 Host/SNI、禁用自动重定向，Playwright route 负责 Recipe / source host
+allowlist，避免 DNS rebinding、跨 SNI 连接池复用和私网重定向。
 
 **视觉模型图表数据提取（`extract_chart_data_vlm` skill）**：接受任意获取渠道的
 论文产物（PNG/JPG/WEBP/GIF 图片或 PDF 文件）。单一工具入口
-`extract_chart_data_vlm(source_path, hint="")` 内部按 MIME 分派：图片直接
-base64 送 Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片（每文件上限 10 张），再
-逐图送 VLM。VLM 客户端在 `agent_loop/vl_model.py` 中独立于 `LazyDashScopeModel`。
+`extract_chart_data_vlm(source_path, hint="")` 内部按 MIME 分派：图片直接送
+Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片，再逐图送 VLM。VLM 客户端独立于
+Agent 模型（`agent_loop/vl_model.py`）。
 
 **三级降级链**（L1→L2→L3，全部失败抛 `ChartExtractionError`，禁止静默空数据
 降级）：
@@ -861,9 +842,9 @@ base64 送 Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片（每文件上�
 - L3 — caption 文本：兜底，正则提取 `Figure N.` / `Table N.` captions，写入
   `chart_type="caption_only"` 行并发出 `warning`。
 
-产物 `parsed/chart_data/chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，
-Excel 兼容）。每行 `source_asset_id` 将 chart 追溯到原始图片 / PDF。大图（>10MB）
-由 Pillow LANCZOS 自动降采样到 1920px 最长边。
+产物为 `parsed/chart_data/chart_data.csv` + `chart_data_points.csv`（Excel
+兼容编码），每行 `source_asset_id` 将 chart 追溯到原始图片 / PDF；大图自动
+降采样。
 
 > 决策依据：ADR-003（保留可信内核）、ADR-007（Agent 不决定数据值）。
 
@@ -923,9 +904,9 @@ ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符�
 **不硬编码 22 列 Schema**。V2 迁移后改为读取 `dataset_manifest.json` 识别主
 数据与辅助表，按数据族选择结果 Tab 与列渲染策略。
 
-启动时并发加载数据库、第一分页后端历史（全部 active Task + 默认 30 条 inactive
-history）和 WebSocket，但保持 `activeTaskId=null`，展示独立的新研究草稿；后续
-历史通过 cursor 加载并按不可变 `(created_at DESC, task_id DESC)` 排序去重。
+启动时并发加载数据库、后端历史分页和 WebSocket，但保持 `activeTaskId=null`，
+展示独立的新研究草稿；后续历史通过 cursor 加载并按不可变
+`(created_at DESC, task_id DESC)` 排序去重。
 
 `tasksById` 中每个 Task 都有独立的 Run、message、activity、artifact、fixture
 stage、`subagentsById`、`subagentOrder` 和 `lastSequence` 投影。桌面端右侧
@@ -962,8 +943,8 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 5. **V2 前端和缓存双轨**：前端结果页同时支持 V1 固定产物包和 V2 Manifest 驱动；
    缓存按 V1 22 列身份和 V2 Schema 版本化身份双轨；
 6. **达到验收门槛后删除 Legacy**：V2 闭环通过四种必测结果（见 §21）后，删除
-   V1 的固定五阶段、固定 22 列、`SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 和
-   单一通用 Validator。
+   §2 列出的 V1 固定协议（固定五阶段、固定 22 列、组合 allowlist、单一通用
+   Validator）。
 
 ### 18.2 迁移期不变量
 
@@ -1013,22 +994,10 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 
 ## 20. 代码评审检查表
 
-新增数据源或数据类型时必须回答：
+新增数据源或数据类型时，先逐项对照 §19 顶层不变量，再回答 §19 未覆盖的问题：
 
-- 它产生哪种 dataset family？
-- 一行是什么？
-- 源 Schema 是什么？
-- Canonical Schema 是什么？
-- 主键是什么？
-- 单位和尺度是什么？
-- 是否已归一化？
-- 字段映射证据来自哪里？
-- 与哪些已有 Batch 兼容？
-- 冲突和重复如何处理？
-- provenance 到什么粒度？
-- confidence 如何确定？
-- Validation Profile 是什么？
-- 无数据时返回什么？
+- 源 Schema 与 Canonical Schema 分别是什么？
+- 主键是什么？冲突和重复如何处理？
 - 是否会在其他模块新增来源特例？若是，抽象可能仍不正确。
 
 ---
@@ -1041,9 +1010,8 @@ V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 P
 
 ### 21.2 来源优先级
 
-- GDC；
-- Xena；
-- GEO 在完成平台、probe mapping、尺度和归一化兼容性后加入。
+GDC、Xena 优先；GEO 在完成平台、probe mapping、尺度和归一化兼容性后加入
+（迁移顺序见 §18.1 步骤 4）。
 
 ### 21.3 PubMed 角色
 
@@ -1092,9 +1060,10 @@ Phase 1 固定案例仍可作为 V1 闭环回归基线：
 Demo 使用 CSV；大数据内部是否使用 Parquet，发布是否同时提供 CSV，需要评估内
 存、速度和用户可用性。
 
-### 22.2 记录级还是批次级 confidence
+### 22.2 批次级与记录级 confidence 的继承规则
 
-确定性数据库通道可批次级默认，模型抽取需记录级。需要定义何时继承、何时覆盖。
+§11.2 已定"确定性 API 可批次级默认、VLM/LLM 抽取需记录级"。待定的是批次默认
+值何时被记录级判定继承或覆盖，以及前端如何呈现。
 
 ### 22.3 Provenance sidecar 格式
 
