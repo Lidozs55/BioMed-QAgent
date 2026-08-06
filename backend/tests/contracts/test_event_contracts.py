@@ -5,6 +5,7 @@ import re
 from datetime import UTC, datetime
 
 import pytest
+from app.datasets.contracts import BuildResult, BuildResultStatus
 from app.domain.contracts import (
     AssistantDeltaPayload,
     AttemptStatus,
@@ -35,7 +36,13 @@ from app.domain.contracts import (
     ToolCalledPayload,
     build_event,
 )
-from app.domain.contracts.events import _STAGE_EVENTS
+from app.domain.contracts.events import (
+    _STAGE_EVENTS,
+    PublicationCreatedPayload,
+    RunCancelledPayload,
+    RunCompletedPayload,
+    RunFailedPayload,
+)
 from pydantic import TypeAdapter, ValidationError
 
 NOW = datetime(2026, 7, 12, tzinfo=UTC)
@@ -614,3 +621,35 @@ def test_subagent_terminal_payloads_require_matching_result(
                 summary="Terminal result",
             ),
         )
+
+
+def test_terminal_event_payloads_carry_structured_state() -> None:
+    completed = RunCompletedPayload(
+        build_result=BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            reason_codes=["no_primary_data"],
+        )
+    )
+    assert completed.build_result.status is BuildResultStatus.NO_DATA
+    # 旧事件重放兼容：字段缺省合法
+    assert RunCompletedPayload().build_result is None
+    failed = RunFailedPayload(error="boom", error_code=ErrorCode.TIMEOUT)
+    assert failed.error_code is ErrorCode.TIMEOUT
+    assert RunFailedPayload(error="boom").error_code is None
+    cancelled = RunCancelledPayload(
+        reason="user", cancelled_at_stage=StageName.PROCESSING
+    )
+    assert cancelled.cancelled_at_stage is StageName.PROCESSING
+    assert RunCancelledPayload().cancelled_at_stage is None
+
+
+def test_publication_created_payload() -> None:
+    payload = PublicationCreatedPayload(
+        publication_id="pub-run_1",
+        run_id="run_1",
+        manifest_sha256="a" * 64,
+        published_at=datetime.now(UTC),
+    )
+    assert payload.type == "publication_created"
+    assert payload.supersedes_publication_id is None
