@@ -1,871 +1,927 @@
-# BioMed-QAgent 架构
+# BioMed-QAgent 架构（V2）
 
-> 本文描述当前批准的目标架构。详细数据契约与验收条件见
-> [Backend Data Closure Design](archive/superpowers/specs/2026-07-12-backend-data-closure-design.md)。
+> **文档元数据（documentation-lifecycle）**
+> - **受众**：所有在本仓库工作的 agent 与工程师；前端、后端、测试、运维评审。
+> - **权威性**：本文件是系统架构的**单一权威来源**（source of truth）。
+>   任何与本文矛盾的实现都视为缺陷；任何架构变更必须先修订本文或新增 ADR。
+> - **职责分工**：本文回答"系统是什么、怎么组织、约束是什么"；具体决策的
+>   "为什么"由 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)
+>   （ADR 索引）承担；实现规格由 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
+>   承担；执行任务由 [TODO.md](TODO.md) 承担。三者不互相复制。
+> - **实现状态**：本文描述 V2 目标架构。当前代码仓库仍为 V1，归档于
+>   [legacy/ARCHITECTURE_V1.md](legacy/ARCHITECTURE_V1.md)。V2 通过绞杀模式
+>   逐步落地，迁移策略见 §18。各章节在涉及"已落地 / 待落地"时以行内标注说明。
+> - **验证节奏**：每个里程碑、每次新增/修订 ADR、每次数据族接入或执行模型
+>   变化时，必须对照本文校验一致性。
+> - **失效信号**：与代码现状矛盾且未标注为待落地、或被新 ADR 显式推翻且未同步
+>   修订时，本文标记为 `stale`。
+> - **变更触发**：新增 ADR、新增数据族、执行模型调整、API 面变化、迁移阶段
+>   推进、Demo 范围调整。
+> - **最后验证（Last Verified）**：2026-08-06。
+> - **交叉引用约定**：本文档内部章节引用写作 `§N`；引用 ADR 索引的章节写作
+>   `ADR §N`（如 `ADR §21` 指 ADR 索引的踩坑复盘，不是本文 §21 Demo 决策）。
+> - **不重复规则（no-duplication）**：每个架构概念只在一处定义权威表述；
+>   其他文档引用本文而不复述。历史 Review 与 Survey 记录问题演进，不作为现行
+>   架构依据，已推翻的结论必须标注 `superseded by ADR-xxx`。
 
-## 1. 产品目标
+---
 
-用户输入一个研究主题，并可限制允许检索的数据库。系统自动完成：
+## 1. 产品定义与边界
 
-1. 检索和理解相关论文；
-2. 识别数据库、accession 和补充材料线索；
-3. 下载并校验原始数据；
-4. 解析、清洗、字段对齐和整合；
-5. 输出可分析、可追溯、可复用的结构化数据包。
+BioMed-QAgent 是面向生物医学开放数据的智能检索与标准化系统。它从自然语言
+数据需求出发，自动发现和评估来源，将**同类数据**映射至明确的规范 Schema，
+经过清洗、兼容性检查、合并、置信度标注和来源追踪后，输出可直接用于后续分析
+的标准化数据集。
 
-核心交付物是经过验证的 CSV、来源清单和处理记录，不是自然语言研究
-结论。分析和可视化是可选加分项。
+**核心边界**：系统的首要任务是**构建标准化可用数据集**，而不是完成一项完整
+科研研究。研究解释、机制分析、假设生成和多角度证据汇总可以作为上层能力，但
+不能决定底层主数据结构。这一边界直接对应赛题
+（[PROBLEM.md](../PROBLEM.md) 主选题 A）的评分对象：数据查找完备性、来源可追
+溯性、清洗整合可靠性、输出格式可用性。
 
-## 2. 当前架构结论
+**多源异构的精确含义**：多源指**来源和载体异构**——数据库、论文表格、附件、
+网页和图表；不表示表达、突变、通路、临床和文献元数据可以共享同一行粒度。允
+许合并的数据必须属于同一数据域、可比较、可合并。
 
-保留 OpenAI Agents SDK，不自研 Agent Runtime，也不推翻统一 Skill 仓库。
-新增确定性 Pipeline，解决 Agent 可以跳步骤、遗漏来源或直接生成不可信 CSV
-的问题。
+**复合需求**：当一个用户请求涉及多个数据域或多种行粒度时，拆分为多个独立的
+DatasetBuild（见 §3）。会话可将多个 Build 放在同一任务下，但每个 Build 独立
+验证和发布。
+
+> 决策依据：ADR-001（产品边界）、ADR-002（单族单粒度）、ADR-006（辅助数据）。
+
+---
+
+## 2. 架构总览
+
+系统采用**双层结构：Agent + Dataset Construction Runtime**。Agent 负责意图、
+来源规划和规格生成；Runtime 负责确定性获取、解析、归一化、兼容性判断、合并、
+验证、置信度、溯源和原子发布。
 
 ```text
 React/shadcn Frontend
         |
-        | HTTP + WebSocket events
+        | HTTP + WebSocket (durable events + realtime assistant stream)
         v
-FastAPI Task API
+FastAPI Control Plane  (task / run / artifact / settings / skills / cache)
         |
         v
 OpenAI Agents SDK Main Agent
         |
-        | TaskSpecification
+        | DatasetBuildSpec  (单一权威输入)
         v
-Deterministic Pipeline Runner
+Dataset Construction Runtime
         |
-        +-- Discovery
-        +-- Acquisition
-        +-- Processing
-        +-- Artifact Builder
-        `-- Validation Gate
+        +-- discover/select     ── 来源发现与候选评估
+        +-- retrieve (per source, parallel)
+        +-- parse (per source)
+        +-- normalize (per source)
+        +-- compatibility gate  ── 数据族/键/单位/尺度兼容性
+        +-- integrate           ── 确定性合并
+        +-- validate            ── Validation Profile 驱动
+        `-- publish             ── 原子发布 + dataset_manifest.json
                  |
                  v
-        validated artifacts/
+        validated artifacts/  (主数据 + 辅助表 + sidecar + manifest)
 ```
 
-### 2.1 Agent 的职责
+**保留自 V1 的可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
+Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
+staging、Validation Gate、原子发布、fixture/live 区分。
 
-- 理解用户主题和过滤条件；
-- 生成 PubMed、GEO 等检索参数；
-- 选择已启用 Skill 和数据库；
-- 生成结构化 `TaskSpecification`；
-- 调用 Pipeline Function Tool；
-- 解释 Pipeline 返回的结构化错误或警告。
+**替换自 V1 的业务中心**：固定 `_STAGES` 列表、`StageName` 作为业务主协议、
+固定数据库组合 allowlist、`StageAttempt` 的阶段专属语义、固定 Artifact 文件集
+合、固定验证顺序、固定 22 列 `main_data.csv` 全局协议。这些 V1 抽象在 V2 中
+降级为兼容 facade 或彻底移除（见 §18）。
 
-Agent 不直接拼装最终 CSV，也不能绕过 Validation Gate。
+> 决策依据：ADR-003（保留可信内核）、ADR-004（受控 BuildRecipe，不引入完整 DAG）。
 
-### 2.2 Pipeline 的职责
+---
 
-- 强制执行完整的数据阶段；
-- 校验每个阶段的输入输出契约；
-- 固化下载、解析、追溯和导出行为；
-- 为模型、网络、解析和完整任务设置独立超时；
-- 只发布通过验证的 Artifact；
-- 失败时保证终态事件，不使用 mock 伪装成功；
-- 接收 Agent 发现或补充的数据，但必须将其转换为统一的
-  `SourceRecord` / `SourceAsset` / `ParsedDataset` 契约后再处理；
-- 负责确定性合并、最终验证和正式 Artifact 发布，Agent 不直接合并或写入最终 CSV。
+## 3. 核心抽象
 
-### 2.3 目标 Agent 编排工作流
+### 3.1 DatasetRequest 与 DatasetBuildSpec
 
-系统采用“Agent 编排 + Pipeline 确定性发布”的迭代流程：
+`DatasetRequest` 是用户意图的内部表示，由 Main Agent 从自然语言主题和数据需求
+解析而来。`DatasetBuildSpec` 是 Agent 生成的、提交给 Runtime 的**单一权威输入
+契约**，包含：
+
+- `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
+- `row_grain`：行粒度定义（如 "基因 × 样本 × 测量"）；
+- `canonical_schema_ref`：规范 Schema 的注册引用（见 §3.3）；
+- `key_semantics`：主键 / 业务键语义；
+- `measurement_semantics`：测量类型、单位、尺度、归一化状态；
+- `sources`：候选 `SourceRecord` 列表及选择理由；
+- `adapter_refs`：每个来源使用的 Adapter 引用；
+- `field_mapping_proposals`：字段映射候选（状态默认 `proposed`，见 §8）；
+- `normalization_profile_ref`：归一化 Profile 引用；
+- `validation_profile_ref`：Validation Profile 引用（见 §10）；
+- `cohort_query_params`：队列 / 查询参数。
+
+`DatasetBuildSpec` 不是任意代码或自由执行步骤，Agent 不能在其中嵌入可执行逻辑。
+复合需求由 Agent 拆成多个 `DatasetBuildSpec`，在同一会话下独立构建。
+
+### 3.2 dataset_family 与 row_grain
+
+一个 DatasetBuild 的主数据必须满足以下四元组均明确且兼容：
 
 ```text
-Agent 初步分析与调研
-    -> 版本化 TaskSpecification / ResearchPlan
-    -> Pipeline Run #1
-         -> validated_intermediate artifacts
-    -> Agent 根据结构化结果评估进展
-         |-- 可修复失败：新的 durable Run，完整或受控局部重跑
-         |-- 有明确缺口：检索、浏览器、PDF 或其它数据库补充数据
-         `-- 无新增证据：结束补充阶段
-    -> Agent 补充数据注册为 SourceRecord / SourceAsset / ParsedDataset
-    -> Pipeline 新 Run
-         -> 确定性合并 + Validation Gate
-         -> validated_final artifacts
+dataset_family + row_grain + key_semantics + measurement_semantics
 ```
 
-这不是让 LLM 直接生成最终 CSV。Agent 只负责问题理解、候选发现、工具选择、
-补充策略和映射建议；所有正式数据仍必须经过 Pipeline 的处理、追溯和 Validation
-Gate。
+**可以合并**的示例：
 
-### 2.4 迭代、重跑与版本决策
+- 多来源 gene-sample expression；
+- 多论文中采用同一指标和同一对象粒度的实验测量；
+- 多数据库的 pathway-member 记录。
 
-- 同一 Agent Run 内只允许一次 Pipeline publication；反复调用通过新的 durable
-  Run 实现，避免同一 publication slot 的重入和不可审计覆盖。
-- 完整重跑可以复用输入、参数和上游输出 digest 一致的已验证阶段；topic、来源、
+**不能直接合并**的示例：
+
+- 表达行与突变事件行；
+- 基因-样本测量与队列聚合统计；
+- 文献元数据与表达测量；
+- 通路节点与临床样本；
+- 原始 count 与 TPM，除非明确转换或保持可区分语义。
+
+`row_grain` 不是字符串标签，而是结构化定义：一行代表什么实体、什么测量、什么
+时间或条件维度。任何"合并"设计必须先写出一行代表什么，再讨论字段对齐。
+
+### 3.3 Canonical Schema 与 Schema Registry
+
+**Schema Registry**（待落地）是数据族规范 Schema 的版本化注册中心。每个
+`CanonicalSchema` 声明：
+
+- Schema 标识与版本；
+- 字段集、类型、约束；
+- 主键与外键语义；
+- 单位与尺度规范；
+- 与历史 Schema 的兼容性关系。
+
+V1 的 22 列表达长表可作为 `gene_expression` 数据族的一个 versioned profile
+保留，但**不再是全局协议**。新数据族通过注册新 Schema 接入，不修改其他数据族
+的 Schema 或共享分支。
+
+`_FIELD_DESCRIPTIONS` 字典（V1，位于 `pipeline/stages/artifact_build/columns.py`）
+将迁移为 Schema Registry 中的字段元数据；不再在 Builder / Validation / API /
+前端多处分散定义。
+
+### 3.4 BuildRecipe
+
+`BuildRecipe` 是受控的执行计划模板，替换 V1 的固定五阶段。Recipe 描述步骤序列
+与来源并行组，但**不允许 Agent 自由生成 nodes/edges**：
+
+```text
+discover/select
+  -> retrieve per source (parallel group)
+  -> parse per source
+  -> normalize per source
+  -> compatibility gate
+  -> integrate
+  -> validate
+  -> publish
+```
+
+- 来源步骤可以内部并发；
+- 依赖由 Recipe 模板和输入输出类型引用隐式确定；
+- Agent 不生成图边、不指定调度顺序；
+- 不引入完整 DAG 引擎：当前流程主体近似线性，并行来源不等于需要通用图调度器；
+  完整 DAG 增加调度、重试传播、局部失败、循环验证和图版本成本，且 LLM 生成
+  DAG 不可靠。
+
+**重新评估触发条件**：仅当用户自定义任意分析链、多级条件分支、节点复用和分布
+式执行成为核心需求时，才重新评估 DAG（见 ADR-004）。
+
+### 3.5 主数据集与辅助数据
+
+**主数据集**：一个 Build 只有一个主数据集族、一种行粒度。主表只保留最小溯源
+引用字段（见 §12）。
+
+**辅助数据**（可与主数据并存，不与之争夺业务中心）：
+
+- sample metadata；
+- entity mapping；
+- source list；
+- field mapping；
+- rejected rows；
+- quality report；
+- search report；
+- image / PDF assets；
+- provenance sidecar。
+
+多表不代表回到"多角度研究包"。辅助表服务主数据的解释、映射、审计或复算。
+
+**关系型特例**：如果数据天然是关系型结构，可有主事实表和维表，但必须显式建模
+关系和主表角色，并在 `dataset_manifest.json` 中声明。
+
+### 3.6 dataset_manifest.json
+
+输出包含一个 `dataset_manifest.json`，是程序识别主数据的**唯一权威入口**。
+程序不得硬编码 `main_data.csv` 或任何固定文件名。Manifest 显式标识：
+
+- 主数据路径；
+- dataset family；
+- row grain；
+- Canonical Schema 引用与版本；
+- 主键；
+- 行数和 hash；
+- 来源、验证、置信度和 provenance 摘要；
+- 辅助表清单及其角色。
+
+可为 Demo 提供 `dataset.csv` 别名，但程序不依赖该文件名。
+
+> 决策依据：ADR-005（Manifest 驱动）、ADR-006（辅助数据）、ADR-015（缓存身份）。
+
+---
+
+## 4. 可信执行内核（保留自 V1）
+
+以下能力是赛题"来源追踪、可复现、错误修正"的基础，直接复用 V1 实现，不重构：
+
+| 能力 | V1 实现位置（参考） | V2 状态 |
+| --- | --- | --- |
+| `SourceAsset` 内容 hash 标识 | `domain/contracts/source.py` | 保留 |
+| `DownloadAttempt` 成功/失败记录 | `domain/contracts/source.py` | 保留 |
+| Stage/Attempt 输入/参数/输出摘要 | `domain/contracts/pipeline.py` | 保留，语义从"阶段"泛化为"步骤" |
+| 任务锁、checkpoint、timeout/cancel | `pipeline/runner.py`、`runtime/manager.py` | 保留 |
+| durable event 持久化与重放 | `runtime/event_store.py`、`runtime/hub.py` | 保留 |
+| staging 区与原子发布 | `pipeline/stages/validation/publish.py` | 保留 |
+| Validation Gate | `pipeline/stages/validation/` | 保留门禁，替换为 Profile 驱动（§10） |
+| fixture / live 区分 | 测试标记与 `mode` 参数 | 保留 |
+| 网络访问、安全下载、沙箱、egress 边界 | `integrations/`、BrowserPool | 保留 |
+
+V2 重构目标是**重新组织**这些能力围绕 DatasetBuild 中心，不是证明 V1 实现一无
+是处。重构后这些能力的接口可能变化，但语义不变。
+
+> 决策依据：ADR-003、ADR §20（V1 已做对的事情）。
+
+---
+
+## 5. 执行模型：受控 BuildRecipe
+
+### 5.1 步骤序列
+
+BuildRecipe 由 Runtime 按模板执行（见 §3.4 序列）。每一步创建独立 Attempt，
+记录输入摘要、参数摘要、输出摘要、attempt 序号和状态。步骤操作幂等；恢复时只
+复用摘要一致的成功输出。
+
+### 5.2 局部重跑与版本
+
+- 同一 Agent Run 内只允许一次 publication；反复调用通过新的 durable Run 实现。
+- 完整重跑可以复用输入、参数和上游输出 digest 一致的已验证步骤；topic、来源、
   解析规则或字段映射变化必须形成新的 Run/版本。
-- 局部重跑不是任意 `skip_stages`。服务端根据阶段依赖闭包从指定阶段重新执行，
-  下游阶段不得消费 digest 不匹配的上游输出。
+- 局部重跑不是任意 `skip_stages`。服务端根据步骤依赖闭包从指定步骤重新执行，
+  下游步骤不得消费 digest 不匹配的上游输出。
 - 第一轮通过验证的结果标记为 `validated_intermediate`；合并 Agent 补充数据后
   重新构建并验证，才标记为 `validated_final`。旧版本 Artifact 保留，不被新 Run
   原地覆盖。
-- Agent-only 数据源不自动等同于 Pipeline 支持；`pipeline_supported` 只表示该
-  来源已经完成相应的搜索、元数据、下载、解析和验证闭环。来源能力以
-  `SOURCE_CAPABILITIES` 单一事实表声明（TODO §1.4）：pubmed/geo/gdc/ucsc_xena/
-  reactome 为 `pipeline_supported`，pdb/pubchem/browser 为 `research_only`。
-  `TaskSpecification.declare_sources` 为每个选中来源生成输入级能力声明，
-  `run_research_pipeline` 按能力表拒绝非 pipeline-supported 来源并返回
-  `capabilities` 明细；skill catalog 的 `pipeline_supported` 与 `/databases`
-  的 `capability` 字段均从该表派生，避免两套声明漂移。
-- GDC Pipeline 首期接受显式 `project_id` + `gene-expression`。Live Acquisition 将
-  该内部类型映射为官方 `Gene Expression Quantification`，并通过 `/files` 同时约束
-  `data_format=TSV`；Processing 支持 GDC 官方 augmented STAR-counts（优先使用
-  `tpm_unstranded`）及兼容 fixture 矩阵。Clinical TSV 仅保留 fixture 回归能力；live
-  Clinical Supplement 在 HTTP 请求前 fail-closed，直至 XML 血缘解析器完成。
-- 多源确定性合并（TODO §1.2/§1.5.4）：当 `TaskSpecification` 明确选择一个 GDC 与
-  一个 Xena 数据集时，Discovery 与 Acquisition 保留两套来源/资产，Processing
-  为每个数据集解析独立 `ParsedDataset`，通过
-  `alignment.align_fields` 生成真实字段映射、`alignment.merge_datasets` 垂向合并，
-  产出 `merged_dataset`（`parsed/{id}_merged.csv`）；Runner 将全部 `parsed_datasets`
-  与 `merged_dataset` 传入 Artifact Build，合并结果作为 `main_data.csv` 发布，
-  `field_mapping.csv` 按来源各一组真实映射，merge 步骤写入 `processing_log.csv`。
-  合并包与单源包一样重新经过 Artifact Build + Validation Gate：`dataset_catalog.csv`
-  每个输入数据集一行、`download_log.csv` 记录全部 attempt、`sample_metadata.csv` 按
-  来源行聚合、lineage 校验按行 asset_id 路由到各自源文件，并生成
-  `multi_source_manifest.csv`（dataset_id → database → row_count）声明合并构成。
-
-### 2.5 Skill 和 Tool 的职责
-
-以下职责是目标边界；当前后端仍有两类实现差距，不能将目标描述当作已完成能力：
-
-- `PipelineRunner` 已覆盖 PubMed/GEO 主路径，GDC、Xena 和 Reactome 的首期显式
-  单数据集路径，以及一个 GDC + 一个 Xena 的确定性合并路径。Reactome 仅接受一个
-  显式 pathway，必须作为唯一来源运行；通用任意来源组合、mutation/CNV、GDC live
-  clinical 与 Reactome 扩展数据类型仍未完成。
-- Agent-only Skill 的文件记录仍主要通过 `RunContext.add_source()` /
-  `add_raw_asset()` 保存到运行时字段；这些文件尚未统一转换为 Pipeline 的
-  Pydantic `SourceRecord` / `SourceAsset` / `ParsedDataset`，因此不能直接作为正式
-  Pipeline 数据或最终 CSV 的来源。
-- Pipeline 的 `Validation Gate` 只约束 Pipeline 生成的研究数据包；直接由 Agent
-  Skill 写入 `artifacts/` 的分析图表或报告属于未纳入正式发布闭环的辅助产物，后续
-  必须明确其目录隔离或接入同一验证契约。
-
-统一 Skill 仓库继续按四类组织：
-
-```text
-backend/app/skills/
-|-- builtin/
-|   |-- discovery/
-|   |-- acquisition/
-|   |-- processing/
-|   `-- analysis/
-`-- learned/
-    |-- discovery/
-    |-- acquisition/
-    |-- processing/
-    `-- analysis/
-```
-
-- Skill 是 instructions 与 Tool 的能力包；
-- 一个网站可以有多个 Tool，不要求一个网站一个 Skill；
-- 网站 Tool 分为 search、describe/metadata、download；
-- download 记录 `DownloadAttempt`，成功校验后才返回 `SourceAsset`；
-- processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
-- learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
-
-### 2.6 动态 Skill Catalog 与管理面
-
-业务 Skill 统一由 lifespan 创建的进程级 `SkillCatalog` 管理。Catalog 合并随应用
-发布的 builtin Skill 与外部应用数据目录中的用户 Skill，并通过不可变快照和单调
-递增 `generation` 原子热更新。正在执行的单次调用固定到解析时的 Skill 版本；
-后续调用读取最新快照。
-
-该进程级 Catalog 必须由 lifespan 同时传给 `UserSkillStore` 和
-`ModeDispatchRunExecutor`，并继续下传到 Agent 与 Import executor，确保管理面热更新
-和后续 Run 使用同一个快照来源。提交 `5008c56` 最初建立了这条链路；合并提交
-`2cf9a01` 保留了 `main.py` 中的 catalog-aware 调用，却从其本地父提交 `0110062`
-恢复了 `runner.py` 的旧构造器，导致启动时出现 unexpected keyword argument。
-`tests/runtime/test_manager.py::test_fastapi_lifespan_owns_runtime_executors_and_manager`
-固定此共享实例和启动不变量，防止跨分支合并再次拆断调用方与实现方。
-
-Main Agent 不再直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
-持有稳定的 `find_skill` / `invoke_skill` 网关、托管子 Agent 的
-`delegate_research` / `get_subagent_results` / `cancel_subagent`，以及 Pipeline、
-文件、压缩和 Reviewer 等核心 Tool。用户选择的数据库是 `preferred_sources`：
-Main Agent 优先使用这些来源，但也可以探索公开、免登录且不需要私密凭据的其他
-来源。登录、CAPTCHA、付费、凭据和服务条款边界仍必须进入 HIL。
-`pipeline_supported` 只表示该来源能够进入确定性 Pipeline，普通 Agent-only Skill
-和子 Agent 的自然语言结果都不能充当完成证据。
-
-用户扩展支持声明式 JSON/YAML HTTP 数据库包和 Python ZIP Skill 包。用户包保存在
-单文件程序之外的可写目录，支持校验、上传、启停、版本回滚和删除。坏包保持
-`unavailable/load_error` 管理可见性，不阻断应用启动。设置页的 Model、Databases
-和 Skills 三个区段使用对应 REST API 管理这些状态。
-
-### 2.5 托管式 Subagent、WorkflowRecipe 与 Pipeline 边界
-
-`SubagentSupervisor` 是 lifespan-owned 的运行时服务。Main Agent 可以在一个父
-Run 内并行委派 `SourceResearchAgent` 和 `SkillBuilderAgent`；子 Agent 使用独立
-SDK Session，不能递归委派、调用 Pipeline 或写入正式 `artifacts/`。Supervisor
-实施单 Run 3 路、进程全局 4 路并发限制，并把 queued、running、progress、HIL、
-cancel 和 terminal 状态写入父 Task 的同一 durable event log。单个子 Agent 的取消
-端点为：
-
-```text
-POST /api/v1/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel
-```
-
-子 Agent 的网络或 Recipe 采集只能写
-`staging/subagents/<subagent_id>/`。`SubagentStagingWorkspace` 校验路径、大小、
-摘要和元数据后，才把文件原子提交为不可变 `SourceAsset`，并通过
-`SubagentResult.source_asset_ids` 向 Main Agent 暴露轻量引用。新采集流程保存为
-声明式、不可执行的 `WorkflowRecipe`；受控执行器固定采用 API → HTML → Browser
-回退，记录每次尝试和回退理由。
-
-当前 Agent ↔ Pipeline 边界不是把子 Agent 文件直接注入 Pipeline。Main Agent 使用
-子 Agent 的结构化结果规划后续工作并提取 PMID、GSE 等 accession，随后调用
-`run_research_pipeline`；Pipeline 仍从权威来源执行自己的确定性 Acquisition。
-当两条路径获得相同字节时，内容寻址 `SourceAsset.asset_id` 相等，证明进入
-Processing 和 Validation Gate 的是同一验证输入。正式 Artifact 仍只由 Validation
-Gate 发布，子 Agent 的完成事件或 SourceAsset ID 本身不构成发布证据。
-
-**视觉证据采集（web_visual_capture）**：
-`acquisition/web_visual_capture.py` 提供 `capture_web_page` 与
-`capture_page_section` 两个 function_tool。它只调用 RunContext 中由 lifespan
-注入的 `CrawlerFacade`，由共享 `BrowserPool` 完成 Chromium 截图；PNG 和 metadata
-sidecar 均先进入 `SubagentStagingWorkspace`，通过大小、摘要、路径和链接检查后再
-commit 到任务 `source_assets/<asset_id>/`。该 Skill 不允许自行启动 Chromium、
-创建 HTTP client 或直接写最终截图路径。
-
-BrowserPool 只保有一个 Chromium，最多同时打开 4 个隔离 BrowserContext。每个
-Context 强制 `service_workers="block"`，并使用独立凭据访问 loopback-only HTTPS
-CONNECT 代理。代理在实际 CONNECT 层仅解析一次目标域名、拒绝非公网地址并直连该
-固定 IP；Playwright route 继续负责 Recipe/source host allowlist。HTTP API/HTML
-请求同样逐跳固定 IP、保留原始 Host/SNI、禁用自动重定向并为每次请求使用独立
-transport，避免 DNS rebinding、跨 SNI 连接池复用和私网重定向。浏览器 HTML、
-Recipe extract、截图像素和 PNG，以及普通下载均有硬上限。该 Skill 不出现在
-`GET /databases` 列表中，由 Agent 按需调用。
-
-**视觉模型图表数据提取（extract_chart_data_vlm）**：
-`processing/extract_chart_data_vlm.py` 是 TODO §5.2 视觉模型降级方案的实现。
-它接受**任意获取渠道**的论文产物（满足"视觉模型应设法处理任何获得方法的论文"
-约束）：
-
-- PNG/JPG/WEBP/GIF 图片 — 来自 `web_visual_capture` 截图、未来 skill 的独立
-  下载、或外部用户提供的图片；
-- PDF 文件 — 来自 `download_supplementary` 从 PubMed/PMC 下载的开放获取论文。
-
-单一工具入口 `extract_chart_data_vlm(source_path, hint="")` 内部按 MIME 分派：
-图片直接 base64 送 Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片（每文件上限 10
-张），再逐图送 VLM。VLM 客户端在 `app/agent_loop/vl_model.py` 中独立于
-`LazyDashScopeModel`（模型名 `qwen-vl-max` vs `qwen-plus`，调用模式为一次性
-`chat.completions.create` + `image_url` content part 而非 Agent 轮次）。
-
-**三级降级链**（L1→L2→L3，全部失败抛 `ChartExtractionError`，project_memory
-L1 禁止静默空数据降级）：
-
-- L1 — Qwen-VL：主路径，要求 `DASHSCOPE_API_KEY`；返回严格 JSON
-  `{chart_type, axes, data_points, legend}`，解析容错剥离 markdown fence 与
-  尾部 prose；
-- L2 — pdfplumber 表格：仅 PDF 触发，提取矢量 PDF 表格数据（非栅格图表替代）；
-- L3 — caption 文本：兜底，正则提取 `Figure N.` / `Table N.` captions，写入
-  `chart_type="caption_only"` 行并发出 `warning`。
-
-产物：`parsed/chart_data/chart_data.csv`（每图一行）+
-`parsed/chart_data/chart_data_points.csv`（每数据点一行），UTF-8 BOM 编码
-（`utf-8-sig`，Excel 兼容，TODO §1.7）。每行 `source_asset_id=asset_<sha256>`
-将 chart 追溯到原始图片/PDF。大图（>10MB）由 Pillow LANCZOS 自动降采样到
-1920px 最长边以适配 DashScope inline base64 限制。`hint` 参数（如
-`"scatter plot, log scale"`）注入 VLM prompt 增强歧义图表识别。
-
-## 3. 核心数据契约
-
-契约使用 Pydantic v2，统一继承 `ContractModel`，显式设置
-`ConfigDict(extra="forbid", validate_default=True)`。集合使用
-`default_factory`，所有序列化对象包含 `schema_version`。对象只保存路径和轻量
-元数据，不把大型表格放入 Context。
-
-### 3.1 TaskRequest
-
-用户提交的需求：
-
-- `topic`：唯一必填业务字段；
-- `databases`：默认 `pubmed`、`geo`；
-- `keywords`：可选关键词；
-- `target_fields`：可选目标字段；
-- `time_range`：可选时间范围。
-
-### 3.2 TaskSpecification
-
-Agent 生成的数据需求描述，包含：
-
-- 原始主题；
-- `QuerySpecification` 列表，区分用户、Agent 和 Pipeline 查询；
-- 候选或固定数据集 accession；
-- 请求的输出类型。
-
-它不是任意代码或自由执行步骤。
-
-`DatasetSelection` 明确定义 `dataset_id`、database、accession、source_id 和选择
-理由。
-
-### 3.3 SourceRecord 与 SourceRelation
-
-描述论文、数据库记录或下载页面：
-
-- `source_id`
-- `database`
-- `accession`
-- `url`
-- `title`
-- `retrieved_at`
-
-`SourceRelation` 使用证据字段表示论文到数据集、数据集到 BioProject/SRA 等关系，
-不依赖 CSV 内不可验证的 ID 数组。
-
-### 3.4 DownloadAttempt、FileAsset 与 SourceAsset
-
-`DownloadAttempt` 记录每次成功、部分成功或失败下载：
-
-- `attempt_id`
-- `source_id`
-- `url`
-- `status`
-- `bytes_received`
-- `error_code` / `error_message`
-- `started_at` / `finished_at`
-
-只有完整下载并校验成功后才创建不可变 `SourceAsset`：
-
-- `asset_id`
-- `source_id`
-- `successful_attempt_id`
-- `relative_path`
-- `sha256`
-- `media_type`
-- `size_bytes`
-- `data_level`
-
-`data_level` 区分 `raw_sequence`、`submitter_processed`、
-`repository_processed` 和 `metadata`。GSE178352 tximport counts 属于 repository
-processed，不称作原始测序数据。路径必须解析在任务 `source_assets/` 内。
-
-所有阶段文件统一使用 `FileAsset`，记录 kind、路径、SHA-256、大小、media type、
-schema version 和生成步骤。
-
-### 3.5 ParsedDataset 与 SourceLocator
-
-描述解析后的本地表格：
-
-- `dataset_id`
-- `source_id`
-- `asset_id`
-- `relative_path`
-- `columns`
-- `row_count`
-- `parser_name`
-- `parser_version`
-
-`SourceLocator` 精确定义：
-
-- 解压后的 logical file；
-- 以 1 为基准、包含表头/注释/空行的物理文本行号；
-- 以 0 为基准的列索引；
-- 原始列名与原始 token。
-
-固定案例对全部 source-derived expression value 执行回溯；一般任务验证全部结构
-外键，并按配置抽样数值。
-
-### 3.6 StageAttempt、Artifact 与 RunManifest
-
-每次阶段执行创建独立 `StageAttempt`，包含输入摘要、参数摘要、输出摘要、attempt
-序号和状态。阶段操作幂等；恢复时只复用摘要一致的成功输出。
-
-描述通过验证的最终文件：
-
-- `artifact_id`
-- `name`
-- `relative_path`
-- `media_type`
-- `size_bytes`
-- `sha256`
-- `generated_by`
-
-`RunManifest`、Warning、Error 和事件 payload 都有正式 Pydantic schema。ID 生成、
-枚举、外键和 schema version 在设计规格中固定。
-
-## 4. Pipeline
-
-### 4.1 Discovery
-
-负责 PubMed、GEO 等来源的检索与元数据获取，输出结构化论文记录、数据集
-候选、实际查询式、结果顺序和来源 URL。
-
-Discovery 不生成最终科研数据行。对于显式 GDC/Xena gene-expression 数据集与
-Reactome pathway participants，Discovery 输出统一的 `SourceRecord` 和数据集选择；
-一个 GDC + 一个 Xena 可作为受支持的双来源组合，Reactome 仍仅支持单来源显式
-`pathway_id`，其它混合来源不得伪装成 Pipeline 支持。
-
-PubMed 优先使用 NCBI E-utilities，配置 tool、email、User-Agent、全局限速、批量
-请求和 429/5xx 有界重试；记录 NCBI term translation 和分页参数。
-
-### 4.2 Acquisition
-
-负责下载和校验：
-
-- 流式下载；
-- 协议、大小和超时限制；
-- 未完成字节写入 `download_tmp/`；
-- 每次尝试记录 DownloadAttempt；
-- 保留下载到的官方压缩文件；
-- 计算 SHA-256 和字节数；
-- 完整成功后创建 SourceAsset；
-- 部分或失败文件永不交给 Parser。
-- Xena gene-expression live acquisition 将显式数据集 accession 映射到 Xena hub
-  `download/{dataset_id}.gz`，复用同一 `acquire_source()`、内容寻址缓存和
-  `SourceAsset`/`DownloadAttempt` 契约；临床、突变、CNV 等 Xena 类型尚未纳入该闭环。
-- GDC gene-expression live acquisition 使用官方 Files API 类型与 TSV 格式过滤；
-  GDC + Xena 组合按规格顺序聚合全部 `SourceAsset`/`DownloadAttempt`。Live 模式的
-  checkpoint 参数摘要不读取测试 fixture，因此生产包可以不包含 `tests/fixtures/`。
-
-成功文件进入 `data/cache/blobs/sha256/` 内容寻址缓存；规范化 URL/accession/请求
-参数映射到缓存元数据，关键词不作为资产身份。任务目录使用硬链接或校验后复制。
-
-GEO live acquisition 采用两级候选回退：tximport counts → series matrix。当全部
-候选下载失败时，acquisition 抛出 `DownloadError`，Pipeline Runner 将其映射为
-`ErrorCode.NETWORK_ERROR` 且 `retryable=True`（与 `TIMEOUT` 同为可重试错误）。
-Agent 收到 `status=failed`、`failed_stage=acquisition`、`error_code=network_error`、
-`retryable=true`，可选择替代 GSE 重试或请求 HIL，而非将下载失败视为不可恢复的
-内部错误。GDC/Xena/Reactome 的下载失败同样走此路径。
-
-### 4.3 Processing
-
-只读取成功的 `SourceAsset`：
-
-```text
-decompress
-    -> parse
-    -> validate schema
-    -> clean
-    -> field mapping
-    -> normalize
-    -> write ParsedDataset
-```
-
-每一步记录输入、输出、工具版本、参数摘要、处理前后行数、警告和时间。样本和
-gene ID 规范化同时保留 raw value、canonical value 与规则。
-
-GEO 表达数据的解析采用三级回退链，确保 `main_data.csv` 在 counts 缺失时仍能
-携带真实表达值或至少样本元数据：
-
-```text
-tximport counts (首选，整型 estimated count)
-    |-- 失败/缺失/404
-    v
-series_matrix 表达矩阵块 (!series_matrix_table_begin/_end)
-    |-- 空块 (snRNAseq / RNA-seq 系列常见)
-    v
-sample_metadata 元数据行 (每样本一行，source_line_number=0)
-```
-
-- `process_geo_tximport_counts` 解析 `*_tximportCounts.txt` 长格式表，gene ID
-  命名空间为 `ensembl_gene`，`measurement_type=tximport_estimated_count`。
-- `process_geo_series_matrix_expression` 解析 series_matrix 表达矩阵块，gene ID
-  命名空间为 `geo_id_ref`，`measurement_type=series_matrix_expression`，
-  `value_scale=log2`（已归一化）。空块返回 `None`，由调用方继续回退。
-- `_build_minimal_parsed_dataset` 写入每样本一行 `sample_metadata` 元数据行，
-  `source_line_number`/`source_column_index` 置 `0` 标识"无源行号"；
-  Validation Gate 的 `source_value_lineage` 检查跳过这些行（无表达值可校验）。
-
-`_try_series_matrix_expression_or_minimal` 统一 fixture 与 live 两条路径的回退
-入口，保证无论 tximport 是否可用，`main_data.csv` 都不会出现零行占位。GDC 官方
-STAR-counts 跳过统计汇总行、规范化 Ensembl 版本号并保留原始值与物理行列定位。
-
-### 4.4 Artifact Builder
-
-Builder 在 `staging/` 生成输出包。论文、数据集目录、样本元数据和最终科研
-数据必须分表保存。
-
-### 4.5 Validation Gate
-
-以下条件全部满足后才把 staging 原子提升为 `artifacts/`：
-
-- `main_data.csv` 每个 `source_id` 都存在；
-- `dataset_id` 和 `sample_id` 外键完整；
+
+### 5.3 来源并行
+
+`retrieve` / `parse` / `normalize` 三个步骤对每个来源独立执行，可内部并发。
+`compatibility gate` 之后的 `integrate` 是确定性合并，不接受 Agent 注入的任意
+合并逻辑。
+
+> 决策依据：ADR-004。
+
+---
+
+## 6. 职责边界：Agent 与服务端
+
+### 6.1 Agent 权限
+
+- 解析用户需求；
+- 选择或建议 Canonical Schema；
+- 查找候选来源；
+- 选择 Adapter；
+- 提议字段映射（状态 `proposed`）；
+- 生成 `DatasetBuildSpec`；
+- 根据诊断重新规划；
+- 拆分复合需求为多个 Build。
+
+### 6.2 服务端权限
+
+- 下载和校验文件；
+- 运行 Parser；
+- 读取源值；
+- 执行确定性转换与归一化；
+- 批准字段映射（将 `proposed` 提升为 `approved`）；
+- 判断兼容性；
+- 计算质量和置信度；
+- 验证与发布。
+
+### 6.3 禁止
+
+**Agent 不能直接提交一个数字并声明它来自论文、图表或数据库。** 任何模型提取
+必须绑定 SourceAsset、定位信息、模型版本、置信度和审核状态。
+
+Agent 不直接拼装最终 CSV，不绕过 Compatibility Gate，不绕过 Validation Gate，
+不绕过原子发布。Agent-only Skill 的产物不能直接作为正式主数据。
+
+> 决策依据：ADR-007。
+
+---
+
+## 7. 来源能力与数据兼容性
+
+V1 的 `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS`（`domain/contracts/enums.py`）
+把"来源组合"当成正式能力边界。V2 拆为两层独立判断：
+
+### 7.1 Adapter capability（系统能否安全获取和解析该来源）
+
+声明系统对该来源的获取与解析能力：能否搜索、能否下载、能否解析、是否需要
+fixture 豁免、是否仅研究用途。以 `SOURCE_CAPABILITIES` 单一事实表声明（V1 已
+存在，V2 保留并扩展）。
+
+### 7.2 Dataset compatibility（本次数据能否映射至目标 Schema 并合并）
+
+每次 Build 独立判断，依据：
+
+- `dataset_family` 一致；
+- `row_grain` 兼容；
+- 主键语义兼容；
+- 测量语义可比较（如 TPM vs raw count 必须显式处理）；
+- 单位与尺度可统一或显式标记不可比较；
+- 字段映射证据充分（见 §8）。
+
+**示例**：GDC 和 Xena 都可用（Adapter capability 满足），不代表任意 GDC 数据
+与任意 Xena 数据可合并（Dataset compatibility 仍需校验）。
+
+### 7.3 来源接入不变量
+
+新来源接入**不应**修改多个数据库组合分支。新来源通过注册 Adapter + Canonical
+Schema + Validation Profile 接入，组合可能性由兼容性判断决定，不靠 allowlist
+枚举。
+
+> 决策依据：ADR-008、ADR §21.7（踩坑）。
+
+---
+
+## 8. 字段映射
+
+### 8.1 映射证据来源
+
+正式字段映射必须来自以下之一：
+
+- Adapter 声明（来源官方文档或结构化元数据）；
+- Schema Registry（Canonical Schema 间的标准映射）；
+- 可信元数据（如 GEO 平台 probe-to-gene 注释）；
+- 明确规则（如单位转换公式）；
+- 人工批准（HIL）。
+
+### 8.2 字符串相似度只提议，不批准
+
+V1 的 `tools/alignment.py` 使用列名包含关系和公共前缀相似度（阈值 `>= 0.7`）
+对齐字段。V2 保留其作为**候选生成器**，但默认状态为 `proposed`，不直接进入
+正式数据。
+
+**原因**：列名相似无法证明同一语义、同一单位、同一粒度、同一值域、同一实体
+ID、一对一关系。V1 的相似度规则足以将看似相似、实际不同的字段对齐，垂向合并
+会让错误进入正式数据。
+
+### 8.3 Schema Registry 与映射状态
+
+字段映射在 Schema Registry 中以状态机管理：`proposed` → `approved` / 
+`rejected`。批准来源记录在案，便于审计与回滚。
+
+> 决策依据：ADR-009、ADR §21.6（踩坑）。
+
+---
+
+## 9. 构建结果与业务终态
+
+### 9.1 业务终态枚举（待落地）
+
+V2 引入 `BuildOutcome` 与 `RunStatus` 分离：
+
+| 终态 | 含义 | 是否发布主数据 |
+| --- | --- | --- |
+| `SUCCEEDED` | 主数据通过验证并发布 | 是 |
+| `PARTIAL_SUCCESS` | 部分来源失败，剩余来源有效并发布 | 是（带失败来源清单） |
+| `NO_DATA` | 来源不适合或无目标记录，不生成假表 | 否，可发布搜索/拒绝报告 |
+| `SPEC_REJECTED` | BuildSpec 不满足兼容性或 Schema 约束 | 否，返回诊断 |
+| `EXECUTION_FAILED` | 文件损坏、Parser 异常等内部错误 | 否，明确错误并不发布 |
+| `CANCELLED` | 用户或系统取消 | 否 |
+
+`RunStatus`（V1 已存在：`QUEUED/RUNNING/FINALIZING/COMPLETED/FAILED/
+CANCELLED/INTERRUPTED/AWAITING_USER_INPUT`）表示**执行生命周期**；
+`BuildOutcome` 表示**数据结果**。两者正交。
+
+### 9.2 NO_DATA 是正式业务结果
+
+- 无主数据不再必然触发 `RunFailedPayload`；
+- 前端不通过错误字符串猜 no_data；
+- 无数据时可以交付搜索、拒绝和诊断报告；
+- 内部异常仍然是 `EXECUTION_FAILED`；
+- 用户始终收到明确终结说明。
+
+### 9.3 禁止 metadata-only 占位主表（P0）
+
+V1 在 GEO 没有表达矩阵时，将样本元数据写成 `measurement_type=sample_metadata`
+的表达 Schema 行，并在 Validation 中跳过表达值和 lineage 检查。这破坏了主数据
+语义。V2 规定：
+
+- 主表无合法记录时 outcome 为 `NO_DATA`；
+- 样本元数据保存在辅助表；
+- Validation 不允许 warning 或特殊字段豁免目标数据不存在；
+- 空主表不发布为 `SUCCEEDED`；
+- 可发布来源搜索和拒绝报告。
+
+### 9.4 不通过 artifact 数量判断成功
+
+V1 修复 silent completion 时将所有无 artifact 情形标成失败，前端再解析错误文
+本识别 no_data。V2 使用显式 `BuildOutcome` 和发布状态，不靠 artifact 数量。
+
+> 决策依据：ADR-010、ADR-011、ADR §21.4/§21.9（踩坑）。
+
+---
+
+## 10. Validation Profile
+
+### 10.1 分层验证
+
+V2 验证由数据集 Profile 驱动，替换 V1 的单一通用 Validator
+（`pipeline/stages/validation/package.py`）。验证分层：
+
+1. 通用文件和 manifest；
+2. Schema 和类型；
+3. 主键、外键和唯一性；
+4. 数据族语义；
+5. 单位、尺度和归一化；
+6. provenance；
+7. confidence；
+8. 发布策略。
+
+不同数据族选择不同 Profile，不再通过 Reactome 特例（V1
+`validation/checks/reactome.py`）、表达列存在性和 metadata-only 条件分支共享
+一个万能 Validator。
+
+### 10.2 测试策略
+
+测试应锁定**验证不变量**和 Profile 结果，不应依赖全局 `check_id` 固定顺序。
+V1 的 validation check 顺序被回归测试固定（`package.py` 注释标注为
+"load-bearing"），重构时大量失败可能只是协议迁移，不代表可靠性退化。
+
+### 10.3 发布门禁
+
+以下条件全部满足后才把 staging 原子提升为 `artifacts/`（语义保留自 V1）：
+
+- 主数据每个 `source_id` 都存在；
+- 主键与外键完整；
 - 每个 `asset_id` 都存在于 source asset 记录，并关联成功 DownloadAttempt；
 - source asset 存在且 SHA-256 一致；
 - 主数据所有字段都有字段说明；
-- `main_data.csv` 至少包含一条可回溯到来源文件的核心科研记录；
+- 主数据至少包含一条可回溯到来源文件的核心科研记录（非 metadata 占位）；
 - 每个源数据派生测量有精确 SourceLocator；
-- 固定案例全量回溯表达值；一般任务全量检查结构并默认抽样 100 个值；
 - processing log 含完整输入输出和行数；
 - CSV 编码和列数稳定；
 - warnings 与 metrics 计数一致；
 - 所有必需 Artifact 存在且非空。
 
 失败报告写入 `logs/validation_report.json`，无效文件不得出现在 Artifact API。
-发布使用任务锁、独立 staging、文件 flush、manifest 验证和同文件系统原子 rename；
-发布成功后才产生 artifact 和 completed 事件。
+发布使用任务锁、独立 staging、文件 flush、manifest 验证和同文件系统原子
+rename；发布成功后才产生 artifact 和 completed 事件。
 
-## 5. 任务目录
+> 决策依据：ADR-012、ADR §21.5（踩坑）。
+
+---
+
+## 11. 置信度
+
+### 11.1 可解释等级，非虚假概率
+
+置信度包含：
+
+- `level`：`high` / `medium` / `low`；
+- `channel`：来源通道（API / VLM / 网页 / 表格解析等）；
+- `reasons`：判定理由；
+- `source_reliability`：来源可靠度；
+- `extraction_reliability`：提取可靠度；
+- `mapping_reliability`：映射可靠度；
+- `validation_result`：验证结果；
+- `cross_source_consistency`：跨源一致性；
+- `human_review_state`：人工审核状态。
+
+未经标定的 `0.92` 看似精确，实际没有概率解释。赛题更需要可解释、可追溯和可
+复核。
+
+### 11.2 通道差异
+
+- 确定性官方 API（GDC、Xena、Reactome、PubMed）可使用批次默认等级；
+- VLM / LLM / 网页抽取必须逐条标注。
+
+### 11.3 与 Validation 的关系
+
+置信度不是 Validation 的替代。Validation 判断是否满足发布规则；Confidence 描
+述记录在已知证据下有多可靠。
+
+### 11.4 禁止装饰字段
+
+V1 图表数据已有 `confidence` 列但值为空。V2 规定：置信度必须有计算/判定策略、
+理由、门禁和 UI，不允许空值默默通过。
+
+> 决策依据：ADR-013、ADR §21.13（踩坑）。
+
+---
+
+## 12. 溯源（Provenance）
+
+### 12.1 主表最小字段
+
+主表保留最小溯源字段：
+
+- `record_id`；
+- `source_id`；
+- `asset_id`；
+- `provenance_id`。
+
+### 12.2 Lineage sidecar
+
+详细定位、原值和转换链放在 lineage sidecar。这样既保持主表可分析性，又能完整
+追踪。
+
+`SourceLocator`（V1 已存在）精确定义：
+
+- 解压后的 logical file；
+- 以 1 为基准、包含表头/注释/空行的物理文本行号；
+- 以 0 为基础的列索引；
+- 原始列名与原始 token。
+
+### 12.3 例外
+
+Demo 或小表可以内联关键来源字段，但 Manifest 和 sidecar 仍为权威来源。
+
+> 决策依据：ADR-014。
+
+---
+
+## 13. 缓存身份
+
+V2 缓存身份由 Schema 和构建参数标识，不由关键词或固定列标识。身份包含：
+
+- dataset family；
+- Schema version；
+- SourceAsset digest；
+- Adapter / parser version；
+- normalization profile；
+- cohort / query parameters。
+
+**关键词用于检索缓存，不用于决定资产身份。**
+
+V1 现状：字节级内容缓存（`tools/content_cache.py`）已按
+`(database, accession, url)` 标识，逻辑缓存（`tools/cache_store.py`）按
+`(source_namespace, dataset_id)` 标识并使用 SQLite FTS5 检索——这些已符合
+V2 精神。V1 的 22 列 `main_data.csv` 缓存契约需要迁移为 Schema 版本化身份。
+
+> 决策依据：ADR-015、ADR §21.3（踩坑）。
+
+---
+
+## 14. Durable Runtime（保留自 V1）
+
+Durable Runtime 是 V1 已成熟的能力，V2 完整保留。本节描述权威契约。
+
+### 14.1 任务与 Run 生命周期
+
+FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、durable
+`EventHub`、内存 `AssistantStreamHub` 和 `TaskIndex`。
+
+- `<task_id>/events.jsonl` 是 append-only 事件日志；`EventStore` 强制 sequence
+  从 1 开始连续递增，`TaskRepository` 先持久化再向 `EventHub` 发布；
+- `<task_id>/state/task_snapshot.json` 是原子写入的权威状态投影；snapshot 落后
+  于 event log 时，repository 通过纯函数 `reduce_task_event` 补齐投影；
+- `<task_id>/state/session_items.jsonl` 保存 OpenAI Agents SDK 的原始 Session
+  历史，`conversation_summary.json` 保存 compaction 摘要；前端不保存会话事实；
+- `task_index.sqlite3` 只承担分页和 request-id 幂等查询，可由 snapshot/event
+  重建，不是会话事实来源。
+
+`RunStatus` 生命周期（V1 已实现）：
 
 ```text
-data/output/tasks/<task_id>/
-|-- source_assets/# 不可变来源文件（包括 Agent 补充来源）
-|-- download_tmp/ # 不完整下载
-|-- parsed/       # 解析结果
-|-- normalized/   # 清洗和字段对齐结果
-|-- staging/      # 按 run_id 隔离的候选产物
-|-- artifacts/    # 已通过验证的当前交付物版本
-|-- state/        # 任务锁和恢复状态
-`-- logs/         # stage attempts、事件、验证和诊断记录
+QUEUED → RUNNING → FINALIZING → COMPLETED | FAILED | CANCELLED | INTERRUPTED
+                ↘ AWAITING_USER_INPUT → RUNNING | FAILED | CANCELLED
 ```
 
-Agent 的查询、选择理由、进度判定和提取记录可以保存在任务级
-`agent_results/` 中，但大型原始数据不得重复存放；原始文件统一进入
-`source_assets/`，并通过 SourceAsset/ParsedDataset 进入 Pipeline。
-
-```text
-agent_results/    # Agent 决策、查询和提取审计记录（可选）
-```
-
-API 只公开 `artifacts/`。
-
-## 6. 标准产物包
-
-```text
-artifacts/
-|-- run_manifest.json
-|-- main_data.csv
-|-- literature.csv
-|-- dataset_catalog.csv
-|-- sample_metadata.csv
-|-- field_descriptions.csv
-|-- field_mapping.csv
-|-- source_list.csv
-|-- source_relations.csv
-|-- source_assets.csv
-|-- download_log.csv
-|-- processing_log.csv
-|-- quality_report.csv
-`-- warnings.csv
-```
-
-### 6.1 main_data.csv
-
-只能包含一种行粒度。GSE178352 案例中一行表示一个基因在一个样本中的表达
-测量：
-
-```text
-record_id,dataset_id,source_id,asset_id,gene_id_raw,gene_id,
-gene_id_namespace,gene_id_version,sample_id,measurement_type,
-value_semantics,value_scale,is_normalized,is_integer_expected,
-expression_value,expression_unit,source_logical_file,source_line_number,
-source_column_index,source_column_name,source_raw_value
-```
-
-论文元数据进入 `literature.csv`，数据集元数据进入 `dataset_catalog.csv`。
-
-### 6.2 追溯文件
-
-- `source_list.csv`：来源与 accession；
-- `source_relations.csv`：来源间关系和证据；
-- `source_assets.csv`：成功资产、data level、checksum 和成功 attempt；
-- `download_log.csv`：每次下载尝试、字节数、状态和错误；
-- `field_mapping.csv`：原字段到标准字段的映射；
-- `processing_log.csv`：所有处理步骤；
-- `quality_report.csv`：验证规则及通过/失败数；
-- `run_manifest.json`：输入、计划、版本、时间和 Artifact 列表。
-
-CSV 中的结构化单元格使用有效 JSON，不使用 Python 字典字符串。
-
-## 7. 固定真实验收案例
-
-Phase 1 固定案例：
-
-- Topic：`breast cancer gene expression under Hsp70 inhibition`
-- PubMed：PMID `34180400`
-- GEO：`GSE178352`
-- 样本数：12
-- 处理后计数文件：`GSE178352_tximportCounts.txt.gz`
-- GEO：`https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE178352`
-
-默认测试使用记录来源与裁剪范围的真实 fixture；标记为 `live` 的集成测试下载
-完整官方文件并验证 checksum、样本标识和解析兼容性。
-
-Mock Demo 仅作为开发烟雾测试，不能满足正式验收，也不能在真实流程失败后自动
-转为成功。
-
-## 8. Durable API、控制面与事件面
-
-FastAPI lifespan 初始化唯一的 `TaskManager`、`TaskRepository`、durable `EventHub`、
-内存 `AssistantStreamHub` 和 `TaskIndex`。当前 REST surface 如下（统一前缀
-`/api/v1`）：
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| GET | `/databases` | 列出用户可选数据库 |
-| GET | `/tasks` | 返回全部 active Task 与 cursor 分页的历史 Task |
-| POST | `/tasks` | 创建 durable Task 并排队首个 Run |
-| GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` |
-| DELETE | `/tasks/{task_id}` | 删除 terminal Task 及其历史 |
-| POST | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run |
-| POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued/running/paused/finalizing/cancel-requested Run |
-| POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 |
-| GET | `/tasks/{task_id}/messages` | cursor 分页读取 durable messages |
-| GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events |
-| GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact |
-| GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 |
-| GET | `/settings` | 当前用户模型设置（api_key 掩码返回） |
-| POST | `/settings` | 更新并持久化用户模型设置；api_key 省略/掩码=保留，空串=清除，非空=替换 |
-| GET | `/vendors` | 列出已知模型供应商 |
-| GET | `/models` | 可用模型列表，支持 `?query=` 搜索、`?preview_base_url=` 预览、`?use_current_settings=` 带凭据发现；不安全 URL → 422，供应商失败 → 502 |
-| GET | `/models/{model_id}` | 单个模型详情 |
-
-### 8.1 后端权威状态
-
-每个 Task 的 durable runtime 数据都保存在后端：
-
-- `<task_id>/events.jsonl` 是 append-only 事件日志；`EventStore` 强制 sequence 从 1
-  开始连续递增，`TaskRepository` 先持久化再向 `EventHub` 发布；
-- `<task_id>/state/task_snapshot.json` 是原子写入的权威状态投影；snapshot 落后于
-  event log 时，repository 通过纯函数 `reduce_task_event` 补齐投影；
-- `<task_id>/state/session_items.jsonl` 保存 OpenAI Agents SDK 的原始 Session 历史，
-  `conversation_summary.json` 保存 compaction 摘要；前端不保存会话事实；
-- `task_index.sqlite3` 只承担分页和 request-id 幂等查询，可由 snapshot/event 重建，
-  不是会话事实来源。
+### 14.2 事件系统
 
 `EventEnvelope` v2 为 managed Run 增加 `run_id`。Run 生命周期、Agent 活动和经
 Agent Tool 桥接的 Pipeline 事件都使用 `schema_version="2.0"`；sequence 是
-**Task 级单调递增**，不是每个 Run 重新计数。旧 fixture envelope 仍兼容 v1，
-可以没有 `run_id`，stage 事件继续校验 `stage_attempt_id`。
+**Task 级单调递增**，不是每个 Run 重新计数。旧 fixture envelope 仍兼容 v1。
 
-### 8.2 WebSocket 重放
+事件类型分两个 StrEnum 家族（`domain/contracts/events.py`）：
 
-WebSocket 端点为 `/api/v1/ws`，只接受三类命令：
+- `PipelineEventType`（17 类）：`TASK_CREATED`、`PLAN_READY`、
+  `USER_INPUT_REQUIRED/RESUMED`、`STAGE_*`、`TOOL_CALLED/COMPLETED`、
+  `WARNING`、`ARTIFACT_PRODUCED`、`TASK_CANCEL_*`、`TASK_RECOVERED`、
+  `TASK_COMPLETED/FAILED`；
+- `RuntimeEventType`（21 类）：`RUN_*`、`ASSISTANT_DELTA/REASONING_DELTA`、
+  `TOOL_STARTED`、`CONVERSATION_COMPACTED`、9 个 `SUBAGENT_*` 事件。
+
+`tool_started` 携带可选 `arguments` dict（深度截断 3、字符串 200 字符、列表 20
+项），`tool_completed.output` 截断到 4 KB，前端据此渲染"检索 PubMed · 查询:
+..."标签而无需回拉。
+
+### 14.3 双通道 WebSocket
+
+WebSocket 端点 `/api/v1/ws` 只接受三类命令：
 
 - `{"type":"subscribe","task_id":"...","after_sequence":N}`：先重放
   `sequence > N` 的 durable events，再无缝进入 live fan-out；
 - `{"type":"unsubscribe","task_id":"..."}`：取消该 Task 的订阅；
 - `{"type":"ping"}`：返回 `{"type":"pong"}`。
 
-服务端输出分为两条通道：
+服务端输出分两条通道：
 
-- durable 通道发送带 Task sequence 的 `EventEnvelope`，并继续发送 `pong` / `error`
-  控制帧；服务端按 Task watermark 去重，若 live sequence 出现间隙，会先从
+- **durable 通道**：发送带 Task sequence 的 `EventEnvelope`，以及 `pong` /
+  `error` 控制帧；按 Task watermark 去重，若 live sequence 出现间隙，会先从
   repository 补齐；
-- realtime 通道发送无 sequence 的 `assistant_stream_delta` 和
-  `assistant_stream_end`。它由 lifespan 管理的 `AssistantStreamHub` 提供，仅驻留
-  内存、best-effort fan-out，不写入 event log；每个订阅队列有界，慢消费者会以
-  可重连状态关闭，Run 的 durable 写入与执行不受影响。
+- **realtime 通道**：发送无 sequence 的 `assistant_stream_delta` 和
+  `assistant_stream_end`，由 `AssistantStreamHub` 提供，仅驻留内存、best-effort
+  fan-out，不写入 event log；每个订阅队列有界，慢消费者以可重连状态关闭，Run
+  的 durable 写入与执行不受影响。
 
 Agent 收到模型文本 chunk 后，先发布 `assistant_stream_delta`，再放入 durable
-buffer。buffer 按 100 ms / 1 KB 批量写为 `assistant_delta`，并在工具调用、正常或
-截断结束、异常与取消路径上强制结束并 flush。durable payload 可携带
-`stream_id + from_chunk_index + through_chunk_index`；三个字段必须同时出现或同时
-省略，省略时兼容旧事件。实时帧丢失或断线时，完整文本仍由 durable event log
-恢复。
+buffer。buffer 按 100 ms / 1 KB 批量写为 `assistant_delta`，并在工具调用、正常
+或截断结束、异常与取消路径上强制结束并 flush。durable payload 可携带
+`stream_id + from_chunk_index + through_chunk_index`；三字段必须同时出现或同时
+省略，省略时兼容旧事件。
 
-`runtime/transport.ts` 自动重连并携带每个 Task 的 durable watermark 重新
-subscribe；`runtime/controller.ts` 在 snapshot/accepted-Task handoff 时使用 REST
-`/events` 重放。WebSocket 不接受创建 Run 的命令，也不提供 SSE。
-
-### 8.3 人在回路与并发
+### 14.4 人在回路与并发
 
 Agent 模式的计划确认会持久化 `user_input_required`，纯 reducer 将 Run 投影为
-`awaiting_user_input`。`POST /resume` 必须匹配当前 Run 的 exact `request_id`，且
-同一请求只消费一次；批准后持久化 `user_input_resumed` 并回到 `running`，拒绝或
-独立 HIL timeout 会使权威 Run 失败。取消 paused Run 会唤醒 Pipeline 的协作式
+`awaiting_user_input`。`POST /resume` 必须匹配当前 Run 的 exact `request_id`，
+且同一请求只消费一次；批准后持久化 `user_input_resumed` 并回到 `running`，拒绝
+或独立 HIL timeout 会使权威 Run 失败。取消 paused Run 会唤醒 Pipeline 的协作式
 取消等待，不必等到 HIL timeout。fixture 模式仍记录 required/resumed 审计事件，
 但以 `fixture_exempt=true` 自动批准且不阻塞。
 
-默认全局有 4 个 active Run slot 和 4 个 worker；不同 Task 可以并行执行，同一
-Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user_input` 期间仍
-占用原 slot，避免暂停任务被队列中的新任务抢占。
+默认全局 4 个 active Run slot 和 4 个 worker；不同 Task 可以并行执行，同一
+Task 只允许一个 nonterminal Run，后续提交返回冲突。`awaiting_user_input` 期间
+仍占用原 slot，避免暂停任务被队列中的新任务抢占。
 
-### 8.4 模型配置 API 与 Run 自有生成设置
+`UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
+`max_turns_reached` / `data_correction`。前端 `UserInputDialog` 按 Run 与
+submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
 
-五个 REST 端点为前端提供模型配置能力。
+### 14.5 模型配置与 Run 自有生成设置
 
-**GET/POST /api/v1/settings**
+五个 REST 端点为前端提供模型配置能力（见 §15）。每个 Run 在构造时捕获不可变
+`RunModelSettings` 快照（通过 `run_model_settings_scope` contextvar），将 Agent
+与并发的设置变更隔离。快照包含模型身份与凭据、六个生成参数，以及不可变
+`ContextBudget`。运行期间的设置变更和新校准只影响后续 Run。
 
-`ModelConfiguration` 存储 `base_url`、`api_key`、`model_name`、输出上限
-`max_tokens`、可选输入窗口覆盖 `context_window`、上下文预算比例，以及
-`AdvancedParams`（temperature、top_p、repetition_penalty、enable_search、
-thinking_mode）。GET 同时返回已解析的窗口来源、保留 token 数和可用输入容量。
-空 `api_key` 返回空串，长度不超过 12 的非空 key
-返回 `****`，更长的 key 返回前 4 + `...` + 后 4 字符。
-POST 合并语义：
+到 OpenAI Agents SDK `ModelSettings` 的映射、DashScope 专有字段的条件发送、
+TrustedHostMiddleware 防 DNS rebinding、Token 估算与压缩校准等细节，V1 已实现，
+V2 保留。`LazyDashScopeModel` 显式持有其创建的 `AsyncOpenAI` 客户端，Run 清理
+时先解除内部引用再关闭 delegate 和底层客户端，构造失败与重复 `close()` 都不会
+泄漏或重复关闭连接池。
 
-- 字段为 `None` 时跳过（保留现有值）。
-- `api_key`：省略或等于掩码 → 保留；空串 → 清除；非空 → 替换。
-- `context_window`：省略 → 保留当前覆盖；正整数 → 记录用户覆盖；显式 `null` →
-  清除覆盖并恢复已知模型的精确目录值（优先模型信息库，其次按命名约定猜测，最终
-  回退 512K）。任务是否可运行只取决于解析后是否仍有正的输入容量，与是否显式设置
-  窗口无关。
-- 完整合并候选必须满足 `0 <= safety_reserve_ratio <= 0.25`、
-  `0 < compaction_target_ratio < compaction_trigger_ratio < 1`，且输出上限与安全保留
-  之后仍有正的输入容量。校验失败不会修改内存快照或持久化文件。
-- 原子持久化到 `data/user_settings.json`。持久化文件中的 `api_key` 字段（包括
-  空串）是权威值；只有文件或字段缺失时才从 `DASHSCOPE_API_KEY` 回退，确保显式
-  清除在重启后不会被环境变量恢复。其他空字段仍按现有环境变量契约回退。
-- 应用入口使用 `TrustedHostMiddleware`，仅接受 `127.0.0.1` 与 `localhost`，阻断
-  DNS rebinding 页面通过恶意 Host 访问本地设置控制面。
+VLM 调用（`agent_loop/vl_model.py`）执行一次性 `chat.completions.create`，固定
+`model="qwen-vl-max"`、`temperature=0.1`，接收显式 `RunModelSettings` 快照，
+创建全新 `AsyncOpenAI` 客户端，在 `finally` 中关闭。VLM 不是 Agent 模型，不参
+与对话轮次。
 
-**GET /api/v1/vendors**
-
-返回静态已知供应商列表，含 `id`、`name`、`base_url`、`description` 和
-`recommended` 标记。
-
-**GET /api/v1/models**
-
-查询参数 `query`（搜索过滤）、`preview_base_url`（临时供应商 URL）、
-`use_current_settings`（使用已保存凭据进行带凭据发现）：
-
-- 提供 `use_current_settings=true` 或非空 `preview_base_url` 时，服务端向
-  供应商 OpenAI 兼容端点发送 `GET /models` 以发现可用模型。
-- 已保存 API Key 仅在预览 URL 与已保存 `base_url` 相同时复用；跨端点预览默认
-  无凭据，除非请求显式提供本次预览 Key。
-- 带凭据发现要求 HTTPS（`http://` + 非空 key 视为不安全）。
-- HTTP 客户端**不**跟随重定向（`follow_redirects=False`，10s 超时）。
-- 服务端仅解析供应商域名一次，校验所有解析结果均为公网地址后，直接连接已校验
-  的 IP；原域名仅通过 `Host` 与 HTTPX `sni_hostname` 传递，以同时保持 TLS
-  证书校验并消除 DNS 校验与连接之间的重绑定窗口。
-- 不安全供应商 URL 返回 422；供应商网络故障返回 502。
-- API 发现的模型优先使用内置目录（含 model_info 信息库回退）补充精确、版本化的
-  上下文窗口；未知模型仍可显示，并返回按命名约定猜测的窗口（无匹配时默认 512K），
-  前端据此在选中模型时把上下文初值设为该窗口上限。
-- 未提供发现 URL 时不发起供应商请求，返回空模型列表；内置目录用于补充已发现
-  模型的元数据和单模型详情查询。
-
-**GET /api/v1/models/{model_id}**
-
-返回单个内置模型完整详情，不存在时返回 404。
-
-**Run 自有生成设置**
-
-每个 Run 在构造时捕获不可变 `RunModelSettings` 快照（通过
-`run_model_settings_scope` contextvar），将 Agent 与并发的设置变更隔离。
-快照包含模型身份与凭据（`base_url`、`api_key`、`model_name`）、六个生成
-参数，以及不可变 `ContextBudget`。预算保留精确目录窗口或用户覆盖、窗口来源、
-tokenizer 类型、校准余量和本 Run 的触发/目标 token 数；运行期间的设置变更和
-新校准只影响后续 Run。
-
-到 OpenAI Agents SDK `ModelSettings` 的映射：
-
-| RunModelSettings 字段 | SDK ModelSettings 字段 | 说明 |
-|---|---|---|
-| `max_tokens` | `max_tokens` | 直接映射 |
-| `temperature` | `temperature` | 直接映射 |
-| `top_p` | `top_p` | 直接映射 |
-| `repetition_penalty` | `extra_body.repetition_penalty` | 仅 DashScope |
-| `enable_search` | `extra_body.enable_search` | 仅 DashScope |
-| `thinking_mode` | `extra_body.enable_thinking` | 仅 DashScope |
-
-DashScope 专有字段仅在 `model_name` 以 `qwen`/`qwq` 开头且 `base_url` 的 host
-与 path 匹配 `dashscope.aliyuncs.com/compatible-mode/v1` 时发送，否则 `extra_body`
-为 `None`。标准字段（max_tokens、temperature、top_p）始终发送。
-`false` 值被显式保留发送。
-
-### 8.5 Token 估算、压缩与校准
-
-输入容量按以下公式捕获一次：
-
-```text
-safety_reserve_tokens = max(16384, ceil(context_window * safety_reserve_ratio))
-input_capacity = context_window - max_tokens - safety_reserve_tokens
-trigger_tokens = ceil(input_capacity * compaction_trigger_ratio)
-target_tokens = ceil(input_capacity * compaction_target_ratio)
-```
-
-默认比例为安全保留 `0.05`、压缩触发 `0.85`、压缩目标 `0.60`。安全保留只从
-容量中扣除一次，不重复加入 prompt 估算。完整估算覆盖已解析 instructions、工具
-schema 的紧凑排序 JSON、Session items、当前输入、Chat Completions wrapper 与历史
-校准余量。
-
-Qwen/QwQ 在安装 `qwen-tokenizer` extra 时尝试使用本地
-`dashscope.get_tokenizer(model).encode`；默认安装和不支持的模型使用确定性的 UTF-8
-字节上界。运行路径不调用远程 `dashscope.Tokenization.call`，也不把
-`o200k_base` 当成 Qwen tokenizer。每次成功请求的最终 provider usage 是权威值；
-只保存 `actual_prompt_tokens - estimate_without_margin` 的正残差。校准按标准化
-provider origin + model 分组，仅保留最近 20 个正残差，采用最大值并限制在精确窗口
-的 10%，不保存 prompt 内容。
-
-`AgentRunExecutor` 在每一次 `Runner.run_streamed` 之前执行预算预检，包括首轮、
-获批的 MaxTurns continuation 和 Qwen 非法 function arguments 重试。超过触发值时，
-压缩器以完整 Run 为最小单元，先摘要最旧段并保留最新段，再缩短摘要或移除最旧完整
-段，直到不高于目标值；固定 instructions、tools、当前输入与输出保留本身已超容量时，
-在 provider 调用前抛出类型化配置错误。重复用户输入导致的对齐歧义会保留已验证的
-durable summary，把歧义后缀作为不可拆分保守段，并发出降级 warning。原始 SDK
-Session 仍 append-only，`conversation_summary.json` 与 durable event 继续按原子提交
-和回滚契约持久化。
-
-live 比较位于 `tests/live/test_context_budget_estimator_live.py`。它使用固定双语消息
-和最小工具，通过最终 streaming `include_usage` 比较 provider prompt token，并验证
-校准残差。默认 pytest 会排除所有 `live` 测试；任意显式 `-m` 表达式完全交给 pytest
-处理。运行命令：
-
-```bash
-uv run pytest -m live tests/live/test_context_budget_estimator_live.py -v
-uv run --extra qwen-tokenizer pytest -m live tests/live/test_context_budget_estimator_live.py -v
-```
-
-Agent 文本模型发送凭据前同样要求公网 HTTPS URL。`LazyDashScopeModel` 显式持有
-其创建的 `AsyncOpenAI` 客户端，不依赖 Agents SDK delegate 的默认 `close()`；
-Run 清理时先解除内部引用，再关闭 delegate 和底层客户端，因此构造失败与重复
-`close()` 都不会泄漏或重复关闭连接池。
-
-**VLM 调用语义**
-
-VLM 模块（`app/agent_loop/vl_model.py`）执行一次性 `chat.completions.create`
-调用，固定 `model="qwen-vl-max"`、`temperature=0.1`。每次调用：
-
-- 接收显式 `RunModelSettings` 快照（Run 自有凭据和 base URL）。
-- 创建全新 `AsyncOpenAI` 客户端。
-- 通过 `require_model_credentials` 校验凭据。
-- 在 `finally` 中关闭客户端后返回。
-- 不同于实现 Agents SDK `Model` 接口的 `LazyDashScopeModel`（对话轮次），
-  VLM 不是 Agent 模型。
-
-### 8.5 Agent SDK 动态 instructions 契约
+### 14.6 Agent SDK 动态 instructions 契约
 
 Main Agent 使用动态 instructions，在每轮模型调用前把当前 Run 的已完成检索记录
 注入 system prompt。该 callable 必须遵守 OpenAI Agents SDK 的公开二参数契约
-`(context, agent)`；即使实现只读取 `context`，也不能省略 `agent` 参数。
+`(context, agent)`；即使实现只读取 `context`，也不能省略 `agent` 参数。该契约
+由 `tests/test_agent.py::test_dynamic_instructions_resolve_through_sdk` 通过
+SDK 的 `Agent.get_system_prompt()` 公共边界固定。
 
-2026-07-21 的故障中，提交 `05f32c9` 将该 callable 实现为单参数 `(context)`。
-OpenAI Agents SDK 0.18.2 在首轮解析 instructions 时拒绝此签名，因此 durable event
-只出现 `run_queued -> run_started -> run_failed`，尚未来得及产生模型或 Tool 事件；
-权威错误为：
+> 决策依据：ADR-003（保留可信内核）。
+
+---
+
+## 15. API 面
+
+统一前缀 `/api/v1`。下表为 V2 目标 API 面（V1 已实现的标注 ✅，待落地的标注
+🚧）。完整路由注册见 `backend/app/api/routes.py`、`api/skills.py`、
+`api/settings.py`、`api/model_info_router.py`、`api/ws.py`。
+
+| Method | Path | Purpose | 状态 |
+| --- | --- | --- | --- |
+| GET | `/health` | 健康检查 | ✅ |
+| GET | `/databases` | 列出用户可选数据库 | ✅ |
+| POST | `/databases` | 声明式用户数据库包上传 | ✅ |
+| PUT | `/databases/{name}` | 更新用户数据库包 | ✅ |
+| DELETE | `/databases/{name}` | 删除用户数据库包 | ✅ |
+| GET | `/settings` | 当前用户模型设置（api_key 掩码） | ✅ |
+| POST | `/settings` | 更新并持久化用户模型设置 | ✅ |
+| GET | `/vendors` | 列出已知模型供应商 | ✅ |
+| GET | `/models` | 可用模型列表，支持 `?query=`/`?preview_base_url=`/`?use_current_settings=` | ✅ |
+| GET | `/models/{model_id}` | 单个内置模型详情 | ✅ |
+| GET | `/tasks` | 返回全部 active Task 与 cursor 分页的历史 Task | ✅ |
+| POST | `/tasks` | 创建 durable Task 并排队首个 Run | ✅ |
+| GET | `/tasks/{task_id}` | 返回权威 `TaskSnapshot` | ✅ |
+| DELETE | `/tasks/{task_id}` | 删除 terminal Task 及其历史 | ✅ |
+| POST | `/tasks/{task_id}/runs` | 为 idle Agent Task 排队下一轮 Run | ✅ |
+| POST | `/tasks/{task_id}/runs/{run_id}/cancel` | 取消 queued/running/paused/finalizing Run | ✅ |
+| POST | `/tasks/{task_id}/runs/{run_id}/resume` | 提交人在回路决策 | ✅ |
+| POST | `/tasks/{task_id}/runs/{run_id}/subagents/{subagent_id}/cancel` | 取消子 Agent | ✅ |
+| POST | `/tasks/{task_id}/compact` | 请求上下文压缩 | ✅ |
+| GET | `/tasks/{task_id}/messages` | cursor 分页读取 durable messages | ✅ |
+| GET | `/tasks/{task_id}/events` | 按 `after_sequence` 重放 durable events | ✅ |
+| GET | `/tasks/{task_id}/artifacts` | 列出 manifest 注册且已验证的 Artifact | ✅ |
+| GET | `/tasks/{task_id}/artifacts/{artifact_id}` | 按 Artifact ID 下载并校验文件 | ✅ |
+| GET | `/tasks/{task_id}/builds` | 列出 Task 下的 DatasetBuild 与 BuildOutcome | 🚧 |
+| GET | `/tasks/{task_id}/builds/{build_id}` | 单个 Build 的 manifest 与产物 | 🚧 |
+| POST | `/import/tasks` | 多部分上传 → IMPORT AgentLoop | ✅ |
+| GET | `/cache/export` | 全量缓存 ZIP 导出 | ✅ |
+| WS | `/ws` | durable events + realtime assistant stream | ✅ |
+
+**API 不变量**：
+
+- 下载只接受 manifest 注册的 `artifact_id`；
+- WebSocket 不接受创建 Run 的命令，也不提供 SSE；
+- 不安全供应商 URL 返回 422，供应商网络故障返回 502；
+- `TrustedHostMiddleware` 仅接受 `127.0.0.1` 与 `localhost`，阻断 DNS rebinding
+  页面通过恶意 Host 访问本地设置控制面。
+
+> 决策依据：ADR-005（Manifest 驱动产物访问）。
+
+---
+
+## 16. Skill 仓库与 Subagent
+
+### 16.1 SkillCatalog
+
+业务 Skill 统一由 lifespan 创建的进程级 `SkillCatalog` 管理
+（`skills/catalog.py`）。Catalog 合并随应用发布的 builtin Skill 与外部应用数据
+目录中的用户 Skill，并通过不可变快照和单调递增 `generation` 原子热更新。正在
+执行的单次调用固定到解析时的 Skill 版本；后续调用读取最新快照。
+
+该进程级 Catalog 必须由 lifespan 同时传给 `UserSkillStore` 和
+`ModeDispatchRunExecutor`，并继续下传到 Agent 与 Import executor，确保管理面
+热更新和后续 Run 使用同一个快照来源。
+
+### 16.2 四类 Skill 组织
 
 ```text
-'instructions' callable must accept exactly 2 arguments (context, agent), but got 1: ['ctx']
+backend/app/skills/
+|-- builtin/
+|   |-- discovery/    # 论文检索、论文理解、关键词扩展与来源方向发现
+|   |-- acquisition/  # 检索数据库、获取元数据与下载原始文件
+|   |-- processing/   # 本地原始文件解析、清洗、字段对齐与合并
+|   `-- analysis/     # 描述性统计、差异分析、富集、网络分析与可视化
+`-- learned/          # 默认禁用，不能绕过 Pipeline 与 Validation Gate
 ```
 
-SDK 日志中的 `Resetting current trace` 是异常后的 trace 清理，不是根因。该故障与
-模型凭据、上下文压缩和 `2cf9a01` 的 merge drift 无关。修复保持检索记录注入逻辑
-不变，只补齐二参数签名。`tests/test_agent.py::test_dynamic_instructions_resolve_through_sdk`
-通过 SDK 的 `Agent.get_system_prompt()` 公共边界解析动态 instructions，防止只检查
-callable 存在性而遗漏 SDK 契约回归。
+`SkillCategory` StrEnum：`DISCOVERY` / `ACQUISITION` / `PROCESSING` /
+`ANALYSIS`。
 
-## 9. 前端实现架构
+Skill 是 instructions 与 Tool 的能力包：
 
-前端已按后端 durable 契约实现为任务工作台，而不是聊天窗口加日志：
+- 一个网站可以有多个 Tool，不要求一个网站一个 Skill；
+- 网站 Tool 分为 search、describe/metadata、download；
+- download 记录 `DownloadAttempt`，成功校验后才返回 `SourceAsset`；
+- processing 只接受成功的本地 `SourceAsset` 或 `ParsedDataset`；
+- learned Skill 默认禁用，不能绕过 Pipeline 和 Validation Gate。
 
-```text
-任务创建
-    -> 计划确认
-    -> 对话流（coding agent 风格步骤流）
-         |-- 用户输入
-         |-- 思维链（reasoning，默认折叠）
-         |-- 工具调用（带 arguments 标签，可展开）
-         |-- 阶段 / 进度 / 警告 / 产物（紧凑单行）
-         `-- Assistant 文本段（按 tool call 分段）
-    -> 结果 Tabs
-         |-- 主数据
-         |-- 文献与数据集
-         |-- 来源与下载
-         |-- 处理记录
-         `-- 警告与质量
-```
+### 16.3 Main Agent 工具集
 
-使用 shadcn 的 Form、Card、Tabs、Table、Badge、Progress、Dialog、Sheet 和
-Toast。全局只保留一个任务/Event client，避免连接与发送属于不同实例。
+Main Agent 不直接装载全部业务 Tool 或拼接每个 Skill 的 instructions。Agent 只
+持有：
+
+- `find_skill` / `invoke_skill` 网关（由 `build_skill_gateway` 构造，绑定
+  `SkillCatalog`）；
+- `run_research_pipeline`（V2 将改造为 `build_dataset` 入口，提交
+  `DatasetBuildSpec`）；
+- 文件读写工具（`read_file` / `read_file_head` / `search_file` / `write_file` /
+  `list_files`）；
+- `compress_query_log` / `review_query_strategy`；
+- `delegate_research` / `get_subagent_results` / `cancel_subagent`。
+
+用户选择的数据库是 `preferred_sources`：Main Agent 优先使用这些来源，但也可以
+探索公开、免登录且不需要私密凭据的其他来源。登录、CAPTCHA、付费、凭据和服务
+条款边界仍必须进入 HIL。`pipeline_supported` 只表示该来源能够进入确定性
+Pipeline，普通 Agent-only Skill 和子 Agent 的自然语言结果都不能充当完成证据。
+
+### 16.4 用户扩展
+
+用户扩展支持声明式 JSON/YAML HTTP 数据库包和 Python ZIP Skill 包。用户包保存
+在单文件程序之外的可写目录，支持校验、上传、启停、版本回滚和删除。坏包保持
+`unavailable/load_error` 管理可见性，不阻断应用启动。设置页的 Model、Databases
+和 Skills 三个区段使用对应 REST API 管理这些状态。
+
+### 16.5 托管式 Subagent
+
+`SubagentSupervisor`（`app/subagents/supervisor.py`）是 lifespan-owned 的运行时
+服务。Main Agent 可以在一个父 Run 内并行委派两类子 Agent：
+
+- **SourceResearchAgent**：bounded source-research child agent，只能使用
+  DISCOVERY + ACQUISITION Skill，产出 `source_asset_ids`；不能递归委派、调用
+  Pipeline 或写入正式 `artifacts/`。失败时返回 `EXTRACTION_FAILED`。
+- **SkillBuilderAgent**：bounded workflow-recipe child agent，使用 DISCOVERY +
+  ACQUISITION + `create_skill`，只能通过 `create_skill` 生成声明式、不可执行的
+  `WorkflowRecipe`；失败时返回 `CAPABILITY_GAP`。
+
+子 Agent 使用独立 SDK Session，`global_limit=4`、`per_run_limit=3`、
+`batch_limit=8`、`timeout=3600s`。Supervisor 把 queued、running、progress、HIL、
+cancel 和 terminal 状态写入父 Task 的同一 durable event log。
+
+子 Agent 的网络或 Recipe 采集只能写 `staging/subagents/<subagent_id>/`。
+`SubagentStagingWorkspace` 校验路径、大小、摘要和元数据后，才把文件原子提交为
+不可变 `SourceAsset`，并通过 `SubagentResult.source_asset_ids` 向 Main Agent
+暴露轻量引用。
+
+**Agent ↔ Pipeline 边界**：Main Agent 使用子 Agent 的结构化结果规划后续工作并
+提取 PMID、GSE 等 accession，随后调用 `run_research_pipeline`（V2：
+`build_dataset`）；Pipeline 仍从权威来源执行自己的确定性 Acquisition。当两条路
+径获得相同字节时，内容寻址 `SourceAsset.asset_id` 相等，证明进入 Processing 和
+Validation Gate 的是同一验证输入。正式 Artifact 仍只由 Validation Gate 发布，
+子 Agent 的完成事件或 SourceAsset ID 本身不构成发布证据。
+
+### 16.6 视觉证据与图表提取
+
+**视觉证据采集（`web_visual_capture` skill）**：`capture_web_page` 与
+`capture_page_section` 调用 RunContext 中由 lifespan 注入的 `CrawlerFacade`，
+由共享 `BrowserPool` 完成 Chromium 截图；PNG 和 metadata sidecar 均先进入
+`SubagentStagingWorkspace`，通过大小、摘要、路径和链接检查后再 commit 到任务
+`source_assets/<asset_id>/`。该 Skill 不允许自行启动 Chromium、创建 HTTP client
+或直接写最终截图路径。不出现在 `GET /databases` 列表中，由 Agent 按需调用。
+
+BrowserPool 只保有一个 Chromium，最多同时打开 4 个隔离 BrowserContext。每个
+Context 强制 `service_workers="block"`，并使用独立凭据访问 loopback-only HTTPS
+CONNECT 代理。代理在实际 CONNECT 层仅解析一次目标域名、拒绝非公网地址并直连该
+固定 IP；Playwright route 继续负责 Recipe / source host allowlist。HTTP API /
+HTML 请求同样逐跳固定 IP、保留原始 Host/SNI、禁用自动重定向并为每次请求使用
+独立 transport，避免 DNS rebinding、跨 SNI 连接池复用和私网重定向。
+
+**视觉模型图表数据提取（`extract_chart_data_vlm` skill）**：接受任意获取渠道的
+论文产物（PNG/JPG/WEBP/GIF 图片或 PDF 文件）。单一工具入口
+`extract_chart_data_vlm(source_path, hint="")` 内部按 MIME 分派：图片直接
+base64 送 Qwen-VL；PDF 先用 `pdfplumber` 提取嵌入图片（每文件上限 10 张），再
+逐图送 VLM。VLM 客户端在 `agent_loop/vl_model.py` 中独立于 `LazyDashScopeModel`。
+
+**三级降级链**（L1→L2→L3，全部失败抛 `ChartExtractionError`，禁止静默空数据
+降级）：
+
+- L1 — Qwen-VL：主路径，要求 `DASHSCOPE_API_KEY`；返回严格 JSON
+  `{chart_type, axes, data_points, legend}`；
+- L2 — pdfplumber 表格：仅 PDF 触发，提取矢量 PDF 表格数据；
+- L3 — caption 文本：兜底，正则提取 `Figure N.` / `Table N.` captions，写入
+  `chart_type="caption_only"` 行并发出 `warning`。
+
+产物 `parsed/chart_data/chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，
+Excel 兼容）。每行 `source_asset_id` 将 chart 追溯到原始图片 / PDF。大图（>10MB）
+由 Pillow LANCZOS 自动降采样到 1920px 最长边。
+
+> 决策依据：ADR-003（保留可信内核）、ADR-007（Agent 不决定数据值）。
+
+---
+
+## 17. 前端架构
+
+前端已按后端 durable 契约实现为任务工作台，而不是聊天窗口加日志。技术栈：
+React 19 + Vite + Tailwind CSS v4 + shadcn/ui，包管理器 pnpm（**never npm**）。
+
+### 17.1 双通道运行时
+
+`frontend/src/runtime/` 实现双通道设计：
+
+- `transport.ts`：`AgentEventTransport` 处理 WebSocket 收帧、rAF 批量刷新、自动
+  重连携带 durable watermark；
+- `controller.ts`：`RuntimeController` 拥有 transport 生命周期，在 snapshot /
+  accepted-Task handoff 时使用 REST `/events` 重放；
+- `reducer.ts` 与 `reducers/`：纯 reducer 把事件投影到 store；
+- `types.ts`：`ConversationItem` 联合类型等。
+
+| 通道 | 帧类型 | 处理 |
+| --- | --- | --- |
+| Durable events | `EventEnvelope`（schema 1.0/2.0，单调 `sequence`） | `applyEvent` |
+| Realtime assistant stream | `assistant_stream_delta` / `assistant_stream_end` | `applyAssistantStreamFrames` |
+
+Pending stream 帧上限 `MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048`，rAF 批量
+flush；`tool_started` / `run_finalizing` / Run 终态等边界事件强制 flush。
+
+### 17.2 对话流（Coding Agent 风格）
+
+对话主流使用"按时间顺序交错的步骤流"，所有事件类型统一投影到 `ConversationItem`
+列表，按 `sequence` 升序渲染。
+
+| kind | 来源事件 | 渲染组件 | 默认状态 |
+| --- | --- | --- | --- |
+| `user_message` | `MessageRecord(role=user)` hydrate | `UserMessageBubble` | 右对齐气泡 |
+| `assistant_segment` | `assistant_delta`（按 `stream_id` 分段） | `AssistantSegment` | 展开，流式时末尾光标 |
+| `reasoning` | `assistant_reasoning_delta`（按 tool call 分段） | `ReasoningBlock` | 折叠；流式时展开 |
+| `tool_call` | `tool_started` + `tool_completed` | `ToolCallStep` | 折叠；running Spinner |
+| `stage` | `stage_started/completed/failed/skipped` | `StageStep` | 展开（紧凑单行） |
+| `progress` | `stage_progress` | `ProgressStep` | 展开（同 kind 原位更新） |
+| `warning` | `warning` | `WarningStep` | 展开（黄色） |
+| `artifact` | `artifact_produced` | `ArtifactStep` | 展开（含大小 Badge） |
+
+`itemId` 规则保证按工具调用分段、同 stage 共用项、同 kind progress 原位更新。
+`run_queued` / `user_input_required` / `user_input_resumed` /
+`conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
+ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理。
+
+`toolLabels` 映射 `toolName + arguments` → `{ verb, target, details? }` 三元组，
+状态条与 ToolCallStep 复用同一映射。
+
+### 17.3 结果展示
+
+`ResultsViewer.tsx` 当前动态读取 CSV 头与行（`Papa.parse`，预览前 100 行），
+**不硬编码 22 列 Schema**。V2 迁移后改为读取 `dataset_manifest.json` 识别主
+数据与辅助表，按数据族选择结果 Tab 与列渲染策略。
 
 启动时并发加载数据库、第一分页后端历史（全部 active Task + 默认 30 条 inactive
 history）和 WebSocket，但保持 `activeTaskId=null`，展示独立的新研究草稿；后续
@@ -874,184 +930,281 @@ history）和 WebSocket，但保持 `activeTaskId=null`，展示独立的新研�
 `tasksById` 中每个 Task 都有独立的 Run、message、activity、artifact、fixture
 stage、`subagentsById`、`subagentOrder` 和 `lastSequence` 投影。桌面端右侧
 `ResizablePanel` 展示子 Agent 工作区，移动端复用 Sheet；产物入口位于聊天输入区
-FAB。单子 Agent 取消通过 controller 串行化到 Task handoff，先从当前
-`lastSequence` 回放到取消响应 snapshot 的 `latest_sequence`，再 hydrate snapshot，
-因此断线重连不会重复或丢失 `subagent_cancel_requested` 状态。HIL prompt 同时绑定
-`task_id + run_id + request_id`；
-`UserInputDialog` 使用该 Run 提交，并用 prompt key 与 submission attempt ID 隔离
-A → B → A 切换中的旧 Promise settlement。resume 事件只清理匹配 Run 与 request
-的 prompt，terminal 事件按所属 Run 清理，新 Run admission 则清理上一轮 prompt。
-侧栏把 `awaiting_user_input` 计入"运行中 N / 4"，与后端 slot 占用一致。
+FAB。
 
-Assistant 文本采用 realtime/durable 双投影：实时 chunk 按 `(run_id, stream_id,
-chunk_index)` 进入 pending，durable `assistant_delta` 的 chunk 范围推进 confirmed
-watermark 并移除已确认 pending。durable 先到、实时帧迟到或重放重复时都会按该
-watermark 去重，因此在线文本与断线重放后的最终文本收敛一致；无 sequence 的实时
-帧不会推进 `lastSequence`。Transport 在 WebSocket 收帧后立即排队，并在下一次
-`requestAnimationFrame` 合并更新；消息区继续复用 `MessageScroller` 自动跟随。
-仅当对应 stream 实际生成文本且仍为 active 时，Markdown 末尾显示装饰性闪烁光标，
-stream end、工具开始、Run finalizing/终态、断连或取消订阅后关闭，并遵循
-`prefers-reduced-motion`。
+Assistant 文本采用 realtime / durable 双投影：实时 chunk 按
+`(run_id, stream_id, chunk_index)` 进入 pending，durable `assistant_delta` 的
+chunk 范围推进 confirmed watermark 并移除已确认 pending。durable 先到、实时帧迟
+到或重放重复时都按该 watermark 去重，因此在线文本与断线重放后的最终文本收敛
+一致。
 
-R5 前端修复还补齐了非聊天区域的有界滚动、刷新竞态下的稳定 Task 排序、后台
-通知"查看"失败反馈，以及 Bubble 中多行 assistant 文本的换行保留。
+> 决策依据：ADR-005（Manifest 驱动）、ADR §21.10（测试锁定不变量而非顺序）。
 
-### 9.1 对话流展示（Coding Agent 风格）
+---
 
-对话主流使用"按时间顺序交错的步骤流"展示，所有事件类型统一投影到
-`ConversationItem` 列表，按 `sequence` 升序渲染。设计目标：让用户输入、思维链、
-工具调用、阶段进度、产物、警告、Assistant 总结汇报都以独立项的形式内联展示，
-类似 Cursor / Claude Code 的对话体验。
+## 18. 迁移策略：绞杀模式
 
-**ConversationItem 联合类型**（`frontend/src/runtime/types.ts`）：
+V2 采用**绞杀模式（strangler）**，不做一次性重写。原因：V1 Pipeline 有大量可
+靠性测试和复杂恢复语义，大爆炸重写风险高，且容易丢掉比业务流程更成熟的基础
+设施。
 
-| kind | 来源事件 | 渲染组件 | 默认状态 |
-|------|----------|----------|----------|
-| `user_message` | `MessageRecord(role=user)` hydrate | `UserMessageBubble` | 右对齐气泡 |
-| `assistant_segment` | `assistant_delta`（按 `stream_id` 分段） | `AssistantSegment` | 展开，流式时末尾 `▋` 光标 |
-| `reasoning` | `assistant_reasoning_delta`（按 tool call 分段） | `ReasoningBlock` | 折叠；流式时展开；流式结束 500ms 后自动折叠 |
-| `tool_call` | `tool_started` + `tool_completed` | `ToolCallStep` | 折叠（仅显示标签行）；running 时 Spinner，error 时 WarningCircle，completed 时 CheckCircle |
-| `stage` | `stage_started/completed/failed/skipped` | `StageStep` | 展开（紧凑单行） |
-| `progress` | `stage_progress` | `ProgressStep` | 展开（紧凑单行，同 kind 原位更新） |
-| `warning` | `warning` | `WarningStep` | 展开（紧凑单行，黄色） |
-| `artifact` | `artifact_produced` | `ArtifactStep` | 展开（紧凑单行，含文件大小 Badge） |
+### 18.1 迁移步骤
 
-**itemId 规则**（reducer 按 itemId 去重 + sequence 排序）：
+1. **V2 契约与 V2 表达闭环并行加入**：新增 `DatasetBuildSpec`、
+   `BuildOutcome`、`dataset_manifest.json`、Schema Registry、Validation Profile
+   等契约；V1 契约保留；
+2. **旧 `run_research_pipeline` 作为兼容 facade**：内部逐步改为构造
+   `DatasetBuildSpec` 并调用 V2 Runtime；
+3. **先抽取可靠性内核，再迁来源**：把 SourceAsset、DownloadAttempt、event、
+   Validation Gate、原子发布等从 V1 Pipeline 抽取为独立模块，V2 Runtime 复用；
+4. **先迁 GDC / Xena，后迁 GEO**：GDC + Xena 的表达合并路径先迁移到 V2；GEO
+   因平台映射、probe mapping、尺度和归一化兼容性复杂，后迁；
+5. **V2 前端和缓存双轨**：前端结果页同时支持 V1 固定产物包和 V2 Manifest 驱动；
+   缓存按 V1 22 列身份和 V2 Schema 版本化身份双轨；
+6. **达到验收门槛后删除 Legacy**：V2 闭环通过四种必测结果（见 §21）后，删除
+   V1 的固定五阶段、固定 22 列、`SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 和
+   单一通用 Validator。
 
-- `assistant:${streamId}` — 同一 stream_id 的 delta 累积到同一项；工具调用打断后
-  segment_index 递增，自动开新段
-- `reasoning:${runId}:${segmentIndex}` — 收到 `tool_started` 时 segmentIndex++，
-  实现思维链按 tool call 分段
-- `tool:${runId}:${toolCallId}` — started/completed 共用同一 itemId
-- `stage:${runId}:${stage}` — started/completed/failed/skipped 共用
-- `progress:${runId}:${stage}:${kind}` — 同 kind 原位更新
-- `warning:${sequence}` / `artifact:${runId}:${artifactId}`
-- `msg:${messageId}` — MessageRecord hydrate（user/assistant 旧消息）
+### 18.2 迁移期不变量
 
-`run_queued` / `user_input_required` / `user_input_resumed` /
-`conversation_compacted` / `plan_ready` / Run 终态事件**不创建 item**，分别由
-ChatPanel 草稿态、`pendingUserInput` + UserInputDialog、状态条分隔符处理，避免与
-MessageRecord hydrate 重复。
+- V1 与 V2 不能在同一 Task 内混用：一个 Run 要么走 V1 facade，要么走 V2 Runtime；
+- V2 发布的产物必须带 `dataset_manifest.json`，V1 产物保留旧 `run_manifest.json`；
+- 内容寻址 `SourceAsset.asset_id` 在 V1 / V2 间相等当且仅当字节相等，跨版本可
+  互验；
+- 迁移期测试同时锁定 V1 不变量（取消、恢复、hash、血缘、原子发布）和 V2 不变量
+  （单族单粒度、Profile 驱动验证、BuildOutcome）。
 
-**toolLabels 映射**（`frontend/src/components/conversation/toolLabels.ts`）：
-`toolName + arguments` → `{ verb, target, details? }` 三元组，如
-`search_pubmed_adapter + {query: "lung cancer"}` → `{verb: "检索", target: "PubMed",
-details: "查询: \"lung cancer\""}`。状态条和 ToolCallStep 标签行复用同一映射，
-未在表中的工具兜底显示"调用 {toolName}"。
+### 18.3 不立即删除历史 Review
 
-**状态条简化**：Run running 时，`selectActiveItem` 返回最后一个活跃 item
-（`isStreaming=true` 或 `status=running`），ChatPanel 顶部 Marker 显示
-`formatActiveItemStatus(item)` 简述（如"检索 PubMed · 查询: 'lung cancer'"）；
-无活跃 item 时回退到 `STATUS_LABELS[task.status]`。
+历史 Review 与 Survey 记录问题演进，不立即删除。已推翻结论标记
+`superseded by ADR-xxx`。每个重大边界变化新增 ADR，不在 Prompt 或 TODO 中悄悄
+改变。TODO 只记录执行任务，不承担长期架构解释。
 
-**向后兼容**：reducer 仍保留 `messages` / `activitiesById` / `assistantStreamsByRunId`
-字段以支持旧事件回放和分页加载（`mergeOlderMessagePage`），但 ChatPanel 渲染只依赖
-`items`。`MessageRecord` hydrate 通过 `projectMessageToItem` 投影到 items 列表，
-事件回放覆盖 hydrate 项（以事件为准）。
+> 决策依据：ADR-016、ADR §26（文档治理）。
 
-## 10. 开发阶段
+---
 
-### Phase 1：后端真实闭环
+## 19. 顶层不变量
 
-PubMed + GEO、数据契约、固定真实案例、Pipeline、Artifact Builder、Validation
-Gate、离线和 live 测试。
+后续设计和代码评审必须检查以下不变量：
 
-### Phase 2：Agent 与 API
+1. 一个主数据集只有一个 family；
+2. 一个主数据集只有一种 row grain；
+3. 主数据记录必须来自真实来源或可复算确定性派生；
+4. Agent 不能直接制造科研值；
+5. 无 SourceAsset / locator 的来源值不得作为高可信正式记录；
+6. 合并前必须通过 Compatibility Gate；
+7. 字段名相似不等于语义相同；
+8. 单位、尺度和归一化状态不得静默丢失；
+9. metadata 不能冒充 measurement；
+10. 空主数据不能标记 `SUCCEEDED`；
+11. `NO_DATA` 必须有明确用户输出；
+12. 部分成功必须列出失败来源；
+13. Validation 失败不得发布；
+14. 发布必须原子；
+15. 任何已发布数据都能定位到构建版本和处理版本；
+16. fixture 不能伪装 live；
+17. 置信度必须可解释；
+18. 复合需求需要拆分或显式关系模型；
+19. 新来源接入不应修改多个数据库组合分支；
+20. 前端不得通过错误字符串推断业务状态。
 
-结构化 TaskSpecification、Pipeline Function Tool、任务 API、统一事件、超时和
-取消。
+---
 
-### Phase 3：shadcn 前端重写
+## 20. 代码评审检查表
 
-任务创建、计划确认、执行状态、结果表格和 Artifact 下载。
+新增数据源或数据类型时必须回答：
 
-### Phase 4：扩展能力
+- 它产生哪种 dataset family？
+- 一行是什么？
+- 源 Schema 是什么？
+- Canonical Schema 是什么？
+- 主键是什么？
+- 单位和尺度是什么？
+- 是否已归一化？
+- 字段映射证据来自哪里？
+- 与哪些已有 Batch 兼容？
+- 冲突和重复如何处理？
+- provenance 到什么粒度？
+- confidence 如何确定？
+- Validation Profile 是什么？
+- 无数据时返回什么？
+- 是否会在其他模块新增来源特例？若是，抽象可能仍不正确。
 
-先增加 PDF/补充材料，再按同一契约接入 GDC、PDB、Xena。任何来源只有在
-search、metadata、download 的 live 测试通过后才能标记为支持。
+---
 
-## 11. 非目标
+## 21. Demo 决策
+
+### 21.1 主案例
+
+`gene_expression` 数据集构建。
+
+### 21.2 来源优先级
+
+- GDC；
+- Xena；
+- GEO 在完成平台、probe mapping、尺度和归一化兼容性后加入。
+
+### 21.3 PubMed 角色
+
+- 发现相关研究和 accession；
+- 说明数据选择依据；
+- 提供来源关系；
+- **不作为表达主表行**。
+
+### 21.4 Reactome 角色
+
+独立 `pathway_member` 数据集族，用于证明系统可扩展到第二个 Schema，**不与表达
+数据合并**。
+
+### 21.5 必测四种结果
+
+1. **成功**：两来源兼容并合并；
+2. **部分成功**：一个来源失败但另一个有效；
+3. **无数据**：来源不适合或无目标记录，不生成假表；
+4. **执行失败**：文件损坏或 Parser 异常，明确错误并不发布。
+
+### 21.6 V1 固定真实验收案例（参考）
+
+Phase 1 固定案例仍可作为 V1 闭环回归基线：
+
+- Topic：`breast cancer gene expression under Hsp70 inhibition`；
+- PubMed：PMID `34180400`；
+- GEO：`GSE178352`；
+- 样本数：12；
+- 处理后计数文件：`GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
+  `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
+
+默认测试使用记录来源与裁剪范围的真实 fixture；标记为 `live` 的集成测试下载完
+整官方文件并验证 checksum、样本标识和解析兼容性。Mock Demo 仅作为开发烟雾测
+试，不能满足正式验收，也不能在真实流程失败后自动转为成功。
+
+> 决策依据：ADR §24（推荐 Demo 决策）。
+
+---
+
+## 22. 待决问题
+
+以下问题不阻塞第一阶段，但需在实现中形成新 ADR：
+
+### 22.1 主数据文件格式
+
+Demo 使用 CSV；大数据内部是否使用 Parquet，发布是否同时提供 CSV，需要评估内
+存、速度和用户可用性。
+
+### 22.2 记录级还是批次级 confidence
+
+确定性数据库通道可批次级默认，模型抽取需记录级。需要定义何时继承、何时覆盖。
+
+### 22.3 Provenance sidecar 格式
+
+CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
+
+### 22.4 多 Build 会话模型
+
+一个用户任务是否直接拥有 `builds[]`，还是每次续聊产生独立 Run / Build，需要结
+合现有 Runtime 数据模型决定。
+
+### 22.5 GDC 与 Xena 镜像数据去重
+
+两者可能呈现同一上游 TCGA 数据。需要明确 source-of-record、版本差异和重复规
+则，不能把镜像当独立证据数量。
+
+### 22.6 聚合粒度
+
+用户有时需要 cohort-level 汇总，而现有表达长表是 gene-sample。应通过明确
+aggregation recipe 生成另一个 Schema，不能在同表混合。
+
+### 22.7 人工确认点
+
+字段映射、低置信图表值和单位转换哪些必须触发 HIL，需要按 Demo 交互成本确定。
+
+---
+
+## 23. 非目标
 
 - 替换 OpenAI Agents SDK；
-- 通用 Workflow Engine；
+- 通用 Workflow Engine 或完整 DAG 引擎；
 - 可执行 Recipe 或由模型直接生成 Python Skill；
-- Agent 或 learned Skill 绕过 Validation Gate；
+- Agent 或 learned Skill 绕过 Compatibility Gate 或 Validation Gate；
 - 将 mock 产物当作正式案例；
 - 自动生成缺乏数据依据的科研或临床结论；
+- 把"多角度研究包"作为同一 DatasetBuild 的主数据；
+- 用 warning 解释空主数据；
+- 只靠 Prompt 修正架构（Prompt 只保留意图层原则，稳定规则进入契约和服务端
+  Validator）；
+- 通过 artifact 数量判断运行成功；
 - 后端事件和 Artifact 契约稳定前重写前端。
 
-## 12. 当前实现证据（2026-07-30）
+> 决策依据：ADR §19（被否决或修正的方案）。
 
-- 默认离线后端测试以 `uv run pytest` 的当前结果为准；Ruff
-  `app/ tests/ launcher.py` 为零告警门禁，默认测试不访问网络。
-  `filterwarnings = ["error", ...]` 把所有告警升级为失败，仅显式忽略 Starlette
-  TestClient 弃用告警。
-- live 验收：PMID 34180400、GSE178352 元数据和官方
-  `GSE178352_tximportCounts.txt.gz`（4,597,797 bytes，SHA-256
-  `71e78e43fbd0db021c243feb8d935850d2c95bbfeba884d42f6dd78bfa753a55`）。
-  多课题 live 验收（阿尔茨海默病 / TP53 / Huntington's）均完整产出 14 个
-  artifact。
-- fixture 闭环：48 条 gene + sample 记录（4 genes × 12 samples），全部通过精确
-  SourceLocator 回溯，生成 14 个正式文件。
-- API：完整 task/run/history/messages/events/cancel/resume/artifact 控制面（11 个
-  REST 端点 + 1 个 WebSocket 端点）已接入 lifespan-owned durable runtime；下载只
-  接受 manifest 注册的 `artifact_id`。
-- Agent：OpenAI Agents SDK 保留为 Runtime，正式产物通过单一
-  `run_research_pipeline` Function Tool 进入确定性 Pipeline。`AGENT_MAX_TURNS=15`
-  常量覆盖正常 4-8 轮 + followup 3 轮 + 余量；达到上限走
-  `UserInputRequiredPayload(prompt_kind="max_turns_reached")` 暂停 Run 等待用户
-  选择继续或停止（不直接转 FAILED）。`AgentRunExecutor` 在
-  `finish_reason="length"` 时发射 `WarningPayload(code="llm_output_truncated")`，
-  `final_output` 为空时抛 `RuntimeError` 拒绝静默完成；`max_turns` 用尽或 LLM 不调
-  tool 时通过 `agent_executed` 标记 + 空事件转 `RunFailedPayload` 而非
-  `RunCompletedPayload`。`QWEN_FUNCTION_ARGS_RETRY_LIMIT=2` 自动重跑 LLM 返回的
-  非法 JSON function arguments。
-- Durable runtime：`events.jsonl`、snapshot 和 Session 历史均由后端持久化；
-  `EventEnvelope` v2、按 Task sequence 续读、4-slot 跨 Task 并发、同 Task 串行、
-  queued/running/paused 取消和重启恢复均已实现。`TaskManager._execute` AGENT 模式
-  增加"成功证据校验"：`completion_events` 为空且无 cancellation 时转
-  `RunFailedPayload`，错误信息 `"agent 完成但未产出 artifact"`。
-- HIL：真实 Agent Tool 路径已接入权威 event/resume bridge，覆盖 exact one-shot
-  request identity、拒绝/超时失败、paused cancellation 和 fixture 自动批准审计。
-  `UserInputRequiredPayload.prompt_kind` 联合覆盖 `plan_confirmation` /
-  `max_turns_reached` / `data_correction`。前端 `UserInputDialog` 按 Run 与
-  submission attempt ID 隔离 A → B → A 切换中的旧 Promise settlement。
-- 前端 Agent 可见性：`StageProgressPayload`（`stage` / `kind` / `current` /
-  `total` / `detail`）跨 Agent / Pipeline 模式发射，Skills 在 `log_query` 后发射
-  `discovered_records` / `downloaded_bytes` / `cleaned_rows` 进度事件。前端
-  删除 stage 事件 Agent 模式丢弃守卫，`AgentProgress.tsx` 增加跨模式 stage/进度
-  chips。前端 Vitest、ESLint 零告警、TypeScript typecheck 和 production build
-  均为合并门禁；当前模型设置回归同时覆盖读取、保存、取消与乱序 settlement。
-- 视觉证据采集：`web_visual_capture` skill（`capture_web_page` +
-  `capture_page_section`）使用 Playwright Chromium 截图，产物为内容寻址 PNG
-  （`source_assets/figures/fig_<sha256[:12]>.png`）+ `_meta.json` sidecar；不进入
-  `GET /databases`，由 Agent 按需调用；22 项单元测试 + 6 项 live 测试。
-- 视觉模型图表数据提取：`extract_chart_data_vlm` skill 使用 Qwen-VL
-  （`qwen-vl-max`）从论文图表中提取 chart_type / axes / data_points / legend。
-  三级降级链 L1 Qwen-VL → L2 pdfplumber 表格 → L3 caption，全部失败抛
-  `ChartExtractionError`（project_memory 禁止静默空数据降级）。产物
-  `chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，Excel 兼容），通过
-  `source_asset_id` 追溯到原始图片/PDF；24 项单元测试 + 2 项 live 测试。
-- QueryStatus 枚举统一：`domain/contracts/enums.py:QueryStatus` 五态枚举
-  （`success` / `not_found` / `failed` / `skipped` / `page_fallback`），11 个 skill
-  文件 42 处 `log_query()` 调用全部迁移；`tests/test_query_log_status_consistency.py`
-  30 项 AST 静态扫描保证迁移完整性。PubChem / Reactome 的 page fallback 不再虚报
-  `ok`/1，改为 `page_fallback`/0（project_memory 硬约束）。
-- PDF 三级 fallback 链：`integrations/acquisition.py:acquire_publication_with_fallback()`
-  实现 `pdf_url` → Unpaywall（DOI，5s timeout）→ EuropePMC fullTextXML（PMCID，国内
-  可用）三级 fallback，所有 attempt（含失败）记录到 `download_log.csv`；
-  `_ALLOWED_HOSTS` 已新增 `api.unpaywall.org` / `www.ebi.ac.uk`；9 项回归测试。
-- Compaction truncation 显式校验：`runtime/compaction.py` 在
-  `finish_reason="length"` 时抛 `ConversationSummarizerTruncatedError` 短路
-  `_fallback` 静默降级（project_memory 硬约束 "LLM 失败必须抛异常"）；2 项回归测试。
-- 托管式研究自学习：builtin Catalog 明确排除旧 `self_evolution`，模型不能生成
-  Python 或写入 `skills/learned/`。能力缺口只能通过内部 `create_skill` 生成
-  声明式 `WorkflowRecipe`，由受控执行器验证 API → HTML → Browser 流程；Recipe、
-  子 Agent staging、SSRF/重定向、BrowserContext 取消清理和 secret redaction
-  均有独立回归测试。
-- 浏览器 QA 已在当前分支重新执行：启动时保留新研究草稿并加载后端历史，fixture
-  完整运行并展示 14 个产物；1440×900 与 390×844 下结果列表可滚动至最后产物，
-  390×520 压缩高度下设置提交控件仍可达，长标题截断且不遮挡状态/删除控件。
+---
 
-未完成能力只以 [TODO.md](TODO.md) 中未勾选条目为准；本节不复制任务清单，避免
-已完成状态在两处维护后产生漂移。
+## 24. 文档治理
+
+### 24.1 文档权威性矩阵
+
+| 主题 | 权威文档 | 状态 |
+| --- | --- | --- |
+| 系统架构（是什么 / 怎么组织 / 约束） | `docs/ARCHITECTURE.md`（本文） | V2 目标，权威 |
+| 架构决策（为什么） | `docs/BioMed-QAgent_Architecture_Decisions_and_Lessons.md` | ADR 索引，权威 |
+| V2 实现规格 | `docs/BioMed-QAgent_Pipeline_Refactor_Design.md` | 实现基线，权威 |
+| V1 架构（历史现状） | `docs/legacy/ARCHITECTURE_V1.md` | Legacy，仅参考 |
+| 执行任务 | `docs/TODO.md` | 任务清单，不承担架构解释 |
+| 赛题背景与评分 | `PROBLEM.md` | 外部约束，权威 |
+| Agent 通用规则 | `AGENTS.md` | 工作流约束，权威 |
+
+### 24.2 不重复规则
+
+- **一个概念一处权威**：每个架构概念只在本文定义权威表述；其他文档引用本文而
+  不复述。
+- **历史 Review 与 Survey 不作为现行架构依据**：已推翻结论必须标注
+  `superseded by ADR-xxx`。
+- **TODO 不承担架构解释**：TODO 只记录执行任务，长期架构解释必须进入本文或新
+  ADR。
+- **Prompt 不承担 Workflow Engine 职责**：稳定规则进入契约和服务端 Validator；
+  Prompt 只保留意图层原则（见 ADR §21.8 踩坑）。
+
+### 24.3 ADR 流程
+
+每个重大边界变化必须新增 ADR，不在 Prompt 或 TODO 中悄悄改变。ADR 形成后同步
+修订本文相关章节，并在本文顶部元数据更新 `Last Verified`。本文与代码现状矛盾
+且未标注为待落地时，标记 `stale` 并在下一里程碑修复。
+
+### 24.4 新增数据族 / 来源的最小文档要求
+
+新增数据族或来源时，必须更新：
+
+1. 本文 §3.2（数据族与行粒度）、§7（来源能力）、§10（Validation Profile）、
+   §16（Skill 仓库）相关章节；
+2. 对应 ADR（若涉及边界变化）；
+3. `docs/TODO.md` 的执行任务条目；
+4. Schema Registry 与 Validation Profile 注册条目。
+
+### 24.5 防止再次走偏的简短规则
+
+开始设计任何新功能前，先回答三句话：
+
+1. 用户最终要下载和分析的主数据是什么？
+2. 主表一行代表什么？
+3. 新来源提供的记录能否在科学语义上进入这张表？
+
+如果第三问答案不明确，就先保持独立、补充映射证据或拆成另一个 Build，**而不是
+先写合并代码**。
+
+---
+
+## 附录 A：被否决或修正的方案
+
+| 方案 | 处置 | 原因 |
+| --- | --- | --- |
+| 完整 Research DAG | 否决作为当前核心架构 | 过重、偏离评分、缺少必要场景、Agent 生成图不可靠 |
+| 多角度 Artifact Package 作为主产品 | 修正 | 可同时存在于一次科研会话，但不应成为同一 DatasetBuild 的同一主数据 |
+| 删除全部 Pipeline | 否决 | 会丢失 SourceAsset、Attempt、digest、恢复、Validation 和原子发布 |
+| 固定五阶段继续增加组合分支 | 否决 | 短期能接新来源，长期形成指数级状态组合和跨层硬编码 |
+| 万能 22 列 Schema | 否决作为全局 Schema | 可作为历史表达 Schema 或表达数据族一个版本保留 |
+| 用 warning 解释空主数据 | 否决 | Warning 不能改变"主表没有目标科学记录"的事实 |
+| 只靠 Prompt 修正架构 | 否决 | Prompt 不能替代服务端契约、兼容性门禁和发布规则 |
+| 通过 artifact 数量判断运行成功 | 否决 | 应使用显式 BuildOutcome 和发布状态 |
+
+> 完整决策记录见 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md) 的 §19（被否决或修正的方案）。
