@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -738,17 +739,31 @@ class RunContext:
         # 支持 QueryStatus 枚举传入;StrEnum 的 __str__ 返回 value,
         # 但显式转换避免任何边界情况。
         status_value = status.value if isinstance(status, QueryStatus) else str(status)
-        self.query_log.append(
-            {
-                "query": query,
-                "source": source,
-                "status": status_value,
-                "records_count": records_count,
-            }
-        )
+        record = {
+            "query": query,
+            "source": source,
+            "status": status_value,
+            "records_count": records_count,
+        }
+        self.query_log.append(record)
         # TODO §8.4: per-source follow-up counter.
         if status_value == QueryStatus.NOT_FOUND.value:
             self._followup_counts[source] = self._followup_counts.get(source, 0) + 1
+        self._append_agent_result_record(record)
+
+    def _append_agent_result_record(self, record: dict[str, object]) -> None:
+        """Append one durable ``agent_results/query_log.jsonl`` record.
+
+        The JSONL audit keeps the full query history even after in-memory
+        compression (``compress_log``), so global query logs are never lost
+        (TODO Phase 2 ``agent_results/``; REVIEW_2026-07-28 Phase 3).
+        """
+        with open(
+            self.work_dir.agent_results / "query_log.jsonl",
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     @property
     def followup_search_count(self) -> int:
@@ -764,8 +779,6 @@ class RunContext:
 
     def query_log_size(self) -> int:
         """估算 query_log 的字符总量（触发压缩判断用）。"""
-        import json
-
         return len(json.dumps(self.query_log, ensure_ascii=False))
 
     def compress_log(self, keep_recent: int, summary: str) -> int:

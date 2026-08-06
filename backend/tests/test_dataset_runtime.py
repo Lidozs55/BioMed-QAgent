@@ -102,6 +102,34 @@ class _Runner:
         )
 
 
+class _ChangingRunner(_Runner):
+    """Re-runs of the target operation produce a different output digest."""
+
+    def __init__(self, *, change_on: str) -> None:
+        super().__init__()
+        self._change_on = change_on
+        self._calls = 0
+
+    async def run(
+        self, op, upstream: dict[str, object]
+    ) -> OperationOutput:
+        self._calls += 1
+        self.calls.append(op.operation_id)
+        if op.operation_id == self._change_on:
+            return OperationOutput(
+                output={
+                    "operation_id": op.operation_id,
+                    "change": self._calls,
+                }
+            )
+        return OperationOutput(
+            output={
+                "operation_id": op.operation_id,
+                "upstream": sorted(upstream),
+            }
+        )
+
+
 def _make_executor(
     tmp_path: Path,
     runner: _Runner,
@@ -110,6 +138,7 @@ def _make_executor(
     scope: dict[str, object] | None = None,
     operation_timeout: float = 120.0,
     events: list[EventEnvelope] | None = None,
+    resume_from: str | None = None,
 ) -> DatasetBuildExecutor:
     spec = _spec()
 
@@ -130,6 +159,7 @@ def _make_executor(
         cancellation_requested=token,
         parameter_scope=scope,
         operation_timeout=operation_timeout,
+        resume_from=resume_from,
     )
 
 
@@ -212,6 +242,81 @@ def test_executor_reruns_when_parameters_change(tmp_path: Path) -> None:
     runner2 = _Runner()
     asyncio.run(_make_executor(tmp_path, runner2, scope={"v": 2}).run())
     assert len(runner2.calls) == 10  # parameter scope change invalidates reuse
+
+
+def test_executor_rerun_from_forces_target_and_reuses_upstream(tmp_path: Path) -> None:
+    runner = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner).run())
+    assert len(runner.calls) == 10
+
+    # resume_from re-executes the named operation; identical output lets
+    # downstream operations reuse their digest-matched attempts.
+    runner2 = _Runner()
+    second = asyncio.run(_make_executor(tmp_path, runner2, resume_from="integrate").run())
+    assert second.status == "completed"
+    assert len(second.completed_operation_ids) == 10
+    assert runner2.calls == ["integrate"]
+
+    state = BuildState.model_validate_json(
+        (tmp_path / "state" / "build_state.json").read_text("utf-8")
+    )
+    integrate = [a for a in state.operation_attempts if a.operation_id == "integrate"]
+    assert [a.status for a in integrate] == [
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.SUCCEEDED,
+    ]
+    assert [a.attempt for a in integrate] == [1, 2]
+
+
+def test_executor_rerun_from_invalidates_downstream_when_output_changes(
+    tmp_path: Path,
+) -> None:
+    runner = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner).run())
+    assert len(runner.calls) == 10
+
+    # Forced re-run changes the canonicalize output digest, so the
+    # compatibility gate and every downstream operation must re-execute.
+    runner2 = _ChangingRunner(change_on="canonicalize:srcbind_gdc")
+    second = asyncio.run(
+        _make_executor(
+            tmp_path, runner2, resume_from="canonicalize:srcbind_gdc"
+        ).run()
+    )
+    assert second.status == "completed"
+    assert len(second.completed_operation_ids) == 10
+    assert runner2.calls == [
+        "canonicalize:srcbind_gdc",
+        "compatibility_gate",
+        "integrate",
+        "validate_profile",
+        "publish",
+    ]
+
+    state = BuildState.model_validate_json(
+        (tmp_path / "state" / "build_state.json").read_text("utf-8")
+    )
+    # The unchanged upstream (parse/acquire) and the sibling canonicalize were
+    # reused; everything downstream of the changed digest was re-executed.
+    assert sum(
+        1
+        for a in state.operation_attempts
+        if a.status is AttemptStatus.SKIPPED
+    ) == 5
+
+
+def test_executor_rerun_from_rejects_unknown_operation(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="resume_from"):
+        _make_executor(tmp_path, _Runner(), resume_from="no_such_operation")
+
+
+def test_executor_rerun_from_fresh_state_executes_everything(tmp_path: Path) -> None:
+    runner = _Runner()
+    outcome = asyncio.run(
+        _make_executor(tmp_path, runner, resume_from="integrate").run()
+    )
+    assert outcome.status == "completed"
+    assert len(runner.calls) == 10  # no prior attempts exist to reuse
 
 
 def test_executor_cancel_stops_build(tmp_path: Path) -> None:

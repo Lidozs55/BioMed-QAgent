@@ -181,6 +181,7 @@ class DatasetBuildExecutor:
         parameter_scope: dict[str, Any] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
+        resume_from: str | None = None,
     ) -> None:
         self._task_id = task_id
         self._build_id = build_id
@@ -195,6 +196,13 @@ class DatasetBuildExecutor:
         self._parameter_scope = parameter_scope or {}
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
+        self._resume_from = resume_from
+        if resume_from is not None and resume_from not in {
+            op.operation_id for op in plan
+        }:
+            raise ValueError(
+                f"resume_from must name a plan operation, got {resume_from!r}"
+            )
         self._state: BuildState | None = None
         self._outputs: dict[str, Any] = {}
         self._sequence: int = 1
@@ -205,7 +213,9 @@ class DatasetBuildExecutor:
 
         A build-level exclusive lock prevents concurrent execution of the same
         build (recovery racing a stuck prior process). The lock is released in
-        ``finally``.
+        ``finally``. When ``resume_from`` names a plan operation, that operation
+        is re-executed and its downstream is revalidated through the digest
+        closure; earlier operations still run or reuse as usual.
         """
         lock = TaskLock(self._lock_path, timeout=self._lock_timeout)
         try:
@@ -274,18 +284,30 @@ class DatasetBuildExecutor:
         for op in self._plan:
             if self._is_cancelled():
                 raise BuildCancelledError("build was cancelled before an operation")
-            await self._run_operation_once(op)
+            await self._run_operation_once(op, force=(op.operation_id == self._resume_from))
         return BuildRunOutcome(
             status="completed",
             completed_operation_ids=tuple(state.completed_operations.keys()),
         )
 
-    async def _run_operation_once(self, op: OperationSpec) -> None:
-        """Run (or reuse) one operation with digest matching and checkpointing."""
+    async def _run_operation_once(
+        self,
+        op: OperationSpec,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Run (or reuse) one operation with digest matching and checkpointing.
+
+        ``force`` marks a server-controlled restart point (``resume_from``):
+        the operation itself is re-executed even when a digest-matched attempt
+        exists; downstream operations are still reused only when their upstream
+        digests match (ARCHITECTURE §5.2). The Agent cannot skip arbitrary
+        operations.
+        """
         input_digest = self._compute_input_digest(op)
         parameter_digest = self._compute_parameter_digest(op)
 
-        if await self._try_reuse_operation(op, input_digest, parameter_digest):
+        if not force and await self._try_reuse_operation(op, input_digest, parameter_digest):
             return
 
         started = datetime.now(UTC)

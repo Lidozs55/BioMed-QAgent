@@ -18,6 +18,7 @@ _SUBDIRS = (
     "artifacts",
     "state",
     "logs",
+    "agent_results",
 )
 
 
@@ -52,6 +53,7 @@ class TaskWorkDir:
     artifacts: Path
     state: Path
     logs: Path
+    agent_results: Path
 
     @property
     def raw(self) -> Path:

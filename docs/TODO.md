@@ -45,6 +45,7 @@
 > `PipelineRunner` 变 Legacy facade。验收见 Design §16 Phase 2。
 > ✅ 已完成第一批（Step 2.1）：`app/datasets/runtime/`（operations / checkpoint / executor）
 > + OPERATION_* 事件 + 10 项 runtime 测试；全量 pytest 无回归。
+> ✅ 第二批：`rerun_from`（resume_from 受控重跑）+ `agent_results/` 查询审计持久化。
 > 剩余项依赖 Phase 3（真实 Operation 执行器与 Publication）后继续。
 
 - [x] **P0** 抽取通用任务锁、Attempt、digest、checkpoint、超时、取消、事件逻辑到
@@ -60,10 +61,14 @@
 - [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
 - [ ] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
       （依赖 Phase 3 真实 `publish` Operation 与 Phase 4 BuildResult/Publication 接线）
-- [ ] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
+- [x] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
+      （`DatasetBuildExecutor.resume_from`：服务端受控起点，目标 Operation 强制重跑、
+      下游经 digest 闭包重新校验，起点外 Operation 不得被跳过；4 项测试）
 - [ ] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
       任务/会话改为 `current_publication_id`（归 Phase 4，随 Publication 一起）
-- [ ] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
+- [x] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
+      （`TaskWorkDir.agent_results/query_log.jsonl`：`log_query` 追加持久化，
+      `compress_log` 后磁盘仍保留全量查询审计；2 项测试）
 
 ---
 

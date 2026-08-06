@@ -1,10 +1,11 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from app.agent_loop.context import RunContext
-from app.domain.contracts import DataLevel
+from app.domain.contracts import DataLevel, QueryStatus
 from app.tools.crawler import CrawlerFacade
 
 
@@ -110,3 +111,57 @@ def test_child_source_asset_helper_commits_to_task_source_assets(
     assert child.source_asset_path(asset).read_bytes() == b"child bytes"
     assert child.source_asset_ids == [asset.asset_id]
     assert asset.relative_path.startswith("source_assets/")
+
+
+def test_log_query_persists_durable_agent_results_query_log(
+    tmp_path: Path,
+) -> None:
+    context = RunContext(task_id="task_agent_results", base_dir=tmp_path)
+    context.log_query("cancer[title]", "pubmed", QueryStatus.SUCCESS, 5)
+    context.log_query("pdac", "geo", QueryStatus.NOT_FOUND, 0)
+
+    log_path = context.work_dir.agent_results / "query_log.jsonl"
+    assert log_path.is_file()
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records == context.query_log
+    assert records == [
+        {
+            "query": "cancer[title]",
+            "source": "pubmed",
+            "status": "success",
+            "records_count": 5,
+        },
+        {
+            "query": "pdac",
+            "source": "geo",
+            "status": "not_found",
+            "records_count": 0,
+        },
+    ]
+
+
+def test_compress_log_keeps_full_durable_query_log(tmp_path: Path) -> None:
+    context = RunContext(task_id="task_compressed", base_dir=tmp_path)
+    for index in range(5):
+        context.log_query(f"query-{index}", "pubmed", QueryStatus.SUCCESS, index)
+
+    compressed = context.compress_log(keep_recent=2, summary="older queries summarized")
+
+    assert compressed == 3
+    assert len(context.query_log) == 2  # in-memory log is compressed
+    log_path = context.work_dir.agent_results / "query_log.jsonl"
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 5  # durable audit keeps the full history
+    assert [record["query"] for record in records] == [
+        "query-0",
+        "query-1",
+        "query-2",
+        "query-3",
+        "query-4",
+    ]
