@@ -78,14 +78,14 @@ async def test_executor_loads_exact_verified_version_from_trusted_store(
     tmp_path: Path,
 ) -> None:
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, _api_recipe())
+    promoted = _store_promoted(store, _api_recipe())
     client = ControlledClient([])
     executor = RecipeExecutor(client=client, store=store)
 
     with pytest.raises(KeyError):
         await executor.execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version + 1,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version + 1,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -117,7 +117,7 @@ async def test_http_client_receives_once_resolved_pinned_target(
         resolve,
     )
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, _api_recipe())
+    promoted = _store_promoted(store, _api_recipe())
     client = ControlledClient(
         [
             RecipeStepResponse(
@@ -129,8 +129,8 @@ async def test_http_client_receives_once_resolved_pinned_target(
     )
 
     await RecipeExecutor(client=client, store=store).execute(
-        recipe_id=verified.recipe_id,
-        version=verified.version,
+        recipe_id=promoted.recipe_id,
+        version=promoted.version,
         inputs={"accession": "GSE100"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -160,7 +160,7 @@ async def test_api_content_uses_source_asset_mapping_without_output_name(
         }
     )
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, draft)
+    promoted = _store_promoted(store, draft)
     client = ControlledClient(
         [
             RecipeStepResponse(
@@ -172,8 +172,8 @@ async def test_api_content_uses_source_asset_mapping_without_output_name(
     )
 
     result = await RecipeExecutor(client=client, store=store).execute(
-        recipe_id=verified.recipe_id,
-        version=verified.version,
+        recipe_id=promoted.recipe_id,
+        version=promoted.version,
         inputs={"accession": "GSE100"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -203,7 +203,7 @@ async def test_private_redirect_is_rejected_before_second_client_call(
         update={"allowed_hosts": ["api.example.org", "private.example"]}
     )
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, draft)
+    promoted = _store_promoted(store, draft)
     client = ControlledClient(
         [
             RecipeStepResponse(
@@ -217,8 +217,8 @@ async def test_private_redirect_is_rejected_before_second_client_call(
 
     with pytest.raises(AcquisitionFailure, match="non-public"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -259,7 +259,7 @@ async def test_browser_authorization_blocks_private_subresource_before_transport
             raise AssertionError("private browser request was contacted")
 
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(
+    promoted = _store_promoted(
         store,
         _browser_recipe().model_copy(
             update={"allowed_hosts": ["api.example.org", "private.example"]}
@@ -269,8 +269,8 @@ async def test_browser_authorization_blocks_private_subresource_before_transport
 
     with pytest.raises(AcquisitionFailure, match="non-public"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -323,13 +323,13 @@ async def test_flat_input_schema_rejects_invalid_values_before_client(
             }
         }
     )
-    verified = _store_verified(store, draft)
+    promoted = _store_promoted(store, draft)
     client = ControlledClient([])
 
     with pytest.raises(ValueError, match="input|pattern|length|minimum|maximum|type|enum"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": value},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -378,7 +378,7 @@ async def test_executor_rejects_unsupported_schema_before_client(
     input_schema: dict[str, object],
 ) -> None:
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(
+    promoted = _store_promoted(
         store,
         _api_recipe().model_copy(update={"input_schema": input_schema}),
     )
@@ -386,8 +386,8 @@ async def test_executor_rejects_unsupported_schema_before_client(
 
     with pytest.raises(ValueError, match="unsupported|additionalProperties"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"} if "accession" in input_schema["properties"] else {},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -405,7 +405,7 @@ async def test_browser_actions_continue_until_extract_with_exact_evidence(
         _public_target,
     )
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, _browser_recipe())
+    promoted = _store_promoted(store, _browser_recipe())
     client = ControlledClient(
         [
             RecipeStepResponse(
@@ -427,8 +427,8 @@ async def test_browser_actions_continue_until_extract_with_exact_evidence(
     )
 
     result = await RecipeExecutor(client=client, store=store).execute(
-        recipe_id=verified.recipe_id,
-        version=verified.version,
+        recipe_id=promoted.recipe_id,
+        version=promoted.version,
         inputs={"accession": "GSE100"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -487,7 +487,7 @@ async def test_browser_scope_closes_when_recipe_ends_without_extract(
             ]
         }
     )
-    verified = _store_verified(store, recipe)
+    promoted = _store_promoted(store, recipe)
     client = ScopeTrackingClient(
         [
             RecipeStepResponse(
@@ -505,8 +505,8 @@ async def test_browser_scope_closes_when_recipe_ends_without_extract(
 
     with pytest.raises(RuntimeError, match="all Recipe steps failed"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -543,12 +543,12 @@ async def test_browser_scope_closes_when_recipe_is_cancelled(
             raise AssertionError("unreachable")
 
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(store, _browser_recipe())
+    promoted = _store_promoted(store, _browser_recipe())
     client = BlockingClient()
     task = asyncio.create_task(
         RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -605,7 +605,7 @@ async def test_browser_subresources_do_not_replace_canonical_document_target(
             return self.responses.pop(0)
 
     store = WorkflowRecipeStore(tmp_path / "recipes")
-    verified = _store_verified(
+    promoted = _store_promoted(
         store,
         _browser_recipe().model_copy(
             update={
@@ -630,8 +630,8 @@ async def test_browser_subresources_do_not_replace_canonical_document_target(
     )
 
     result = await RecipeExecutor(client=client, store=store).execute(
-        recipe_id=verified.recipe_id,
-        version=verified.version,
+        recipe_id=promoted.recipe_id,
+        version=promoted.version,
         inputs={"accession": "GSE100"},
         workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
     )
@@ -656,13 +656,13 @@ async def test_browser_only_recipe_requires_audited_api_and_html_evidence(
 ) -> None:
     store = WorkflowRecipeStore(tmp_path / "recipes")
     draft = _browser_recipe().model_copy(update={"attempts": []})
-    verified = _store_verified(store, draft)
+    promoted = _store_promoted(store, draft)
     client = ControlledClient([])
 
     with pytest.raises(ValueError, match="API and HTML.*evidence"):
         await RecipeExecutor(client=client, store=store).execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
         )
@@ -738,12 +738,14 @@ def _browser_recipe() -> WorkflowRecipe:
     )
 
 
-def _store_verified(
+def _store_promoted(
     store: WorkflowRecipeStore,
     draft: WorkflowRecipe,
 ) -> WorkflowRecipe:
     stored = store.save_draft(draft)
-    return store.mark_verified(stored.recipe_id, verification_evidence=["fixture"])
+    verified = store.mark_verified(stored.recipe_id, verification_evidence=["fixture"])
+    requested = store.request_promotion(verified.recipe_id)
+    return store.approve_promotion(requested.recipe_id)
 
 
 def _public_target(url: str, *, require_https: bool) -> PublicHttpTarget:

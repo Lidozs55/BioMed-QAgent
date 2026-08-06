@@ -76,12 +76,12 @@ class FakeRecipeClient:
 
 
 @pytest.mark.asyncio
-async def test_verified_recipe_produces_staged_source_asset(
+async def test_promoted_recipe_produces_staged_source_asset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_target_validator(monkeypatch)
-    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
+    store, recipe = _stored_promoted_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
@@ -117,7 +117,7 @@ async def test_executor_percent_encodes_declared_template_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_target_validator(monkeypatch)
-    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
+    store, recipe = _stored_promoted_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
@@ -162,7 +162,7 @@ async def test_executor_percent_encodes_browser_navigation_values(
             ],
         }
     )
-    store, recipe = _store_verified(tmp_path / "recipes", draft)
+    store, recipe = _store_promoted(tmp_path / "recipes", draft)
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
@@ -202,7 +202,7 @@ async def test_executor_rejects_missing_or_extra_inputs_before_client_call(
     inputs: dict[str, str],
     message: str,
 ) -> None:
-    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
+    store, recipe = _stored_promoted_recipe(tmp_path / "recipes")
     client = FakeRecipeClient([])
 
     with pytest.raises(ValueError, match=message):
@@ -221,8 +221,8 @@ async def test_executor_rejects_tampered_or_unverified_stored_recipe(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "recipes"
-    store, verified = _stored_verified_recipe(root)
-    recipe_path = root / verified.recipe_id / str(verified.version) / "recipe.json"
+    store, promoted = _stored_promoted_recipe(root)
+    recipe_path = root / promoted.recipe_id / str(promoted.version) / "recipe.json"
     serialized = json.loads(recipe_path.read_text(encoding="utf-8"))
     serialized["capability"] = "tampered"
     recipe_path.write_text(json.dumps(serialized), encoding="utf-8")
@@ -232,8 +232,8 @@ async def test_executor_rejects_tampered_or_unverified_stored_recipe(
 
     with pytest.raises(ValueError, match="digest"):
         await executor.execute(
-            recipe_id=verified.recipe_id,
-            version=verified.version,
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
             inputs={"accession": "GSE100"},
             workspace=workspace,
         )
@@ -242,7 +242,7 @@ async def test_executor_rejects_tampered_or_unverified_stored_recipe(
     draft = draft_store.save_draft(
         _draft_recipe().model_copy(update={"recipe_id": "recipe_unverified"})
     )
-    with pytest.raises(ValueError, match="verified"):
+    with pytest.raises(ValueError, match="promoted"):
         await RecipeExecutor(client=client, store=draft_store).execute(
             recipe_id=draft.recipe_id,
             version=draft.version,
@@ -272,7 +272,7 @@ async def test_executor_records_failed_fallback_before_success(
             ]
         }
     )
-    store, recipe = _store_verified(tmp_path / "recipes", draft)
+    store, recipe = _store_promoted(tmp_path / "recipes", draft)
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
@@ -328,7 +328,7 @@ async def test_executor_enforces_step_and_total_timeouts(
             ],
         }
     )
-    store, recipe = _store_verified(tmp_path / "recipes", draft)
+    store, recipe = _store_promoted(tmp_path / "recipes", draft)
 
     with pytest.raises(TimeoutError, match="recipe execution timed out"):
         await RecipeExecutor(client=SlowClient([]), store=store).execute(
@@ -356,7 +356,7 @@ async def test_executor_revalidates_redirect_before_following(
         return _target(url)
 
     monkeypatch.setattr("app.recipes.executor.validate_recipe_source_url", validate)
-    store, recipe = _stored_verified_recipe(tmp_path / "recipes")
+    store, recipe = _stored_promoted_recipe(tmp_path / "recipes")
     client = FakeRecipeClient(
         [
             RecipeStepResponse(
@@ -383,6 +383,86 @@ async def test_executor_revalidates_redirect_before_following(
 def test_recipe_contract_rejects_unknown_browser_action() -> None:
     with pytest.raises(ValueError):
         BrowserActionStep.model_validate({"type": "browser_action", "action": "evaluate"})
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_verified_recipe_in_production(
+    tmp_path: Path,
+) -> None:
+    store, verified = _stored_verified_recipe(tmp_path / "recipes")
+    client = FakeRecipeClient([])
+
+    with pytest.raises(ValueError, match="only promoted"):
+        await RecipeExecutor(client=client, store=store).execute(
+            recipe_id=verified.recipe_id,
+            version=verified.version,
+            inputs={"accession": "GSE100"},
+            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+        )
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_executor_trial_execution_accepts_verified_recipe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_target_validator(monkeypatch)
+    store, verified = _stored_verified_recipe(tmp_path / "recipes")
+    client = FakeRecipeClient(
+        [
+            RecipeStepResponse(
+                content=b'{"accession":"GSE100"}',
+                status_code=200,
+                media_type="application/json",
+            )
+        ]
+    )
+
+    result = await RecipeExecutor(client=client, store=store).execute_for_trial(
+        recipe_id=verified.recipe_id,
+        version=verified.version,
+        inputs={"accession": "GSE100"},
+        workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+    )
+
+    assert result.source_asset.source_id == "src_recipe"
+    assert result.attempts[0].status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_executor_trial_execution_rejects_promoted_recipe(
+    tmp_path: Path,
+) -> None:
+    store, promoted = _stored_promoted_recipe(tmp_path / "recipes")
+    client = FakeRecipeClient([])
+
+    with pytest.raises(ValueError, match="limited trial"):
+        await RecipeExecutor(client=client, store=store).execute_for_trial(
+            recipe_id=promoted.recipe_id,
+            version=promoted.version,
+            inputs={"accession": "GSE100"},
+            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+        )
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_rejected_recipe_in_production(
+    tmp_path: Path,
+) -> None:
+    store, verified = _stored_verified_recipe(tmp_path / "recipes")
+    rejected = store.reject(verified.recipe_id, reason="fixture rejection")
+    client = FakeRecipeClient([])
+
+    with pytest.raises(ValueError, match="only promoted"):
+        await RecipeExecutor(client=client, store=store).execute(
+            recipe_id=rejected.recipe_id,
+            version=rejected.version,
+            inputs={"accession": "GSE100"},
+            workspace=SubagentStagingWorkspace(tmp_path / "task", "sub_1"),
+        )
+    assert client.calls == []
 
 
 def _draft_recipe() -> WorkflowRecipe:
@@ -419,6 +499,12 @@ def _stored_verified_recipe(
     return _store_verified(root, _draft_recipe())
 
 
+def _stored_promoted_recipe(
+    root: Path,
+) -> tuple[WorkflowRecipeStore, WorkflowRecipe]:
+    return _store_promoted(root, _draft_recipe())
+
+
 def _store_verified(
     root: Path,
     draft: WorkflowRecipe,
@@ -430,6 +516,16 @@ def _store_verified(
         verification_evidence=["fixture"],
     )
     return store, verified
+
+
+def _store_promoted(
+    root: Path,
+    draft: WorkflowRecipe,
+) -> tuple[WorkflowRecipeStore, WorkflowRecipe]:
+    store, verified = _store_verified(root, draft)
+    requested = store.request_promotion(verified.recipe_id)
+    promoted = store.approve_promotion(requested.recipe_id)
+    return store, promoted
 
 
 def _fallback_evidence() -> list[RecipeAttempt]:

@@ -90,6 +90,34 @@ class WorkflowRecipeStore:
         capability: str,
         host: str | None = None,
     ) -> list[WorkflowRecipe]:
+        """Trial/development discovery: only VERIFIED recipes are returned.
+
+        Production Dataset Builds must discover through ``find_promoted``;
+        VERIFIED recipes remain limited to trial use or explicit HIL
+        confirmation (ADR-004; Design §9.4).
+        """
+        return self._find_by_status(
+            RecipeStatus.VERIFIED, domain, capability, host
+        )
+
+    def find_promoted(
+        self,
+        domain: str,
+        capability: str,
+        host: str | None = None,
+    ) -> list[WorkflowRecipe]:
+        """Production discovery: only PROMOTED recipes are auto-discoverable."""
+        return self._find_by_status(
+            RecipeStatus.PROMOTED, domain, capability, host
+        )
+
+    def _find_by_status(
+        self,
+        status: RecipeStatus,
+        domain: str,
+        capability: str,
+        host: str | None = None,
+    ) -> list[WorkflowRecipe]:
         normalized_host = host.strip().lower().rstrip(".") if host else None
         matches: list[WorkflowRecipe] = []
         for recipe_root in sorted(self.root.iterdir()):
@@ -100,7 +128,7 @@ class WorkflowRecipeStore:
             except (KeyError, ValueError):
                 continue
             if (
-                recipe.status is RecipeStatus.VERIFIED
+                recipe.status is status
                 and recipe.domain == domain
                 and recipe.capability == capability
                 and (normalized_host is None or normalized_host in recipe.allowed_hosts)

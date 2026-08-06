@@ -173,7 +173,7 @@ def test_store_creates_immutable_monotonic_versions(tmp_path: Path) -> None:
     assert store.get(first.recipe_id, version=2) == second
 
 
-def test_store_transitions_append_versions_and_find_verified(tmp_path: Path) -> None:
+def test_store_transitions_append_versions_and_discovery(tmp_path: Path) -> None:
     store = WorkflowRecipeStore(tmp_path)
     draft = store.save_draft(_recipe())
 
@@ -205,6 +205,21 @@ def test_store_transitions_append_versions_and_find_verified(tmp_path: Path) -> 
         store.find_verified(
             domain="gene-expression",
             capability="download-series-matrix",
+        )
+        == []
+    )
+    assert (
+        store.find_promoted(
+            domain="gene-expression",
+            capability="download-series-matrix",
+            host="api.example.org",
+        )
+        == [promoted]
+    )
+    assert (
+        store.find_promoted(
+            domain="gene-expression",
+            capability="other-capability",
         )
         == []
     )

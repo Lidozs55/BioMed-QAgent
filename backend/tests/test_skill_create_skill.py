@@ -117,7 +117,7 @@ async def test_validate_recipe_uses_trusted_draft_bootstrap_then_commits(
     draft = store.get(developed["recipe"]["recipe_id"], developed["recipe"]["version"])
     executor = context.context.create_skill_runtime.executor
 
-    with pytest.raises(ValueError, match="only verified"):
+    with pytest.raises(ValueError, match="only promoted"):
         await executor.execute(
             recipe_id=draft.recipe_id,
             version=draft.version,

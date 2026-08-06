@@ -190,6 +190,25 @@ class RecipeExecutor:
         inputs: Mapping[str, object],
         workspace: SubagentStagingWorkspace,
     ) -> RecipeExecutionResult:
+        """Execute one trusted PROMOTED Recipe for a production Dataset Build."""
+
+        recipe = self._load(recipe_id, version, required_status=RecipeStatus.PROMOTED)
+        return await self._execute(recipe, inputs, workspace)
+
+    async def execute_for_trial(
+        self,
+        *,
+        recipe_id: str,
+        version: int,
+        inputs: Mapping[str, object],
+        workspace: SubagentStagingWorkspace,
+    ) -> RecipeExecutionResult:
+        """Execute one VERIFIED Recipe under explicit limited-trial authorization.
+
+        VERIFIED recipes must never enter a production Build without an
+        explicit trial or HIL confirmation (ADR-004; Design §9.4).
+        """
+
         recipe = self._load(recipe_id, version, required_status=RecipeStatus.VERIFIED)
         return await self._execute(recipe, inputs, workspace)
 
@@ -506,9 +525,13 @@ class RecipeExecutor:
         if validated.recipe_id != recipe_id or validated.version != version:
             raise ValueError("stored Recipe identity does not match requested version")
         if validated.status is not required_status:
+            if required_status is RecipeStatus.DRAFT:
+                raise ValueError("only draft Recipes may be executed for validation")
             if required_status is RecipeStatus.VERIFIED:
-                raise ValueError("only verified Recipes may be executed")
-            raise ValueError("only draft Recipes may be executed for validation")
+                raise ValueError(
+                    "only verified Recipes may be executed in a limited trial"
+                )
+            raise ValueError("only promoted Recipes may be executed in production")
         if not validated.digest or validated.digest != compute_recipe_digest(validated):
             raise ValueError("Recipe digest does not match its stored content")
         return validated

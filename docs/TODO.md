@@ -72,13 +72,14 @@
 > 目标：`WorkflowRecipe` 只服务 Acquisition；生产 Build 只消费 PROMOTED Recipe。
 > 验收见 Design §16 Phase 2.5。
 
-- [ ] **P0** 明确 `WorkflowRecipe` 边界：只产出 `SourceAsset`，不得产生 DataBatch、
-      声明跨来源依赖、决定合并、选择 Profile 或发布
-- [ ] **P0** 实现 `WorkflowRecipeSourceFetcher`；`SourceBinding` 支持 `recipe_id + version`
-- [ ] **P0** 生产发现只返回 `PROMOTED`；`VERIFIED` 仅限受限试用或 HIL 确认
-- [ ] **P0** 修复 `RecipeExecutor.execute()`、Store 发现与 promotion 状态不一致
+- [x] **P0** 明确 `WorkflowRecipe` 边界：只产出 `SourceAsset`，不得产生 DataBatch、
+      声明跨来源依赖、决定合并、选择 Profile 或发布（Design §9.3；契约层由类型化
+      step 与固定 SourceAsset 映射结构性保证）
+- [x] **P0** 实现 `WorkflowRecipeSourceFetcher`；`SourceBinding` 支持 `recipe_id + version`
+- [x] **P0** 生产发现只返回 `PROMOTED`；`VERIFIED` 仅限受限试用或 HIL 确认
+- [x] **P0** 修复 `RecipeExecutor.execute()`、Store 发现与 promotion 状态不一致
       （当前 execute/find_verified 只面向 VERIFIED，PROMOTED 后反不可达）
-- [ ] **P0** Recipe 输出经 Workspace 校验提交为 `SourceAsset` 后再交给 Adapter
+- [x] **P0** Recipe 输出经 Workspace 校验提交为 `SourceAsset` 后再交给 Adapter
 - [ ] **P1** 统一 SourceAsset 契约：PDB / browser 下载路径走 `acquire_source()`；
       所有 acquisition skill 产出合规 SourceAsset（原 §2.4）
 - [ ] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
