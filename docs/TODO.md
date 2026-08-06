@@ -173,10 +173,15 @@
 - [ ] **P0** 实现 Confidence Contract 与确定性统计检测器（benford_distance /
       last_digit_chi2 / detect_constant_column / detect_arithmetic_progression /
       aggregate_confidence_metrics，含 `is_benford_applicable` 前置判定）（原 §6.1）
+      （✅ 检测器纯函数已落地：`app/datasets/build/confidence.py` + 24 项单元测试；
+      阈值由 Profile 持有 `ConfidenceThresholds`；VLM 图表点标注等契约侧落地待后续）
 - [ ] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
       门禁（缺置信度或 source-of-record 时对应 Profile 失败）
-- [ ] **P1** 产出 `confidence_report.csv`；validation 增加 data_confidence 补充检查
+- [x] **P1** 产出 `confidence_report.csv`；validation 增加 data_confidence 补充检查
       （低分 → valid_with_warnings）（原 §6.1）
+      （`ExpressionValidationProfile` 增加 data_confidence check：统计异常仅作
+      warning（v1 不阻断发布，SURVEY §7），报告写入 validation_report.json 的
+      warnings 字段并产出 `confidence_report.csv`；5 项新测试）
 - [ ] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
 - [ ] **P1** `chart_data` 完整性校验（原 §2.7.1）
 - [ ] **P2** 通用 provenance coverage 统计
