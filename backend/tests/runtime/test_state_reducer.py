@@ -393,6 +393,57 @@ def test_publication_events_honor_explicit_supersedes() -> None:
     assert reduced.publications[0].supersedes_publication_id == "pub-earlier"
 
 
+def test_duplicate_publication_event_is_a_no_op() -> None:
+    # A re-delivered publication_created event for the same publication_id must
+    # not append a second entry; bookkeeping (latest_sequence) still advances.
+    snapshot = _snapshot_fixture()
+    first = reduce_task_event(
+        snapshot,
+        _envelope(
+            2,
+            PublicationCreatedPayload(
+                publication_id="pub-run_1",
+                run_id="run_1",
+                manifest_sha256="a" * 64,
+                published_at=NOW + timedelta(seconds=2),
+            ),
+        ),
+    )
+    second = reduce_task_event(
+        first,
+        _envelope(
+            3,
+            PublicationCreatedPayload(
+                publication_id="pub-run_1",
+                run_id="run_1",
+                manifest_sha256="a" * 64,
+                published_at=NOW + timedelta(seconds=3),
+            ),
+        ),
+    )
+    assert len(second.publications) == 1
+    assert second.publications[0].publication_id == "pub-run_1"
+    assert second.publications[0].published_at == NOW + timedelta(seconds=2)
+    assert second.current_publication_id == "pub-run_1"
+    assert second.task.latest_sequence == 3
+
+
+def test_publication_event_rejects_payload_envelope_run_id_mismatch() -> None:
+    with pytest.raises(ValueError, match="run_id must match"):
+        reduce_task_event(
+            _snapshot_fixture(),
+            _envelope(
+                2,
+                PublicationCreatedPayload(
+                    publication_id="pub-run_1",
+                    run_id="run_2",
+                    manifest_sha256="a" * 64,
+                    published_at=NOW + timedelta(seconds=2),
+                ),
+            ),
+        )
+
+
 def test_terminal_events_populate_run_summary() -> None:
     snapshot = _queued_run_fixture()
     for sequence, payload in enumerate(

@@ -612,14 +612,17 @@ async def test_cancelled_summary_save_waits_for_atomic_write_before_unlocking(
 
 @pytest.mark.asyncio
 async def test_legacy_events_replay_without_string_scan(tmp_path) -> None:
-    # Old-style journal: run_failed carries only error (no error_code),
-    # run_completed has no build_result, and no publication events exist.
+    # Old-style journal: run_failed carries only error (no error_code key),
+    # run_completed has no build_result key, and no publication events exist.
     # Replay must build the snapshot, project partial run summaries, and
-    # leave current_publication_id unset.
+    # leave current_publication_id unset. The journal is written as RAW JSON
+    # with the optional payload keys omitted entirely (not explicit nulls) so
+    # the model's optional-field defaults are genuinely exercised on load.
     repository = TaskRepository(tmp_path / "output")
     await repository.initialize()
     task_id = "task_legacy_replay"
     await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    events_path = repository.events.path_for(task_id)
     try:
         for event in (
             build_event(
@@ -672,7 +675,18 @@ async def test_legacy_events_replay_without_string_scan(tmp_path) -> None:
                 payload=RunCompletedPayload(),
             ),
         ):
-            await asyncio.to_thread(repository.events.append, event)
+            raw = event.model_dump(mode="json")
+            payload = raw["payload"]
+            if payload["type"] == "run_failed":
+                payload.pop("error_code", None)
+            if payload["type"] == "run_completed":
+                payload.pop("build_result", None)
+            event_store_module.append_jsonl(events_path, raw)
+
+        # The raw journal genuinely omits the optional payload keys.
+        raw_text = events_path.read_text("utf-8")
+        assert "error_code" not in raw_text
+        assert "build_result" not in raw_text
 
         loaded = await repository.get_snapshot(task_id)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
 
 from app.domain.contracts import (
     ArtifactProducedPayload,
@@ -223,19 +222,24 @@ def reduce_task_event(
     elif isinstance(payload, PublicationCreatedPayload):
         if event.run_id is None:
             raise ValueError("publication events require run_id")
+        if payload.run_id != event.run_id:
+            raise ValueError("payload run_id must match envelope run_id")
         _run_index(snapshot, event.run_id)
-        previous = current_publication_id
-        publications.append(
-            PublicationSummary(
-                publication_id=payload.publication_id,
-                manifest_sha256=payload.manifest_sha256,
-                supersedes_publication_id=(
-                    payload.supersedes_publication_id or previous
-                ),
-                published_at=payload.published_at,
+        if not any(
+            item.publication_id == payload.publication_id for item in publications
+        ):
+            previous = current_publication_id
+            publications.append(
+                PublicationSummary(
+                    publication_id=payload.publication_id,
+                    manifest_sha256=payload.manifest_sha256,
+                    supersedes_publication_id=(
+                        payload.supersedes_publication_id or previous
+                    ),
+                    published_at=payload.published_at,
+                )
             )
-        )
-        current_publication_id = payload.publication_id
+            current_publication_id = payload.publication_id
         status = snapshot.task.status
     elif type(payload) in _STATUS_PAYLOADS:
         if event.run_id is None:
@@ -259,7 +263,7 @@ def reduce_task_event(
             updates["started_at"] = event.timestamp
         if status in _TERMINAL_STATUSES:
             updates["finished_at"] = event.timestamp
-        summary = _run_summary_for(payload, status, event.timestamp)
+        summary = _run_summary_for(payload, status)
         if summary is not None:
             updates["summary"] = summary
         if isinstance(payload, RunFailedPayload):
@@ -392,7 +396,7 @@ def reduce_task_event(
 
 
 def _run_summary_for(
-    payload: object, status: RunStatus, timestamp: datetime
+    payload: object, status: RunStatus
 ) -> RunSummary | None:
     """Project a server-generated per-run outcome summary from a terminal event.
 
