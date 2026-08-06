@@ -1,291 +1,212 @@
 # BioMed-QAgent 开发 TODO
 
-> 基于 PROBLEM.md 赛题要求（XH-202619 赛道二方向1 选题A）。
-> 本文件仅保留**未完成**待办；已完成项的根因、实现说明与结论见
-> `docs/REVIEW_*.md`、`docs/RESEARCH_SYSTEM_REVIEW_2026-08-03.md` 与 git 历史。
+> 本清单的目标：**全部条目完成后，项目与新版 [ARCHITECTURE.md](ARCHITECTURE.md) 一致**。
+> 主线按实现规格 [BioMed-QAgent_Pipeline_Refactor_Design.md](BioMed-QAgent_Pipeline_Refactor_Design.md)
+> §16 的 Phase 1-8 组织；每个 Phase 的验收标准以该文档为准，此处不重复。
+> 原 Design §16 Phase 0（冻结与特征测试）面向云端无法运行的环境；本地仓库已具备
+> 运行环境，其基线意图由"全程保持既有测试通过（AGENTS.md §7.3 质量门）"与既有
+> REVIEW 固定案例（ARCHITECTURE §21.6）覆盖，故不单列。
+> 架构决策依据见 [BioMed-QAgent_Architecture_Decisions_and_Lessons.md](BioMed-QAgent_Architecture_Decisions_and_Lessons.md)
+> （ADR-004/010/012 为 V2 状态与执行模型的权威）。
+> 已完成项、根因与结论见 `docs/REVIEW_*.md` 与 git 历史；本文件只保留未完成项。
 
 ---
 
-## 1. 管道核心能力（P0）
+## Phase 1：引入 V2 数据集契约和 Schema Registry
 
-### 1.4 数据源能力边界
+> 目标：新增自包含 `DatasetBuildSpec`（**不新增 DatasetRequest**）与四正交状态契约；
+> 不修改旧 Pipeline 执行。验收见 Design §16 Phase 1。
 
-> Agent 可使用的数据库不等于 Pipeline 已验收支持的数据源。
-
-- [ ] **P1** Acquisition 为 PubMed 补充材料等正式来源产出合规 `SourceAsset`
-- [ ] **P2** 新增 UniProt/ChEMBL 等能力（仍 Agent-only，未接入 pipeline）
-
-### 1.5 Pipeline 数据库完整性
-
-> Pipeline 已覆盖 PubMed/GEO 主路径，GDC、Xena、Reactome 的单源路径，
-> 以及 GDC + Xena 的确定性合并路径。其它数据库仍为 Agent-only 或待接入。
-
-#### 1.5.2 Acquisition 扩展
-
-- [ ] **P2** `acquire_source()` 抽象为协议
-
-#### 1.5.3 Processing 扩展
-
-- [ ] **P1** 基因符号映射：先确权 namespace 分布（`ensembl_gene`/`geo_probe` 为主；0804 suppl 解析器已产出 `gene_symbol`）；优先本地映射（避免 mygene 在线依赖），定义多对一聚合策略；`main_data.csv` 增加 `gene_symbol` 列（0805 复核修正，REVIEW §9.6）
-
-#### 1.5.4 Artifact 完整性
-
-- [ ] **P1** `artifact_build` 按资产类型决定产出哪些 artifact
-- [ ] **P1** 中间结果与最终结果使用独立的 run/version 标识
-
-#### 1.5.5 Agent ↔ Pipeline 数据桥接与确定性合并
-
-> Agent 负责发现、选择和补充数据；Pipeline 负责统一处理、合并、验证和发布。
-
-- [ ] **P1** Agent 查询、选择理由、进度判定持久化为可重放的任务记录
-- [ ] **P1** Agent 获取的原始文件统一注册为 `SourceRecord` / `SourceAsset`
-- [ ] **P1** Agent 解析结果统一产出 `ParsedDataset`，不绕过 Validation Gate
-- [ ] **P1** 实现确定性多源合并：主键、去重、字段映射、冲突策略结构化记录
-- [ ] **P1** 每条合并后记录保留 `SourceLocator`
-- [ ] **P1** "Pipeline 无新进展"依据结构化证据，非 LLM 主观结论
-- [ ] **P2** 任务目录增加 `agent_results/` 保存 Agent 决策日志
-- [ ] **P2** Agent 发现的 accession 可生成新 `TaskSpecification` 触发重跑
-
-#### 1.5.6 GEO 多数据集支持（0805 复核修正，REVIEW §9.5）
-
-> 共病/比对类主题刚需（0804 实测 4 个 GSE 被静默丢弃 3 个）。设计先于实现。
-
-- [ ] **P1** 消除 `_resolve_gse` 静默截断：多 GSE 全部保留（`dataset_catalog` / `source_list`）
-- [ ] **P1** 多 GSE **各数据集独立发布**（不做表达值行级合并——跨数据集合并引入 batch effect，非当前 pipeline 范围）；每 GSE 独立走 acquisition→processing→artifact 链，`source_relations` 记录双侧关系
-
-#### 1.5.8 0805 task_db204f6b 审查（REVIEW_2026-08-05-task-db204f6b）
-
-> 0805 审查结论：probe→gene 映射、主产物体积治理、TCGA 引导、plan 超时自动批准
-> 均已落地；剩余项为样本分组结构化。
-
-- [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（REVIEW §2.4）
-
-### 1.6 Agent 编排与 Pipeline 重跑闭环
-
-- [ ] **P1** 新 Run 支持携带版本化 `TaskSpecification`
-- [ ] **P1** 完整重跑完成新版本 Artifact 的原子发布和旧版本保留
-- [ ] **P2** 受控局部重跑增加 `rerun_from`
-- [ ] **P2** 局部重跑覆盖依赖一致性测试
-- [ ] **P2** 禁止 Agent 任意指定 `skip_stages`
-- [ ] **P2** Pipeline 结果分类为 `validated_intermediate` / `validated_final`
-
-### 1.7 人在回路：数据修正闭环
-
-> 0805 复核：`request_human_correction` 是 **Agent 层**工具（Agent 主动请求用户修正数据）。
-> pipeline 内"下载失败时自动触发 `user_input_required`"的 HIL **已否决**——会阻塞自动化场景，
-> Agent 收到失败详情后已有决策权（REVIEW §9.2）。
-
-- [ ] **P2** 新增 `request_human_correction` function_tool
-- [ ] **P2** `UserInputDialog` 增加 `data_correction` 分支渲染
-- [ ] **P2** 超时退化为批处理：生成 `corrections_todo.csv`
+- [ ] **P0** 新增 `DatasetBuildSpec`（dataset_family / row_grain / schema_ref /
+      required_fields / source_bindings / normalization_profile_ref / merge_strategy /
+      validation_profile_ref），Agent 不得内嵌验收阈值
+- [ ] **P0** 新增 `DatasetSchema`、`DataBatch`、`SourceBinding`、`FieldMapping`、
+      `ProvenanceRecord`、`ConfidenceRecord` 契约
+- [ ] **P0** 新增 `BuildResult`、`ValidationResult`、`DatasetManifest`、`DatasetPublication`
+      契约（四正交状态；**删除 BuildOutcome 概念**）
+- [ ] **P0** 实现 Schema Registry，注册 `gene_expression.long.v1`
+- [ ] **P0** 编写 Spec Validator：复合请求拒绝/拆分；缺 family/granularity 拒绝；
+      Agent 无法传入 `minimum_valid_rows` / `allow_empty_primary_dataset`；
+      Adapter/Recipe 参数通过正式 Schema 校验
+- [ ] **P0** 将验收阈值与部分成功策略放入服务端版本化 Validation Profile
+- [ ] **P1** `_FIELD_DESCRIPTIONS` 迁移为 Schema Registry 字段元数据（消除
+      Builder/Validation/API/前端分散定义）
+- [ ] **P2** Spec Validator 与 Schema 注册的单元测试
 
 ---
 
-## 2. 数据源完备性（P0/P1）
+## Phase 2：抽取可信执行内核
 
-### 2.2 Xena 403 修复
+> 目标：从 PipelineRunner 抽取可靠性内核为服务端固定 `DatasetBuildExecutor` 骨架；
+> `PipelineRunner` 变 Legacy facade。验收见 Design §16 Phase 2。
 
-- [ ] **P1** 移除 `test_all_data_sources_live.py` 的 xfail
-
-### 2.4 统一 SourceAsset 契约
-
-- [ ] **P1** PDB / browser 下载路径走 `acquire_source()`（仍待办）
-- [ ] **P1** 所有 acquisition skill 产出合规 `SourceAsset`
-
-### 2.5 PubMed XML 注册为 SourceAsset + download_log 完整性
-
-- [ ] **P1** `download_supplementary` 改为走 `acquire_source()`
-- [ ] **P1** 大文件下载增加 progress 事件
-
-### 2.7 赛题加分项
-
-#### 2.7.1 图表数据提取
-
-- [ ] **P2** `validation.py` 新增 `chart_data` 完整性校验
-
-#### 2.7.2 单位不一致检测
-
-- [ ] **P2** `cleaning.py` 新增 `detect_unit_inconsistencies`
-- [ ] **P2** 单位冲突写入 `warnings.csv`
-
-#### 2.7.3 OCR 能力
-
-- [ ] **P2** `extract_tables.py` 增加 `ocr_fallback`
-- [ ] **P2** 中文支持 `lang='chi_sim+eng'`
-
-#### 2.7.4 DE 分析 FDR 校正
-
-- [ ] **P2** `stats.py:run_differential_expression` 增加 BH FDR 校正
-- [ ] **P2** 火山图增加 `padj` 阈值线
-- [ ] **P2** 输出 `padj` 字段
-
-#### 2.7.5 extract_tables 测试覆盖
-
-- [ ] **P2** 增加真实 pdfplumber 路径测试
-- [ ] **P2** 放置最小真实 PDF fixture
-
-#### 2.7.6 视觉采集与 VLM 联调
-
-- [ ] **P2** `web_visual_capture` 与 `extract_chart_data_vlm` 联调
+- [ ] **P0** 抽取通用任务锁、Attempt、digest、checkpoint、超时、取消、事件逻辑到
+      `datasets/runtime/`（Operation / OperationAttempt）
+- [ ] **P0** 实现固定骨架：`acquire[*] → parse[*] → canonicalize[*] → compatibility gate
+      → integrate → validate profile → publish`；来源 fan-out / fan-in 用 Operation 记录
+- [ ] **P0** `PipelineRunner` 降级为 Legacy facade；**不定义 BuildRecipe / 公开 BuildStep**
+- [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
+- [ ] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
+- [ ] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
+- [ ] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
+      任务/会话改为 `current_publication_id`（原 §1.6 条目改写）
+- [ ] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
 
 ---
 
-## 3. 前端体验与呈现（P1/P2）
+## Phase 2.5：补齐 WorkflowRecipe Acquisition 闭环
 
-### 3.1 产物/结果展示
+> 目标：`WorkflowRecipe` 只服务 Acquisition；生产 Build 只消费 PROMOTED Recipe。
+> 验收见 Design §16 Phase 2.5。
 
-- [ ] **P1** `ResultsViewer` 增加 `field_descriptions.csv` 专门视图
-- [ ] **P1** `ResultsViewer` 增加 `source_list.csv` / `source_relations.csv` 视图
-- [ ] **P1** `ResultsViewer` 用 Tabs 分离主数据/来源/处理/警告
-- [ ] **P2** `SettingsPanel` Tab 移至左侧垂直布局
-
-### 3.2 invoke_skill / find_skill 前端呈现
-
-- [ ] **P2** `toolLabels.ts` 新增 `invoke_skill` / `find_skill` formatter
-- [ ] **P2** `ToolCallStep` 紧凑化 + 输出区域改造
-
-### 3.3 模型搜索框恢复
-
-- [ ] **P1** 排查 `hasApiKey` / `sortedModels` 不满足条件的原因
-- [ ] **P2** 降级分支也加入搜索输入框
-- [ ] **P2** 清理 `LEGACY_MODELS` 硬编码列表
-
-### 3.4 对话流任务节点自动折叠
-
-- [ ] **P1** 以 `tool_completed` 为界归组"任务节点"
-- [ ] **P1** 节点完成后折叠为单行摘要
-- [ ] **P1** 前端实现 `TaskNode` 投影与 `TaskNodeItem` 组件
-- [ ] **P1** 摘要生成：工具标签 + 一句话结论
-- [ ] **P1** 降级：归组失败时保持逐项展示
-
-### 3.5 通用 UI 改进
-
-- [ ] **P2** 引入 shadcn command / context-menu / menubar
-- [ ] **P2** 优化思维链呈现 / 产物呈现
-- [ ] **P2** 引入对话路由
-- [ ] **P2** 缓存导出按钮放到设置页面
-- [ ] **P2** 优化边栏底部
+- [ ] **P0** 明确 `WorkflowRecipe` 边界：只产出 `SourceAsset`，不得产生 DataBatch、
+      声明跨来源依赖、决定合并、选择 Profile 或发布
+- [ ] **P0** 实现 `WorkflowRecipeSourceFetcher`；`SourceBinding` 支持 `recipe_id + version`
+- [ ] **P0** 生产发现只返回 `PROMOTED`；`VERIFIED` 仅限受限试用或 HIL 确认
+- [ ] **P0** 修复 `RecipeExecutor.execute()`、Store 发现与 promotion 状态不一致
+      （当前 execute/find_verified 只面向 VERIFIED，PROMOTED 后反不可达）
+- [ ] **P0** Recipe 输出经 Workspace 校验提交为 `SourceAsset` 后再交给 Adapter
+- [ ] **P1** 统一 SourceAsset 契约：PDB / browser 下载路径走 `acquire_source()`；
+      所有 acquisition skill 产出合规 SourceAsset（原 §2.4）
+- [ ] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
+      `acquire_source()` + 大文件 progress 事件（原 §2.5）
 
 ---
 
-## 4. 可靠性与可观测性（P0/P1）
+## Phase 3：实现表达数据 V2 Demo 链路
 
-### 4.4 结构化日志
+> 目标：GDC + Xena 表达路径迁移为 Adapter + Canonicalizer + Integrator + Profile，
+> 主数据不再依赖 `main_data.csv` 固定文件名。验收见 Design §16 Phase 3。
 
-- [ ] **P2** `main.py` 引入 structlog 或 python-json-logger
-- [ ] **P2** 新增 `docs/observability.md`
-
-### 4.5 Agent max_turns 后续
-
-- [ ] **P2** INSTRUCTIONS 新增"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"指导
-
----
-
-## 5. 工程基础设施（P1/P2）
-
-### 5.2 并发与资源管理
-
-- [ ] **P2** 监控并发 Chromium 实例数，超阈值时排队
-
-### 5.3 配置硬编码治理
-
-- [ ] **P2** `config.py` 扩展配置项（crawler_ua / rate_limit / stage_timeouts 等）
-- [ ] **P2** 启动时校验 `DASHSCOPE_API_KEY` 非空
-- [ ] **P2** `OUTPUT_DIR` 改为绝对路径默认值
+- [ ] **P0** Adapter 化 GDC 与 Xena（获取逻辑进 Acquisition Provider，解析进 Adapter）
+- [ ] **P0** 实现文件型 canonicalization：字段映射、实体 ID 标准化、可证明等价的单位
+      转换，保留原值/转换规则/版本；生成 mapping / normalization / rejected 审计
+- [ ] **P0** 实现表达 Compatibility Gate（单位/尺度/主键语义/映射证据）
+- [ ] **P0** 实现显式 append/dedup 合并规则（`append_by_canonical_row`）
+- [ ] **P0** 生成 role-based DatasetManifest V2（primary / supporting / schema /
+      provenance / audit_report）
+- [ ] **P0** 实现表达 Validation Profile（`gene_expression.release.v1`）
+- [ ] **P1** 基因符号映射：namespace 确权（ensembl_gene / geo_probe / gene_symbol）、
+      优先本地映射、定义多对一聚合策略（原 §1.5.3）
+- [ ] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
+      `tools/alignment` 降级为候选生成器（不再承担正式合并）
 
 ---
 
-## 6. 数据置信度与非 pipeline 数据准入（SURVEY_2026-08-05-data-confidence）
+## Phase 4：修复空表和终态语义
 
-> 调研与设计见 `docs/SURVEY_2026-08-05-data-confidence.md`。§6.1 为先决条件；
-> §6.2 依赖 §6.1，将 §1.5.5 / §1.4 / §2.4 中"Agent 数据入产物"相关 TODO
-> 统一重构为"来源分级与准入"主线。
+> 目标：`BuildResult` 显式化、Publication 版本链、服务端 RunSummary。
+> 验收见 Design §16 Phase 4。
 
-### 6.1 数据置信度（先决条件）
-
-- [ ] **P1** `app/pipeline/processing/confidence.py` 确定性统计检测器：
-      `benford_distance` / `last_digit_chi2` / `detect_constant_column` /
-      `detect_arithmetic_progression` / `aggregate_confidence_metrics`
-      （纯函数 + 单元测试，含 `is_benford_applicable` 前置判定防误报）
-- [ ] **P1** processing 接入检测器：异常写 `anomaly_flags` + `warnings.csv`
-      （code=`statistical_anomaly_*`）
-- [ ] **P1** 产出 `confidence_report.csv` artifact（每数据集置信度画像
-      `overall_score` 0-1）
-- [ ] **P1** validation 增加 `data_confidence` 补充检查：低分 →
-      `valid_with_warnings`（不阻断发布但强制显式标记）
-- [ ] **P2** 前端 `ResultsViewer` 展示置信度画像
-
-### 6.2 非 pipeline 数据进入最终成果（依赖 §6.1，需重新设计）
-
-> 原则：**进入 `artifacts/` 的每条记录必须有 source-of-record**；非 pipeline
-> 数据必须过置信度评估并携带 provenance 等级，防止 LLM 内容冒充产物的
-> "伪成功通道"（agent.py 铁律 2 边界澄清）。
-
-- [ ] **P1** `SourceRecord` / `SourceAsset` 契约扩展到 Agent 手动来源
-      （强制 `source_id` = URL/DOI/文件路径 + 获取时间戳）
-- [ ] **P1** 新增 `provenance_level`（`pipeline_validated` /
-      `agent_research_annotated`）；validation gate 对 annotated 记录强制
-      source_id 校验，缺失即拒绝
-- [ ] **P1** 非 pipeline 数据产出 `confidence_report.csv` 条目（沿用 §6.1 Phase 2）
-- [ ] **P2** Agent 决策日志持久化（`agent_results/`，吸收 §1.5.5 部分条目）
+- [ ] **P0** 删除 metadata-only 主表占位路径（GEO 无表达矩阵时 `sample_metadata`
+      占位表达行；ADR-011）
+- [ ] **P0** 引入 `BuildResult`；`RunStatus` 不再由 artifact 数量推导
+- [ ] **P0** 增加不可变 Publication 与 `current_publication_id`；新版本不修改旧版本状态
+- [ ] **P0** 服务端始终生成 `RunSummary`：COMPLETED 附 BuildResult、FAILED 附稳定
+      错误分类、CANCELLED 附取消点；Agent 文本不再是唯一输出
+- [ ] **P0** 前端直接展示 NO_DATA / PARTIAL_SUCCESS / SPEC_REJECTED，删除通过错误
+      字符串猜测 no_data 的路径
+- [ ] **P1** 审计产物（source list / quality / search / rejected）通过
+      `audit_report` Artifact Role 发布，不在架构层固定单独文件名
+- [ ] **P2** `request_human_correction` function_tool + UserInputDialog
+      `data_correction` 分支 + 超时退化为 `corrections_todo.csv`（原 §1.7，HIL 为
+      Agent 层工具，pipeline 内自动 HIL 已否决）
 
 ---
 
-## 7. REVIEW 后续决策记录（REVIEW_2026-08-05-comprehensive-codebase）
+## Phase 5：迁移 GEO
 
-> 用户在 0805 会话中逐项拍板；标"暂缓/保留"的项仅记录、不实现，
-> 避免重复评估。
+> 目标：GEO 按 Acquisition Provider + Adapter 拆分，多 GSE 独立发布。
+> 验收见 Design §16 Phase 5。
 
-- [ ] **P1（暂缓）** 模型元数据四源归一（REVIEW §5.1）：删 `catalog_qwen.py` /
-      `catalog_compatible.py`，`get_known_model` 直连 `model_info` 仓库；
-      `qwen.py` 瘦身为纯 dashscope 表。待 §6 数据置信度设计定稿后作为独立批次
-- [ ] **P1（调研修正，结论：仅 parse_*/cleaning 为遗留，alignment/processing 活跃保留）**
-      旧工具链接入工作流（REVIEW §5.2）：代码核查（0805 修订）表明 REVIEW
-      原"整组删除"建议与事实不符——
-      - `app/tools/alignment.py` **活跃接入**：`pipeline/stages/processing.py`
-        单数据集路径用 `normalize_field_names`（L368），GDC+Xena 多数据集
-        确定性合并路径（TODO §1.2）经 `_to_legacy_parsed_datasets` 适配后调
-        `align_fields` + `merge_datasets`（L454-463，`merge_parsed_datasets`
-        由 L672 真实调用）。**不可删除**，REVIEW §5.2 对 alignment 的判断有误。
-      - `app/tools/processing.py` 的 `_infer_field_types`/`_infer_type` 被
-        parse_*/cleaning/alignment 引用，为公共类型推断工具，随上层存活。
-      - `app/tools/parse_pdb.py`/`parse_geo.py`/`parse_excel.py`/`cleaning.py`
-        app 内零引用者（仅 `tests/test_processing.py` 覆盖 cleaning/processing），
-        MVP 遗留，功能已被 pipeline 专用 processor（`geo_tximport.py`
-        `parse_geo_series_matrix_samples`/`parse_geo_soft_samples` 等）取代；
-        **不接入**。删除前需同步清理 `tests/test_processing.py` 与
-        `tests/test_config.py` 的 openpyxl 依赖检查（L138-145）。
-      - 0804 调研记录"_to_legacy_dataset 零调用死桥接"有误：实际函数名为
-        `_to_legacy_parsed_datasets`（`stages/processing.py:378`），是
-        多数据集合并路径的活跃适配器，**保留**。
-- [ ] **P2（保留现状）** metadata-only 样本下限（REVIEW P1-2）：不改 validation
-      阈值；空壳包识别交由 §6.1 数据置信度检测器覆盖（`confidence_report.csv`
-      低分 → `valid_with_warnings`）
-- [ ] **P2（保留现状）** 缓存 TTL / 新鲜度（REVIEW P1-5）：不改缓存键与 TTL；
-      风险（平台注释可能陈旧）在 §6.1 数据置信度调研中持续跟踪
+- [ ] **P0** GEO acquisition/parser 按 Acquisition Provider 与 Adapter 拆分
+- [ ] **P0** 正式建模 platform、probe mapping、value scale 与 normalization
+- [ ] **P0** 多 GSE 各数据集独立发布（不做跨数据集行级合并），`source_relations`
+      记录双侧关系（原 §1.5.6）
+- [ ] **P1** 只有通过 Compatibility Gate 的 GEO 数据才能与其他表达数据整合；
+      映射失败保留审计报告或 NO_DATA，不伪装 gene-level 数据
+- [ ] **P1** 消除 `_resolve_gse` 静默截断（原 §1.5.6）
+- [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（原 §1.5.8）
 
-### 7.1 已执行（0805 本批次，commit `feat/review-2026-08-05-b3-b5-c1-c4`）
+---
 
-- [x] **B3 限流/UA/超时归一**（REVIEW §5.3）：保留 `crawler.AsyncHostRateLimiter`
-      唯一实现 + 单 UA 常量 `browser_pool.BROWSER_UA`（crawler re-export）；
-      `_download_io` 删除本地 UA/限流常量（同步 `rate_limit()` 保留，因 urllib
-      回退路径无法复用异步限流器，常量统一引用 crawler）；ncbi 删除
-      `AsyncRateLimiter`，改用 `crawler.AsyncHostRateLimiter`（3/10 rps 政策 →
-      `min_interval=1/3`、`1/10`，单 host 下等价）；`xena`/`europepmc` UA 收敛；
-      超时注入见 B5
-- [x] **B4 compaction 8→3 文件**（REVIEW §5.4）：`compaction_planning.py` 为
-      依赖 leaf 持有全部 types；`compaction.py` = types re-export +
-      `_execution.Runner` patch；删除 5 个原文件；114 项 compaction 测试通过
-- [x] **B5 超时配置真实化**（REVIEW §5.5）：`get_runtime_limits()` 从持久化
-      store 读 runtime_limits；`PUT /settings` 支持写入；移除模块级
-      `RuntimeLimitsSettings()` 伪配置；crawler/`_download_io`/main/subagents/
-      agent_loop fallback 全部改走注入值；`RunContext.model_settings` 默认继承
-      store 值
-- [x] **C1 checkpoint 复用新鲜度**（REVIEW P1-1）：live 模式下已 COMPLETED 任务
-      禁止复用 DISCOVERY（防静默跳过上游更新）；崩溃/中断恢复（未 COMPLETED）
-      仍可复用
-- [x] **C4 plan pending 残留清理**（REVIEW P2-3）：`RunExecution.emit()` 遇
-      `UserInputResumedPayload`（pipeline 自动批准直发，未经
-      `submit_user_input`）时清除 stale pending id，同 Run 下一次 HIL
-      （如 data_correction）不再被 "already pending" 阻断
+## Phase 6：Validation、Confidence、图表通道
 
+> 目标：架构层固定三项发布不变量；具体规则迁入 Profile；置信度与模型提取准入
+> 落地。验收见 Design §16 Phase 6。
+
+- [ ] **P0** 架构层固定"provenance closure + Profile passed + atomic promotion"
+      三项发布不变量（ADR-012）
+- [ ] **P0** 将 CSV 编码/列数、字段完整率、probe mapping 覆盖率、bbox 等具体规则
+      迁入版本化 Validation Profile
+- [ ] **P0** 实现 Confidence Contract 与确定性统计检测器（benford_distance /
+      last_digit_chi2 / detect_constant_column / detect_arithmetic_progression /
+      aggregate_confidence_metrics，含 `is_benford_applicable` 前置判定）（原 §6.1）
+- [ ] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
+      门禁（缺置信度或 source-of-record 时对应 Profile 失败）
+- [ ] **P1** 产出 `confidence_report.csv`；validation 增加 data_confidence 补充检查
+      （低分 → valid_with_warnings）（原 §6.1）
+- [ ] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
+- [ ] **P1** `chart_data` 完整性校验（原 §2.7.1）
+- [ ] **P2** 通用 provenance coverage 统计
+- [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
+- [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
+- [ ] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+
+---
+
+## Phase 7：Cache、前端与 API 完整迁移
+
+> 目标：Schema-aware Cache、Manifest-driven 前端、通用 operation 事件、API 状态分离。
+> 验收见 Design §16 Phase 7。
+
+- [ ] **P0** V2 Dataset Cache：`cache/datasets/<namespace>/<dataset_id>/`
+      （manifest + data + schema + provenance）；键含 family / Schema version /
+      source binding / Adapter version / normalization profile / query / asset digest；
+      关键词仅用于检索
+- [ ] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
+      row grain / Schema / 有效行数 / 来源覆盖 / Validation / confidence /
+      provenance 覆盖率 / 部分成功或 NO_DATA 原因（原 §3.1 改写）
+- [ ] **P0** 通用 operation events 前端渲染（`operation_id` / `label` / `category`，
+      替代固定 StageName union；兼容期保留旧 `stage_*`）
+- [ ] **P0** API 分别返回 RunStatus / BuildResult / ValidationResult / Publication；
+      新增 builds 端点（BuildResult 与 manifest 产物）
+- [ ] **P1** 旧缓存与旧 artifact API 双读双写迁移；旧 `main_data.csv` 包装为
+      `gene_expression.long.legacy.v1`
+- [ ] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
+- [ ] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
+- [ ] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）
+- [ ] **P2** 模型搜索框恢复与 `LEGACY_MODELS` 硬编码清理（原 §3.3）
+- [ ] **P2** 通用 UI 改进（command/menubar、缓存导出按钮、对话路由等）（原 §3.5）
+
+---
+
+## Phase 8：清理 Legacy
+
+> 前提：V2 闭环通过四种必测结果（成功/部分成功/无数据/执行失败）。
+> 删除清单见 Design §16 Phase 8 与 ARCHITECTURE §2。
+
+- [ ] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
+      `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 语义门禁（可保留来源级安全 allowlist）
+- [ ] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
+- [ ] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
+- [ ] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
+- [ ] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
+      `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl
+      依赖检查）——依据 REVIEW §5.2 结论
+- [ ] **P2** 删除任何 V2 `DatasetRequest` / `BuildRecipe` 临时实现
+- [ ] **P2** 全量回归：`uv run pytest`、Ruff、前端 `pnpm lint/tsc/build/test` 通过，
+      `uvicorn app.main:app` 干净启动；ARCHITECTURE 标记与代码一致
+
+---
+
+## 独立维护项（不阻塞 V2 主线，随阶段推进）
+
+- [ ] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
+- [ ] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
+- [ ] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
+- [ ] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
+      `DASHSCOPE_API_KEY` 启动校验、`OUTPUT_DIR` 绝对路径默认值（原 §5.3）
+- [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
+      指导（原 §4.5）
+- [ ] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
