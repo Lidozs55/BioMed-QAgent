@@ -1102,7 +1102,7 @@ Agent 可补充解释，但不能成为唯一输出来源。
 ### 11.4 状态正交关系
 
 | 维度 | 负责问题 | 典型状态 |
-|---|---|---|
+| --- | --- | --- |
 | `RunStatus` | 执行是否仍在运行、失败或取消 | queued/running/completed/failed/cancelled |
 | `BuildResult` | 正常结束后得到了什么数据结果 | succeeded/partial_success/no_data/spec_rejected |
 | `ValidationResult` | 某 Manifest digest 是否通过 Profile | passed/failed |
@@ -1114,7 +1114,7 @@ Agent 可补充解释，但不能成为唯一输出来源。
 ### 11.5 终态判定示例
 
 | 情形 | RunStatus | BuildResult | Publication |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 两来源成功并通过验证 | completed | succeeded | 有主数据 |
 | 一来源成功，一来源下载失败，Profile 允许部分发布 | completed | partial_success | 有主数据 |
 | 找到来源但全部不兼容 | completed | no_data | 可选审计型 Publication |
@@ -1172,7 +1172,7 @@ backend/app/datasets/
 ### 12.1 现有模块迁移映射
 
 | 当前模块 | 目标处理 |
-|---|---|
+| --- | --- |
 | `pipeline/runner.py` | 抽取可靠性内核到 `datasets/runtime/executor.py`；保留 Legacy facade |
 | `pipeline/stages/discovery.py` | 来源发现逻辑迁到 Agent/Skills；不再是全局 Stage |
 | `pipeline/stages/acquisition.py` | 下载编排迁到 Acquisition Provider；复用安全下载与 SourceAsset |
