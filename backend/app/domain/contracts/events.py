@@ -55,6 +55,10 @@ class RuntimeEventType(StrEnum):
     ASSISTANT_REASONING_DELTA = "assistant_reasoning_delta"
     TOOL_STARTED = "tool_started"
     CONVERSATION_COMPACTED = "conversation_compacted"
+    OPERATION_STARTED = "operation_started"
+    OPERATION_PROGRESS = "operation_progress"
+    OPERATION_COMPLETED = "operation_completed"
+    OPERATION_FAILED = "operation_failed"
     SUBAGENT_QUEUED = "subagent_queued"
     SUBAGENT_STARTED = "subagent_started"
     SUBAGENT_PROGRESS = "subagent_progress"
@@ -332,6 +336,52 @@ class ConversationCompactedPayload(ContractModel):
     summary_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class OperationStartedPayload(ContractModel):
+    """One skeleton operation started (V2 build execution; Design §15.1)."""
+
+    type: Literal[RuntimeEventType.OPERATION_STARTED] = (
+        RuntimeEventType.OPERATION_STARTED
+    )
+    operation_id: str = Field(min_length=1)
+    label: str = ""
+    category: str = ""
+    attempt: int = Field(ge=1)
+
+
+class OperationProgressPayload(ContractModel):
+    """Mid-operation progress (rows parsed, candidates found, ...)."""
+
+    type: Literal[RuntimeEventType.OPERATION_PROGRESS] = (
+        RuntimeEventType.OPERATION_PROGRESS
+    )
+    operation_id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    current: int = Field(ge=0)
+    total: int | None = Field(default=None, ge=0)
+    detail: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class OperationCompletedPayload(ContractModel):
+    type: Literal[RuntimeEventType.OPERATION_COMPLETED] = (
+        RuntimeEventType.OPERATION_COMPLETED
+    )
+    operation_id: str = Field(min_length=1)
+    status: Literal[AttemptStatus.SUCCEEDED, AttemptStatus.SKIPPED] = (
+        AttemptStatus.SUCCEEDED
+    )
+    output_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reused_operation_attempt_id: str | None = None
+
+
+class OperationFailedPayload(ContractModel):
+    type: Literal[RuntimeEventType.OPERATION_FAILED] = (
+        RuntimeEventType.OPERATION_FAILED
+    )
+    operation_id: str = Field(min_length=1)
+    status: Literal[AttemptStatus.FAILED, AttemptStatus.CANCELLED]
+    error: ErrorDetail | None = None
+
+
 class SubagentQueuedPayload(ContractModel):
     type: Literal[RuntimeEventType.SUBAGENT_QUEUED] = RuntimeEventType.SUBAGENT_QUEUED
     subagent_id: str = Field(min_length=1)
@@ -459,6 +509,10 @@ EventPayload = Annotated[
     | AssistantReasoningDeltaPayload
     | ToolStartedPayload
     | ConversationCompactedPayload
+    | OperationStartedPayload
+    | OperationProgressPayload
+    | OperationCompletedPayload
+    | OperationFailedPayload
     | SubagentQueuedPayload
     | SubagentStartedPayload
     | SubagentProgressPayload

@@ -7,10 +7,16 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     AssistantReasoningDeltaPayload,
     ConversationCompactedPayload,
+    ErrorCode,
+    ErrorDetail,
     EventEnvelope,
     MessagePage,
     MessageRecord,
     MessageRole,
+    OperationCompletedPayload,
+    OperationFailedPayload,
+    OperationProgressPayload,
+    OperationStartedPayload,
     PipelineEventType,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -54,6 +60,7 @@ from app.domain.contracts import (
     generate_run_id,
     generate_task_id,
 )
+from app.domain.contracts.enums import AttemptStatus
 from pydantic import ValidationError
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -78,6 +85,22 @@ RUNTIME_PAYLOADS = [
     ConversationCompactedPayload(
         covered_through_run_id="run_122",
         summary_digest="ab" * 32,
+    ),
+    OperationStartedPayload(
+        operation_id="acquire:srcbind_gdc", label="获取 gdc", attempt=1
+    ),
+    OperationProgressPayload(
+        operation_id="acquire:srcbind_gdc", kind="download", current=1, total=2
+    ),
+    OperationCompletedPayload(operation_id="acquire:srcbind_gdc", output_digest="ab" * 32),
+    OperationFailedPayload(
+        operation_id="acquire:srcbind_gdc",
+        status=AttemptStatus.FAILED,
+        error=ErrorDetail(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="boom",
+            retryable=False,
+        ),
     ),
     WarningPayload(message="compaction failed", code="compaction_failed"),
 ]

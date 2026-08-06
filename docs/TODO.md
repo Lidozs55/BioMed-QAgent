@@ -43,17 +43,26 @@
 
 > 目标：从 PipelineRunner 抽取可靠性内核为服务端固定 `DatasetBuildExecutor` 骨架；
 > `PipelineRunner` 变 Legacy facade。验收见 Design §16 Phase 2。
+> ✅ 已完成第一批（Step 2.1）：`app/datasets/runtime/`（operations / checkpoint / executor）
+> + OPERATION_* 事件 + 10 项 runtime 测试；全量 pytest 无回归。
+> 剩余项依赖 Phase 3（真实 Operation 执行器与 Publication）后继续。
 
-- [ ] **P0** 抽取通用任务锁、Attempt、digest、checkpoint、超时、取消、事件逻辑到
-      `datasets/runtime/`（Operation / OperationAttempt）
-- [ ] **P0** 实现固定骨架：`acquire[*] → parse[*] → canonicalize[*] → compatibility gate
+- [x] **P0** 抽取通用任务锁、Attempt、digest、checkpoint、超时、取消、事件逻辑到
+      `datasets/runtime/`（Operation / OperationAttempt / BuildCheckpoint；
+      任务锁复用 V1 `TaskLock`；digest 复用 + checkpoint 文件 hash 校验 + 崩溃恢复）
+- [x] **P0** 实现固定骨架：`acquire[*] → parse[*] → canonicalize[*] → compatibility gate
       → integrate → validate profile → publish`；来源 fan-out / fan-in 用 Operation 记录
+      （`build_operation_plan` + `DatasetBuildExecutor`；Operation 执行器可注入，
+      真实 Adapter 归 Phase 3）
 - [ ] **P0** `PipelineRunner` 降级为 Legacy facade；**不定义 BuildRecipe / 公开 BuildStep**
+      （V1 不动；facade 化在 Phase 3 接入 `execute_dataset_build` 工具时落地，
+      避免空 facade）
 - [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
 - [ ] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
+      （依赖 Phase 3 真实 `publish` Operation 与 Phase 4 BuildResult/Publication 接线）
 - [ ] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
 - [ ] **P2** 删除 `validated_intermediate` / `validated_final` 状态（ADR-010 否决），
-      任务/会话改为 `current_publication_id`（原 §1.6 条目改写）
+      任务/会话改为 `current_publication_id`（归 Phase 4，随 Publication 一起）
 - [ ] **P2** Agent 决策日志持久化 `agent_results/`（吸收原 §1.5.5）
 
 ---
