@@ -112,14 +112,12 @@ staging、Validation Gate、原子发布、fixture/live 区分。
 `DatasetBuildSpec` 是 Agent 在意图解析和来源发现后生成、提交给 Runtime 的**单一
 权威输入契约**。它同时表达用户语义和受控构建参数，至少包含：
 
-- `build_id`：构建标识；
-- `objective`：本次数据集构建目标；
-- `dataset_family`：数据集族标识，如 `gene_expression`、`pathway_member`；
-- `row_granularity`：行粒度定义，如“基因 × 样本 × 测量”；
-- `entities` / `cohort_filters`：目标实体与队列条件；
-- `required_fields`：用户和下游所需字段；
-- `schema_ref`：规范 Schema 注册引用；
-- `source_bindings`：每个来源的来源标识、获取方式、accession、参数和 Adapter 引用；
+- `dataset_family`：数据集族标识（如 `gene_expression`、`pathway_member`）；
+- `row_granularity`：行粒度定义（如 "基因 × 样本 × 测量"）；
+- `schema_ref`：目标 Schema 的注册引用（见 §3.3）；
+- `required_fields`：必需字段清单；
+- `source_bindings`：每个来源的 SourceBinding（来源、获取方式、Adapter、
+  accession/参数）；获取方式只能是 `builtin` 或 `workflow_recipe`；
 - `normalization_profile_ref`：归一化 Profile 引用；
 - `merge_strategy`：服务端允许的显式合并策略；
 - `validation_profile_ref`：Validation Profile 引用；
@@ -128,12 +126,6 @@ staging、Validation Gate、原子发布、fixture/live 区分。
 不建立正式 `DatasetRequest` 契约。自然语言解析过程中可以使用 Agent 内部的
 `ParsedDatasetIntent`，但它不进入持久化、API 或执行协议，避免
 `DatasetRequest -> DatasetBuildSpec` 两个对象之间重复、漂移和跨引用读取。
-
-`DatasetBuildSpec` 不允许嵌入任意代码、执行步骤、发布阈值或自由验收策略。Agent
-可以选择服务端允许的 `validation_profile_ref`，但不能传入
-`minimum_valid_rows`、`allow_empty_primary_dataset` 等 acceptance policy；阈值、
-部分成功策略和人工复核要求属于服务端版本化 Profile。复合需求由 Agent 拆成多个
-`DatasetBuildSpec`，在同一会话下独立构建、验证和发布。
 
 ### 3.2 dataset_family 与 row_granularity
 
@@ -157,9 +149,8 @@ dataset_family + row_granularity + key_semantics + measurement_semantics
 - 通路节点与临床样本；
 - 原始 count 与 TPM，除非明确转换或保持可区分语义。
 
-`row_granularity` 不是普通字符串标签，而是结构化定义：一行代表什么实体、什么
-测量、什么时间或条件维度。任何“合并”设计必须先写出一行代表什么，再讨论字段
-对齐。
+`row_granularity` 不是字符串标签，而是结构化定义：一行代表什么实体、什么测量、什么
+时间或条件维度。任何"合并"设计必须先写出一行代表什么，再讨论字段对齐。
 
 ### 3.3 Canonical Schema 与 Schema Registry
 

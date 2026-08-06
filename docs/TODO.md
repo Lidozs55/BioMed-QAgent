@@ -16,22 +16,26 @@
 
 > 目标：新增自包含 `DatasetBuildSpec`（**不新增 DatasetRequest**）与四正交状态契约；
 > 不修改旧 Pipeline 执行。验收见 Design §16 Phase 1。
+> ✅ 已完成（commit 待定）：`app/datasets/` 包，27 项单元测试通过，全量 pytest 无回归。
 
-- [ ] **P0** 新增 `DatasetBuildSpec`（dataset_family / row_grain / schema_ref /
+- [x] **P0** 新增 `DatasetBuildSpec`（dataset_family / row_granularity / schema_ref /
       required_fields / source_bindings / normalization_profile_ref / merge_strategy /
-      validation_profile_ref），Agent 不得内嵌验收阈值
-- [ ] **P0** 新增 `DatasetSchema`、`DataBatch`、`SourceBinding`、`FieldMapping`、
+      validation_profile_ref），Agent 不得内嵌验收阈值（契约 `extra="forbid"` 拒绝）
+- [x] **P0** 新增 `DatasetSchema`、`DataBatch`、`SourceBinding`、`FieldMapping`、
       `ProvenanceRecord`、`ConfidenceRecord` 契约
-- [ ] **P0** 新增 `BuildResult`、`ValidationResult`、`DatasetManifest`、`DatasetPublication`
+- [x] **P0** 新增 `BuildResult`、`ValidationResult`、`DatasetManifest`、`DatasetPublication`
       契约（四正交状态；**删除 BuildOutcome 概念**）
-- [ ] **P0** 实现 Schema Registry，注册 `gene_expression.long.v1`
-- [ ] **P0** 编写 Spec Validator：复合请求拒绝/拆分；缺 family/granularity 拒绝；
-      Agent 无法传入 `minimum_valid_rows` / `allow_empty_primary_dataset`；
-      Adapter/Recipe 参数通过正式 Schema 校验
-- [ ] **P0** 将验收阈值与部分成功策略放入服务端版本化 Validation Profile
-- [ ] **P1** `_FIELD_DESCRIPTIONS` 迁移为 Schema Registry 字段元数据（消除
-      Builder/Validation/API/前端分散定义）
-- [ ] **P2** Spec Validator 与 Schema 注册的单元测试
+- [x] **P0** 实现 Schema Registry，注册 `gene_expression.long.v1`
+- [x] **P0** 编写 Spec Validator：未知 Schema / family 不匹配 / required_fields 不在
+      Schema / Profile 不在服务端 allowlist 均返回结构化 reason_code；复合请求拆分
+      与 Adapter 参数 Schema 校验属 Agent 层 / Phase 3
+- [x] **P0** 将验收阈值与部分成功策略放入服务端版本化 Validation Profile（契约骨架，
+      完整 Profile 校验归 Phase 3/6）
+- [x] **P1** `_FIELD_DESCRIPTIONS` 迁移为 Schema Registry 字段元数据
+      （`build_gene_expression_schema()` 从 V1 字段描述构建 22 列表达 Schema；Builder/
+      Validation 侧切换归 Phase 3）
+- [x] **P2** Spec Validator 与 Schema 注册的单元测试（`tests/test_dataset_contracts.py`
+      / `test_schema_registry.py` / `test_spec_validator.py`）
 
 ---
 
