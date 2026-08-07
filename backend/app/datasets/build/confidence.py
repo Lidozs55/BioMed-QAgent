@@ -44,6 +44,10 @@ class ConfidenceThresholds:
     min_benford_samples: int = 30
     benford_min_order_span: int = 2  # max/min >= 10**span (>= 2 orders of magnitude)
     benford_chi2_limit: float = 15.51  # df=8, alpha=0.05
+    # Chi-squared last-digit uniformity needs ~5 expected per digit (n >= 50);
+    # below this the statistic is meaningless and would misfire on tiny
+    # datasets (SURVEY §7).
+    min_last_digit_samples: int = 50
     last_digit_chi2_limit: float = 16.92  # df=9, alpha=0.05
     progression_max_distinct: int = 200  # avoid O(n^2) on wide value domains
 
@@ -287,21 +291,36 @@ def aggregate_confidence_metrics(
                 )
             )
 
-        chi2 = last_digit_chi2(column_values, thresholds=limits)
-        anomaly = chi2 > limits.last_digit_chi2_limit
-        findings.append(
-            DetectorFinding(
-                column=column,
-                detector="last_digit_chi2",
-                applicable=True,
-                statistic=chi2,
-                anomaly=anomaly,
-                detail=(
-                    f"last-digit chi2={chi2:.3f}, "
-                    f"limit={limits.last_digit_chi2_limit}"
-                ),
+        if len(parsed) < limits.min_last_digit_samples:
+            findings.append(
+                DetectorFinding(
+                    column=column,
+                    detector="last_digit_chi2",
+                    applicable=False,
+                    statistic=None,
+                    anomaly=False,
+                    detail=(
+                        f"fewer than {limits.min_last_digit_samples} numeric "
+                        "values; chi-squared last-digit test not applicable"
+                    ),
+                )
             )
-        )
+        else:
+            chi2 = last_digit_chi2(column_values, thresholds=limits)
+            anomaly = chi2 > limits.last_digit_chi2_limit
+            findings.append(
+                DetectorFinding(
+                    column=column,
+                    detector="last_digit_chi2",
+                    applicable=True,
+                    statistic=chi2,
+                    anomaly=anomaly,
+                    detail=(
+                        f"last-digit chi2={chi2:.3f}, "
+                        f"limit={limits.last_digit_chi2_limit}"
+                    ),
+                )
+            )
 
         constant = detect_constant_column(column_values, thresholds=limits)
         findings.append(

@@ -120,6 +120,20 @@ def test_empty_primary_fails_min_rows(tmp_path: Path) -> None:
     assert "minimum_valid_rows" in report
 
 
+def test_header_only_file_fails_even_when_manifest_claims_rows(tmp_path: Path) -> None:
+    """A header-only primary must fail even if the manifest declares rows.
+
+    Regression for the review finding: ``minimum_valid_rows`` used to read the
+    manifest-declared row_count, so a truncated/header-only file could
+    vacuous-pass (ADR-011: no empty primary may be published as succeeded).
+    """
+    result, _ = _validate(tmp_path, [], row_count=5)
+    assert result.status is ValidationResultStatus.FAILED
+    report = (tmp_path / "validation_report.json").read_text()
+    assert '"check_id": "minimum_valid_rows"' in report
+    assert "file_row_count=0" in report
+
+
 def test_mixed_units_fail_consistency(tmp_path: Path) -> None:
     rows = [
         _valid_row(gene="TP53", unit="expression_value"),

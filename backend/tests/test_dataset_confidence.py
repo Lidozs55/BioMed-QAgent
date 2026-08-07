@@ -174,6 +174,35 @@ def test_aggregate_metrics_empty_columns() -> None:
     assert summary.findings[0].applicable is False
 
 
+def test_last_digit_chi2_gated_on_small_samples() -> None:
+    """Tiny datasets must not misfire the chi-squared last-digit test.
+
+    Regression for the review finding: 3 rows used to produce chi2=27.0 > 16.92
+    (a spurious anomaly); with < 50 numeric values the finding is marked not
+    applicable instead (SURVEY §7 — chi2 needs ~5 expected per digit).
+    """
+    thresholds = ConfidenceThresholds(min_last_digit_samples=50)
+    summary = aggregate_confidence_metrics(
+        {"value": [1.5, 2.5, 3.5]}, thresholds=thresholds
+    )
+    last_digit = next(f for f in summary.findings if f.detector == "last_digit_chi2")
+    assert last_digit.applicable is False
+    assert last_digit.anomaly is False
+    assert last_digit.statistic is None
+    # The progression finding is a separate, legitimate signal; last-digit
+    # must not contribute a spurious anomaly.
+    assert not any(
+        f.anomaly for f in summary.findings if f.detector == "last_digit_chi2"
+    )
+
+
+def test_last_digit_chi2_applicable_above_threshold() -> None:
+    summary = aggregate_confidence_metrics({"value": [5.0, 10.0, 15.0] * 20})
+    last_digit = next(f for f in summary.findings if f.detector == "last_digit_chi2")
+    assert last_digit.applicable is True
+    assert last_digit.anomaly is True  # all 0/5 endings, now statistically valid
+
+
 def test_write_confidence_report_deterministic(tmp_path) -> None:
     summary = aggregate_confidence_metrics({"value": [1.0, 2.0, 3.0]})
     path = tmp_path / "confidence_report.csv"

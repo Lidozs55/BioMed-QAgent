@@ -41,9 +41,24 @@ def _registry() -> SchemaRegistry:
 
 
 def test_valid_spec_passes() -> None:
-    result = SpecValidator(_registry()).validate(_spec())
+    result = SpecValidator(
+        _registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_spec())
     assert result.valid is True
     assert result.reason_codes == ()
+
+
+def test_empty_allowlist_rejects_every_profile() -> None:
+    """Fail-closed guard: an unconfigured allowlist must deny all profiles.
+
+    Regression for the review finding: an empty allowlist used to skip the
+    check entirely, so a runtime that forgot to inject the allowlist would let
+    the Agent select an arbitrary (possibly threshold-relaxing) profile.
+    """
+    result = SpecValidator(_registry()).validate(_spec())
+    assert result.valid is False
+    assert "profile_not_allowed" in result.reason_codes
 
 
 def test_unknown_schema_rejected() -> None:

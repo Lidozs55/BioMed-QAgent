@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -179,6 +179,7 @@ class DatasetBuildExecutor:
         event_sink: BuildEventSink | None = None,
         cancellation_requested: CancellationToken | None = None,
         parameter_scope: dict[str, Any] | None = None,
+        implementation_versions: Mapping[str, str] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
         resume_from: str | None = None,
@@ -194,6 +195,7 @@ class DatasetBuildExecutor:
         self._event_sink = event_sink
         self._cancellation_requested = cancellation_requested
         self._parameter_scope = parameter_scope or {}
+        self._implementation_versions = implementation_versions or {}
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
         self._resume_from = resume_from
@@ -225,13 +227,23 @@ class DatasetBuildExecutor:
                 ErrorCode.INTERNAL_ERROR, f"could not acquire build lock: {exc}"
             )
         try:
-            self._state = load_build_state(
-                self._state_dir, self._task_id, self._build_id
-            )
-            self._persisted_attempt_count = validate_attempt_log_prefix(
-                self._state, self._attempts_path()
-            )
-            self._recover_inflight_attempt()
+            try:
+                self._state = load_build_state(
+                    self._state_dir, self._task_id, self._build_id
+                )
+                self._persisted_attempt_count = validate_attempt_log_prefix(
+                    self._state, self._attempts_path()
+                )
+                self._recover_inflight_attempt()
+            except Exception as exc:
+                # A corrupt/mismatched state or diverged attempt log is a
+                # recovery failure, not a plan failure: return a structured
+                # outcome instead of escaping a bare exception (the caller
+                # only expects BuildRunOutcome).
+                return self._outcome_failed(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"build state could not be loaded or recovered: {exc}",
+                )
             try:
                 return await self._run_plan()
             except BuildCancelledError:
@@ -489,11 +501,18 @@ class DatasetBuildExecutor:
         )
 
     def _compute_parameter_digest(self, op: OperationSpec) -> str:
+        # The implementation version is part of the reuse contract: a
+        # SUCCEEDED attempt is only reused when input, parameter **and
+        # implementation version** all match (ARCHITECTURE §5.2), so an
+        # upgraded adapter/parser never serves stale output.
         return _sha256_json(
             {
                 "build_id": self._build_id,
                 "operation_id": op.operation_id,
                 "parameters": self._parameter_scope,
+                "implementation_version": self._implementation_versions.get(
+                    op.operation_id
+                ),
             }
         )
 
@@ -522,6 +541,7 @@ class DatasetBuildExecutor:
             parameter_digest=parameter_digest,
             output_digest=output_digest,
             status=status,
+            implementation_version=self._implementation_versions.get(operation_id),
             started_at=started,
             finished_at=finished,
             error=error,
@@ -543,7 +563,8 @@ class DatasetBuildExecutor:
 
     async def _finalize_cancelled(self) -> BuildRunOutcome:
         state = self._state
-        assert state is not None
+        if state is None:
+            return BuildRunOutcome(status="cancelled")
         inflight = state.inflight_attempt
         if inflight is not None:
             cancelled = self._build_attempt(
@@ -571,15 +592,16 @@ class DatasetBuildExecutor:
     async def _finalize_failed(
         self, exc: Exception, error_code: ErrorCode
     ) -> BuildRunOutcome:
+        error = ErrorDetail(
+            code=error_code,
+            message=str(exc),
+            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
+        )
         state = self._state
-        assert state is not None
+        if state is None:
+            return BuildRunOutcome(status="failed", error=error)
         inflight = state.inflight_attempt
         if inflight is not None:
-            error = ErrorDetail(
-                code=error_code,
-                message=str(exc),
-                retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
-            )
             failed = self._build_attempt(
                 inflight.operation_id,
                 inflight.input_digest,
@@ -603,11 +625,6 @@ class DatasetBuildExecutor:
                 )
             )
             return BuildRunOutcome(status="failed", error=error)
-        error = ErrorDetail(
-            code=error_code,
-            message=str(exc),
-            retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
-        )
         return BuildRunOutcome(status="failed", error=error)
 
     def _outcome_failed(self, error_code: ErrorCode, message: str) -> BuildRunOutcome:

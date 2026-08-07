@@ -185,20 +185,31 @@ class ExpressionValidationProfile:
                 )
             ]
         checks: list[ProfileCheck] = [
-            self._check_min_rows(manifest),
+            self._check_min_rows(manifest, primary_path),
             self._check_column_count(primary_path, schema),
         ]
         checks.extend(self._check_rows(primary_path, schema))
         return checks
 
-    def _check_min_rows(self, manifest: DatasetManifest) -> ProfileCheck:
+    def _check_min_rows(
+        self, manifest: DatasetManifest, primary_path: Path
+    ) -> ProfileCheck:
         minimum = self.profile.acceptance.minimum_valid_rows
-        passed = manifest.row_count >= minimum
+        # Count actual data rows in the file (excluding the header), never the
+        # manifest-declared row_count: a truncated or header-only file must not
+        # vacuous-pass just because the manifest claims enough rows (ADR-011).
+        file_rows = 0
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)  # header
+            for _row in reader:
+                file_rows += 1
+        passed = file_rows >= minimum
         return ProfileCheck(
             check_id="minimum_valid_rows",
             description=f"primary dataset has at least {minimum} row(s)",
             passed=passed,
-            detail=f"row_count={manifest.row_count}, minimum={minimum}",
+            detail=f"file_row_count={file_rows}, minimum={minimum}",
         )
 
     def _check_column_count(self, primary_path: Path, schema: DatasetSchema) -> ProfileCheck:
