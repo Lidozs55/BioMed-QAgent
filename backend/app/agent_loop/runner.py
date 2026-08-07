@@ -53,6 +53,7 @@ from app.domain.contracts import (
     WarningPayload,
     build_event,
 )
+from app.domain.contracts.dataset_state import BuildResultStatus
 from app.domain.contracts.runtime import validate_task_databases
 from app.model_config import RunModelSettings
 from app.model_config.token_estimation import (
@@ -1292,7 +1293,15 @@ class AgentRunExecutor:
                 await _run_sync_operation(pending.publish)
                 manifest_digest = pending.manifest_entry.sha256
                 publication_id = f"pub-{execution.run_id}"
-                if execution.build_result is not None:
+                # Phase 4b T4: only SUCCEEDED/PARTIAL_SUCCESS build results
+                # carry a publication_id (BuildResult.validate_state forbids it
+                # on NO_DATA). A pipeline NO_DATA manifest (T1-T3) must keep
+                # publication_id None while its audit package still publishes.
+                if (
+                    execution.build_result is not None
+                    and execution.build_result.status
+                    in (BuildResultStatus.SUCCEEDED, BuildResultStatus.PARTIAL_SUCCESS)
+                ):
                     execution.set_build_result(
                         execution.build_result.model_copy(
                             update={"publication_id": publication_id}
@@ -1480,7 +1489,13 @@ class FixtureRunExecutor:
                         await _run_sync_operation(operation)
                     if pending is not None:
                         publication_id = f"pub-{execution.run_id}"
-                        if execution.build_result is not None:
+                        # Phase 4b T4: see commit_agent_artifacts — NO_DATA
+                        # build results must not carry a publication_id.
+                        if (
+                            execution.build_result is not None
+                            and execution.build_result.status
+                            in (BuildResultStatus.SUCCEEDED, BuildResultStatus.PARTIAL_SUCCESS)
+                        ):
                             execution.set_build_result(
                                 execution.build_result.model_copy(
                                     update={"publication_id": publication_id}

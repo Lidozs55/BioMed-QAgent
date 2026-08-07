@@ -1652,9 +1652,16 @@ async def test_commit_artifacts_emits_publication_event(
     manifest = _completed_run_manifest(context.task_id).model_copy(
         update={
             "build_result": BuildResult(
-                status=BuildResultStatus.NO_DATA,
-                valid_row_count=0,
-                reason_codes=["no_primary_data"],
+                status=BuildResultStatus.SUCCEEDED,
+                valid_row_count=10,
+                successful_sources=["src_geo"],
+                available_artifact_roles=[ArtifactRole.PRIMARY_DATASET],
+                # Placeholder stamped by ``_compute_build_result`` (T4 now
+                # injects the real row count); the commit path replaces it
+                # with the run-scoped pub-<run_id>.
+                publication_id=f"pub-{context.task_id}",
+                user_summary="完成：主数据已发布。",
+                recommended_next_action="可在产物区查看主表与审计报告。",
             )
         }
     )
@@ -1705,7 +1712,12 @@ async def test_commit_artifacts_emits_publication_event(
         SimpleNamespace(task_session=run_scoped_session(object()))
     )(execution)
     assert execution.build_result is manifest.build_result
-    assert execution.build_result.publication_id is None
+    # Transfer time carries the ``_compute_build_result`` placeholder
+    # (pub-<task_id>); the commit path replaces it with pub-<run_id>.
+    assert (
+        execution.build_result.publication_id
+        == f"pub-{context.task_id}"
+    )
 
     execution.seal_completion()
     completion_events = await execution.commit_completion()
@@ -1727,6 +1739,94 @@ async def test_commit_artifacts_emits_publication_event(
     )
     assert publication_event.sequence == len(completion_events)
     assert execution.build_result.publication_id == "pub-run_publication_event"
+
+
+@pytest.mark.asyncio
+async def test_commit_artifacts_no_data_keeps_publication_id_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 4b T4: a NO_DATA build result (pipeline NO_DATA manifest from
+    T1-T3) must NOT be stamped with a publication_id at commit time —
+    ``BuildResult.validate_state`` forbids publication_id on NO_DATA. The
+    audit-type NO_DATA package still publishes (PublicationCreatedPayload is
+    emitted) with its own publication_id."""
+    order: list[str] = []
+    context = RunContext(
+        task_id="task_no_data_publication_event",
+        base_dir=tmp_path,
+        managed_run_id="run_no_data_publication_event",
+    )
+    manifest = _completed_run_manifest(context.task_id).model_copy(
+        update={
+            "build_result": BuildResult(
+                status=BuildResultStatus.NO_DATA,
+                valid_row_count=0,
+                reason_codes=["no_primary_data"],
+            )
+        }
+    )
+    pending = SimpleNamespace(
+        run_id="run_no_data_publication_event",
+        manifest=manifest,
+        manifest_entry=ArtifactManifestEntry(
+            artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
+            name="run_manifest.json",
+            relative_path="artifacts/run_manifest.json",
+            media_type="application/json",
+            size_bytes=2,
+            sha256="3" * 64,
+            generated_by_step_id="step_artifact_builder_v1",
+        ),
+        publish=lambda: order.append("publish"),
+        abort=lambda: order.append("abort"),
+    )
+    context.reserve_pipeline_publication()
+    context.set_pending_publication(pending)
+    execution = RunExecution(
+        task_id=context.task_id,
+        run_id="run_no_data_publication_event",
+        request_id="request_no_data_publication_event",
+        input="no data publication event",
+        context=context,
+    )
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+
+    class FakeResult:
+        async def stream_events(self):
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
+    assert execution.build_result is manifest.build_result
+    assert execution.build_result.status is BuildResultStatus.NO_DATA
+
+    execution.seal_completion()
+    completion_events = await execution.commit_completion()
+
+    # The audit-type NO_DATA package still publishes.
+    publication_event = completion_events[-1]
+    assert isinstance(publication_event.payload, PublicationCreatedPayload)
+    assert (
+        publication_event.payload.publication_id
+        == "pub-run_no_data_publication_event"
+    )
+    # But the NO_DATA build result keeps publication_id None.
+    assert execution.build_result.publication_id is None
 
 
 @pytest.mark.asyncio

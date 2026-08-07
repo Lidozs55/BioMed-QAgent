@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import threading
@@ -17,6 +18,9 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     CancelRequestedPayload,
     MessageRole,
+    PublicationCreatedPayload,
+    RunCompletedPayload,
+    RunFailedPayload,
     RunStatus,
     StageName,
     StageStartedPayload,
@@ -31,7 +35,7 @@ from app.domain.contracts import (
     ValidationSummary,
     build_event,
 )
-from app.domain.contracts.dataset_state import ArtifactRole
+from app.domain.contracts.dataset_state import ArtifactRole, BuildResultStatus
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.repository import TaskRepository
 
@@ -1133,4 +1137,92 @@ async def test_runtime_completion_seals_fixture_publication_against_late_cancel(
         release_publication.set()
         if cancel_task is not None:
             await asyncio.gather(cancel_task, return_exceptions=True)
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_no_primary_pipeline_emits_completed_no_data(
+    monkeypatch, tmp_path,
+) -> None:
+    """A FIXTURE pipeline that recovers no primary (T1 output shape) must
+    complete with RunCompletedPayload(BuildResult NO_DATA) — never FAILED.
+
+    Phase 4b T4: the T1-T3 changes made NO_DATA pipeline manifests possible
+    (previously the metadata-only placeholder always yielded SUCCEEDED), so
+    the fixture executor completion path must handle them: the NO_DATA
+    package is still published (audit publication, spec D6), and the NO_DATA
+    build_result must NOT carry a publication_id (BuildResult.validate_state
+    forbids publication_id on NO_DATA).
+    """
+
+    def no_primary_processing(ctx, source_asset, dataset_id, geo=None):
+        from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+        from app.pipeline.stages.base import ProcessingOutput, StageResult
+
+        return StageResult(
+            output_digest=hashlib.sha256(b"no-primary-processing").hexdigest(),
+            output=ProcessingOutput(
+                parsed_datasets=[],
+                samples=[
+                    GeoSampleMetadata(
+                        sample_id="GSM9999991",
+                        source_alias="S1",
+                        cell_line_raw="",
+                        cell_line_canonical="",
+                        normalization_rule="",
+                        treatment="control",
+                        replicate=1,
+                        organism="Homo sapiens",
+                    ),
+                ],
+                no_primary_reason="series_matrix_expression_empty_and_no_supplementary",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.pipeline.runner.run_processing", no_primary_processing
+    )
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=runner_module.FixtureRunExecutor(
+            repository,
+            fixture_dir=(
+                Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
+            ),
+        ),
+    )
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_fixture_no_primary",
+                input="no primary fixture",
+                databases=["pubmed", "geo"],
+                mode=TaskMode.FIXTURE,
+            )
+        )
+        await manager.wait_until_idle()
+
+        events = await repository.list_events(accepted.task_id)
+        payloads = [event.payload for event in events]
+
+        # The manager emits COMPLETED with the NO_DATA build result.
+        completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
+        assert completed[0].build_result.valid_row_count == 0
+        assert completed[0].build_result.reason_codes == ["no_primary_data"]
+        # NO_DATA builds must not carry a publication_id (validate_state).
+        assert completed[0].build_result.publication_id is None
+
+        # The NO_DATA package is still published (audit publication, spec D6)
+        # and the run never FAILED.
+        assert any(
+            isinstance(p, PublicationCreatedPayload) for p in payloads
+        )
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
+    finally:
         await manager.close()

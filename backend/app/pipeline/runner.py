@@ -981,7 +981,17 @@ class PipelineRunner:
                 sources=discovery.sources,
                 source_assets=acquisition.source_assets,
                 download_attempts=acquisition.download_attempts,
-                parsed_dataset=processing.parsed_datasets[0],
+                # Phase 4b T1/T4 (ADR-011): a no-primary processing output
+                # (parsed_datasets=[]) must reach artifact build without
+                # crashing on parsed_datasets[0]; the builder stages the
+                # NO_DATA package (no main_data.csv) and no_primary_reason
+                # records why, which the validation stage (T3) uses to
+                # authorize the NO_DATA package.
+                parsed_dataset=(
+                    processing.parsed_datasets[0]
+                    if processing.parsed_datasets
+                    else None
+                ),
                 parsed_datasets=processing.parsed_datasets,
                 merged_dataset=processing.merged_dataset,
                 samples=processing.samples,
@@ -992,6 +1002,7 @@ class PipelineRunner:
                 stage_attempt_id=stage_attempt_id,
                 cleaning_report=processing.cleaning_report,
                 field_alignment=processing.field_alignment,
+                no_primary_reason=processing.no_primary_reason,
             )
         if stage is StageName.VALIDATION:
             build = self._get_output(stage_outputs, StageName.ARTIFACT_BUILD, ArtifactBuildOutput)
@@ -1520,8 +1531,26 @@ class PipelineRunner:
             stage_outputs, StageName.VALIDATION, ValidationOutput
         )
         manifest = validation_output.manifest
+        # Phase 4b T4: inject the primary's real valid row count into the
+        # BuildResult. The authoritative source is the PROCESSING output's
+        # primary parsed dataset ``row_count`` (the ``rows_after`` value
+        # processing_log records) — the manifest itself carries no row
+        # statistics. NO_DATA keeps 0. The primary mirrors the builder's
+        # selection: merged_dataset wins over parsed_datasets[0].
+        processing = self._get_output(
+            stage_outputs, StageName.PROCESSING, ProcessingOutput
+        )
+        primary_row_count: int | None = None
+        if processing.merged_dataset is not None:
+            primary_row_count = processing.merged_dataset.row_count
+        elif processing.parsed_datasets:
+            primary_row_count = processing.parsed_datasets[0].row_count
         manifest = manifest.model_copy(
-            update={"build_result": _compute_build_result(manifest)}
+            update={
+                "build_result": _compute_build_result(
+                    manifest, primary_row_count=primary_row_count
+                )
+            }
         )
         # Keep the deferred staging package's run_manifest.json in sync with
         # the enriched in-memory manifest so a deferred publication (and its
@@ -1658,19 +1687,28 @@ def _hash_directory(directory: Path) -> str:
 _PRIMARY_ARTIFACT_NAME = "main_data.csv"
 
 
-def _compute_build_result(manifest: RunManifest) -> BuildResult:
+def _compute_build_result(
+    manifest: RunManifest,
+    primary_row_count: int | None = None,
+) -> BuildResult:
     """Conservative 4a BuildResult from a completed manifest.
 
     Only the presence of a primary dataset artifact is considered. Source-level
-    partial-success statistics and accurate row counts arrive with 4b when the
-    V2 chain statistics are wired in.
+    partial-success statistics arrive with the V2 chain statistics (later
+    phase); ``valid_row_count`` is injected here (phase 4b T4).
+
+    ``primary_row_count`` is the primary parsed dataset's actual valid row
+    count (``ParsedDataset.row_count`` — the ``rows_after`` value processing
+    records in processing_log). ``_finalize_completed`` derives it from the
+    PROCESSING stage output; NO_DATA keeps 0. Callers that do not supply it
+    (e.g. the legacy ``tests/pipeline/test_build_result.py`` unit calls)
+    keep the 4a placeholder 0.
 
     ``SUCCEEDED`` carries a provisional ``publication_id`` (``pub-<task_id>``):
     ``BuildResult.validate_state`` forbids a SUCCEEDED build without one, and
     ``_compute_build_result`` receives no run identifier. The agent_loop
     publish path replaces it with the run-scoped ``pub-<run_id>`` before
-    emitting ``PublicationCreatedPayload`` (4a Task 5). ``valid_row_count`` is
-    0 until 4b injects the artifact_build primary row statistics.
+    emitting ``PublicationCreatedPayload`` (4a Task 5).
     """
 
     available_roles = sorted(
@@ -1682,7 +1720,9 @@ def _compute_build_result(manifest: RunManifest) -> BuildResult:
     if has_primary:
         return BuildResult(
             status=BuildResultStatus.SUCCEEDED,
-            valid_row_count=0,
+            valid_row_count=(
+                primary_row_count if primary_row_count is not None else 0
+            ),
             successful_sources=list(manifest.source_ids),
             available_artifact_roles=available_roles,
             reason_codes=[],
