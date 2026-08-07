@@ -1,7 +1,13 @@
-"""跨数据集字段对齐与合并工具。
+"""跨数据集字段对齐与合并工具（Phase 3 P2 降级后：**候选生成器**）。
 
-提供字段名规范化、多数据集字段对齐和垂向合并功能。
-用于将来自不同来源的异构数据集统一为一致的列结构。
+V2 表达式链的确定性合并已由 `app/datasets/build/integrator.py` 的
+``integrate()`` 承担（Design §8.8）。本模块保留两个角色：
+
+- ``normalize_field_names`` / ``align_fields`` —— **候选生成器**：为
+  V2 字段映射（``field_mappings``）提供跨来源字段对齐候选；
+- ``merge_datasets`` —— **V1 Legacy**：仅被 V1 pipeline 的
+  ``merge_parsed_datasets`` 使用，Phase 8 将正式路径删除
+  （TODO Phase 8 P1：删除正式路径上的 ``tools/alignment.merge_datasets``）。
 
 对应数据集成 / 元分析预处理工作流。
 """
@@ -213,10 +219,11 @@ def merge_datasets(
     field_mapping: dict[str, list[str]],
     output_name: str,
 ) -> ParsedDataset:
-    """垂向合并多个对齐的数据集。
+    """[V1 Legacy] 垂向合并多个对齐的数据集（Phase 8 将删除）。
 
-    根据字段对齐映射将多个数据集合并为一个。每个输出行通过 ``_source``
-    字段标记来源数据集，重复行保留首次出现。
+    仅 V1 pipeline 的 ``merge_parsed_datasets`` 使用；V2 表达式链的合并
+    走 ``app.datasets.build.integrator.integrate()``（确定性 append +
+    dedup + conflict 审计）。此处保留至 Phase 8 清理。
 
     Args:
         datasets: 要对齐合并的 ParsedDataset 列表。
