@@ -519,3 +519,50 @@ async def test_execute_dataset_build_refuses_publication_when_correction_pending
         if not build_task.done():
             build_task.cancel()
             await asyncio.gather(build_task, return_exceptions=True)
+
+
+def test_tool_returns_retryable_error_on_unstable_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """K1 residual (wave 9): the tool maps the executor's unstable-workspace
+    conflict to the retryable error envelope — a same-build retry cannot
+    reuse a workspace whose previous worker is still running (the marker
+    persisted beyond the poll cap). Uses short poll params so the test is
+    fast; the marker itself is written directly (no live straggler needed).
+    """
+    import json
+
+    from app.datasets.runtime import DatasetBuildExecutor
+
+    orig_init = DatasetBuildExecutor.__init__
+
+    def fast_poll_init(self, **kwargs):
+        kwargs.setdefault("unstable_poll_interval", 0.01)
+        kwargs.setdefault("unstable_poll_cap", 0.3)
+        orig_init(self, **kwargs)
+
+    monkeypatch.setattr(DatasetBuildExecutor, "__init__", fast_poll_init)
+
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    marker = (
+        run_ctx.work_dir.root
+        / "datasets_build"
+        / "state"
+        / "build_tool_test"
+        / ".worker_unfinished"
+    )
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"build_id": "build_tool_test"}) + "\n", "utf-8"
+    )
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "error"
+    assert data["retryable"] is True
+    assert "unstable" in data["message"]
+    # The marker persists so a later retry can re-check the workspace.
+    assert marker.is_file()

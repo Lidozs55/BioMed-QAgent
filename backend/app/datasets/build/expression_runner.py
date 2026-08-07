@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import functools
 import json
 import shutil
@@ -82,6 +83,21 @@ class PublicationRefusedError(BuildError):
     """
 
 
+def _complete_worker_future(completion: concurrent.futures.Future[Any]) -> None:
+    """Set a worker-completion signal exactly once, race-safely.
+
+    K1 residual (Phase 4 review wave 9): the executor's straggler grace may
+    cancel the completion future while the worker thread is mid-``finally``
+    — a cancellation landing between a ``done()`` check and ``set_result``
+    would raise ``InvalidStateError`` in the worker's tail (check-then-act
+    race). ``set_result`` is the single authoritative state transition; any
+    non-pending future (already finished or cancelled) raises and is
+    suppressed, so the worker's finally can never raise here.
+    """
+    with contextlib.suppress(concurrent.futures.InvalidStateError):
+        completion.set_result(None)
+
+
 class ExpressionBuildRunner:
     """Executes the expression skeleton operations against real components."""
 
@@ -123,6 +139,13 @@ class ExpressionBuildRunner:
         # touched from worker threads, so it is guarded by a lock).
         self._worker_futures: set[concurrent.futures.Future[Any]] = set()
         self._worker_futures_lock = threading.Lock()
+        # K1 residual (wave 9): the executor registers the per-build
+        # ``.worker_unfinished`` marker path here at run start; a worker
+        # thread's ``finally`` removes the marker best-effort so a retry
+        # polling the marker observes the workspace stabilizing exactly
+        # when the straggler thread truly finishes (the marker is the
+        # exclusion; threads share the filesystem).
+        self._worker_marker_path: Path | None = None
         # Per-operation state accumulated across the plan run. A digest-reused
         # (SKIPPED) operation simply reports the cached output again.
         self._batches: dict[str, object] = {}
@@ -163,6 +186,18 @@ class ExpressionBuildRunner:
         with self._worker_futures_lock:
             self._worker_futures.discard(future)
 
+    def set_worker_marker_path(self, marker_path: Path | None) -> None:
+        """Register the state-dir worker marker for best-effort cleanup.
+
+        K1 residual (wave 9): the executor calls this at run start with
+        ``state/<build_id>/.worker_unfinished``; every worker thread's
+        ``finally`` removes the marker (best-effort, OSError suppressed) so
+        a same-build_id retry that polls the marker proceeds exactly when
+        the straggler thread truly finishes. Runners constructed directly
+        (without an executor) keep ``None`` and never clean a marker.
+        """
+        self._worker_marker_path = marker_path
+
     async def _offload(
         self,
         func: Callable[..., _OffloadT],
@@ -191,12 +226,16 @@ class ExpressionBuildRunner:
             try:
                 return func(*tracked_args, **tracked_kwargs)
             finally:
-                # Guard: after the straggler grace elapses the executor
-                # cancels the completion future; the late thread must not
-                # raise InvalidStateError in its tail when it finally
-                # finishes.
-                if not completion.done():
-                    completion.set_result(None)
+                _complete_worker_future(completion)
+                # K1 residual (wave 9): the worker thread truly finished —
+                # best-effort clear of the state-dir worker marker so a
+                # retry polling it observes the workspace stabilizing
+                # exactly when the straggler dies (threads share the
+                # filesystem; the marker is the exclusion).
+                marker = self._worker_marker_path
+                if marker is not None:
+                    with contextlib.suppress(OSError):
+                        marker.unlink(missing_ok=True)
 
         worker = loop.run_in_executor(
             None, functools.partial(tracked, *args, **kwargs)

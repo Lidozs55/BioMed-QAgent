@@ -15,6 +15,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -192,6 +193,9 @@ class DatasetBuildExecutor:
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
         straggler_grace: float = 10.0,
+        unstable_marker_ttl: float = 60.0,
+        unstable_poll_interval: float = 0.05,
+        unstable_poll_cap: float = 5.0,
         resume_from: str | None = None,
     ) -> None:
         self._task_id = task_id
@@ -218,6 +222,17 @@ class DatasetBuildExecutor:
         # finish within the grace, the state dir is marked so a retry cannot
         # reuse the unstable workspace.
         self._straggler_grace = straggler_grace
+        # K1 residual (wave 9): ``.worker_unfinished`` is a real exclusion,
+        # not an observation. ``unstable_marker_ttl`` bounds how old a
+        # marker must be to be treated as stale (worker threads die with the
+        # process, so a marker surviving a restart is stale by definition);
+        # a fresh marker is polled every ``unstable_poll_interval`` until
+        # the straggler's finally removes it, bounded by
+        # ``unstable_poll_cap``, after which a retryable conflict is
+        # returned.
+        self._unstable_marker_ttl = unstable_marker_ttl
+        self._unstable_poll_interval = unstable_poll_interval
+        self._unstable_poll_cap = unstable_poll_cap
         self._resume_from = resume_from
         if resume_from is not None and resume_from not in {
             op.operation_id for op in plan
@@ -255,7 +270,7 @@ class DatasetBuildExecutor:
                     self._state, self._attempts_path()
                 )
                 self._recover_inflight_attempt()
-                self._warn_unfinished_worker()
+                self._register_worker_marker()
             except Exception as exc:
                 # A corrupt/mismatched state or diverged attempt log is a
                 # recovery failure, not a plan failure: return a structured
@@ -265,6 +280,9 @@ class DatasetBuildExecutor:
                     ErrorCode.INTERNAL_ERROR,
                     f"build state could not be loaded or recovered: {exc}",
                 )
+            unstable = await self._exclude_unstable_workspace()
+            if unstable is not None:
+                return unstable
             try:
                 return await self._run_plan()
             except BuildCancelledError:
@@ -596,10 +614,11 @@ class DatasetBuildExecutor:
 
         K1 residual (Phase 4 review): the thread cannot be interrupted, so a
         same-build_id retry must not trust the workspace to be stable. The
-        marker is honored by the next run (``_warn_unfinished_worker``); the
-        retry re-executes the failed operation (its attempt is FAILED, never
-        reusable) and everything downstream via the digest closure, rewriting
-        the same deterministic paths.
+        marker is a real exclusion: the next run polls it (``_exclude_unstable_workspace``)
+        before executing any operation; the retry re-executes the failed
+        operation (its attempt is FAILED, never reusable) and everything
+        downstream via the digest closure, rewriting the same deterministic
+        paths.
         """
         operation_id: str | None = None
         state = self._state
@@ -617,30 +636,108 @@ class DatasetBuildExecutor:
                 json.dumps(payload, ensure_ascii=False) + "\n", "utf-8"
             )
 
-    def _warn_unfinished_worker(self) -> None:
-        """Honor the state-dir marker left by a previous run (log + clear).
+    def _register_worker_marker(self) -> None:
+        """Point the operation runner's workers at the marker path.
 
-        The retry cannot reuse the unfinished operation — its attempt is
-        FAILED and the digest closure re-runs it and everything downstream —
-        so the marker's purpose is observability of the instability, not a
-        reuse gate; it is cleared once acknowledged.
+        K1 residual (wave 9): the runner's worker threads remove
+        ``.worker_unfinished`` from their ``finally`` when they truly
+        finish, so a retry polling the marker observes the workspace
+        stabilizing exactly when the straggler dies. Duck-typed like
+        ``in_flight_workers``: runners without the accessor simply cannot
+        clean the marker (the TTL/staleness path still unblocks a retry
+        after a crash).
+        """
+        probe = getattr(self._operation_runner, "set_worker_marker_path", None)
+        if probe is None:
+            return
+        with contextlib.suppress(Exception):
+            probe(self._state_dir / ".worker_unfinished")
+
+    async def _exclude_unstable_workspace(self) -> BuildRunOutcome | None:
+        """Honor the worker-unfinished marker as a real exclusion.
+
+        K1 residual (wave 9): the marker written by a grace-expired run
+        means a worker thread may still be writing the build's deterministic
+        paths. This runs BEFORE any operation of a same-build_id run
+        executes:
+
+        - stale (mtime older than ``unstable_marker_ttl``): worker threads
+          die with the process, so a marker surviving a restart is stale by
+          definition — remove it and proceed;
+        - fresh: poll every ``unstable_poll_interval`` until the straggler's
+          ``finally`` removes it (bounded by ``unstable_poll_cap``);
+        - cap expired with the marker still present: the workspace is
+          genuinely unstable — return a retryable conflict outcome (the tool
+          maps it to retryable error text).
+
+        Returns ``None`` when the workspace is safe to execute.
         """
         marker = self._state_dir / ".worker_unfinished"
         if not marker.is_file():
-            return
+            return None
+        if self._worker_marker_is_stale(marker):
+            logger.warning(
+                "build %s: stale worker-unfinished marker removed (mtime "
+                "beyond %.1fs ttl)",
+                self._build_id,
+                self._unstable_marker_ttl,
+            )
+            with contextlib.suppress(OSError):
+                marker.unlink(missing_ok=True)
+            return None
         operation_id: str | None = None
         with contextlib.suppress(Exception):
             payload = json.loads(marker.read_text("utf-8"))
             operation_id = payload.get("operation_id")
         logger.warning(
             "build %s: previous run left an operation worker unfinished "
-            "(operation=%s); re-executing the failed operation and "
-            "downstream via the digest closure",
+            "(operation=%s); waiting for the worker to finish before "
+            "executing the plan",
             self._build_id,
             operation_id,
         )
-        with contextlib.suppress(OSError):
-            marker.unlink(missing_ok=True)
+        try:
+            async with asyncio.timeout(self._unstable_poll_cap):
+                while marker.is_file():
+                    await asyncio.sleep(self._unstable_poll_interval)
+        except TimeoutError:
+            logger.error(
+                "build %s: worker-unfinished marker persisted beyond %.1fs; "
+                "returning retryable conflict (workspace unstable)",
+                self._build_id,
+                self._unstable_poll_cap,
+            )
+            return self._outcome_unstable_conflict()
+        return None
+
+    def _worker_marker_is_stale(self, marker: Path) -> bool:
+        """A marker older than the TTL is stale (threads die with the process)."""
+        try:
+            return time.time() - marker.stat().st_mtime > self._unstable_marker_ttl
+        except OSError:
+            # The marker vanished while we looked; treat as gone (stable).
+            return True
+
+    def _outcome_unstable_conflict(self) -> BuildRunOutcome:
+        """A retryable conflict: the workspace cannot be trusted right now.
+
+        The tool maps failed+retryable outcomes to the generic retryable
+        error envelope; the straggler that outlived the grace keeps the
+        marker in place so the next retry re-checks it.
+        """
+        return BuildRunOutcome(
+            status="failed",
+            error=ErrorDetail(
+                code=ErrorCode.TIMEOUT,
+                message=(
+                    f"build {self._build_id} state is unstable: a previous "
+                    "operation worker is still running (worker-unfinished "
+                    f"marker persisted beyond {self._unstable_poll_cap:.1f}s); "
+                    "retry later"
+                ),
+                retryable=True,
+            ),
+        )
 
     def _compute_input_digest(self, op: OperationSpec) -> str:
         upstream = {

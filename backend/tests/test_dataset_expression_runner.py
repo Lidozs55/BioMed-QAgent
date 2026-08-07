@@ -1100,6 +1100,281 @@ async def test_timed_out_worker_beyond_grace_marks_state_dir_and_retry_proceeds(
     assert published_values == {"9", "10", "11", "12"}
 
 
+@pytest.mark.asyncio
+async def test_grace_expired_straggler_blocks_same_build_retry_until_worker_finishes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """K1 residual (wave 9): the worker-unfinished marker is a real exclusion.
+
+    A grace-expired straggler is STILL alive (blocked on a test-controlled
+    event); a same-build_id retry started while it is alive must not enter
+    the plan — it polls the marker until the straggler's finally removes it,
+    then proceeds. The retry's publication reflects only its own inputs; the
+    straggler's late writes never land in the retry's paths.
+    """
+    import threading
+
+    from app.datasets.build import expression_runner as expression_runner_module
+
+    real_integrate = expression_runner_module.integrate
+    integrate_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def blocking_integrate(*args, **kwargs):
+        integrate_started.set()
+        release_worker.wait(10.0)
+        result = real_integrate(*args, **kwargs)
+        worker_finished.set()
+        return result
+
+    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    output_dir = tmp_path / "build"
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=output_dir,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_timeout_a",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        source_assets=assets,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        operation_timeout=0.5,
+        straggler_grace=0.05,
+    )
+    outcome = await executor.run()
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.code == ErrorCode.TIMEOUT
+    marker = tmp_path / "state" / spec.build_id / ".worker_unfinished"
+    assert marker.is_file()
+    # The straggler thread is STILL alive: the executor returned without
+    # waiting (grace 0.05s) and the worker is still blocked mid-write. The
+    # marker's presence is the authoritative alive signal — its finally
+    # (which removes the marker) has not run.
+    assert not worker_finished.is_set()
+
+    # A same-build_id retry with new inputs starts WHILE the straggler is
+    # alive: the marker is a real exclusion, so the retry must NOT enter the
+    # plan (it polls the marker until the straggler's finally removes it).
+    monkeypatch.setattr(expression_runner_module, "integrate", real_integrate)
+    new_input = tmp_path / "new_input.tsv"
+    new_input.write_text(
+        "gene_id\tS1\tS2\nTP53\t9\t10\nBRCA1\t11\t12\n", encoding="utf-8"
+    )
+    checksum = hashlib.sha256(new_input.read_bytes()).hexdigest()
+    new_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/new_input.tsv",
+        sha256=checksum,
+        size_bytes=new_input.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_gdc",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    retry_runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_gdc": new_asset},
+        source_paths={"binding_gdc": new_input},
+        output_dir=output_dir,
+    )
+    retry_entered = threading.Event()
+
+    async def recording_operation(op, upstream):
+        retry_entered.set()
+        return await retry_runner.run_operation(op, upstream)
+
+    retry_executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_retry_b",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=recording_operation,
+        source_assets={"binding_gdc": new_asset},
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        unstable_poll_interval=0.01,
+        unstable_poll_cap=5.0,
+    )
+    retry_task = asyncio.create_task(retry_executor.run())
+    # While the straggler is alive the retry stays in its exclusion poll: it
+    # does not resolve and never executes an operation.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(retry_task), timeout=0.4)
+    assert not retry_entered.is_set(), (
+        "retry entered the plan while the straggler was still alive"
+    )
+    assert marker.is_file()
+
+    # Release the straggler: its finally removes the marker, the retry's poll
+    # observes the workspace stabilizing and proceeds to publish its own data.
+    release_worker.set()
+    retry = await asyncio.wait_for(retry_task, timeout=10.0)
+    assert retry.status == "completed"
+    assert not marker.exists()
+    published_values: set[str] = set()
+    for version_dir in (output_dir / "publish").glob("build_runner_test_*"):
+        with (version_dir / "merged" / "primary.csv").open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        published_values.update(row["expression_value"] for row in rows)
+    assert published_values == {"9", "10", "11", "12"}
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_unfinished_marker_ttl_unblocks_retry(
+    tmp_path: Path,
+) -> None:
+    """K1 residual (wave 9): a marker older than the TTL is stale by
+    definition (worker threads die with the process) — the retry removes it
+    and proceeds, never a permanent block after a crash.
+    """
+    import os
+    import time
+
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {"build_id": "build_runner_test", "operation_id": "integrate"}
+        )
+        + "\n",
+        "utf-8",
+    )
+    # mtime far beyond any filesystem timestamp granularity vs. the TTL.
+    past = time.time() - 5.0
+    os.utime(marker, (past, past))
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    output_dir = tmp_path / "build"
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=output_dir,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_retry_stale",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        unstable_marker_ttl=0.5,
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "completed"
+    assert not marker.exists()
+    assert _primary_rows(output_dir)
+
+
+@pytest.mark.asyncio
+async def test_worker_unfinished_marker_persists_past_poll_cap_returns_retryable_conflict(
+    tmp_path: Path,
+) -> None:
+    """K1 residual (wave 9): when the marker persists beyond the poll cap
+    (no straggler finishes), the executor returns a RETRYABLE conflict
+    outcome — the workspace is genuinely unstable and no operation runs.
+    """
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {"build_id": "build_runner_test", "operation_id": "integrate"}
+        )
+        + "\n",
+        "utf-8",
+    )
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path / "build",
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_conflict",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        unstable_poll_interval=0.01,
+        unstable_poll_cap=0.3,
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.retryable is True
+    assert "unstable" in outcome.error.message
+    # The marker is left in place so the next retry re-checks the workspace.
+    assert marker.is_file()
+
+
+def test_worker_completion_signal_race_safe_against_interleaved_cancel() -> None:
+    """K1 residual (wave 9): a cancellation landing between the done() check
+    and set_result() in the worker's finally must not raise
+    InvalidStateError (the check-then-act race on the completion future).
+    """
+    import concurrent.futures
+
+    from app.datasets.build.expression_runner import _complete_worker_future
+
+    completion = concurrent.futures.Future()
+
+    def _done_returns_false() -> bool:
+        return False
+
+    # Freeze the guard's view at "not done": the executor's straggler-grace
+    # path then cancels the future before the set_result call lands.
+    completion.done = _done_returns_false
+    completion.cancel()
+    _complete_worker_future(completion)
+    assert completion.cancelled()
+
+
 def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> None:
     """B8/H5: older publication records may carry naive ISO timestamps;
     mixing naive and timezone-aware values must not raise TypeError, and the
