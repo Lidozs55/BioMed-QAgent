@@ -168,12 +168,13 @@ describe("ResultsViewer", () => {
 
     render(<ResultsViewer />);
     // The latest NO_DATA run declares no own artifacts
-    // (available_artifact_roles: []), so the banner must NOT attach to the
-    // stale artifact left over from an earlier run.
+    // (available_artifact_roles: []), so the banner AND the preview message
+    // must NOT attach to the stale artifact left over from an earlier run.
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
-    // The message still surfaces via the empty CSV preview for this artifact.
-    expect(await screen.findByText("所选数据源未返回任何记录")).toBeVisible();
+    // The stale artifact's preview shows its own empty state, not the later
+    // run's NO_DATA message.
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
   });
 
   it("shows the server no-data message for a completed no_data run with zero artifacts", () => {
@@ -494,11 +495,13 @@ describe("ResultsViewer", () => {
 
     render(<ResultsViewer />);
 
-    // The latest run FAILED (build_result null): no NO_DATA banner, no
-    // NO_DATA summary text over the earlier run's artifacts.
+    // The latest run FAILED (build_result null): no NO_DATA banner and no
+    // NO_DATA preview message over the earlier run's artifacts — not even the
+    // generic "无数据" fallback.
     expect(screen.getByText("main_data.csv")).toBeVisible();
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
     expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
+    expect(screen.queryByText("无数据")).not.toBeInTheDocument();
   });
 
   it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {

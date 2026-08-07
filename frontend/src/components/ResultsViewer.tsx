@@ -288,10 +288,27 @@ export default function ResultsViewer({
   const latestRun =
     latestRunId === undefined ? undefined : task?.runsById[latestRunId];
   const buildResult = latestRun?.summary?.build_result;
+  // The empty-state title and the per-artifact preview message describe the
+  // LATEST run's outcome. The empty state is only rendered when NO artifacts
+  // exist (ownership is trivially satisfied), so it may use the plain latest
+  // NO_DATA message. The preview message, however, renders over whatever
+  // artifacts are listed — the artifact list is reset at each run_manifest
+  // and accumulates that cycle's artifacts, so when the latest NO_DATA run
+  // produced none (available_artifact_roles: [] — e.g. acquisition found
+  // nothing), the visible artifacts belong to an EARLIER run and must not
+  // carry this run's NO_DATA message.
   const noDataMessage =
     buildResult?.status === "no_data"
       ? latestRun?.summary?.user_message ?? "无数据"
       : undefined;
+  const noDataOwnsArtifacts =
+    buildResult?.status === "no_data" &&
+    buildResult != null &&
+    buildResult.available_artifact_roles.length > 0 &&
+    artifacts.length > 0;
+  const previewNoDataMessage = noDataOwnsArtifacts
+    ? noDataMessage
+    : undefined;
   const noDataContext =
     buildResult?.status === "no_data" &&
     (buildResult.user_summary !== "" ||
@@ -305,16 +322,9 @@ export default function ResultsViewer({
         }
       : undefined;
   // The banner describes the LATEST run's outcome, so it may only render
-  // over that run's OWN artifacts. The artifact list is reset at each
-  // run_manifest and then accumulates that cycle's artifacts; when the
-  // latest NO_DATA run produced none (available_artifact_roles: [] — e.g.
-  // acquisition found nothing), the visible artifacts belong to an EARLIER
-  // run and must not carry this run's NO_DATA summary.
+  // over that run's OWN artifacts (see noDataOwnsArtifacts above).
   const showNoDataBanner =
-    noDataContext !== undefined &&
-    buildResult != null &&
-    buildResult.available_artifact_roles.length > 0 &&
-    artifacts.length > 0;
+    noDataContext !== undefined && noDataOwnsArtifacts;
 
   if (taskId === null) {
     return (
@@ -402,7 +412,7 @@ export default function ResultsViewer({
               key={artifact.artifact_id}
               artifact={artifact}
               taskId={taskId}
-              noDataMessage={noDataMessage}
+              noDataMessage={previewNoDataMessage}
             />
           ))}
         </div>
