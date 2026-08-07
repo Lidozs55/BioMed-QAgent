@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Self
 
-from pydantic import Field, JsonValue, field_validator, model_validator
+from pydantic import Field, JsonValue, PrivateAttr, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
 from app.domain.contracts.dataset_state import BuildResult
@@ -159,6 +159,12 @@ class TaskSnapshot(ContractModel):
     current_publication_id: str | None = Field(default=None, min_length=1)
     publications: list[PublicationSummary] = Field(default_factory=list)
     older_messages_cursor: str | None = None
+
+    # A8 (Phase 4 review): internal projection bookkeeping for artifact-count
+    # dedup — seen artifact identities per run (private, never serialized to
+    # the wire contract). The repository persists it in the snapshot JSON
+    # under a private key so the dedup survives restarts.
+    _artifact_ids_by_run: dict[str, set[str]] = PrivateAttr(default_factory=dict)
 
 
 class TaskPage(ContractModel):

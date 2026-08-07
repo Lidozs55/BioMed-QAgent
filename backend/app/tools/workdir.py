@@ -28,6 +28,19 @@ def _validate_id(value: str, field_name: str) -> str:
     return value
 
 
+def validate_safe_path_id(value: str, field_name: str = "id") -> str:
+    """Strict single-component identifier validation (path-escape safe).
+
+    Rejects path separators, ``..``, absolute paths and any value that is
+    not a single ``[A-Za-z0-9_-]{1,128}`` component. Shared by task work
+    directory builders and V2 dataset build contracts (build_id /
+    binding_id) so a tool caller can never steer generated paths outside
+    the task/build workspace.
+    """
+
+    return _validate_id(value, field_name)
+
+
 def _safe_child(root: Path, relative: str) -> Path:
     if not relative:
         raise ValueError("path must not be blank")

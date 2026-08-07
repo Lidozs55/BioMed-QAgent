@@ -44,6 +44,7 @@ from app.domain.contracts import (
     generate_prefixed_uuid,
 )
 from app.domain.contracts.enums import AttemptStatus
+from app.domain.contracts.source import SourceAsset
 from app.pipeline.state import TaskLock
 from app.runtime.event_store import append_jsonl_records
 
@@ -180,6 +181,7 @@ class DatasetBuildExecutor:
         cancellation_requested: CancellationToken | None = None,
         parameter_scope: dict[str, Any] | None = None,
         implementation_versions: Mapping[str, str] | None = None,
+        source_assets: Mapping[str, SourceAsset] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
         resume_from: str | None = None,
@@ -196,6 +198,7 @@ class DatasetBuildExecutor:
         self._cancellation_requested = cancellation_requested
         self._parameter_scope = parameter_scope or {}
         self._implementation_versions = implementation_versions or {}
+        self._source_assets = dict(source_assets or {})
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
         self._resume_from = resume_from
@@ -489,16 +492,31 @@ class DatasetBuildExecutor:
             upstream_id: self._outputs[upstream_id]
             for upstream_id in op.upstream
         }
-        return _sha256_json(
-            {
-                "build_id": self._build_id,
-                "operation_id": op.operation_id,
-                "upstream": {
-                    operation_id: _sha256_json(value)
-                    for operation_id, value in upstream.items()
-                },
+        payload: dict[str, object] = {
+            "build_id": self._build_id,
+            "operation_id": op.operation_id,
+            "upstream": {
+                operation_id: _sha256_json(value)
+                for operation_id, value in upstream.items()
+            },
+        }
+        if self._source_assets:
+            # B2 (Phase 4 review): checkpoint reuse must never serve stale
+            # output after a source file changed. Operation outputs are
+            # structural metadata (row counts, file paths, batch ids), so a
+            # change to source content would not otherwise flow through the
+            # upstream digest chain — folding the authoritative
+            # binding -> {sha256, size_bytes} mapping into every operation's
+            # input digest conservatively invalidates all checkpoints when
+            # any source asset changes (ARCHITECTURE §5.2 digest closure).
+            payload["source_assets"] = {
+                binding_id: {
+                    "sha256": asset.sha256,
+                    "size_bytes": asset.size_bytes,
+                }
+                for binding_id, asset in sorted(self._source_assets.items())
             }
-        )
+        return _sha256_json(payload)
 
     def _compute_parameter_digest(self, op: OperationSpec) -> str:
         # The implementation version is part of the reuse contract: a

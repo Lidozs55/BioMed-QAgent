@@ -317,12 +317,7 @@ async def test_repository_rejects_recovery_reads_after_close_without_writing(
     await repository.save_snapshot(empty_snapshot(task_id))
     await asyncio.to_thread(repository.events.append, queued_event(task_id))
     snapshot_path = repository._snapshot_path(task_id)
-    assert (
-        TaskSnapshot.model_validate_json(
-            snapshot_path.read_text("utf-8")
-        ).task.latest_sequence
-        == 0
-    )
+    assert _load_persisted_snapshot(snapshot_path).task.latest_sequence == 0
     await repository.close()
 
     with pytest.raises(RuntimeError, match="repository is closed"):
@@ -331,12 +326,7 @@ async def test_repository_rejects_recovery_reads_after_close_without_writing(
         else:
             await repository.load_conversation_summary(task_id)
 
-    assert (
-        TaskSnapshot.model_validate_json(
-            snapshot_path.read_text("utf-8")
-        ).task.latest_sequence
-        == 0
-    )
+    assert _load_persisted_snapshot(snapshot_path).task.latest_sequence == 0
 
 
 @pytest.mark.asyncio
@@ -837,7 +827,7 @@ async def test_repository_recovers_event_after_atomic_snapshot_replace_fails(
             task_id="task_123",
             run_id="run_123",
         )
-        persisted = TaskSnapshot.model_validate_json(snapshot_path.read_text("utf-8"))
+        persisted = _load_persisted_snapshot(snapshot_path)
         assert persisted.task.latest_sequence == 1
     finally:
         await recovered_repository.close()
@@ -1346,5 +1336,58 @@ async def test_repository_rejects_snapshot_ahead_of_event_journal(tmp_path) -> N
     try:
         with pytest.raises(CorruptEventLogError, match="latest_sequence"):
             await repository.get_snapshot("task_123")
+    finally:
+        await repository.close()
+
+
+def _load_persisted_snapshot(path: Path) -> TaskSnapshot:
+    """Validate a persisted snapshot JSON, ignoring the private dedup key."""
+
+    raw = json.loads(path.read_text("utf-8"))
+    raw.pop("_artifact_ids_by_run", None)
+    return TaskSnapshot.model_validate(raw)
+
+
+@pytest.mark.asyncio
+async def test_repository_dedups_identical_artifact_events_across_roundtrips(
+    tmp_path: Path,
+) -> None:
+    """A8: re-appending the same artifact payload at a new sequence must not
+    inflate artifact_count, including across snapshot persistence round-trips
+    (load -> reduce -> save)."""
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    task_id = "task_dedup_artifacts"
+    await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    try:
+        await repository.append_event(queued_event(task_id=task_id))
+        await repository.append_event(
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=2,
+                timestamp=NOW + timedelta(seconds=2),
+                payload=RunStartedPayload(),
+            )
+        )
+        first = await repository.append_event(artifact_event(task_id, 3, "artifact_dup"))
+        assert first.task.artifact_count == 1
+        # Re-append the IDENTICAL payload at a new sequence (retry/reconcile).
+        second = await repository.append_event(artifact_event(task_id, 4, "artifact_dup"))
+        assert second.task.artifact_count == 1
+        # A different artifact id still increments.
+        third = await repository.append_event(artifact_event(task_id, 5, "artifact_other"))
+        assert third.task.artifact_count == 2
+        # A fresh load (new repository instance) preserves the dedup state.
+        reloaded = TaskRepository(output_dir)
+        await reloaded.initialize()
+        snapshot = await reloaded.get_snapshot(task_id)
+        assert snapshot is not None
+        assert snapshot.task.artifact_count == 2
+        assert snapshot._artifact_ids_by_run["run_123"] == {  # noqa: SLF001
+            "artifact_dup",
+            "artifact_other",
+        }
     finally:
         await repository.close()

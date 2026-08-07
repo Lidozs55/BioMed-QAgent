@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 
 from app.datasets.build.adapters import get_adapter
@@ -46,6 +47,7 @@ from app.datasets.contracts import (
     ValidationResultStatus,
 )
 from app.datasets.runtime import OperationKind, OperationOutput, OperationSpec
+from app.datasets.runtime.executor import BuildCancelledError, CancellationToken
 from app.datasets.schema_registry import SchemaRegistry
 from app.domain.contracts.source import SourceAsset
 from app.pipeline.state import StageOutputFile
@@ -67,6 +69,7 @@ class ExpressionBuildRunner:
         source_paths: dict[str, Path],
         output_dir: Path,
         gene_symbol_map: Mapping[str, str] | None = SYMBOL_TO_ENSEMBL,
+        cancellation_requested: CancellationToken | None = None,
     ) -> None:
         self._spec = spec
         self._registry = registry
@@ -74,6 +77,7 @@ class ExpressionBuildRunner:
         self._source_paths = source_paths
         self._output_dir = Path(output_dir)
         self._gene_symbol_map = gene_symbol_map
+        self._cancellation_requested = cancellation_requested
         self._schema = registry.get(spec.schema_ref)
         self._normalization_profile = get_normalization_profile(
             spec.normalization_profile_ref
@@ -310,6 +314,16 @@ class ExpressionBuildRunner:
     async def _publish(
         self, op: OperationSpec, upstream: dict[str, object]
     ) -> OperationOutput:
+        # D2 (Phase 4 review): the publish operation must never promote a
+        # version after cancellation was requested — the executor also checks
+        # around every operation, this is defense in depth for direct runs.
+        if (
+            self._cancellation_requested is not None
+            and self._cancellation_requested.is_set()
+        ):
+            raise BuildCancelledError(
+                "build was cancelled before publish"
+            )
         manifest = self._require_manifest()
         validation = self._require_validation()
         invariants = check_release_invariants(
@@ -447,11 +461,15 @@ class ExpressionBuildRunner:
 def _find_latest_publication(publish_dir: Path) -> str | None:
     """Return the publication_id of the newest existing version directory.
 
-    Version directories are named ``<build_id>_<manifest_digest16>``; the
-    newest is the lexicographically last directory carrying a
-    ``publication.json``. Returns None when no prior publication exists.
+    Version directories are named ``<build_id>_<manifest_digest16>`` and
+    publication_ids are ``pub_<build_id>_<digest-prefix>``, so digest order is
+    unrelated to publication time (B8). The newest record is selected by its
+    authoritative ``published_at`` timestamp from ``publication.json``;
+    equal timestamps tie-break deterministically on publication_id. Returns
+    None when no prior publication exists.
     """
-    candidates: list[str] = []
+
+    candidates: list[tuple[datetime, str]] = []
     for child in publish_dir.iterdir():
         if not child.is_dir() or child.name.startswith("."):
             continue
@@ -460,12 +478,16 @@ def _find_latest_publication(publish_dir: Path) -> str | None:
             continue
         try:
             record = json.loads(publication_path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
+            published_at = datetime.fromisoformat(record["published_at"])
+            publication_id = record["publication_id"]
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
-        publication_id = record.get("publication_id")
-        if isinstance(publication_id, str) and publication_id:
-            candidates.append(publication_id)
-    return sorted(candidates)[-1] if candidates else None
+        if not isinstance(publication_id, str) or not publication_id:
+            continue
+        candidates.append((published_at, publication_id))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[1]
 
 
 def _placeholder_validation() -> ValidationResult:

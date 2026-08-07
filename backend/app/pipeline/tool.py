@@ -616,6 +616,12 @@ async def run_research_pipeline(
             + " Reference these filenames verbatim; do not invent filenames."
         ),
     }
+    # B9 (Phase 4 review): a completed run must carry its structured
+    # BuildResult so NO_DATA is distinguishable at the tool boundary from any
+    # other completed package (additive key, backward compatible).
+    build_result = getattr(manifest, "build_result", None)
+    if build_result is not None:
+        result["build_result"] = build_result.model_dump(mode="json")
     if last_error is not None:
         result["failed_stage"] = last_error.stage.value
         result["error_message"] = last_error.error.message

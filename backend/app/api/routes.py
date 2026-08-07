@@ -837,7 +837,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             "name": "run_manifest.json",
             "role": ArtifactRole.SCHEMA.value,
             "size": manifest_path.stat().st_size,
-            "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "sha256": _file_sha256(manifest_path),
             "media_type": "application/json",
         }
     ]
@@ -897,8 +897,25 @@ async def get_artifact_file(
     return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)
 
 
-def _file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+_HASH_CHUNK_SIZE = 1 << 20  # 1 MiB — bounded memory per artifact read
+
+
+def _file_sha256(path: Path, chunk_size: int = _HASH_CHUNK_SIZE) -> str:
+    """Hash a file incrementally without loading it into memory (B7).
+
+    Streaming fixed-size chunks keeps API memory bounded even for very large
+    published CSVs; the same helper backs listing digests and download
+    verification.
+    """
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _verified_artifact_path(artifacts_dir: Path, relative_path: str) -> Path:
@@ -995,7 +1012,7 @@ def _load_validated_manifest(
     )
     if completed_run is None:
         return None
-    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != marker_hash:
+    if _file_sha256(manifest_path) != marker_hash:
         raise HTTPException(
             status_code=409,
             detail="Artifact publication marker does not match manifest",

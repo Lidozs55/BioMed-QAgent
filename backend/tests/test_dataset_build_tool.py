@@ -7,6 +7,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.pipeline.dataset_build_tool import execute_dataset_build
@@ -103,3 +104,71 @@ def test_execute_dataset_build_missing_binding_file(tmp_path: Path) -> None:
     )
     assert data["status"] == "error"
     assert data["retryable"] is True
+
+
+def test_execute_dataset_build_rejects_path_like_build_id(tmp_path: Path) -> None:
+    """A path-like build_id is rejected before any output directory is created."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(
+        ctx, _spec_json(), json.dumps({"binding_gdc": rel})
+    )
+    assert data["status"] == "ok"  # sanity: the valid baseline still works
+
+    escape_target = tmp_path / "published-by-agent"
+    escaped_spec = json.loads(_spec_json())
+    escaped_spec["build_id"] = str(escape_target)
+    data = _call_tool(ctx, json.dumps(escaped_spec), json.dumps({"binding_gdc": rel}))
+    assert data["status"] == "invalid_input"
+    assert not escape_target.exists()
+    # Nothing escaped the task work directory: the escaped build_id never
+    # became a child of the task-local build workspace.
+    task_builds = run_ctx.work_dir.root / "datasets_build"
+    assert "published-by-agent" not in [p.name for p in task_builds.iterdir()]
+
+
+def test_execute_dataset_build_rejects_path_like_binding_id(tmp_path: Path) -> None:
+    """A path-like binding_id is rejected before filename interpolation."""
+    ctx = _make_ctx(tmp_path)
+
+    escaped_spec = json.loads(_spec_json(binding_id="../../escape"))
+    data = _call_tool(ctx, json.dumps(escaped_spec), json.dumps({}))
+    assert data["status"] == "invalid_input"
+
+
+def test_build_output_guard_blocks_workspace_escape(tmp_path: Path) -> None:
+    """Defense in depth: the path-construction guard rejects any escape."""
+    from app.pipeline.dataset_build_tool import _ensure_build_output_inside
+
+    build_root = tmp_path / "builds"
+    build_root.mkdir(parents=True)
+    with pytest.raises(ValueError, match="inside the build workspace"):
+        _ensure_build_output_inside(build_root, "/tmp/outside")
+    with pytest.raises(ValueError, match="inside the build workspace"):
+        _ensure_build_output_inside(build_root, "../escape")
+    contained = _ensure_build_output_inside(build_root, "build_ok_1")
+    assert contained == build_root / "build_ok_1"
+
+
+def test_execute_dataset_build_is_cancellation_aware(tmp_path: Path) -> None:
+    """D2: a pre-cancelled Run must not publish; the tool passes the token.
+
+    The executor must observe ``RunContext.cancellation_requested`` so a
+    cancelled run returns a cancelled outcome instead of continuing through
+    validation/publish.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    # Cancel before the build starts.
+    run_ctx.cancellation_requested.set()
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] != "ok"
+    build_root = run_ctx.work_dir.root / "datasets_build"
+    publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
+    assert publish_dirs == []
