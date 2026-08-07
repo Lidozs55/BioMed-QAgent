@@ -225,9 +225,10 @@ function ArtifactCard({
 }) {
   const { getArtifactUrl } = useAPI();
   const { Icon, label } = fileType(artifact.name, artifact.role);
+  const ext = getExtension(artifact.name);
   const url = getArtifactUrl(taskId, artifact.artifact_id);
-  const isCsv = getExtension(artifact.name) === "csv";
-  const isPreviewable = isCsv || artifact.role === "primary_dataset" || artifact.role === "supporting_dataset";
+  const isCsvPreviewable = ext === "csv" || ext === "tsv" || ext === "txt";
+  const isPreviewable = isCsvPreviewable;
 
   return (
     <Card size="sm" className="min-w-0">

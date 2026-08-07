@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -1448,10 +1449,24 @@ class TaskManager:
                     continue
                 if not isinstance(marker, dict):
                     continue
-                if marker.get("run_id") != run.run_id:
-                    continue
+                # Strict marker validation – mirror _load_validated_manifest in routes.py
+                marker_task_id = marker.get("task_id")
+                marker_run_id = marker.get("run_id")
                 manifest_sha256 = marker.get("manifest_sha256")
-                if not isinstance(manifest_sha256, str):
+                if (
+                    marker.get("schema_version") != 1
+                    or marker_task_id != summary.task_id
+                    or not isinstance(marker_run_id, str)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", marker_run_id) is None
+                    or marker_run_id != run.run_id
+                    or not isinstance(manifest_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+                ):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
                     continue
                 accepted = TaskRunAccepted(
                     request_id="recovery",

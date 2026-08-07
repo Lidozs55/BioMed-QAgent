@@ -216,4 +216,35 @@ describe("ResultsViewer", () => {
     expect(screen.getByText("所选数据源未返回任何记录")).toBeVisible();
     expect(screen.queryByText("暂无结果")).not.toBeInTheDocument();
   });
+
+  it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {
+            artifact_json: {
+              artifact_id: "artifact_json",
+              name: "main_data.json",
+              role: "primary_dataset",
+              size: 128,
+              sha256: "b".repeat(64),
+              media_type: "application/json",
+              taskId: "task_results",
+              generatedByStepId: null,
+            } satisfies ArtifactProjection,
+          },
+          artifactOrder: ["artifact_json"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    // Should show the role label "主数据" but NOT a CSV preview button
+    expect(screen.getByText("主数据")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "CSV 预览" })).not.toBeInTheDocument();
+  });
 });

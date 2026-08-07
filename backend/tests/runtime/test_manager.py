@@ -19,6 +19,7 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     AssistantStreamDeltaFrame,
     ConversationCompactedPayload,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -3485,6 +3486,78 @@ async def test_recovery_repairs_partial_child_interruptions_idempotently(
     finally:
         await second_manager.close()
         await second_hub.close()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_publication_marker_does_not_abort_recovery(
+    tmp_path,
+) -> None:
+    """A corrupt .runtime-publication.json marker must not crash startup
+    or synthesise a publication_created event."""
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_corrupt_marker"
+    run_id = "run_corrupt_marker"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunQueuedPayload(
+            request_id="req_corrupt_marker",
+            input="corrupt marker test",
+        ),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunStartedPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunFinalizingPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunCompletedPayload(),
+    )
+
+    artifacts_dir = output_dir / task_id / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    # Write a corrupt marker: bad sha256 (not 64 hex chars)
+    marker_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "manifest_sha256": "bad-sha256",
+            "manifest_entries": [],
+        }),
+        "utf-8",
+    )
+    await seed.close()
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+    )
+    await manager.start()
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        events = await repository.list_events(task_id)
+        # Must not synthesise a publication_created event
+        assert not any(
+            isinstance(event.payload, PublicationCreatedPayload)
+            for event in events
+        )
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio
