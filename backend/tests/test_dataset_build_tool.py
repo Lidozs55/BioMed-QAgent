@@ -376,11 +376,16 @@ def test_no_data_classification_is_scoped_to_current_attempt(
     assert data_c["result"]["publication_id"]
 
 
-def test_execute_dataset_build_mixed_empty_and_usable_sources_not_all_rejected(
+def test_execute_dataset_build_mixed_empty_and_usable_sources_is_no_data_not_partial_success(
     tmp_path: Path,
 ) -> None:
-    """H3: a mixed-source build (one empty + one usable) is NOT all-rejected
-    as NO_DATA — the usable source is surfaced as a partial outcome.
+    """B5/K2: a mixed-source build (one empty + one usable) where the plan
+    aborts at the first empty source must NOT emit a contract-incoherent
+    zero-row/no-publication PARTIAL_SUCCESS (ARCHITECTURE §9.2 defines
+    PARTIAL_SUCCESS as remaining valid sources validated and publishable,
+    which this build never did). The contract-coherent outcome is a
+    structured NO_DATA envelope whose reason codes identify the empty
+    binding; it is not retryable.
     """
     ctx = _make_ctx(tmp_path)
     run_ctx: RunContext = ctx.context
@@ -401,10 +406,53 @@ def test_execute_dataset_build_mixed_empty_and_usable_sources_not_all_rejected(
 
     assert data["status"] == "ok"
     result = data["result"]
-    assert result["status"] == "partial_success"
-    assert result["successful_sources"] == ["binding_xena"]
-    assert result["rejected_sources"] == ["binding_gdc"]
+    # NOT the previous zero-row/no-publication PARTIAL_SUCCESS envelope.
+    assert result["status"] != "partial_success"
+    assert result["status"] == "no_data"
     assert result["valid_row_count"] == 0
+    assert result["successful_sources"] == []
+    assert result["rejected_sources"] == ["binding_gdc"]
+    # The reason codes identify the empty binding(s), not just the generic
+    # code — the usable source was never parsed/validated/published.
+    assert result["reason_codes"] == ["no_primary_data:binding_gdc"]
+    assert result.get("publication_id") is None
+    assert data.get("retryable") is not True
+
+    build_root = run_ctx.work_dir.root / "datasets_build"
+    publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
+    assert publish_dirs == []
+
+
+def test_execute_dataset_build_all_empty_mixed_sources_is_no_data(tmp_path: Path) -> None:
+    """B5/K2 regression: when every source is empty the mixed build keeps the
+    established all-empty NO_DATA envelope (generic reason code, all sources
+    rejected) — the per-binding codes are only for the mixed abort case.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    empty_gdc = run_ctx.work_dir.source_asset_file("empty_gdc.tsv")
+    empty_gdc.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    empty_xena = run_ctx.work_dir.source_asset_file("empty_xena.tsv")
+    empty_xena.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+
+    data = _call_tool(
+        ctx,
+        _mixed_spec_json(),
+        json.dumps(
+            {
+                "binding_gdc": "source_assets/empty_gdc.tsv",
+                "binding_xena": "source_assets/empty_xena.tsv",
+            }
+        ),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "no_data"
+    assert result["valid_row_count"] == 0
+    assert result["successful_sources"] == []
+    assert result["rejected_sources"] == ["binding_gdc", "binding_xena"]
+    assert result["reason_codes"] == ["no_primary_data"]
     assert result.get("publication_id") is None
 
 

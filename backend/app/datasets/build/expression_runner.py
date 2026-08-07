@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -452,6 +453,62 @@ class ExpressionBuildRunner:
         )
 
     # -------------------------------------------------------------- helpers
+
+    def discard_operation_outputs(self, op: OperationSpec) -> None:
+        """Delete the outputs a (cancelled) operation would have written.
+
+        D2/K1 (Phase 4 review): the operation-boundary cancellation check
+        runs only after the worker thread's await completed, so the thread's
+        files are finished but must not become part of the build state — a
+        completed-too-late parse/canonicalize/integrate would otherwise leave
+        intermediates that a retry (or an inspection) could mistake for valid
+        state or overlap with. Discarding at the boundary is safe (never
+        mid-write); the in-flight sync work itself is not preemptable, that
+        residual is documented.
+        """
+
+        output_dir = self._output_dir
+        if op.kind is OperationKind.PARSE or op.kind is OperationKind.CANONICALIZE:
+            binding_id = op.category
+            if op.kind is OperationKind.PARSE:
+                targets = [
+                    output_dir / "batches" / f"{binding_id}.csv",
+                    output_dir / "batches" / f"{binding_id}_rejected.csv",
+                ]
+            else:
+                targets = list(
+                    (output_dir / "canonical").glob(f"{binding_id}.*")
+                )
+        elif op.kind is OperationKind.INTEGRATE:
+            targets = [
+                output_dir / "merged" / "primary.csv",
+                output_dir / "merged" / "conflicts.csv",
+            ]
+        elif op.kind is OperationKind.VALIDATE_PROFILE:
+            targets = [
+                output_dir / "dataset_manifest.json",
+                output_dir / "validation_report.json",
+                output_dir / "provenance.json",
+            ]
+        elif op.kind is OperationKind.PUBLISH:
+            targets = [
+                staged
+                for staged in (output_dir / "publish").glob(".*.tmp")
+                if staged.is_dir()
+            ]
+        else:
+            targets = []
+        for target in targets:
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink(missing_ok=True)
+            except OSError:
+                # Best-effort hygiene: a file held open by a dying worker
+                # thread may refuse deletion; the retry re-runs the operation
+                # and rewrites the same paths anyway.
+                continue
 
     def _binding(self, binding_id: str) -> object:
         for binding in self._spec.source_bindings:

@@ -86,6 +86,12 @@ interface TransportOptions {
   socketFactory: SocketFactory;
   getLastSequence: (taskId: string) => number;
   applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
+  /**
+   * Clear the store-level ``sequenceGap`` marker for a task on a fresh
+   * connection: the server replays every subscribed task from its current
+   * watermark, so the stream is contiguous again (K3/C2, Phase 4 review).
+   */
+  markContiguous?: (taskId: string) => void;
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -660,6 +666,14 @@ export class AgentEventTransport {
       this.active.clear();
       this.awaitingUnsubscribe.clear();
       this.hasConnected = true;
+      // K3 (C2, Phase 4 review): a fresh connection replays every desired
+      // task from its current watermark (flushSubscriptions below), so each
+      // stream is contiguous again — clear the store-level sequenceGap
+      // marker now instead of letting it linger after a recovery-driven
+      // socket replacement or a natural reconnect. A still-undeliverable
+      // frame simply re-sets the marker on the next replay; the transport's
+      // bounded recovery guards are untouched.
+      this.clearStoreSequenceGaps();
       this.options.setConnectionStatus("connected");
       this.flushSubscriptions();
       this.resolveConnectionWaiters();
@@ -802,6 +816,13 @@ export class AgentEventTransport {
     this.gapRecoveryCursors.delete(taskId);
     this.gapRecoveryFailures.delete(taskId);
     this.gapFallbackFired.delete(taskId);
+  }
+
+  private clearStoreSequenceGaps(): void {
+    if (this.options.markContiguous === undefined) return;
+    for (const taskId of this.desired.keys()) {
+      this.options.markContiguous(taskId);
+    }
   }
 
   /**

@@ -19,6 +19,7 @@ import {
   mergeOlderMessagePage as projectOlderMessagePage,
   mergeTaskPage as projectTaskPage,
   prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
+  markTaskContiguous as projectMarkTaskContiguous,
   deactivateAssistantStreams as projectDeactivateAssistantStreams,
   reduceAssistantStreamFrames,
   reduceRuntimeEvent,
@@ -54,6 +55,14 @@ export interface AgentStore extends AgentRuntimeData {
     page: MessagePage,
   ) => void;
   applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
+  /**
+   * Clear the store-level ``sequenceGap`` marker for a task. The transport
+   * invokes this when a fresh connection establishes (the server replays
+   * every subscribed task from its watermark, so the stream is contiguous
+   * again) — a lingering marker must not keep treating valid replayed
+   * events as gapped (K3/C2, Phase 4 review).
+   */
+  markContiguous: (taskId: string) => void;
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setActiveTaskId: (taskId: string | null) => void;
@@ -315,6 +324,9 @@ export const useAgentStore = create<AgentStore>()(
         });
         return gap;
       },
+
+      markContiguous: (taskId) =>
+        set((state) => projectMarkTaskContiguous(state, taskId)),
 
       applyAssistantStreamFrames: (frames) =>
         set((state) => reduceAssistantStreamFrames(state, frames)),

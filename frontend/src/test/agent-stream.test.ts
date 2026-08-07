@@ -105,6 +105,7 @@ function setupTransport(options: TransportTestOptions = {}) {
     getLastSequence: (taskId) =>
       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
     applyEvent: (incoming) => useAgentStore.getState().applyEvent(incoming),
+    markContiguous: (taskId) => useAgentStore.getState().markContiguous(taskId),
     applyAssistantStreamFrames:
       options.applyAssistantStreamFrames ?? (() => undefined),
     deactivateAssistantStreams:
@@ -429,6 +430,48 @@ describe("durable event transport", () => {
     // Replay 5 then 6 → both applied, cursor 6, gap healed.
     sockets[1].message(event("task_a", 5, "five"));
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    sockets[1].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("clears the store-level sequenceGap when the replacement socket opens (K3)", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied); frame 5
+    // is dropped and the next valid frame is 6, arming one socket-replacement
+    // recovery.
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → the store records the marker and the transport replaces
+    // the socket for a replay from the watermark (4).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+    expect(sockets).toHaveLength(2);
+
+    // K3: opening the replacement socket clears the store-level marker —
+    // the fresh connection replays from the watermark, so the stream is
+    // contiguous again and the marker must not linger.
+    sockets[1].open();
+    await Promise.resolve();
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(4);
+
+    // Subsequent valid events apply normally without another recovery.
+    sockets[1].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    expect(sockets).toHaveLength(2);
     sockets[1].message(event("task_a", 6, "six"));
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
     expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
