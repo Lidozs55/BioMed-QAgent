@@ -395,11 +395,16 @@ export function applyPublicationCreatedEvent(
   envelope: EventEnvelope,
   payload: Extract<EventPayload, { type: "publication_created" }>,
 ): TaskProjection {
-  // Mirror the backend reducer: publication events require an envelope run_id
-  // and the payload run_id must match it; a re-delivered publication_id is a
-  // no-op so duplicate entries never accumulate.
-  if (envelope.run_id === null || payload.run_id !== envelope.run_id) {
-    return task;
+  // Mirror the backend reducer (raise, don't skip): publication events
+  // require an envelope run_id and the payload run_id must match it. A
+  // malformed event must not be silently consumed — skipping would advance
+  // lastSequence and make it unreplayable on reconnect. A re-delivered
+  // publication_id is a no-op so duplicate entries never accumulate.
+  if (envelope.run_id === null) {
+    throw new Error("publication events require run_id");
+  }
+  if (payload.run_id !== envelope.run_id) {
+    throw new Error("payload run_id must match envelope run_id");
   }
   if (
     task.publications.some(

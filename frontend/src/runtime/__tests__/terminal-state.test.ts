@@ -193,21 +193,42 @@ describe("terminal state projection", () => {
     expect(task.publications[1].supersedes_publication_id).toBe("pub_1");
   });
 
-  it("skips publication_created when payload run_id mismatches the envelope", () => {
-    const task = applyEvent(
-      buildInitialTask("task_1"),
-      envelope(2, {
-        type: "publication_created",
-        publication_id: "pub_1",
-        run_id: "run_other",
-        manifest_sha256:
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        supersedes_publication_id: null,
-        published_at: CREATED_AT,
-      }),
-    );
-    expect(task.currentPublicationId).toBeNull();
-    expect(task.publications).toHaveLength(0);
+  it("rejects publication_created when payload run_id mismatches the envelope", () => {
+    expect(() =>
+      applyEvent(
+        buildInitialTask("task_1"),
+        envelope(2, {
+          type: "publication_created",
+          publication_id: "pub_1",
+          run_id: "run_other",
+          manifest_sha256:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          supersedes_publication_id: null,
+          published_at: CREATED_AT,
+        }),
+      ),
+    ).toThrow("payload run_id must match envelope run_id");
+  });
+
+  it("rejects publication_created without an envelope run_id", () => {
+    expect(() =>
+      applyEvent(
+        buildInitialTask("task_1"),
+        envelope(
+          2,
+          {
+            type: "publication_created",
+            publication_id: "pub_1",
+            run_id: "run_1",
+            manifest_sha256:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            supersedes_publication_id: null,
+            published_at: CREATED_AT,
+          },
+          null,
+        ),
+      ),
+    ).toThrow("publication events require run_id");
   });
 
   it("ignores a duplicate publication_created for the same publication_id", () => {
