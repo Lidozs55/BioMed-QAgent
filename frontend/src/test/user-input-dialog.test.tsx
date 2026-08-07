@@ -18,6 +18,7 @@ function taskWithPrompt(
     detail?: PendingUserInput["detail"];
     summary?: string;
     expiresAt?: string | null;
+    fixtureExempt?: boolean;
   } = {},
 ): TaskProjection {
   const summary: TaskSummary = {
@@ -39,7 +40,7 @@ function taskWithPrompt(
       promptKind: overrides.promptKind ?? "plan_confirmation",
       summary: overrides.summary ?? `Confirm ${taskId}`,
       expiresAt: overrides.expiresAt ?? null,
-      fixtureExempt: false,
+      fixtureExempt: overrides.fixtureExempt ?? false,
       detail: overrides.detail ?? {},
       sequence: 1,
       timestamp: CREATED_AT,
@@ -290,10 +291,10 @@ describe("UserInputDialog", () => {
     render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
 
     expect(screen.getByText("需要人工修正")).toBeVisible();
-    // summary 同时出现在描述与修正卡片中（突出展示）
+    // T5 polish: summary 仅渲染一次(卡片突出展示;描述不再重复)。
     expect(
-      screen.getAllByText("候选 GSE 无法判断，请确认使用哪个数据集？").length,
-    ).toBeGreaterThan(0);
+      screen.getAllByText("候选 GSE 无法判断，请确认使用哪个数据集？"),
+    ).toHaveLength(1);
     expect(screen.getByRole("textbox")).toBeVisible();
     expect(screen.getByRole("button", { name: "提交修正" })).toBeVisible();
     expect(screen.getByRole("button", { name: "跳过并继续" })).toBeVisible();
@@ -458,8 +459,7 @@ describe("UserInputDialog", () => {
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("clears the correction text when a same-kind prompt arrives with a new request id", () => {
-    // Guards the existing reset behavior: a new data_correction request id still
+  it("clears the correction text when a same-kind prompt arrives with a new request id", () => {    // Guards the existing reset behavior: a new data_correction request id still
     // resets the textarea even when task/run ids are unchanged.
     const requestATask = taskWithPrompt(
       "task_reset",
@@ -491,6 +491,109 @@ describe("UserInputDialog", () => {
 
     rerender(<UserInputDialog task={requestBTask} onResumeRun={vi.fn()} />);
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("uses prompt-kind-aware wording for the fixture-exempt alert", () => {
+    // T5 polish: the fixtureExempt Alert previously always used plan-
+    // confirmation wording even for data_correction prompts.
+    const correctionTask = taskWithPrompt(
+      "task_fixture_correction",
+      "run_fixture_correction",
+      "run_fixture_correction",
+      "request_fixture_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+        fixtureExempt: true,
+      },
+    );
+    const planTask = taskWithPrompt(
+      "task_fixture_plan",
+      "run_fixture_plan",
+      "run_fixture_plan",
+      "request_fixture_plan",
+      { fixtureExempt: true },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(
+        "当前为固定验收模式，仅供查看修正请求，提交修正仅触发流程继续。",
+      ),
+    ).toBeVisible();
+    // 其他分支(plan_confirmation 等)保留原有计划语义文案
+    rerender(<UserInputDialog task={planTask} onResumeRun={vi.fn()} />);
+    expect(
+      screen.getByText(
+        "当前为固定验收模式，仅供查看计划，确认按钮仅触发流程继续。",
+      ),
+    ).toBeVisible();
+  });
+
+  it("suppresses an old data_correction submission error after a prompt-kind switch", async () => {
+    // T5 (T4 re-review residual): same task/run/request ids, prompt kind flips
+    // data_correction → no_progress while the first resume is in flight; the
+    // OLD onResumeRun rejection must not surface on the new prompt (the
+    // runtime-level twin of the T4 promptKey fix).
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    const firstResume = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun
+      .mockReturnValueOnce(firstResume)
+      .mockResolvedValueOnce(undefined);
+    const correctionTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    const noProgressTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "no_progress",
+        summary: "检测到无进展",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+
+    // Same task/run/request ids, different prompt kind → new promptKey.
+    rerender(
+      <UserInputDialog task={noProgressTask} onResumeRun={onResumeRun} />,
+    );
+    expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+
+    // The OLD data_correction resume fails: the error is keyed to the old
+    // prompt and must NOT appear on the no_progress prompt.
+    act(() => rejectFirst?.(new Error("old correction resume failed")));
+    await waitFor(() => {
+      expect(screen.queryByText("old correction resume failed")).toBeNull();
+      expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+    });
   });
 
   it("renders no_progress prompt without structured plan card", () => {

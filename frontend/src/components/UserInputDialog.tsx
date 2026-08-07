@@ -229,7 +229,11 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                     : "请补充信息"}
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words">
-            {pending?.summary ?? "Pipeline 已暂停，等待你的决策。"}
+            {pending === null
+              ? "Pipeline 已暂停，等待你的决策。"
+              : pending.promptKind === "data_correction"
+                ? "Agent 在研究中请求人工修正，请在下方输入你的修正并提交。"
+                : (pending.summary ?? "Pipeline 已暂停，等待你的决策。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -384,7 +388,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         {pending?.fixtureExempt && (
           <Alert>
             <AlertDescription>
-              当前为固定验收模式，仅供查看计划，确认按钮仅触发流程继续。
+              {pending?.promptKind === "data_correction"
+                ? "当前为固定验收模式，仅供查看修正请求，提交修正仅触发流程继续。"
+                : "当前为固定验收模式，仅供查看计划，确认按钮仅触发流程继续。"}
             </AlertDescription>
           </Alert>
         )}

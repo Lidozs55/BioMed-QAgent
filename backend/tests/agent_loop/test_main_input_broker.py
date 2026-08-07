@@ -790,6 +790,109 @@ async def test_corrections_todo_write_failure_degrades_gracefully(
     assert resumed_payloads[0].detail["auto_approved"] is True
 
 
+@pytest.mark.asyncio
+async def test_corrections_todo_without_artifacts_dir_warns_and_degrades(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T5 (T3 review 可选): artifacts_dir=None 时记录 warning 并降级,不崩溃。
+
+    broker 未配置 artifacts 目录(单元/非 manager 上下文)时,超时请求无法
+    落盘 corrections_todo.csv —— 必须显式告警,而不是静默假成功。
+    """
+
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_t5_no_dir",
+        run_id="run_t5_no_dir",
+        request_id="request_t5_no_dir",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=None,
+    )
+
+    with caplog.at_level("WARNING", logger="app.agent_loop.main_input_broker"):
+        decision = await broker.request_input(
+            summary="需要人工修正",
+            timeout_seconds=0.05,
+        )
+
+    assert decision.timed_out is True  # 运行继续,不抛异常
+    assert decision.corrections_path is None
+    assert "corrections_todo" in caplog.text
+
+    # 合成 resume 仍正常发射,Run 可离开 AWAITING_USER_INPUT
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1
+    assert resumed_payloads[0].detail["auto_approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_corrections_todo_csv_escapes_comma_newline_quotes(
+    tmp_path: Path,
+) -> None:
+    """T5 (T3 review 可选): 逗号/换行/引号重自由文本在 CSV 中正确转义往返。
+
+    summary/detail_json 携带逗号、换行与双引号时,落盘行必须能被
+    ``csv.DictReader`` 无损读回(逐字节一致),否则待办修正内容会被截断/错列。
+    """
+
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_t5_escape",
+        run_id="run_t5_escape",
+        request_id="request_t5_escape",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=tmp_path / "artifacts",
+    )
+
+    summary = '第一行,含逗号 "引号"\n第二行'
+    detail: dict[str, object] = {
+        "dataset_id": 'GSE"1,234"',
+        "note": "多行\n注释,含逗号",
+    }
+    decision = await broker.request_input(
+        summary=summary,
+        detail=detail,
+        timeout_seconds=0.05,
+    )
+
+    assert decision.timed_out is True
+    assert decision.corrections_path is not None
+    rows = _read_corrections_todo(decision.corrections_path)
+    assert len(rows) == 1
+    assert rows[0]["summary"] == summary
+    assert json.loads(rows[0]["detail_json"]) == detail
+
+
 # ---------------------------------------------------------------------------
 # Manager E2E: data_correction pause → resume → decision → COMPLETED
 # ---------------------------------------------------------------------------
@@ -1055,6 +1158,125 @@ class _ScriptedCorrectionModel(Model):
         self.close_calls += 1
 
 
+class _CorrectionAwareModel(Model):
+    """Two rounds: tool call, then a final answer derived from the tool output.
+
+    The second round reads the real SDK conversation history (the ``input``
+    items passed to ``stream_response``) for the ``function_call_output`` item
+    and echoes the human correction it carries. The final message can only
+    reference the correction if the human decision actually flowed through the
+    agent loop (pause → resume → tool output → next model turn), which is the
+    proof T5 needs: the correction influences the outcome, not just the tool
+    return value.
+    """
+
+    def __init__(self) -> None:
+        self.allow_tool_call = asyncio.Event()
+        self.tool_round_entered = asyncio.Event()
+        self.final_round_entered = asyncio.Event()
+        self.release_final_answer = asyncio.Event()
+        self.stream_calls = 0
+        self.close_calls = 0
+
+    async def get_response(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("scripted integration must use streaming")
+
+    @staticmethod
+    def _extract_correction(input_items: object) -> str:
+        """Pull ``detail.correction`` out of the round-2 conversation history."""
+
+        if not isinstance(input_items, list):
+            raise AssertionError(
+                "expected conversation input list in round 2"
+            )
+        for item in input_items:
+            if (
+                not isinstance(item, dict)
+                or item.get("type") != "function_call_output"
+            ):
+                continue
+            output = item.get("output")
+            if not isinstance(output, str):
+                continue
+            try:
+                parsed = json.loads(output)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            detail = parsed.get("detail")
+            if (
+                isinstance(detail, dict)
+                and isinstance(detail.get("correction"), str)
+            ):
+                return detail["correction"]
+        raise AssertionError(
+            "correction not found in round-2 conversation input"
+        )
+
+    async def stream_response(
+        self,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        self.stream_calls += 1
+        if self.stream_calls == 1:
+            self.tool_round_entered.set()
+            await self.allow_tool_call.wait()
+            item = ResponseFunctionToolCall(
+                arguments=json.dumps({"summary": "确认数据平台"}),
+                call_id="call_correction_aware",
+                name="request_human_correction_probe",
+                type="function_call",
+                status="completed",
+            )
+        elif self.stream_calls == 2:
+            self.final_round_entered.set()
+            await self.release_final_answer.wait()
+            correction = self._extract_correction(args[1])
+            item = ResponseOutputMessage(
+                id="message_correction_aware",
+                content=[
+                    ResponseOutputText(
+                        annotations=[],
+                        text=f"使用 {correction} 继续分析",
+                        type="output_text",
+                    )
+                ],
+                role="assistant",
+                status="completed",
+                type="message",
+            )
+        else:
+            raise AssertionError("scripted model received an unexpected round")
+
+        response = Response(
+            id=f"response_{self.stream_calls}",
+            created_at=0.0,
+            model="scripted-correction-aware-model",
+            object="response",
+            output=[item],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status="completed",
+        )
+        yield ResponseOutputItemDoneEvent(
+            item=item,
+            output_index=0,
+            sequence_number=1,
+            type="response.output_item.done",
+        )
+        yield ResponseCompletedEvent(
+            response=response,
+            sequence_number=2,
+            type="response.completed",
+        )
+
+    async def close(self) -> None:
+        self.close_calls += 1
+
+
 async def _wait_for_data_correction_payload(
     repository: TaskRepository,
     task_id: str,
@@ -1179,6 +1401,106 @@ async def test_agent_loop_data_correction_pause_resume_e2e(
         ]
         assert len(tool_outputs) == 1
         assert '"decision": "approve"' in tool_outputs[0]
+        assert '"correction": "GPL570"' in tool_outputs[0]
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_data_correction_influences_outcome_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """T5 E2E: 暂停 → 人工修正 → 恢复 → 修正影响最终结果 (真实 agent turn)。
+
+    与 T1 E2E 的区别:第二轮的 scripted 模型必须从真实 SDK 会话历史
+    (``function_call_output`` 项)中提取人工修正文本,最终助手消息才能引用它
+    (``使用 GPL570 继续分析``)。修正值只能通过真实 agent 循环到达模型:
+    工具暂停 → manager.resume_run 投递 → broker 返回决策 → 工具输出进入会话
+    → 下一轮模型调用看到它。若任一环节断裂,最终消息不会包含 GPL570。
+    """
+
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    model = _CorrectionAwareModel()
+    agent = Agent[RunContext](
+        name="Correction Agent",
+        instructions="Call request_human_correction_probe, then answer.",
+        tools=[request_human_correction_probe],
+        model=model,
+    )
+    build = SimpleNamespace(
+        agent=agent,
+        skill_names=("request_human_correction_probe",),
+        model=model,
+    )
+    monkeypatch.setattr(
+        runner_module, "build_agent", lambda databases=None: build
+    )
+
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_data_correction_influence_e2e",
+                input="request a data correction",
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        model.allow_tool_call.set()
+
+        required = await _wait_for_data_correction_payload(
+            repository,
+            accepted.task_id,
+        )
+        assert required.request_id.startswith(
+            f"data_correction-{accepted.run_id}-"
+        )
+
+        paused = await repository.get_snapshot(accepted.task_id)
+        assert paused is not None
+        assert paused.runs[-1].status.value == "awaiting_user_input"
+
+        await manager.resume_run(
+            accepted.task_id,
+            accepted.run_id,
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "GPL570"},
+        )
+        await asyncio.wait_for(model.final_round_entered.wait(), timeout=5)
+        model.release_final_answer.set()
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status.value == "completed"
+
+        # 人工修正影响了最终结果:助手消息引用 GPL570,而模型只能从
+        # 真实会话历史(工具输出)学到该值。
+        final_contents = [
+            message.content
+            for message in completed.messages
+            if message.role.value == "assistant"
+        ]
+        assert any(
+            "GPL570" in content for content in final_contents
+        ), final_contents
+
+        # 工具输出事件携带人类决策(与 T1 一致)
+        events = await repository.list_events(accepted.task_id)
+        payloads = [event.payload for event in events]
+        tool_outputs = [
+            p.output
+            for p in payloads
+            if isinstance(p, ToolCompletedPayload)
+            and p.tool_name == "request_human_correction_probe"
+        ]
+        assert len(tool_outputs) == 1
         assert '"correction": "GPL570"' in tool_outputs[0]
         assert not any(isinstance(p, RunFailedPayload) for p in payloads)
     finally:

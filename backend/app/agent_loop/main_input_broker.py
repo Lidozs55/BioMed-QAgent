@@ -284,6 +284,11 @@ class MainInputBroker:
         """
 
         if self._artifacts_dir is None:
+            logger.warning(
+                "cannot record timed-out data correction to %s: "
+                "artifacts_dir is not configured",
+                _CORRECTIONS_TODO_FILENAME,
+            )
             return None
         path = self._artifacts_dir / _CORRECTIONS_TODO_FILENAME
         tmp = path.with_name(path.name + ".tmp")
