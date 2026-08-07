@@ -111,9 +111,9 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
 
     For GEO / expression packages, verifies that ``expression_value`` and
     ``gene_id`` each meet a minimum non-empty rate (10%). A package where
-    these fields are 100% empty — e.g. a download failure masked by
-    ``geo_minimal_placeholder`` metadata-only rows — fails here instead of
-    silently passing the structural checks.
+    these fields are 100% empty — e.g. a download failure that produced no
+    usable expression values — fails here instead of silently passing the
+    structural checks.
 
     Packages that legitimately lack expression columns are skipped:
     - Reactome pathway-participant packages (``participant_id`` is verified
@@ -122,6 +122,13 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
       design — clinical variables are stored in dedicated columns).
     The check only fires when an ``expression_value`` column is present in
     the header, i.e. the package claims to carry expression data.
+
+    Phase 4b: there is no metadata-only exemption anymore. The placeholder
+    era (GEO series with an empty expression block published a main table of
+    ``measurement_type="sample_metadata"`` rows) ended in T1 — NO_DATA
+    packages carry no main table at all and are authorized by the
+    ``no_primary_data`` decision check instead. Any remaining main table
+    whose rows claim expression but are 100% blank is rejected uniformly.
     """
     main_rows = ctx.main_rows
     if not main_rows:
@@ -161,33 +168,10 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
             "failed_count": 0,
             "details": "non-expression package (no expression_value/gene_id column); skipped",
         }
-    # A metadata-only package (e.g. a GEO series whose series_matrix
-    # expression block is empty and no supplementary expression file was
-    # found) explicitly declares ``value_semantics="metadata_only"`` on every
-    # row. The fixed 22-column schema still carries ``expression_value`` /
-    # ``gene_id`` columns but leaves them blank by design, so the non-empty
-    # rate check must be skipped here — otherwise every legitimate
-    # metadata-only package would fail as "claims expression but is 100%
-    # empty". Row presence is still guarded by ``main_data_nonempty``, so a
-    # hollow 0-row placeholder cannot slip through. (GSE339404 regression,
-    # 0805.)
-    is_metadata_only = all(
-        row.get("value_semantics", "").strip() == "metadata_only"
-        for row in main_rows
-    )
-    if is_metadata_only:
-        return {
-            "check_id": "core_data_existence",
-            "scope": "main_data",
-            "check_name": "core data fields have sufficient non-empty records",
-            "status": "passed",
-            "checked_count": len(main_rows),
-            "failed_count": 0,
-            "details": (
-                f"metadata-only package: {len(main_rows)} sample_metadata "
-                "rows; expression fields intentionally blank"
-            ),
-        }
+    # Phase 4b T6: the placeholder-era metadata-only exemption is deleted.
+    # The metadata-only placeholder producer was removed in T1, so a main
+    # table whose rows declare ``value_semantics="metadata_only"`` can no
+    # longer exist legitimately — the uniform non-empty rate gate applies.
     total = len(main_rows)
     has_expr = "expression_value" in columns
     has_gene = "gene_id" in columns

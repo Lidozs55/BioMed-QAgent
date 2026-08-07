@@ -412,9 +412,13 @@ def test_no_primary_digest_covers_full_sample_metadata(tmp_path: Path) -> None:
     assert _no_primary_digest(reason, samples_c) != digest_a
 
 
-def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
-    """The source_value_lineage check must skip measurement_type="sample_metadata"
-    rows (they have no expression value to verify against)."""
+def test_validation_no_longer_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
+    """The source_value_lineage check must NOT skip measurement_type="sample_metadata"
+    rows anymore: phase 4b T1 removed the metadata-only placeholder primary, so
+    the check applies uniformly to every main_data row (phase 4b T6 D5). These
+    placeholder-era rows point at a blank locator (source_line_number 0 / empty
+    raw value), so the lineage check now FAILS them instead of silently
+    skipping — the exemption is dead code and no longer masks hollow rows."""
     import gzip as _gzip
     import json as _json
 
@@ -563,11 +567,14 @@ def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> No
         staging, source_path, tmp_path / "tasks" / "task_val" / "logs" / "r.json"
     )
     svl = next(c for c in checks if c["check_id"] == "source_value_lineage")
-    # No lineage failures — sample_metadata rows were skipped
-    assert svl["status"] == "passed"
-    assert int(svl["failed_count"]) == 0
+    # Phase 4b T6: every sampled row is checked uniformly — the sample_metadata
+    # skip and its counters/flags are gone. Both rows fail the locator check
+    # (blank raw value at line 0), so the check reports them as failures.
+    assert svl["status"] == "failed"
+    assert int(svl["failed_count"]) == 2
     details = _json.loads(svl["details"])
-    assert details["skipped_metadata_rows"] == 2
+    assert "skipped_metadata_rows" not in details
+    assert "high_skip_ratio" not in details
     assert details["total_rows"] == 2
     assert details["sampled"] == 2
 
@@ -846,6 +853,34 @@ def test_run_processing_live_tximport_failure_raising_bytes_no_supplementary(
     counts_content = b"this is definitely not a gzip file at all"
     ctx, assets = _make_live_tximport_failure_assets(
         tmp_path, "task_live_txi_raise_none", counts_content
+    )
+
+    result = run_processing(ctx, assets, "ds_geo_gse999999")
+
+    assert result.output.parsed_datasets == []
+    assert result.output.no_primary_reason == "tximport_parse_failed_no_expression"
+    # Samples recovered from the family SOFT are preserved.
+    assert len(result.output.samples) == 12
+    assert "GSM5388270" in {s.sample_id for s in result.output.samples}
+    # No leftover files in the parsed workdir.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_run_processing_live_tximport_truncated_gzip_lands_no_primary(
+    tmp_path: Path,
+) -> None:
+    """A TRUNCATED gzip counts file raises ``EOFError`` (NOT an ``OSError``)
+    mid-stream. The live tximport fallback must treat it like any other parse
+    failure: recover SOFT samples and land on the honest no-primary reason —
+    never crash the stage (phase 4b T1 caveat, closed in T6)."""
+    from app.pipeline.stages.processing import run_processing
+
+    full = gzip.compress(
+        (FIXTURE_DIR / "tximport_counts_slice.tsv").read_bytes(), mtime=0
+    )
+    truncated = full[: max(1, int(len(full) * 0.6))]
+    ctx, assets = _make_live_tximport_failure_assets(
+        tmp_path, "task_live_txi_trunc", truncated
     )
 
     result = run_processing(ctx, assets, "ds_geo_gse999999")

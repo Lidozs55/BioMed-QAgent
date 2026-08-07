@@ -2,24 +2,16 @@
 
 A GEO series whose series_matrix expression block is empty and whose
 supplementary files carry no expression matrix has no publishable expression
-data. 0805 fixed two defects exposed by GSE339404:
+data. Phase 4b (ADR-011): the metadata-only placeholder primary was removed in
+T1, so NO_DATA packages never contain a main table at all — the builder drives
+the NO_DATA signal directly (``parsed_dataset=None`` + ``no_primary_reason``)
+and the validation gate authorizes it (T3).
 
-1. ``check_core_data_existence`` rejected packages whose rows all declare
-   ``value_semantics="metadata_only"`` because the fixed 22-column schema
-   still declares empty ``expression_value`` / ``gene_id`` columns (non-empty
-   rate 0% < 10%) — the check now accepts packages that explicitly declare
-   ``value_semantics="metadata_only"`` on every row while still rejecting
-   packages that *claim* expression but are 100% blank.
-2. The artifact builder emitted no signal telling the Agent *why* the
-   artifact is metadata-only, so the Agent kept retrying the same dataset.
-   A ``no_expression_data`` warning is now injected into ``warnings.csv``
-   (and folded into ``processing_log.csv`` so
-   ``warnings_metrics_consistency`` stays satisfied).
-
-Phase 4b (ADR-011): the metadata-only placeholder primary was removed in T1,
-so the builder-side warning test now drives the NO_DATA signal directly
-(``parsed_dataset=None`` + ``no_primary_reason``) instead of a
-``geo_minimal_placeholder`` ParsedDataset.
+Phase 4b T6: the placeholder-era ``check_core_data_existence`` exemption
+(rows declaring ``value_semantics="metadata_only"`` were accepted with blank
+``expression_value``/``gene_id`` cells) is deleted — the check now applies
+uniformly to every main_data row. A main table whose rows claim expression
+but are 100% blank always fails the non-empty rate gate.
 """
 from __future__ import annotations
 
@@ -45,14 +37,14 @@ from app.pipeline.stages.validation.checks_common import ValidationContext
 from app.tools.workdir import create_task_workdir
 
 
-def _metadata_only_row(**overrides: str) -> dict[str, str]:
+def _blank_expression_row(**overrides: str) -> dict[str, str]:
     row = {
         "dataset_id": "ds_gse339404",
         "sample_id": "GSM1234567",
         "source_id": "src_geo_gse339404",
         "asset_id": "asset_series_matrix",
-        "value_semantics": "metadata_only",
-        "measurement_type": "sample_metadata",
+        "value_semantics": "estimated_count",
+        "measurement_type": "tximport_estimated_count",
         "expression_value": "",
         "gene_id": "",
     }
@@ -91,19 +83,21 @@ def _ctx_with_main_rows(
     )
 
 
-def test_core_data_existence_accepts_metadata_only_rows(tmp_path: Path) -> None:
-    """A package whose rows all declare ``value_semantics="metadata_only"``
-    must pass — the blank ``expression_value``/``gene_id`` cells are by
-    design (GSE339404 regression).
+def test_core_data_existence_rejects_blank_expression_rows_uniformly(tmp_path: Path) -> None:
+    """Phase 4b T6: the metadata-only exemption is deleted — the check applies
+    uniformly. A main table whose rows declare ``value_semantics="metadata_only"``
+    (the placeholder-era shape) but carry 100% blank ``expression_value``/
+    ``gene_id`` cells now FAILS the non-empty rate gate like any other
+    blank-expression package (the placeholder era that produced such rows no
+    longer exists; ADR-011).
     """
     rows = [
-        _metadata_only_row(sample_id="GSM1234567"),
-        _metadata_only_row(sample_id="GSM1234568"),
+        _blank_expression_row(sample_id="GSM1234567", value_semantics="metadata_only"),
+        _blank_expression_row(sample_id="GSM1234568", value_semantics="metadata_only"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
-    assert result["status"] == "passed"
-    assert "metadata-only" in str(result["details"])
-    assert result["failed_count"] == 0
+    assert result["status"] == "failed"
+    assert result["failed_count"] == 1
 
 
 def test_core_data_existence_still_rejects_blank_expression_package(
@@ -113,8 +107,8 @@ def test_core_data_existence_still_rejects_blank_expression_package(
     ship 100% blank values (download-failure placeholders).
     """
     rows = [
-        _metadata_only_row(sample_id="GSM1234567", value_semantics="estimated_count"),
-        _metadata_only_row(sample_id="GSM1234568", value_semantics="estimated_count"),
+        _blank_expression_row(sample_id="GSM1234567", value_semantics="estimated_count"),
+        _blank_expression_row(sample_id="GSM1234568", value_semantics="estimated_count"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
     assert result["status"] == "failed"
@@ -129,12 +123,12 @@ def test_core_data_existence_rejects_partial_expression_package(
     satisfy the gene-id non-empty rate.
     """
     rows = [
-        _metadata_only_row(
+        _blank_expression_row(
             sample_id="GSM1234567",
             value_semantics="estimated_count",
             expression_value="1.5",
         ),
-        _metadata_only_row(sample_id="GSM1234568"),
+        _blank_expression_row(sample_id="GSM1234568"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
     assert result["status"] == "failed"

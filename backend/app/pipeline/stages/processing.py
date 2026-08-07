@@ -496,7 +496,7 @@ def _try_series_matrix_expression_or_minimal(
                     expression_parsed.row_count,
                 )
                 return expression_parsed, None
-        except (ValueError, FileNotFoundError, OSError) as exc:
+        except (ValueError, FileNotFoundError, OSError, EOFError) as exc:
             logger.warning(
                 "processing: series_matrix expression parse failed (%s); "
                 "no primary dataset (no expression data)",
@@ -528,7 +528,7 @@ def _try_series_matrix_expression_or_minimal(
             if not samples:
                 return None, "series_matrix_samples_unavailable"
             return None, "series_matrix_expression_empty_and_supplementary_empty"
-        except (ValueError, FileNotFoundError, OSError) as exc:
+        except (ValueError, FileNotFoundError, OSError, EOFError) as exc:
             logger.warning(
                 "processing: supplementary expression parse failed (%s)",
                 exc,
@@ -848,7 +848,7 @@ def run_processing(
                 parsed.row_count,
                 len(samples),
             )
-        except (ValueError, FileNotFoundError, OSError) as exc:
+        except (ValueError, FileNotFoundError, OSError, EOFError) as exc:
             # Fixture-mode fallback: try series_matrix expression parsing;
             # if that finds no expression either, the tximport counts parse
             # failure is the root cause of the no-primary outcome.
@@ -879,7 +879,11 @@ def run_processing(
                     parsed.row_count,
                     len(samples),
                 )
-            except (ValueError, FileNotFoundError, OSError) as exc:
+            except (ValueError, FileNotFoundError, OSError, EOFError) as exc:
+                # EOFError: a truncated gzip raises EOFError (NOT OSError)
+                # mid-decompression; treat it like any other parse failure so
+                # the run lands on the honest no-primary reason instead of
+                # crashing the stage (phase 4b T1 caveat, closed in T6).
                 # Live-mode fallback (REAL topology): when tximport counts
                 # were downloaded, acquisition pairs them with the family SOFT
                 # asset and there is NO series_matrix file in the workdir.
@@ -898,7 +902,7 @@ def run_processing(
                         ctx.workdir.root / soft_asset.relative_path
                     ).read_bytes()
                     samples = parse_geo_soft_samples(soft_bytes)
-                except (ValueError, FileNotFoundError, OSError) as soft_exc:
+                except (ValueError, FileNotFoundError, OSError, EOFError) as soft_exc:
                     logger.warning(
                         "processing: family SOFT sample recovery failed (%s)",
                         soft_exc,

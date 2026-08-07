@@ -129,8 +129,8 @@
 > 目标：`BuildResult` 显式化、Publication 版本链、服务端 RunSummary。
 > 验收见 Design §16 Phase 4。
 
-- [ ] **P0** 删除 metadata-only 主表占位路径（GEO 无表达矩阵时 `sample_metadata`
-      占位表达行；ADR-011）
+- [x] **P0** 删除 metadata-only 主表占位路径（GEO 无表达矩阵时 `sample_metadata`
+      占位表达行；ADR-011）（4b 完成 2026-08-07）
 - [x] **P0** 引入 `BuildResult`；`RunStatus` 不再由 artifact 数量推导
 - [x] **P0** 增加不可变 Publication 与 `current_publication_id`；新版本不修改旧版本状态
 - [x] **P0** 服务端始终生成 `RunSummary`：COMPLETED 附 BuildResult、FAILED 附稳定
