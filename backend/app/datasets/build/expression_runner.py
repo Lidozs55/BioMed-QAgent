@@ -83,6 +83,18 @@ class PublicationRefusedError(BuildError):
     """
 
 
+class _WorkerCompletionFuture(concurrent.futures.Future[Any]):
+    """A worker-completion future tagged with its worker's identity.
+
+    K1 residual (wave 10): ``worker_id`` is set when the future is created
+    and read from the SAME object by the executor (which records it in the
+    ``.worker_unfinished`` marker) and by the worker's ``finally`` (which
+    read-compares before unlinking), so both sides agree by construction.
+    """
+
+    worker_id: str
+
+
 def _complete_worker_future(completion: concurrent.futures.Future[Any]) -> None:
     """Set a worker-completion signal exactly once, race-safely.
 
@@ -198,6 +210,29 @@ class ExpressionBuildRunner:
         """
         self._worker_marker_path = marker_path
 
+    def _cleanup_worker_marker(self, own_worker_id: str) -> None:
+        """Read-compare-unlink the state-dir worker marker for THIS worker.
+
+        K1 residual (wave 10): a worker's ``finally`` removes the
+        ``.worker_unfinished`` marker only when it owns it
+        (``marker.worker_id == own_worker_id``). A marker that is absent or
+        written for another worker is left untouched — the executor
+        re-checks process ownership on the retry side, so a marker for a
+        still-live straggler must survive until that straggler's finally
+        runs. Best-effort: OSError / JSONDecodeError suppressed (a vanished
+        or corrupt marker is nothing to clean).
+        """
+        marker = self._worker_marker_path
+        if marker is None:
+            return
+        try:
+            payload = json.loads(marker.read_text("utf-8"))
+            if payload.get("worker_id") != own_worker_id:
+                return
+            marker.unlink(missing_ok=True)
+        except (OSError, json.JSONDecodeError):
+            return
+
     async def _offload(
         self,
         func: Callable[..., _OffloadT],
@@ -217,7 +252,11 @@ class ExpressionBuildRunner:
         still writing after its await was cancelled.
         """
         loop = asyncio.get_running_loop()
-        completion = concurrent.futures.Future()
+        completion = _WorkerCompletionFuture()
+        # K1 residual (wave 10): tag the completion future with its worker's
+        # identity so the executor can record it in the marker and this
+        # worker's finally can read-compare before unlinking.
+        completion.worker_id = f"w{id(completion):x}"
         with self._worker_futures_lock:
             self._worker_futures.add(completion)
         completion.add_done_callback(self._worker_done)
@@ -227,15 +266,13 @@ class ExpressionBuildRunner:
                 return func(*tracked_args, **tracked_kwargs)
             finally:
                 _complete_worker_future(completion)
-                # K1 residual (wave 9): the worker thread truly finished —
-                # best-effort clear of the state-dir worker marker so a
-                # retry polling it observes the workspace stabilizing
-                # exactly when the straggler dies (threads share the
-                # filesystem; the marker is the exclusion).
-                marker = self._worker_marker_path
-                if marker is not None:
-                    with contextlib.suppress(OSError):
-                        marker.unlink(missing_ok=True)
+                # K1 residual (wave 10): the worker thread truly finished —
+                # read-compare-unlink the state-dir worker marker: this
+                # worker removes ONLY its own marker, so a marker written
+                # for a still-live straggler survives until THAT straggler's
+                # finally runs (threads share the filesystem; the marker is
+                # the exclusion).
+                self._cleanup_worker_marker(completion.worker_id)
 
         worker = loop.run_in_executor(
             None, functools.partial(tracked, *args, **kwargs)

@@ -1113,9 +1113,11 @@ async def test_grace_expired_straggler_blocks_same_build_retry_until_worker_fini
     then proceeds. The retry's publication reflects only its own inputs; the
     straggler's late writes never land in the retry's paths.
     """
+    import os
     import threading
 
     from app.datasets.build import expression_runner as expression_runner_module
+    from app.datasets.runtime import executor as executor_module
 
     real_integrate = expression_runner_module.integrate
     integrate_started = threading.Event()
@@ -1165,6 +1167,13 @@ async def test_grace_expired_straggler_blocks_same_build_retry_until_worker_fini
     assert outcome.error.code == ErrorCode.TIMEOUT
     marker = tmp_path / "state" / spec.build_id / ".worker_unfinished"
     assert marker.is_file()
+    marker_payload = json.loads(marker.read_text("utf-8"))
+    # Wave 10: the marker carries process + worker identity so a retry can
+    # tell a LIVE in-process straggler (same pid + process nonce) from a
+    # marker whose owning process is gone (stale).
+    assert marker_payload["pid"] == os.getpid()
+    assert marker_payload["process_nonce"] == executor_module._PROCESS_NONCE
+    assert isinstance(marker_payload["worker_id"], str) and marker_payload["worker_id"]
     # The straggler thread is STILL alive: the executor returned without
     # waiting (grace 0.05s) and the worker is still blocked mid-write. The
     # marker's presence is the authoritative alive signal — its finally
@@ -1351,6 +1360,278 @@ async def test_worker_unfinished_marker_persists_past_poll_cap_returns_retryable
     assert "unstable" in outcome.error.message
     # The marker is left in place so the next retry re-checks the workspace.
     assert marker.is_file()
+
+
+@pytest.mark.asyncio
+async def test_same_process_marker_persists_past_poll_cap_returns_retryable_conflict(
+    tmp_path: Path,
+) -> None:
+    """K1 residual (wave 10): a marker owned by THIS process (same pid +
+    process nonce) means the straggler thread is LIVE in-process — the retry
+    polls it and must NEVER auto-delete it (the thread may still be writing
+    the build's deterministic paths). When the poll cap expires a retryable
+    conflict is returned and the marker is left for the next retry.
+    """
+    import os
+
+    from app.datasets.runtime import executor as executor_module
+
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "build_id": "build_runner_test",
+                "operation_id": "integrate",
+                "pid": os.getpid(),
+                "process_nonce": executor_module._PROCESS_NONCE,
+                "worker_id": "w_live_ghost",
+                "ts": "2026-08-08T00:00:00+00:00",
+            }
+        )
+        + "\n",
+        "utf-8",
+    )
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path / "build",
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_conflict",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        unstable_poll_interval=0.01,
+        unstable_poll_cap=0.3,
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.retryable is True
+    assert "unstable" in outcome.error.message
+    # A same-process marker is NEVER auto-deleted: the straggler thread is
+    # live in this process, so its finally is the only legitimate remover.
+    assert marker.is_file()
+
+
+@pytest.mark.asyncio
+async def test_dead_process_marker_removed_and_retry_proceeds(
+    tmp_path: Path,
+) -> None:
+    """K1 residual (wave 10): a marker whose pid/process nonce does not match
+    this process means the owning process is gone — its worker threads died
+    with it, so the workspace is stable by definition. The retry removes the
+    stale marker and proceeds: no permanent block after a crash.
+    """
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "build_id": "build_runner_test",
+                "operation_id": "integrate",
+                "pid": 424242,  # a dead process
+                "process_nonce": "deadbeef-dead-beef-4bad-deadbeefdead",
+                "worker_id": "w_dead",
+                "ts": "2026-08-08T00:00:00+00:00",
+            }
+        )
+        + "\n",
+        "utf-8",
+    )
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path / "build",
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_retry_dead",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "completed"
+    assert not marker.exists()
+    assert _primary_rows(tmp_path / "build")
+
+
+@pytest.mark.asyncio
+async def test_worker_resolving_during_grace_does_not_write_orphan_marker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """K1 residual (wave 10): the orphan-race closure. When the straggler's
+    raw future resolves during the grace wait (its finally already ran, so
+    any marker it could clean never existed), the executor must NOT write a
+    marker: a fresh same-process marker with no live worker would block
+    retries up to the poll cap. A subsequent retry proceeds immediately.
+    """
+    import concurrent.futures
+
+    from app.datasets.runtime import DatasetBuildExecutor as Executor
+
+    pending = concurrent.futures.Future()
+    probe_calls = {"count": 0}
+
+    def resolving_during_grace_probe():
+        probe_calls["count"] += 1
+        if probe_calls["count"] == 1:
+            return (pending,)
+        # The re-probe after the grace timeout finds nothing in flight: the
+        # straggler resolved during the grace wait (worker finally ran).
+        return ()
+
+    async def noop_operation(op, upstream):
+        raise AssertionError("no operation should run")
+
+    executor = Executor(
+        task_id="task_runner",
+        build_id="build_runner_test",
+        run_id="run_a",
+        state_dir=tmp_path / "state" / "build_runner_test",
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=(),
+        run_operation=noop_operation,
+        straggler_grace=0.05,
+    )
+    monkeypatch.setattr(
+        executor, "_in_flight_worker_futures", resolving_during_grace_probe
+    )
+
+    await executor._await_straggler_workers()
+
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    assert not marker.exists(), "orphan marker written for a resolved worker"
+    # A subsequent retry proceeds immediately: no marker blocks it.
+    assert await executor._exclude_unstable_workspace() is None
+
+
+@pytest.mark.asyncio
+async def test_marker_dropped_when_worker_resolves_between_probe_and_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """K1 residual (wave 10): write-then-verify closure of the marker write.
+    If the named worker's future resolves between the executor's probe and
+    the atomic marker write (its finally unlinked before the marker existed),
+    the marker is dropped immediately — no fresh orphan marker can ever
+    block a retry.
+    """
+    import concurrent.futures
+
+    from app.datasets.runtime import DatasetBuildExecutor as Executor
+
+    pending = concurrent.futures.Future()
+    resolved = concurrent.futures.Future()
+    resolved.set_result(None)
+    probe_calls = {"count": 0}
+
+    def probe():
+        probe_calls["count"] += 1
+        if probe_calls["count"] == 1:
+            return (pending,)
+        # The re-probe inside the marker step finds the straggler ALREADY
+        # resolved: the worker finished during the grace, just late.
+        return (resolved,)
+
+    async def noop_operation(op, upstream):
+        raise AssertionError("no operation should run")
+
+    executor = Executor(
+        task_id="task_runner",
+        build_id="build_runner_test",
+        run_id="run_a",
+        state_dir=tmp_path / "state" / "build_runner_test",
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=(),
+        run_operation=noop_operation,
+        straggler_grace=0.05,
+    )
+    monkeypatch.setattr(executor, "_in_flight_worker_futures", probe)
+
+    await executor._await_straggler_workers()
+
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    assert not marker.exists(), "marker survived for a worker that already finished"
+
+
+def test_worker_cleanup_leaves_other_workers_marker_untouched(
+    tmp_path: Path,
+) -> None:
+    """K1 residual (wave 10): a worker's finally read-compares the marker —
+    it unlinks ONLY its own marker (``worker_id`` match). A marker written
+    for another worker (or absent/corrupt) is left untouched; the executor
+    re-checks ownership on the retry side, so a marker for a still-live
+    straggler must survive until THAT straggler's finally runs.
+    """
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path / "build",
+    )
+    marker = tmp_path / "state" / "build_runner_test" / ".worker_unfinished"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    runner.set_worker_marker_path(marker)
+
+    # A marker owned by ANOTHER worker is left untouched by this finally.
+    marker.write_text(json.dumps({"worker_id": "w_other"}) + "\n", "utf-8")
+    runner._cleanup_worker_marker("w_mine")
+    assert marker.is_file()
+
+    # This worker's own marker is removed.
+    marker.write_text(json.dumps({"worker_id": "w_mine"}) + "\n", "utf-8")
+    runner._cleanup_worker_marker("w_mine")
+    assert not marker.exists()
+
+    # A corrupt marker is best-effort: no exception, left untouched.
+    marker.write_text("{not json\n", "utf-8")
+    runner._cleanup_worker_marker("w_mine")
+    assert marker.is_file()
+
+    # An absent marker raises nothing.
+    marker.unlink()
+    runner._cleanup_worker_marker("w_mine")
 
 
 def test_worker_completion_signal_race_safe_against_interleaved_cancel() -> None:

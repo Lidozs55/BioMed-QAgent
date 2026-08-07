@@ -15,7 +15,9 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -55,6 +57,21 @@ from app.pipeline.state import TaskLock
 from app.runtime.event_store import append_jsonl_records
 
 logger = logging.getLogger(__name__)
+
+#: K1 residual (wave 10): a process-lifetime nonce generated ONCE per
+#: process. Together with the marker's ``pid`` it identifies which process
+#: owns a ``.worker_unfinished`` marker, so a retry can tell a LIVE
+#: in-process straggler (same pid + nonce) from a marker whose owning
+#: process is gone (its worker threads died with it — stale by definition).
+_PROCESS_NONCE = uuid.uuid4().hex
+
+#: K1 residual (wave 10): poll interval for the bounded straggler wait.
+#: The wait polls the worker completion futures instead of awaiting a
+#: ``wrap_future`` gather under ``asyncio.timeout``, because a timed-out
+#: gather CANCELLES the (pending) completion futures — destroying the
+#: liveness signal a marker write needs (a cancelled future reads as
+#: ``done()`` while the thread is still writing).
+_STRAGGLER_POLL_INTERVAL = 0.01
 
 
 class CancellationToken(Protocol):
@@ -577,13 +594,25 @@ class DatasetBuildExecutor:
         workers = self._in_flight_worker_futures()
         if not workers:
             return
-        try:
-            async with asyncio.timeout(self._straggler_grace):
-                await asyncio.gather(
-                    *(asyncio.wrap_future(worker) for worker in workers),
-                    return_exceptions=True,
-                )
-        except TimeoutError:
+        # K1 residual (wave 10): the wait POLLS the worker completion
+        # futures instead of awaiting a ``wrap_future`` gather under
+        # ``asyncio.timeout`` — a timed-out gather CANCELLES the (pending)
+        # completion futures, and a cancelled future reads as ``done()``
+        # while the thread is still writing, destroying the liveness signal
+        # ``_mark_unfinished_worker`` needs. With polling, a pending
+        # completion future means exactly "thread still running", so the
+        # marker step can distinguish a worker that resolved during the
+        # grace (never write an orphan marker) from one that genuinely
+        # outlived it (write the marker).
+        pending = {worker for worker in workers if not worker.done()}
+        deadline = time.monotonic() + self._straggler_grace
+        while pending:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            await asyncio.sleep(min(_STRAGGLER_POLL_INTERVAL, deadline - now))
+            pending = {worker for worker in pending if not worker.done()}
+        if pending:
             self._mark_unfinished_worker()
             logger.warning(
                 "build %s: operation worker(s) still running after %.1fs "
@@ -614,12 +643,34 @@ class DatasetBuildExecutor:
 
         K1 residual (Phase 4 review): the thread cannot be interrupted, so a
         same-build_id retry must not trust the workspace to be stable. The
-        marker is a real exclusion: the next run polls it (``_exclude_unstable_workspace``)
-        before executing any operation; the retry re-executes the failed
-        operation (its attempt is FAILED, never reusable) and everything
-        downstream via the digest closure, rewriting the same deterministic
-        paths.
+        marker is a real exclusion: the next run polls it
+        (``_exclude_unstable_workspace``) before executing any operation; the
+        retry re-executes the failed operation (its attempt is FAILED, never
+        reusable) and everything downstream via the digest closure, rewriting
+        the same deterministic paths.
+
+        K1 residual (wave 10): the marker is written ONLY when the straggler
+        is genuinely still running (its raw completion future is pending) — a
+        worker that resolved during the grace wait has already run its
+        ``finally`` (which cleans any marker that existed), so writing a
+        marker now would orphan it and block retries up to the poll cap. The
+        write is atomic (temp file + rename) and the payload carries process
+        identity (``pid`` + ``process_nonce``) and the straggler's
+        ``worker_id`` so a retry can tell a live in-process straggler from a
+        marker whose owning process is gone, and a worker's finally can
+        remove only its own marker. After the write the straggler's future is
+        re-checked: if it resolved between the probe and the write (its
+        finally unlinked before the marker existed), the marker is dropped
+        immediately.
         """
+        pending = self._in_flight_worker_futures()
+        if not pending:
+            # The straggler(s) resolved during the grace wait: their finally
+            # blocks already ran (and cleaned any marker that existed).
+            # Writing a marker now would orphan it — no live worker would
+            # ever remove it. Skip.
+            return
+        worker = pending[0]
         operation_id: str | None = None
         state = self._state
         if state is not None and state.inflight_attempt is not None:
@@ -627,14 +678,25 @@ class DatasetBuildExecutor:
         payload = {
             "build_id": self._build_id,
             "operation_id": operation_id,
-            "written_at": datetime.now(UTC).isoformat(),
+            "pid": os.getpid(),
+            "process_nonce": _PROCESS_NONCE,
+            "worker_id": getattr(worker, "worker_id", None),
+            "ts": datetime.now(UTC).isoformat(),
         }
+        marker = self._state_dir / ".worker_unfinished"
         with contextlib.suppress(OSError):
             self._state_dir.mkdir(parents=True, exist_ok=True)
-            marker = self._state_dir / ".worker_unfinished"
-            marker.write_text(
+            staged = self._state_dir / ".worker_unfinished.tmp"
+            staged.write_text(
                 json.dumps(payload, ensure_ascii=False) + "\n", "utf-8"
             )
+            staged.replace(marker)
+        # Write-then-verify: the named worker may have resolved between the
+        # probe and the atomic rename (its finally unlinked before the marker
+        # existed). Drop the marker so a retry is never blocked by an orphan.
+        if worker.done():
+            with contextlib.suppress(OSError):
+                marker.unlink(missing_ok=True)
 
     def _register_worker_marker(self) -> None:
         """Point the operation runner's workers at the marker path.
@@ -656,46 +718,76 @@ class DatasetBuildExecutor:
     async def _exclude_unstable_workspace(self) -> BuildRunOutcome | None:
         """Honor the worker-unfinished marker as a real exclusion.
 
-        K1 residual (wave 9): the marker written by a grace-expired run
+        K1 residual (wave 9/10): the marker written by a grace-expired run
         means a worker thread may still be writing the build's deterministic
         paths. This runs BEFORE any operation of a same-build_id run
-        executes:
+        executes. Wave 10 makes staleness a matter of PROCESS OWNERSHIP, not
+        wall-clock age — the mtime TTL alone cannot establish process death,
+        so a live in-process straggler must never be misclassified stale:
 
-        - stale (mtime older than ``unstable_marker_ttl``): worker threads
-          die with the process, so a marker surviving a restart is stale by
-          definition — remove it and proceed;
-        - fresh: poll every ``unstable_poll_interval`` until the straggler's
-          ``finally`` removes it (bounded by ``unstable_poll_cap``);
-        - cap expired with the marker still present: the workspace is
-          genuinely unstable — return a retryable conflict outcome (the tool
-          maps it to retryable error text).
+        - marker owned by THIS process (``pid`` + ``process_nonce`` match):
+          the straggler thread is LIVE in-process. Poll every
+          ``unstable_poll_interval`` until the worker's finally removes the
+          marker, bounded by ``unstable_poll_cap``; if the cap expires the
+          workspace is genuinely unstable — a retryable conflict is returned
+          and the marker is NEVER auto-deleted (only the owning worker's
+          finally may remove it);
+        - marker owned by a DIFFERENT process (pid or nonce mismatch): the
+          owning process is gone, so its worker threads are dead with it —
+          remove the marker and proceed (no permanent block after a crash);
+        - legacy wave-9 marker without ``pid``/``process_nonce``: fall back
+          to the mtime TTL (``unstable_marker_ttl``) as the only staleness
+          signal; fresh legacy markers are polled like any other.
 
         Returns ``None`` when the workspace is safe to execute.
         """
         marker = self._state_dir / ".worker_unfinished"
         if not marker.is_file():
             return None
-        if self._worker_marker_is_stale(marker):
+        payload = self._read_marker_payload(marker)
+        pid = payload.get("pid")
+        process_nonce = payload.get("process_nonce")
+        operation_id = payload.get("operation_id")
+        if isinstance(pid, int) and isinstance(process_nonce, str):
+            if pid == os.getpid() and process_nonce == _PROCESS_NONCE:
+                logger.warning(
+                    "build %s: previous run left an operation worker "
+                    "unfinished (operation=%s) and it is LIVE in this "
+                    "process; waiting for the worker's finally to remove "
+                    "the marker before executing the plan",
+                    self._build_id,
+                    operation_id,
+                )
+            else:
+                logger.warning(
+                    "build %s: worker-unfinished marker owned by a dead "
+                    "process (pid=%s); removing it and proceeding",
+                    self._build_id,
+                    pid,
+                )
+                with contextlib.suppress(OSError):
+                    marker.unlink(missing_ok=True)
+                return None
+        else:
+            # Legacy wave-9 marker without process identity: the mtime TTL
+            # is the only staleness signal available.
+            if self._worker_marker_is_stale(marker):
+                logger.warning(
+                    "build %s: stale legacy worker-unfinished marker "
+                    "removed (mtime beyond %.1fs ttl)",
+                    self._build_id,
+                    self._unstable_marker_ttl,
+                )
+                with contextlib.suppress(OSError):
+                    marker.unlink(missing_ok=True)
+                return None
             logger.warning(
-                "build %s: stale worker-unfinished marker removed (mtime "
-                "beyond %.1fs ttl)",
+                "build %s: previous run left an operation worker unfinished "
+                "(operation=%s); waiting for the worker to finish before "
+                "executing the plan",
                 self._build_id,
-                self._unstable_marker_ttl,
+                operation_id,
             )
-            with contextlib.suppress(OSError):
-                marker.unlink(missing_ok=True)
-            return None
-        operation_id: str | None = None
-        with contextlib.suppress(Exception):
-            payload = json.loads(marker.read_text("utf-8"))
-            operation_id = payload.get("operation_id")
-        logger.warning(
-            "build %s: previous run left an operation worker unfinished "
-            "(operation=%s); waiting for the worker to finish before "
-            "executing the plan",
-            self._build_id,
-            operation_id,
-        )
         try:
             async with asyncio.timeout(self._unstable_poll_cap):
                 while marker.is_file():
@@ -710,8 +802,22 @@ class DatasetBuildExecutor:
             return self._outcome_unstable_conflict()
         return None
 
+    def _read_marker_payload(self, marker: Path) -> dict[str, Any]:
+        """Best-effort parse of the worker-unfinished marker ({} on failure)."""
+        with contextlib.suppress(Exception):
+            payload = json.loads(marker.read_text("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        return {}
+
     def _worker_marker_is_stale(self, marker: Path) -> bool:
-        """A marker older than the TTL is stale (threads die with the process)."""
+        """A legacy marker older than the TTL is stale (wave-10 fallback).
+
+        Wave 9 relied on the mtime TTL alone; wave 10 uses it only for
+        markers that predate the pid/process_nonce schema (no process
+        identity to reason about). A marker older than ``unstable_marker_ttl``
+        is removed; fresh legacy markers are polled like same-process ones.
+        """
         try:
             return time.time() - marker.stat().st_mtime > self._unstable_marker_ttl
         except OSError:
@@ -731,9 +837,9 @@ class DatasetBuildExecutor:
                 code=ErrorCode.TIMEOUT,
                 message=(
                     f"build {self._build_id} state is unstable: a previous "
-                    "operation worker is still running (worker-unfinished "
-                    f"marker persisted beyond {self._unstable_poll_cap:.1f}s); "
-                    "retry later"
+                    "operation worker is still running in this process "
+                    "(worker-unfinished marker persisted beyond "
+                    f"{self._unstable_poll_cap:.1f}s); retry later"
                 ),
                 retryable=True,
             ),
