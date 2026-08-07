@@ -714,6 +714,7 @@ class AgentRunExecutor:
                 install_user_input_submitter=execution.set_user_input_submitter,
                 clear_user_input_submitter=execution.clear_user_input_submitter,
                 cancellation_requested=context.cancellation_requested,
+                artifacts_dir=context.work_dir.artifacts,
             )
         )
 

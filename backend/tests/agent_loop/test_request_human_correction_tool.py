@@ -24,7 +24,6 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from agents.tool_context import ToolContext
@@ -64,6 +63,7 @@ def _decision(
     resumed: UserInputResumedPayload | None,
     summary: str = "确认数据平台",
     request_id: str = "data_correction-run_t2-0",
+    corrections_path: Path | None = None,
 ) -> MainInputDecision:
     return MainInputDecision(
         request_id=request_id,
@@ -74,6 +74,7 @@ def _decision(
         timeout_seconds=30.0,
         timed_out=timed_out,
         resumed=resumed,
+        corrections_path=corrections_path,
     )
 
 
@@ -251,24 +252,23 @@ async def test_timed_out_decision_returns_degraded_timeout_message(
 async def test_timeout_message_uses_corrections_path_when_present(
     tmp_path: Path,
 ) -> None:
-    """T3 contract seam: a corrections_path on the decision fills the location."""
+    """T3 typed contract: decision.corrections_path fills the degraded location."""
 
-    decision = SimpleNamespace(
-        request_id="data_correction-run_t2-0",
-        summary="确认数据平台",
+    corrections_path = (
+        tmp_path / "tasks" / "task_x" / "artifacts" / "corrections_todo.csv"
+    )
+    decision = _decision(
         timed_out=True,
         resumed=None,
-        corrections_path=(
-            tmp_path / "tasks" / "task_x" / "artifacts" / "corrections_todo.csv"
-        ),
+        summary="确认数据平台",
+        corrections_path=corrections_path,
     )
-    context = _ctx_with_broker(tmp_path, decision)  # type: ignore[arg-type]
+    context = _ctx_with_broker(tmp_path, decision)
 
     result = await _invoke_tool(context, summary="确认数据平台")
 
     assert result == (
-        f"人工修正请求超时（确认数据平台），已记录到 "
-        f"{tmp_path / 'tasks' / 'task_x' / 'artifacts' / 'corrections_todo.csv'}"
+        f"人工修正请求超时（确认数据平台），已记录到 {corrections_path}"
     )
 
 

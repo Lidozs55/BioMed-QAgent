@@ -24,6 +24,7 @@ Covers docs/archive/superpowers/specs/2026-08-07-phase4c-hil-correction-design.m
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -109,6 +110,7 @@ def _make_broker(
     clear,
     cancellation_requested: asyncio.Event | None = None,
     default_timeout_seconds: float = 300.0,
+    artifacts_dir: Path | None = None,
 ) -> MainInputBroker:
     return MainInputBroker(
         run_id=run_id,
@@ -118,6 +120,7 @@ def _make_broker(
         clear_user_input_submitter=clear,
         cancellation_requested=cancellation_requested,
         default_timeout_seconds=default_timeout_seconds,
+        artifacts_dir=artifacts_dir,
     )
 
 
@@ -125,6 +128,7 @@ async def _wait_for_required(
     emitted: list[object],
     *,
     timeout: float = 2.0,
+    request_id: str | None = None,
 ) -> UserInputRequiredPayload:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
@@ -132,10 +136,18 @@ async def _wait_for_required(
             if (
                 isinstance(payload, UserInputRequiredPayload)
                 and payload.prompt_kind == "data_correction"
+                and (request_id is None or payload.request_id == request_id)
             ):
                 return payload
         await asyncio.sleep(0.01)
     raise TimeoutError("data_correction UserInputRequiredPayload was not emitted")
+
+
+def _read_corrections_todo(path: Path) -> list[dict[str, str]]:
+    """Read the corrections_todo CSV back (utf-8-sig BOM, dict rows)."""
+
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +522,275 @@ async def test_runner_installs_main_input_broker_per_run(
 
 
 # ---------------------------------------------------------------------------
+# T3: corrections_todo.csv timeout degradation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timeout_decision_carries_corrections_path_and_writes_csv(
+    tmp_path: Path,
+) -> None:
+    """T3: live timeout → corrections_path (Path) + artifacts CSV row."""
+
+    emitted: list[object] = []
+    artifacts_dir = tmp_path / "artifacts"
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_t3_timeout",
+        run_id="run_t3_timeout",
+        request_id="request_t3_timeout",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=artifacts_dir,
+    )
+
+    decision = await broker.request_input(
+        summary="确认数据平台",
+        detail={"field": "platform"},
+        timeout_seconds=0.05,
+    )
+
+    assert decision.timed_out is True
+    assert isinstance(decision.corrections_path, Path)
+    assert decision.corrections_path == artifacts_dir / "corrections_todo.csv"
+    assert decision.corrections_path.exists()
+
+    rows = _read_corrections_todo(artifacts_dir / "corrections_todo.csv")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["request_id"] == "data_correction-run_t3_timeout-0"
+    assert row["summary"] == "确认数据平台"
+    assert json.loads(row["detail_json"]) == {"field": "platform"}
+    assert row["status"] == "timed_out"
+    assert datetime.fromisoformat(row["requested_at"]).tzinfo is not None
+    assert datetime.fromisoformat(row["expires_at"]).tzinfo is not None
+    # 原子写:重写后文件仍为合法 CSV,且无临时文件残留
+    assert not list(artifacts_dir.glob("corrections_todo.csv.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_corrections_todo_appends_rows_across_timeouts_same_run(
+    tmp_path: Path,
+) -> None:
+    """T3: 同 run 多次超时 → 逐行追加,历史行保留。"""
+
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_t3_append",
+        run_id="run_t3_append",
+        request_id="request_t3_append",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=tmp_path / "artifacts",
+    )
+
+    first = await broker.request_input(summary="第一次修正", timeout_seconds=0.05)
+    second = await broker.request_input(summary="第二次修正", timeout_seconds=0.05)
+
+    assert first.timed_out is True
+    assert second.timed_out is True
+    rows = _read_corrections_todo(first.corrections_path)
+    assert len(rows) == 2
+    assert rows[0]["request_id"] == "data_correction-run_t3_append-0"
+    assert rows[0]["summary"] == "第一次修正"
+    assert rows[1]["request_id"] == "data_correction-run_t3_append-1"
+    assert rows[1]["summary"] == "第二次修正"
+    assert all(r["status"] == "timed_out" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_corrections_todo_preserves_history_across_runs(
+    tmp_path: Path,
+) -> None:
+    """T3: 跨 run 累积 — 新 run 超时保留旧 run 的历史行。"""
+
+    async def emit(payload: object) -> None:
+        pass
+
+    def make_run(run_id: str) -> tuple[RunExecution, MainInputBroker]:
+        execution = RunExecution(
+            task_id="task_t3_cross",
+            run_id=run_id,
+            request_id=f"request_{run_id}",
+            input="request a correction",
+            context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+            _event_emitter=emit,
+        )
+        broker = _make_broker(
+            run_id=run_id,
+            fixture=False,
+            emit=execution.emit,
+            install=execution.set_user_input_submitter,
+            clear=execution.clear_user_input_submitter,
+            cancellation_requested=execution.context.cancellation_requested,
+            artifacts_dir=tmp_path / "artifacts",
+        )
+        return execution, broker
+
+    _, run_one = make_run("run_t3_cross_a")
+    await run_one.request_input(summary="第一次修正", timeout_seconds=0.05)
+
+    _, run_two = make_run("run_t3_cross_b")
+    second = await run_two.request_input(summary="第二次修正", timeout_seconds=0.05)
+
+    rows = _read_corrections_todo(second.corrections_path)
+    assert len(rows) == 2
+    assert rows[0]["request_id"] == "data_correction-run_t3_cross_a-0"
+    assert rows[1]["request_id"] == "data_correction-run_t3_cross_b-0"
+    assert rows[0]["summary"] == "第一次修正"
+    assert rows[1]["summary"] == "第二次修正"
+
+
+@pytest.mark.asyncio
+async def test_resumed_decision_does_not_write_corrections_todo(
+    tmp_path: Path,
+) -> None:
+    """T3: resume 到达的请求不写 corrections_todo.csv(也不新增行)。"""
+
+    emitted: list[object] = []
+    artifacts_dir = tmp_path / "artifacts"
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id="task_t3_resumed",
+        run_id="run_t3_resumed",
+        request_id="request_t3_resumed",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=artifacts_dir,
+    )
+
+    # 1) 干净目录:resume 到达 → 不创建文件
+    pending = asyncio.create_task(
+        broker.request_input(summary="需要人工修正", timeout_seconds=5.0)
+    )
+    required = await _wait_for_required(emitted)
+    execution.submit_user_input(
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "GPL570"},
+        )
+    )
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+    assert decision.timed_out is False
+    assert decision.corrections_path is None
+    assert not (artifacts_dir / "corrections_todo.csv").exists()
+
+    # 2) 已有历史行:resume 到达 → 不新增行
+    timed_out = await broker.request_input(summary="超时修正", timeout_seconds=0.05)
+    assert timed_out.timed_out is True
+    csv_path = artifacts_dir / "corrections_todo.csv"
+    assert csv_path.exists()
+    rows_before = _read_corrections_todo(csv_path)
+    assert len(rows_before) == 1
+
+    pending = asyncio.create_task(
+        broker.request_input(summary="resume 修正", timeout_seconds=5.0)
+    )
+    required = await _wait_for_required(
+        emitted, request_id="data_correction-run_t3_resumed-2"
+    )
+    execution.submit_user_input(
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "OK"},
+        )
+    )
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+    assert decision.timed_out is False
+    assert _read_corrections_todo(csv_path) == rows_before
+
+
+@pytest.mark.asyncio
+async def test_corrections_todo_write_failure_degrades_gracefully(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T3: 写失败不崩溃 — warning 记录,corrections_path=None,请求仍返回降级结果。"""
+
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    blocker = tmp_path / "artifacts_blocked"
+    blocker.write_text("not a directory")  # mkdir 将失败(FileExistsError)
+
+    execution = RunExecution(
+        task_id="task_t3_fail",
+        run_id="run_t3_fail",
+        request_id="request_t3_fail",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        artifacts_dir=blocker,
+    )
+
+    with caplog.at_level("WARNING", logger="app.agent_loop.main_input_broker"):
+        decision = await broker.request_input(
+            summary="需要人工修正",
+            timeout_seconds=0.05,
+        )
+
+    assert decision.timed_out is True  # 运行继续,不抛异常
+    assert decision.corrections_path is None
+    assert "corrections_todo" in caplog.text
+
+    # 合成 resume 仍正常发射,Run 可离开 AWAITING_USER_INPUT
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1
+    assert resumed_payloads[0].detail["auto_approved"] is True
+
+
+# ---------------------------------------------------------------------------
 # Manager E2E: data_correction pause → resume → decision → COMPLETED
 # ---------------------------------------------------------------------------
 
@@ -540,10 +821,168 @@ async def request_human_correction_probe(
     )
 
 
+@function_tool
+async def request_human_correction_timeout_probe(
+    ctx: RunContextWrapper[RunContext],
+    summary: str,
+) -> str:
+    """Probe tool that pauses with a short deadline so the broker times out."""
+
+    decision = await ctx.context.request_main_input(
+        summary=summary,
+        detail={"probe": "correction-timeout-e2e"},
+        timeout_seconds=1.0,
+    )
+    if decision.timed_out:
+        return json.dumps(
+            {
+                "status": "timed_out",
+                "request_id": decision.request_id,
+                "corrections_path": (
+                    str(decision.corrections_path)
+                    if decision.corrections_path is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+        )
+    return json.dumps(
+        {
+            "status": "decided",
+            "detail": decision.resumed.detail if decision.resumed else {},
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_data_correction_timeout_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """真实 TaskManager 流:data_correction 暂停 → 超时降级 → 文件落盘 → COMPLETED。
+
+    T1 REVIEW 残余项(manager 级超时集成):AWAITING_USER_INPUT → (合成 resume)
+    → RUNNING → COMPLETED,且 corrections_todo.csv 写入任务 artifacts 目录,
+    降级路径经 decision.corrections_path 流回工具输出。
+    """
+
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    model = _ScriptedCorrectionModel(
+        tool_name="request_human_correction_timeout_probe"
+    )
+    agent = Agent[RunContext](
+        name="Correction Agent",
+        instructions="Call request_human_correction_timeout_probe, then answer.",
+        tools=[request_human_correction_timeout_probe],
+        model=model,
+    )
+    build = SimpleNamespace(
+        agent=agent,
+        skill_names=("request_human_correction_timeout_probe",),
+        model=model,
+    )
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_data_correction_timeout_e2e",
+                input="request a data correction",
+            )
+        )
+        await asyncio.wait_for(model.tool_round_entered.wait(), timeout=2)
+        model.allow_tool_call.set()
+
+        required = await _wait_for_data_correction_payload(
+            repository,
+            accepted.task_id,
+        )
+        assert required.request_id.startswith(
+            f"data_correction-{accepted.run_id}-"
+        )
+
+        paused = await repository.get_snapshot(accepted.task_id)
+        assert paused is not None
+        assert paused.runs[-1].status.value == "awaiting_user_input"
+
+        # 无人答复:broker 超时 → 写 corrections_todo.csv + 合成 resume → 继续
+        await asyncio.wait_for(model.final_round_entered.wait(), timeout=5)
+        model.release_final_answer.set()
+        await manager.wait_until_idle()
+
+        completed = await repository.get_snapshot(accepted.task_id)
+        assert completed is not None
+        assert completed.runs[-1].status.value == "completed"
+
+        events = await repository.list_events(accepted.task_id)
+        payloads = [event.payload for event in events]
+
+        required_idx = next(
+            i for i, p in enumerate(payloads)
+            if isinstance(p, UserInputRequiredPayload)
+        )
+        resumed = [p for p in payloads if isinstance(p, UserInputResumedPayload)]
+        assert len(resumed) == 1
+        assert resumed[0].decision == "approve"
+        assert resumed[0].detail["auto_approved"] is True
+        resumed_idx = payloads.index(resumed[0])
+        completed_idx = next(
+            i for i, p in enumerate(payloads)
+            if isinstance(p, RunCompletedPayload)
+        )
+        assert required_idx < resumed_idx < completed_idx
+
+        # corrections_todo.csv 落盘:一行,status=timed_out,字段完整
+        csv_path = (
+            repository.tasks_dir
+            / accepted.task_id
+            / "artifacts"
+            / "corrections_todo.csv"
+        )
+        assert csv_path.exists()
+        rows = _read_corrections_todo(csv_path)
+        assert len(rows) == 1
+        assert rows[0]["request_id"] == required.request_id
+        assert rows[0]["status"] == "timed_out"
+        assert rows[0]["summary"] == "确认数据平台"
+        assert json.loads(rows[0]["detail_json"]) == {
+            "probe": "correction-timeout-e2e"
+        }
+        assert datetime.fromisoformat(rows[0]["requested_at"]).tzinfo is not None
+        assert datetime.fromisoformat(rows[0]["expires_at"]).tzinfo is not None
+
+        # 工具输出携带降级路径,证明 corrections_path 经 decision 流回工具
+        tool_outputs = [
+            p.output
+            for p in payloads
+            if isinstance(p, ToolCompletedPayload)
+            and p.tool_name == "request_human_correction_timeout_probe"
+        ]
+        assert len(tool_outputs) == 1
+        assert '"status": "timed_out"' in tool_outputs[0]
+        assert str(csv_path) in tool_outputs[0]
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
+    finally:
+        model.allow_tool_call.set()
+        model.release_final_answer.set()
+        await manager.close()
+
+
 class _ScriptedCorrectionModel(Model):
     """Two rounds: data_correction tool call, then the final answer."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        tool_name: str = "request_human_correction_probe",
+        tool_arguments: dict[str, object] | None = None,
+    ) -> None:
+        self.tool_name = tool_name
+        self.tool_arguments = tool_arguments or {"summary": "确认数据平台"}
         self.allow_tool_call = asyncio.Event()
         self.tool_round_entered = asyncio.Event()
         self.final_round_entered = asyncio.Event()
@@ -564,9 +1003,9 @@ class _ScriptedCorrectionModel(Model):
             self.tool_round_entered.set()
             await self.allow_tool_call.wait()
             item = ResponseFunctionToolCall(
-                arguments=json.dumps({"summary": "确认数据平台"}),
+                arguments=json.dumps(self.tool_arguments),
                 call_id="call_correction",
-                name="request_human_correction_probe",
+                name=self.tool_name,
                 type="function_call",
                 status="completed",
             )

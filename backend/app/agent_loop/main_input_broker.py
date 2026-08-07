@@ -19,8 +19,10 @@ Semantics (docs/archive/superpowers/specs/2026-08-07-phase4c-hil-correction-desi
 - On timeout the broker emits a synthetic auto-approved resume (mirroring the
   plan-confirmation timeout convention, REVIEW 2026-08-05 §3.3) so the Run can
   leave ``AWAITING_USER_INPUT`` (FINALIZING from it is an illegal transition),
-  and returns a degraded ``MainInputDecision(timed_out=True)`` — it never
-  raises for a timeout (the T3 corrections_todo.csv path handles degradation).
+  appends one ``timed_out`` row to the task artifacts ``corrections_todo.csv``
+  (T3, D3: append semantics + atomic replace) and returns a degraded
+  ``MainInputDecision(timed_out=True, corrections_path=...)`` — it never
+  raises for a timeout; a write failure degrades to ``corrections_path=None``.
 - Cancellation while paused propagates ``CompactionCancelledError`` (the agent
   loop's cancellation exception, mirroring max_turns).
 """
@@ -28,14 +30,32 @@ Semantics (docs/archive/superpowers/specs/2026-08-07-phase4c-hil-correction-desi
 from __future__ import annotations
 
 import asyncio
+import csv
+import json
+import logging
+import os
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from app.agent_loop.context import UserInputSubmitter
 from app.domain.contracts import UserInputRequiredPayload, UserInputResumedPayload
 from app.pipeline.runner import USER_INPUT_TIMEOUT
 from app.runtime.compaction import CompactionCancelledError
+
+logger = logging.getLogger(__name__)
+
+_CORRECTIONS_TODO_FILENAME = "corrections_todo.csv"
+_CORRECTIONS_TODO_COLUMNS = (
+    "request_id",
+    "requested_at",
+    "expires_at",
+    "summary",
+    "detail_json",
+    "status",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,9 +64,11 @@ class MainInputDecision:
 
     ``resumed`` carries the human (or fixture synthetic) decision when the
     request was answered in time; ``timed_out=True`` means the deadline
-    elapsed without a human reply — the caller persists the pending
-    correction (T3 ``corrections_todo.csv``) and continues with a degraded
-    result instead of failing.
+    elapsed without a human reply — the broker persists the pending
+    correction to ``corrections_todo.csv`` (T3, spec §3-D3) and returns a
+    degraded result instead of failing. ``corrections_path`` is the full
+    path of that todo file when the write succeeded (a write failure keeps
+    it ``None`` and the tool degrades to the bare filename).
     """
 
     request_id: str
@@ -57,6 +79,7 @@ class MainInputDecision:
     timeout_seconds: float
     timed_out: bool
     resumed: UserInputResumedPayload | None = None
+    corrections_path: Path | None = None
 
 
 class MainInputBroker:
@@ -77,6 +100,7 @@ class MainInputBroker:
         clear_user_input_submitter: Callable[[UserInputSubmitter], None],
         cancellation_requested: asyncio.Event | None = None,
         default_timeout_seconds: float = USER_INPUT_TIMEOUT,
+        artifacts_dir: Path | None = None,
     ) -> None:
         self._run_id = run_id
         self._fixture = fixture
@@ -85,6 +109,7 @@ class MainInputBroker:
         self._clear_user_input_submitter = clear_user_input_submitter
         self._cancellation_requested = cancellation_requested
         self._default_timeout_seconds = default_timeout_seconds
+        self._artifacts_dir = artifacts_dir
         self._counter = 0
 
     async def request_input(
@@ -149,6 +174,13 @@ class MainInputBroker:
             self._clear_user_input_submitter(submitter)
 
         if timed_out:
+            corrections_path = self._write_corrections_todo(
+                request_id=request_id,
+                summary=summary,
+                detail=resolved_detail,
+                requested_at=requested_at,
+                expires_at=expires_at,
+            )
             await self._emit(
                 UserInputResumedPayload(
                     request_id=request_id,
@@ -168,6 +200,7 @@ class MainInputBroker:
                 expires_at=expires_at,
                 timeout_seconds=timeout,
                 timed_out=True,
+                corrections_path=corrections_path,
             )
 
         if not decision_holder:
@@ -229,6 +262,64 @@ class MainInputBroker:
             timed_out=False,
             resumed=resumed,
         )
+
+    def _write_corrections_todo(
+        self,
+        *,
+        request_id: str,
+        summary: str,
+        detail: dict[str, object],
+        requested_at: datetime,
+        expires_at: datetime,
+    ) -> Path | None:
+        """Append one timed-out request to the task artifacts todo CSV (T3, D3).
+
+        utf-8-sig + ``csv.DictWriter`` match the pipeline artifact convention
+        (``app/pipeline/stages/base.py:write_csv``); the write is atomic
+        (temp file + ``os.replace``) so a crash never truncates history rows.
+        Only timed-out requests are recorded — resumed requests never reach
+        this path. A write failure must never crash the Run: log a warning
+        and return ``None`` so the caller degrades with
+        ``corrections_path=None`` (the degraded message still returns).
+        """
+
+        if self._artifacts_dir is None:
+            return None
+        path = self._artifacts_dir / _CORRECTIONS_TODO_FILENAME
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            self._artifacts_dir.mkdir(parents=True, exist_ok=True)
+            rows: list[dict[str, object]] = []
+            if path.exists():
+                with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                    rows.extend(csv.DictReader(handle))
+            rows.append(
+                {
+                    "request_id": request_id,
+                    "requested_at": requested_at.isoformat(),
+                    "expires_at": expires_at.isoformat(),
+                    "summary": summary,
+                    "detail_json": json.dumps(detail, ensure_ascii=False),
+                    "status": "timed_out",
+                }
+            )
+            with tmp.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=_CORRECTIONS_TODO_COLUMNS,
+                    extrasaction="raise",
+                )
+                writer.writeheader()
+                writer.writerows(rows)
+            os.replace(tmp, path)
+            return path
+        except (OSError, csv.Error, TypeError, ValueError) as exc:
+            logger.warning(
+                "failed to write %s: %s", _CORRECTIONS_TODO_FILENAME, exc
+            )
+            with suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            return None
 
     async def _wait_for_decision(
         self,

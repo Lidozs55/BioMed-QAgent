@@ -11,9 +11,9 @@
 - 已答复：``用户已确认：<correction>`` / ``用户已拒绝并继续：<correction>``；
   无 ``correction`` 字段时退化为决策动词 + 其余 detail（不丢人类答复）；
 - 超时：降级消息 ``人工修正请求超时（<summary>），已记录到
-  corrections_todo.csv``——T3 在 ``MainInputDecision`` 上增加
-  ``corrections_path`` 字段后，消息自动携带完整落盘路径（本模块通过
-  ``getattr`` 读取，字段缺失时退化为文件名占位）；
+  corrections_todo.csv``——broker（T3）在 ``MainInputDecision.corrections_path``
+  上提供完整落盘路径（Path 字段，非空时消息携带完整位置，否则退化为
+  文件名占位）。
 - broker 未安装（子代理/单元测试上下文）：返回明确的失败文本而非向 SDK
   抛异常，Agent 据此自行判断继续；取消（``CompactionCancelledError``）保持
   原样向上传播，不吞掉取消语义。
@@ -66,10 +66,10 @@ def _format_resumed_text(decision: MainInputDecision) -> str:
 
 
 def _format_timeout_text(decision: MainInputDecision) -> str:
-    """Build the degraded timeout message; T3 fills the corrections path."""
+    """Build the degraded timeout message carrying the full CSV path (T3)."""
 
-    path = getattr(decision, "corrections_path", None)
-    location = str(path) if path else _CORRECTIONS_TODO_FILENAME
+    path = decision.corrections_path
+    location = str(path) if path is not None else _CORRECTIONS_TODO_FILENAME
     return f"人工修正请求超时（{decision.summary}），已记录到 {location}"
 
 
