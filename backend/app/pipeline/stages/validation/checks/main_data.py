@@ -25,6 +25,40 @@ def check_main_data_nonempty(ctx: ValidationContext) -> dict[str, object]:
     }
 
 
+def check_no_primary_data(ctx: ValidationContext) -> dict[str, object]:
+    """NO_DATA decision record: the package has no primary table.
+
+    Runs only in no_primary mode (``validate_package`` skips it otherwise).
+    The check asserts the staging indeed has no primary dataset (neither
+    ``main_data.csv`` nor ``pathway_members.csv``) and records the reason
+    from the ``no_expression_data`` warning in ``warnings.csv`` when present,
+    falling back to a generic message. Status ``passed`` means the no-primary
+    assertion holds — this is the NO_DATA decision record (ADR-011), not an
+    exemption.
+    """
+    has_primary_file = (
+        (ctx.staging / "main_data.csv").is_file()
+        or (ctx.staging / "pathway_members.csv").is_file()
+    )
+    reason = "no primary dataset in staging package"
+    warnings_path = ctx.staging / "warnings.csv"
+    if warnings_path.is_file():
+        for row in read_csv(warnings_path):
+            if row.get("code") == "no_expression_data":
+                reason = row.get("message") or reason
+                break
+    assertion_holds = ctx.no_primary and not has_primary_file
+    return {
+        "check_id": "no_primary_data",
+        "scope": "main_data",
+        "check_name": "no primary dataset present (NO_DATA decision)",
+        "status": "passed" if assertion_holds else "failed",
+        "checked_count": 1,
+        "failed_count": 0 if assertion_holds else 1,
+        "details": json.dumps({"reason": reason}, ensure_ascii=False),
+    }
+
+
 # Minimum non-empty rate for core data fields. Below this the package cannot
 # support any downstream analysis and must fail validation rather than ship a
 # "formally complete but content-empty" artifact (see

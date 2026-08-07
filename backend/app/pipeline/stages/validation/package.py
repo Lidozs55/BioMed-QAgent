@@ -20,6 +20,7 @@ from app.pipeline.stages.validation.checks.main_data import (
     check_field_descriptions,
     check_foreign_keys,
     check_main_data_nonempty,
+    check_no_primary_data,
     check_warnings_metrics_consistency,
 )
 from app.pipeline.stages.validation.checks.reactome import check_reactome
@@ -58,17 +59,34 @@ def validate_package(
     )
 
     checks: list[dict[str, object]] = []
-    checks.append(check_source_relation_evidence(ctx))
-    checks.append(check_main_data_nonempty(ctx))
-    checks.append(check_core_data_existence(ctx))
-    checks.append(check_foreign_keys(ctx))
-    checks.extend(check_reactome(ctx))
-    checks.append(check_sample_foreign_keys(ctx))
-    checks.append(check_source_asset_integrity(ctx))
-    checks.append(check_field_descriptions(ctx))
-    checks.append(check_source_value_lineage(ctx))
-    checks.append(check_warnings_metrics_consistency(ctx))
-    checks.append(check_cleaning_report_consistency(ctx))
+    if ctx.no_primary:
+        # Phase 4b NO_DATA mode (ADR-011 / design D3): no primary table
+        # exists (neither main_data.csv nor pathway_members.csv), so the
+        # main-table checks are skipped entirely and a ``no_primary_data``
+        # decision record is emitted instead. The decision check asserts the
+        # no-primary shape and records the reason from warnings.csv; the
+        # remaining checks run unchanged. This is a SEPARATE branch — the
+        # normal-mode check_id sequence stays byte-identical (pinned by
+        # tests/pipeline/test_validation_split.py).
+        checks.append(check_source_relation_evidence(ctx))
+        checks.append(check_no_primary_data(ctx))
+        checks.append(check_sample_foreign_keys(ctx))
+        checks.append(check_source_asset_integrity(ctx))
+        checks.append(check_field_descriptions(ctx))
+        checks.append(check_warnings_metrics_consistency(ctx))
+        checks.append(check_cleaning_report_consistency(ctx))
+    else:
+        checks.append(check_source_relation_evidence(ctx))
+        checks.append(check_main_data_nonempty(ctx))
+        checks.append(check_core_data_existence(ctx))
+        checks.append(check_foreign_keys(ctx))
+        checks.extend(check_reactome(ctx))
+        checks.append(check_sample_foreign_keys(ctx))
+        checks.append(check_source_asset_integrity(ctx))
+        checks.append(check_field_descriptions(ctx))
+        checks.append(check_source_value_lineage(ctx))
+        checks.append(check_warnings_metrics_consistency(ctx))
+        checks.append(check_cleaning_report_consistency(ctx))
 
     total_failed = sum(int(check["failed_count"]) for check in checks)
     report = {
