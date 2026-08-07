@@ -23,7 +23,6 @@ from app.pipeline.processing.geo_annotation import (
     fetch_platform_annotation,
 )
 from app.pipeline.processing.geo_tximport import (
-    _OUTPUT_COLUMNS,
     GeoSampleMetadata,
     parse_geo_series_matrix_samples,
     parse_geo_soft_samples,
@@ -48,107 +47,6 @@ logger = logging.getLogger(__name__)
 # 流式清洗后内存不再依赖行数，上限提高为防御值；超出部分经
 # CleaningReportModel.truncated_rows + warnings.csv 对用户可见。
 _CLEANING_MAX_ROWS = 5_000_000
-
-
-def _build_minimal_parsed_dataset(
-    source_asset: SourceAsset,
-    dataset_id: str,
-    ctx: StageContext,
-    samples: list[GeoSampleMetadata] | None = None,
-) -> ParsedDataset:
-    """Produce a ParsedDataset for cases where tximport parsing fails.
-
-    When ``samples`` is provided (e.g. recovered from a series_matrix file
-    whose expression block is empty), one row per sample is written with
-    ``measurement_type="sample_metadata"`` so that ``main_data.csv`` always
-    carries the per-sample metadata even when no expression matrix is
-    available. Expression-related fields (``gene_id_raw``, ``expression_value``,
-    etc.) are left blank, and ``source_line_number``/``source_column_index``
-    are set to ``0`` to signal "no source locator" — the validation gate
-    skips lineage checks for these rows.
-
-    When ``samples`` is empty or None, the file is schema-only (0 rows) for
-    backward compatibility with callers that have no sample metadata to
-    recover (e.g. fixture-mode tests that don't exercise live mode).
-    """
-    import csv
-
-    from app.domain.contracts import FileAsset, asset_id_from_sha256, make_record_id
-
-    output_path = ctx.workdir.parsed / f"{dataset_id}_tximport_long.csv"
-    row_count = 0
-    # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
-    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=_OUTPUT_COLUMNS)
-        writer.writeheader()
-        if samples:
-            for sample in samples:
-                writer.writerow(
-                    {
-                        "record_id": make_record_id(
-                            dataset_id, "sample_metadata", sample.sample_id
-                        ),
-                        "dataset_id": dataset_id,
-                        "source_id": source_asset.source_id,
-                        "asset_id": source_asset.asset_id,
-                        "gene_id_raw": "",
-                        "gene_id": "",
-                        "gene_id_namespace": "",
-                        "gene_id_version": "",
-                        "sample_id": sample.sample_id,
-                        "source_sample_alias": sample.source_alias,
-                        "measurement_type": "sample_metadata",
-                        "value_semantics": "metadata_only",
-                        "value_scale": "na",
-                        "is_normalized": "false",
-                        "is_integer_expected": "false",
-                        "expression_value": "",
-                        "expression_unit": "na",
-                        "source_logical_file": "series_matrix_metadata",
-                        "source_line_number": 0,
-                        "source_column_index": 0,
-                        "source_column_name": "sample_metadata",
-                        "source_raw_value": "",
-                    }
-                )
-                row_count += 1
-    file_bytes = output_path.read_bytes()
-    checksum = hashlib.sha256(file_bytes).hexdigest()
-    file_asset = FileAsset(
-        asset_id=asset_id_from_sha256(checksum),
-        kind="parsed",
-        relative_path=output_path.relative_to(ctx.workdir.root).as_posix(),
-        sha256=checksum,
-        size_bytes=len(file_bytes),
-        media_type="text/csv",
-        generated_by_step_id="step_geo_minimal_v1",
-    )
-    # The minimal parser emits one row per sample (no expression matrix).
-    # ``source_row_count`` is 0 because the source series_matrix had no
-    # expression data rows; ``processing_parameters`` records the actual
-    # measurement_type so processing_log.parameters is not hardcoded (TODO §1.3).
-    processing_parameters = {
-        "measurement_type": "sample_metadata",
-        "value_semantics": "metadata_only",
-        "value_scale": "na",
-        "is_normalized": False,
-        "is_integer_expected": False,
-        "sample_count": len(samples) if samples else 0,
-        "source_logical_file": "series_matrix_metadata",
-        "gene_id_namespace": "",
-    }
-    return ParsedDataset(
-        dataset_id=dataset_id,
-        source_id=source_asset.source_id,
-        source_asset_id=source_asset.asset_id,
-        file_asset=file_asset,
-        columns=list(_OUTPUT_COLUMNS),
-        row_count=row_count,
-        parser_name="geo_minimal_placeholder",
-        parser_version="1.0.0",
-        source_row_count=0,
-        processing_parameters=processing_parameters,
-    )
 
 
 def _clean_parsed_dataset(
@@ -542,70 +440,81 @@ def _try_series_matrix_expression_or_minimal(
     suppl_asset: SourceAsset | None = None,
     gene_map: dict[str, str] | None = None,
     probe_gene_mapping: str = NOT_ATTEMPTED,
-) -> ParsedDataset:
-    """Try parsing the series_matrix expression block; fall back to minimal.
+) -> tuple[ParsedDataset | None, str | None]:
+    """Try series_matrix / supplementary expression; no-primary fallback.
 
     When the series_matrix has a non-empty ``!series_matrix_table_begin``/
-    ``!series_matrix_table_end`` block, produces real expression rows.
-    When the block is empty but a supplementary expression asset is available
-    (downloaded by the acquisition stage for RNA-seq series), parses that
-    instead. Otherwise falls back to ``_build_minimal_parsed_dataset``
-    (metadata-only).
+    ``!series_matrix_table_end`` block, produces real expression rows and
+    returns ``(parsed, None)``. When the block is empty but a supplementary
+    expression asset is available (downloaded by the acquisition stage for
+    RNA-seq series), parses that instead — real expression always wins.
+
+    When no expression data can be recovered anywhere, returns
+    ``(None, reason)`` where ``reason`` is a stable string recorded on
+    ``ProcessingOutput.no_primary_reason``. The old metadata-only fallback
+    (``_build_minimal_parsed_dataset`` / ``geo_minimal_placeholder``) is
+    removed: without expression data no parsed primary dataset is produced
+    (ADR-011 / phase 4b T1).
 
     ``gene_map`` / ``probe_gene_mapping`` are forwarded to the expression
     parser so probe rows can be rewritten to gene symbols and the annotation
     status (mapped/unmapped/...) is recorded in processing_parameters.
     """
-    if samples:
-        try:
-            expression_parsed = process_geo_series_matrix_expression(
-                source_asset=source_asset,
-                dataset_id=dataset_id,
-                workdir=ctx.workdir,
-                samples=samples,
-                gene_map=gene_map,
-                probe_gene_mapping=probe_gene_mapping,
-            )
-            if expression_parsed is not None:
-                logger.info(
-                    "processing: parsed %d expression rows from series_matrix",
-                    expression_parsed.row_count,
-                )
-                return expression_parsed
-            # series_matrix 表达块为空 —— 尝试 supplementary 表达矩阵
-            if suppl_asset is not None:
-                try:
-                    suppl_parsed = process_geo_supplementary_expression(
-                        source_asset=suppl_asset,
-                        dataset_id=dataset_id,
-                        workdir=ctx.workdir,
-                        samples=samples,
-                    )
-                    if suppl_parsed is not None:
-                        logger.info(
-                            "processing: parsed %d expression rows from supplementary file",
-                            suppl_parsed.row_count,
-                        )
-                        return suppl_parsed
-                    logger.info(
-                        "processing: supplementary expression file yielded no rows",
-                    )
-                except (ValueError, FileNotFoundError, OSError) as exc:
-                    logger.warning(
-                        "processing: supplementary expression parse failed (%s)",
-                        exc,
-                    )
+    if not samples:
+        # No samples recovered from the series_matrix: the expression block
+        # cannot be mapped to sample columns, so no expression data exists.
+        return None, "series_matrix_samples_unavailable"
+    try:
+        expression_parsed = process_geo_series_matrix_expression(
+            source_asset=source_asset,
+            dataset_id=dataset_id,
+            workdir=ctx.workdir,
+            samples=samples,
+            gene_map=gene_map,
+            probe_gene_mapping=probe_gene_mapping,
+        )
+        if expression_parsed is not None:
             logger.info(
-                "processing: series_matrix expression block is empty; "
-                "falling back to sample_metadata rows",
+                "processing: parsed %d expression rows from series_matrix",
+                expression_parsed.row_count,
             )
-        except (ValueError, FileNotFoundError, OSError) as exc:
-            logger.warning(
-                "processing: series_matrix expression parse failed (%s); "
-                "falling back to sample_metadata rows",
-                exc,
-            )
-    return _build_minimal_parsed_dataset(source_asset, dataset_id, ctx, samples=samples)
+            return expression_parsed, None
+        # series_matrix 表达块为空 —— 尝试 supplementary 表达矩阵
+        if suppl_asset is not None:
+            try:
+                suppl_parsed = process_geo_supplementary_expression(
+                    source_asset=suppl_asset,
+                    dataset_id=dataset_id,
+                    workdir=ctx.workdir,
+                    samples=samples,
+                )
+                if suppl_parsed is not None:
+                    logger.info(
+                        "processing: parsed %d expression rows from supplementary file",
+                        suppl_parsed.row_count,
+                    )
+                    return suppl_parsed, None
+                logger.info(
+                    "processing: supplementary expression file yielded no rows",
+                )
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                logger.warning(
+                    "processing: supplementary expression parse failed (%s)",
+                    exc,
+                )
+                return None, "supplementary_expression_parse_failed"
+        logger.info(
+            "processing: series_matrix expression block is empty; "
+            "no primary dataset (no expression data)",
+        )
+        return None, "series_matrix_expression_empty_and_no_supplementary"
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "processing: series_matrix expression parse failed (%s); "
+            "no primary dataset (no expression data)",
+            exc,
+        )
+        return None, "series_matrix_expression_parse_failed"
 
 
 def _run_multi_dataset_processing(
@@ -730,6 +639,27 @@ def _load_geo_gene_map(
             gpl, type(exc).__name__, exc,
         )
         return None, "annotation_unavailable"
+
+
+def _no_primary_digest(reason: str, samples: list[GeoSampleMetadata]) -> str:
+    """Deterministic digest for the no-primary path (ADR-011 D1).
+
+    The regular processing digest hashes the parsed file's sha256; with no
+    parsed file (no expression data) we hash the reason string plus the
+    sorted recovered sample ids instead, so the digest is stable for
+    identical inputs and changes when the recovered samples change.
+    """
+    import json
+
+    payload = json.dumps(
+        {
+            "no_primary_reason": reason,
+            "sample_ids": sorted(sample.sample_id for sample in samples),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def run_processing(
@@ -864,7 +794,8 @@ def run_processing(
         None,
     )
     samples: list[GeoSampleMetadata] = []
-    parsed: ParsedDataset
+    parsed: ParsedDataset | None = None
+    no_primary_reason: str | None = None
     if ctx.mode == "fixture":
         try:
             parsed = process_geo_tximport_counts(
@@ -883,16 +814,19 @@ def run_processing(
                 len(samples),
             )
         except (ValueError, FileNotFoundError, OSError) as exc:
-            # Fixture-mode fallback: try series_matrix expression parsing,
-            # then fall back to sample_metadata rows.
+            # Fixture-mode fallback: try series_matrix expression parsing;
+            # if that finds no expression either, the tximport counts parse
+            # failure is the root cause of the no-primary outcome.
             logger.warning(
                 "processing: tximport parse failed (%s); attempting series_matrix recovery",
                 exc,
             )
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            parsed = _try_series_matrix_expression_or_minimal(
+            parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
                 source_asset, dataset_id, ctx, samples, suppl_asset=suppl_asset
             )
+            if parsed is None and no_primary_reason is not None:
+                no_primary_reason = "tximport_parse_failed_no_expression"
     else:
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
             soft_bytes = (ctx.workdir.root / soft_asset.relative_path).read_bytes()
@@ -907,17 +841,43 @@ def run_processing(
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
             gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
-            parsed = _try_series_matrix_expression_or_minimal(
+            parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
                 source_asset, dataset_id, ctx, samples,
                 suppl_asset=suppl_asset,
                 gene_map=gene_map,
                 probe_gene_mapping=probe_gene_mapping,
             )
-        if not samples and not parsed.row_count:
-            logger.warning(
-                "processing: series_matrix recovery yielded no samples; "
-                "main_data.csv will be schema-only (0 rows)"
-            )
+
+    if parsed is None:
+        # No expression data anywhere (empty block / parse failure / no
+        # supplementary): ADR-011 — do NOT emit a metadata-only placeholder
+        # primary. Recovered samples stay on the output for the supporting
+        # sample_metadata.csv; the digest hashes the reason + sorted sample
+        # ids (deterministic, and independent of any parsed file's sha256).
+        logger.warning(
+            "processing: no primary dataset; reason=%s (samples=%d)",
+            no_primary_reason,
+            len(samples),
+        )
+        ctx.emit_progress_sync(
+            stage=StageName.PROCESSING,
+            kind="cleaned_rows",
+            current=0,
+            total=None,
+            detail={
+                "dataset_id": dataset_id,
+                "no_primary_reason": no_primary_reason or "no_expression_data",
+            },
+        )
+        output = ProcessingOutput(
+            parsed_datasets=[],
+            samples=samples,
+            no_primary_reason=no_primary_reason,
+        )
+        digest = _no_primary_digest(
+            no_primary_reason or "no_expression_data", samples
+        )
+        return StageResult(output_digest=digest, output=output)
 
     # --- cleaning ---
     parsed, cleaning_report = _clean_parsed_dataset(ctx, parsed)

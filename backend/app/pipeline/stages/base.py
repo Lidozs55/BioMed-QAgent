@@ -222,6 +222,11 @@ class ProcessingOutput(ContractModel):
     deterministic vertical merge produced by ``alignment.merge_datasets``
     (TODO §1.2) and ``field_alignment`` holds the real ``align_fields``
     mapping used to build it.
+
+    When no expression data can be recovered (phase 4b T1 / ADR-011)
+    ``parsed_datasets`` is empty and ``no_primary_reason`` records why — the
+    metadata-only placeholder primary was removed. Recovered ``samples``
+    remain on the output for the supporting ``sample_metadata.csv``.
     """
 
     parsed_datasets: list[ParsedDataset]
@@ -229,6 +234,7 @@ class ProcessingOutput(ContractModel):
     cleaning_report: CleaningReportModel | None = None
     field_alignment: dict[str, list[str]] | None = None
     merged_dataset: ParsedDataset | None = None
+    no_primary_reason: str | None = None
 
 
 class ArtifactBuildOutput(ContractModel):

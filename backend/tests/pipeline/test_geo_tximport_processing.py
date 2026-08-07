@@ -198,128 +198,131 @@ def test_geo_sample_metadata_accepts_gsm_accession_as_source_alias() -> None:
     assert sample.source_alias == "GSM9000001"
 
 
-# --- main_data.csv 始终含样本元数据行 (§17.5) -------------------------------
+# --- 无表达数据 → 无主数据（ADR-011 / phase 4b T1） -------------------------
 #
-# 当 GEO series_matrix 的表达矩阵为空（snRNAseq / RNA-seq 系列）时，
-# _build_minimal_parsed_dataset 必须为每个恢复出的样本生成一行
-# measurement_type="sample_metadata" 的元数据行写入 main_data.csv，
-# 保证 main_data.csv 始终有数据。表达相关字段留空，source_line_number=0
-# 标识"无源行号"，validation 的 source_value_lineage 检查会跳过这些行。
+# 当 GEO series_matrix 的表达矩阵为空（snRNAseq / RNA-seq 系列）且无
+# supplementary 表达文件时，processing 不再生成 metadata-only 占位行
+# （_build_minimal_parsed_dataset / geo_minimal_placeholder 已删除）：
+# parsed_datasets=[] + no_primary_reason 记录原因，恢复出的 samples 保留在
+# ProcessingOutput.samples 供 sample_metadata.csv 使用（T2 接线）。
 
 
-def _make_geo_sample(sample_id: str, alias: str = "", treatment: str = "Control"):
-    from app.pipeline.processing.geo_tximport import GeoSampleMetadata
-
-    return GeoSampleMetadata(
-        sample_id=sample_id,
-        source_alias=alias or sample_id,
-        cell_line_raw="MDA-MB-231",
-        cell_line_canonical="MDA-MB-231",
-        normalization_rule="identity",
-        treatment=treatment,
-        replicate=1,
-    )
-
-
-def _make_minimal_ctx(
+def _make_no_expression_ctx(
     tmp_path: Path, task_id: str
 ) -> tuple[object, SourceAsset]:
-    """Build a StageContext + placeholder SourceAsset for processing tests."""
+    """Build a live-mode StageContext + series_matrix SourceAsset whose
+    expression block is empty and which has no supplementary expression
+    asset — the no-expression scenario of phase 4b T1."""
     from datetime import UTC, datetime
 
     from app.pipeline.stages.base import StageContext
 
-    workdir = create_task_workdir(task_id, base_dir=str(tmp_path / task_id))
-    placeholder = workdir.source_assets / "series_matrix.txt.gz"
-    placeholder.write_bytes(b"placeholder")
-    checksum = hashlib.sha256(b"placeholder").hexdigest()
-    source_asset = SourceAsset(
-        asset_id=f"asset_{checksum}",
-        kind="source",
-        relative_path="source_assets/series_matrix.txt.gz",
-        sha256=checksum,
-        size_bytes=len(b"placeholder"),
-        media_type="application/gzip",
-        source_id="src_geo_gse_test",
-        successful_attempt_id="download_attempt_1",
-        data_level=DataLevel.REPOSITORY_PROCESSED,
+    ctx, source_asset = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_EMPTY_BLOCK, task_id=task_id
     )
-    ctx = StageContext(
+    live_ctx = StageContext(
         task_id=task_id,
-        workdir=workdir,
+        workdir=ctx.workdir,
         fixture_dir=tmp_path,
-        topic="test",
+        topic="live",
+        databases=["geo"],
         started_at=datetime.now(tz=UTC),
+        mode="live",
     )
-    return ctx, source_asset
+    return live_ctx, source_asset
 
 
-def test_minimal_dataset_with_samples_writes_one_metadata_row_per_sample(
+def test_no_expression_fallback_yields_no_primary_with_reason(
     tmp_path: Path,
 ) -> None:
-    """When samples are provided, _build_minimal_parsed_dataset must write
-    one sample_metadata row per sample into main_data.csv (not 0 rows)."""
-    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
-
-    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md1")
-
-    samples = [
-        _make_geo_sample("GSM9000001", treatment="DMSO"),
-        _make_geo_sample("GSM9000002", treatment="DrugA"),
-        _make_geo_sample("GSM9000003", treatment="DMSO"),
-    ]
-    parsed = _build_minimal_parsed_dataset(
-        source_asset, "ds_geo_test", ctx, samples=samples
+    """A series_matrix with an empty expression block and no supplementary
+    expression asset must yield NO parsed primary dataset: the metadata-only
+    placeholder rows (geo_minimal_placeholder) are removed (ADR-011)."""
+    from app.pipeline.stages.processing import (
+        _try_series_matrix_expression_or_minimal,
     )
 
-    # row_count must equal the number of samples (not 0)
-    assert parsed.row_count == 3
+    ctx, source_asset = _make_no_expression_ctx(tmp_path, "task_md1")
+    compressed = (
+        ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    ).read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+    assert len(samples) == 3
 
-    output_path = ctx.workdir.root / parsed.file_asset.relative_path
-    with output_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+    parsed, reason = _try_series_matrix_expression_or_minimal(
+        source_asset, "ds_geo_test", ctx, samples, suppl_asset=None
+    )
 
-    assert len(rows) == 3
-    # Every row is a sample_metadata row
-    assert all(r["measurement_type"] == "sample_metadata" for r in rows)
-    # Sample IDs are preserved
-    assert {r["sample_id"] for r in rows} == {
+    assert parsed is None
+    assert reason == "series_matrix_expression_empty_and_no_supplementary"
+    # No placeholder tximport_long.csv is written to the parsed workdir.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_no_expression_without_recoverable_samples_yields_no_primary(
+    tmp_path: Path,
+) -> None:
+    """When no samples can be recovered from the series_matrix no expression
+    data is available either: the fallback yields no parsed primary dataset
+    (no schema-only placeholder file is written)."""
+    from app.pipeline.stages.processing import (
+        _try_series_matrix_expression_or_minimal,
+    )
+
+    ctx, source_asset = _make_no_expression_ctx(tmp_path, "task_md2")
+
+    parsed, reason = _try_series_matrix_expression_or_minimal(
+        source_asset, "ds_geo_test", ctx, [], suppl_asset=None
+    )
+
+    assert parsed is None
+    assert reason == "series_matrix_samples_unavailable"
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_run_processing_no_expression_yields_empty_parsed_with_samples(
+    tmp_path: Path,
+) -> None:
+    """run_processing on a series_matrix with no expression data must yield
+    parsed_datasets=[], no_primary_reason, and keep the recovered samples on
+    the output (they feed sample_metadata.csv in a later task)."""
+    from app.pipeline.stages.processing import run_processing
+
+    ctx, source_asset = _make_no_expression_ctx(tmp_path, "task_md3")
+
+    result = run_processing(ctx, source_asset, "ds_geo_test")
+
+    assert result.output.parsed_datasets == []
+    assert (
+        result.output.no_primary_reason
+        == "series_matrix_expression_empty_and_no_supplementary"
+    )
+    # Recovered samples are preserved for the supporting sample_metadata.csv.
+    assert {s.sample_id for s in result.output.samples} == {
         "GSM9000001", "GSM9000002", "GSM9000003",
     }
-    # Expression-related fields are blank
-    for r in rows:
-        assert r["gene_id_raw"] == ""
-        assert r["gene_id"] == ""
-        assert r["expression_value"] == ""
-        assert r["source_raw_value"] == ""
-        # source_line_number=0 is the "no source locator" sentinel
-        assert r["source_line_number"] == "0"
-        assert r["source_column_index"] == "0"
-    # source_sample_alias is preserved
-    assert {r["source_sample_alias"] for r in rows} == {
-        "GSM9000001", "GSM9000002", "GSM9000003",
-    }
-    # record_id is deterministic per (dataset_id, "sample_metadata", sample_id)
-    assert all(r["record_id"].startswith("rec_") for r in rows)
-    assert len({r["record_id"] for r in rows}) == 3
+    # No placeholder tximport_long.csv is written.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+    # Deterministic digest that does not touch a parsed file's sha256.
+    assert len(result.output_digest) == 64
+    int(result.output_digest, 16)
 
 
-def test_minimal_dataset_without_samples_is_schema_only(tmp_path: Path) -> None:
-    """When samples is None or empty, _build_minimal_parsed_dataset writes a
-    schema-only CSV (0 rows) for backward compatibility."""
-    from app.pipeline.stages.processing import _build_minimal_parsed_dataset
+def test_no_primary_output_digest_is_deterministic(tmp_path: Path) -> None:
+    """Same no-expression inputs must produce the same output_digest (the
+    no-primary digest hashes the reason + sorted sample ids, not a parsed
+    file's sha256)."""
+    from app.pipeline.stages.processing import run_processing
 
-    ctx, source_asset = _make_minimal_ctx(tmp_path, "task_md2")
+    ctx_a, asset_a = _make_no_expression_ctx(tmp_path, "task_dig_a")
+    ctx_b, asset_b = _make_no_expression_ctx(tmp_path, "task_dig_b")
 
-    parsed_none = _build_minimal_parsed_dataset(
-        source_asset, "ds_geo_test", ctx, samples=None
-    )
-    assert parsed_none.row_count == 0
+    result_a = run_processing(ctx_a, asset_a, "ds_geo_test")
+    result_b = run_processing(ctx_b, asset_b, "ds_geo_test")
 
-    parsed_empty = _build_minimal_parsed_dataset(
-        source_asset, "ds_geo_test", ctx, samples=[]
-    )
-    assert parsed_empty.row_count == 0
+    assert result_a.output.parsed_datasets == []
+    assert result_a.output.no_primary_reason == result_b.output.no_primary_reason
+    assert result_a.output_digest == result_b.output_digest
 
 
 def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
@@ -681,18 +684,21 @@ def test_run_processing_live_mode_does_not_read_fixture_soft(
 
     # Live mode succeeded without reading the fixture SOFT.
     assert result.output is not None
-    parsed = result.output.parsed_datasets[0]
+    # No expression data (empty matrix block, no supplementary file) → no
+    # parsed primary dataset: parsed_datasets=[] with no_primary_reason
+    # (phase 4b T1 — the metadata-only placeholder is gone).
+    assert result.output.parsed_datasets == []
+    assert (
+        result.output.no_primary_reason
+        == "series_matrix_expression_empty_and_no_supplementary"
+    )
     # Sample metadata was recovered from the series_matrix, not the fixture.
     assert len(result.output.samples) == 2
     assert {s.sample_id for s in result.output.samples} == {
         "GSM9000100", "GSM9000101",
     }
-    # main_data.csv carries one sample_metadata row per sample (no expression
-    # matrix in live mode — see architectural note in run_processing).
-    assert parsed.row_count == 2
-    assert parsed.source_row_count == 0
-    assert parsed.processing_parameters["measurement_type"] == "sample_metadata"
-    assert parsed.processing_parameters["sample_count"] == 2
+    # No placeholder tximport_long.csv is written for the no-primary path.
+    assert list(workdir.parsed.iterdir()) == []
 
 
 def test_run_processing_fixture_mode_still_uses_fixture_soft() -> None:
