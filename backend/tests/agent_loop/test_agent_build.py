@@ -49,6 +49,8 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
         "find_skill",
         "invoke_skill",
         "run_research_pipeline",
+        "request_human_correction",
+        "execute_dataset_build",
         "read_file",
         "read_file_head",
         "search_file",

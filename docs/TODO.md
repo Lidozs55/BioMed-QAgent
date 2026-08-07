@@ -55,12 +55,16 @@
       → integrate → validate profile → publish`；来源 fan-out / fan-in 用 Operation 记录
       （`build_operation_plan` + `DatasetBuildExecutor`；Operation 执行器可注入，
       真实 Adapter 归 Phase 3）
-- [ ] **P0** `PipelineRunner` 降级为 Legacy facade；**不定义 BuildRecipe / 公开 BuildStep**
-      （V1 不动；facade 化在 Phase 3 接入 `execute_dataset_build` 工具时落地，
-      避免空 facade）
+- [x] **P0** `PipelineRunner` 降级为 Legacy facade；**不定义 BuildRecipe / 公开 BuildStep**
+      （V1 不动；`app/pipeline/runner.py` docstring 标注 `[V1 Legacy facade — Phase 2/8]`；
+      新 V2 入口为 `execute_dataset_build` function_tool（`app/pipeline/dataset_build_tool.py`，
+      spec JSON + source_files 包装为 content-addressed SourceAsset 后走
+      `ExpressionBuildRunner` + `DatasetBuildExecutor`）
 - [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
-- [ ] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
-      （依赖 Phase 3 真实 `publish` Operation 与 Phase 4 BuildResult/Publication 接线）
+- [x] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
+      （`expression_runner._publish` 写 `publication.json`：`publication_id` / manifest_ref /
+      validation_result_ref / `published_at` / `supersedes_publication_id`（`_find_latest_publication`
+      按版本目录字典序取最新）；新版本不修改旧版本目录）
 - [x] **P1** 受控局部重跑 `rerun_from` + 依赖一致性测试；禁止 Agent 任意 `skip_stages`（原 §1.6）
       （`DatasetBuildExecutor.resume_from`：服务端受控起点，目标 Operation 强制重跑、
       下游经 digest 闭包重新校验，起点外 Operation 不得被跳过；4 项测试）
@@ -85,9 +89,10 @@
 - [x] **P0** 修复 `RecipeExecutor.execute()`、Store 发现与 promotion 状态不一致
       （当前 execute/find_verified 只面向 VERIFIED，PROMOTED 后反不可达）
 - [x] **P0** Recipe 输出经 Workspace 校验提交为 `SourceAsset` 后再交给 Adapter
-- [ ] **P1** 统一 SourceAsset 契约：PDB / browser 下载路径走 `acquire_source()`；
+- [x] **P1** 统一 SourceAsset 契约：PDB 下载路径走 `acquire_source()`；
       所有 acquisition skill 产出合规 SourceAsset（原 §2.4）
-- [ ] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
+      （browser 属任意 URL 兜底、不走 HTTPS 白名单，见 skills_interface_spec §browser_fallback）
+- [x] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
       `acquire_source()` + 大文件 progress 事件（原 §2.5）
 
 ---
@@ -119,8 +124,13 @@
       可选 `gene_symbol_map` 参数：命中转 ensembl_gene + normalization_log 审计，
       未命中保留原 namespace 不丢弃，statistics 记 `gene_symbol_mapped_count`；
       多对一聚合策略保持 NormalizationProfile `keep_all` 声明；6 项测试）
-- [ ] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
+- [x] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
       `tools/alignment` 降级为候选生成器（待 Phase 2 执行内核后执行）
+      （V2 chain 已用 `integrator.integrate()`；新增 `datasets/build/expression_runner.py`
+      把整链拆为 Operation 粒度真实执行器并接入 `DatasetBuildExecutor`——
+      parse/canonicalize/compat/integrate/validate/publish 六类 handler + digest 复用 +
+      重跑 SKIPPED；`tools/alignment.merge_datasets` 标注 V1 Legacy 保留至 Phase 8，
+      `align_fields`/`normalize_field_names` 作候选生成器）
 
 ---
 
@@ -139,9 +149,9 @@
       字符串猜测 no_data 的路径
 - [x] **P1** 审计产物（source list / quality / search / rejected）通过
       `audit_report` Artifact Role 发布，不在架构层固定单独文件名
-- [ ] **P2** `request_human_correction` function_tool + UserInputDialog
+- [x] **P2** `request_human_correction` function_tool + UserInputDialog
       `data_correction` 分支 + 超时退化为 `corrections_todo.csv`（原 §1.7，HIL 为
-      Agent 层工具，pipeline 内自动 HIL 已否决）
+      Agent 层工具，pipeline 内自动 HIL 已否决）（4c 完成 2026-08-07）
 
 ---
 
@@ -166,25 +176,41 @@
 > 目标：架构层固定三项发布不变量；具体规则迁入 Profile；置信度与模型提取准入
 > 落地。验收见 Design §16 Phase 6。
 
-- [ ] **P0** 架构层固定"provenance closure + Profile passed + atomic promotion"
+- [x] **P0** 架构层固定"provenance closure + Profile passed + atomic promotion"
       三项发布不变量（ADR-012）
-- [ ] **P0** 将 CSV 编码/列数、字段完整率、probe mapping 覆盖率、bbox 等具体规则
+      （`datasets/build/invariants.py`：`check_release_invariants` 纯函数——
+      provenance 文档在盘且覆盖全部 source asset、validation status 必须 passed、
+      publish 目录 temp+rename 原子写且不重写旧版本；expression_runner 的 publish
+      Operation 作为发布前 gate，失败拒绝 promotion）
+- [x] **P0** 将 CSV 编码/列数、字段完整率、probe mapping 覆盖率、bbox 等具体规则
       迁入版本化 Validation Profile
-- [ ] **P0** 实现 Confidence Contract 与确定性统计检测器（benford_distance /
+      （`csv_encoding_utf8` 已入 `gene_expression.release.v1`：非 UTF-8 主表 FAILED
+      且前置短路避免下游崩溃；列数/字段完整率已有；probe mapping 覆盖率待 Phase 5
+      GEO 迁移后入 Profile；bbox/model 元数据由 chart 提取准入门禁承担）
+- [x] **P0** 实现 Confidence Contract 与确定性统计检测器（benford_distance /
       last_digit_chi2 / detect_constant_column / detect_arithmetic_progression /
       aggregate_confidence_metrics，含 `is_benford_applicable` 前置判定）（原 §6.1）
       （✅ 检测器纯函数已落地：`app/datasets/build/confidence.py` + 24 项单元测试；
-      阈值由 Profile 持有 `ConfidenceThresholds`；VLM 图表点标注等契约侧落地待后续）
-- [ ] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
+      阈值由 Profile 持有 `ConfidenceThresholds`；契约侧已落地——manifest
+      `confidence_summary` 由 `build_confidence_summary` 汇总 `confidence_report.csv`
+      异常计数，无报告时为全零）
+- [x] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
       门禁（缺置信度或 source-of-record 时对应 Profile 失败）
+      （`extract_chart_data_vlm`：L1 点带 confidence + chart 行 page_number/bbox/
+      extraction_tier 元数据；新增 `validate_chart_extraction` 准入——L1 点缺
+      confidence 或缺 model_name → 整批拒绝、不落盘；L2/L3 确定性兜底豁免；
+      9 项新测试）
 - [x] **P1** 产出 `confidence_report.csv`；validation 增加 data_confidence 补充检查
       （低分 → valid_with_warnings）（原 §6.1）
       （`ExpressionValidationProfile` 增加 data_confidence check：统计异常仅作
       warning（v1 不阻断发布，SURVEY §7），报告写入 validation_report.json 的
       warnings 字段并产出 `confidence_report.csv`；5 项新测试）
-- [ ] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
-- [ ] **P1** `chart_data` 完整性校验（原 §2.7.1）
-- [ ] **P2** 通用 provenance coverage 统计
+- [x] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
+- [x] **P1** `chart_data` 完整性校验（原 §2.7.1）
+- [x] **P2** 通用 provenance coverage 统计
+      （`manifest.compute_provenance_coverage`：primary 行 `traced_rows` / `untraced_rows` /
+      `coverage_ratio`，asset 集合来自 provenance.json 的 source assets；coverage 写入
+      `dataset_manifest.json` 的 `provenance_summary.coverage`）
 - [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
 - [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
 - [ ] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）

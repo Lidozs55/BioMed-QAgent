@@ -31,6 +31,7 @@ from app.domain.contracts import (
     QueryStatus,
     SourceRecord,
     StageName,
+    generate_prefixed_uuid,
     make_source_id,
 )
 from app.integrations.acquisition import acquire_source
@@ -330,7 +331,25 @@ async def download_supplementary_adapter(
             "error": "No PMCID found — article is not in the PMC open-access subset",
         }, ensure_ascii=False)
 
-    # ---- 2. Fetch PMC article page for supplementary links -------------------
+    # ---- 2. Register the PubMed efetch XML itself as a SourceAsset ---------
+    # The XML is the original record that the PMCID and the supplementary
+    # links are derived from; keeping it as a content-addressed asset makes
+    # the provenance chain complete (TODO Phase 2.5 P1).
+    xml_source_id = make_source_id(
+        Database.PUBMED,
+        pmid,
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+    )
+    xml_asset = run_ctx.stage_source_asset(
+        content=xml_data,
+        filename=f"pubmed_{pmid}.xml",
+        source_id=xml_source_id,
+        successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+        data_level=DataLevel.METADATA,
+        media_type="application/xml",
+    )
+
+    # ---- 3. Fetch PMC article page for supplementary links -------------------
     pmc_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
 
     try:
@@ -369,6 +388,21 @@ async def download_supplementary_adapter(
     assets = []
     attempts = []
     retrieved_at = datetime.now(UTC)
+
+    async def _report_progress(bytes_received: int, total: int | None) -> None:
+        # Throttle to whole-megabyte steps so large supplementary downloads
+        # surface incremental progress without spamming the event stream.
+        if bytes_received % (1024 * 1024) < 64 * 1024 or (
+            total is not None and bytes_received >= total
+        ):
+            await run_ctx.emit_progress(
+                stage=StageName.ACQUISITION,
+                kind="downloaded_bytes",
+                current=bytes_received,
+                total=total,
+                detail={"source": "pubmed", "accession": pmid, "filename": filename},
+            )
+
     source_record = SourceRecord(
         source_id=make_source_id(Database.PUBMED, pmid, pmc_url),
         database=Database.PUBMED,
@@ -403,6 +437,7 @@ async def download_supplementary_adapter(
             max_bytes=max_size_bytes,
             accept="*/*",
             request_headers=BROWSER_HEADERS,
+            progress=_report_progress,
         )
         attempts.append(result.attempt)
         if result.asset is None:
@@ -439,6 +474,7 @@ async def download_supplementary_adapter(
         "source_url": pmc_url,
         "local_files": downloaded,
         "source_assets": [asset.model_dump(mode="json") for asset in assets],
+        "pubmed_xml_asset": xml_asset.model_dump(mode="json"),
         "download_attempts": [
             attempt.model_dump(mode="json") for attempt in attempts
         ],

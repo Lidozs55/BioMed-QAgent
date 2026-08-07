@@ -7,14 +7,20 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.domain.contracts import DataLevel
 from app.skills.builtin.acquisition.pdb import (
+    PdbServices,
     describe_pdb,
     download_pdb,
+    download_pdb_adapter,
     search_pdb,
 )
-from app.tools.crawler import DownloadResult, FetchResult
+from app.tools.content_cache import ContentCache
+from app.tools.crawler import FetchResult
 
 
 def _make_ctx(task_id: str = "test_pdb") -> ToolContext:
@@ -179,44 +185,68 @@ def test_managed_search_pdb_uses_bound_crawler_facade(
 
 
 def test_child_download_pdb_commits_source_asset(
-    monkeypatch,
-    tmp_path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ManagedFacade:
-        async def download(self, url: str) -> DownloadResult:
-            return DownloadResult(
-                url=url,
-                content=b"ATOM child structure",
-                status_code=200,
-                elapsed_ms=1,
-            )
+    """Child (subagent) run: asset staged in child boundary then committed.
+
+    Mirrors the GEO child test: the download path is replaced by a staged
+    asset so the staging-commit boundary is exercised deterministically
+    (acquire_source's real hardlink publication is covered by the
+    integration tests in tests/integrations/test_acquisition.py).
+    """
+    import app.skills.builtin.acquisition.pdb as pdb_module
 
     parent = RunContext(task_id="managed_pdb_download", base_dir=tmp_path)
-    parent.bind_crawler_facade(ManagedFacade())
     child = parent.create_child_context("child-pdb")
-    context = ToolContext(
-        context=child,
-        tool_name="download_pdb",
-        tool_call_id="call-pdb-download",
-        tool_arguments="{}",
-    )
-    monkeypatch.setattr(
-        "app.skills.builtin.acquisition.pdb._download",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("urllib path used")),
+    workspace = child.source_asset_workspace()
+    asset = workspace.stage_bytes(
+        content=b"ATOM child structure",
+        filename="1cbs.pdb",
+        source_id="src_pdb_child",
+        successful_attempt_id="attempt_pdb_child",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+        media_type="application/octet-stream",
     )
 
-    result = asyncio.run(
-        download_pdb.on_invoke_tool(
-            context,
-            json.dumps({"pdb_id": "1cbs", "file_type": "pdb"}),
+    async def fake_acquire_source(**_kwargs: object) -> object:
+        return type(
+            "AcquisitionResultStub",
+            (),
+            {
+                "asset": asset,
+                "attempt": type(
+                    "AttemptStub",
+                    (),
+                    {"model_dump": lambda self, mode: {"status": "succeeded"}},
+                )(),
+            },
+        )()
+
+    monkeypatch.setattr(pdb_module, "acquire_source", fake_acquire_source)
+
+    async def run() -> str:
+        services = PdbServices(
+            http=None,  # type: ignore[arg-type]
+            cache=None,  # type: ignore[arg-type]
         )
-    )
+        return await download_pdb_adapter(
+            child,
+            "1cbs",
+            "pdb",
+            services=services,
+        )
+
+    result = asyncio.run(run())
 
     data = json.loads(result)
-    committed = Path(data["local_files"][0])
-    assert committed.is_relative_to(parent.work_dir.source_assets)
+    committed = parent.work_dir.root / data["asset"]["relative_path"]
+    assert committed.exists()
     assert committed.read_bytes() == b"ATOM child structure"
-    assert child.source_asset_ids
+    assert not (child.work_dir.root / data["asset"]["relative_path"]).exists()
+    assert child.source_asset_ids == [asset.asset_id]
+    assert data["asset"]["kind"] == "source"
+    assert data["attempt"]["status"] == "succeeded"
 
 
 def test_search_pdb_network_error_returns_error_json() -> None:
@@ -279,24 +309,40 @@ def test_describe_pdb_success() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_download_pdb_success() -> None:
+def test_download_pdb_success(tmp_path: Path) -> None:
     """download_pdb saves file, tracks provenance, and logs query."""
-    file_content = b"ATOM      1  N   MET A   1      11.104  6.134  6.504  1.00 20.00           N"
+    file_content = (
+        b"ATOM      1  N   MET A   1      11.104  6.134  6.504  1.00 20.00           N"
+    )
 
-    # shutil.copyfileobj calls resp.read(bufsize) in a loop until empty bytes
-    # Return content on first read, empty on subsequent reads
-    read_calls = [file_content, b""]
-    mock_resp = MagicMock()
-    mock_resp.__enter__.return_value = mock_resp
-    mock_resp.__exit__.return_value = False
-    mock_resp.read.side_effect = read_calls
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=file_content,
+            headers={
+                "Content-Length": str(len(file_content)),
+                "Content-Type": "application/octet-stream",
+            },
+        )
 
     ctx = _make_ctx(task_id="test_pdb_download")
-    with patch("urllib.request.urlopen", return_value=mock_resp):
-        args = json.dumps({"pdb_id": "1cbs", "file_type": "pdb"})
-        result = asyncio.run(download_pdb.on_invoke_tool(ctx, args))
 
-    data = json.loads(result)
+    async def run() -> str:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http:
+            services = PdbServices(
+                http=http,
+                cache=ContentCache(tmp_path / "cache"),
+            )
+            return await download_pdb_adapter(
+                ctx.context,
+                "1cbs",
+                "pdb",
+                services=services,
+            )
+
+    data = json.loads(asyncio.run(run()))
     assert data["source"] == "pdb"
     assert data["pdb_id"] == "1CBS"
     assert data["format_hint"] == "pdb_legacy"
@@ -308,6 +354,9 @@ def test_download_pdb_success() -> None:
     assert len(rc.raw_assets) == 1
     assert len(rc.sources) == 1
     assert rc.sources[0].database.value == "pdb"
+    assert rc.source_asset_ids
+    assert data["asset"]["sha256"] is not None
+    assert data["attempt"]["status"] == "succeeded"
 
 
 def test_download_pdb_unsupported_file_type() -> None:
@@ -322,13 +371,30 @@ def test_download_pdb_unsupported_file_type() -> None:
     assert "xml" in data["error"] or "unsupported" in data["error"].lower()
 
 
-def test_download_pdb_network_error_returns_error_json() -> None:
+def test_download_pdb_network_error_returns_error_json(tmp_path: Path) -> None:
     """download_pdb returns error JSON (not raises) on network failure."""
-    ctx = _make_ctx(task_id="test_pdb_dl_err")
-    with patch("urllib.request.urlopen", side_effect=ConnectionError("timeout")):
-        args = json.dumps({"pdb_id": "1cbs", "file_type": "pdb"})
-        result = asyncio.run(download_pdb.on_invoke_tool(ctx, args))
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content=b"server error")
 
-    data = json.loads(result)
+    ctx = _make_ctx(task_id="test_pdb_dl_err")
+
+    async def run() -> str:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http:
+            services = PdbServices(
+                http=http,
+                cache=ContentCache(tmp_path / "cache"),
+            )
+            return await download_pdb_adapter(
+                ctx.context,
+                "1cbs",
+                "pdb",
+                services=services,
+            )
+
+    data = json.loads(asyncio.run(run()))
     assert data["source"] == "pdb"
     assert "error" in data
+    rc: RunContext = ctx.context
+    assert rc.query_log[-1]["status"] == "failed"

@@ -252,3 +252,106 @@ def test_gene_symbol_map_keeps_unmapped_symbols(tmp_path: Path) -> None:
     assert by_id["TP53"]["gene_id_namespace"] == "ensembl_gene"
     assert by_id["MYH9"]["gene_id_namespace"] == "gene_symbol"
     assert by_id["MYH9"]["gene_id"] == "MYH9"  # never dropped when unmapped
+
+
+def test_multi_unit_batch_detected_as_inconsistency(tmp_path: Path) -> None:
+    """A batch mixing two allowed units is flagged, not silently merged."""
+    matrix = tmp_path / "mixed_unit_matrix.tsv"
+    matrix.write_text(
+        "gene_id\tS1\tS2\n"
+        "TP53\t1.5\t2.5\n"
+        "BRCA1\t3.5\t4.5\n",
+        encoding="utf-8",
+    )
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/mixed_unit_matrix.tsv",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_test",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        matrix,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    # Both units are in the allowed set, so neither row is rejected; the
+    # canonicalizer must still surface the inconsistency for the publisher.
+    from app.datasets.contracts import NormalizationProfile
+
+    base = _expression_normalization_v1()
+    profile = NormalizationProfile(
+        profile_id="gene_expression.normalization.mixed.v1",
+        dataset_family="gene_expression",
+        allowed_namespaces=base.allowed_namespaces,
+        allowed_units=["tpm_unstranded", "unstranded", "expression_value"],
+        allowed_semantics=base.allowed_semantics,
+        aggregation_policy="keep_all",
+    )
+    # Inject a second unit into the parsed batch rows so the canonicalizer
+    # sees two distinct expression_unit values.
+    from app.datasets.contracts import DataBatch
+
+    def _remap_unit(row: dict[str, str]) -> dict[str, str]:
+        row = dict(row)
+        if row.get("sample_id") == "S2":
+            row["expression_unit"] = "unstranded"
+        return row
+
+    source_path = tmp_path / batch.file_asset.relative_path
+    mixed_dir = tmp_path / "source_assets"
+    mixed_dir.mkdir(parents=True, exist_ok=True)
+    mixed = mixed_dir / "mixed_parsed.tsv"
+    with source_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames
+        rows = [_remap_unit(row) for row in reader]
+    with mixed.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    mixed_checksum = hashlib.sha256(mixed.read_bytes()).hexdigest()
+    mixed_batch = DataBatch(
+        batch_id="binding_1",
+        binding_id="binding_1",
+        dataset_family=batch.dataset_family,
+        row_granularity=batch.row_granularity,
+        schema_ref=batch.schema_ref,
+        file_asset=batch.file_asset.model_copy(
+                update={
+                    "asset_id": asset_id_from_sha256(mixed_checksum),
+                    "sha256": mixed_checksum,
+                    "relative_path": "source_assets/mixed_parsed.tsv",
+                    "size_bytes": mixed.stat().st_size,
+                }
+            ),
+        row_count=batch.row_count,
+        column_count=batch.column_count,
+        parser_id=batch.parser_id,
+        parser_version=batch.parser_version,
+        statistics=dict(batch.statistics),
+    )
+    result = canonicalize(
+        batch=mixed_batch,
+        schema=build_gene_expression_schema(),
+        profile=profile,
+        output_dir=tmp_path,
+    )
+    assert result.row_count == 4
+    assert result.rejected_count == 0
+    assert result.batch.statistics["unit_inconsistency_detected"] is True
+    assert any(
+        "multiple expression units" in warning for warning in result.batch.warnings
+    )
+    assert set(result.batch.statistics["expression_units"]) == {
+        "expression_value",
+        "unstranded",
+    }

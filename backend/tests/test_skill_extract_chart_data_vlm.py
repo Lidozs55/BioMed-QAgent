@@ -60,9 +60,9 @@ _VALID_VLM_JSON = json.dumps({
         "y": {"label": "Expression", "unit": "FPKM", "scale": "log"},
     },
     "data_points": [
-        {"x": "Liver", "y": "120.5", "series_label": "GeneA"},
-        {"x": "Brain", "y": "85.3", "series_label": "GeneA"},
-        {"x": "Liver", "y": "200.1", "series_label": "GeneB"},
+        {"x": "Liver", "y": "120.5", "series_label": "GeneA", "confidence": 0.95},
+        {"x": "Brain", "y": "85.3", "series_label": "GeneA", "confidence": 0.9},
+        {"x": "Liver", "y": "200.1", "series_label": "GeneB", "confidence": 0.88},
     ],
     "legend": ["GeneA", "GeneB"],
 })
@@ -328,15 +328,15 @@ def test_extract_from_pdf_l1_success(tmp_path: Path) -> None:
             "y": {"label": "-log10(p)", "unit": "", "scale": "linear"},
         },
         "data_points": [
-            {"x": "2.5", "y": "4.1", "series_label": "up"},
-            {"x": "-3.0", "y": "5.2", "series_label": "down"},
+            {"x": "2.5", "y": "4.1", "series_label": "up", "confidence": 0.93},
+            {"x": "-3.0", "y": "5.2", "series_label": "down", "confidence": 0.91},
         ],
         "legend": ["up", "down"],
     })
 
     with patch(
         "app.skills.builtin.processing.extract_chart_data_vlm._extract_pdf_images",
-        return_value=[fake_img1, fake_img2],
+        return_value=[(fake_img1, 1, (0, 0, 10, 10)), (fake_img2, 2, (0, 0, 20, 20))],
     ), patch(
         "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
         side_effect=[vlm_response_1, vlm_response_2],
@@ -388,6 +388,9 @@ def test_extract_from_pdf_l1_fail_l2_success(tmp_path: Path) -> None:
         "extracted_at": "2025-01-01T00:00:00Z",
         "model_name": "pdfplumber",
         "source_label": "paper_no_charts.pdf",
+        "page_number": "1",
+        "bbox": "",
+        "extraction_tier": "L2_tables",
     }
     fake_point_rows = [
         {"point_id": "chart_test_tbl_p1_1_r1_c1", "chart_id": "chart_test_tbl_p1_1",
@@ -396,7 +399,7 @@ def test_extract_from_pdf_l1_fail_l2_success(tmp_path: Path) -> None:
 
     with patch(
         "app.skills.builtin.processing.extract_chart_data_vlm._extract_pdf_images",
-        return_value=[fake_img],
+        return_value=[(fake_img, 1, (0, 0, 10, 10))],
     ), patch(
         "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
         side_effect=ChartExtractionError("VLM failed"),
@@ -435,7 +438,7 @@ def test_extract_from_pdf_l1_l2_fail_l3_success(tmp_path: Path) -> None:
 
     with patch(
         "app.skills.builtin.processing.extract_chart_data_vlm._extract_pdf_images",
-        return_value=[fake_img],
+        return_value=[(fake_img, 1, (0, 0, 10, 10))],
     ), patch(
         "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
         side_effect=ChartExtractionError("VLM failed"),
@@ -647,12 +650,45 @@ def test_normalize_chart_json_basic() -> None:
     assert chart_row["legend"] == "GeneA|GeneB"
     assert chart_row["model_name"] == "qwen-vl-max"
     assert chart_row["source_label"] == "test.png"
+    # Metadata / tier provenance (TODO Phase 6 P0)
+    assert chart_row["extraction_tier"] == "L1_vlm"
+    assert chart_row["page_number"] == ""
+    assert chart_row["bbox"] == ""
 
     assert len(point_rows) == 3
     assert point_rows[0]["point_id"] == "chart_asset_abc123_1_p1"
     assert point_rows[0]["x_value"] == "Liver"
     assert point_rows[0]["y_value"] == "120.5"
     assert point_rows[0]["series_label"] == "GeneA"
+    assert point_rows[0]["confidence"] == "0.95"
+
+
+def test_normalize_chart_json_carries_metadata() -> None:
+    """page_number / bbox / extraction_tier are carried into the chart row."""
+    data = json.loads(_VALID_VLM_JSON)
+    chart_row, point_rows = _normalize_chart_json(
+        data,
+        source_asset_id="asset_pdf_sha",
+        chart_idx=3,
+        source_label="paper.pdf",
+        page_number="3",
+        bbox="10,20,300,150",
+        extraction_tier="L1_vlm",
+    )
+    assert chart_row["page_number"] == "3"
+    assert chart_row["bbox"] == "10,20,300,150"
+    assert chart_row["extraction_tier"] == "L1_vlm"
+    assert point_rows[0]["confidence"] == "0.95"
+
+
+def test_normalize_chart_json_point_without_confidence_blank() -> None:
+    """A VLM point missing confidence normalizes to an empty string."""
+    data = json.loads(_VALID_VLM_JSON)
+    data["data_points"][0].pop("confidence")
+    _chart, point_rows = _normalize_chart_json(
+        data, source_asset_id="asset_abc", chart_idx=1, source_label="a.png"
+    )
+    assert point_rows[0]["confidence"] == ""
 
 
 def test_normalize_chart_json_empty_data_points() -> None:
@@ -795,3 +831,215 @@ def test_pdf_image_cap_at_10(tmp_path: Path) -> None:
     # The cap is enforced inside _extract_pdf_images; here we just verify
     # the constant is correctly exported and the skill module exposes it
     # for future tuning.
+
+
+# ---------------------------------------------------------------------------
+# chart_data integrity validation (TODO Phase 6 P1, 原 §2.7.1)
+# ---------------------------------------------------------------------------
+
+
+def _valid_chart_rows() -> list[dict[str, Any]]:
+    return [{
+        "chart_id": "chart_asset_a_1",
+        "source_asset_id": "asset_a",
+        "chart_type": "bar",
+        "title": "T",
+        "x_label": "X", "x_unit": "", "x_scale": "linear",
+        "y_label": "Y", "y_unit": "", "y_scale": "linear",
+        "data_point_count": 2, "legend": "",
+        "extracted_at": "2026-01-01T00:00:00Z",
+        "model_name": "qwen-vl-max", "source_label": "a.png",
+    }]
+
+
+def _valid_point_rows() -> list[dict[str, Any]]:
+    return [
+        {"point_id": "p1", "chart_id": "chart_asset_a_1", "x_value": "1", "y_value": "2", "series_label": "s", "confidence": "0.9"},
+        {"point_id": "p2", "chart_id": "chart_asset_a_1", "x_value": "3", "y_value": "4", "series_label": "s", "confidence": "0.8"},
+    ]
+
+
+def test_validate_chart_data_accepts_complete_payload() -> None:
+    """A complete chart payload (source_asset_id + chart_id refs) passes."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    violations = validate_chart_data(_valid_chart_rows(), _valid_point_rows())
+    assert violations == []
+
+
+def test_validate_chart_data_rejects_missing_source_asset_id() -> None:
+    """Every chart row must carry a source_asset_id."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    chart_rows = _valid_chart_rows()
+    chart_rows[0]["source_asset_id"] = ""
+    violations = validate_chart_data(chart_rows, _valid_point_rows())
+    assert any("missing source_asset_id" in v for v in violations)
+
+
+def test_validate_chart_data_rejects_orphan_point() -> None:
+    """A point referencing a non-existent chart_id is a violation."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    point_rows = _valid_point_rows()
+    point_rows[0]["chart_id"] = "chart_ghost"
+    violations = validate_chart_data(_valid_chart_rows(), point_rows)
+    assert any("no matching chart_data.csv row" in v for v in violations)
+
+
+def test_validate_chart_data_rejects_point_missing_chart_id() -> None:
+    """A point with an empty chart_id is a violation."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    point_rows = _valid_point_rows()
+    point_rows[0]["chart_id"] = ""
+    violations = validate_chart_data(_valid_chart_rows(), point_rows)
+    assert any("missing chart_id" in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# Model-extraction admission gate (TODO Phase 6 P0, Design §16 Phase 6)
+# ---------------------------------------------------------------------------
+
+
+def _l1_chart_rows() -> list[dict[str, Any]]:
+    rows = _valid_chart_rows()
+    rows[0]["extraction_tier"] = "L1_vlm"
+    rows[0]["model_name"] = "qwen-vl-max"
+    return rows
+
+
+def _l2_chart_rows() -> list[dict[str, Any]]:
+    rows = _valid_chart_rows()
+    rows[0]["chart_type"] = "table"
+    rows[0]["extraction_tier"] = "L2_tables"
+    rows[0]["model_name"] = "pdfplumber"
+    return rows
+
+
+def test_validate_chart_extraction_accepts_confident_l1_payload() -> None:
+    """L1 points carrying confidence pass the admission gate."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_extraction,
+    )
+
+    violations = validate_chart_extraction(
+        _l1_chart_rows(), _valid_point_rows()
+    )
+    assert violations == []
+
+
+def test_validate_chart_extraction_rejects_l1_point_missing_confidence() -> None:
+    """A model-extracted point without confidence fails admission."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_extraction,
+    )
+
+    point_rows = _valid_point_rows()
+    point_rows[0]["confidence"] = ""
+    violations = validate_chart_extraction(_l1_chart_rows(), point_rows)
+    assert any("missing confidence" in v for v in violations)
+
+
+def test_validate_chart_extraction_rejects_l1_missing_model() -> None:
+    """A model-extracted chart without model_name fails admission."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_extraction,
+    )
+
+    chart_rows = _l1_chart_rows()
+    chart_rows[0]["model_name"] = ""
+    violations = validate_chart_extraction(chart_rows, _valid_point_rows())
+    assert any("missing model_name" in v for v in violations)
+
+
+def test_validate_chart_extraction_exempts_l2_points_without_confidence() -> None:
+    """Deterministic (non-model) tiers are exempt from the confidence gate."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_extraction,
+    )
+
+    point_rows = _valid_point_rows()
+    for row in point_rows:
+        row["confidence"] = ""
+    violations = validate_chart_extraction(_l2_chart_rows(), point_rows)
+    assert violations == []
+
+
+def test_validate_chart_extraction_no_tier_treated_as_l1() -> None:
+    """Rows without extraction_tier are treated as model-extracted."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_extraction,
+    )
+
+    chart_rows = _valid_chart_rows()  # no extraction_tier key
+    point_rows = _valid_point_rows()
+    point_rows[0]["confidence"] = ""
+    violations = validate_chart_extraction(chart_rows, point_rows)
+    assert any("missing confidence" in v for v in violations)
+
+
+def test_extract_from_pdf_l1_success_persists_page_metadata(tmp_path: Path) -> None:
+    """PDF L1 charts carry page_number/bbox/extraction_tier in chart_data.csv."""
+    ctx = _make_ctx(tmp_path=tmp_path)
+    run_ctx: RunContext = ctx.context
+
+    pdf_path = run_ctx.work_dir.source_asset_file("meta_paper.pdf")
+    pdf_path.write_bytes(b"%PDF-1.4 meta paper")
+
+    fake_img1 = run_ctx.work_dir.download_temp_file("meta_p1_img1.png")
+    _write_fake_png(fake_img1, content=b"\x89PNG\r\n\x1a\nmeta1")
+
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm._extract_pdf_images",
+        return_value=[(fake_img1, 1, (12, 34, 156, 200))],
+    ), patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        return_value=_VALID_VLM_JSON,
+    ):
+        data = _call_tool(ctx, str(pdf_path))
+
+    assert data["status"] == "ok"
+    chart_csv = Path(data["outputs"][0])
+    with chart_csv.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["page_number"] == "1"
+    assert rows[0]["bbox"] == "12,34,156,200"
+    assert rows[0]["extraction_tier"] == "L1_vlm"
+    assert rows[0]["model_name"] == "qwen-vl-max"
+
+
+def test_l1_point_missing_confidence_fails_extraction(tmp_path: Path) -> None:
+    """An L1 extraction whose points lack confidence fails admission."""
+    ctx = _make_ctx(tmp_path=tmp_path)
+    run_ctx: RunContext = ctx.context
+
+    img_path = _write_fake_png(
+        run_ctx.work_dir.source_asset_file("no_confidence.png")
+    )
+    no_confidence_json = json.loads(_VALID_VLM_JSON)
+    for pt in no_confidence_json["data_points"]:
+        pt.pop("confidence")
+
+    with patch(
+        "app.skills.builtin.processing.extract_chart_data_vlm.call_vl_model",
+        return_value=json.dumps(no_confidence_json),
+    ):
+        data = _call_tool(ctx, str(img_path))
+
+    assert data["status"] == "error"
+    assert "admission check failed" in data["error"]
+    assert "missing confidence" in data["error"]
+
+    # Nothing was written to disk
+    chart_dir = run_ctx.work_dir.root / "parsed" / "chart_data"
+    assert not (chart_dir / "chart_data.csv").exists()

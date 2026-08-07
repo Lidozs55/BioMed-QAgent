@@ -13,7 +13,13 @@ function taskWithPrompt(
   activeRunId: string,
   pendingRunId: string,
   requestId: string,
-  overrides: { promptKind?: PendingUserInput["promptKind"]; detail?: PendingUserInput["detail"]; summary?: string } = {},
+  overrides: {
+    promptKind?: PendingUserInput["promptKind"];
+    detail?: PendingUserInput["detail"];
+    summary?: string;
+    expiresAt?: string | null;
+    fixtureExempt?: boolean;
+  } = {},
 ): TaskProjection {
   const summary: TaskSummary = {
     task_id: taskId,
@@ -33,8 +39,8 @@ function taskWithPrompt(
       requestId,
       promptKind: overrides.promptKind ?? "plan_confirmation",
       summary: overrides.summary ?? `Confirm ${taskId}`,
-      expiresAt: null,
-      fixtureExempt: false,
+      expiresAt: overrides.expiresAt ?? null,
+      fixtureExempt: overrides.fixtureExempt ?? false,
       detail: overrides.detail ?? {},
       sequence: 1,
       timestamp: CREATED_AT,
@@ -159,9 +165,110 @@ describe("UserInputDialog", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText("Stale A1 failure")).toBeNull();
-      expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+      // FIX 3: after a SUCCESSFUL resume the in-flight decision is retained
+      // while the same prompt stays pending — buttons stay disabled instead
+      // of briefly re-enabling before user_input_resumed arrives.
+      expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
     });
     expect(onResumeRun).toHaveBeenCalledTimes(2);
+
+    // The in-flight state clears only with the prompt lifecycle: removing the
+    // prompt (pendingUserInput -> null) resets the submission; re-showing the
+    // same prompt starts fresh and re-enables the buttons.
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_a",
+      mode: "agent",
+      databases: [],
+      title: "Task task_a",
+      status: "running",
+      active_run_id: "run_a",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "确认执行" })).not.toBeInTheDocument();
+    });
+    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+  });
+
+  it("retains the in-flight decision while the same prompt stays pending (FIX 3)", async () => {
+    // Regression (final review FIX 3): after an accepted resumeRun returns,
+    // the dialog used to clear pendingDecision even though the snapshot may
+    // still report awaiting_user_input — the buttons briefly re-enabled and a
+    // second click was rejected by the backend submitter. The in-flight
+    // decision must be retained while the SAME prompt remains pending and
+    // cleared only when the prompt disappears (promptKey reset effect).
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun.mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_inflight",
+      "run_inflight",
+      "run_inflight",
+      "request_inflight",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+
+    // resumeRun resolves (the manager returned its snapshot as-is), but the
+    // prompt is STILL pending: the dialog must stay in-flight — both buttons
+    // remain disabled and the spinner stays.
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+
+    // The prompt disappears (reducer processed user_input_resumed): the
+    // dialog closes and nothing in-flight leaks.
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_inflight",
+      mode: "agent",
+      databases: [],
+      title: "Task task_inflight",
+      status: "running",
+      active_run_id: "run_inflight",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "提交修正" })).not.toBeInTheDocument();
+    });
+
+    // Re-showing the same prompt starts fresh: the retained in-flight state
+    // was cleared with the prompt lifecycle.
+    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
   });
 
   it("renders plan_confirmation detail as structured fields instead of raw JSON", () => {
@@ -265,6 +372,360 @@ describe("UserInputDialog", () => {
     expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
     // max_turns_reached 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
+
+  it("renders data_correction prompt with title, summary, textarea and both actions", () => {
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "候选 GSE 无法判断，请确认使用哪个数据集？",
+        detail: {
+          field: "dataset_id",
+          options: ["GSE100500", "GSE12345"],
+        },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    expect(screen.getByText("需要人工修正")).toBeVisible();
+    // T5 polish: summary 仅渲染一次(卡片突出展示;描述不再重复)。
+    expect(
+      screen.getAllByText("候选 GSE 无法判断，请确认使用哪个数据集？"),
+    ).toHaveLength(1);
+    expect(screen.getByRole("textbox")).toBeVisible();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeVisible();
+    // detail 字段只读展示（field/options 建议选项）
+    expect(screen.getByText("field")).toBeVisible();
+    expect(screen.getByText("options")).toBeVisible();
+    expect(screen.getByText("GSE100500")).toBeVisible();
+    expect(screen.getByText("GSE12345")).toBeVisible();
+    // data_correction 不应渲染 plan card
+    expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
+
+  it("disables 提交修正 while the correction text is empty and enables it once typed", () => {
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    const submit = screen.getByRole("button", { name: "提交修正" });
+    expect(submit).toBeDisabled();
+    // 跳过并继续始终可用（拒绝并继续，空修正）
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "使用 GSE12345 并检索 PubMed" },
+    });
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeEnabled();
+  });
+
+  it("submits approve with the correction text and skip rejects with an empty correction", async () => {
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun.mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请确认数据源",
+      },
+    );
+    const { rerender } = render(
+      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
+    expect(onResumeRun).toHaveBeenLastCalledWith(
+      "task_correction",
+      "run_correction",
+      {
+        request_id: "request_correction",
+        decision: "approve",
+        detail: { correction: "改用 GEO 数据 GSE12345" },
+      },
+    );
+
+    // FIX 3: after a successful resume the SAME prompt stays in-flight — both
+    // buttons stay disabled until the prompt disappears (user_input_resumed).
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+
+    // A second decision needs a fresh prompt lifecycle: remove the prompt and
+    // re-show it (the promptKey reset effect clears the in-flight state).
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_correction",
+      mode: "agent",
+      databases: [],
+      title: "Task task_correction",
+      status: "running",
+      active_run_id: "run_correction",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "跳过并继续" })).not.toBeInTheDocument();
+    });
+    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+
+    // 跳过并继续总是发送 reject + 空修正，忽略已输入的文本
+    fireEvent.click(screen.getByRole("button", { name: "跳过并继续" }));
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(2));
+    expect(onResumeRun).toHaveBeenLastCalledWith(
+      "task_correction",
+      "run_correction",
+      {
+        request_id: "request_correction",
+        decision: "reject",
+        detail: { correction: "" },
+      },
+    );
+  });
+
+  it("shows the expiry hint when expires_at is present and hides it otherwise", () => {
+    const withExpiry = taskWithPrompt(
+      "task_expiry",
+      "run_expiry",
+      "run_expiry",
+      "request_expiry",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: "2026-07-14T00:05:00Z",
+      },
+    );
+    const withoutExpiry = taskWithPrompt(
+      "task_no_expiry",
+      "run_no_expiry",
+      "run_no_expiry",
+      "request_no_expiry",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={withExpiry} onResumeRun={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(/需在 .*前答复，超时后将记录到 corrections_todo\.csv 并继续/),
+    ).toBeVisible();
+
+    rerender(<UserInputDialog task={withoutExpiry} onResumeRun={vi.fn()} />);
+    expect(screen.queryByText(/corrections_todo\.csv/)).not.toBeInTheDocument();
+  });
+
+  it("clears the correction text when the prompt kind changes with the same task/run/request ids", () => {
+    // Regression (T4 review): the reset effect was keyed only on taskId/runId/requestId,
+    // so a promptKind switch with identical ids kept the previous correction text and
+    // leaked it back into the next data_correction prompt.
+    const correctionTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    const noProgressTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "no_progress",
+        summary: "检测到无进展",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "改用 GEO 数据 GSE12345",
+    );
+
+    // Same task/run/request ids, different prompt kind → no textarea rendered.
+    rerender(<UserInputDialog task={noProgressTask} onResumeRun={vi.fn()} />);
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    // Back to data_correction with the same ids: stale text must NOT leak back.
+    rerender(<UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />);
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("clears the correction text when a same-kind prompt arrives with a new request id", () => {    // Guards the existing reset behavior: a new data_correction request id still
+    // resets the textarea even when task/run ids are unchanged.
+    const requestATask = taskWithPrompt(
+      "task_reset",
+      "run_reset",
+      "run_reset",
+      "request_a",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+    const requestBTask = taskWithPrompt(
+      "task_reset",
+      "run_reset",
+      "run_reset",
+      "request_b",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={requestATask} onResumeRun={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "GSE12345" },
+    });
+
+    rerender(<UserInputDialog task={requestBTask} onResumeRun={vi.fn()} />);
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("uses prompt-kind-aware wording for the fixture-exempt alert", () => {
+    // T5 polish: the fixtureExempt Alert previously always used plan-
+    // confirmation wording even for data_correction prompts.
+    const correctionTask = taskWithPrompt(
+      "task_fixture_correction",
+      "run_fixture_correction",
+      "run_fixture_correction",
+      "request_fixture_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+        fixtureExempt: true,
+      },
+    );
+    const planTask = taskWithPrompt(
+      "task_fixture_plan",
+      "run_fixture_plan",
+      "run_fixture_plan",
+      "request_fixture_plan",
+      { fixtureExempt: true },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(
+        "当前为固定验收模式，仅供查看修正请求，提交修正仅触发流程继续。",
+      ),
+    ).toBeVisible();
+    // 其他分支(plan_confirmation 等)保留原有计划语义文案
+    rerender(<UserInputDialog task={planTask} onResumeRun={vi.fn()} />);
+    expect(
+      screen.getByText(
+        "当前为固定验收模式，仅供查看计划，确认按钮仅触发流程继续。",
+      ),
+    ).toBeVisible();
+  });
+
+  it("suppresses an old data_correction submission error after a prompt-kind switch", async () => {
+    // T5 (T4 re-review residual): same task/run/request ids, prompt kind flips
+    // data_correction → no_progress while the first resume is in flight; the
+    // OLD onResumeRun rejection must not surface on the new prompt (the
+    // runtime-level twin of the T4 promptKey fix).
+    let rejectFirst: ((reason?: unknown) => void) | undefined;
+    const firstResume = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun
+      .mockReturnValueOnce(firstResume)
+      .mockResolvedValueOnce(undefined);
+    const correctionTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    const noProgressTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "no_progress",
+        summary: "检测到无进展",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+
+    // Same task/run/request ids, different prompt kind → new promptKey.
+    rerender(
+      <UserInputDialog task={noProgressTask} onResumeRun={onResumeRun} />,
+    );
+    expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+
+    // The OLD data_correction resume fails: the error is keyed to the old
+    // prompt and must NOT appear on the no_progress prompt.
+    act(() => rejectFirst?.(new Error("old correction resume failed")));
+    await waitFor(() => {
+      expect(screen.queryByText("old correction resume failed")).toBeNull();
+      expect(screen.getByRole("button", { name: "继续工作" })).toBeEnabled();
+    });
   });
 
   it("renders no_progress prompt without structured plan card", () => {
