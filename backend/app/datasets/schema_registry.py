@@ -89,6 +89,13 @@ def build_gene_expression_schema() -> DatasetSchema:
                 derivation_policy=None,
             )
         )
+    # ``source_sample_alias`` mirrors the source column header.  Single-sample
+    # GDC STAR-counts files have no sample columns (the sample is implied by
+    # the file), so the alias legitimately stays blank there — the V2 schema
+    # marks it optional (V1 legacy columns.py is left untouched).
+    for field in fields:
+        if field.name == "source_sample_alias":
+            field.required = False
     return DatasetSchema(
         schema_id="gene_expression.long.v1",
         dataset_family="gene_expression",

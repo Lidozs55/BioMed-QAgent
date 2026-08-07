@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,8 +101,15 @@ def canonicalize(
     schema: DatasetSchema,
     profile: NormalizationProfile,
     output_dir: Path,
+    gene_symbol_map: Mapping[str, str] | None = None,
 ) -> CanonicalizationResult:
-    """Transform one source-long batch into canonical schema rows."""
+    """Transform one source-long batch into canonical schema rows.
+
+    ``gene_symbol_map`` optionally maps ``gene_symbol`` IDs to Ensembl gene
+    IDs (local, ship-bound; REVIEW §9.6).  A mapped row is re-namespaced to
+    ``ensembl_gene`` and the conversion is recorded in the normalization log;
+    unmapped symbols stay in their original namespace and are never dropped.
+    """
     source_path = output_dir / batch.file_asset.relative_path
     if not source_path.is_file():
         raise BuildError(f"batch file not found: {source_path}")
@@ -115,6 +123,7 @@ def canonicalize(
     columns = [field.name for field in schema.fields]
     row_count = 0
     rejected_count = 0
+    mapped_count = 0
     namespaces: set[str] = set()
     units: set[str] = set()
     identities: set[tuple[str, str, str]] = set()
@@ -171,6 +180,17 @@ def canonicalize(
                 )
                 rejected_count += 1
                 continue
+            mapped = False
+            if (
+                namespace == "gene_symbol"
+                and gene_symbol_map is not None
+                and gene_id in gene_symbol_map
+            ):
+                gene_id = gene_symbol_map[gene_id]
+                namespace = "ensembl_gene"
+                version = ""
+                mapped = True
+                mapped_count += 1
             canonical_row = dict(row)
             canonical_row["record_id"] = make_record_id(
                 row["dataset_id"], row["gene_id_raw"], row["sample_id"]
@@ -191,14 +211,22 @@ def canonicalize(
                     "gene_id_namespace": namespace,
                     "gene_id_version": version,
                     "rule_id": (
-                        "ensembl_version_split"
-                        if namespace == "ensembl_gene" and version
-                        else f"namespace_{namespace}"
+                        "gene_symbol_map"
+                        if mapped
+                        else (
+                            "ensembl_version_split"
+                            if namespace == "ensembl_gene" and version
+                            else f"namespace_{namespace}"
+                        )
                     ),
                     "evidence": (
-                        "Ensembl ID pattern ENSG###########(.N)"
-                        if namespace == "ensembl_gene"
-                        else "HGNC gene symbol pattern"
+                        "local gene symbol map (symbol->ensembl)"
+                        if mapped
+                        else (
+                            "Ensembl ID pattern ENSG###########(.N)"
+                            if namespace == "ensembl_gene"
+                            else "HGNC gene symbol pattern"
+                        )
                     ),
                 }
             )
@@ -231,6 +259,7 @@ def canonicalize(
             "row_count": row_count,
             "rejected_count": rejected_count,
             "gene_id_namespaces": sorted(namespaces),
+            "gene_symbol_mapped_count": mapped_count,
             "expression_units": sorted(units),
             "measurement_identities": [
                 [semantics, scale, unit]

@@ -20,7 +20,14 @@ class SpecValidationResult:
 
 
 class SpecValidator:
-    """Checks a spec against the registry before any download starts."""
+    """Checks a spec against the registry before any download starts.
+
+    The validation-profile allowlist is **fail-closed**: an empty allowlist
+    rejects every ``validation_profile_ref`` (there is no way to tell "not yet
+    configured" from "deliberately deny all", so the safe default is deny),
+    preventing an Agent from silently selecting an arbitrary profile when the
+    runtime forgets to inject the allowlist.
+    """
 
     def __init__(
         self,
@@ -48,10 +55,7 @@ class SpecValidator:
                 codes.append("unknown_required_field")
                 reasons.append(f"required fields not in schema: {sorted(missing)}")
 
-        if (
-            self._allowed_profiles
-            and spec.validation_profile_ref not in self._allowed_profiles
-        ):
+        if spec.validation_profile_ref not in self._allowed_profiles:
             codes.append("profile_not_allowed")
             reasons.append(
                 f"validation profile {spec.validation_profile_ref!r} is not on "

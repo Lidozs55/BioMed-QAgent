@@ -139,6 +139,7 @@ def _make_executor(
     operation_timeout: float = 120.0,
     events: list[EventEnvelope] | None = None,
     resume_from: str | None = None,
+    implementation_versions: dict[str, str] | None = None,
 ) -> DatasetBuildExecutor:
     spec = _spec()
 
@@ -158,6 +159,7 @@ def _make_executor(
         event_sink=sink,
         cancellation_requested=token,
         parameter_scope=scope,
+        implementation_versions=implementation_versions,
         operation_timeout=operation_timeout,
         resume_from=resume_from,
     )
@@ -242,6 +244,40 @@ def test_executor_reruns_when_parameters_change(tmp_path: Path) -> None:
     runner2 = _Runner()
     asyncio.run(_make_executor(tmp_path, runner2, scope={"v": 2}).run())
     assert len(runner2.calls) == 10  # parameter scope change invalidates reuse
+
+
+def test_executor_reruns_when_implementation_version_changes(tmp_path: Path) -> None:
+    """An upgraded operation implementation must not serve stale output.
+
+    Regression for the review finding: the parameter digest used to exclude
+    the implementation version, so an upgraded adapter/parser could reuse a
+    SUCCEEDED attempt produced by an older implementation (ARCHITECTURE §5.2).
+    """
+    versions = {"parse:srcbind_gdc": "1.0.0", "parse:srcbind_xena": "1.0.0"}
+    runner = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner, implementation_versions=versions).run())
+    assert len(runner.calls) == 10
+
+    # Upgrade only the parse implementation; its digest changes -> re-run.
+    upgraded = dict(versions)
+    upgraded["parse:srcbind_gdc"] = "1.1.0"
+    runner2 = _Runner()
+    asyncio.run(
+        _make_executor(tmp_path, runner2, implementation_versions=upgraded).run()
+    )
+    assert runner2.calls == ["parse:srcbind_gdc"]
+
+    # Recorded attempts carry the version that produced them.
+    state = BuildState.model_validate_json(
+        (tmp_path / "state" / "build_state.json").read_text("utf-8")
+    )
+    parse_attempts = [
+        a for a in state.operation_attempts if a.operation_id == "parse:srcbind_gdc"
+    ]
+    assert {a.implementation_version for a in parse_attempts} == {
+        "1.0.0",
+        "1.1.0",
+    }
 
 
 def test_executor_rerun_from_forces_target_and_reuses_upstream(tmp_path: Path) -> None:
@@ -449,3 +485,21 @@ def test_build_state_rejects_diverged_attempt_log(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="ahead of durable state"):
         validate_attempt_log_prefix(state, state_dir / "operation_attempts.jsonl")
+
+
+def test_executor_corrupt_state_returns_failed_outcome(tmp_path: Path) -> None:
+    """run() must return a structured outcome on corrupt state, not raise.
+
+    Regression for the review finding: a build_state.json that fails to load
+    (mismatched task/build or corrupted JSON) used to escape a bare
+    AssertionError/AttributeError from the finalizers instead of returning a
+    BuildRunOutcome.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "build_state.json").write_text("{not valid json", encoding="utf-8")
+    outcome = asyncio.run(_make_executor(tmp_path, _Runner()).run())
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.code.value == "internal_error"
+    assert "could not be loaded or recovered" in outcome.error.message

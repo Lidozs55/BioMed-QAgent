@@ -67,6 +67,11 @@ class OperationAttempt(ContractModel):
     parameter_digest: str = Field(pattern=_SHA256_PATTERN)
     output_digest: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     status: AttemptStatus
+    # Implementation version of the operation runner. ARCHITECTURE §5.2 reuses
+    # a SUCCEEDED attempt only when input, parameter **and implementation
+    # version** digests match — an upgraded adapter/parser must not silently
+    # serve stale output under a matching parameter digest.
+    implementation_version: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: ErrorDetail | None = None

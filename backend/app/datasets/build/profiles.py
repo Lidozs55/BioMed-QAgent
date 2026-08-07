@@ -17,6 +17,11 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.datasets.build.confidence import (
+    ConfidenceThresholds,
+    aggregate_confidence_metrics,
+    write_confidence_report,
+)
 from app.datasets.contracts import (
     AcceptancePolicy,
     DatasetManifest,
@@ -88,6 +93,12 @@ class ExpressionValidationProfile:
 
     Rules live here (and in the versioned profile), never in the Agent or in
     the build chain, so the Agent cannot smuggle acceptance thresholds.
+
+    ``data_confidence`` is a supplementary statistical check (SURVEY §4.1):
+    detector thresholds are owned by this Profile (阈值入 Profile), and the
+    v1 policy is warning-only — anomalies never flip the release gate, they
+    are recorded in ``confidence_report.csv`` and as report warnings until
+    the thresholds are calibrated (SURVEY §7).
     """
 
     profile_id = "gene_expression.release.v1"
@@ -107,6 +118,7 @@ class ExpressionValidationProfile:
                 "numeric values, a single unit, and closed provenance."
             ),
         )
+        self.confidence_thresholds = ConfidenceThresholds()
 
     def validate(
         self,
@@ -118,6 +130,13 @@ class ExpressionValidationProfile:
         output_dir: Path,
     ) -> ValidationResult:
         checks = self._run_checks(manifest, primary_path, schema)
+        if primary_path.is_file():
+            confidence_check, warnings = self._run_confidence_check(
+                primary_path, output_dir
+            )
+            checks.append(confidence_check)
+        else:
+            warnings = []
         report = {
             "profile_ref": self.profile_id,
             "manifest_digest": manifest_digest,
@@ -130,6 +149,7 @@ class ExpressionValidationProfile:
                 }
                 for check in checks
             ],
+            "warnings": warnings,
         }
         report_path = output_dir / "validation_report.json"
         report_path.write_text(
@@ -165,20 +185,31 @@ class ExpressionValidationProfile:
                 )
             ]
         checks: list[ProfileCheck] = [
-            self._check_min_rows(manifest),
+            self._check_min_rows(manifest, primary_path),
             self._check_column_count(primary_path, schema),
         ]
         checks.extend(self._check_rows(primary_path, schema))
         return checks
 
-    def _check_min_rows(self, manifest: DatasetManifest) -> ProfileCheck:
+    def _check_min_rows(
+        self, manifest: DatasetManifest, primary_path: Path
+    ) -> ProfileCheck:
         minimum = self.profile.acceptance.minimum_valid_rows
-        passed = manifest.row_count >= minimum
+        # Count actual data rows in the file (excluding the header), never the
+        # manifest-declared row_count: a truncated or header-only file must not
+        # vacuous-pass just because the manifest claims enough rows (ADR-011).
+        file_rows = 0
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            next(reader, None)  # header
+            for _row in reader:
+                file_rows += 1
+        passed = file_rows >= minimum
         return ProfileCheck(
             check_id="minimum_valid_rows",
             description=f"primary dataset has at least {minimum} row(s)",
             passed=passed,
-            detail=f"row_count={manifest.row_count}, minimum={minimum}",
+            detail=f"file_row_count={file_rows}, minimum={minimum}",
         )
 
     def _check_column_count(self, primary_path: Path, schema: DatasetSchema) -> ProfileCheck:
@@ -252,6 +283,55 @@ class ExpressionValidationProfile:
             ),
         ]
         return checks
+
+
+    def _run_confidence_check(
+        self,
+        primary_path: Path,
+        output_dir: Path,
+    ) -> tuple[ProfileCheck, list[dict[str, str]]]:
+        """Supplementary statistical check on the primary numeric column.
+
+        Reads ``expression_value`` once, runs the deterministic detectors, and
+        writes ``confidence_report.csv``. v1 policy: the check always passes —
+        anomalies are surfaced as warnings, never as a failed gate (SURVEY §7).
+        """
+        values: list[str] = []
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                values.append(row.get("expression_value", ""))
+        summary = aggregate_confidence_metrics(
+            {"expression_value": values},
+            thresholds=self.confidence_thresholds,
+        )
+        report_path = output_dir / "confidence_report.csv"
+        write_confidence_report(summary, report_path)
+        warnings = [
+            {
+                "check_id": "data_confidence",
+                "detector": finding.detector,
+                "column": finding.column,
+                "statistic": (
+                    "" if finding.statistic is None else f"{finding.statistic:.4f}"
+                ),
+                "detail": finding.detail,
+            }
+            for finding in summary.anomalies
+        ]
+        check = ProfileCheck(
+            check_id="data_confidence",
+            description=(
+                "deterministic statistical detectors (Benford / last digit / "
+                "constant / progression) on the primary numeric column"
+            ),
+            passed=True,  # v1: warning-only, never blocks release
+            detail=(
+                f"{summary.anomaly_count} anomaly(ies) in {summary.anomalies[0].column}"
+                if summary.anomalies
+                else "no statistical anomalies detected"
+            ),
+        )
+        return check, warnings
 
 
 VALIDATION_PROFILES: dict[str, ExpressionValidationProfile] = {

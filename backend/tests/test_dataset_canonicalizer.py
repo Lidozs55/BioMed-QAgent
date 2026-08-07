@@ -12,6 +12,7 @@ from app.datasets.build.canonicalizer import (
     authorize_namespace,
     canonicalize,
 )
+from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.profiles import _expression_normalization_v1
 from app.datasets.schema_registry import build_gene_expression_schema
 from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256, make_record_id
@@ -35,7 +36,13 @@ def _source_asset(relative_path: str) -> SourceAsset:
     )
 
 
-def _canonicalize(fixture: str, adapter, tmp_path: Path) -> CanonicalizationResult:
+def _canonicalize(
+    fixture: str,
+    adapter,
+    tmp_path: Path,
+    *,
+    gene_symbol_map: dict[str, str] | None = None,
+) -> CanonicalizationResult:
     asset = _source_asset(fixture)
     batch = adapter.parse(
         asset,
@@ -50,6 +57,7 @@ def _canonicalize(fixture: str, adapter, tmp_path: Path) -> CanonicalizationResu
         schema=build_gene_expression_schema(),
         profile=_expression_normalization_v1(),
         output_dir=tmp_path,
+        gene_symbol_map=gene_symbol_map,
     )
 
 
@@ -181,3 +189,66 @@ def test_unknown_unit_rejected(tmp_path: Path) -> None:
     assert result.rejected_count == 2
     rejected = (tmp_path / "canonical" / "binding_1_rejected.csv").read_text()
     assert "unknown_unit" in rejected
+
+
+def test_gene_symbol_map_resolves_symbols_to_ensembl(tmp_path: Path) -> None:
+    result = _canonicalize(
+        "gdc/gdc_expression.tsv",
+        GdcExpressionAdapter(),
+        tmp_path,
+        gene_symbol_map=SYMBOL_TO_ENSEMBL,
+    )
+    assert result.row_count == 4
+    assert result.rejected_count == 0
+    assert result.namespaces == ("ensembl_gene",)
+    assert result.batch.statistics["gene_symbol_mapped_count"] == 4
+    with result.canonical_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["gene_id"] == "ENSG00000141510"  # TP53
+    assert rows[0]["gene_id_namespace"] == "ensembl_gene"
+    assert rows[0]["gene_id_version"] == ""
+    log = (tmp_path / "canonical" / "binding_1_normalization_log.csv").read_text()
+    assert "gene_symbol_map" in log
+    assert "local gene symbol map" in log
+
+
+def test_gene_symbol_map_keeps_unmapped_symbols(tmp_path: Path) -> None:
+    matrix = tmp_path / "symbol_matrix.tsv"
+    matrix.write_text("gene_id\tS1\nTP53\t1.5\nMYH9\t2.5\n", encoding="utf-8")
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/symbol_matrix.tsv",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_test",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        matrix,
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    result = canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+        gene_symbol_map=SYMBOL_TO_ENSEMBL,
+    )
+    assert result.row_count == 2
+    assert result.rejected_count == 0
+    assert result.namespaces == ("ensembl_gene", "gene_symbol")
+    assert result.batch.statistics["gene_symbol_mapped_count"] == 1
+    with result.canonical_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    by_id = {row["gene_id_raw"]: row for row in rows}
+    assert by_id["TP53"]["gene_id_namespace"] == "ensembl_gene"
+    assert by_id["MYH9"]["gene_id_namespace"] == "gene_symbol"
+    assert by_id["MYH9"]["gene_id"] == "MYH9"  # never dropped when unmapped
