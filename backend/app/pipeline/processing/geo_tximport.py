@@ -299,6 +299,9 @@ def process_geo_series_matrix_expression(
                 row_count += 1
 
     if row_count == 0:
+        # No valid expression rows (all values NA/non-numeric): do NOT leave
+        # a schema-only placeholder CSV on disk (phase 4b T1 MUST-FIX 1).
+        output_path.unlink(missing_ok=True)
         return None
 
     if mapped_probes:
@@ -550,47 +553,57 @@ def process_geo_tximport_counts(
         output_path = workdir.parsed / f"{dataset_id}_tximport_long.csv"
         row_count = 0
         source_row_count = 0
-        # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
-        with output_path.open("w", encoding="utf-8-sig", newline="") as target:
-            writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
-            writer.writeheader()
-            for source_line_number, values in enumerate(rows, start=2):
-                if len(values) != len(header) + 1:
-                    raise ValueError(
-                        f"source line {source_line_number} has an unexpected field count"
-                    )
-                gene_id_raw = values[0]
-                source_row_count += 1
-                for header_index, column_name, alias in count_fields:
-                    physical_index = header_index + 1
-                    raw_value = values[physical_index]
-                    float(raw_value)
-                    sample = samples[alias]
-                    writer.writerow({
-                        "record_id": make_record_id(dataset_id, gene_id_raw, sample.sample_id),
-                        "dataset_id": dataset_id,
-                        "source_id": source_asset.source_id,
-                        "asset_id": source_asset.asset_id,
-                        "gene_id_raw": gene_id_raw,
-                        "gene_id": gene_id_raw,
-                        "gene_id_namespace": "ensembl_gene",
-                        "gene_id_version": "",
-                        "sample_id": sample.sample_id,
-                        "source_sample_alias": alias,
-                        "measurement_type": "tximport_estimated_count",
-                        "value_semantics": "estimated_count",
-                        "value_scale": "linear",
-                        "is_normalized": "false",
-                        "is_integer_expected": "false",
-                        "expression_value": raw_value,
-                        "expression_unit": "estimated_count",
-                        "source_logical_file": logical_file,
-                        "source_line_number": source_line_number,
-                        "source_column_index": physical_index,
-                        "source_column_name": column_name,
-                        "source_raw_value": raw_value,
-                    })
-                    row_count += 1
+        try:
+            # utf-8-sig writes a BOM so Excel opens UTF-8 CSVs without garbling (TODO §1.7).
+            with output_path.open("w", encoding="utf-8-sig", newline="") as target:
+                writer = csv.DictWriter(target, fieldnames=_OUTPUT_COLUMNS)
+                writer.writeheader()
+                for source_line_number, values in enumerate(rows, start=2):
+                    if len(values) != len(header) + 1:
+                        raise ValueError(
+                            f"source line {source_line_number} has an unexpected field count"
+                        )
+                    gene_id_raw = values[0]
+                    source_row_count += 1
+                    for header_index, column_name, alias in count_fields:
+                        physical_index = header_index + 1
+                        raw_value = values[physical_index]
+                        float(raw_value)
+                        sample = samples[alias]
+                        writer.writerow({
+                            "record_id": make_record_id(dataset_id, gene_id_raw, sample.sample_id),
+                            "dataset_id": dataset_id,
+                            "source_id": source_asset.source_id,
+                            "asset_id": source_asset.asset_id,
+                            "gene_id_raw": gene_id_raw,
+                            "gene_id": gene_id_raw,
+                            "gene_id_namespace": "ensembl_gene",
+                            "gene_id_version": "",
+                            "sample_id": sample.sample_id,
+                            "source_sample_alias": alias,
+                            "measurement_type": "tximport_estimated_count",
+                            "value_semantics": "estimated_count",
+                            "value_scale": "linear",
+                            "is_normalized": "false",
+                            "is_integer_expected": "false",
+                            "expression_value": raw_value,
+                            "expression_unit": "estimated_count",
+                            "source_logical_file": logical_file,
+                            "source_line_number": source_line_number,
+                            "source_column_index": physical_index,
+                            "source_column_name": column_name,
+                            "source_raw_value": raw_value,
+                        })
+                        row_count += 1
+        except Exception:
+            # Phase 4b T1 review round 2: a midstream parse failure must not
+            # leave a partial ``<dataset>_tximport_long.csv`` in the parsed
+            # workdir. The stage-level caller (run_processing) catches the
+            # ValueError/OSError and continues to the no-primary path, so the
+            # partial file would otherwise survive into staging. Unlink on ANY
+            # exception so no partial file can ever be published.
+            output_path.unlink(missing_ok=True)
+            raise
 
     file_bytes = output_path.read_bytes()
     checksum = hashlib.sha256(file_bytes).hexdigest()
@@ -783,6 +796,9 @@ def process_geo_supplementary_expression(
                 row_count += 1
 
     if row_count == 0:
+        # No valid expression rows (all values NA/non-numeric): do NOT leave
+        # a schema-only placeholder CSV on disk (phase 4b T1 MUST-FIX 1).
+        output_path.unlink(missing_ok=True)
         return None
 
     file_bytes = output_path.read_bytes()

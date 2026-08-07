@@ -76,13 +76,17 @@ def _build_field_mapping_rows(
 
 
 def _build_field_descriptions_rows(
-    primary: ParsedDataset,
+    primary: ParsedDataset | None = None,
 ) -> list[dict[str, object]]:
     """Build ``field_descriptions.csv`` rows for the primary parsed dataset.
 
     Looks up each column in ``_FIELD_DESCRIPTIONS``; unknown columns fall back
     to a generic ``("string", "Source column", "", "true", "")`` entry.
+    When there is no primary (phase 4b NO_DATA package) there are no parsed
+    columns to describe, so the file is header-only.
     """
+    if primary is None:
+        return []
     field_descriptions: list[dict[str, object]] = []
     for field in primary.columns:
         metadata = _FIELD_DESCRIPTIONS.get(field, ("string", "Source column", "", "true", ""))

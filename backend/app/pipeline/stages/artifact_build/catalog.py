@@ -27,7 +27,7 @@ def _build_dataset_catalog_rows(
     dataset_url_value: str,
     retrieved_at: datetime,
     workdir_root: Path,
-    parsed_path: Path,
+    parsed_path: Path | None = None,
     sources: list[SourceRecord],
 ) -> list[dict[str, object]]:
     """Build ``dataset_catalog.csv`` rows.
@@ -36,9 +36,16 @@ def _build_dataset_catalog_rows(
     entry. When a deterministic multi-source merge exists (TODO §1.2), one
     row per input dataset is emitted so every ``dataset_id`` referenced by
     the merged ``main_data.csv`` closes against the catalog (TODO §1.5.4).
+    When no parsed long-form file exists (phase 4b NO_DATA — ``parsed_path``
+    is None) the sample count falls back to the GEO record's ``sample_count``
+    or 0.
     """
     if not is_merged:
-        parsed_rows = _read_parsed_rows(parsed_path)
+        parsed_rows = (
+            _read_parsed_rows(parsed_path)
+            if parsed_path is not None and parsed_path.is_file()
+            else []
+        )
         parsed_sample_count = len(
             {row["sample_id"] for row in parsed_rows if row.get("sample_id")}
         )

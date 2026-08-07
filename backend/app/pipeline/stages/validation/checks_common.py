@@ -97,6 +97,13 @@ class ValidationContext:
     described: set[str]
     reactome_rows: bool
     source_rel_base: Path
+    # True when the staging package has no primary table (neither
+    # ``main_data.csv`` nor ``pathway_members.csv``): phase 4b NO_DATA mode
+    # (ADR-011). ``main_rows`` is ``[]`` in that case and ``validate_package``
+    # runs the no_primary branch (decision check + supporting checks) instead
+    # of the main-table checks. Default False keeps direct ``ValidationContext``
+    # construction (tests) backward compatible.
+    no_primary: bool = False
     # reactome source header is loaded lazily by the reactome checks; exposed
     # here so the lineage check can reuse the same source-file reader logic
     # without re-deriving the file name.
@@ -120,7 +127,19 @@ def load_validation_context(
     main_path = staging / "main_data.csv"
     if not main_path.is_file():
         main_path = staging / "pathway_members.csv"
-    main_rows = read_csv(main_path)
+    if not main_path.is_file():
+        # Phase 4b NO_DATA (ADR-011): neither primary file exists — the
+        # empty-table package must validate in NO_DATA mode, not crash on a
+        # missing file. ``no_primary`` signals the mode and ``main_rows``
+        # stays ``[]``; every check that dereferences ``main_rows`` must be
+        # safe with an empty list (the main-table checks are skipped entirely
+        # by ``validate_package`` in this mode).
+        main_rows: list[dict[str, str]] = []
+        no_primary = True
+        main_path = staging / "main_data.csv"
+    else:
+        main_rows = read_csv(main_path)
+        no_primary = False
     dataset_rows = read_csv(staging / "dataset_catalog.csv")
     dataset_ids = {row["dataset_id"] for row in dataset_rows}
     datasets_by_id = {row["dataset_id"]: row for row in dataset_rows}
@@ -169,5 +188,6 @@ def load_validation_context(
         described=described,
         reactome_rows=reactome_rows,
         source_rel_base=source_rel_base,
+        no_primary=no_primary,
         reactome_source_file=reactome_source_file,
     )

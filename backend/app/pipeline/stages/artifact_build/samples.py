@@ -36,7 +36,7 @@ def _build_sample_metadata_rows(
     primary_source_id: str,
     geo_url: str,
     is_reactome: bool,
-    parsed_path: Path,
+    parsed_path: Path | None = None,
     dataset_url_value: str,
 ) -> list[dict[str, object]]:
     """Build ``sample_metadata.csv`` rows.
@@ -46,7 +46,9 @@ def _build_sample_metadata_rows(
     fallback derives one row per distinct ``sample_id`` from the parsed
     long-form dataset; for a merged package the sample belongs to the
     dataset/source of its originating rows (TODO §1.5.4), keeping
-    sample_metadata's dataset/source closure.
+    sample_metadata's dataset/source closure. When no parsed long-form file
+    exists (phase 4b NO_DATA — ``parsed_path`` is None) the fallback is
+    skipped entirely: the rows can only come from the recovered samples list.
     """
     sample_rows: list[dict[str, object]] = [
         {
@@ -64,7 +66,9 @@ def _build_sample_metadata_rows(
         }
         for sample in samples
     ]
-    if not is_reactome and not sample_rows:
+    if not is_reactome and not sample_rows and parsed_path is not None:
+        if not parsed_path.is_file():
+            return sample_rows
         sample_rows = []
         seen_samples: set[tuple[str, str, str]] = set()
         for row in _read_parsed_rows(parsed_path):

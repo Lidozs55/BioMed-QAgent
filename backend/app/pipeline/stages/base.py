@@ -222,6 +222,11 @@ class ProcessingOutput(ContractModel):
     deterministic vertical merge produced by ``alignment.merge_datasets``
     (TODO §1.2) and ``field_alignment`` holds the real ``align_fields``
     mapping used to build it.
+
+    When no expression data can be recovered (phase 4b T1 / ADR-011)
+    ``parsed_datasets`` is empty and ``no_primary_reason`` records why — the
+    metadata-only placeholder primary was removed. Recovered ``samples``
+    remain on the output for the supporting ``sample_metadata.csv``.
     """
 
     parsed_datasets: list[ParsedDataset]
@@ -229,10 +234,19 @@ class ProcessingOutput(ContractModel):
     cleaning_report: CleaningReportModel | None = None
     field_alignment: dict[str, list[str]] | None = None
     merged_dataset: ParsedDataset | None = None
+    no_primary_reason: str | None = None
 
 
 class ArtifactBuildOutput(ContractModel):
-    """Output of the artifact builder: staging dir + artifact file paths."""
+    """Output of the artifact builder: staging dir + artifact file paths.
+
+    ``no_primary_reason`` is non-None iff the package is a NO_DATA package
+    (phase 4b / ADR-011): processing produced no primary parsed dataset, so
+    no ``main_data.csv`` was written and only supporting + audit artifacts
+    were staged. The value carries the processing-stage reason and is the
+    signal the validation stage (T3) and runner (T4) use to treat the
+    package as NO_DATA instead of a failed main table.
+    """
 
     staging_dir: Path
     artifact_paths: list[Path]
@@ -252,6 +266,7 @@ class ArtifactBuildOutput(ContractModel):
     dataset_title: str = ""
     dataset_url: str = ""
     dataset_id: str = ""
+    no_primary_reason: str | None = None
 
 
 class ValidationOutput(ContractModel):

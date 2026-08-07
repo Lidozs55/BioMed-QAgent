@@ -87,6 +87,12 @@ def run_validation(
     Runs all validation checks, writes ``quality_report.csv``, and if valid
     performs the atomic rename from ``staging/`` to ``artifacts/``.
 
+    The trusted NO_DATA signal (``build_output.no_primary_reason``) is
+    threaded into ``validate_package``: NO_DATA mode is authorized only when
+    that signal is non-empty AND no primary file exists in staging, so a
+    package whose main_data.csv accidentally disappeared is rejected instead
+    of validated as a fabricated NO_DATA publication.
+
     ``_validate_package`` is resolved through the package attribute at call
     time (not imported into this module's namespace) so tests that monkeypatch
     ``app.pipeline.stages.validation._validate_package`` still take effect.
@@ -104,6 +110,7 @@ def run_validation(
             if _requires_full_lineage_validation(build_output.specification)
             else 100
         ),
+        no_primary_reason=build_output.no_primary_reason,
     )
     write_csv(
         build_output.staging_dir / "quality_report.csv",

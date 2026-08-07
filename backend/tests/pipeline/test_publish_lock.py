@@ -163,19 +163,40 @@ def test_publish_marker_absent_on_validation_failure(
 ) -> None:
     """If validation rejects the package, no publish marker is written."""
     import app.pipeline.stages.validation as validation_module
+    from app.domain.contracts import ValidationSummary
 
     real_validate = validation_module._validate_package
+    observed: list[ValidationSummary] = []
 
-    def rejecting_validate(staging, source_path, report_path):
-        summary, _checks = real_validate(staging, source_path, report_path)
+    def rejecting_validate(
+        staging: Path,
+        source_path: Path,
+        report_path: Path,
+        *,
+        max_lineage_checks: int | None = None,
+        no_primary_reason: str | None = None,
+    ) -> tuple[ValidationSummary, list[dict[str, object]]]:
+        # Match the real ``validate_package`` signature: run_validation calls
+        # it with the keyword-only ``max_lineage_checks`` and
+        # ``no_primary_reason`` args, so the replacement must accept and
+        # forward them (a strict positional-only stub TypeError's and the
+        # run fails for the wrong reason).
+        summary, _checks = real_validate(
+            staging,
+            source_path,
+            report_path,
+            max_lineage_checks=max_lineage_checks,
+            no_primary_reason=no_primary_reason,
+        )
         # Force a failure so the gate rejects.
-        from app.domain.contracts import ValidationSummary
-        return ValidationSummary(
+        forced = ValidationSummary(
             status="invalid",
             checked_count=summary.checked_count,
             failed_count=1,
             report_path=summary.report_path,
-        ), _checks
+        )
+        observed.append(forced)
+        return forced, _checks
 
     monkeypatch.setattr(validation_module, "_validate_package", rejecting_validate)
 
@@ -188,6 +209,14 @@ def test_publish_marker_absent_on_validation_failure(
     assert manifest.task_state.value == "failed"
     marker = tmp_path / "tasks" / "task_marker_fail" / "state" / "publish_completed.json"
     assert not marker.is_file(), "no marker when validation fails"
+    # The rejection must come from the patched return value: the fixture
+    # validates cleanly on its own, so the failure is only meaningful if the
+    # monkeypatched validator actually returned the forced-invalid summary.
+    assert observed, (
+        "rejecting_validate never returned a summary — the monkeypatch "
+        "signature does not match validate_package (TypeError swallowed by "
+        "the runner, test passing for the wrong reason)"
+    )
 
 
 def test_pipeline_runner_publish_waits_for_publish_lock(tmp_path: Path) -> None:

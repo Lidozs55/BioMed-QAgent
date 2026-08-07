@@ -578,6 +578,77 @@ def test_source_value_lineage_detects_out_of_range_line(tmp_path: Path) -> None:
     assert svl["failed_count"] == 1
 
 
+def test_source_value_lineage_rejects_non_integer_locator(tmp_path: Path) -> None:
+    """A non-integer ``source_line_number``/``source_column_index`` cannot
+    index the source table. The lineage check must count the row as a
+    lineage FAILURE — consistent with the guarded locator rejection for
+    non-positive locators — instead of letting the unguarded ``int()``
+    conversion ValueError escape the check (final review FIX 2)."""
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    rows = _read_csv(staging / "main_data.csv")
+    rows[0]["source_line_number"] = "not-an-integer"
+    rows[0]["source_column_index"] = "0"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert svl["failed_count"] == 1
+
+    # The non-integer column index is rejected the same way.
+    rows = _read_csv(staging / "main_data.csv")
+    rows[0]["source_line_number"] = "2"
+    rows[0]["source_column_index"] = "x"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert svl["failed_count"] == 1
+
+
+def test_source_value_lineage_rejects_wrapped_placeholder_locator(tmp_path: Path) -> None:
+    """A placeholder-shaped row (source_line_number 0 / source_column_index 0,
+    blank expression_value) must FAIL lineage even when its recorded
+    source_raw_value coincidentally equals the cell that negative indexing
+    wraps to — the LAST source row's first column. Phase 4b T6 review: the
+    locator-only branch subtracted 1 from line 0 → line_index -1 → read the
+    last source row, so a crafted placeholder-shaped row whose
+    source_raw_value matches that wrapped cell PASSED lineage (ADR-011:
+    placeholder-shaped rows must fail)."""
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    # _build_source_tsv(2, 2) writes the gzipped TSV
+    #   gene_id\tsample1\tsample2
+    #   ENSG001\t11.0\t12.0
+    #   ENSG002\t21.0\t22.0
+    # so the wrapped cell lines[-1][0] is "ENSG002".
+    rows = _read_csv(staging / "main_data.csv")
+    placeholder = dict(rows[0])
+    placeholder.update({
+        "gene_id_raw": "",
+        "gene_id": "",
+        "expression_value": "",  # blank → locator-only branch
+        "source_line_number": "0",
+        "source_column_index": "0",
+        # Equals the last source row's first column — matches what negative
+        # indexing (line 0 − 1 = −1) would read, masking the bad locator.
+        "source_raw_value": "ENSG002",
+    })
+    rows[0] = placeholder
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert svl["failed_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Rule 6 (NEW): warnings_metrics_consistency
 # Non-empty warnings.csv must agree with processing_log warnings count.

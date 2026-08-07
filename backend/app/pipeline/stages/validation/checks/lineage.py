@@ -27,7 +27,21 @@ def _read_source_lines(path: Path) -> list[list[str]]:
 
 
 def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
-    """Sampled main_data values must match the source file locator."""
+    """Sampled main_data values must match the source file locator.
+
+    Rows carrying an expression value are verified fully (source raw value AND
+    numeric expression value). Rows without one — e.g. GDC clinical variables,
+    whose cells are clinical strings — are verified locator-only: the recorded
+    ``source_raw_value`` must reproduce from the source file, but there is no
+    expression value to compare. The placeholder-era
+    ``measurement_type="sample_metadata"`` skip was deleted in phase 4b T6
+    (T1 removed the placeholder producer; the row-level guard keeps the check
+    safe for the still-produced GDC clinical rows). A row whose locator is
+    unusable (line number <= 0, e.g. the placeholder-era line 0, or a negative
+    column index) fails immediately — there is no cell to verify, and negative
+    indexing would wrap to the LAST source row and mask the bad locator when
+    ``source_raw_value`` happens to match that wrapped cell (T6 review).
+    """
     main_rows = ctx.main_rows
     source_path = ctx.source_path
     source_rel_base = ctx.source_rel_base
@@ -54,12 +68,31 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
 
     sampled_rows = deterministic_sample(main_rows, max_lineage_checks)
     lineage_failures = 0
-    sampled_skipped = 0
     for row in sampled_rows:
         lines = _lines_for(row.get("asset_id", ""))
-        if reactome_rows:
-            line_index = int(row["source_line_number"]) - 1
+        try:
+            line_number = int(row["source_line_number"])
             column_index = int(row["source_column_index"])
+        except (TypeError, ValueError):
+            # A non-integer locator value (or a None cell) cannot index the
+            # source table — count the row as a lineage failure, consistent
+            # with the guarded locator rejection below, instead of letting
+            # the conversion ValueError escape the check (final review FIX 2).
+            lineage_failures += 1
+            continue
+        if line_number <= 0 or column_index < 0:
+            # No verifiable locator: a non-positive line number (placeholder
+            # rows carry line 0) or a negative column index points outside the
+            # source table. Reject rather than wrap — subtracting 1 from line 0
+            # would index the LAST source row and let a crafted
+            # placeholder-shaped row whose source_raw_value matches that
+            # wrapped cell pass lineage (ADR-011: placeholder-shaped rows must
+            # fail). Column index 0 stays valid: it is zero-based, e.g. GDC
+            # clinical sample_id lives at column 0 (gdc.py).
+            lineage_failures += 1
+            continue
+        if reactome_rows:
+            line_index = line_number - 1
             try:
                 raw = lines[line_index][column_index]
             except (IndexError, ValueError):
@@ -68,31 +101,28 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
             if raw != row["source_raw_value"] or raw != row["participant_id"]:
                 lineage_failures += 1
             continue
-        # Skip sample-metadata rows: they have no expression value to verify.
-        if row.get("measurement_type") == "sample_metadata":
-            sampled_skipped += 1
-            continue
-        line_index = int(row["source_line_number"]) - 1
-        column_index = int(row["source_column_index"])
+        line_index = line_number - 1
         try:
             raw = lines[line_index][column_index]
         except (IndexError, ValueError):
             lineage_failures += 1
+            continue
+        # Rows without an expression value (e.g. GDC clinical variables —
+        # phase 4b T6) are verified locator-only: the source raw value must
+        # reproduce, but there is no numeric expression value to compare.
+        # The placeholder-era measurement_type="sample_metadata" skip was
+        # deleted (T1 removed the placeholder producer); this row-level guard
+        # keeps the check safe for the still-produced GDC clinical rows.
+        if not str(row.get("expression_value", "")).strip():
+            if raw != row["source_raw_value"]:
+                lineage_failures += 1
             continue
         if raw != row["source_raw_value"] or float(raw) != float(
             row["expression_value"]
         ):
             lineage_failures += 1
     total_sampled = len(sampled_rows)
-    checked_count = total_sampled - sampled_skipped
-    # Flag a high metadata-skip ratio: when nearly every sampled row is a
-    # sample_metadata placeholder, the lineage check effectively verified
-    # nothing — the package is "formally valid but content-hollow" (see
-    # ARTIFACT_ANALYSIS §缺陷 3). Downstream consumers can use this flag to
-    # distinguish a real pass from a vacuous one.
-    high_skip_ratio = (
-        total_sampled > 0 and sampled_skipped / total_sampled > 0.8
-    )
+    checked_count = total_sampled
     return {
         "check_id": "source_value_lineage",
         "scope": "main_data",
@@ -104,8 +134,6 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
             {
                 "total_rows": len(main_rows),
                 "sampled": total_sampled,
-                "skipped_metadata_rows": sampled_skipped,
-                "high_skip_ratio": high_skip_ratio,
             }
         ),
     }

@@ -1,25 +1,20 @@
-"""Regression tests: metadata-only GEO packages (GSE339404 case, 0805).
+"""Regression tests: metadata-only / NO_DATA GEO packages (GSE339404 case).
 
 A GEO series whose series_matrix expression block is empty and whose
-supplementary files carry no expression matrix legitimately produces a
-metadata-only ``main_data.csv``: one row per sample with
-``value_semantics="metadata_only"``. 0805 fixes two defects exposed by
-GSE339404:
+supplementary files carry no expression matrix has no publishable expression
+data. Phase 4b (ADR-011): the metadata-only placeholder primary was removed in
+T1, so NO_DATA packages never contain a main table at all — the builder drives
+the NO_DATA signal directly (``parsed_dataset=None`` + ``no_primary_reason``)
+and the validation gate authorizes it (T3).
 
-1. ``check_core_data_existence`` rejected such packages because the fixed
-   22-column schema still declares empty ``expression_value`` / ``gene_id``
-   columns (non-empty rate 0% < 10%) — the check now accepts packages that
-   explicitly declare ``value_semantics="metadata_only"`` on every row while
-   still rejecting packages that *claim* expression but are 100% blank.
-2. The artifact builder emitted no signal telling the Agent *why* the
-   artifact is metadata-only, so the Agent kept retrying the same dataset.
-   A ``no_expression_data`` warning is now injected into ``warnings.csv``
-   (and folded into ``processing_log.csv`` so
-   ``warnings_metrics_consistency`` stays satisfied).
+Phase 4b T6: the placeholder-era ``check_core_data_existence`` exemption
+(rows declaring ``value_semantics="metadata_only"`` were accepted with blank
+``expression_value``/``gene_id`` cells) is deleted — the check now applies
+uniformly to every main_data row. A main table whose rows claim expression
+but are 100% blank always fails the non-empty rate gate.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,8 +23,6 @@ from app.domain.contracts import (
     Database,
     DataLevel,
     DatasetSelection,
-    FileAsset,
-    ParsedDataset,
     SourceAsset,
     SourceRecord,
     TaskSpecification,
@@ -44,14 +37,14 @@ from app.pipeline.stages.validation.checks_common import ValidationContext
 from app.tools.workdir import create_task_workdir
 
 
-def _metadata_only_row(**overrides: str) -> dict[str, str]:
+def _blank_expression_row(**overrides: str) -> dict[str, str]:
     row = {
         "dataset_id": "ds_gse339404",
         "sample_id": "GSM1234567",
         "source_id": "src_geo_gse339404",
         "asset_id": "asset_series_matrix",
-        "value_semantics": "metadata_only",
-        "measurement_type": "sample_metadata",
+        "value_semantics": "estimated_count",
+        "measurement_type": "tximport_estimated_count",
         "expression_value": "",
         "gene_id": "",
     }
@@ -90,19 +83,21 @@ def _ctx_with_main_rows(
     )
 
 
-def test_core_data_existence_accepts_metadata_only_rows(tmp_path: Path) -> None:
-    """A package whose rows all declare ``value_semantics="metadata_only"``
-    must pass — the blank ``expression_value``/``gene_id`` cells are by
-    design (GSE339404 regression).
+def test_core_data_existence_rejects_blank_expression_rows_uniformly(tmp_path: Path) -> None:
+    """Phase 4b T6: the metadata-only exemption is deleted — the check applies
+    uniformly. A main table whose rows declare ``value_semantics="metadata_only"``
+    (the placeholder-era shape) but carry 100% blank ``expression_value``/
+    ``gene_id`` cells now FAILS the non-empty rate gate like any other
+    blank-expression package (the placeholder era that produced such rows no
+    longer exists; ADR-011).
     """
     rows = [
-        _metadata_only_row(sample_id="GSM1234567"),
-        _metadata_only_row(sample_id="GSM1234568"),
+        _blank_expression_row(sample_id="GSM1234567", value_semantics="metadata_only"),
+        _blank_expression_row(sample_id="GSM1234568", value_semantics="metadata_only"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
-    assert result["status"] == "passed"
-    assert "metadata-only" in str(result["details"])
-    assert result["failed_count"] == 0
+    assert result["status"] == "failed"
+    assert result["failed_count"] == 1
 
 
 def test_core_data_existence_still_rejects_blank_expression_package(
@@ -112,8 +107,8 @@ def test_core_data_existence_still_rejects_blank_expression_package(
     ship 100% blank values (download-failure placeholders).
     """
     rows = [
-        _metadata_only_row(sample_id="GSM1234567", value_semantics="estimated_count"),
-        _metadata_only_row(sample_id="GSM1234568", value_semantics="estimated_count"),
+        _blank_expression_row(sample_id="GSM1234567", value_semantics="estimated_count"),
+        _blank_expression_row(sample_id="GSM1234568", value_semantics="estimated_count"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
     assert result["status"] == "failed"
@@ -128,41 +123,15 @@ def test_core_data_existence_rejects_partial_expression_package(
     satisfy the gene-id non-empty rate.
     """
     rows = [
-        _metadata_only_row(
+        _blank_expression_row(
             sample_id="GSM1234567",
             value_semantics="estimated_count",
             expression_value="1.5",
         ),
-        _metadata_only_row(sample_id="GSM1234568"),
+        _blank_expression_row(sample_id="GSM1234568"),
     ]
     result = check_core_data_existence(_ctx_with_main_rows(rows, tmp_path))
     assert result["status"] == "failed"
-
-
-def _minimal_primary(ctx: StageContext) -> ParsedDataset:
-    parsed_path = ctx.workdir.parsed / "ds_gse_minimal_tximport_long.csv"
-    parsed_path.write_text("record_id\nr1\n", encoding="utf-8")
-    checksum = hashlib.sha256(parsed_path.read_bytes()).hexdigest()
-    return ParsedDataset(
-        dataset_id="ds_gse_minimal",
-        source_id="src_geo_gse339404",
-        source_asset_id="asset_series_matrix",
-        file_asset=FileAsset(
-            asset_id=asset_id_from_sha256(checksum),
-            kind="parsed",
-            relative_path=parsed_path.relative_to(ctx.workdir.root).as_posix(),
-            sha256=checksum,
-            size_bytes=parsed_path.stat().st_size,
-            media_type="text/csv",
-            generated_by_step_id="step_geo_minimal_v1",
-        ),
-        columns=["record_id"],
-        row_count=1,
-        parser_name="geo_minimal_placeholder",
-        parser_version="1.0.0",
-        source_row_count=0,
-        processing_parameters={"measurement_type": "sample_metadata"},
-    )
 
 
 def _minimal_specification() -> TaskSpecification:
@@ -195,15 +164,16 @@ def _minimal_stage_context(tmp_path: Path) -> StageContext:
     )
 
 
-def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
+def test_builder_adds_no_expression_data_warning_for_no_data_package(
     tmp_path: Path,
 ) -> None:
     """The artifact builder must inject a ``no_expression_data`` warning for a
-    metadata-only package, and processing_log must fold it in so
-    ``warnings_metrics_consistency`` stays satisfied.
+    NO_DATA package (no primary parsed dataset, phase 4b), with the recorded
+    ``no_primary_reason`` in the copy; no ``main_data.csv`` is written; and
+    processing_log must fold the warning in so ``warnings_metrics_consistency``
+    stays satisfied.
     """
     ctx = _minimal_stage_context(tmp_path)
-    primary = _minimal_primary(ctx)
     now = datetime.now(UTC)
     source_asset = SourceAsset(
         asset_id=asset_id_from_sha256("b" * 64),
@@ -229,7 +199,9 @@ def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
         sources=[source_record],
         source_assets=[source_asset],
         download_attempts=[],
-        parsed_dataset=primary,
+        parsed_dataset=None,
+        parsed_datasets=[],
+        no_primary_reason="series_matrix_expression_empty_and_no_supplementary",
         samples=[],
         literature=None,
         geo=None,
@@ -241,11 +213,19 @@ def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
         dataset_accession="GSE339404",
     )
     staging = result.output.staging_dir
+    # ADR-011: a NO_DATA package must never publish a fake main table.
+    assert not (staging / "main_data.csv").exists()
     warnings_rows = _read_csv(staging / "warnings.csv")
     no_expr = [w for w in warnings_rows if w.get("code") == "no_expression_data"]
     assert len(no_expr) == 1
     assert no_expr[0]["severity"] == "warning"
-    assert "GSE339404" in no_expr[0]["message"]
+    assert (
+        "series_matrix_expression_empty_and_no_supplementary"
+        in no_expr[0]["message"]
+    )
+    assert result.output.no_primary_reason == (
+        "series_matrix_expression_empty_and_no_supplementary"
+    )
 
     proc_rows = _read_csv(staging / "processing_log.csv")
     logged = sum(len(json.loads(p.get("warnings", "[]"))) for p in proc_rows)

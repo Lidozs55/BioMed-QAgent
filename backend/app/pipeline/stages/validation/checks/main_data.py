@@ -25,6 +25,80 @@ def check_main_data_nonempty(ctx: ValidationContext) -> dict[str, object]:
     }
 
 
+def check_no_primary_data(
+    ctx: ValidationContext, no_primary_reason: str | None = None
+) -> dict[str, object]:
+    """NO_DATA decision/authorization record.
+
+    Runs only in the no-primary branch of ``validate_package`` (or when an
+    authorized NO_DATA reason conflicts with a present primary file).
+    Authorization comes from the trusted upstream reason
+    (``ArtifactBuildOutput.no_primary_reason`` threaded through
+    ``validate_package``); the ``no_expression_data`` row in ``warnings.csv``
+    is evidence, not authorization — it is recorded when present but never
+    grants NO_DATA status.
+
+    Status ``passed`` requires BOTH: no primary file in staging (neither
+    ``main_data.csv`` nor ``pathway_members.csv``) AND a non-empty authorized
+    reason. Every other shape fails:
+    - authorized reason + primary file present → conflict: NO_DATA claimed
+      but a primary exists;
+    - no reason + no primary file → broken package: primary missing without
+      NO_DATA authorization.
+    """
+    has_primary_file = (
+        (ctx.staging / "main_data.csv").is_file()
+        or (ctx.staging / "pathway_members.csv").is_file()
+    )
+    authorized_reason = (no_primary_reason or "").strip()
+    # warnings.csv evidence (human-readable message); recorded when present,
+    # never used to authorize NO_DATA mode.
+    evidence = ""
+    warnings_path = ctx.staging / "warnings.csv"
+    if warnings_path.is_file():
+        for row in read_csv(warnings_path):
+            if row.get("code") == "no_expression_data":
+                evidence = row.get("message") or ""
+                break
+    if has_primary_file:
+        if authorized_reason:
+            details = {
+                "error": (
+                    "inconsistent package: NO_DATA authorized upstream "
+                    f"(reason: {authorized_reason}) but a primary file exists "
+                    "in staging"
+                ),
+                "reason": authorized_reason,
+            }
+        else:
+            details = {"error": "primary file present; no_primary_data not applicable"}
+        status = "failed"
+    elif authorized_reason:
+        # Intended NO_DATA path: the authorized reason is recorded (the
+        # warnings.csv row, when present, is corroborating evidence only).
+        details: dict[str, str] = {"reason": authorized_reason}
+        if evidence:
+            details["evidence"] = evidence
+        status = "passed"
+    else:
+        details = {
+            "error": (
+                "primary table missing without NO_DATA authorization "
+                "(no_primary_reason); broken package, not NO_DATA"
+            ),
+        }
+        status = "failed"
+    return {
+        "check_id": "no_primary_data",
+        "scope": "main_data",
+        "check_name": "no primary dataset present (NO_DATA decision)",
+        "status": status,
+        "checked_count": 1,
+        "failed_count": 0 if status == "passed" else 1,
+        "details": json.dumps(details, ensure_ascii=False),
+    }
+
+
 # Minimum non-empty rate for core data fields. Below this the package cannot
 # support any downstream analysis and must fail validation rather than ship a
 # "formally complete but content-empty" artifact (see
@@ -37,9 +111,9 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
 
     For GEO / expression packages, verifies that ``expression_value`` and
     ``gene_id`` each meet a minimum non-empty rate (10%). A package where
-    these fields are 100% empty — e.g. a download failure masked by
-    ``geo_minimal_placeholder`` metadata-only rows — fails here instead of
-    silently passing the structural checks.
+    these fields are 100% empty — e.g. a download failure that produced no
+    usable expression values — fails here instead of silently passing the
+    structural checks.
 
     Packages that legitimately lack expression columns are skipped:
     - Reactome pathway-participant packages (``participant_id`` is verified
@@ -48,6 +122,13 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
       design — clinical variables are stored in dedicated columns).
     The check only fires when an ``expression_value`` column is present in
     the header, i.e. the package claims to carry expression data.
+
+    Phase 4b: there is no metadata-only exemption anymore. The placeholder
+    era (GEO series with an empty expression block published a main table of
+    ``measurement_type="sample_metadata"`` rows) ended in T1 — NO_DATA
+    packages carry no main table at all and are authorized by the
+    ``no_primary_data`` decision check instead. Any remaining main table
+    whose rows claim expression but are 100% blank is rejected uniformly.
     """
     main_rows = ctx.main_rows
     if not main_rows:
@@ -87,33 +168,10 @@ def check_core_data_existence(ctx: ValidationContext) -> dict[str, object]:
             "failed_count": 0,
             "details": "non-expression package (no expression_value/gene_id column); skipped",
         }
-    # A metadata-only package (e.g. a GEO series whose series_matrix
-    # expression block is empty and no supplementary expression file was
-    # found) explicitly declares ``value_semantics="metadata_only"`` on every
-    # row. The fixed 22-column schema still carries ``expression_value`` /
-    # ``gene_id`` columns but leaves them blank by design, so the non-empty
-    # rate check must be skipped here — otherwise every legitimate
-    # metadata-only package would fail as "claims expression but is 100%
-    # empty". Row presence is still guarded by ``main_data_nonempty``, so a
-    # hollow 0-row placeholder cannot slip through. (GSE339404 regression,
-    # 0805.)
-    is_metadata_only = all(
-        row.get("value_semantics", "").strip() == "metadata_only"
-        for row in main_rows
-    )
-    if is_metadata_only:
-        return {
-            "check_id": "core_data_existence",
-            "scope": "main_data",
-            "check_name": "core data fields have sufficient non-empty records",
-            "status": "passed",
-            "checked_count": len(main_rows),
-            "failed_count": 0,
-            "details": (
-                f"metadata-only package: {len(main_rows)} sample_metadata "
-                "rows; expression fields intentionally blank"
-            ),
-        }
+    # Phase 4b T6: the placeholder-era metadata-only exemption is deleted.
+    # The metadata-only placeholder producer was removed in T1, so a main
+    # table whose rows declare ``value_semantics="metadata_only"`` can no
+    # longer exist legitimately — the uniform non-empty rate gate applies.
     total = len(main_rows)
     has_expr = "expression_value" in columns
     has_gene = "gene_id" in columns
