@@ -62,7 +62,8 @@ def validate_package(
       but a primary exists) — the ``no_primary_data`` decision check FAILS
       with the conflict while the normal main-table checks still run;
     - no reason + primary file missing → broken package (missing primary
-      without NO_DATA authorization) — the decision check FAILS.
+      without NO_DATA authorization) — the NORMAL main-table checks run and
+      ``main_data_nonempty`` fails on the empty table (no decision record).
     """
     ctx = load_validation_context(
         staging,
@@ -73,16 +74,15 @@ def validate_package(
 
     authorized_no_data = bool((no_primary_reason or "").strip())
     checks: list[dict[str, object]] = []
-    if ctx.no_primary:
-        # Phase 4b NO_DATA shape (ADR-011 / design D3): no primary table
-        # exists (neither main_data.csv nor pathway_members.csv), so the
-        # main-table checks are skipped entirely and a ``no_primary_data``
-        # decision record is emitted instead. The decision check PASSES only
-        # when the trusted upstream reason authorizes NO_DATA mode; without
-        # it the record FAILS and the package is a broken no-primary package,
-        # not NO_DATA. The remaining checks run unchanged. This is a SEPARATE
-        # branch — the normal-mode check_id sequence stays byte-identical
-        # (pinned by tests/pipeline/test_validation_split.py).
+    if authorized_no_data and ctx.no_primary:
+        # Phase 4b NO_DATA shape (ADR-011 / design D3): the trusted upstream
+        # reason AUTHORIZES NO_DATA mode AND no primary table exists (neither
+        # main_data.csv nor pathway_members.csv), so the main-table checks
+        # are skipped entirely and a ``no_primary_data`` decision record is
+        # emitted instead. The decision check PASSES (recording the
+        # authorized reason); the remaining checks run unchanged. This is a
+        # SEPARATE branch — the normal-mode check_id sequence stays
+        # byte-identical (pinned by tests/pipeline/test_validation_split.py).
         checks.append(check_source_relation_evidence(ctx))
         checks.append(check_no_primary_data(ctx, no_primary_reason))
         checks.append(check_sample_foreign_keys(ctx))
@@ -91,9 +91,15 @@ def validate_package(
         checks.append(check_warnings_metrics_consistency(ctx))
         checks.append(check_cleaning_report_consistency(ctx))
     else:
-        # A primary file exists → the normal main-table checks run. An
-        # authorized NO_DATA reason alongside a primary file is inconsistent
-        # and additionally emits a FAILING conflict decision record.
+        # Normal branch. Two shapes land here:
+        # - a primary file EXISTS → the normal main-table checks run. An
+        #   authorized NO_DATA reason alongside a primary file is
+        #   inconsistent and additionally emits a FAILING conflict decision
+        #   record;
+        # - no primary file WITHOUT authorization (broken package, not
+        #   NO_DATA) → the normal main-table checks still run and
+        #   ``main_data_nonempty`` fails on ``main_rows=[]`` — nothing skips
+        #   the main-data checks without the trusted reason.
         checks.append(check_source_relation_evidence(ctx))
         if authorized_no_data:
             checks.append(check_no_primary_data(ctx, no_primary_reason))

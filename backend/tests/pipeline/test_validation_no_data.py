@@ -397,11 +397,16 @@ def test_authorized_no_data_without_warning_valid(tmp_path: Path) -> None:
     assert "no primary dataset in staging package" not in str(decision["details"])
 
 
-def test_missing_primary_without_authorization_rejected(tmp_path: Path) -> None:
-    """T3 MUST-FIX: a package missing the primary table WITHOUT the trusted
-    upstream reason is a BROKEN package, not NO_DATA — the gate rejects it
-    even when warnings.csv carries a no_expression_data row (the warning row
-    is evidence, not authorization)."""
+def test_missing_primary_without_authorization_runs_normal_checks(
+    tmp_path: Path,
+) -> None:
+    """T3 round-2 MUST-FIX: a package missing the primary table WITHOUT the
+    trusted upstream reason must take the NORMAL check sequence, never the
+    no-primary branch — nothing may skip the main-data checks without
+    authorization. ``main_data_nonempty`` fails on ``main_rows=[]`` (broken
+    package, not NO_DATA), so the gate rejects it; the ``no_primary_data``
+    decision record must NOT appear (the no-primary branch was not taken).
+    The warnings.csv no_expression_data row is evidence, not authorization."""
     task_root = tmp_path / "tasks" / "task_no_primary_unauthorized"
     staging, source_path = _build_no_data_staging(
         staging=task_root / "staging",
@@ -415,14 +420,19 @@ def test_missing_primary_without_authorization_rejected(tmp_path: Path) -> None:
 
     assert summary.status == "invalid"
     actual_ids = [str(c["check_id"]) for c in checks]
-    # No-primary branch runs (main-table checks absent) but the decision
-    # check FAILS: missing primary without NO_DATA authorization.
-    for check_id in _SKIPPED_MAIN_CHECK_IDS:
-        assert check_id not in actual_ids, check_id
-    decision = _check_by_id(checks, "no_primary_data")
-    assert decision["status"] == "failed"
-    assert decision["failed_count"] == 1
-    assert "authorization" in str(decision["details"])
+    # The NORMAL sequence runs: the main-table checks are present and
+    # main_data_nonempty fails on the empty table (safe with main_rows=[]).
+    assert "main_data_nonempty" in actual_ids, actual_ids
+    nonempty = _check_by_id(checks, "main_data_nonempty")
+    assert nonempty["status"] == "failed"
+    assert nonempty["failed_count"] == 1
+    assert nonempty["checked_count"] == 0
+    core = _check_by_id(checks, "core_data_existence")
+    assert core["status"] == "failed"
+    assert "source_value_lineage" in actual_ids, actual_ids
+    # The no-primary branch (decision check) must NOT be taken without
+    # authorization.
+    assert "no_primary_data" not in actual_ids, actual_ids
 
 
 def test_reason_with_primary_present_rejected(tmp_path: Path) -> None:
