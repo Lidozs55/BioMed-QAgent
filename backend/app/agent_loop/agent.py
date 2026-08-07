@@ -14,6 +14,7 @@ from app.agent_loop.model import (
     get_active_model_settings,
     get_model,
 )
+from app.agent_loop.request_human_correction import request_human_correction
 from app.agent_loop.reviewer import build_review_query_strategy_tool
 from app.agent_loop.summarizer import build_compress_query_log_tool
 from app.model_config import RunModelSettings
@@ -117,6 +118,8 @@ Pipeline 生成。你的核心价值在于**研究策略的质量**：选对数�
 你拥有以下 FunctionTool，可直接调用：
 - `find_skill` / `invoke_skill` — 发现和调用业务技能（检索、下载、解析等）
 - `run_research_pipeline` — 执行确定性 Pipeline，生成正式产物
+- `request_human_correction` — 仅在真正需要人类决策/澄清时暂停 Run 等待人工
+  修正（数据源选择歧义、参数确认、候选 GSE 无法判断等）；不要在同一轮内重复调用
 - `read_file` / `write_file` / `list_files` — 管理本地文件
 - `read_file_head` — 读取大文件前 N 行（查看表头/结构，不加载全文）
 - `search_file` — 在文件中按关键词检索（grep 式，返回行号与内容片段）
@@ -456,6 +459,7 @@ def build_agent(
         find_skill,
         invoke_skill,
         run_research_pipeline,
+        request_human_correction,
         execute_dataset_build,
         read_file,
         read_file_head,

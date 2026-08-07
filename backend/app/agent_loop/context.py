@@ -32,6 +32,7 @@ from app.model_settings import get_runtime_limits
 from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
+    from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
     from app.subagents.input_broker import SubagentInputBroker
@@ -47,6 +48,18 @@ ProgressEmitter = Callable[
 
 
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
+
+
+class MainInputBrokerUnavailableError(RuntimeError):
+    """Raised when ``request_main_input`` runs without an installed broker.
+
+    Dedicated missing-broker marker (final review FIX 1): subagent/unit-test
+    contexts never install a ``MainInputBroker``, so the tool degrades to a
+    clear failure message for exactly this case. Genuine runtime failures
+    (duplicate submitter guard, pending-input guard, durable event emission)
+    raise plain ``RuntimeError``/``OSError`` and must propagate to the Run
+    failure path — tools catch only this dedicated type.
+    """
 
 _SENSITIVE_INPUT_KEYS = {
     "api_key",
@@ -258,6 +271,11 @@ class RunContext:
         init=False,
         repr=False,
     )
+    _main_input_broker: MainInputBroker | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
     _delegated_subagent_ids: set[str] = field(
         default_factory=set,
         init=False,
@@ -321,6 +339,48 @@ class RunContext:
         if self._subagent_runtime is None:
             raise RuntimeError("subagent runtime is not available")
         return self._subagent_runtime
+
+    def bind_main_input_broker(self, broker: MainInputBroker) -> None:
+        """Bind the main-run human-input broker exactly once (runner-owned).
+
+        The runner installs one broker per Run; subagent/child contexts never
+        receive one, so ``request_main_input`` fails explicitly there.
+        """
+
+        if self._main_input_broker is not None:
+            raise RuntimeError("main input broker is already bound")
+        self._main_input_broker = broker
+
+    @property
+    def main_input_broker(self) -> MainInputBroker | None:
+        """Return the runner-installed main input broker, if any."""
+
+        return self._main_input_broker
+
+    async def request_main_input(
+        self,
+        *,
+        summary: str,
+        detail: dict[str, object] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> MainInputDecision:
+        """Pause the main Run for a human data-correction decision.
+
+        Delegates to the runner-installed ``MainInputBroker``. Raises a clear
+        error when no broker is installed (subagent contexts, unit tests) so
+        tools never silently fake success.
+        """
+
+        if self._main_input_broker is None:
+            raise MainInputBrokerUnavailableError(
+                "main input broker is not available: request_human_correction "
+                "is only usable inside the main agent Run"
+            )
+        return await self._main_input_broker.request_input(
+            summary=summary,
+            detail=detail,
+            timeout_seconds=timeout_seconds,
+        )
 
     def create_child_context(
         self,

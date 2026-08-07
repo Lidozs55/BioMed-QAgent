@@ -31,6 +31,7 @@ from app.agent_loop.invocation import (
     InvocationPreflight,
     record_calibration_from_result,
 )
+from app.agent_loop.main_input_broker import MainInputBroker
 from app.agent_loop.model import run_model_settings_scope, to_run_model_settings
 from app.domain.contracts import (
     ArtifactProducedPayload,
@@ -693,6 +694,30 @@ class AgentRunExecutor:
             input_broker=self._subagent_input_broker,
         )
 
+    def _bind_main_input_broker(self, execution) -> None:
+        """Attach this Run's main-run human-input broker (data_correction).
+
+        Installed once per Run so the request-id counter resets per Run;
+        subagent/child contexts never receive a broker (spec §3-D1).
+        """
+
+        context = execution.context
+        if not isinstance(context, RunContext):
+            return
+        if context.main_input_broker is not None:
+            return
+        context.bind_main_input_broker(
+            MainInputBroker(
+                run_id=execution.run_id,
+                fixture=execution.mode is TaskMode.FIXTURE,
+                emit=execution.emit,
+                install_user_input_submitter=execution.set_user_input_submitter,
+                clear_user_input_submitter=execution.clear_user_input_submitter,
+                cancellation_requested=context.cancellation_requested,
+                artifacts_dir=context.work_dir.artifacts,
+            )
+        )
+
     @staticmethod
     async def _consume_events(
         execution,
@@ -831,6 +856,7 @@ class AgentRunExecutor:
         if callable(bind_model_settings):
             bind_model_settings(model_settings)
         self._bind_subagent_runtime(execution)
+        self._bind_main_input_broker(execution)
         task_session = self._repository.task_session(
             execution.task_id,
             run_id=execution.run_id,

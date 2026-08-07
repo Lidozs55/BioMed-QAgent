@@ -149,9 +149,9 @@
       字符串猜测 no_data 的路径
 - [x] **P1** 审计产物（source list / quality / search / rejected）通过
       `audit_report` Artifact Role 发布，不在架构层固定单独文件名
-- [ ] **P2** `request_human_correction` function_tool + UserInputDialog
+- [x] **P2** `request_human_correction` function_tool + UserInputDialog
       `data_correction` 分支 + 超时退化为 `corrections_todo.csv`（原 §1.7，HIL 为
-      Agent 层工具，pipeline 内自动 HIL 已否决）
+      Agent 层工具，pipeline 内自动 HIL 已否决）（4c 完成 2026-08-07）
 
 ---
 
