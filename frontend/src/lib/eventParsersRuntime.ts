@@ -153,8 +153,8 @@ function parseBuildResult(value: unknown, path: string): BuildResult {
     available_artifact_roles: assertStringArray(Reflect.get(result, "available_artifact_roles"), `${path}.available_artifact_roles`),
     publication_id: assertOptionalNull(Reflect.get(result, "publication_id"), `${path}.publication_id`, assertRequiredString),
     reason_codes: assertStringArray(Reflect.get(result, "reason_codes"), `${path}.reason_codes`),
-    user_summary: assertRequiredString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
-    recommended_next_action: assertRequiredString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
+    user_summary: assertString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
+    recommended_next_action: assertString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
   };
 }
 

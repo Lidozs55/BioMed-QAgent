@@ -392,8 +392,22 @@ export function applyRunTerminalEvent(
 
 export function applyPublicationCreatedEvent(
   task: TaskProjection,
+  envelope: EventEnvelope,
   payload: Extract<EventPayload, { type: "publication_created" }>,
 ): TaskProjection {
+  // Mirror the backend reducer: publication events require an envelope run_id
+  // and the payload run_id must match it; a re-delivered publication_id is a
+  // no-op so duplicate entries never accumulate.
+  if (envelope.run_id === null || payload.run_id !== envelope.run_id) {
+    return task;
+  }
+  if (
+    task.publications.some(
+      (publication) => publication.publication_id === payload.publication_id,
+    )
+  ) {
+    return task;
+  }
   const previous = task.currentPublicationId;
   const publication: PublicationSummary = {
     publication_id: payload.publication_id,

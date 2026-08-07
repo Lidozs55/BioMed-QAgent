@@ -85,7 +85,7 @@ export function reduceRuntimeEvent(
       break;
     }
     case "publication_created": {
-      task = applyPublicationCreatedEvent(task, payload);
+      task = applyPublicationCreatedEvent(task, envelope, payload);
       break;
     }
     case "user_input_required":

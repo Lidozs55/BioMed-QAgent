@@ -414,7 +414,9 @@ export function hydrateTaskSnapshot(
     messages: mergeSnapshotMessages(base, snapshotMessages),
     assistantStreamsByRunId,
     currentPublicationId:
-      snapshot.current_publication_id ?? base.currentPublicationId,
+      snapshot.current_publication_id === undefined
+        ? base.currentPublicationId
+        : snapshot.current_publication_id,
     publications:
       snapshot.publications === undefined
         ? base.publications

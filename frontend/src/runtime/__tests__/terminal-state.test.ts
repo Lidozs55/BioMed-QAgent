@@ -193,6 +193,73 @@ describe("terminal state projection", () => {
     expect(task.publications[1].supersedes_publication_id).toBe("pub_1");
   });
 
+  it("skips publication_created when payload run_id mismatches the envelope", () => {
+    const task = applyEvent(
+      buildInitialTask("task_1"),
+      envelope(2, {
+        type: "publication_created",
+        publication_id: "pub_1",
+        run_id: "run_other",
+        manifest_sha256:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        supersedes_publication_id: null,
+        published_at: CREATED_AT,
+      }),
+    );
+    expect(task.currentPublicationId).toBeNull();
+    expect(task.publications).toHaveLength(0);
+  });
+
+  it("ignores a duplicate publication_created for the same publication_id", () => {
+    const payload = (publicationId: string) => ({
+      type: "publication_created" as const,
+      publication_id: publicationId,
+      run_id: "run_1",
+      manifest_sha256:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      supersedes_publication_id: null,
+      published_at: CREATED_AT,
+    });
+    let task = applyEvent(buildInitialTask("task_1"), envelope(2, payload("pub_1")));
+    expect(task.publications).toHaveLength(1);
+    task = applyEvent(task, envelope(3, payload("pub_1")));
+    expect(task.publications).toHaveLength(1);
+    expect(task.currentPublicationId).toBe("pub_1");
+    expect(task.publications[0].publication_id).toBe("pub_1");
+  });
+
+  it("clears a previously projected publication when the snapshot has null current_publication_id", () => {
+    let task = buildInitialTask("task_1");
+    task = applyEvent(
+      task,
+      envelope(2, {
+        type: "publication_created",
+        publication_id: "pub_1",
+        run_id: "run_1",
+        manifest_sha256:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        supersedes_publication_id: null,
+        published_at: CREATED_AT,
+      }),
+    );
+    expect(task.currentPublicationId).toBe("pub_1");
+    const hydrated = hydrateTaskSnapshot(stateWith(task), {
+      task: {
+        ...summary("task_1"),
+        status: "completed",
+        active_run_id: null,
+        latest_sequence: 2,
+      },
+      runs: [],
+      messages: [],
+      current_publication_id: null,
+      publications: [],
+      older_messages_cursor: null,
+    });
+    expect(hydrated.tasksById["task_1"].currentPublicationId).toBeNull();
+    expect(hydrated.tasksById["task_1"].publications).toHaveLength(0);
+  });
+
   it("hydrates currentPublicationId and publications from a snapshot", () => {
     const state = hydrateTaskSnapshot(
       createInitialRuntimeState(),
