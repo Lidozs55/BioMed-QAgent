@@ -16,10 +16,15 @@ as a crash:
   stays byte-identical (pinned by ``test_validation_split.py``).
 - Every check that dereferences ``main_rows`` is safe with ``main_rows=[]``.
 
-Design choice (documented): the staging shape (no primary file) is the NO_DATA
-signal — a package missing the primary table enters no_primary mode regardless
-of whether the ``no_expression_data`` warning is present; the check records
-whatever evidence exists (reason from warnings.csv, generic fallback).
+Design choice (T3 review MUST-FIX, documented): NO_DATA is AUTHORIZED only by
+the trusted upstream signal — ``ArtifactBuildOutput.no_primary_reason`` threaded
+from ``run_validation`` into ``validate_package``. The staging shape (no primary
+file) is the file-shape evidence the decision check asserts; the
+``no_expression_data`` row in ``warnings.csv`` is evidence, not authorization.
+A package missing the primary table WITHOUT the authorized reason is a broken
+package and fails the gate; a package claiming NO_DATA while a primary file
+exists is inconsistent and fails the gate. NO_DATA mode is active only when
+BOTH the reason is non-empty AND no primary file exists.
 """
 from __future__ import annotations
 
@@ -30,6 +35,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from app.domain.contracts import (
     Database,
     DatasetSelection,
@@ -65,7 +71,6 @@ from app.pipeline.stages.validation.runner import run_validation
 from app.tools.workdir import create_task_workdir
 
 _NO_DATA_REASON = "series_matrix_expression_empty_and_no_supplementary"
-_GENERIC_NO_PRIMARY_REASON = "no primary dataset in staging package"
 
 # The NO_DATA branch check_id sequence (a SEPARATE branch from the normal
 # sequence pinned in test_validation_split.py).
@@ -331,14 +336,19 @@ def _check_by_id(checks: list[dict], check_id: str) -> dict:
 def test_no_data_package_validates_as_no_data(tmp_path: Path) -> None:
     """A T2-shaped no-primary staging package validates as NO_DATA: status
     valid, failed_count 0, the ``no_primary_data`` decision check appears and
-    the main-table checks are skipped entirely."""
+    the main-table checks are skipped entirely. The authorized upstream
+    reason is threaded via the ``no_primary_reason`` parameter; the
+    warnings.csv evidence row is recorded as evidence only."""
     task_root = tmp_path / "tasks" / "task_no_data"
     staging, source_path = _build_no_data_staging(
         staging=task_root / "staging", task_root=task_root
     )
 
     summary, checks = _validate_package(
-        staging, source_path, task_root / "logs" / "validation.json"
+        staging,
+        source_path,
+        task_root / "logs" / "validation.json",
+        no_primary_reason=_NO_DATA_REASON,
     )
 
     assert summary.status == "valid"
@@ -357,12 +367,12 @@ def test_no_data_package_validates_as_no_data(tmp_path: Path) -> None:
     assert _NO_DATA_REASON in str(decision["details"])
 
 
-def test_no_data_without_warning_still_no_primary(tmp_path: Path) -> None:
-    """A package missing the primary table but WITHOUT the no_expression_data
-    warning still enters no_primary mode (the staging shape is the signal;
-    the warning is evidence). The decision check passes with the generic
-    reason."""
-    task_root = tmp_path / "tasks" / "task_no_data_no_warning"
+def test_authorized_no_data_without_warning_valid(tmp_path: Path) -> None:
+    """A no-primary package with the AUTHORIZED upstream reason but NO
+    warnings.csv evidence row still validates as NO_DATA: the authorized
+    reason is recorded (the warning row is evidence, not authorization; the
+    generic fallback never applies when authorization exists)."""
+    task_root = tmp_path / "tasks" / "task_no_data_authorized"
     staging, source_path = _build_no_data_staging(
         staging=task_root / "staging",
         task_root=task_root,
@@ -370,7 +380,10 @@ def test_no_data_without_warning_still_no_primary(tmp_path: Path) -> None:
     )
 
     summary, checks = _validate_package(
-        staging, source_path, task_root / "logs" / "validation.json"
+        staging,
+        source_path,
+        task_root / "logs" / "validation.json",
+        no_primary_reason=_NO_DATA_REASON,
     )
 
     assert summary.status == "valid"
@@ -379,8 +392,69 @@ def test_no_data_without_warning_still_no_primary(tmp_path: Path) -> None:
     assert actual_ids == _NO_DATA_CHECK_IDS, actual_ids
     decision = _check_by_id(checks, "no_primary_data")
     assert decision["status"] == "passed"
-    assert _GENERIC_NO_PRIMARY_REASON in str(decision["details"])
+    # The AUTHORIZED reason is recorded — not a generic fallback.
+    assert _NO_DATA_REASON in str(decision["details"])
+    assert "no primary dataset in staging package" not in str(decision["details"])
 
+
+def test_missing_primary_without_authorization_rejected(tmp_path: Path) -> None:
+    """T3 MUST-FIX: a package missing the primary table WITHOUT the trusted
+    upstream reason is a BROKEN package, not NO_DATA — the gate rejects it
+    even when warnings.csv carries a no_expression_data row (the warning row
+    is evidence, not authorization)."""
+    task_root = tmp_path / "tasks" / "task_no_primary_unauthorized"
+    staging, source_path = _build_no_data_staging(
+        staging=task_root / "staging",
+        task_root=task_root,
+        with_no_expression_warning=True,
+    )
+
+    summary, checks = _validate_package(
+        staging, source_path, task_root / "logs" / "validation.json"
+    )
+
+    assert summary.status == "invalid"
+    actual_ids = [str(c["check_id"]) for c in checks]
+    # No-primary branch runs (main-table checks absent) but the decision
+    # check FAILS: missing primary without NO_DATA authorization.
+    for check_id in _SKIPPED_MAIN_CHECK_IDS:
+        assert check_id not in actual_ids, check_id
+    decision = _check_by_id(checks, "no_primary_data")
+    assert decision["status"] == "failed"
+    assert decision["failed_count"] == 1
+    assert "authorization" in str(decision["details"])
+
+
+def test_reason_with_primary_present_rejected(tmp_path: Path) -> None:
+    """T3 MUST-FIX: a package that claims NO_DATA upstream while a primary
+    file EXISTS is inconsistent and must FAIL — the decision check reports
+    the conflict instead of papering over it."""
+    task_root = tmp_path / "tasks" / "task_no_data_conflict"
+    staging, source_path = _build_no_data_staging(
+        staging=task_root / "staging",
+        task_root=task_root,
+        with_empty_main=True,
+    )
+
+    summary, checks = _validate_package(
+        staging,
+        source_path,
+        task_root / "logs" / "validation.json",
+        no_primary_reason=_NO_DATA_REASON,
+    )
+
+    assert summary.status == "invalid"
+    actual_ids = [str(c["check_id"]) for c in checks]
+    # Normal branch runs (a primary file exists) PLUS the failing conflict
+    # decision check.
+    assert "main_data_nonempty" in actual_ids
+    assert "no_primary_data" in actual_ids
+    decision = _check_by_id(checks, "no_primary_data")
+    assert decision["status"] == "failed"
+    assert decision["failed_count"] == 1
+    details = str(decision["details"])
+    assert "primary file" in details
+    assert _NO_DATA_REASON in details
 
 def test_empty_main_data_file_is_not_no_primary(tmp_path: Path) -> None:
     """A ``main_data.csv`` that EXISTS but has 0 rows is NOT no_primary (a
@@ -538,3 +612,58 @@ def test_run_validation_manifest_builds_without_primary(tmp_path: Path) -> None:
     roles = [entry.role for entry in result.output.manifest.artifacts]
     assert ArtifactRole.PRIMARY_DATASET not in roles
     assert result.output.manifest.artifacts, "manifest must list staging files"
+
+
+def test_run_validation_rejects_no_primary_without_signal(tmp_path: Path) -> None:
+    """T3 MUST-FIX regression at the entry point: run_validation must read
+    ``ArtifactBuildOutput.no_primary_reason``. A no-primary staging whose
+    build output carries NO reason (e.g. a normal package whose main_data.csv
+    accidentally disappeared) must FAIL the validation gate — never validate
+    as a fabricated NO_DATA publication."""
+    ctx = StageContext(
+        task_id="task_no_data_unauthorized_validate",
+        workdir=create_task_workdir(
+            "task_no_data_unauthorized_validate",
+            base_dir=str(tmp_path / "tasks"),
+        ),
+        fixture_dir=tmp_path,
+        topic="GSE999999",
+        started_at=datetime.now(UTC),
+        mode="fixture",
+        databases=["geo"],
+        specification=_specification(),
+    )
+    staging = ctx.workdir.staging_run(ctx.run_id)
+    source_path = _build_no_data_staging(
+        staging=staging, task_root=ctx.workdir.root
+    )[1]
+
+    # Note: no ``no_primary_reason`` — the default None means the build
+    # output carries NO trusted NO_DATA signal.
+    build_output = ArtifactBuildOutput(
+        staging_dir=staging,
+        artifact_paths=sorted(staging.iterdir()),
+        source_assets=[],
+        source_path=source_path,
+        literature=None,
+        geo=None,
+        specification=ctx.specification,
+        sources=[],
+        parsed_datasets=[],
+        samples=[],
+        download_attempts=[],
+        retrieved_at=datetime.now(UTC),
+        started_at=ctx.started_at,
+        dataset_source_id="src_geo",
+        dataset_accession="GSE999999",
+        dataset_id="ds1",
+    )
+
+    with pytest.raises(ValueError, match="validation gate rejected the package"):
+        run_validation(
+            ctx,
+            build_output,
+            stage_attempts=[],
+            stage_attempt_id="attempt_build",
+            publish=False,
+        )

@@ -43,6 +43,7 @@ def validate_package(
     report_path: Path,
     *,
     max_lineage_checks: int | None = DEFAULT_MAX_LINEAGE_CHECKS,
+    no_primary_reason: str | None = None,
 ) -> tuple[ValidationSummary, list[dict[str, object]]]:
     """Run all validation checks on the staging package.
 
@@ -50,6 +51,18 @@ def validate_package(
     per-scope checks in the historic order so the emitted ``check_id``
     sequence is stable. Writes ``validation_report.json`` and returns the
     summary plus the check list.
+
+    ``no_primary_reason`` is the trusted NO_DATA authorization threaded from
+    the artifact build output (``ArtifactBuildOutput.no_primary_reason``).
+    NO_DATA mode is active only when BOTH the authorization is non-empty AND
+    no primary file exists in staging (``ctx.no_primary``); every other shape
+    fails the gate:
+
+    - reason present + primary file present → inconsistent (NO_DATA claimed
+      but a primary exists) — the ``no_primary_data`` decision check FAILS
+      with the conflict while the normal main-table checks still run;
+    - no reason + primary file missing → broken package (missing primary
+      without NO_DATA authorization) — the decision check FAILS.
     """
     ctx = load_validation_context(
         staging,
@@ -58,25 +71,32 @@ def validate_package(
         max_lineage_checks=max_lineage_checks,
     )
 
+    authorized_no_data = bool((no_primary_reason or "").strip())
     checks: list[dict[str, object]] = []
     if ctx.no_primary:
-        # Phase 4b NO_DATA mode (ADR-011 / design D3): no primary table
+        # Phase 4b NO_DATA shape (ADR-011 / design D3): no primary table
         # exists (neither main_data.csv nor pathway_members.csv), so the
         # main-table checks are skipped entirely and a ``no_primary_data``
-        # decision record is emitted instead. The decision check asserts the
-        # no-primary shape and records the reason from warnings.csv; the
-        # remaining checks run unchanged. This is a SEPARATE branch — the
-        # normal-mode check_id sequence stays byte-identical (pinned by
-        # tests/pipeline/test_validation_split.py).
+        # decision record is emitted instead. The decision check PASSES only
+        # when the trusted upstream reason authorizes NO_DATA mode; without
+        # it the record FAILS and the package is a broken no-primary package,
+        # not NO_DATA. The remaining checks run unchanged. This is a SEPARATE
+        # branch — the normal-mode check_id sequence stays byte-identical
+        # (pinned by tests/pipeline/test_validation_split.py).
         checks.append(check_source_relation_evidence(ctx))
-        checks.append(check_no_primary_data(ctx))
+        checks.append(check_no_primary_data(ctx, no_primary_reason))
         checks.append(check_sample_foreign_keys(ctx))
         checks.append(check_source_asset_integrity(ctx))
         checks.append(check_field_descriptions(ctx))
         checks.append(check_warnings_metrics_consistency(ctx))
         checks.append(check_cleaning_report_consistency(ctx))
     else:
+        # A primary file exists → the normal main-table checks run. An
+        # authorized NO_DATA reason alongside a primary file is inconsistent
+        # and additionally emits a FAILING conflict decision record.
         checks.append(check_source_relation_evidence(ctx))
+        if authorized_no_data:
+            checks.append(check_no_primary_data(ctx, no_primary_reason))
         checks.append(check_main_data_nonempty(ctx))
         checks.append(check_core_data_existence(ctx))
         checks.append(check_foreign_keys(ctx))

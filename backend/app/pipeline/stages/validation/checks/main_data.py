@@ -25,37 +25,77 @@ def check_main_data_nonempty(ctx: ValidationContext) -> dict[str, object]:
     }
 
 
-def check_no_primary_data(ctx: ValidationContext) -> dict[str, object]:
-    """NO_DATA decision record: the package has no primary table.
+def check_no_primary_data(
+    ctx: ValidationContext, no_primary_reason: str | None = None
+) -> dict[str, object]:
+    """NO_DATA decision/authorization record.
 
-    Runs only in no_primary mode (``validate_package`` skips it otherwise).
-    The check asserts the staging indeed has no primary dataset (neither
-    ``main_data.csv`` nor ``pathway_members.csv``) and records the reason
-    from the ``no_expression_data`` warning in ``warnings.csv`` when present,
-    falling back to a generic message. Status ``passed`` means the no-primary
-    assertion holds — this is the NO_DATA decision record (ADR-011), not an
-    exemption.
+    Runs only in the no-primary branch of ``validate_package`` (or when an
+    authorized NO_DATA reason conflicts with a present primary file).
+    Authorization comes from the trusted upstream reason
+    (``ArtifactBuildOutput.no_primary_reason`` threaded through
+    ``validate_package``); the ``no_expression_data`` row in ``warnings.csv``
+    is evidence, not authorization — it is recorded when present but never
+    grants NO_DATA status.
+
+    Status ``passed`` requires BOTH: no primary file in staging (neither
+    ``main_data.csv`` nor ``pathway_members.csv``) AND a non-empty authorized
+    reason. Every other shape fails:
+    - authorized reason + primary file present → conflict: NO_DATA claimed
+      but a primary exists;
+    - no reason + no primary file → broken package: primary missing without
+      NO_DATA authorization.
     """
     has_primary_file = (
         (ctx.staging / "main_data.csv").is_file()
         or (ctx.staging / "pathway_members.csv").is_file()
     )
-    reason = "no primary dataset in staging package"
+    authorized_reason = (no_primary_reason or "").strip()
+    # warnings.csv evidence (human-readable message); recorded when present,
+    # never used to authorize NO_DATA mode.
+    evidence = ""
     warnings_path = ctx.staging / "warnings.csv"
     if warnings_path.is_file():
         for row in read_csv(warnings_path):
             if row.get("code") == "no_expression_data":
-                reason = row.get("message") or reason
+                evidence = row.get("message") or ""
                 break
-    assertion_holds = ctx.no_primary and not has_primary_file
+    if has_primary_file:
+        if authorized_reason:
+            details = {
+                "error": (
+                    "inconsistent package: NO_DATA authorized upstream "
+                    f"(reason: {authorized_reason}) but a primary file exists "
+                    "in staging"
+                ),
+                "reason": authorized_reason,
+            }
+        else:
+            details = {"error": "primary file present; no_primary_data not applicable"}
+        status = "failed"
+    elif authorized_reason:
+        # Intended NO_DATA path: the authorized reason is recorded (the
+        # warnings.csv row, when present, is corroborating evidence only).
+        details: dict[str, str] = {"reason": authorized_reason}
+        if evidence:
+            details["evidence"] = evidence
+        status = "passed"
+    else:
+        details = {
+            "error": (
+                "primary table missing without NO_DATA authorization "
+                "(no_primary_reason); broken package, not NO_DATA"
+            ),
+        }
+        status = "failed"
     return {
         "check_id": "no_primary_data",
         "scope": "main_data",
         "check_name": "no primary dataset present (NO_DATA decision)",
-        "status": "passed" if assertion_holds else "failed",
+        "status": status,
         "checked_count": 1,
-        "failed_count": 0 if assertion_holds else 1,
-        "details": json.dumps({"reason": reason}, ensure_ascii=False),
+        "failed_count": 0 if status == "passed" else 1,
+        "details": json.dumps(details, ensure_ascii=False),
     }
 
 
