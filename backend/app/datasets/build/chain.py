@@ -14,6 +14,7 @@ chain stays pure and testable.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from app.datasets.build import adapters
 from app.datasets.build.canonicalizer import CanonicalizationResult, canonicalize
 from app.datasets.build.compat_gate import CompatibilityReport, check_expression_compatibility
 from app.datasets.build.errors import BuildError
+from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.integrator import IntegrationResult, integrate
 from app.datasets.build.manifest import (
     assemble_manifest,
@@ -77,12 +79,18 @@ def build_expression_dataset(
     source_paths: dict[str, Path],
     output_dir: Path,
     task_id: str = "task_demo",
+    gene_symbol_map: Mapping[str, str] | None = SYMBOL_TO_ENSEMBL,
 ) -> BuildChainResult:
     """Run the expression build chain; raises BuildError on execution failure.
 
     ``output_dir`` is a build-owned workspace: stale outputs from a previous
     build are cleared so a rejected rerun can never leave a prior
     ``primary.csv`` / ``dataset_manifest.json`` behind.
+
+    ``gene_symbol_map`` defaults to the ship-bound local symbol table so the
+    demo chain genuinely performs namespace authorization (symbol sources are
+    canonicalized to ``ensembl_gene`` when the mapping matches); pass ``None``
+    to keep symbol namespaces as-is.
     """
     _clear_build_workspace(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +122,7 @@ def build_expression_dataset(
             schema=schema,
             profile=normalization_profile,
             output_dir=output_dir,
+            gene_symbol_map=gene_symbol_map,
         )
         canonical_results.append(result)
         statistics = result.batch.statistics

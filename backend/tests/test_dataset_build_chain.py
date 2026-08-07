@@ -115,7 +115,97 @@ def test_single_gdc_build_succeeds(tmp_path: Path) -> None:
     assert result.manifest.row_count == 4
     rows = _primary_rows(result)
     assert len(rows) == 4
-    assert {r["gene_id_namespace"] for r in rows} == {"gene_symbol"}
+    # The ship-bound symbol map canonicalizes TP53/BRCA1 to ensembl_gene.
+    assert {r["gene_id_namespace"] for r in rows} == {"ensembl_gene"}
+    assert {r["gene_id"] for r in rows} == {
+        "ENSG00000141510",  # TP53
+        "ENSG00000012048",  # BRCA1
+    }
+    assert all(r["expression_unit"] == "expression_value" for r in rows)
+
+
+def test_single_gdc_star_build_succeeds(tmp_path: Path) -> None:
+    """STAR-counts single-sample files must pass the whole chain.
+
+    Regression for the review finding that STAR rows carry no sample column
+    alias (single-sample files have no sample columns), which previously
+    tripped ``required_field_completeness`` for ``source_sample_alias`` and
+    rejected every STAR build.
+    """
+    result = _run_chain(
+        tmp_path,
+        [_binding("binding_star", "gdc", "gdc.expression.v1")],
+        {"binding_star": "gdc/gdc_star_counts.tsv"},
+    )
+    assert result.status == "succeeded"
+    assert result.reason_codes == ()
+    assert result.validation.status.value == "passed"
+    assert result.manifest is not None
+    # 2 real genes; the __no_feature pseudo-row is canonicalization-rejected.
+    assert result.manifest.row_count == 2
+    rows = _primary_rows(result)
+    assert len(rows) == 2
+    assert {r["gene_id_namespace"] for r in rows} == {"ensembl_gene"}
+    assert all(r["source_sample_alias"] == "" for r in rows)
+    assert all(r["expression_unit"] == "tpm_unstranded" for r in rows)
+
+
+def test_gene_symbol_map_merges_symbol_and_ensembl_sources(tmp_path: Path) -> None:
+    """A symbol-keyed source maps to ensembl and merges with an ensembl source.
+
+    Regression for the review finding: the ship-bound gene_symbol_map existed
+    but was never wired into the chain, so a symbol-keyed source could never be
+    unified with an ensembl-keyed source of the same measurement identity (the
+    demo merge only worked because both fixtures happened to share symbol keys).
+    """
+    ensembl_matrix = tmp_path / "ensembl_matrix.tsv"
+    ensembl_matrix.write_text(
+        "gene_id\tS3\tS4\n"
+        "ENSG00000141510\t5.5\t6.5\n"  # TP53
+        "ENSG00000012048\t7.5\t8.5\n",  # BRCA1
+        encoding="utf-8",
+    )
+    ensembl_checksum = hashlib.sha256(ensembl_matrix.read_bytes()).hexdigest()
+    ensembl_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(ensembl_checksum),
+        kind="source",
+        relative_path="source_assets/ensembl_matrix.tsv",
+        sha256=ensembl_checksum,
+        size_bytes=ensembl_matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_ensembl",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    result = build_expression_dataset(
+        spec=_spec(
+            [
+                _binding("binding_symbol", "gdc", "gdc.expression.v1"),
+                _binding("binding_ensembl", "gdc", "gdc.expression.v1"),
+            ]
+        ),
+        registry=_registry(),
+        source_assets={
+            "binding_symbol": _source_asset("gdc/gdc_expression.tsv", "src_symbol"),
+            "binding_ensembl": ensembl_asset,
+        },
+        source_paths={
+            "binding_symbol": FIXTURES / "gdc/gdc_expression.tsv",
+            "binding_ensembl": ensembl_matrix,
+        },
+        output_dir=tmp_path / "build",
+    )
+    assert result.status == "succeeded"
+    assert result.reason_codes == ()
+    rows = _primary_rows(result)
+    # 2 genes x (S1/S2 from symbol source + S3/S4 from ensembl source).
+    assert len(rows) == 8
+    # Both sources land in the ensembl namespace with the same unit.
+    assert {r["gene_id_namespace"] for r in rows} == {"ensembl_gene"}
+    assert {r["gene_id"] for r in rows} == {
+        "ENSG00000141510",  # TP53
+        "ENSG00000012048",  # BRCA1
+    }
     assert all(r["expression_unit"] == "expression_value" for r in rows)
 
 
@@ -275,10 +365,11 @@ def test_provenance_sample_backtrace(tmp_path: Path) -> None:
     assert provenance["schema_ref"] == "gene_expression.long.v1"
     assert provenance["sources"][0]["asset_id"].startswith("asset_")
     backtrace = provenance["sample_backtraces"][0]
-    assert backtrace["gene_id"] == "TP53"
+    # TP53 is mapped to its Ensembl gene via the ship-bound symbol map.
+    assert backtrace["gene_id"] == "ENSG00000141510"
     assert backtrace["source_logical_file"] == "gdc_expression.tsv"
     assert backtrace["source_line_number"] == "2"
-    assert backtrace["transforms"][0]["output"] == "TP53"
+    assert backtrace["transforms"][0]["input"] == "TP53"
 
 
 def test_rerun_is_deterministic(tmp_path: Path) -> None:

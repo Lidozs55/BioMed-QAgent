@@ -93,4 +93,6 @@ def test_gene_expression_required_fields() -> None:
     optional = [
         field.name for field in schema.fields if not field.required
     ]
-    assert optional == ["gene_id_version"]
+    # gene_id_version is optional by definition; source_sample_alias is optional
+    # because single-sample GDC STAR-counts files have no sample column header.
+    assert optional == ["gene_id_version", "source_sample_alias"]
