@@ -3,7 +3,7 @@
 日期：2026-08-08
 分支：`fix/phase4-review-bugs`（基于 `main @ 08c961c`，即 Phase 4a/4b/4c + phase3-p2 integrator 合并后的状态）
 结论：**4 个分域评审（A 运行时 / B pipeline+artifacts / C 前端 / D agent loop+HIL）共 30 项 findings；
-修复波 1-4 处理 23 项（TDD 全部红→绿），7 项设计级延后记录。** 终态：后端 2377、前端 677。
+修复波 1-10 处理全部 30 项（TDD 红→绿，含 3 轮 MUST-FIX 迭代闭合），7 项设计级延后记录。** 终态：后端 2377、前端 677。
 
 ## 1. 评审方法
 
@@ -76,7 +76,7 @@
 第一轮 23 项修复后，最终 scoped re-review（gpt-5.6-sol）对 11 项 MUST-FIX 判定：7 项部分/回归 + 4 项未闭合。
 Wave 5（后端）+ Wave 6（前端）处理 10 项；#10（V2 结果传播）转 §3 设计级。
 
-### Wave 5 后端（commit 待填）
+### Wave 5 后端（commit `a7310cb`）
 
 | 项 | 修复 |
 | --- | --- |
@@ -87,7 +87,7 @@ Wave 5（后端）+ Wave 6（前端）处理 10 项；#10（V2 结果传播）�
 | B8 | 时区 naive/aware 归一化后再比较（防御 TypeError） |
 | A8 | 旧快照去重状态重建 + 冲突重复 artifact 拒绝 |
 
-### Wave 6 前端（commit 待填）
+### Wave 6 前端（commit `36c4d8d`）
 
 | 项 | 修复 |
 | --- | --- |
@@ -96,11 +96,23 @@ Wave 5（后端）+ Wave 6（前端）处理 10 项；#10（V2 结果传播）�
 | C8 | 弹窗挂载期 deadline 定时重算（setInterval 链） |
 | #11 | `operation_*` 四事件入 EVENT_TYPES + reducer 无操作透传（游标前进，状态不变） |
 
+### Wave 7 收尾（commit `52a282e`）：取消 V2 输出丢弃 + 混合源契约一致 NO_DATA + socket 重置清 store marker
+
+### Wave 8-10（K1 竞态闭合链，commit `1170072`/`b330772`/`ba58e7f`）
+
+| 轮 | 残留 | 修复 |
+| --- | --- | --- |
+| R3 (W8) | 超时后 to_thread worker 仍写共享路径，锁释放后重试重叠 | 锁释放前有界等待 straggler；原始 future 追踪（wrap_future 的 done() 误导） |
+| R4 (W9) | marker 仅观察性；完成信号 check-then-act 竞态 | marker 成为真实重试排除（轮询+有界 cap→retryable conflict；TTL 处理崩溃残留）；InvalidStateError 抑制 |
+| R5 (W10) | mtime 不能证明进程死亡；孤儿 marker 竞态 | 进程感知所有权（pid+process_nonce）；仅真存活时写 marker + write-then-verify；worker 按 worker_id read-compare-unlink；poll 替代 wrap_future 探测 |
+
+**Round-6 终审：Overall PASS，无 MUST-FIX。** 全分支 30 项 findings + 11+3+1 轮 MUST-FIX 全部闭合，仅剩 §3 设计级延后。
+
 ## 5. 验证（终态门，wave1 合并后实测）
 
 | 门 | 结果 |
 | --- | --- |
-| 后端 pytest | `2377 passed, 2 skipped, 28 deselected` |
+| 后端 pytest | `2402 passed, 2 skipped, 28 deselected` |
 | 后端 ruff（全量） | `All checks passed!` |
 | `python -c "import app.main"` | OK |
 | 前端 test | `677 passed (42 files)` |
