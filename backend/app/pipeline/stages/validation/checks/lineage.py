@@ -70,8 +70,16 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
     lineage_failures = 0
     for row in sampled_rows:
         lines = _lines_for(row.get("asset_id", ""))
-        line_number = int(row["source_line_number"])
-        column_index = int(row["source_column_index"])
+        try:
+            line_number = int(row["source_line_number"])
+            column_index = int(row["source_column_index"])
+        except (TypeError, ValueError):
+            # A non-integer locator value (or a None cell) cannot index the
+            # source table — count the row as a lineage failure, consistent
+            # with the guarded locator rejection below, instead of letting
+            # the conversion ValueError escape the check (final review FIX 2).
+            lineage_failures += 1
+            continue
         if line_number <= 0 or column_index < 0:
             # No verifiable locator: a non-positive line number (placeholder
             # rows carry line 0) or a negative column index points outside the

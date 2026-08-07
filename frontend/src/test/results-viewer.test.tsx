@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ResultsViewer from "@/components/ResultsViewer";
 import { createInitialRuntimeState } from "@/runtime/reducer";
-import type { ArtifactProjection } from "@/runtime/types";
+import type { ArtifactProjection, RunProjection } from "@/runtime/types";
 import { useAgentStore } from "@/stores/agentStore";
 
 describe("ResultsViewer", () => {
@@ -509,6 +509,171 @@ describe("ResultsViewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
     expect(await screen.findByText("无数据")).toBeVisible();
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
+  });
+
+  it("scopes the NO_DATA summary to the overridden task, not the active task", async () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    const noDataRun = (
+      taskId: string,
+      runId: string,
+    ): RunProjection => ({
+      runId,
+      taskId,
+      requestId: `req_${runId}`,
+      status: "completed",
+      input: "question",
+      createdAt: "2026-07-14T00:00:00Z",
+      updatedAt: "2026-07-14T00:00:00Z",
+      startedAt: "2026-07-14T00:00:00Z",
+      finishedAt: "2026-07-14T00:00:00Z",
+      error: null,
+      summary: {
+        run_status: "completed",
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: ["geo"],
+          available_artifact_roles: ["supporting_dataset"],
+          publication_id: null,
+          reason_codes: ["no_records"],
+          user_summary: `摘要-${taskId}`,
+          recommended_next_action: `建议-${taskId}`,
+        },
+        error_code: null,
+        cancelled_at_stage: null,
+        user_message: `消息-${taskId}`,
+      },
+    });
+    const artifactOther: ArtifactProjection = {
+      artifact_id: "artifact_other",
+      name: "other_metadata.csv",
+      role: "supporting_dataset",
+      size: 128,
+      sha256: "f".repeat(64),
+      media_type: "text/csv",
+      taskId: "task_other",
+      generatedByStepId: null,
+    };
+    useAgentStore.setState({
+      tasksById: {
+        task_results: {
+          ...task,
+          runsById: {
+            run_active_no_data: noDataRun("task_results", "run_active_no_data"),
+          },
+          runOrder: ["run_active_no_data"],
+        },
+        task_other: {
+          ...task,
+          summary: { ...task.summary, task_id: "task_other", title: "Other" },
+          runsById: {
+            run_other_no_data: noDataRun("task_other", "run_other_no_data"),
+          },
+          runOrder: ["run_other_no_data"],
+          artifactsById: {
+            artifact_other: artifactOther,
+          },
+          artifactOrder: ["artifact_other"],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
+    );
+
+    render(
+      <ResultsViewer
+        taskId="task_other"
+        artifacts={[artifactOther]}
+        activities={[]}
+      />,
+    );
+
+    // The banner/preview describe the OVERRIDDEN task's own NO_DATA outcome —
+    // never the active task's summary (final review FIX 3).
+    expect(screen.queryByText("摘要-task_results")).not.toBeInTheDocument();
+    expect(screen.queryByText("建议-task_results")).not.toBeInTheDocument();
+    expect(screen.getByText("摘要-task_other")).toBeVisible();
+    expect(screen.getByText("建议-task_other")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+    expect(await screen.findByText("消息-task_other")).toBeVisible();
+    expect(screen.queryByText("消息-task_results")).not.toBeInTheDocument();
+  });
+
+  it("suppresses the NO_DATA summary when the override target task is not in the store", async () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        task_results: {
+          ...task,
+          runsById: {
+            run_active_no_data: {
+              runId: "run_active_no_data",
+              taskId: "task_results",
+              requestId: "req_active_no_data",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["geo"],
+                  available_artifact_roles: ["supporting_dataset"],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "ACTIVE 任务无数据",
+                  recommended_next_action: "ACTIVE 调整建议",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "ACTIVE 任务无数据消息",
+              },
+            },
+          },
+          runOrder: ["run_active_no_data"],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
+    );
+    const ghostArtifact: ArtifactProjection = {
+      artifact_id: "artifact_ghost",
+      name: "ghost_metadata.csv",
+      role: "supporting_dataset",
+      size: 64,
+      sha256: "9".repeat(64),
+      media_type: "text/csv",
+      taskId: "task_ghost",
+      generatedByStepId: null,
+    };
+
+    render(
+      <ResultsViewer
+        taskId="task_ghost"
+        artifacts={[ghostArtifact]}
+        activities={[]}
+      />,
+    );
+
+    // The overridden task is absent from the store: no summary is attached
+    // to its artifacts — the active task's NO_DATA summary must NOT leak
+    // (final review FIX 3).
+    expect(screen.queryByText("ACTIVE 任务无数据")).not.toBeInTheDocument();
+    expect(screen.queryByText("ACTIVE 调整建议")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+    expect(await screen.findByText("无数据")).toBeVisible();
+    expect(screen.queryByText("ACTIVE 任务无数据消息")).not.toBeInTheDocument();
   });
 
   it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {

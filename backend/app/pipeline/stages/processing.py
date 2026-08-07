@@ -427,7 +427,12 @@ def _recover_samples_from_series_matrix(
         return []
     try:
         return parse_geo_series_matrix_samples(compressed)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, EOFError) as exc:
+        # EOFError: a truncated series_matrix gzip raises EOFError (NOT
+        # OSError) mid-decompression inside parse_geo_series_matrix_samples;
+        # treat it like any other parse failure so the caller lands on the
+        # honest no-primary outcome instead of aborting the pipeline
+        # (final review FIX 1).
         logger.warning("processing: series_matrix sample recovery failed: %s", exc)
         return []
 

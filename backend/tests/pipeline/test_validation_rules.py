@@ -578,6 +578,38 @@ def test_source_value_lineage_detects_out_of_range_line(tmp_path: Path) -> None:
     assert svl["failed_count"] == 1
 
 
+def test_source_value_lineage_rejects_non_integer_locator(tmp_path: Path) -> None:
+    """A non-integer ``source_line_number``/``source_column_index`` cannot
+    index the source table. The lineage check must count the row as a
+    lineage FAILURE — consistent with the guarded locator rejection for
+    non-positive locators — instead of letting the unguarded ``int()``
+    conversion ValueError escape the check (final review FIX 2)."""
+    staging = tmp_path / "tasks" / "task1" / "staging"
+    source_path = tmp_path / "tasks" / "task1" / "source_assets" / "source.tsv.gz"
+    _build_valid_staging(staging, source_path)
+
+    rows = _read_csv(staging / "main_data.csv")
+    rows[0]["source_line_number"] = "not-an-integer"
+    rows[0]["source_column_index"] = "0"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert svl["failed_count"] == 1
+
+    # The non-integer column index is rejected the same way.
+    rows = _read_csv(staging / "main_data.csv")
+    rows[0]["source_line_number"] = "2"
+    rows[0]["source_column_index"] = "x"
+    _write_csv(staging / "main_data.csv", _MAIN_DATA_COLUMNS, rows)
+
+    summary, checks = _run_validation(staging, source_path, tmp_path / "tasks" / "task1")
+    svl = _check_by_id(checks, "source_value_lineage")
+    assert svl["status"] == "failed"
+    assert svl["failed_count"] == 1
+
+
 def test_source_value_lineage_rejects_wrapped_placeholder_locator(tmp_path: Path) -> None:
     """A placeholder-shaped row (source_line_number 0 / source_column_index 0,
     blank expression_value) must FAIL lineage even when its recorded

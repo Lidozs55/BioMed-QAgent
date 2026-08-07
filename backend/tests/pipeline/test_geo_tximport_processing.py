@@ -359,6 +359,81 @@ def test_run_processing_no_expression_yields_empty_parsed_with_samples(
     int(result.output_digest, 16)
 
 
+def test_recover_samples_truncated_series_matrix_gzip_returns_empty(
+    tmp_path: Path, caplog
+) -> None:
+    """A TRUNCATED series_matrix gzip raises ``EOFError`` (NOT an ``OSError``)
+    mid-decompression inside ``parse_geo_series_matrix_samples``. The sample
+    recovery helper must treat it like any other parse failure: return an
+    empty sample list with a warning instead of letting EOFError escape and
+    abort the pipeline (final review FIX 1)."""
+    import logging
+
+    from app.pipeline.stages.processing import _recover_samples_from_series_matrix
+
+    full = gzip.compress(SERIES_MATRIX_EMPTY_BLOCK.encode("utf-8"), mtime=0)
+    truncated = full[:-4]
+    # Pin the assumption: truncated gzip bytes raise EOFError (not OSError).
+    import pytest
+
+    with pytest.raises(EOFError):
+        gzip.decompress(truncated)
+
+    ctx, source_asset = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_EMPTY_BLOCK, task_id="task_trunc_recover"
+    )
+    source_path = ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    source_path.write_bytes(truncated)
+    source_asset.sha256 = hashlib.sha256(truncated).hexdigest()
+    source_asset.size_bytes = len(truncated)
+
+    with caplog.at_level(logging.WARNING, logger="app.pipeline.stages.processing"):
+        samples = _recover_samples_from_series_matrix(source_asset, ctx)
+
+    assert samples == []
+    assert "series_matrix sample recovery failed" in caplog.text
+
+
+def test_run_processing_truncated_series_matrix_gzip_lands_no_primary(
+    tmp_path: Path,
+) -> None:
+    """A truncated series_matrix gzip must flow to the honest NO_DATA outcome:
+    parsed_datasets=[] + no_primary_reason set — never a raised EOFError
+    aborting the stage (final review FIX 1)."""
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+    from app.pipeline.stages.processing import run_processing
+
+    ctx, source_asset = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_EMPTY_BLOCK, task_id="task_trunc_run"
+    )
+    full = (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    truncated = full[:-4]
+    (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").write_bytes(
+        truncated
+    )
+    source_asset.sha256 = hashlib.sha256(truncated).hexdigest()
+    source_asset.size_bytes = len(truncated)
+    live_ctx = StageContext(
+        task_id="task_trunc_run",
+        workdir=ctx.workdir,
+        fixture_dir=tmp_path,
+        topic="live",
+        databases=["geo"],
+        started_at=datetime.now(tz=UTC),
+        mode="live",
+    )
+
+    result = run_processing(live_ctx, source_asset, "ds_geo_test")
+
+    assert result.output.parsed_datasets == []
+    assert result.output.no_primary_reason == "series_matrix_samples_unavailable"
+    # No samples could be recovered from the truncated file.
+    assert result.output.samples == []
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
 def test_no_primary_output_digest_is_deterministic(tmp_path: Path) -> None:
     """Same no-expression inputs must produce the same output_digest (the
     no-primary digest hashes the reason + canonical sample records — full

@@ -97,10 +97,16 @@ NO_DATA 渲染与 SUCCEEDED 回归。全量门见 §4。
 - **core_data_existence 去豁免（D5）**：`checks/main_data.py` 删除 `is_metadata_only` 分支
   （`value_semantics == "metadata_only"` 全行豁免）+ 陈旧 docstring 注释（"download failure
   masked by geo_minimal_placeholder"）；check 现统一应用于所有 main_data。
-- **EOFError/截断 gzip（T1 caveat 关闭）**：`processing.py` 5 处
-  `except (ValueError, FileNotFoundError, OSError)` 加入 `EOFError`（series-matrix 块解析、
-  supplementary 解析、fixture tximport、live tximport、live SOFT 恢复）——截断 gzip 走诚实
-  no-primary 路径而非崩溃；已核实 app/ 内无其他路径依赖 EOFError 传播。
+- **EOFError/截断 gzip（T1 caveat 关闭；final review FIX 1 补齐最后一处）**：
+  `processing.py` 共 6 处截断 gzip 边界捕获 `EOFError`——T6 加入的 5 处表达恢复元组
+  （series-matrix 块解析、supplementary 解析、fixture tximport、live tximport、live SOFT
+  恢复）加上样本恢复 helper `_recover_samples_from_series_matrix`（原仅捕获
+  `(ValueError, OSError)`，截断 series_matrix gzip 的 `EOFError` 会逃逸并中断管线，
+  final review FIX 1 补入）。已核实 app/ 内无其他路径依赖 EOFError 传播
+  （`geo_annotation.parse_platform_annotation` 的元组仍无 EOFError，但其调用链
+  `_load_geo_gene_map` 以 `except Exception` 兜底为 `annotation_unavailable`，不构成逃逸）。
+  回归测试：`test_recover_samples_truncated_series_matrix_gzip_returns_empty`（直接 helper）+
+  `test_run_processing_truncated_series_matrix_gzip_lands_no_primary`（no-primary 路径）。
 - **无表达 E2E**：`tests/runtime/test_fixture_executor.py` 新增 fixture 级无表达全链测试
   （真实 acquisition → run_processing，无 monkeypatch）：复制 fixture 目录并损坏
   `tximport_counts_slice.tsv`（无 12 个 counts 列）→ processing no-primary → builder NO_DATA 包
@@ -117,11 +123,15 @@ NO_DATA 渲染与 SUCCEEDED 回归。全量门见 §4。
 2. **valid_row_count 数据来源（T4 决策 option b）**：从 PROCESSING 输出的
    `ParsedDataset.row_count`（rows_after）注入，而非 finalize 时重读 staged `main_data.csv`；
    `RunManifest`/`ArtifactManifestEntry` 未加行数字段（避免前端 parser 契约涟漪）。
-3. **(b) ResultsViewer override 契约风险（T5 复评，文档化）**：`ResultsViewer` 的
-   `latestRun`/`buildResult` 始终从 active store task（`selectActiveTask`）推导，即使
-   `taskId`/`artifacts` props 被调用方覆盖（如 ArtifactSheet 单产物覆盖）——NO_DATA banner/
-   预览消息描述的是 active task 的最新 run，而非覆盖目标 task。无代码改动（避免组件契约重设计）；
-   ArtifactSheet 继承 banner 属信息性行为，非回归。
+3. **(b) ResultsViewer override 契约风险（T5 复评，final review FIX 3 修复）**：
+   `ResultsViewer` 的 `latestRun`/`buildResult` 曾始终从 active store task
+   （`selectActiveTask`）推导，即使 `taskId`/`artifacts` props 被调用方覆盖
+   （如 ArtifactSheet 单产物覆盖）——NO_DATA banner/预览消息会描述 active task 的最新 run
+   而非覆盖目标 task。修复：store 按 task_id 保存所有已加载任务，覆盖存在时 run 摘要从
+   `tasksById[taskId]` 解析（同覆盖目标 task）；覆盖目标不在 store 时完全抑制
+   NO_DATA banner/预览消息而非错误归属。无覆盖路径字节级不变。
+   回归测试：`scopes the NO_DATA summary to the overridden task, not the active task` +
+   `suppresses the NO_DATA summary when the override target task is not in the store`。
 4. **(c) task-wide artifact list（T5 三轮注记，文档化）**：store 的 artifact 列表是任务级
    聚合，合法 NO_DATA publication 的 banner/消息在列表同时含早期 run 产物时可能渲染其上。
    现有属权门控（最新 run 的 `available_artifact_roles` 非空 + 列表非空）已降低误渲染面，
@@ -135,8 +145,9 @@ NO_DATA 渲染与 SUCCEEDED 回归。全量门见 §4。
    拒绝：`line_number <= 0` / `column_index < 0` 在索引前即判失败——行 0 减 1 的负索引
    会包装到源表末行，`source_raw_value` 恰好等于该包裹单元格时原实现会误通过（T6 review
    修复）；列 0 不拒绝（GDC clinical sample_id 零基位于列 0）。
-7. **EOFError caveat 关闭方式**：加入 5 处 except 元组（含 fixture 路径与 helper 内部），
-   而非仅 live 路径——同类截断 gzip 崩溃在 fallback 链任何节点都不应存活。
+7. **EOFError caveat 关闭方式**：加入 6 处 except 元组（含 fixture 路径、helper 内部与
+   样本恢复 helper，final review FIX 1 补齐）——而非仅 live 路径——同类截断 gzip 崩溃在
+   fallback 链任何节点都不应存活。
 8. **fixture 级无表达 E2E 的可执行性**：fixture 模式 acquisition 硬编码 pin 唯一数据集
    （`_run_acquisition_fixture` 对非 GSE178352 raise），无法新增独立"无表达"fixture 数据集；
    采用**复制 fixture 目录 + 损坏 counts 资产**建模（轻量、不触碰共享 fixture 资产，

@@ -279,14 +279,30 @@ export default function ResultsViewer({
   activities: activityOverride,
 }: ResultsViewerProps = {}) {
   const task = useAgentStore(selectActiveTask);
+  const tasksById = useAgentStore((state) => state.tasksById);
   const activeArtifacts = useAgentStore(selectActiveArtifacts);
   const activeActivities = useAgentStore(selectActiveActivities);
   const taskId = taskIdOverride ?? task?.summary.task_id ?? null;
   const artifacts = artifactOverride ?? activeArtifacts;
   const activities = activityOverride ?? activeActivities;
-  const latestRunId = task?.runOrder[task.runOrder.length - 1];
+  // The run summary (latestRun/buildResult/noDataMessage) must describe the
+  // SAME task the rendered artifacts belong to. The store keeps every loaded
+  // task keyed by task_id, so when overrides target another task the summary
+  // resolves from that task's own runs; when the overridden task is not in
+  // the store the summary is suppressed entirely rather than misattributing
+  // the active task's outcome to another task's artifacts (final review
+  // FIX 3). The no-override path stays byte-identical.
+  const hasRunOverrides =
+    taskIdOverride !== undefined || artifactOverride !== undefined;
+  const runSourceTask = hasRunOverrides
+    ? (taskId === null ? undefined : tasksById[taskId])
+    : task;
+  const latestRunId =
+    runSourceTask?.runOrder[runSourceTask.runOrder.length - 1];
   const latestRun =
-    latestRunId === undefined ? undefined : task?.runsById[latestRunId];
+    latestRunId === undefined
+      ? undefined
+      : runSourceTask?.runsById[latestRunId];
   const buildResult = latestRun?.summary?.build_result;
   // The empty-state title and the per-artifact preview message describe the
   // LATEST run's outcome. The empty state is only rendered when NO artifacts
