@@ -448,6 +448,10 @@ def _try_series_matrix_expression_or_minimal(
     returns ``(parsed, None)``. When the block is empty but a supplementary
     expression asset is available (downloaded by the acquisition stage for
     RNA-seq series), parses that instead — real expression always wins.
+    The supplementary parser does not require samples (GSM columns map
+    directly, raw column names fall back), so supplementary recovery is
+    attempted even when *samples* is empty; only the series-matrix block
+    parse is skipped in that case (phase 4b T1 review round 2).
 
     When no expression data can be recovered anywhere, returns
     ``(None, reason)`` where ``reason`` is a stable string recorded on
@@ -460,65 +464,76 @@ def _try_series_matrix_expression_or_minimal(
     parser so probe rows can be rewritten to gene symbols and the annotation
     status (mapped/unmapped/...) is recorded in processing_parameters.
     """
-    if not samples:
-        # No samples recovered from the series_matrix: the expression block
-        # cannot be mapped to sample columns, so no expression data exists.
-        return None, "series_matrix_samples_unavailable"
-    try:
-        expression_parsed = process_geo_series_matrix_expression(
-            source_asset=source_asset,
-            dataset_id=dataset_id,
-            workdir=ctx.workdir,
-            samples=samples,
-            gene_map=gene_map,
-            probe_gene_mapping=probe_gene_mapping,
-        )
-        if expression_parsed is not None:
-            logger.info(
-                "processing: parsed %d expression rows from series_matrix",
-                expression_parsed.row_count,
+    # The series_matrix expression block needs samples to map its columns;
+    # the supplementary parser does NOT (GSM columns map directly and raw
+    # column names fall back). So when *samples* is empty we skip only the
+    # series-matrix block and still attempt supplementary recovery — the real
+    # tximport-counts topology (tximport file + family SOFT, no series_matrix
+    # asset) must not lose supplementary expression recovery just because the
+    # SOFT yielded no samples (phase 4b T1 review round 2).
+    if samples:
+        try:
+            expression_parsed = process_geo_series_matrix_expression(
+                source_asset=source_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                samples=samples,
+                gene_map=gene_map,
+                probe_gene_mapping=probe_gene_mapping,
             )
-            return expression_parsed, None
-        # series_matrix 表达块为空 —— 尝试 supplementary 表达矩阵
-        if suppl_asset is not None:
-            try:
-                suppl_parsed = process_geo_supplementary_expression(
-                    source_asset=suppl_asset,
-                    dataset_id=dataset_id,
-                    workdir=ctx.workdir,
-                    samples=samples,
-                )
-                if suppl_parsed is not None:
-                    logger.info(
-                        "processing: parsed %d expression rows from supplementary file",
-                        suppl_parsed.row_count,
-                    )
-                    return suppl_parsed, None
-                # Supplementary asset is present but yielded no rows: the
-                # reason must not claim "no supplementary file" (phase 4b T1
-                # MUST-FIX 3).
+            if expression_parsed is not None:
                 logger.info(
-                    "processing: supplementary expression file yielded no rows",
+                    "processing: parsed %d expression rows from series_matrix",
+                    expression_parsed.row_count,
                 )
-                return None, "series_matrix_expression_empty_and_supplementary_empty"
-            except (ValueError, FileNotFoundError, OSError) as exc:
-                logger.warning(
-                    "processing: supplementary expression parse failed (%s)",
-                    exc,
+                return expression_parsed, None
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "processing: series_matrix expression parse failed (%s); "
+                "no primary dataset (no expression data)",
+                exc,
+            )
+            return None, "series_matrix_expression_parse_failed"
+
+    # series_matrix 表达块为空（或样本不可用）—— 尝试 supplementary 表达矩阵
+    if suppl_asset is not None:
+        try:
+            suppl_parsed = process_geo_supplementary_expression(
+                source_asset=suppl_asset,
+                dataset_id=dataset_id,
+                workdir=ctx.workdir,
+                samples=samples,
+            )
+            if suppl_parsed is not None:
+                logger.info(
+                    "processing: parsed %d expression rows from supplementary file",
+                    suppl_parsed.row_count,
                 )
-                return None, "series_matrix_expression_empty_and_supplementary_unparsable"
-        logger.info(
-            "processing: series_matrix expression block is empty; "
-            "no primary dataset (no expression data)",
-        )
-        return None, "series_matrix_expression_empty_and_no_supplementary"
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        logger.warning(
-            "processing: series_matrix expression parse failed (%s); "
-            "no primary dataset (no expression data)",
-            exc,
-        )
-        return None, "series_matrix_expression_parse_failed"
+                return suppl_parsed, None
+            # Supplementary asset is present but yielded no rows: the
+            # reason must not claim "no supplementary file" (phase 4b T1
+            # MUST-FIX 3).
+            logger.info(
+                "processing: supplementary expression file yielded no rows",
+            )
+            if not samples:
+                return None, "series_matrix_samples_unavailable"
+            return None, "series_matrix_expression_empty_and_supplementary_empty"
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "processing: supplementary expression parse failed (%s)",
+                exc,
+            )
+            return None, "series_matrix_expression_empty_and_supplementary_unparsable"
+    if not samples:
+        # No samples recovered from the series_matrix (or SOFT) and no
+        # supplementary asset: no expression data is available.
+        return None, "series_matrix_samples_unavailable"
+    logger.info(
+        "processing: series_matrix expression block is empty; "
+        "no primary dataset (no expression data)",
+    )
+    return None, "series_matrix_expression_empty_and_no_supplementary"
 
 
 def _run_multi_dataset_processing(
@@ -856,17 +871,30 @@ def run_processing(
                     len(samples),
                 )
             except (ValueError, FileNotFoundError, OSError) as exc:
-                # Live-mode fallback (mirrors fixture mode): the tximport
-                # counts parse failed — attempt series_matrix expression
-                # recovery; if that finds no expression either, the tximport
+                # Live-mode fallback (REAL topology): when tximport counts
+                # were downloaded, acquisition pairs them with the family SOFT
+                # asset and there is NO series_matrix file in the workdir.
+                # Recover samples from the family SOFT (soft_asset is
+                # guaranteed present in this branch) and attempt supplementary
+                # expression; if that finds no expression either, the tximport
                 # counts parse failure is the root cause of the no-primary
                 # outcome.
                 logger.warning(
                     "processing: live tximport parse failed (%s); "
-                    "attempting series_matrix recovery",
+                    "recovering samples from family SOFT",
                     exc,
                 )
-                samples = _recover_samples_from_series_matrix(source_asset, ctx)
+                try:
+                    soft_bytes = (
+                        ctx.workdir.root / soft_asset.relative_path
+                    ).read_bytes()
+                    samples = parse_geo_soft_samples(soft_bytes)
+                except (ValueError, FileNotFoundError, OSError) as soft_exc:
+                    logger.warning(
+                        "processing: family SOFT sample recovery failed (%s)",
+                        soft_exc,
+                    )
+                    samples = []
                 gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
                 parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
                     source_asset, dataset_id, ctx, samples,
