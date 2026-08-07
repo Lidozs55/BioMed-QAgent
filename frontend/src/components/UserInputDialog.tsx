@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { CheckIcon, XCircleIcon } from "@phosphor-icons/react";
 
@@ -13,7 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import type { ResumeRunInput, UserInputDecision } from "@/runtime/contracts";
 import type { PendingUserInput, TaskProjection } from "@/runtime/types";
 
@@ -87,6 +89,33 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function renderDetailValue(value: unknown): ReactNode {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return (
+      <ul className="list-disc space-y-1 pl-4">
+        {value.map((item, index) => (
+          <li key={index}>{renderDetailValue(item)}</li>
+        ))}
+      </ul>
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return (
+      <code className="break-all font-mono text-xs text-muted-foreground">
+        {JSON.stringify(value)}
+      </code>
+    );
+  }
+  return null;
+}
+
 export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   const pending = task?.pendingUserInput ?? null;
   const taskId = task?.summary.task_id ?? null;
@@ -96,6 +125,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       ? null
       : `${taskId}:${pending.runId}:${pending.requestId}`;
   const nextAttemptId = useRef(0);
+  const [correctionText, setCorrectionText] = useState("");
   const [submission, setSubmission] = useState<SubmissionState>({
     promptKey: null,
     attemptId: 0,
@@ -110,6 +140,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       pendingDecision: null,
       error: null,
     });
+    setCorrectionText("");
   }, [promptKey]);
   const pendingDecision =
     submission.promptKey === promptKey ? submission.pendingDecision : null;
@@ -124,7 +155,10 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
     [pending],
   );
 
-  const submit = async (decision: UserInputDecision) => {
+  const submit = async (
+    decision: UserInputDecision,
+    detail: ResumeRunInput["detail"] = {},
+  ) => {
     if (
       pending === null ||
       taskId === null ||
@@ -146,7 +180,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       await onResumeRun(taskId, runId, {
         request_id: pending.requestId,
         decision,
-        detail: {},
+        detail,
       });
     } catch (caught) {
       setSubmission((current) =>
@@ -190,7 +224,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                 ? "Agent 已达到最大轮次"
                 : pending?.promptKind === "no_progress"
                   ? "检测到无进展"
-                  : "请补充信息"}
+                  : pending?.promptKind === "data_correction"
+                    ? "需要人工修正"
+                    : "请补充信息"}
           </DialogTitle>
           <DialogDescription className="min-w-0 break-words">
             {pending?.summary ?? "Pipeline 已暂停，等待你的决策。"}
@@ -303,6 +339,48 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
           </div>
         )}
 
+        {pending?.promptKind === "data_correction" && (
+          <div className="flex min-w-0 flex-col gap-3 rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
+            <p className="whitespace-pre-wrap break-words text-sm font-medium leading-relaxed">
+              {pending.summary}
+            </p>
+
+            {Object.keys(pending.detail).length > 0 && (
+              <dl className="space-y-2">
+                {Object.entries(pending.detail).map(([key, value]) => (
+                  <div key={key} className="space-y-1">
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {key}
+                    </dt>
+                    <dd className="break-words">{renderDetailValue(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="data-correction-input">修正内容</Label>
+              <Textarea
+                id="data-correction-input"
+                value={correctionText}
+                onChange={(event) => setCorrectionText(event.target.value)}
+                placeholder="输入你的修正或答复…"
+                disabled={pendingDecision !== null}
+              />
+            </div>
+
+            {pending.expiresAt !== null && (
+              <p className="text-xs text-muted-foreground">
+                需在{" "}
+                {new Date(pending.expiresAt).toLocaleString("zh-CN", {
+                  hour12: false,
+                })}{" "}
+                前答复，超时后将记录到 corrections_todo.csv 并继续
+              </p>
+            )}
+          </div>
+        )}
+
         {pending?.fixtureExempt && (
           <Alert>
             <AlertDescription>
@@ -318,35 +396,69 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         )}
 
         <DialogFooter className="gap-2">
-          <Button
-            variant="outline"
-            disabled={pendingDecision !== null}
-            onClick={() => void submit("reject")}
-          >
-            {pendingDecision === "reject" ? (
-              <Spinner data-icon="inline-start" aria-hidden="true" />
-            ) : (
-              <XCircleIcon data-icon="inline-start" aria-hidden="true" />
-            )}
-            {pending?.promptKind === "max_turns_reached" ||
-            pending?.promptKind === "no_progress"
-              ? "停止"
-              : "拒绝"}
-          </Button>
-          <Button
-            disabled={pendingDecision !== null}
-            onClick={() => void submit("approve")}
-          >
-            {pendingDecision === "approve" ? (
-              <Spinner data-icon="inline-start" aria-hidden="true" />
-            ) : (
-              <CheckIcon data-icon="inline-start" aria-hidden="true" />
-            )}
-            {pending?.promptKind === "max_turns_reached" ||
-            pending?.promptKind === "no_progress"
-              ? "继续工作"
-              : "确认执行"}
-          </Button>
+          {pending?.promptKind === "data_correction" ? (
+            <>
+              <Button
+                variant="outline"
+                disabled={pendingDecision !== null}
+                onClick={() => void submit("reject", { correction: "" })}
+              >
+                {pendingDecision === "reject" ? (
+                  <Spinner data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <XCircleIcon data-icon="inline-start" aria-hidden="true" />
+                )}
+                跳过并继续
+              </Button>
+              <Button
+                disabled={
+                  pendingDecision !== null || correctionText.trim() === ""
+                }
+                onClick={() =>
+                  void submit("approve", { correction: correctionText })
+                }
+              >
+                {pendingDecision === "approve" ? (
+                  <Spinner data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <CheckIcon data-icon="inline-start" aria-hidden="true" />
+                )}
+                提交修正
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                disabled={pendingDecision !== null}
+                onClick={() => void submit("reject")}
+              >
+                {pendingDecision === "reject" ? (
+                  <Spinner data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <XCircleIcon data-icon="inline-start" aria-hidden="true" />
+                )}
+                {pending?.promptKind === "max_turns_reached" ||
+                pending?.promptKind === "no_progress"
+                  ? "停止"
+                  : "拒绝"}
+              </Button>
+              <Button
+                disabled={pendingDecision !== null}
+                onClick={() => void submit("approve")}
+              >
+                {pendingDecision === "approve" ? (
+                  <Spinner data-icon="inline-start" aria-hidden="true" />
+                ) : (
+                  <CheckIcon data-icon="inline-start" aria-hidden="true" />
+                )}
+                {pending?.promptKind === "max_turns_reached" ||
+                pending?.promptKind === "no_progress"
+                  ? "继续工作"
+                  : "确认执行"}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

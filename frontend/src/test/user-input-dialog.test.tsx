@@ -13,7 +13,12 @@ function taskWithPrompt(
   activeRunId: string,
   pendingRunId: string,
   requestId: string,
-  overrides: { promptKind?: PendingUserInput["promptKind"]; detail?: PendingUserInput["detail"]; summary?: string } = {},
+  overrides: {
+    promptKind?: PendingUserInput["promptKind"];
+    detail?: PendingUserInput["detail"];
+    summary?: string;
+    expiresAt?: string | null;
+  } = {},
 ): TaskProjection {
   const summary: TaskSummary = {
     task_id: taskId,
@@ -33,7 +38,7 @@ function taskWithPrompt(
       requestId,
       promptKind: overrides.promptKind ?? "plan_confirmation",
       summary: overrides.summary ?? `Confirm ${taskId}`,
-      expiresAt: null,
+      expiresAt: overrides.expiresAt ?? null,
       fixtureExempt: false,
       detail: overrides.detail ?? {},
       sequence: 1,
@@ -265,6 +270,148 @@ describe("UserInputDialog", () => {
     expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
     // max_turns_reached 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
+
+  it("renders data_correction prompt with title, summary, textarea and both actions", () => {
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "候选 GSE 无法判断，请确认使用哪个数据集？",
+        detail: {
+          field: "dataset_id",
+          options: ["GSE100500", "GSE12345"],
+        },
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    expect(screen.getByText("需要人工修正")).toBeVisible();
+    // summary 同时出现在描述与修正卡片中（突出展示）
+    expect(
+      screen.getAllByText("候选 GSE 无法判断，请确认使用哪个数据集？").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("textbox")).toBeVisible();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeVisible();
+    // detail 字段只读展示（field/options 建议选项）
+    expect(screen.getByText("field")).toBeVisible();
+    expect(screen.getByText("options")).toBeVisible();
+    expect(screen.getByText("GSE100500")).toBeVisible();
+    expect(screen.getByText("GSE12345")).toBeVisible();
+    // data_correction 不应渲染 plan card
+    expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
+
+  it("disables 提交修正 while the correction text is empty and enables it once typed", () => {
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    const submit = screen.getByRole("button", { name: "提交修正" });
+    expect(submit).toBeDisabled();
+    // 跳过并继续始终可用（拒绝并继续，空修正）
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "使用 GSE12345 并检索 PubMed" },
+    });
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeEnabled();
+  });
+
+  it("submits approve with the correction text and skip rejects with an empty correction", async () => {
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun.mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_correction",
+      "run_correction",
+      "run_correction",
+      "request_correction",
+      {
+        promptKind: "data_correction",
+        summary: "请确认数据源",
+      },
+    );
+    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
+    expect(onResumeRun).toHaveBeenLastCalledWith(
+      "task_correction",
+      "run_correction",
+      {
+        request_id: "request_correction",
+        decision: "approve",
+        detail: { correction: "改用 GEO 数据 GSE12345" },
+      },
+    );
+
+    // 跳过并继续总是发送 reject + 空修正，忽略已输入的文本
+    fireEvent.click(screen.getByRole("button", { name: "跳过并继续" }));
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(2));
+    expect(onResumeRun).toHaveBeenLastCalledWith(
+      "task_correction",
+      "run_correction",
+      {
+        request_id: "request_correction",
+        decision: "reject",
+        detail: { correction: "" },
+      },
+    );
+  });
+
+  it("shows the expiry hint when expires_at is present and hides it otherwise", () => {
+    const withExpiry = taskWithPrompt(
+      "task_expiry",
+      "run_expiry",
+      "run_expiry",
+      "request_expiry",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: "2026-07-14T00:05:00Z",
+      },
+    );
+    const withoutExpiry = taskWithPrompt(
+      "task_no_expiry",
+      "run_no_expiry",
+      "run_no_expiry",
+      "request_no_expiry",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={withExpiry} onResumeRun={vi.fn()} />,
+    );
+    expect(
+      screen.getByText(/需在 .*前答复，超时后将记录到 corrections_todo\.csv 并继续/),
+    ).toBeVisible();
+
+    rerender(<UserInputDialog task={withoutExpiry} onResumeRun={vi.fn()} />);
+    expect(screen.queryByText(/corrections_todo\.csv/)).not.toBeInTheDocument();
   });
 
   it("renders no_progress prompt without structured plan card", () => {
