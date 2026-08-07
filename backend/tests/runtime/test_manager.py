@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import logging
+import pathlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -3488,12 +3489,37 @@ async def test_recovery_repairs_partial_child_interruptions_idempotently(
         await second_hub.close()
 
 
+@pytest.mark.parametrize(
+    "marker_content",
+    [
+        pytest.param(
+            "{bad json",
+            id="syntactically-malformed-json",
+        ),
+        pytest.param(
+            '"just a string"',
+            id="non-object-json",
+        ),
+        pytest.param(
+            json.dumps({
+                "schema_version": 1,
+                "task_id": "task_corrupt_marker",
+                "run_id": "run_corrupt_marker",
+                "manifest_sha256": "bad-sha256",
+                "manifest_entries": [],
+            }),
+            id="invalid-sha256",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_corrupt_publication_marker_does_not_abort_recovery(
     tmp_path,
+    caplog,
+    marker_content,
 ) -> None:
     """A corrupt .runtime-publication.json marker must not crash startup
-    or synthesise a publication_created event."""
+    or synthesise a publication_created event; it must log a warning."""
     manager_module = importlib.import_module("app.runtime.manager")
     output_dir = tmp_path / "output"
     task_id = "task_corrupt_marker"
@@ -3525,20 +3551,10 @@ async def test_corrupt_publication_marker_does_not_abort_recovery(
         payload=RunCompletedPayload(),
     )
 
-    artifacts_dir = output_dir / task_id / "artifacts"
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     marker_path = artifacts_dir / ".runtime-publication.json"
-    # Write a corrupt marker: bad sha256 (not 64 hex chars)
-    marker_path.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "task_id": task_id,
-            "run_id": run_id,
-            "manifest_sha256": "bad-sha256",
-            "manifest_entries": [],
-        }),
-        "utf-8",
-    )
+    marker_path.write_text(marker_content, "utf-8")
     await seed.close()
 
     repository = TaskRepository(output_dir)
@@ -3546,7 +3562,8 @@ async def test_corrupt_publication_marker_does_not_abort_recovery(
         repository,
         run_executor=_do_nothing,
     )
-    await manager.start()
+    with caplog.at_level(logging.WARNING, logger="app.runtime.manager"):
+        await manager.start()
     try:
         snapshot = await repository.get_snapshot(task_id)
         assert snapshot is not None
@@ -3556,6 +3573,96 @@ async def test_corrupt_publication_marker_does_not_abort_recovery(
             isinstance(event.payload, PublicationCreatedPayload)
             for event in events
         )
+        # A corrupt marker must be reported, not silently dropped
+        assert "Skipping corrupt publication marker" in caplog.text
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_publication_marker_warns_and_skips(
+    tmp_path,
+    caplog,
+    monkeypatch,
+) -> None:
+    """An OSError while reading the marker (raced removal, permissions) must
+    not crash startup; it must log a warning and skip reconciliation."""
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_unreadable_marker"
+    run_id = "run_unreadable_marker"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunQueuedPayload(
+            request_id="req_unreadable_marker",
+            input="unreadable marker test",
+        ),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunStartedPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunFinalizingPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunCompletedPayload(),
+    )
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    # A fully valid marker – without the OSError this would be reconciled.
+    marker_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "manifest_sha256": "0" * 64,
+        }),
+        "utf-8",
+    )
+    await seed.close()
+
+    real_read_text = pathlib.Path.read_text
+
+    def raise_oserror(
+        path: pathlib.Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == marker_path:
+            raise OSError("simulated marker read failure")
+        return real_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", raise_oserror)
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.runtime.manager"):
+        await manager.start()
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        events = await repository.list_events(task_id)
+        # Must not synthesise a publication_created event
+        assert not any(
+            isinstance(event.payload, PublicationCreatedPayload)
+            for event in events
+        )
+        # The read failure must be reported, not crash startup
+        assert "Skipping unreadable publication marker" in caplog.text
     finally:
         await manager.close()
 

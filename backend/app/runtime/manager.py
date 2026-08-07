@@ -1445,9 +1445,29 @@ class TaskManager:
                     continue
                 try:
                     marker = json.loads(marker_path.read_text("utf-8"))
+                    published_at = datetime.fromtimestamp(
+                        marker_path.stat().st_mtime, tz=UTC
+                    )
                 except (json.JSONDecodeError, UnicodeDecodeError):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
+                    continue
+                except OSError:
+                    logger.warning(
+                        "Skipping unreadable publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
                     continue
                 if not isinstance(marker, dict):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
                     continue
                 # Strict marker validation – mirror _load_validated_manifest in routes.py
                 marker_task_id = marker.get("task_id")
@@ -1483,9 +1503,7 @@ class TaskManager:
                             run_id=run.run_id,
                             manifest_sha256=manifest_sha256,
                             supersedes_publication_id=None,
-                            published_at=datetime.fromtimestamp(
-                                marker_path.stat().st_mtime, tz=UTC
-                            ),
+                            published_at=published_at,
                         ),
                     )
 
