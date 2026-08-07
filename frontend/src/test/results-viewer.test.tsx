@@ -167,13 +167,13 @@ describe("ResultsViewer", () => {
     );
 
     render(<ResultsViewer />);
-    // The NO_DATA banner surfaces the message without opening a preview...
-    expect(screen.getByText("所选数据源未返回任何记录")).toBeVisible();
+    // The latest NO_DATA run declares no own artifacts
+    // (available_artifact_roles: []), so the banner must NOT attach to the
+    // stale artifact left over from an earlier run.
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
-    // ...and the empty CSV preview repeats it for this artifact once loaded.
-    await waitFor(() => {
-      expect(screen.getAllByText("所选数据源未返回任何记录")).toHaveLength(2);
-    });
+    // The message still surfaces via the empty CSV preview for this artifact.
+    expect(await screen.findByText("所选数据源未返回任何记录")).toBeVisible();
   });
 
   it("shows the server no-data message for a completed no_data run with zero artifacts", () => {
@@ -225,6 +225,102 @@ describe("ResultsViewer", () => {
 
     expect(screen.getByText("所选数据源未返回任何记录")).toBeVisible();
     expect(screen.queryByText("暂无结果")).not.toBeInTheDocument();
+  });
+
+  it("does not attach the latest NO_DATA banner to stale artifacts from an earlier run", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {
+            artifact_main: {
+              artifact_id: "artifact_main",
+              name: "main_data.csv",
+              role: "primary_dataset",
+              size: 1024,
+              sha256: "g".repeat(64),
+              media_type: "text/csv",
+              taskId: "task_results",
+              generatedByStepId: null,
+            } satisfies ArtifactProjection,
+          },
+          artifactOrder: ["artifact_main"],
+          runsById: {
+            run_ok: {
+              runId: "run_ok",
+              taskId: "task_results",
+              requestId: "req_ok",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "succeeded",
+                  valid_row_count: 42,
+                  successful_sources: ["geo"],
+                  rejected_sources: [],
+                  available_artifact_roles: ["primary_dataset"],
+                  publication_id: "pub_ok",
+                  reason_codes: [],
+                  user_summary: "数据构建成功",
+                  recommended_next_action: "",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: null,
+              },
+            },
+            run_no_data: {
+              runId: "run_no_data",
+              taskId: "task_results",
+              requestId: "req_no_data",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["pubmed"],
+                  // The latest run produced NO artifacts of its own.
+                  available_artifact_roles: [],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "所选数据源未返回任何记录",
+                  recommended_next_action: "调整检索词后重试",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "所选数据源未返回任何记录",
+              },
+            },
+          },
+          runOrder: ["run_ok", "run_no_data"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    // The earlier run's artifacts are still listed (artifact list scope is
+    // unchanged), but the latest NO_DATA summary must NOT be attached to them.
+    expect(screen.getByText("main_data.csv")).toBeVisible();
+    expect(screen.getByText("主数据")).toBeVisible();
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
+    expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
   });
 
   it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {
@@ -337,7 +433,9 @@ describe("ResultsViewer", () => {
                     "audit_report",
                     "schema",
                   ],
-                  publication_id: "pub_no_data",
+                  // NO_DATA build results never carry a publication_id
+                  // (backend BuildResult.validate_state forbids it).
+                  publication_id: null,
                   reason_codes: ["no_primary_data"],
                   user_summary: "未找到可发布的表达数据",
                   recommended_next_action: "请更换数据集或调整检索词后重试",

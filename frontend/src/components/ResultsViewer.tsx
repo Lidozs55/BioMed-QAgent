@@ -304,6 +304,17 @@ export default function ResultsViewer({
           recommendedNextAction: buildResult.recommended_next_action,
         }
       : undefined;
+  // The banner describes the LATEST run's outcome, so it may only render
+  // over that run's OWN artifacts. The artifact list is reset at each
+  // run_manifest and then accumulates that cycle's artifacts; when the
+  // latest NO_DATA run produced none (available_artifact_roles: [] — e.g.
+  // acquisition found nothing), the visible artifacts belong to an EARLIER
+  // run and must not carry this run's NO_DATA summary.
+  const showNoDataBanner =
+    noDataContext !== undefined &&
+    buildResult != null &&
+    buildResult.available_artifact_roles.length > 0 &&
+    artifacts.length > 0;
 
   if (taskId === null) {
     return (
@@ -366,7 +377,7 @@ export default function ResultsViewer({
           </AccordionItem>
         </Accordion>
       )}
-      {noDataContext !== undefined && artifacts.length > 0 && (
+      {showNoDataBanner && (
         <div className="flex min-w-0 items-start gap-2 rounded-lg border border-sky-600/30 bg-sky-600/5 p-3">
           <InfoIcon
             aria-hidden="true"
