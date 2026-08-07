@@ -120,8 +120,13 @@
       可选 `gene_symbol_map` 参数：命中转 ensembl_gene + normalization_log 审计，
       未命中保留原 namespace 不丢弃，statistics 记 `gene_symbol_mapped_count`；
       多对一聚合策略保持 NormalizationProfile `keep_all` 声明；6 项测试）
-- [ ] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
+- [x] **P2** `merge_parsed_datasets`（GDC+Xena 确定性合并）迁移为 Integrator 路径，
       `tools/alignment` 降级为候选生成器（待 Phase 2 执行内核后执行）
+      （V2 chain 已用 `integrator.integrate()`；新增 `datasets/build/expression_runner.py`
+      把整链拆为 Operation 粒度真实执行器并接入 `DatasetBuildExecutor`——
+      parse/canonicalize/compat/integrate/validate/publish 六类 handler + digest 复用 +
+      重跑 SKIPPED；`tools/alignment.merge_datasets` 标注 V1 Legacy 保留至 Phase 8，
+      `align_fields`/`normalize_field_names` 作候选生成器）
 
 ---
 
@@ -167,10 +172,17 @@
 > 目标：架构层固定三项发布不变量；具体规则迁入 Profile；置信度与模型提取准入
 > 落地。验收见 Design §16 Phase 6。
 
-- [ ] **P0** 架构层固定"provenance closure + Profile passed + atomic promotion"
+- [x] **P0** 架构层固定"provenance closure + Profile passed + atomic promotion"
       三项发布不变量（ADR-012）
-- [ ] **P0** 将 CSV 编码/列数、字段完整率、probe mapping 覆盖率、bbox 等具体规则
+      （`datasets/build/invariants.py`：`check_release_invariants` 纯函数——
+      provenance 文档在盘且覆盖全部 source asset、validation status 必须 passed、
+      publish 目录 temp+rename 原子写且不重写旧版本；expression_runner 的 publish
+      Operation 作为发布前 gate，失败拒绝 promotion）
+- [x] **P0** 将 CSV 编码/列数、字段完整率、probe mapping 覆盖率、bbox 等具体规则
       迁入版本化 Validation Profile
+      （`csv_encoding_utf8` 已入 `gene_expression.release.v1`：非 UTF-8 主表 FAILED
+      且前置短路避免下游崩溃；列数/字段完整率已有；probe mapping 覆盖率待 Phase 5
+      GEO 迁移后入 Profile；bbox/model 元数据由 chart 提取准入门禁承担）
 - [ ] **P0** 实现 Confidence Contract 与确定性统计检测器（benford_distance /
       last_digit_chi2 / detect_constant_column / detect_arithmetic_progression /
       aggregate_confidence_metrics，含 `is_benford_applicable` 前置判定）（原 §6.1）
