@@ -5,8 +5,9 @@ import re
 from datetime import UTC, datetime
 
 import pytest
-from app.datasets.contracts import BuildResult, BuildResultStatus
+from app.datasets.contracts import ArtifactRole, BuildResult, BuildResultStatus
 from app.domain.contracts import (
+    ArtifactProducedPayload,
     AssistantDeltaPayload,
     AttemptStatus,
     ErrorCode,
@@ -642,6 +643,31 @@ def test_terminal_event_payloads_carry_structured_state() -> None:
     )
     assert cancelled.cancelled_at_stage is StageName.PROCESSING
     assert RunCancelledPayload().cancelled_at_stage is None
+
+
+def test_artifact_produced_payload_tolerates_legacy_entry_without_role() -> None:
+    """Pre-T8 events.jsonl artifact entries lack ``role``; they must still replay.
+
+    The role classification (Task 8) landed after the durable event log was
+    persisted; legacy ``ArtifactProducedPayload`` events serialize the artifact
+    entry without a ``role`` key. Replay must default it to ``AUDIT_REPORT``
+    rather than failing validation (Global Constraints: old events replay
+    correctly).
+    """
+    payload = ArtifactProducedPayload.model_validate(
+        {
+            "artifact": {
+                "artifact_id": "artifact_legacy",
+                "name": "legacy.csv",
+                "relative_path": "artifacts/legacy.csv",
+                "media_type": "text/csv",
+                "size_bytes": 1,
+                "sha256": SHA256,
+                "generated_by_step_id": "step_legacy",
+            }
+        }
+    )
+    assert payload.artifact.role is ArtifactRole.AUDIT_REPORT
 
 
 def test_publication_created_payload() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
@@ -122,6 +123,20 @@ class ArtifactManifestEntry(ContractModel):
     size_bytes: int = Field(ge=0)
     sha256: str
     generated_by_step_id: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def inject_legacy_role(cls, data: object) -> object:
+        """Default ``role`` for pre-T8 payloads that omit it (legacy tolerance).
+
+        Older persisted ``events.jsonl`` (``ArtifactProducedPayload.artifact``)
+        and ``run_manifest.json`` files were written before role classification
+        and lack the ``role`` key. Inject ``AUDIT_REPORT`` so replay/load keeps
+        working; explicitly supplied roles pass through untouched.
+        """
+        if isinstance(data, Mapping) and "role" not in data:
+            return {**data, "role": ArtifactRole.AUDIT_REPORT}
+        return data
 
     @field_validator("relative_path")
     @classmethod
