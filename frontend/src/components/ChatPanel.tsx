@@ -448,7 +448,10 @@ export function ChatPanel({
         <div className="flex shrink-0 flex-col">
           <Marker variant="border" className="px-5 py-2" role="status">
             <MarkerIcon>
-              <TaskStatusIcon status={activeTask.summary.status} />
+              <TaskStatusIcon
+                status={activeTask.summary.status}
+                buildStatus={latestRun?.summary?.build_result?.status}
+              />
             </MarkerIcon>
             <MarkerContent>
               {activeItem !== undefined && activeTask.summary.status === "running"

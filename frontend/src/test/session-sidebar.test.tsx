@@ -442,6 +442,8 @@ describe("SessionSidebar", () => {
 
     const iconFor = (name: string) =>
       screen.getByRole("button", { name }).querySelector("svg");
+    const iconPath = (name: string) =>
+      iconFor(name)?.querySelector("path")?.getAttribute("d") ?? null;
     expect(iconFor("Succeeded 已完成")).toHaveClass(
       "text-emerald-600",
       "dark:text-emerald-400",
@@ -459,6 +461,12 @@ describe("SessionSidebar", () => {
       "dark:text-amber-400",
     );
     expect(iconFor("Error 失败")).toHaveClass("text-destructive");
+    // icon identity matches the build result (not just color classes)
+    expect(iconPath("Succeeded 已完成")).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
+    expect(iconPath("Partial 已完成")).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
+    expect(iconPath("No Data 已完成")).toContain("M112,84a12,12,0,1,1"); // InfoIcon
+    expect(iconPath("Rejected 已完成")).toContain("m88,104a87.56"); // ProhibitIcon
+    expect(iconPath("Error 失败")).toContain("Zm-8-80V80"); // WarningCircleIcon
   });
 
   it("separates active cancellation from terminal deletion", async () => {

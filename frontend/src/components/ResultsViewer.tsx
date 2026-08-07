@@ -315,7 +315,7 @@ export default function ResultsViewer({
     return (
       <Empty className="min-h-48">
         <EmptyHeader>
-          <EmptyTitle>暂无结果</EmptyTitle>
+          <EmptyTitle>{noDataMessage ?? "暂无结果"}</EmptyTitle>
           <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
         </EmptyHeader>
       </Empty>
