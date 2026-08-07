@@ -357,6 +357,19 @@ class RunContext:
 
         return self._main_input_broker
 
+    @property
+    def main_input_pending(self) -> bool:
+        """True while the main-run human-input broker has an unanswered request.
+
+        D1 (Phase 4 review): publication-capable tools (e.g.
+        ``execute_dataset_build``) use this as an exclusivity gate — when a
+        data-correction pause is in flight, sibling tools must not build or
+        publish from inputs under correction.
+        """
+
+        broker = self._main_input_broker
+        return broker.has_pending_request if broker is not None else False
+
     async def request_main_input(
         self,
         *,

@@ -330,6 +330,9 @@ class ExpressionBuildRunner:
             manifest=manifest,
             validation=validation,
             output_dir=self._output_dir,
+            expected_source_asset_ids={
+                asset.asset_id for asset in self._source_assets.values()
+            },
         )
         if not invariants.passed:
             raise BuildError(
@@ -369,10 +372,15 @@ class ExpressionBuildRunner:
             shutil.rmtree(staged_dir)
         staged_dir.mkdir(parents=True)
         try:
+            # B3 (Phase 4 review): preserve each artifact's relative_path
+            # under the version directory so the manifest's references resolve
+            # inside the immutable publication. A vanished file raises OSError
+            # (never a silent skip) and aborts the promotion.
             for artifact in manifest.artifacts:
                 src = self._output_dir / artifact.relative_path
-                if src.is_file():
-                    shutil.copy2(src, staged_dir / src.name)
+                dest = staged_dir / artifact.relative_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
             manifest_src = self._output_dir / MANIFEST_FILE
             if manifest_src.is_file():
                 shutil.copy2(manifest_src, staged_dir / MANIFEST_FILE)
@@ -396,6 +404,7 @@ class ExpressionBuildRunner:
                     "provenance_closed": invariants.provenance_closed,
                     "profile_passed": invariants.profile_passed,
                     "atomic_promotion_ready": invariants.atomic_promotion_ready,
+                    "artifacts_intact": invariants.artifacts_intact,
                 },
             }
         )

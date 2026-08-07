@@ -111,6 +111,18 @@ class MainInputBroker:
         self._default_timeout_seconds = default_timeout_seconds
         self._artifacts_dir = artifacts_dir
         self._counter = 0
+        self._pending = False
+
+    @property
+    def has_pending_request(self) -> bool:
+        """True while one main-run data-correction request is in flight.
+
+        D1 (Phase 4 review): publication-capable sibling tools use this as an
+        exclusivity gate — while a correction pause is pending they must not
+        build/publish from inputs under correction.
+        """
+
+        return self._pending
 
     async def request_input(
         self,
@@ -137,95 +149,116 @@ class MainInputBroker:
         expires_at = requested_at + timedelta(seconds=timeout)
         resolved_detail = dict(detail or {})
 
-        if self._fixture:
-            return await self._fixture_approve(
-                request_id=request_id,
-                summary=summary,
-                detail=resolved_detail,
-                requested_at=requested_at,
-                expires_at=expires_at,
-                timeout=timeout,
-            )
-
-        event: asyncio.Event = asyncio.Event()
-        decision_holder: list[UserInputResumedPayload] = []
-        loop = asyncio.get_running_loop()
-        # FIX 2 (final review): one immutable monotonic deadline captured at
-        # entry, shared by the submitter and the wait loop — the expiry
-        # boundary is a single deterministic point.
-        deadline = loop.time() + timeout
-        claimed_timed_out = False
-
-        def submitter(payload: UserInputResumedPayload) -> bool:
-            if payload.request_id != request_id:
-                return False
-            # Reject submissions that arrive after the deadline, and anything
-            # that races the timeout after the deadline already won the wait
-            # (the claim is set synchronously on the timeout path, before any
-            # other task can interleave).
-            if claimed_timed_out or loop.time() > deadline:
-                return False
-            decision_holder.append(payload)
-            event.set()
-            return True
-
-        self._install_user_input_submitter(submitter)
+        self._pending = True
         try:
-            await self._emit(
-                UserInputRequiredPayload(
-                    request_id=request_id,
-                    prompt_kind="data_correction",
-                    summary=summary,
-                    detail=resolved_detail,
-                    expires_at=expires_at,
-                    fixture_exempt=False,
-                )
-            )
-            timed_out = await self._wait_for_decision(event, deadline)
-        except BaseException:
-            self._clear_user_input_submitter(submitter)
-            raise
-
-        if timed_out and decision_holder:
-            # A submission accepted exactly at the deadline wins. The wait's
-            # timeout can fire with an EMPTY done set (``_wait_for_decision``
-            # reports timed_out) while a submitter running in the same loop
-            # tick already accepted a payload at ``loop.time() <= deadline``.
-            # The append is synchronous in the submitter, so the holder is
-            # authoritative; it is re-checked synchronously after the wait
-            # returns (no await between) and the claimed flag is only set on
-            # the actual timeout path — an accepted decision can never be lost
-            # to the synthetic timeout. The human path below emits the accepted
-            # decision and never writes the todo row (accepted ⇒ human wins;
-            # only an unaccepted timeout degrades to the synthetic path).
-            timed_out = False
-        if timed_out:
-            # The deadline won: claim the request so any concurrently-arrived
-            # (or late) human submission is rejected, and discard whatever
-            # raced into the holder — only the timeout path may write the todo
-            # row and emit the synthetic resume.
-            claimed_timed_out = True
-            decision_holder.clear()
-        try:
-            if timed_out:
-                corrections_path = self._write_corrections_todo(
+            if self._fixture:
+                return await self._fixture_approve(
                     request_id=request_id,
                     summary=summary,
                     detail=resolved_detail,
                     requested_at=requested_at,
                     expires_at=expires_at,
+                    timeout=timeout,
                 )
+
+            event: asyncio.Event = asyncio.Event()
+            decision_holder: list[UserInputResumedPayload] = []
+            loop = asyncio.get_running_loop()
+            # FIX 2 (final review): one immutable monotonic deadline captured at
+            # entry, shared by the submitter and the wait loop — the expiry
+            # boundary is a single deterministic point.
+            deadline = loop.time() + timeout
+            claimed_timed_out = False
+
+            def submitter(payload: UserInputResumedPayload) -> bool:
+                if payload.request_id != request_id:
+                    return False
+                # Reject submissions that arrive after the deadline, and anything
+                # that races the timeout after the deadline already won the wait
+                # (the claim is set synchronously on the timeout path, before any
+                # other task can interleave).
+                if claimed_timed_out or loop.time() > deadline:
+                    return False
+                decision_holder.append(payload)
+                event.set()
+                return True
+
+            self._install_user_input_submitter(submitter)
+            try:
                 await self._emit(
-                    UserInputResumedPayload(
+                    UserInputRequiredPayload(
                         request_id=request_id,
-                        decision="approve",
-                        detail={
-                            "auto_approved": True,
-                            "auto_approve_reason": "data_correction_timeout",
-                            "timeout_seconds": timeout,
-                        },
+                        prompt_kind="data_correction",
+                        summary=summary,
+                        detail=resolved_detail,
+                        expires_at=expires_at,
+                        fixture_exempt=False,
                     )
                 )
+                timed_out = await self._wait_for_decision(event, deadline)
+            except BaseException:
+                self._clear_user_input_submitter(submitter)
+                raise
+
+            if timed_out and decision_holder:
+                # A submission accepted exactly at the deadline wins. The wait's
+                # timeout can fire with an EMPTY done set (``_wait_for_decision``
+                # reports timed_out) while a submitter running in the same loop
+                # tick already accepted a payload at ``loop.time() <= deadline``.
+                # The append is synchronous in the submitter, so the holder is
+                # authoritative; it is re-checked synchronously after the wait
+                # returns (no await between) and the claimed flag is only set on
+                # the actual timeout path — an accepted decision can never be lost
+                # to the synthetic timeout. The human path below emits the accepted
+                # decision and never writes the todo row (accepted ⇒ human wins;
+                # only an unaccepted timeout degrades to the synthetic path).
+                timed_out = False
+            if timed_out:
+                # The deadline won: claim the request so any concurrently-arrived
+                # (or late) human submission is rejected, and discard whatever
+                # raced into the holder — only the timeout path may write the todo
+                # row and emit the synthetic resume.
+                claimed_timed_out = True
+                decision_holder.clear()
+            try:
+                if timed_out:
+                    corrections_path = self._write_corrections_todo(
+                        request_id=request_id,
+                        summary=summary,
+                        detail=resolved_detail,
+                        requested_at=requested_at,
+                        expires_at=expires_at,
+                    )
+                    await self._emit(
+                        UserInputResumedPayload(
+                            request_id=request_id,
+                            decision="approve",
+                            detail={
+                                "auto_approved": True,
+                                "auto_approve_reason": "data_correction_timeout",
+                                "timeout_seconds": timeout,
+                            },
+                        )
+                    )
+                    return MainInputDecision(
+                        request_id=request_id,
+                        summary=summary,
+                        detail=resolved_detail,
+                        requested_at=requested_at,
+                        expires_at=expires_at,
+                        timeout_seconds=timeout,
+                        timed_out=True,
+                        corrections_path=corrections_path,
+                    )
+
+                if not decision_holder:
+                    raise RuntimeError(
+                        "data_correction resume event set without a decision"
+                    )
+                # Mirror the max_turns path: emit UserInputResumedPayload after
+                # waking so the reducer transitions AWAITING_USER_INPUT -> RUNNING
+                # before the manager finalizes the Run.
+                await self._emit(decision_holder[0])
                 return MainInputDecision(
                     request_id=request_id,
                     summary=summary,
@@ -233,35 +266,18 @@ class MainInputBroker:
                     requested_at=requested_at,
                     expires_at=expires_at,
                     timeout_seconds=timeout,
-                    timed_out=True,
-                    corrections_path=corrections_path,
+                    timed_out=False,
+                    resumed=decision_holder[0],
                 )
-
-            if not decision_holder:
-                raise RuntimeError(
-                    "data_correction resume event set without a decision"
-                )
-            # Mirror the max_turns path: emit UserInputResumedPayload after
-            # waking so the reducer transitions AWAITING_USER_INPUT -> RUNNING
-            # before the manager finalizes the Run.
-            await self._emit(decision_holder[0])
-            return MainInputDecision(
-                request_id=request_id,
-                summary=summary,
-                detail=resolved_detail,
-                requested_at=requested_at,
-                expires_at=expires_at,
-                timeout_seconds=timeout,
-                timed_out=False,
-                resumed=decision_holder[0],
-            )
+            finally:
+                # FIX 2 reorder: the submitter is cleared only AFTER the winner is
+                # decided and the synthetic/human resumed event is emitted. While
+                # the resumed event is being persisted the submitter stays
+                # installed, but the claimed flag / deadline check reject anything
+                # late — a resume can never be accepted and then discarded.
+                self._clear_user_input_submitter(submitter)
         finally:
-            # FIX 2 reorder: the submitter is cleared only AFTER the winner is
-            # decided and the synthetic/human resumed event is emitted. While
-            # the resumed event is being persisted the submitter stays
-            # installed, but the claimed flag / deadline check reject anything
-            # late — a resume can never be accepted and then discarded.
-            self._clear_user_input_submitter(submitter)
+            self._pending = False
 
     async def _fixture_approve(
         self,

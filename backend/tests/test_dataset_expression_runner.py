@@ -197,6 +197,88 @@ async def test_runner_rerun_reuses_succeeded_attempts(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_published_version_preserves_manifest_relative_paths(
+    tmp_path: Path,
+) -> None:
+    """B3: every manifest artifact must resolve inside the published version
+    directory — relative paths (merged/primary.csv, schema.json, ...) are
+    preserved, not flattened to basenames.
+    """
+    outcome, output_dir = await _run_executor(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+    )
+    assert outcome.status == "completed"
+    version_dir = next((output_dir / "publish").glob("build_runner_test_*"))
+    published_manifest = json.loads(
+        (version_dir / "dataset_manifest.json").read_text("utf-8")
+    )
+    assert published_manifest["artifacts"], "manifest must declare artifacts"
+    for entry in published_manifest["artifacts"]:
+        assert (version_dir / entry["relative_path"]).is_file(), (
+            f"published artifact {entry['relative_path']} is missing "
+            f"from the version directory"
+        )
+
+
+@pytest.mark.asyncio
+async def test_publish_rejects_missing_manifest_artifact_after_validation(
+    tmp_path: Path,
+) -> None:
+    """B4: deleting a manifest artifact after validation must fail the release
+    gate so publish raises BuildError and nothing is promoted.
+    """
+    from app.datasets.build.errors import BuildError
+    from app.datasets.runtime import OperationKind
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path,
+    )
+
+    async def wrapped(op, upstream):
+        result = await runner.run_operation(op, upstream)
+        if op.kind is OperationKind.VALIDATE_PROFILE:
+            # Delete a non-provenance manifest artifact (schema.json): the
+            # provenance-closure gate does not cover it, only the manifest
+            # artifact inventory check does.
+            (tmp_path / "schema.json").unlink()
+        return result
+
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=wrapped,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert "release invariants failed" in outcome.error.message
+    assert not list((tmp_path / "publish").glob("build_runner_test_*"))
+
+    # The publish operation itself raises BuildError for the same violation.
+    with pytest.raises(BuildError, match="release invariants failed"):
+        await runner.run_operation(plan[-1], {})
+
+
+@pytest.mark.asyncio
 async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
     """A later build's publication supersedes the prior build's publication."""
     first, output_dir = await _run_executor(
