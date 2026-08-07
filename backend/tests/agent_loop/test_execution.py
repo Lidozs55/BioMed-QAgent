@@ -14,6 +14,7 @@ import app.agent_loop.runner as runner_module
 import app.pipeline.runner as pipeline_runner_module
 import app.pipeline.tool as pipeline_tool_module
 import pytest
+from agents import Agent
 from agents.exceptions import MaxTurnsExceeded
 from agents.items import ModelResponse
 from agents.models.interface import Model
@@ -71,8 +72,6 @@ from openai.types.responses import (
     ResponseOutputMessage,
     ResponseOutputText,
 )
-
-from agents import Agent
 
 
 def test_extract_text_delta_supports_responses_api_event() -> None:

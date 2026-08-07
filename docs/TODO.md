@@ -128,13 +128,13 @@
 
 - [ ] **P0** 删除 metadata-only 主表占位路径（GEO 无表达矩阵时 `sample_metadata`
       占位表达行；ADR-011）
-- [ ] **P0** 引入 `BuildResult`；`RunStatus` 不再由 artifact 数量推导
-- [ ] **P0** 增加不可变 Publication 与 `current_publication_id`；新版本不修改旧版本状态
-- [ ] **P0** 服务端始终生成 `RunSummary`：COMPLETED 附 BuildResult、FAILED 附稳定
+- [x] **P0** 引入 `BuildResult`；`RunStatus` 不再由 artifact 数量推导
+- [x] **P0** 增加不可变 Publication 与 `current_publication_id`；新版本不修改旧版本状态
+- [x] **P0** 服务端始终生成 `RunSummary`：COMPLETED 附 BuildResult、FAILED 附稳定
       错误分类、CANCELLED 附取消点；Agent 文本不再是唯一输出
-- [ ] **P0** 前端直接展示 NO_DATA / PARTIAL_SUCCESS / SPEC_REJECTED，删除通过错误
+- [x] **P0** 前端直接展示 NO_DATA / PARTIAL_SUCCESS / SPEC_REJECTED，删除通过错误
       字符串猜测 no_data 的路径
-- [ ] **P1** 审计产物（source list / quality / search / rejected）通过
+- [x] **P1** 审计产物（source list / quality / search / rejected）通过
       `audit_report` Artifact Role 发布，不在架构层固定单独文件名
 - [ ] **P2** `request_human_correction` function_tool + UserInputDialog
       `data_correction` 分支 + 超时退化为 `corrections_todo.csv`（原 §1.7，HIL 为

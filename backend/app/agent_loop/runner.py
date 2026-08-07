@@ -14,10 +14,10 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-from agents import Runner
 from app.agent_loop.agent import (
     AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
 )
