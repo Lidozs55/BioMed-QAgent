@@ -4,7 +4,12 @@ import { toast } from "sonner";
 
 import { SessionSidebar } from "@/components/SessionSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import type { RunStatus, TaskSummary } from "@/runtime/contracts";
+import type {
+  BuildResult,
+  BuildResultStatus,
+  RunStatus,
+  TaskSummary,
+} from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -18,7 +23,6 @@ function summary(
   taskId: string,
   status: RunStatus,
   title = taskId,
-  artifactCount?: number,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -37,8 +41,70 @@ function summary(
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
     latest_sequence: 1,
-    ...(artifactCount === undefined ? {} : { artifact_count: artifactCount }),
   };
+}
+
+function buildResult(status: BuildResultStatus): BuildResult {
+  return {
+    status,
+    valid_row_count: 0,
+    successful_sources: [],
+    rejected_sources: [],
+    available_artifact_roles: [],
+    publication_id: null,
+    reason_codes: [],
+    user_summary: "",
+    recommended_next_action: "",
+  };
+}
+
+function seedRunSummary(
+  taskId: string,
+  runId: string,
+  options: {
+    status?: RunStatus;
+    buildStatus?: BuildResultStatus;
+    userMessage?: string | null;
+  } = {},
+): void {
+  const state = useAgentStore.getState();
+  const task = state.tasksById[taskId];
+  if (task === undefined) throw new Error(`task ${taskId} not seeded`);
+  const runStatus = options.status ?? "completed";
+  useAgentStore.setState({
+    tasksById: {
+      ...state.tasksById,
+      [taskId]: {
+        ...task,
+        runsById: {
+          ...task.runsById,
+          [runId]: {
+            runId,
+            taskId,
+            requestId: `req_${runId}`,
+            status: runStatus,
+            input: "question",
+            createdAt: CREATED_AT,
+            updatedAt: CREATED_AT,
+            startedAt: CREATED_AT,
+            finishedAt: CREATED_AT,
+            error: null,
+            summary: {
+              run_status: runStatus,
+              build_result:
+                options.buildStatus === undefined
+                  ? null
+                  : buildResult(options.buildStatus),
+              error_code: null,
+              cancelled_at_stage: null,
+              user_message: options.userMessage ?? null,
+            },
+          },
+        },
+        runOrder: [...task.runOrder, runId],
+      },
+    },
+  });
 }
 
 function scrollSidebarToBottom() {
@@ -324,6 +390,7 @@ describe("SessionSidebar", () => {
       },
       false,
     );
+    seedRunSummary("completed", "run_completed", { buildStatus: "no_data" });
     const { container } = renderSidebar();
 
     const iconFor = (name: string) =>
@@ -342,46 +409,44 @@ describe("SessionSidebar", () => {
     );
   });
 
-  it("colors terminal indicators by structured data outcome", () => {
+  it("renders four-state outcome from run.summary.build_result", () => {
     useAgentStore.getState().mergeTaskPage(
       {
         active_items: [],
         items: [
-          summary("with_data", "completed", "With Data", 3),
-          summary("without_data", "completed", "No Data", 0),
+          summary("succeeded", "completed", "Succeeded"),
+          summary("partial", "completed", "Partial"),
+          summary("no_data", "completed", "No Data"),
+          summary("rejected", "completed", "Rejected"),
           summary("error", "failed", "Error"),
-          summary("silent_summary", "failed", "Silent Summary", 0),
         ],
         next_cursor: null,
       },
       false,
     );
-    useAgentStore.getState().hydrateTaskSnapshot({
-      task: summary("silent", "failed", "Silent", 0),
-      runs: [
-        {
-          run_id: "run_silent",
-          task_id: "silent",
-          request_id: "req_silent",
-          status: "failed",
-          input: "question",
-          created_at: CREATED_AT,
-          updated_at: CREATED_AT,
-          started_at: CREATED_AT,
-          finished_at: CREATED_AT,
-          error:
-            "agent completed without producing any artifacts (manifest missing or unchanged)",
-        },
-      ],
-      messages: [],
-      older_messages_cursor: null,
+    seedRunSummary("succeeded", "run_succeeded", {
+      buildStatus: "succeeded",
+    });
+    seedRunSummary("partial", "run_partial", {
+      buildStatus: "partial_success",
+    });
+    seedRunSummary("no_data", "run_no_data", {
+      buildStatus: "no_data",
+      userMessage: "未检索到数据",
+    });
+    seedRunSummary("rejected", "run_rejected", {
+      buildStatus: "spec_rejected",
     });
 
     renderSidebar();
 
     const iconFor = (name: string) =>
       screen.getByRole("button", { name }).querySelector("svg");
-    expect(iconFor("With Data 已完成")).toHaveClass(
+    expect(iconFor("Succeeded 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("Partial 已完成")).toHaveClass(
       "text-emerald-600",
       "dark:text-emerald-400",
     );
@@ -389,11 +454,11 @@ describe("SessionSidebar", () => {
       "text-sky-600",
       "dark:text-sky-400",
     );
-    expect(iconFor("Error 失败")).toHaveClass("text-destructive");
-    expect(iconFor("Silent 失败")).toHaveClass(
-      "text-sky-600",
-      "dark:text-sky-400",
+    expect(iconFor("Rejected 已完成")).toHaveClass(
+      "text-amber-600",
+      "dark:text-amber-400",
     );
+    expect(iconFor("Error 失败")).toHaveClass("text-destructive");
   });
 
   it("separates active cancellation from terminal deletion", async () => {

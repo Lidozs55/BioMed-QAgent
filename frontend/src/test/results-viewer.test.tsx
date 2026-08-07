@@ -111,4 +111,57 @@ describe("ResultsViewer", () => {
       expect(scrollViewport).toContainElement(finalArtifact);
     });
   });
+
+  it("shows the server no-data message when the run summary reports no_data", async () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          runsById: {
+            run_results: {
+              runId: "run_results",
+              taskId: "task_results",
+              requestId: "req_results",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["pubmed"],
+                  available_artifact_roles: [],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "所选数据源未返回任何记录",
+                  recommended_next_action: "调整检索词后重试",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "所选数据源未返回任何记录",
+              },
+            },
+          },
+          runOrder: ["run_results"],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
+    );
+
+    render(<ResultsViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+
+    expect(await screen.findByText("所选数据源未返回任何记录")).toBeVisible();
+  });
 });

@@ -570,6 +570,106 @@ describe("ChatPanel", () => {
     expect(screen.queryByText("模型未产出有效产物")).not.toBeInTheDocument();
   });
 
+  it("shows the no_data build label from the latest run summary", () => {
+    seedTerminalTask();
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      const runId = task.runOrder[task.runOrder.length - 1];
+      if (runId === undefined) return state;
+      return {
+        ...state,
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            runsById: {
+              ...task.runsById,
+              [runId]: {
+                ...task.runsById[runId],
+                status: "completed",
+                summary: {
+                  run_status: "completed",
+                  build_result: {
+                    status: "no_data",
+                    valid_row_count: 0,
+                    successful_sources: [],
+                    rejected_sources: ["pubmed"],
+                    available_artifact_roles: [],
+                    publication_id: null,
+                    reason_codes: ["no_records"],
+                    user_summary: "未检索到数据",
+                    recommended_next_action: "调整检索词后重试",
+                  },
+                  error_code: null,
+                  cancelled_at_stage: null,
+                  user_message: "未检索到数据",
+                },
+              },
+            },
+          },
+        },
+      };
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("无数据");
+  });
+
+  it("shows the spec_rejected build label from the latest run summary", () => {
+    seedTerminalTask();
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      const runId = task.runOrder[task.runOrder.length - 1];
+      if (runId === undefined) return state;
+      return {
+        ...state,
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            runsById: {
+              ...task.runsById,
+              [runId]: {
+                ...task.runsById[runId],
+                status: "completed",
+                summary: {
+                  run_status: "completed",
+                  build_result: {
+                    status: "spec_rejected",
+                    valid_row_count: 0,
+                    successful_sources: [],
+                    rejected_sources: ["pubmed"],
+                    available_artifact_roles: [],
+                    publication_id: null,
+                    reason_codes: ["spec_rejected"],
+                    user_summary: "产物未通过规格校验",
+                    recommended_next_action: "修正规格后重试",
+                  },
+                  error_code: null,
+                  cancelled_at_stage: null,
+                  user_message: "产物未通过规格校验",
+                },
+              },
+            },
+          },
+        },
+      };
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("规格被拒");
+  });
+
+  it("keeps the generic completed label when the run summary has no build result", () => {
+    seedTerminalTask();
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("任务已完成");
+  });
+
   it("does not show processing status while an Agent waits for user input", () => {
     seedBackgroundTask();
     useAgentStore.setState((state) => ({
