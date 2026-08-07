@@ -58,9 +58,9 @@ def _binding(binding_id: str, source: str, adapter_id: str) -> SourceBinding:
     )
 
 
-def _spec(bindings: list[SourceBinding]) -> DatasetBuildSpec:
+def _spec(bindings: list[SourceBinding], build_id: str = "build_runner_test") -> DatasetBuildSpec:
     return DatasetBuildSpec(
-        build_id="build_runner_test",
+        build_id=build_id,
         objective="compare TP53 expression across sources",
         dataset_family="gene_expression",
         row_granularity="gene_sample_measurement",
@@ -76,8 +76,9 @@ async def _run_executor(
     tmp_path: Path,
     bindings: list[SourceBinding],
     fixtures: dict[str, str],
+    build_id: str = "build_runner_test",
 ) -> tuple[object, Path]:
-    spec = _spec(bindings)
+    spec = _spec(bindings, build_id=build_id)
     registry = SchemaRegistry([build_gene_expression_schema()])
     assets = {
         binding_id: _source_asset(fixtures[binding_id], f"src_{binding_id}")
@@ -97,7 +98,7 @@ async def _run_executor(
         task_id="task_runner",
         build_id=spec.build_id,
         run_id="run_runner",
-        state_dir=tmp_path / "state",
+        state_dir=tmp_path / "state" / build_id,
         lock_path=tmp_path / "build.lock",
         task_root=tmp_path,
         plan=plan,
@@ -179,7 +180,7 @@ async def test_runner_rerun_reuses_succeeded_attempts(tmp_path: Path) -> None:
         {"binding_gdc": "gdc/gdc_expression.tsv"},
     )
     assert first.status == "completed"
-    attempts_path = tmp_path / "state" / "operation_attempts.jsonl"
+    attempts_path = tmp_path / "state" / "build_runner_test" / "operation_attempts.jsonl"
     assert attempts_path.is_file()
     attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
     assert all(a["status"] == "succeeded" for a in attempts)
@@ -193,3 +194,60 @@ async def test_runner_rerun_reuses_succeeded_attempts(tmp_path: Path) -> None:
     assert second.status == "completed"
     attempts_after = [json.loads(line) for line in attempts_path.read_text().splitlines()]
     assert any(a["status"] == "skipped" for a in attempts_after)
+
+
+@pytest.mark.asyncio
+async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
+    """A later build's publication supersedes the prior build's publication."""
+    first, output_dir = await _run_executor(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+        build_id="build_v1",
+    )
+    assert first.status == "completed"
+    second, _ = await _run_executor(
+        tmp_path,
+        [
+            _binding("binding_gdc", "gdc", "gdc.expression.v1"),
+            _binding("binding_xena", "ucsc_xena", "xena.matrix.v1"),
+        ],
+        {
+            "binding_gdc": "gdc/gdc_expression.tsv",
+            "binding_xena": "ncbi/gse178352/xena_matrix.tsv",
+        },
+        build_id="build_v2",
+    )
+    assert second.status == "completed"
+
+    publications = [
+        json.loads((d / "publication.json").read_text("utf-8"))
+        for d in (output_dir / "publish").iterdir()
+        if d.is_dir() and (d / "publication.json").is_file()
+    ]
+    publications.sort(key=lambda p: p["published_at"])
+    assert len(publications) == 2
+    first_pub, second_pub = publications
+    assert first_pub["publication_id"] != second_pub["publication_id"]
+    # The newest publication supersedes the prior one.
+    assert second_pub["supersedes_publication_id"] == first_pub["publication_id"]
+    assert first_pub["supersedes_publication_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_manifest_carries_coverage_and_confidence(tmp_path: Path) -> None:
+    """provenance coverage + confidence_summary land in the persisted manifest."""
+    outcome, output_dir = await _run_executor(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+    )
+    assert outcome.status == "completed"
+    manifest = json.loads(
+        (output_dir / "dataset_manifest.json").read_text("utf-8")
+    )
+    coverage = manifest["provenance_summary"]["coverage"]
+    assert coverage["traced_rows"] == 4
+    assert coverage["untraced_rows"] == 0
+    assert coverage["coverage_ratio"] == 1.0
+    assert manifest["confidence_summary"]["report_file"] == "confidence_report.csv"

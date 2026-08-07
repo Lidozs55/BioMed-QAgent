@@ -14,6 +14,7 @@ invariants gate on the ``publish`` operation.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -324,6 +325,9 @@ class ExpressionBuildRunner:
         # directory + rename so a crash never leaves a half-written
         # publication and a prior version is never mutated.
         import shutil
+        from datetime import UTC, datetime
+
+        from app.datasets.contracts import DatasetPublication
 
         publish_dir = self._output_dir / "publish"
         publish_dir.mkdir(parents=True, exist_ok=True)
@@ -333,6 +337,19 @@ class ExpressionBuildRunner:
                 f"atomic promotion: version directory already exists: "
                 f"{version_dir.name}"
             )
+        superseded = _find_latest_publication(publish_dir)
+        publication_id = f"pub_{manifest.build_id}_{manifest.sha256[:16]}"
+        publication = DatasetPublication(
+            publication_id=publication_id,
+            manifest_ref=manifest.manifest_id,
+            validation_result_ref=(
+                "validation_report.json"
+                if validation.report_path is None
+                else str(validation.report_path)
+            ),
+            published_at=datetime.now(UTC),
+            supersedes_publication_id=superseded,
+        )
         staged_dir = publish_dir / f".{version_dir.name}.tmp"
         if staged_dir.exists():
             shutil.rmtree(staged_dir)
@@ -345,14 +362,22 @@ class ExpressionBuildRunner:
             manifest_src = self._output_dir / MANIFEST_FILE
             if manifest_src.is_file():
                 shutil.copy2(manifest_src, staged_dir / MANIFEST_FILE)
+            (staged_dir / "publication.json").write_text(
+                json.dumps(
+                    publication.model_dump(mode="json"), ensure_ascii=False, indent=2
+                )
+                + "\n",
+                "utf-8",
+            )
             staged_dir.rename(version_dir)
         except OSError as exc:
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise BuildError(f"atomic promotion failed: {exc}") from exc
         return OperationOutput(
             output={
-                "publication_id": f"pub_{manifest.build_id}_{manifest.sha256[:16]}",
+                "publication_id": publication_id,
                 "version_dir": version_dir.relative_to(self._output_dir).as_posix(),
+                "supersedes_publication_id": superseded,
                 "invariants": {
                     "provenance_closed": invariants.provenance_closed,
                     "profile_passed": invariants.profile_passed,
@@ -417,6 +442,30 @@ class ExpressionBuildRunner:
                 "namespace": ", ".join(result.namespaces),
             }
         return summary
+
+
+def _find_latest_publication(publish_dir: Path) -> str | None:
+    """Return the publication_id of the newest existing version directory.
+
+    Version directories are named ``<build_id>_<manifest_digest16>``; the
+    newest is the lexicographically last directory carrying a
+    ``publication.json``. Returns None when no prior publication exists.
+    """
+    candidates: list[str] = []
+    for child in publish_dir.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        publication_path = child / "publication.json"
+        if not publication_path.is_file():
+            continue
+        try:
+            record = json.loads(publication_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        publication_id = record.get("publication_id")
+        if isinstance(publication_id, str) and publication_id:
+            candidates.append(publication_id)
+    return sorted(candidates)[-1] if candidates else None
 
 
 def _placeholder_validation() -> ValidationResult:

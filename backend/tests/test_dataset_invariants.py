@@ -165,8 +165,26 @@ def test_failed_profile_blocks_promotion(tmp_path: Path) -> None:
     assert any("validation status is 'failed'" in v for v in result.violations)
 
 
-def test_existing_prior_version_blocks_republish(tmp_path: Path) -> None:
-    """Atomic promotion must never rewrite an existing version directory."""
+def test_duplicate_digest_version_blocks_republish(tmp_path: Path) -> None:
+    """Atomic promotion must never republish the same immutable version."""
+    output_dir = _build_dir(tmp_path)
+    _provenance_path(output_dir)
+    # Same build + same digest as the manifest under test -> duplicate version.
+    duplicate = output_dir / "publish" / f"build_test_{_DIGEST[:16]}"
+    duplicate.mkdir(parents=True)
+    (duplicate / "dataset_manifest.json").write_text("{}", "utf-8")
+    result = check_release_invariants(
+        manifest=_manifest(output_dir),
+        validation=_validation(),
+        output_dir=output_dir,
+    )
+    assert not result.passed
+    assert not result.atomic_promotion_ready
+    assert any("refusing to republish" in v for v in result.violations)
+
+
+def test_new_digest_version_is_allowed(tmp_path: Path) -> None:
+    """A newer digest (supersedes) is a different version dir and is allowed."""
     output_dir = _build_dir(tmp_path)
     _provenance_path(output_dir)
     prior = output_dir / "publish" / "build_test_priorversion"
@@ -177,6 +195,5 @@ def test_existing_prior_version_blocks_republish(tmp_path: Path) -> None:
         validation=_validation(),
         output_dir=output_dir,
     )
-    assert not result.passed
-    assert not result.atomic_promotion_ready
-    assert any("refusing to republish" in v for v in result.violations)
+    assert result.passed
+    assert result.atomic_promotion_ready

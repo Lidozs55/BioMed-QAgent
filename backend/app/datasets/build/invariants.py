@@ -152,17 +152,15 @@ def _check_atomic_promotion(
         return False
 
     # A publication version is content-addressed by build + manifest digest.
-    # Atomic promotion forbids rewriting a previously published version.
+    # Atomic promotion forbids republishing the *same* digest (duplicate
+    # version) — a new digest names a new version directory, so publishing a
+    # newer version never rewrites an older one (supersedes chain).
     version_dir = publish_dir / f"{manifest.build_id}_{manifest.sha256[:16]}"
-    existing_versions = [
-        child for child in publish_dir.iterdir()
-        if child.is_dir() and child.name != version_dir.name
-    ]
-    for prior in existing_versions:
-        if not prior.is_symlink() and (prior / "dataset_manifest.json").is_file():
-            violations.append(
-                "atomic promotion: refusing to republish over an existing "
-                f"immutable version directory {prior.name}"
-            )
-            return False
+    if version_dir.exists():
+        violations.append(
+            "atomic promotion: version directory already exists for this "
+            f"digest ({version_dir.name}); refusing to republish an "
+            "immutable version"
+        )
+        return False
     return True
