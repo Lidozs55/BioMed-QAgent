@@ -15,11 +15,15 @@ invariants gate on the ``publish`` operation.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import shutil
+import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, TypeVar
 
 from app.datasets.build.adapters import get_adapter
 from app.datasets.build.canonicalizer import (
@@ -53,6 +57,10 @@ from app.datasets.runtime.executor import BuildCancelledError, CancellationToken
 from app.datasets.schema_registry import SchemaRegistry
 from app.domain.contracts.source import SourceAsset
 from app.pipeline.state import StageOutputFile
+
+#: Type variable for the worker-thread offload helper (the caller's expected
+#: return type is the wrapped function's return type).
+_OffloadT = TypeVar("_OffloadT")
 
 #: Synthetic validation used only to seed the manifest digest before the real
 #: profile run; the authoritative manifest is re-assembled after validation.
@@ -107,6 +115,14 @@ class ExpressionBuildRunner:
         self._validation_profile = get_validation_profile(
             spec.validation_profile_ref
         )
+        # K1 residual (Phase 4 review): worker-thread futures started by this
+        # runner whose threads may still be running after the executor's
+        # operation timeout cancelled only the await. The executor awaits
+        # these (bounded) before finalizing the failure and releasing the
+        # build lock. ``_worker_done`` discards completed futures (the set is
+        # touched from worker threads, so it is guarded by a lock).
+        self._worker_futures: set[concurrent.futures.Future[Any]] = set()
+        self._worker_futures_lock = threading.Lock()
         # Per-operation state accumulated across the plan run. A digest-reused
         # (SKIPPED) operation simply reports the cached output again.
         self._batches: dict[str, object] = {}
@@ -119,6 +135,73 @@ class ExpressionBuildRunner:
         self, op: OperationSpec, upstream: dict[str, object]
     ) -> OperationOutput:
         return await self.run_operation(op, upstream)
+
+    def in_flight_workers(self) -> tuple[concurrent.futures.Future[Any], ...]:
+        """Return the operation worker futures whose threads may still run.
+
+        K1 residual (Phase 4 review): a ``to_thread`` worker cannot be
+        interrupted — ``asyncio.timeout`` cancels only the await (and the
+        executor's wrapped future), never the thread. Each worker's
+        completion future is set from inside the worker itself (``finally``),
+        so it stays pending exactly while the thread may still be writing.
+        The executor awaits these stragglers (bounded) before finalizing a
+        timed-out/cancelled/failed operation and releasing the build lock,
+        so a same-build_id retry never overlaps a live late worker writing
+        the same deterministic output paths.
+        """
+        with self._worker_futures_lock:
+            return tuple(
+                future
+                for future in self._worker_futures
+                if not future.done()
+            )
+
+    def _worker_done(
+        self, future: concurrent.futures.Future[Any]
+    ) -> None:
+        """Drop a completed worker future (runs in the completing thread)."""
+        with self._worker_futures_lock:
+            self._worker_futures.discard(future)
+
+    async def _offload(
+        self,
+        func: Callable[..., _OffloadT],
+        *args: object,
+        **kwargs: object,
+    ) -> _OffloadT:
+        """Run heavy synchronous work in a worker thread, tracking completion.
+
+        D2/H1 + K1 residual: same offload semantics as ``asyncio.to_thread``
+        (default executor), plus a completion signal that survives
+        ``asyncio.timeout``. ``loop.run_in_executor`` returns a wrapped
+        asyncio future that the timeout CANCELLES — its ``done()`` state
+        says nothing about the thread. So thread completion is tracked by a
+        separate raw ``concurrent.futures.Future`` set from inside the
+        worker's ``finally``; that future is never cancelled by the timeout,
+        which lets ``in_flight_workers()`` report a straggler whose thread is
+        still writing after its await was cancelled.
+        """
+        loop = asyncio.get_running_loop()
+        completion = concurrent.futures.Future()
+        with self._worker_futures_lock:
+            self._worker_futures.add(completion)
+        completion.add_done_callback(self._worker_done)
+
+        def tracked(*tracked_args: object, **tracked_kwargs: object) -> object:
+            try:
+                return func(*tracked_args, **tracked_kwargs)
+            finally:
+                # Guard: after the straggler grace elapses the executor
+                # cancels the completion future; the late thread must not
+                # raise InvalidStateError in its tail when it finally
+                # finishes.
+                if not completion.done():
+                    completion.set_result(None)
+
+        worker = loop.run_in_executor(
+            None, functools.partial(tracked, *args, **kwargs)
+        )
+        return await worker
 
     async def run_operation(
         self, op: OperationSpec, upstream: dict[str, object]
@@ -165,7 +248,7 @@ class ExpressionBuildRunner:
         # run it in a worker thread so the event loop stays responsive (the
         # manager can process a cancel request while the parse runs) and the
         # executor's operation-boundary cancellation checks can interrupt.
-        batch = await asyncio.to_thread(
+        batch = await self._offload(
             adapter.parse,
             asset,
             source_path,
@@ -199,9 +282,9 @@ class ExpressionBuildRunner:
             raise BuildError(f"no parsed batch cached for binding {binding_id!r}")
         # D2/H1: canonicalization is heavy synchronous work; offload it to a
         # worker thread so cancellation stays responsive during the operation.
-        result = await asyncio.to_thread(
+        result = await self._offload(
             canonicalize,
-            batch=batch,  # type: ignore[arg-type]
+            batch=batch,
             schema=self._schema,
             profile=self._normalization_profile,
             output_dir=self._output_dir,
@@ -244,7 +327,7 @@ class ExpressionBuildRunner:
         results = self._canonical_results_for_bindings()
         # D2/H1: integration is heavy synchronous work; offload it to a worker
         # thread so the event loop stays responsive during the operation.
-        integration = await asyncio.to_thread(
+        integration = await self._offload(
             integrate,
             results=results,
             merge_strategy=self._spec.merge_strategy,

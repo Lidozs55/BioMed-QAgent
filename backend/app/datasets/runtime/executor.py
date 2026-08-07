@@ -10,9 +10,11 @@ per-operation timeout and typed events. Operation semantics are injected via
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -50,6 +52,8 @@ from app.domain.contracts.enums import AttemptStatus
 from app.domain.contracts.source import SourceAsset
 from app.pipeline.state import TaskLock
 from app.runtime.event_store import append_jsonl_records
+
+logger = logging.getLogger(__name__)
 
 
 class CancellationToken(Protocol):
@@ -187,6 +191,7 @@ class DatasetBuildExecutor:
         source_assets: Mapping[str, SourceAsset] | None = None,
         operation_timeout: float = 120.0,
         lock_timeout: float = 5.0,
+        straggler_grace: float = 10.0,
         resume_from: str | None = None,
     ) -> None:
         self._task_id = task_id
@@ -204,6 +209,15 @@ class DatasetBuildExecutor:
         self._source_assets = dict(source_assets or {})
         self._operation_timeout = operation_timeout
         self._lock_timeout = lock_timeout
+        # K1 residual (Phase 4 review): the operation timeout cancels only
+        # the await; the to_thread worker keeps running. This bounds how long
+        # the executor waits for such a straggler before finalizing the
+        # failure and releasing the build lock (a straggler is work already
+        # in progress, so a short fixed cap suffices — the operation timeout
+        # already bounded the work itself). If a straggler still does not
+        # finish within the grace, the state dir is marked so a retry cannot
+        # reuse the unstable workspace.
+        self._straggler_grace = straggler_grace
         self._resume_from = resume_from
         if resume_from is not None and resume_from not in {
             op.operation_id for op in plan
@@ -241,6 +255,7 @@ class DatasetBuildExecutor:
                     self._state, self._attempts_path()
                 )
                 self._recover_inflight_attempt()
+                self._warn_unfinished_worker()
             except Exception as exc:
                 # A corrupt/mismatched state or diverged attempt log is a
                 # recovery failure, not a plan failure: return a structured
@@ -253,12 +268,15 @@ class DatasetBuildExecutor:
             try:
                 return await self._run_plan()
             except BuildCancelledError:
+                await self._await_straggler_workers()
                 return await self._finalize_cancelled()
             except BuildOperationTimeoutError as exc:
+                await self._await_straggler_workers()
                 return await self._finalize_failed(
                     exc, ErrorCode.TIMEOUT
                 )
             except Exception as exc:
+                await self._await_straggler_workers()
                 return await self._finalize_failed(
                     exc, ErrorCode.INTERNAL_ERROR
                 )
@@ -520,6 +538,109 @@ class DatasetBuildExecutor:
         # attempt is recorded) and rewriting the paths.
         with contextlib.suppress(Exception):
             discard(op)
+
+    async def _await_straggler_workers(self) -> None:
+        """Wait (bounded) for operation worker threads that may still run.
+
+        K1 residual (Phase 4 review): ``asyncio.timeout`` cancels only the
+        await — the ``to_thread`` worker keeps running and may still be
+        writing its deterministic outputs. The executor must not return (and
+        thus must not release the build lock in ``run()``'s ``finally``)
+        while such a straggler may still be alive: a same-build_id retry
+        could otherwise acquire the lock and validate/publish a file the
+        late thread later overwrites. The wait is bounded by
+        ``straggler_grace``; if a straggler still does not finish within the
+        grace, the state dir is marked (``_mark_unfinished_worker``) so a
+        retry cannot reuse the unstable workspace, and the condition is
+        logged. The wait defers only lock release, never the operation
+        outcome: the timeout/cancellation/failure that triggered it is still
+        the outcome.
+        """
+        workers = self._in_flight_worker_futures()
+        if not workers:
+            return
+        try:
+            async with asyncio.timeout(self._straggler_grace):
+                await asyncio.gather(
+                    *(asyncio.wrap_future(worker) for worker in workers),
+                    return_exceptions=True,
+                )
+        except TimeoutError:
+            self._mark_unfinished_worker()
+            logger.warning(
+                "build %s: operation worker(s) still running after %.1fs "
+                "grace; state dir marked so a retry cannot reuse the "
+                "unstable workspace",
+                self._build_id,
+                self._straggler_grace,
+            )
+
+    def _in_flight_worker_futures(
+        self,
+    ) -> tuple[concurrent.futures.Future[Any], ...]:
+        """The operation runner's still-running worker futures (duck-typed).
+
+        ``ExpressionBuildRunner`` exposes ``in_flight_workers()``; runners
+        without the accessor simply have no trackable stragglers.
+        """
+        probe = getattr(self._operation_runner, "in_flight_workers", None)
+        if probe is None:
+            return ()
+        with contextlib.suppress(Exception):
+            workers = probe()
+            return tuple(worker for worker in workers if not worker.done())
+        return ()
+
+    def _mark_unfinished_worker(self) -> None:
+        """Record (durably, in the state dir) a worker that outlived the grace.
+
+        K1 residual (Phase 4 review): the thread cannot be interrupted, so a
+        same-build_id retry must not trust the workspace to be stable. The
+        marker is honored by the next run (``_warn_unfinished_worker``); the
+        retry re-executes the failed operation (its attempt is FAILED, never
+        reusable) and everything downstream via the digest closure, rewriting
+        the same deterministic paths.
+        """
+        operation_id: str | None = None
+        state = self._state
+        if state is not None and state.inflight_attempt is not None:
+            operation_id = state.inflight_attempt.operation_id
+        payload = {
+            "build_id": self._build_id,
+            "operation_id": operation_id,
+            "written_at": datetime.now(UTC).isoformat(),
+        }
+        with contextlib.suppress(OSError):
+            self._state_dir.mkdir(parents=True, exist_ok=True)
+            marker = self._state_dir / ".worker_unfinished"
+            marker.write_text(
+                json.dumps(payload, ensure_ascii=False) + "\n", "utf-8"
+            )
+
+    def _warn_unfinished_worker(self) -> None:
+        """Honor the state-dir marker left by a previous run (log + clear).
+
+        The retry cannot reuse the unfinished operation — its attempt is
+        FAILED and the digest closure re-runs it and everything downstream —
+        so the marker's purpose is observability of the instability, not a
+        reuse gate; it is cleared once acknowledged.
+        """
+        marker = self._state_dir / ".worker_unfinished"
+        if not marker.is_file():
+            return
+        operation_id: str | None = None
+        with contextlib.suppress(Exception):
+            payload = json.loads(marker.read_text("utf-8"))
+            operation_id = payload.get("operation_id")
+        logger.warning(
+            "build %s: previous run left an operation worker unfinished "
+            "(operation=%s); re-executing the failed operation and "
+            "downstream via the digest closure",
+            self._build_id,
+            operation_id,
+        )
+        with contextlib.suppress(OSError):
+            marker.unlink(missing_ok=True)
 
     def _compute_input_digest(self, op: OperationSpec) -> str:
         upstream = {

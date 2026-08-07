@@ -27,7 +27,7 @@ from app.datasets.runtime import (
     build_operation_plan,
 )
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
-from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
+from app.domain.contracts import DataLevel, ErrorCode, SourceAsset, asset_id_from_sha256
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -827,6 +827,277 @@ async def test_cancelled_integrate_outputs_are_discarded_and_retry_publishes_cle
     assert values == {"9", "10", "11", "12"}
     assert {row["sample_id"] for row in published} == {"S1", "S2"}
     assert {row["gene_id_namespace"] for row in published} == {"ensembl_gene"}
+
+
+@pytest.mark.asyncio
+async def test_timed_out_integrate_waits_for_straggler_before_lock_release(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """K1 residual (Phase 4 review): the operation-timeout path cancels only
+    the await — the ``to_thread`` integrate worker keeps running and may still
+    be writing merged/primary.csv. The executor must NOT return (and thus
+    must NOT release the build lock) while that straggler may still be alive,
+    or a same-build_id retry could validate/publish a file the late thread
+    later overwrites. The executor waits for the straggler (bounded) before
+    finalizing the timed-out failure and releasing the lock.
+    """
+    import threading
+
+    from app.datasets.build import expression_runner as expression_runner_module
+
+    real_integrate = expression_runner_module.integrate
+    integrate_started = threading.Event()
+    release_worker = threading.Event()
+
+    def blocking_integrate(*args, **kwargs):
+        integrate_started.set()
+        # Simulate a worker mid-write when the operation timeout fires: the
+        # thread keeps running (its future stays not-done) until the test
+        # releases it.
+        release_worker.wait(10.0)
+        return real_integrate(*args, **kwargs)
+
+    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    output_dir = tmp_path / "build"
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=output_dir,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_timeout_a",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        source_assets=assets,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        operation_timeout=0.5,
+    )
+    run_task = asyncio.create_task(executor.run())
+    assert await asyncio.to_thread(integrate_started.wait, 5.0), "integrate never started"
+    # The operation timeout (0.5s) fires while the integrate worker is
+    # mid-write. (a) The executor must NOT resolve — and must NOT release the
+    # build lock — before the straggler worker finishes.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(run_task), timeout=1.0)
+    # (b) Once the straggler finishes, the executor returns the timed-out
+    # failure and releases the lock.
+    release_worker.set()
+    outcome = await asyncio.wait_for(run_task, timeout=5.0)
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.code == ErrorCode.TIMEOUT
+    assert outcome.error.retryable is True
+    assert "integrate" in outcome.error.message
+
+    # The timed-out integrate attempt is FAILED (clean checkpoint): no
+    # SUCCEEDED integrate attempt exists for the retry to reuse.
+    attempts = [
+        json.loads(line)
+        for line in (
+            tmp_path / "state" / spec.build_id / "operation_attempts.jsonl"
+        )
+        .read_text()
+        .splitlines()
+    ]
+    integrate_attempts = [a for a in attempts if a["operation_id"] == "integrate"]
+    assert integrate_attempts and integrate_attempts[-1]["status"] == "failed"
+
+    # (c) A subsequent same-build_id run proceeds cleanly: attempt A's
+    # straggler is guaranteed finished before the lock was released, so the
+    # retry never overlaps a live late worker; the published artifact
+    # reflects only the retry's own inputs (A's late writes did not leak).
+    monkeypatch.setattr(expression_runner_module, "integrate", real_integrate)
+    new_input = tmp_path / "new_input.tsv"
+    new_input.write_text(
+        "gene_id\tS1\tS2\nTP53\t9\t10\nBRCA1\t11\t12\n", encoding="utf-8"
+    )
+    checksum = hashlib.sha256(new_input.read_bytes()).hexdigest()
+    new_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/new_input.tsv",
+        sha256=checksum,
+        size_bytes=new_input.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_gdc",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    retry_runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_gdc": new_asset},
+        source_paths={"binding_gdc": new_input},
+        output_dir=output_dir,
+    )
+    retry_executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_retry_b",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=retry_runner,
+        source_assets={"binding_gdc": new_asset},
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    retry = await retry_executor.run()
+
+    assert retry.status == "completed"
+    published_values: set[str] = set()
+    for version_dir in (output_dir / "publish").glob("build_runner_test_*"):
+        with (version_dir / "merged" / "primary.csv").open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        published_values.update(row["expression_value"] for row in rows)
+    # Only the retry's data was ever published: no fixture value from attempt
+    # A (1.5 / 2 / 3 / 4.25) leaked into any publication.
+    assert published_values == {"9", "10", "11", "12"}
+
+
+@pytest.mark.asyncio
+async def test_timed_out_worker_beyond_grace_marks_state_dir_and_retry_proceeds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """K1 residual (Phase 4 review): the straggler wait is BOUNDED — a worker
+    that still does not finish within the grace must not block the executor
+    forever. The run still returns the timed-out failure, the state dir is
+    marked so a retry cannot reuse the unstable workspace, and a subsequent
+    same-build_id run (with new inputs) proceeds cleanly and publishes only
+    its own data.
+    """
+    import threading
+
+    from app.datasets.build import expression_runner as expression_runner_module
+
+    real_integrate = expression_runner_module.integrate
+    integrate_started = threading.Event()
+    release_worker = threading.Event()
+
+    def blocking_integrate(*args, **kwargs):
+        integrate_started.set()
+        release_worker.wait(10.0)
+        return real_integrate(*args, **kwargs)
+
+    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    output_dir = tmp_path / "build"
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=output_dir,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_timeout_a",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        source_assets=assets,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        operation_timeout=0.5,
+        straggler_grace=0.05,
+    )
+    run_task = asyncio.create_task(executor.run())
+    assert await asyncio.to_thread(integrate_started.wait, 5.0), "integrate never started"
+    # The straggler grace (0.05s) elapses while the worker is still blocked:
+    # the executor returns the timed-out failure WITHOUT waiting for the
+    # worker, marks the state dir, and releases the lock.
+    outcome = await asyncio.wait_for(run_task, timeout=5.0)
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.code == ErrorCode.TIMEOUT
+    marker = tmp_path / "state" / spec.build_id / ".worker_unfinished"
+    assert marker.is_file()
+    payload = json.loads(marker.read_text("utf-8"))
+    assert payload["build_id"] == spec.build_id
+    assert payload["operation_id"] == "integrate"
+
+    # The straggler thread is still alive here (it outlived the grace):
+    # release it and wait for it to actually finish before the retry so the
+    # retry's writes cannot interleave with the late worker's.
+    release_worker.set()
+    await asyncio.gather(
+        *(asyncio.wrap_future(worker) for worker in runner.in_flight_workers()),
+        return_exceptions=True,
+    )
+
+    # The marker is honored (logged + cleared) by the next run; the retry
+    # re-executes the failed integrate (its attempt is FAILED, never
+    # reusable) and downstream via the digest closure, publishing only its
+    # own data.
+    monkeypatch.setattr(expression_runner_module, "integrate", real_integrate)
+    new_input = tmp_path / "new_input.tsv"
+    new_input.write_text(
+        "gene_id\tS1\tS2\nTP53\t9\t10\nBRCA1\t11\t12\n", encoding="utf-8"
+    )
+    checksum = hashlib.sha256(new_input.read_bytes()).hexdigest()
+    new_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/new_input.tsv",
+        sha256=checksum,
+        size_bytes=new_input.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_gdc",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    retry_runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_gdc": new_asset},
+        source_paths={"binding_gdc": new_input},
+        output_dir=output_dir,
+    )
+    retry_executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_retry_b",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=retry_runner,
+        source_assets={"binding_gdc": new_asset},
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    retry = await retry_executor.run()
+
+    assert retry.status == "completed"
+    published_values: set[str] = set()
+    for version_dir in (output_dir / "publish").glob("build_runner_test_*"):
+        with (version_dir / "merged" / "primary.csv").open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        published_values.update(row["expression_value"] for row in rows)
+    assert published_values == {"9", "10", "11", "12"}
 
 
 def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> None:
