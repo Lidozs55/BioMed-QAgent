@@ -37,6 +37,7 @@ import {
 import {
   DatabaseIcon,
   DownloadIcon,
+  InfoIcon,
 } from "@phosphor-icons/react";
 import type { ActivityProjection, ArtifactProjection } from "@/runtime/types";
 import {
@@ -286,9 +287,22 @@ export default function ResultsViewer({
   const latestRunId = task?.runOrder[task.runOrder.length - 1];
   const latestRun =
     latestRunId === undefined ? undefined : task?.runsById[latestRunId];
+  const buildResult = latestRun?.summary?.build_result;
   const noDataMessage =
-    latestRun?.summary?.build_result?.status === "no_data"
-      ? latestRun.summary.user_message ?? "无数据"
+    buildResult?.status === "no_data"
+      ? latestRun?.summary?.user_message ?? "无数据"
+      : undefined;
+  const noDataContext =
+    buildResult?.status === "no_data" &&
+    (buildResult.user_summary !== "" ||
+      buildResult.recommended_next_action !== "")
+      ? {
+          userSummary:
+            buildResult.user_summary === ""
+              ? "无数据"
+              : buildResult.user_summary,
+          recommendedNextAction: buildResult.recommended_next_action,
+        }
       : undefined;
 
   if (taskId === null) {
@@ -351,6 +365,24 @@ export default function ResultsViewer({
             </AccordionContent>
           </AccordionItem>
         </Accordion>
+      )}
+      {noDataContext !== undefined && artifacts.length > 0 && (
+        <div className="flex min-w-0 items-start gap-2 rounded-lg border border-sky-600/30 bg-sky-600/5 p-3">
+          <InfoIcon
+            aria-hidden="true"
+            className="mt-0.5 size-4 shrink-0 text-sky-600 dark:text-sky-400"
+          />
+          <div className="min-w-0">
+            <p className="text-sm font-medium leading-snug">
+              {noDataContext.userSummary}
+            </p>
+            {noDataContext.recommendedNextAction !== "" && (
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {noDataContext.recommendedNextAction}
+              </p>
+            )}
+          </div>
+        </div>
       )}
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         <div className="flex min-w-0 flex-col gap-3">
