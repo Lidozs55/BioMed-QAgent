@@ -28,7 +28,10 @@ from app.datasets.build.errors import BuildError
 from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.hashing import sha256_file
 from app.datasets.build.integrator import IntegrationResult, integrate
-from app.datasets.build.invariants import check_release_invariants
+from app.datasets.build.invariants import (
+    check_release_invariants,
+    find_latest_publication,
+)
 from app.datasets.build.manifest import (
     MANIFEST_FILE,
     assemble_manifest,
@@ -337,7 +340,7 @@ class ExpressionBuildRunner:
                 f"atomic promotion: version directory already exists: "
                 f"{version_dir.name}"
             )
-        superseded = _find_latest_publication(publish_dir)
+        superseded = find_latest_publication(publish_dir)
         publication_id = f"pub_{manifest.build_id}_{manifest.sha256[:16]}"
         publication = DatasetPublication(
             publication_id=publication_id,
@@ -358,7 +361,9 @@ class ExpressionBuildRunner:
             for artifact in manifest.artifacts:
                 src = self._output_dir / artifact.relative_path
                 if src.is_file():
-                    shutil.copy2(src, staged_dir / src.name)
+                    dest = staged_dir / artifact.relative_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
             manifest_src = self._output_dir / MANIFEST_FILE
             if manifest_src.is_file():
                 shutil.copy2(manifest_src, staged_dir / MANIFEST_FILE)
@@ -442,30 +447,6 @@ class ExpressionBuildRunner:
                 "namespace": ", ".join(result.namespaces),
             }
         return summary
-
-
-def _find_latest_publication(publish_dir: Path) -> str | None:
-    """Return the publication_id of the newest existing version directory.
-
-    Version directories are named ``<build_id>_<manifest_digest16>``; the
-    newest is the lexicographically last directory carrying a
-    ``publication.json``. Returns None when no prior publication exists.
-    """
-    candidates: list[str] = []
-    for child in publish_dir.iterdir():
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        publication_path = child / "publication.json"
-        if not publication_path.is_file():
-            continue
-        try:
-            record = json.loads(publication_path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        publication_id = record.get("publication_id")
-        if isinstance(publication_id, str) and publication_id:
-            candidates.append(publication_id)
-    return sorted(candidates)[-1] if candidates else None
 
 
 def _placeholder_validation() -> ValidationResult:

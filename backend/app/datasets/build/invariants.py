@@ -164,3 +164,35 @@ def _check_atomic_promotion(
         )
         return False
     return True
+
+
+def find_latest_publication(publish_dir: Path) -> str | None:
+    """Return the publication_id of the newest immutable version.
+
+    Version directories are content-addressed (``<build_id>_<digest16>``);
+    the newest version is the one with the latest ``published_at`` — never a
+    lexicographic ordering of publication_ids, which is not a time ordering
+    when the same build publishes multiple digests.
+
+    Returns None when no prior publication exists. Corrupt or unreadable
+    version records are skipped (a broken record must not poison the
+    supersedes chain).
+    """
+    newest: tuple[str, str] | None = None  # (published_at, publication_id)
+    for child in publish_dir.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        publication_path = child / "publication.json"
+        if not publication_path.is_file():
+            continue
+        try:
+            record = json.loads(publication_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        publication_id = record.get("publication_id")
+        if not isinstance(publication_id, str) or not publication_id:
+            continue
+        published_at = str(record.get("published_at", ""))
+        if newest is None or published_at > newest[0]:
+            newest = (published_at, publication_id)
+    return newest[1] if newest is not None else None

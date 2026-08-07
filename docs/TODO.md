@@ -226,6 +226,11 @@
       （manifest + data + schema + provenance）；键含 family / Schema version /
       source binding / Adapter version / normalization profile / query / asset digest；
       关键词仅用于检索
+      （✅ 最小实现已落地：`datasets/build/cache.py`——`DatasetCacheV2` 内容寻址
+      `dataset_id`（`derive_dataset_id` 覆盖 family/schema_ref/bindings/adapter/
+      normalization/merge/asset digests，关键词仅检索）、原子写（staging+rename）、
+      幂等 commit；`execute_dataset_build` 发布成功后 commit 到 `build` namespace；
+      6 项测试。API/检索端点与双读双写迁移待后续）
 - [ ] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
       row grain / Schema / 有效行数 / 来源覆盖 / Validation / confidence /
       provenance 覆盖率 / 部分成功或 NO_DATA 原因（原 §3.1 改写）
