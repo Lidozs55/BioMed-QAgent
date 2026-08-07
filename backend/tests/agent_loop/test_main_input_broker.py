@@ -647,6 +647,95 @@ async def test_resume_racing_timeout_resolves_to_single_deterministic_winner() -
         await _run_single_deadline_race(iteration)
 
 
+@pytest.mark.asyncio
+async def test_submission_accepted_exactly_at_deadline_wins_over_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """FIX 2 (final wave): an accepted submission wins even when the wait times out.
+
+    Deterministically reproduces the exact-boundary hole: ``asyncio.wait``'s
+    timeout fires with an EMPTY done set (``_wait_for_decision`` returns True)
+    while a submitter running in the same loop tick already accepted a payload
+    at ``loop.time() <= deadline`` — the append is synchronous in the submitter
+    and happens-before the event is set, so the holder is authoritative. The
+    accepted decision must NOT be discarded by the synthetic timeout:
+
+    - ``decision.timed_out`` is False and the human detail is returned;
+    - the human resumed event is emitted (no synthetic auto-approved resume);
+    - ``corrections_todo.csv`` is NOT written (a won request never degrades).
+    """
+
+    emitted: list[object] = []
+    installed: list[UserInputSubmitter] = []
+    artifacts_dir = tmp_path / "artifacts"
+    submission_injected = asyncio.Event()
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    def install(submitter: UserInputSubmitter) -> None:
+        installed.append(submitter)
+
+    def clear(submitter: UserInputSubmitter) -> None:
+        pass
+
+    broker = _make_broker(
+        run_id="run_exact_deadline",
+        fixture=False,
+        emit=emit,
+        install=install,
+        clear=clear,
+        cancellation_requested=asyncio.Event(),
+        default_timeout_seconds=30.0,
+        artifacts_dir=artifacts_dir,
+    )
+
+    async def fake_wait_for_decision(
+        event: asyncio.Event, deadline: float
+    ) -> bool:
+        # 模拟边界洞:wait 的 timeout 以空 done 集返回(报告超时),但同一 loop
+        # tick 内 submitter 已在 loop.time() <= deadline 接受了提交。
+        await submission_injected.wait()
+        return True
+
+    monkeypatch.setattr(broker, "_wait_for_decision", fake_wait_for_decision)
+
+    pending = asyncio.create_task(
+        broker.request_input(summary="需要人工修正", timeout_seconds=30.0)
+    )
+    required = await _wait_for_required(emitted)
+    assert required.request_id == "data_correction-run_exact_deadline-0"
+
+    # 恰好在 deadline 处被接受的提交(submitter 检查 loop.time() > deadline
+    # 为 False → accepted=True,决策同步落入 holder)。
+    accepted = installed[0](
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "边界提交"},
+        )
+    )
+    assert accepted is True
+    submission_injected.set()
+
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+    assert decision.timed_out is False  # 被接受的提交赢,不降级为合成超时
+    assert decision.resumed is not None
+    assert decision.resumed.detail == {"correction": "边界提交"}
+
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1  # 仅人类事件,无合成 resume
+    assert resumed_payloads[0].request_id == required.request_id
+    assert resumed_payloads[0].detail == {"correction": "边界提交"}
+    assert resumed_payloads[0].detail.get("auto_approved") is not True
+
+    # 赢家请求绝不写 corrections_todo.csv
+    assert not (artifacts_dir / "corrections_todo.csv").exists()
+
+
 async def _run_single_deadline_race(iteration: int) -> None:
     """Run one deadline race and assert the single-winner invariant."""
 

@@ -186,6 +186,19 @@ class MainInputBroker:
             self._clear_user_input_submitter(submitter)
             raise
 
+        if timed_out and decision_holder:
+            # A submission accepted exactly at the deadline wins. The wait's
+            # timeout can fire with an EMPTY done set (``_wait_for_decision``
+            # reports timed_out) while a submitter running in the same loop
+            # tick already accepted a payload at ``loop.time() <= deadline``.
+            # The append is synchronous in the submitter, so the holder is
+            # authoritative; it is re-checked synchronously after the wait
+            # returns (no await between) and the claimed flag is only set on
+            # the actual timeout path — an accepted decision can never be lost
+            # to the synthetic timeout. The human path below emits the accepted
+            # decision and never writes the todo row (accepted ⇒ human wins;
+            # only an unaccepted timeout degrades to the synthetic path).
+            timed_out = False
         if timed_out:
             # The deadline won: claim the request so any concurrently-arrived
             # (or late) human submission is rejected, and discard whatever

@@ -124,18 +124,24 @@
    任务工作目录文件存在（`<task>/artifacts/corrections_todo.csv`），**不进** `list_artifacts` /
    发布链（发布为 deterministic pipeline 独占，4a/4b 架构）。完整 manifest-driven 产物迁移属
    Phase 7（见 §5）。
-4. **timeout/resume 竞态仲裁（最终复评 FIX 2，确定性替代原接受窗口）**：broker 在请求
+4. **timeout/resume 竞态仲裁（最终复评 FIX 2 + 终波修正，确定性替代原接受窗口）**：broker 在请求
    入口捕获**单一不可变 monotonic deadline**，与 submitter 和等待循环共享同一个过期边界；
-   submitter 在 `loop.time() > deadline` 或请求已声明超时（claimed-timed-out）时拒绝提交；
-   `asyncio.wait` 返回后重检赢家——超时赢则丢弃竞态中落入的人类提交并发射合成 resume，
-   人类赢则忽略 deadline；submitter 仅在赢家确定**且**合成/人类 resumed 事件发射后才清理
-   （原实现先清 submitter 再发射）。由此：被接受的提交绝不因超时被丢弃（accepted ⇒ 人类赢），
-   被拒绝的迟到提交绝不产生人类路径 resumed 事件（rejected ⇒ 超时赢）——边界同 tick 竞争
-   解析为**恰好一个赢家**（无双重 resume 事件、无丢失决策）。`resume_run` 对迟到提交返回
-   拒绝（submitter 已清 / Run 已离开 `AWAITING_USER_INPUT`），前端按 API 错误处理——既有
-   模式保留。测试：`test_late_resume_after_deadline_is_rejected_and_timeout_wins`（时钟
-   拨快 + claimed 标记双路径）、`test_resume_before_deadline_wins_and_no_synthetic_resume`、
-   `test_resume_racing_timeout_resolves_to_single_deterministic_winner`（20 轮竞态不变量）。
+   submitter 在 `loop.time() > deadline` 或请求已声明超时（claimed-timed-out）时拒绝提交。
+   `asyncio.wait` 返回后**重检赢家**：若已有被接受的提交（`decision_holder` 非空——submitter
+   同步追加、先于事件置位，故持有人集合在 wait 返回后即为权威），该提交**必胜**——发射其
+   resumed 事件，**不写** `corrections_todo.csv`、不发射合成 resume；仅当**没有**任何被接受的
+   提交时才宣告超时——写待办行 + 发射合成 resume。claimed 标记仅在确认超时路径同步置位
+   （重检与置位之间无 await，被接受决策不可能丢失）；submitter 仅在赢家确定**且** resumed
+   事件发射后才清理（原实现先清 submitter 再发射）。由此确立的赢家规则：**accepted ⇒ 人类赢**
+   ——即使 wait 在 deadline 同 tick 以空 done 集返回超时，恰在 `loop.time() <= deadline` 被
+   接受的提交也绝不丢弃；**unaccepted timeout ⇒ 合成**——被拒绝/迟到的提交绝不产生人类路径
+   resumed 事件；边界竞争解析为**恰好一个赢家**（无双重 resume 事件、无丢失决策）。
+   `resume_run` 对迟到提交返回拒绝（submitter 已清 / Run 已离开 `AWAITING_USER_INPUT`），
+   前端按 API 错误处理——既有模式保留。测试：`test_late_resume_after_deadline_is_rejected_and_timeout_wins`
+   （时钟拨快 + claimed 标记双路径）、`test_resume_before_deadline_wins_and_no_synthetic_resume`、
+   `test_resume_racing_timeout_resolves_to_single_deterministic_winner`（20 轮竞态不变量）、
+   `test_submission_accepted_exactly_at_deadline_wins_over_timeout`（确定性边界复现：wait 返回
+   超时 + 已接受提交 ⇒ 人类赢，无 CSV 行、无合成 resume）。
 5. **max_turns/no_progress 字节级不变**：`_await_max_turns_resume` / `_await_no_progress_resume`
    **未修改**（broker 为平行实现复用同一 execution 辅助，未做规格 D1 提示的抽取）；既有 fixture
    E2E（`test_max_turns_continue.py`、`test_no_progress_detector.py`、`test_execution.py`、
