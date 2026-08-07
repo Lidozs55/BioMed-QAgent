@@ -111,6 +111,22 @@ def atomic_write_json(path: Path, value: BaseModel | Mapping[str, Any]) -> None:
     atomic_write_text(path, content)
 
 
+def _snapshot_with_internal(snapshot: TaskSnapshot) -> dict[str, Any]:
+    """Serialize a snapshot including its private artifact-id dedup map.
+
+    A8 (Phase 4 review): the seen-artifact bookkeeping lives in a private
+    attribute (never part of the wire contract); it is persisted under a
+    private JSON key so the dedup survives repository round-trips and
+    restarts. ``_load_snapshot_sync`` restores it before reducing new events.
+    """
+
+    raw = snapshot.model_dump(mode="json")
+    raw["_artifact_ids_by_run"] = {
+        run_id: sorted(ids) for run_id, ids in snapshot._artifact_ids_by_run.items()
+    }
+    return raw
+
+
 class TaskRepository:
     """Provide durable task/session operations over one output directory."""
 
@@ -575,7 +591,7 @@ class TaskRepository:
         self._ensure_layout(snapshot.task.task_id)
         atomic_write_json(
             self._snapshot_path(snapshot.task.task_id),
-            snapshot,
+            _snapshot_with_internal(snapshot),
         )
 
     def _load_snapshot_sync(self, task_id: str) -> TaskSnapshot | None:
@@ -586,7 +602,14 @@ class TaskRepository:
         # Snapshots persisted before the no_artifact_failure field was removed
         # still carry it; strict ContractModel (extra="forbid") would reject it.
         raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
+        # A8: restore the private artifact-id dedup map (stored under a private
+        # JSON key that is never part of the wire contract).
+        internal_artifact_ids = raw_snapshot.pop("_artifact_ids_by_run", None)
         snapshot = TaskSnapshot.model_validate(raw_snapshot)
+        if internal_artifact_ids:
+            snapshot._artifact_ids_by_run = {  # noqa: SLF001
+                run_id: set(ids) for run_id, ids in internal_artifact_ids.items()
+            }
         latest_sequence = self.events.latest_sequence(task_id)
         if snapshot.task.latest_sequence > latest_sequence:
             raise CorruptEventLogError(
@@ -622,11 +645,11 @@ class TaskRepository:
             for event in events:
                 snapshot = reduce_task_event(snapshot, event)
             snapshot = self._snapshot_without_messages(snapshot)
-            atomic_write_json(snapshot_path, snapshot)
+            atomic_write_json(snapshot_path, _snapshot_with_internal(snapshot))
         elif legacy and legacy_artifact_count > 0:
             atomic_write_json(
                 snapshot_path,
-                self._snapshot_without_messages(snapshot),
+                _snapshot_with_internal(self._snapshot_without_messages(snapshot)),
             )
         return snapshot
 
@@ -637,7 +660,10 @@ class TaskRepository:
         updated = reduce_task_event(current, event)
         self.events.append(event)
         persisted = self._snapshot_without_messages(updated)
-        atomic_write_json(self._snapshot_path(event.task_id), persisted)
+        atomic_write_json(
+            self._snapshot_path(event.task_id),
+            _snapshot_with_internal(persisted),
+        )
         return persisted
 
     def _append_event_payload_sync(
@@ -666,7 +692,10 @@ class TaskRepository:
         updated = reduce_task_event(current, event)
         self.events.append(event)
         persisted = self._snapshot_without_messages(updated)
-        atomic_write_json(self._snapshot_path(task_id), persisted)
+        atomic_write_json(
+            self._snapshot_path(task_id),
+            _snapshot_with_internal(persisted),
+        )
         return persisted, event
 
     def _delete_task_tree_sync(self, task_id: str) -> None:

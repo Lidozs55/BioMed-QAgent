@@ -330,3 +330,69 @@ async def test_unexpected_manifest_storage_error_remains_500(
             response = await client.get("/api/v1/tasks/task_storage_error/artifacts")
 
     assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_artifact_routes_hash_chunked_without_full_file_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B7: artifact hashing must never load a whole file via Path.read_bytes.
+
+    Monkeypatching ``Path.read_bytes`` to raise proves the routes (and the
+    shared digest helper) stream files in bounded chunks instead of loading
+    them into memory; list and download still work and yield the correct
+    sha256.
+    """
+    from app.api.routes import _file_sha256
+
+    # Multi-chunk artifact: build a > 2 MiB file so chunked reading must loop.
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"a" * (2 * 1024 * 1024 + 12345))
+    with big.open("rb") as handle:
+        expected = hashlib.sha256(handle.read()).hexdigest()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("Path.read_bytes must not be used for artifacts")
+
+    assert _file_sha256(big) == expected
+
+    # The routes must also work without read_bytes for artifact files. Other
+    # small-file app bookkeeping (session/state JSONL) legitimately uses
+    # read_bytes, so the guard only fires for the artifact tree and big.bin.
+    real_read_bytes = Path.read_bytes
+
+    def guarded_read_bytes(path: Path, *args, **kwargs) -> bytes:
+        parts = Path(path).parts
+        if path.name == "big.bin" or "artifacts" in parts:
+            raise AssertionError("Path.read_bytes must not be used for artifacts")
+        return real_read_bytes(path, *args, **kwargs)
+
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await seed_fixture(application, "task_chunked")
+        monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+        listed = await client.get("/api/v1/tasks/task_chunked/artifacts")
+        artifacts = listed.json()["artifacts"]
+        main_entry = next(
+            entry for entry in artifacts if entry["name"] == "main_data.csv"
+        )
+        downloaded = await client.get(
+            f"/api/v1/tasks/task_chunked/artifacts/{main_entry['artifact_id']}"
+        )
+        # Undo the monkeypatch before app teardown so background bookkeeping
+        # (which legitimately reads small JSON state) is not affected.
+        monkeypatch.undo()
+
+    assert listed.status_code == 200
+    assert downloaded.status_code == 200
+    assert downloaded.content.startswith(b"\xef\xbb\xbfrecord_id")
+    # The listed digest is the manifest-recorded (trusted) digest.
+    assert main_entry["sha256"] == hashlib.sha256(
+        (
+            repository.tasks_dir
+            / "task_chunked"
+            / "artifacts"
+            / "main_data.csv"
+        ).read_bytes()
+    ).hexdigest()

@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
 from app.domain.contracts.dataset_state import (
@@ -32,6 +32,7 @@ from app.domain.contracts.dataset_state import (
     BuildResultStatus as BuildResultStatus,
 )
 from app.domain.contracts.source import FileAsset, SourceLocator
+from app.tools.workdir import validate_safe_path_id
 
 
 class ValidationResultStatus(StrEnum):
@@ -128,6 +129,14 @@ class SourceBinding(ContractModel):
     accession: str | None = None
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
 
+    @field_validator("binding_id")
+    @classmethod
+    def validate_binding_id(cls, value: str) -> str:
+        # B1 (Phase 4 review): binding_id is interpolated into generated
+        # filenames (batches/<binding_id>_rejected.csv, ...) so a path-like
+        # value must be rejected before any path is constructed.
+        return validate_safe_path_id(value, "binding_id")
+
 
 class DatasetBuildSpec(ContractModel):
     """Self-contained build input produced by the Agent (ARCHITECTURE §3.1).
@@ -149,6 +158,14 @@ class DatasetBuildSpec(ContractModel):
     merge_strategy: str = "append_by_canonical_row"
     validation_profile_ref: str = Field(min_length=1)
     output_format: str = "csv"
+
+    @field_validator("build_id")
+    @classmethod
+    def validate_build_id(cls, value: str) -> str:
+        # B1 (Phase 4 review): build_root / build_id must stay inside the
+        # task work directory; reject absolute/traversal path-like values at
+        # model construction (defense in depth in the tool as well).
+        return validate_safe_path_id(value, "build_id")
 
 
 class DataBatch(ContractModel):

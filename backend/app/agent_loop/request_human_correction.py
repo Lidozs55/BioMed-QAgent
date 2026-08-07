@@ -39,6 +39,12 @@ from app.runtime.compaction import CompactionCancelledError
 # 文件名占位，T3 补上字段后消息自动携带完整位置。
 _CORRECTIONS_TODO_FILENAME = "corrections_todo.csv"
 
+# D3 (Phase 4 review): the model-controlled timeout override must be a
+# finite value in [1, MAX]; anything else is rejected at the tool entry with
+# agent-facing failure text (never a Run failure or an immediate expiry).
+_MIN_TIMEOUT_SECONDS = 1.0
+_MAX_TIMEOUT_SECONDS = 3600.0
+
 _DESCRIPTION = (
     "请求人类人工修正：暂停当前 Run，向用户弹出修正对话框并等待人工答复，"
     "返回人类决策（approve/reject + 修正内容）的文本摘要，Agent 据此继续。"
@@ -49,6 +55,15 @@ _DESCRIPTION = (
     "配置决定）。人类在超时前未答复时返回降级提示，请求已记录到 "
     "corrections_todo.csv。"
 )
+
+
+def _is_valid_timeout(timeout_seconds: float) -> bool:
+    """True when *timeout_seconds* is a finite value within [1, MAX] (D3)."""
+
+    try:
+        return _MIN_TIMEOUT_SECONDS <= float(timeout_seconds) <= _MAX_TIMEOUT_SECONDS
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _format_resumed_text(decision: MainInputDecision) -> str:
@@ -91,11 +106,20 @@ async def request_human_correction(
 
     ``summary`` is the question/clarification presented to the human;
     ``detail`` optionally carries the fields to fix, suggested options, or
-    context; ``timeout_seconds`` overrides the run-level HIL timeout. Returns
-    the human decision text (approve/reject + detail), a degraded timeout
-    message when nobody answered, or a clear failure text when the broker is
-    not installed (subagent contexts). Cancellation while paused propagates.
+    context; ``timeout_seconds`` overrides the run-level HIL timeout and must
+    be a finite value in [1, 3600]. Returns the human decision text
+    (approve/reject + detail), a degraded timeout message when nobody
+    answered, or a clear failure text when the broker is not installed
+    (subagent contexts). Cancellation while paused propagates.
     """
+
+    if timeout_seconds is not None and not _is_valid_timeout(timeout_seconds):
+        return (
+            f"request_human_correction 参数无效：timeout_seconds 必须是 "
+            f"[{_MIN_TIMEOUT_SECONDS:.0f}, {_MAX_TIMEOUT_SECONDS:.0f}] 范围内"
+            "的有限数值（收到 "
+            f"{timeout_seconds!r}）。请修正参数后重试，或省略该参数使用默认超时。"
+        )
 
     try:
         decision = await ctx.context.request_main_input(

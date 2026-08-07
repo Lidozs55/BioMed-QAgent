@@ -20,7 +20,10 @@ from pathlib import Path
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
-from app.datasets.build.expression_runner import ExpressionBuildRunner
+from app.datasets.build.expression_runner import (
+    ExpressionBuildRunner,
+    _find_latest_publication,
+)
 from app.datasets.build.invariants import PUBLISH_DIR
 from app.datasets.contracts import DatasetBuildSpec
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
@@ -45,6 +48,25 @@ _MEDIA_TYPES = {
 
 def _infer_media_type(path: Path) -> str:
     return _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
+    """Resolve the build output dir and prove it stays inside the workspace.
+
+    Defense in depth for B1 (Phase 4 review): ``DatasetBuildSpec`` rejects
+    path-like ``build_id`` values at model construction, but the tool must
+    never trust a value that slips through — ``build_root / build_id`` is
+    only used when the resolved path remains under ``build_root``.
+    """
+
+    output_dir = build_root / build_id
+    try:
+        output_dir.resolve().relative_to(build_root.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"build_id must remain inside the build workspace: {build_id!r}"
+        ) from exc
+    return output_dir
 
 
 @function_tool(
@@ -149,13 +171,24 @@ async def execute_dataset_build(
 
     build_root = run_ctx.work_dir.root / "datasets_build"
     build_root.mkdir(parents=True, exist_ok=True)
-    output_dir = build_root / build_spec.build_id
+    try:
+        output_dir = _ensure_build_output_inside(build_root, build_spec.build_id)
+    except ValueError as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": str(exc),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     runner = ExpressionBuildRunner(
         spec=build_spec,
         registry=SchemaRegistry([build_gene_expression_schema()]),
         source_assets=assets,
         source_paths=paths,
         output_dir=output_dir,
+        cancellation_requested=run_ctx.cancellation_requested,
     )
     plan = build_operation_plan(build_spec)
     executor = DatasetBuildExecutor(
@@ -167,6 +200,8 @@ async def execute_dataset_build(
         task_root=build_root,
         plan=plan,
         run_operation=runner,
+        source_assets=assets,
+        cancellation_requested=run_ctx.cancellation_requested,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )
     outcome = await executor.run()
@@ -217,21 +252,11 @@ async def execute_dataset_build(
 
 
 def _latest_publication_id(publish_dir: Path) -> str | None:
-    """Read the newest version directory's publication_id (if any)."""
-    if not publish_dir.is_dir():
-        return None
-    candidates: list[str] = []
-    for child in publish_dir.iterdir():
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        publication_path = child / "publication.json"
-        if not publication_path.is_file():
-            continue
-        try:
-            record = json.loads(publication_path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        publication_id = record.get("publication_id")
-        if isinstance(publication_id, str) and publication_id:
-            candidates.append(publication_id)
-    return sorted(candidates)[-1] if candidates else None
+    """Read the newest version directory's publication_id (if any).
+
+    Delegates to ``ExpressionBuildRunner._find_latest_publication`` so the
+    tool and the supersedes chain agree: newest by ``published_at``, never by
+    lexicographic publication_id order (B8).
+    """
+
+    return _find_latest_publication(publish_dir)

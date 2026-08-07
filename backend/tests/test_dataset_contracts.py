@@ -225,3 +225,44 @@ def test_data_batch_contract() -> None:
         parser_version="1.2.0",
     )
     assert batch.row_count == 100
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 review B1: build_id / binding_id must be safe single-component IDs
+# ---------------------------------------------------------------------------
+
+
+def test_spec_rejects_path_like_build_id() -> None:
+    """Absolute or traversal build_ids must be rejected at model construction."""
+    for bad in ("/tmp/outside", "../escape", "a/b", "a\\b", "dir/sub", ".."):
+        with pytest.raises(ValidationError, match="build_id"):
+            _spec(build_id=bad)
+
+
+def test_spec_accepts_safe_build_id() -> None:
+    spec = _spec(build_id="build_test_42")
+    assert spec.build_id == "build_test_42"
+
+
+def test_source_binding_rejects_path_like_binding_id() -> None:
+    """Path-like binding_ids must be rejected before filename interpolation."""
+    for bad in ("../../escape", "/tmp/out", "a/b", "a\\b", ".."):
+        with pytest.raises(ValidationError, match="binding_id"):
+            _spec(
+                source_bindings=[
+                    SourceBinding(
+                        binding_id=bad,
+                        source="gdc",
+                        acquisition=SourceBindingAcquisition(
+                            mode=AcquisitionMode.BUILTIN,
+                            provider_id="gdc.files.v1",
+                        ),
+                        adapter_id="gdc.expression.v1",
+                    )
+                ]
+            )
+
+
+def test_source_binding_accepts_safe_binding_id() -> None:
+    spec = _spec()
+    assert spec.source_bindings[0].binding_id == "binding_gdc"

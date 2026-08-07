@@ -414,3 +414,60 @@ async def test_fixture_mode_returns_synthetic_approval_text(
         for p in emitted
     )
     assert any(isinstance(p, UserInputResumedPayload) for p in emitted)
+
+
+# ---------------------------------------------------------------------------
+# D3: timeout_seconds validation (bounded, finite)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_timeout",
+    [-1, 0, float("nan"), float("inf"), 3601],
+)
+async def test_tool_rejects_invalid_timeout_seconds_without_pausing(
+    tmp_path: Path,
+    bad_timeout: float,
+) -> None:
+    """D3: negative/zero/NaN/inf/over-max timeout_seconds must return a
+    failure text and never pause the Run (no broker request)."""
+    decision = _decision(
+        timed_out=False,
+        resumed=_resumed(decision="approve"),
+    )
+    context = _ctx_with_broker(tmp_path, decision)
+
+    result = await _invoke_tool(
+        context,
+        summary="确认数据平台",
+        timeout_seconds=bad_timeout,
+    )
+
+    assert "timeout_seconds" in result
+    broker = context.main_input_broker
+    assert broker is not None
+    assert broker.received == {}  # type: ignore[attr-defined]  # never paused
+
+
+@pytest.mark.asyncio
+async def test_tool_accepts_valid_timeout_seconds_and_pauses(
+    tmp_path: Path,
+) -> None:
+    """A valid timeout_seconds still routes to the broker and pauses."""
+    decision = _decision(
+        timed_out=False,
+        resumed=_resumed(decision="approve", detail={"correction": "GPL570"}),
+    )
+    context = _ctx_with_broker(tmp_path, decision)
+
+    result = await _invoke_tool(
+        context,
+        summary="确认数据平台",
+        timeout_seconds=42.0,
+    )
+
+    assert result == "用户已确认：GPL570"
+    broker = context.main_input_broker
+    assert broker is not None
+    assert broker.received["timeout_seconds"] == 42.0  # type: ignore[attr-defined]

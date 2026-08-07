@@ -432,7 +432,13 @@ class TaskIndex:
                 # removed still carry it; strict ContractModel (extra="forbid")
                 # would reject it.
                 raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
+                internal_artifact_ids = raw_snapshot.pop("_artifact_ids_by_run", None)
                 snapshot = TaskSnapshot.model_validate(raw_snapshot)
+                if internal_artifact_ids:
+                    snapshot._artifact_ids_by_run = {  # noqa: SLF001
+                        run_id: set(ids)
+                        for run_id, ids in internal_artifact_ids.items()
+                    }
                 if task_dir.name != snapshot.task.task_id:
                     raise ValueError(
                         "task directory name does not match snapshot task_id: "

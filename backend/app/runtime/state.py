@@ -198,6 +198,11 @@ def reduce_task_event(
     publications = list(snapshot.publications)
     current_publication_id = snapshot.current_publication_id
     payload = event.payload
+    # A8: copy the private seen-artifact map so the returned snapshot never
+    # aliases (or mutates) the input snapshot's bookkeeping.
+    seen_artifact_ids = {
+        run_id: set(ids) for run_id, ids in snapshot._artifact_ids_by_run.items()
+    }
 
     if isinstance(payload, RunQueuedPayload):
         if event.run_id is None:
@@ -385,7 +390,18 @@ def reduce_task_event(
 
     artifact_count = snapshot.task.artifact_count
     if isinstance(payload, ArtifactProducedPayload):
-        artifact_count += 1
+        # A8 (Phase 4 review): dedup artifact identities per run so a retry or
+        # reconciliation path that re-appends the same artifact payload at a
+        # new task sequence cannot inflate the count. Events without a run_id
+        # (not produced today) keep the legacy unconditional counting.
+        if event.run_id is not None:
+            run_seen = seen_artifact_ids.setdefault(event.run_id, set())
+            artifact_id = payload.artifact.artifact_id
+            if artifact_id not in run_seen:
+                run_seen.add(artifact_id)
+                artifact_count += 1
+        else:
+            artifact_count += 1
 
     active_run_id = snapshot.task.active_run_id
     if isinstance(payload, RunQueuedPayload) or type(payload) in _STATUS_PAYLOADS:
@@ -400,7 +416,7 @@ def reduce_task_event(
             "artifact_count": artifact_count,
         }
     )
-    return snapshot.model_copy(
+    updated = snapshot.model_copy(
         update={
             "task": task,
             "runs": runs,
@@ -409,6 +425,8 @@ def reduce_task_event(
             "current_publication_id": current_publication_id,
         }
     )
+    updated._artifact_ids_by_run = seen_artifact_ids
+    return updated
 
 
 def _run_summary_for(

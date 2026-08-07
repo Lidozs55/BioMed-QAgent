@@ -264,6 +264,10 @@ async def test_pipeline_function_tool_runs_explicit_fixture_mode(
     assert payload["status"] == "completed"
     assert payload["validation_status"] == "valid"
     assert payload["artifact_count"] == 15
+    # B9 (Phase 4 review): the envelope must carry the structured BuildResult.
+    assert payload["build_result"]["status"] == "succeeded"
+    assert payload["build_result"]["valid_row_count"] > 0
+    assert "publication_id" in payload["build_result"]
 
     # Tool 必须返回实际 artifact 文件名清单，避免 LLM 在报告中编造文件名
     # (例如把 main_data.csv 编造成 merged_comorbidity_data.csv)。
@@ -841,3 +845,75 @@ async def test_pipeline_function_tool_forwards_run_cancellation_token(
     )
 
     assert captured["cancellation_requested"] is context.cancellation_requested
+
+
+@pytest.mark.asyncio
+async def test_pipeline_tool_envelope_carries_no_data_build_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B9: a completed NO_DATA run must expose build_result.status == no_data.
+
+    Without the envelope key, NO_DATA is indistinguishable from any other
+    completed package without a primary; the Agent must be able to read the
+    structured BuildResult (status + reason codes).
+    """
+    from app.domain.contracts.dataset_state import (
+        ArtifactRole,
+        BuildResult,
+        BuildResultStatus,
+    )
+
+    context = RunContext(task_id="task_no_data_envelope")
+    context._work_dir = create_task_workdir(  # noqa: SLF001
+        "task_no_data_envelope", base_dir=str(tmp_path / "tasks")
+    )
+    tool_context = ToolContext(
+        context=context,
+        tool_name="run_research_pipeline",
+        tool_call_id="call_no_data",
+        tool_arguments="{}",
+    )
+
+    class NoDataRunner:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def run(self):
+            return SimpleNamespace(
+                task_id=context.task_id,
+                task_state=SimpleNamespace(value="completed"),
+                validation=SimpleNamespace(status="valid"),
+                artifacts=[],
+                build_result=BuildResult(
+                    status=BuildResultStatus.NO_DATA,
+                    valid_row_count=0,
+                    available_artifact_roles=[ArtifactRole.AUDIT_REPORT],
+                    reason_codes=["no_primary_data"],
+                    user_summary="no primary data",
+                ),
+            )
+
+        @property
+        def state(self):
+            return SimpleNamespace(stage_attempts=[])
+
+    monkeypatch.setattr(pipeline_tool_module, "PipelineRunner", NoDataRunner)
+
+    payload = json.loads(
+        await run_research_pipeline.on_invoke_tool(
+            tool_context,
+            json.dumps(
+                {
+                    "topic": "no data topic",
+                    "databases": ["pubmed", "geo"],
+                    "mode": "fixture",
+                }
+            ),
+        )
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["build_result"]["status"] == "no_data"
+    assert payload["build_result"]["valid_row_count"] == 0
+    assert payload["build_result"]["reason_codes"] == ["no_primary_data"]

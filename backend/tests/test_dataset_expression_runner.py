@@ -251,3 +251,290 @@ async def test_manifest_carries_coverage_and_confidence(tmp_path: Path) -> None:
     assert coverage["untraced_rows"] == 0
     assert coverage["coverage_ratio"] == 1.0
     assert manifest["confidence_summary"]["report_file"] == "confidence_report.csv"
+
+
+@pytest.mark.asyncio
+async def test_runner_rerun_with_changed_source_invalidates_checkpoints(
+    tmp_path: Path,
+) -> None:
+    """B2: replacing a source file must invalidate reused checkpoints.
+
+    Re-running the same build_id after the source content changed must
+    re-execute the pipeline and publish a NEW publication with the new
+    values — the old checkpoint must not short-circuit. ``output_dir`` is
+    set to the executor ``task_root`` so checkpoint file verification can
+    actually succeed (otherwise a separate latent path quirk re-runs the
+    middle operations and masks the digest gap).
+    """
+
+    source_a = tmp_path / "source_a.tsv"
+    source_b = tmp_path / "source_b.tsv"
+    source_a.write_text("gene_id\tS1\tS2\nTP53\t1.5\t2\nBRCA1\t3\t4.25\n", "utf-8")
+    source_b.write_text("gene_id\tS1\tS2\nTP53\t99\t100\nBRCA1\t101\t102\n", "utf-8")
+
+    async def build_with(source_path: Path) -> tuple[object, list[dict[str, str]]]:
+        spec = _spec([_binding("binding_gdc", "gdc", "gdc.expression.v1")])
+        registry = SchemaRegistry([build_gene_expression_schema()])
+        checksum = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        asset = SourceAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="source",
+            relative_path=f"source_assets/{source_path.name}",
+            sha256=checksum,
+            size_bytes=source_path.stat().st_size,
+            media_type="text/tab-separated-values",
+            source_id="src_binding_gdc",
+            successful_attempt_id="attempt_1",
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+        )
+        assets = {"binding_gdc": asset}
+        paths = {"binding_gdc": source_path}
+        runner = ExpressionBuildRunner(
+            spec=spec,
+            registry=registry,
+            source_assets=assets,
+            source_paths=paths,
+            output_dir=tmp_path,
+        )
+        plan = build_operation_plan(spec)
+        executor = DatasetBuildExecutor(
+            task_id="task_runner",
+            build_id=spec.build_id,
+            run_id="run_runner",
+            state_dir=tmp_path / "state" / spec.build_id,
+            lock_path=tmp_path / "build.lock",
+            task_root=tmp_path,
+            plan=plan,
+            run_operation=runner,
+            source_assets=assets,
+            implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        )
+        outcome = await executor.run()
+        return outcome, _primary_rows(tmp_path)
+
+    first_outcome, _ = await build_with(source_a)
+    assert first_outcome.status == "completed"
+    first_pub_dir = list((tmp_path / "publish").glob("build_runner_test_*"))[0]
+    first_pub = json.loads(
+        (first_pub_dir / "publication.json").read_text("utf-8")
+    )
+
+    second_outcome, rows = await build_with(source_b)
+    assert second_outcome.status == "completed"
+    publish_dirs = list((tmp_path / "publish").glob("build_runner_test_*"))
+    assert len(publish_dirs) == 2
+    second_pub_dir = [d for d in publish_dirs if d.name != first_pub_dir.name][0]
+    second_pub = json.loads(
+        (second_pub_dir / "publication.json").read_text("utf-8")
+    )
+    assert second_pub["publication_id"] != first_pub["publication_id"]
+
+    # The new values must be in the newly published primary, not the stale one.
+    assert {r["expression_value"] for r in rows} == {"99", "100", "101", "102"}
+
+    # The acquire checkpoint was NOT reused: no SKIPPED acquire attempt and the
+    # re-run acquire attempt carries a different input digest.
+    attempts_path = tmp_path / "state" / "build_runner_test" / "operation_attempts.jsonl"
+    attempts = [json.loads(line) for line in attempts_path.read_text().splitlines()]
+    acquire_attempts = [
+        a for a in attempts if a["operation_id"] == "acquire:binding_gdc"
+    ]
+    assert acquire_attempts[-1]["status"] == "succeeded"
+    assert acquire_attempts[-1]["input_digest"] != acquire_attempts[0]["input_digest"]
+
+
+def test_find_latest_publication_selects_newest_by_published_at(
+    tmp_path: Path,
+) -> None:
+    """B8: the supersedes chain must pick the newest by time, not ID order.
+
+    publication_ids are ``pub_<build_id>_<digest-prefix>`` so digest order is
+    unrelated to publication time. With chronologically published digests
+    ``f...`` then ``a...`` then ``0...``, the newest is the middle ID by
+    string order — the selection must return it.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.datasets.build.expression_runner import _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    records = [
+        ("pub_build_x_f1234567890abcdef", base),
+        ("pub_build_x_a1234567890abcdef", base + timedelta(minutes=10)),
+        ("pub_build_x_0123456789abcdef", base + timedelta(minutes=20)),
+    ]
+    for publication_id, published_at in records:
+        version_dir = publish_dir / publication_id.removeprefix("pub_build_x_")
+        version_dir.mkdir(parents=True)
+        (version_dir / "publication.json").write_text(
+            json.dumps(
+                {
+                    "publication_id": publication_id,
+                    "published_at": published_at.isoformat(),
+                }
+            ),
+            "utf-8",
+        )
+
+    # Lexicographic max is f...; the newest by time is 0... (published last).
+    assert _find_latest_publication(publish_dir) == "pub_build_x_0123456789abcdef"
+
+
+def test_find_latest_publication_tie_breaks_deterministically(
+    tmp_path: Path,
+) -> None:
+    """Equal published_at timestamps resolve deterministically."""
+    from datetime import UTC, datetime
+
+    from app.datasets.build.expression_runner import _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    same_time = datetime(2026, 8, 1, tzinfo=UTC)
+    for publication_id in ("pub_build_x_b1234567890abcdef", "pub_build_x_a1234567890abcdef"):
+        version_dir = publish_dir / publication_id.removeprefix("pub_build_x_")
+        version_dir.mkdir(parents=True)
+        (version_dir / "publication.json").write_text(
+            json.dumps(
+                {
+                    "publication_id": publication_id,
+                    "published_at": same_time.isoformat(),
+                }
+            ),
+            "utf-8",
+        )
+
+    result = _find_latest_publication(publish_dir)
+    assert result in (
+        "pub_build_x_a1234567890abcdef",
+        "pub_build_x_b1234567890abcdef",
+    )
+    # Deterministic: a second call returns the same choice.
+    assert _find_latest_publication(publish_dir) == result
+
+
+def test_find_latest_publication_ignores_malformed_records(tmp_path: Path) -> None:
+    """Records without a parseable publication_id/published_at are skipped."""
+    from datetime import UTC, datetime
+
+    from app.datasets.build.expression_runner import _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    good = publish_dir / "0123456789abcdef"
+    good.mkdir(parents=True)
+    (good / "publication.json").write_text(
+        json.dumps(
+            {
+                "publication_id": "pub_build_x_0123456789abcdef",
+                "published_at": datetime(2026, 8, 1, tzinfo=UTC).isoformat(),
+            }
+        ),
+        "utf-8",
+    )
+    bad = publish_dir / "zzzz"
+    bad.mkdir()
+    (bad / "publication.json").write_text("{not json", "utf-8")
+
+    assert _find_latest_publication(publish_dir) == "pub_build_x_0123456789abcdef"
+
+
+class _FlagToken:
+    def __init__(self) -> None:
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+
+@pytest.mark.asyncio
+async def test_cancellation_between_validate_and_publish_blocks_publication(
+    tmp_path: Path,
+) -> None:
+    """D2: cancelling between validation and publish yields a cancelled
+    outcome and no publication directory."""
+    from app.datasets.runtime import OperationKind
+
+    token = _FlagToken()
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path,
+        cancellation_requested=token,
+    )
+
+    async def wrapped(op, upstream):
+        result = await runner.run_operation(op, upstream)
+        if op.kind is OperationKind.VALIDATE_PROFILE:
+            token.set()
+        return result
+
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=wrapped,
+        source_assets=assets,
+        cancellation_requested=token,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "cancelled"
+    assert not list((tmp_path / "publish").glob("build_runner_test_*"))
+    attempts = [
+        json.loads(line)
+        for line in (tmp_path / "state" / "build_runner_test" / "operation_attempts.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    publish_attempts = [a for a in attempts if a["operation_id"] == "publish"]
+    assert all(a["status"] == "cancelled" for a in publish_attempts)
+
+
+@pytest.mark.asyncio
+async def test_runner_publish_refuses_cancelled_token_directly(
+    tmp_path: Path,
+) -> None:
+    """D2 defense in depth: publish raises BuildCancelledError when the token
+    is already set, even without the executor wrapper."""
+    from app.datasets.runtime.executor import BuildCancelledError
+    from app.datasets.runtime.operations import OperationKind, OperationSpec
+
+    token = _FlagToken()
+    token.set()
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path,
+        cancellation_requested=token,
+    )
+    publish_op = OperationSpec(
+        operation_id="publish",
+        kind=OperationKind.PUBLISH,
+        label="atomic publish",
+        upstream=("validate_profile",),
+    )
+    with pytest.raises(BuildCancelledError):
+        await runner.run_operation(publish_op, {})
