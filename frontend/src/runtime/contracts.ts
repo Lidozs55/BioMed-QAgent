@@ -260,6 +260,7 @@ export interface ResumeRunInput {
 export interface ArtifactRecord {
   artifact_id: string;
   name: string;
+  role?: string;
   size: number;
   sha256: string;
   media_type: string;
@@ -269,6 +270,7 @@ export interface ArtifactManifestEntry {
   schema_version?: "1.0";
   artifact_id: string;
   name: string;
+  role?: string;
   relative_path: string;
   media_type: string;
   size_bytes: number;

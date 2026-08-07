@@ -217,6 +217,7 @@ describe("runtime REST client", () => {
           {
             artifact_id: "artifact/abc",
             name: "result.csv",
+            role: "primary_dataset",
             size: 12,
             sha256: "a".repeat(64),
             media_type: "text/csv",

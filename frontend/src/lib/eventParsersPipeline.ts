@@ -124,6 +124,7 @@ export function parsePipelineEventPayload(payloadObj: Record<string, unknown>, p
       const artifact = {
         artifact_id: assertString(Reflect.get(artObj, "artifact_id"), path + ".artifact.artifact_id"),
         name: assertString(Reflect.get(artObj, "name"), path + ".artifact.name"),
+        role: typeof Reflect.get(artObj, "role") === "string" ? Reflect.get(artObj, "role") as string : "audit_report",
         relative_path: assertString(Reflect.get(artObj, "relative_path"), path + ".artifact.relative_path"),
         media_type: assertString(Reflect.get(artObj, "media_type"), path + ".artifact.media_type"),
         size_bytes: assertNumber(Reflect.get(artObj, "size_bytes"), path + ".artifact.size_bytes"),

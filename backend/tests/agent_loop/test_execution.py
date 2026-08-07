@@ -1723,7 +1723,7 @@ async def test_commit_artifacts_emits_publication_event(
     assert publication_event.payload.supersedes_publication_id is None
     assert (
         publication_event.payload.manifest_sha256
-        == hashlib.sha256(manifest.model_dump_json().encode("utf-8")).hexdigest()
+        == pending.manifest_entry.sha256
     )
     assert publication_event.sequence == len(completion_events)
     assert execution.build_result.publication_id == "pub-run_publication_event"

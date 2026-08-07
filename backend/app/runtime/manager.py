@@ -21,6 +21,7 @@ from app.domain.contracts import (
     AssistantStreamFrame,
     ConversationCompactedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -1417,6 +1418,62 @@ class TaskManager:
 
             await self._interrupt_terminal_parent_subagents(snapshot)
 
+        # Reconcile publication markers for COMPLETED runs that have a
+        # .runtime-publication.json marker but no publication_created event
+        # (e.g. crash between filesystem publish and durable event persist).
+        for summary in summaries.values():
+            snapshot = await self.repository.get_snapshot(summary.task_id)
+            if snapshot is None:
+                continue
+            for run in snapshot.runs:
+                if run.status is not RunStatus.COMPLETED:
+                    continue
+                publication_id = f"pub-{run.run_id}"
+                if any(
+                    pub.publication_id == publication_id
+                    for pub in snapshot.publications
+                ):
+                    continue
+                marker_path = (
+                    self.repository.tasks_dir
+                    / summary.task_id
+                    / "artifacts"
+                    / ".runtime-publication.json"
+                )
+                if not marker_path.is_file():
+                    continue
+                try:
+                    marker = json.loads(marker_path.read_text("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(marker, dict):
+                    continue
+                if marker.get("run_id") != run.run_id:
+                    continue
+                manifest_sha256 = marker.get("manifest_sha256")
+                if not isinstance(manifest_sha256, str):
+                    continue
+                accepted = TaskRunAccepted(
+                    request_id="recovery",
+                    task_id=summary.task_id,
+                    run_id=run.run_id,
+                    request_fingerprint="recovery",
+                )
+                lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
+                async with lock:
+                    await self._append_status(
+                        accepted,
+                        PublicationCreatedPayload(
+                            publication_id=publication_id,
+                            run_id=run.run_id,
+                            manifest_sha256=manifest_sha256,
+                            supersedes_publication_id=None,
+                            published_at=datetime.fromtimestamp(
+                                marker_path.stat().st_mtime, tz=UTC
+                            ),
+                        ),
+                    )
+
         for _, _, _, queued_run in sorted(queued):
             try:
                 self._queue.put_nowait(queued_run)
@@ -1832,7 +1889,8 @@ class TaskManager:
                     error=(
                         "completion abort failed: "
                         f"{type(cleanup_error).__name__}: {cleanup_error}"
-                    )
+                    ),
+                    error_code=_classify_error(cleanup_error),
                 ),
             )
 

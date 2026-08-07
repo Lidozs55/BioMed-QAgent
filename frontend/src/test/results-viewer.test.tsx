@@ -79,6 +79,7 @@ describe("ResultsViewer", () => {
         {
           artifact_id: artifactId,
           name: `artifact-${ordinal}.csv`,
+          role: "audit_report",
           size: ordinal,
           sha256: String(ordinal).padStart(64, "0"),
           media_type: "text/csv",

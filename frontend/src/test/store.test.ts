@@ -522,6 +522,7 @@ describe("agent task projection store", () => {
         {
           artifact_id: "artifact_rest",
           name: "rest.csv",
+          role: "audit_report",
           size: 4,
           sha256: "a".repeat(64),
           media_type: "text/csv",

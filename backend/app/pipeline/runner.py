@@ -1673,14 +1673,18 @@ def _compute_build_result(manifest: RunManifest) -> BuildResult:
     0 until 4b injects the artifact_build primary row statistics.
     """
 
+    available_roles = sorted(
+        {entry.role for entry in manifest.artifacts}
+    )
     has_primary = any(
-        entry.name == _PRIMARY_ARTIFACT_NAME for entry in manifest.artifacts
+        entry.role is ArtifactRole.PRIMARY_DATASET for entry in manifest.artifacts
     )
     if has_primary:
         return BuildResult(
             status=BuildResultStatus.SUCCEEDED,
             valid_row_count=0,
             successful_sources=list(manifest.source_ids),
+            available_artifact_roles=available_roles,
             reason_codes=[],
             # Deterministic placeholder required by BuildResult.validate_state
             # (a SUCCEEDED build must carry a non-None publication_id). Task 5
@@ -1693,6 +1697,7 @@ def _compute_build_result(manifest: RunManifest) -> BuildResult:
     return BuildResult(
         status=BuildResultStatus.NO_DATA,
         valid_row_count=0,
+        available_artifact_roles=available_roles,
         reason_codes=["no_primary_data"],
         user_summary="任务完成，但未产出可发布的主数据。",
         recommended_next_action="检查数据源可用性或调整查询后重试。",

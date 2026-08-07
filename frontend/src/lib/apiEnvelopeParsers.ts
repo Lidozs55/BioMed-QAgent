@@ -45,6 +45,7 @@ export function parseArtifactsEnvelope(json: unknown): { artifacts: ArtifactReco
       return {
         artifact_id: assertString(Reflect.get(ao, "artifact_id"), `artifacts[${i}].artifact_id`),
         name: assertString(Reflect.get(ao, "name"), `artifacts[${i}].name`),
+        role: assertString(Reflect.get(ao, "role"), `artifacts[${i}].role`),
         size: assertNumber(Reflect.get(ao, "size"), `artifacts[${i}].size`),
         sha256: assertString(Reflect.get(ao, "sha256"), `artifacts[${i}].sha256`),
         media_type: assertString(Reflect.get(ao, "media_type"), `artifacts[${i}].media_type`),

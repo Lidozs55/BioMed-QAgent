@@ -32,22 +32,40 @@ export interface FileTypeMeta {
   label: string;
 }
 
-export function fileType(name: string): FileTypeMeta {
+const ROLE_LABELS: Record<string, string> = {
+  primary_dataset: "主数据",
+  supporting_dataset: "辅助数据",
+  schema: "结构定义",
+  provenance: "溯源信息",
+  audit_report: "审计报告",
+};
+
+export function fileType(name: string, role?: string): FileTypeMeta {
   const ext = getExtension(name);
+  const roleLabel = role ? ROLE_LABELS[role] ?? undefined : undefined;
   switch (ext) {
     case "csv":
     case "tsv":
-      return { Icon: FileCsvIcon, label: ext.toUpperCase() };
+      return {
+        Icon: FileCsvIcon,
+        label: roleLabel ?? ext.toUpperCase(),
+      };
     case "json":
     case "jsonl":
-      return { Icon: FileCodeIcon, label: ext.toUpperCase() };
+      return {
+        Icon: FileCodeIcon,
+        label: roleLabel ?? ext.toUpperCase(),
+      };
     case "txt":
     case "md":
-      return { Icon: FileTextIcon, label: ext.toUpperCase() };
+      return {
+        Icon: FileTextIcon,
+        label: roleLabel ?? ext.toUpperCase(),
+      };
     default:
       return {
         Icon: ext ? FileDashedIcon : FileArchiveIcon,
-        label: ext ? ext.toUpperCase() : "FILE",
+        label: roleLabel ?? (ext ? ext.toUpperCase() : "FILE"),
       };
   }
 }

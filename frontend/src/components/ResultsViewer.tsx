@@ -224,9 +224,10 @@ function ArtifactCard({
   noDataMessage?: string;
 }) {
   const { getArtifactUrl } = useAPI();
-  const { Icon, label } = fileType(artifact.name);
+  const { Icon, label } = fileType(artifact.name, artifact.role);
   const url = getArtifactUrl(taskId, artifact.artifact_id);
   const isCsv = getExtension(artifact.name) === "csv";
+  const isPreviewable = isCsv || artifact.role === "primary_dataset" || artifact.role === "supporting_dataset";
 
   return (
     <Card size="sm" className="min-w-0">
@@ -240,7 +241,7 @@ function ArtifactCard({
         </div>
         <CardDescription>{formatSize(artifact.size)}</CardDescription>
       </CardHeader>
-      {isCsv && (
+      {isPreviewable && (
         <CardContent>
           <Accordion>
             <AccordionItem value={`csv-preview-${artifact.artifact_id}`}>

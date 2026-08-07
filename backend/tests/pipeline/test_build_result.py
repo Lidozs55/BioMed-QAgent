@@ -84,6 +84,7 @@ def test_completed_with_primary_is_succeeded() -> None:
     assert result.status is BuildResultStatus.SUCCEEDED
     assert result.valid_row_count == 0
     assert result.successful_sources == manifest.source_ids
+    assert result.available_artifact_roles == ["audit_report", "primary_dataset"]
 
 
 def test_completed_without_primary_is_no_data() -> None:
@@ -92,6 +93,7 @@ def test_completed_without_primary_is_no_data() -> None:
     assert result.status is BuildResultStatus.NO_DATA
     assert "no_primary_data" in result.reason_codes
     assert result.valid_row_count == 0
+    assert result.available_artifact_roles == ["audit_report"]
 
 
 def test_failed_manifest_carries_error_code() -> None:

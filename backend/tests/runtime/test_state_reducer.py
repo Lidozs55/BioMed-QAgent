@@ -398,6 +398,44 @@ def test_publication_events_honor_explicit_supersedes() -> None:
 def test_duplicate_publication_event_is_a_no_op() -> None:
     # A re-delivered publication_created event for the same publication_id must
     # not append a second entry; bookkeeping (latest_sequence) still advances.
+    # Identical duplicates (same sha256, same published_at, same supersedes)
+    # are a no-op; conflicting duplicates raise ValueError.
+    published_at = NOW + timedelta(seconds=2)
+    snapshot = _snapshot_fixture()
+    first = reduce_task_event(
+        snapshot,
+        _envelope(
+            2,
+            PublicationCreatedPayload(
+                publication_id="pub-run_1",
+                run_id="run_1",
+                manifest_sha256="a" * 64,
+                published_at=published_at,
+            ),
+        ),
+    )
+    second = reduce_task_event(
+        first,
+        _envelope(
+            3,
+            PublicationCreatedPayload(
+                publication_id="pub-run_1",
+                run_id="run_1",
+                manifest_sha256="a" * 64,
+                published_at=published_at,
+            ),
+        ),
+    )
+    assert len(second.publications) == 1
+    assert second.publications[0].publication_id == "pub-run_1"
+    assert second.publications[0].published_at == published_at
+    assert second.current_publication_id == "pub-run_1"
+    assert second.task.latest_sequence == 3
+
+
+def test_duplicate_publication_event_with_different_fields_raises() -> None:
+    # A re-delivered publication_created event with different immutable fields
+    # (manifest_sha256, published_at, or supersedes) must raise ValueError.
     snapshot = _snapshot_fixture()
     first = reduce_task_event(
         snapshot,
@@ -411,23 +449,19 @@ def test_duplicate_publication_event_is_a_no_op() -> None:
             ),
         ),
     )
-    second = reduce_task_event(
-        first,
-        _envelope(
-            3,
-            PublicationCreatedPayload(
-                publication_id="pub-run_1",
-                run_id="run_1",
-                manifest_sha256="a" * 64,
-                published_at=NOW + timedelta(seconds=3),
+    with pytest.raises(ValueError, match="conflicting duplicate publication"):
+        reduce_task_event(
+            first,
+            _envelope(
+                3,
+                PublicationCreatedPayload(
+                    publication_id="pub-run_1",
+                    run_id="run_1",
+                    manifest_sha256="b" * 64,
+                    published_at=NOW + timedelta(seconds=3),
+                ),
             ),
-        ),
-    )
-    assert len(second.publications) == 1
-    assert second.publications[0].publication_id == "pub-run_1"
-    assert second.publications[0].published_at == NOW + timedelta(seconds=2)
-    assert second.current_publication_id == "pub-run_1"
-    assert second.task.latest_sequence == 3
+        )
 
 
 def test_publication_event_rejects_payload_envelope_run_id_mismatch() -> None:

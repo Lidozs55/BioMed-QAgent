@@ -9,6 +9,7 @@ function artifact(name: string): ArtifactProjection {
   return {
     artifact_id: name,
     name,
+    role: "audit_report",
     size: 128,
     sha256: `sha-${name}`,
     media_type: "text/csv",

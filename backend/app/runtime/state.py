@@ -225,9 +225,15 @@ def reduce_task_event(
         if payload.run_id != event.run_id:
             raise ValueError("payload run_id must match envelope run_id")
         _run_index(snapshot, event.run_id)
-        if not any(
-            item.publication_id == payload.publication_id for item in publications
-        ):
+        existing = next(
+            (
+                item
+                for item in publications
+                if item.publication_id == payload.publication_id
+            ),
+            None,
+        )
+        if existing is None:
             previous = current_publication_id
             publications.append(
                 PublicationSummary(
@@ -240,6 +246,16 @@ def reduce_task_event(
                 )
             )
             current_publication_id = payload.publication_id
+        elif (
+            existing.manifest_sha256 != payload.manifest_sha256
+            or existing.published_at != payload.published_at
+        ):
+            raise ValueError(
+                f"conflicting duplicate publication event: "
+                f"{payload.publication_id}"
+            )
+        # Identical duplicate (same sha256 and published_at): no-op.
+        # supersedes_publication_id is state-derived, not compared.
         status = snapshot.task.status
     elif type(payload) in _STATUS_PAYLOADS:
         if event.run_id is None:

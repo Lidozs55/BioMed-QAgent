@@ -1290,9 +1290,7 @@ class AgentRunExecutor:
 
             async def commit_agent_artifacts() -> list[EventEnvelope]:
                 await _run_sync_operation(pending.publish)
-                manifest_digest = hashlib.sha256(
-                    pending.manifest.model_dump_json().encode("utf-8")
-                ).hexdigest()
+                manifest_digest = pending.manifest_entry.sha256
                 publication_id = f"pub-{execution.run_id}"
                 if execution.build_result is not None:
                     execution.set_build_result(
@@ -1480,6 +1478,27 @@ class FixtureRunExecutor:
                             else partial(publish, execution.run_id)
                         )
                         await _run_sync_operation(operation)
+                    if pending is not None:
+                        publication_id = f"pub-{execution.run_id}"
+                        if execution.build_result is not None:
+                            execution.set_build_result(
+                                execution.build_result.model_copy(
+                                    update={"publication_id": publication_id}
+                                )
+                            )
+                        publication_event = build_event(
+                            task_id=execution.task_id,
+                            run_id=execution.run_id,
+                            sequence=len(completion_events) + 1,
+                            payload=PublicationCreatedPayload(
+                                publication_id=publication_id,
+                                run_id=execution.run_id,
+                                manifest_sha256=pending.manifest_entry.sha256,
+                                supersedes_publication_id=None,
+                                published_at=datetime.now(UTC),
+                            ),
+                        )
+                        return completion_events + [publication_event]
                     return completion_events
 
                 async def abort_fixture_completion() -> None:
