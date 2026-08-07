@@ -440,6 +440,7 @@ def _try_series_matrix_expression_or_minimal(
     suppl_asset: SourceAsset | None = None,
     gene_map: dict[str, str] | None = None,
     probe_gene_mapping: str = NOT_ATTEMPTED,
+    skip_series_matrix: bool = False,
 ) -> tuple[ParsedDataset | None, str | None]:
     """Try series_matrix / supplementary expression; no-primary fallback.
 
@@ -452,6 +453,14 @@ def _try_series_matrix_expression_or_minimal(
     directly, raw column names fall back), so supplementary recovery is
     attempted even when *samples* is empty; only the series-matrix block
     parse is skipped in that case (phase 4b T1 review round 2).
+
+    ``skip_series_matrix=True`` skips the series-matrix block attempt
+    entirely and goes straight to supplementary recovery. It is used on the
+    live tximport-failure path where *source_asset* is a tximport COUNTS
+    file, not a series matrix: routing counts bytes through the
+    series-matrix parser could raise (e.g. gzip.BadGzipFile on corrupt
+    bytes) and return ``series_matrix_expression_parse_failed`` before the
+    supplementary branch is ever reached (phase 4b T1 review round 3).
 
     When no expression data can be recovered anywhere, returns
     ``(None, reason)`` where ``reason`` is a stable string recorded on
@@ -471,7 +480,7 @@ def _try_series_matrix_expression_or_minimal(
     # tximport-counts topology (tximport file + family SOFT, no series_matrix
     # asset) must not lose supplementary expression recovery just because the
     # SOFT yielded no samples (phase 4b T1 review round 2).
-    if samples:
+    if samples and not skip_series_matrix:
         try:
             expression_parsed = process_geo_series_matrix_expression(
                 source_asset=source_asset,
@@ -901,6 +910,12 @@ def run_processing(
                     suppl_asset=suppl_asset,
                     gene_map=gene_map,
                     probe_gene_mapping=probe_gene_mapping,
+                    # source_asset here is the tximport COUNTS file, NOT a
+                    # series matrix: never route counts bytes through the
+                    # series-matrix parser (a corrupt counts gzip would raise
+                    # BadGzipFile and short-circuit supplementary recovery —
+                    # phase 4b T1 review round 3).
+                    skip_series_matrix=True,
                 )
                 if parsed is None and no_primary_reason is not None:
                     no_primary_reason = "tximport_parse_failed_no_expression"

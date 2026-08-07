@@ -793,6 +793,72 @@ def test_run_processing_live_tximport_failure_recovers_soft_samples_with_supplem
     assert "GSM5388270" in {s.sample_id for s in result.output.samples}
 
 
+def test_run_processing_live_tximport_failure_raising_bytes_parses_supplementary(
+    tmp_path: Path,
+) -> None:
+    """When the live tximport counts asset fails the parse with bytes that
+    RAISE (garbage bytes -> gzip.BadGzipFile, an OSError subclass), the
+    tximport asset must NEVER be routed through the series-matrix parser
+    (it is tximport COUNTS format, not a series matrix). With a valid family
+    SOFT (samples recovered) and a supplementary expression asset present,
+    supplementary expression MUST be attempted and parsed regardless of how
+    the failed tximport bytes fail (phase 4b T1 review round 3)."""
+    from app.pipeline.stages.processing import run_processing
+
+    # Bytes that raise gzip.BadGzipFile (an OSError) when read/decompressed:
+    # the failure mode that previously short-circuited the supplementary
+    # branch via "series_matrix_expression_parse_failed".
+    counts_content = b"this is definitely not a gzip file at all"
+    ctx, assets = _make_live_tximport_failure_assets(
+        tmp_path, "task_live_txi_raise_suppl", counts_content
+    )
+    suppl_content = gzip.compress(
+        b'"gene"\t"GSM5388270"\t"GSM5388271"\n'
+        b'"ENSG00000000003"\t"12.5"\t"3.2"\n'
+        b'"ENSG00000000419"\t"0.8"\t"9.9"\n',
+        mtime=0,
+    )
+    suppl_asset = _make_supplementary_asset(ctx.workdir, suppl_content)
+
+    result = run_processing(ctx, assets + [suppl_asset], "ds_geo_gse999999")
+
+    # Real expression success is not masked by the raising tximport failure.
+    assert result.output.no_primary_reason is None
+    parsed = result.output.parsed_datasets[0]
+    assert parsed.row_count == 4  # 2 genes x 2 samples
+    assert parsed.parser_name == "geo_supplementary_expression"
+    assert parsed.processing_parameters["measurement_type"] == "supplementary_counts"
+    # Samples recovered from the family SOFT are preserved on the output.
+    assert len(result.output.samples) == 12
+    assert "GSM5388270" in {s.sample_id for s in result.output.samples}
+
+
+def test_run_processing_live_tximport_failure_raising_bytes_no_supplementary(
+    tmp_path: Path,
+) -> None:
+    """Sibling case: raising tximport bytes + valid family SOFT (samples
+    recovered) but NO supplementary asset -> honest no-primary outcome with
+    parsed_datasets=[] and the SOFT-recovered samples preserved. The
+    raising-bytes failure must not leak an intermediate series-matrix reason
+    (phase 4b T1 review round 3)."""
+    from app.pipeline.stages.processing import run_processing
+
+    counts_content = b"this is definitely not a gzip file at all"
+    ctx, assets = _make_live_tximport_failure_assets(
+        tmp_path, "task_live_txi_raise_none", counts_content
+    )
+
+    result = run_processing(ctx, assets, "ds_geo_gse999999")
+
+    assert result.output.parsed_datasets == []
+    assert result.output.no_primary_reason == "tximport_parse_failed_no_expression"
+    # Samples recovered from the family SOFT are preserved.
+    assert len(result.output.samples) == 12
+    assert "GSM5388270" in {s.sample_id for s in result.output.samples}
+    # No leftover files in the parsed workdir.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
 def test_run_processing_live_tximport_failure_no_expression_keeps_soft_samples(
     tmp_path: Path,
 ) -> None:
