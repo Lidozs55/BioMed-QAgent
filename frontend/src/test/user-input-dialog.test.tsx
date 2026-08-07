@@ -900,6 +900,41 @@ describe("UserInputDialog", () => {
     vi.useRealTimers();
   });
 
+  it("re-evaluates expiry while the dialog stays mounted (F3)", () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-07-14T00:10:00Z");
+    vi.setSystemTime(now);
+    const task = taskWithPrompt(
+      "task_live_expiry",
+      "run_live_expiry",
+      "run_live_expiry",
+      "request_live_expiry",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: new Date(now.getTime() + 2_000).toISOString(),
+      },
+    );
+
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    // Deadline is 2s away: actions enabled, no expired state yet.
+    expect(screen.queryByText(/已超时/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+
+    // Cross the deadline while the dialog stays mounted: an interval tick
+    // must re-render and flip to the expired state, disabling the actions.
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+
+    expect(screen.getByText(/已超时/)).toBeVisible();
+    expect(screen.queryByText(/需在 .*前答复/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    vi.useRealTimers();
+  });
+
   it("keeps actions enabled for a future deadline and treats an invalid deadline as expired (F5)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T00:10:00Z"));

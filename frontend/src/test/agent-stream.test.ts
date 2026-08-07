@@ -89,6 +89,7 @@ interface TransportTestOptions {
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
   shouldSubscribe?: (taskId: string) => boolean;
+  onPermanentGap?: (taskId: string) => void;
 }
 
 function setupTransport(options: TransportTestOptions = {}) {
@@ -115,6 +116,7 @@ function setupTransport(options: TransportTestOptions = {}) {
     cancelAnimationFrame: options.cancelAnimationFrame,
     reconnectDelayMs: 10,
     shouldSubscribe: options.shouldSubscribe,
+    onPermanentGap: options.onPermanentGap,
   });
   return { transport, sockets, controlErrors };
 }
@@ -272,6 +274,74 @@ describe("durable event transport", () => {
     );
   });
 
+  it("accepts backend operation lifecycle envelopes without crashing or changing state (F4)", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const before = useAgentStore.getState().tasksById.task_a;
+
+    const operationEnvelope = (
+      type: string,
+      sequence: number,
+      payload: Record<string, unknown>,
+    ) => ({
+      schema_version: "2.0",
+      event_id: `event_task_a_${sequence}`,
+      type,
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence,
+      timestamp: `2026-07-14T00:00:${String(sequence).padStart(2, "0")}Z`,
+      payload: { type, ...payload },
+    });
+
+    sockets[0].message(
+      operationEnvelope("operation_started", 1, {
+        operation_id: "op-1",
+        label: "build skeleton",
+        category: "build",
+        attempt: 1,
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_progress", 2, {
+        operation_id: "op-1",
+        kind: "rows_parsed",
+        current: 42,
+        total: 100,
+        detail: {},
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_completed", 3, {
+        operation_id: "op-1",
+        status: "succeeded",
+        output_digest: "a".repeat(64),
+        reused_operation_attempt_id: null,
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_failed", 4, {
+        operation_id: "op-1",
+        status: "failed",
+        error: null,
+      }),
+    );
+
+    const after = useAgentStore.getState().tasksById.task_a;
+    // Informational frames: the cursor advances but no projection changes.
+    expect(after.lastSequence).toBe(4);
+    expect(after.sequenceGap).toBeNull();
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runsById).toEqual(before.runsById);
+    expect(after.activityOrder).toEqual(before.activityOrder);
+    expect(after.summary.status).toBe(before.summary.status);
+  });
+
   it("accepts publication_created on the live path and keeps the cursor moving", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 0);
@@ -363,6 +433,118 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
     expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
     sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("re-arms gap recovery after a natural reconnect clears the recovery guard (F2)", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied). Frame 5
+    // is permanently undeliverable; the first valid frame is 6.
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → one socket-replacement recovery (sockets[1]).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+
+    // The replay cannot deliver frame 5, so the gap re-appears at the same
+    // cursor. The bounded guard must NOT arm a second recovery yet.
+    sockets[1].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+
+    // A natural reconnect (server-side close) clears the recovery guard so
+    // the next gap event can arm a fresh recovery on the new connection.
+    sockets[1].abnormalClose(1013);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(3);
+    sockets[2].open();
+    await Promise.resolve();
+
+    // Without the F2 guard-clearing, this gap would be silently blocked;
+    // with it, a fresh socket-replacement recovery is armed (sockets[3]).
+    sockets[2].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(4);
+    sockets[3].open();
+    await Promise.resolve();
+
+    // The fresh replay can now deliver the missing frame → gap healed.
+    sockets[3].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    sockets[3].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[3].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("falls back to an authoritative snapshot when replay cannot heal a permanent gap (F2)", async () => {
+    const onPermanentGap = vi.fn((taskId: string) => {
+      // Controller-style fallback: rebuild the task authoritatively from a
+      // REST snapshot (watermark 8 covers the undeliverable frame 5) and
+      // resume the live subscription after that watermark.
+      useAgentStore.getState().hydrateTaskSnapshot({
+        task: summary(taskId, 8, "running"),
+        runs: [],
+        messages: [],
+        older_messages_cursor: null,
+      });
+      void harness.transport.recoverSubscription(taskId, 8);
+    });
+    const harness = setupTransport({ onPermanentGap });
+    const transport = harness.transport;
+    const { sockets } = harness;
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → first socket-replacement recovery (sockets[1]).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+
+    // The replay still cannot deliver frame 5 → the same gap re-appears;
+    // one failed recovery alone must not trigger the snapshot fallback.
+    sockets[1].message(event("task_a", 6, "jumped"));
+    expect(onPermanentGap).not.toHaveBeenCalled();
+
+    // A second failed recovery crosses the bounded threshold → fallback.
+    sockets[1].message(event("task_a", 7, "seven"));
+    expect(onPermanentGap).toHaveBeenCalledWith("task_a");
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(8);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+
+    // Settle the first recovery's pending ping so the queued resume runs.
+    sockets[1].message({ type: "pong" });
+    // The ping resolution unwinds through the control barrier queue across
+    // several await boundaries before the resume replaces the socket.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sockets).toHaveLength(3);
+    sockets[2].open();
+    await Promise.resolve();
+
+    // Valid events after the snapshot watermark are contiguous → applied.
+    sockets[2].message(event("task_a", 9, "nine"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(9);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[2].message({ type: "pong" });
     await Promise.resolve();
   });
 

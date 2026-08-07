@@ -165,6 +165,20 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       : new Date(pending.expiresAt).getTime();
   const expired =
     deadline !== null && (Number.isNaN(deadline) || deadline <= Date.now());
+  // F3 (final review): a mounted dialog that crosses its deadline must flip
+  // to the expired state (and disable its actions) without waiting for a
+  // re-render from elsewhere. While a deadline is pending, re-render on a
+  // one-second interval; the interval is torn down when the prompt clears
+  // or the component unmounts.
+  const [, setExpiryTick] = useState(0);
+  useEffect(() => {
+    if (pending === null || pending.expiresAt === null) return;
+    const timer = window.setInterval(
+      () => setExpiryTick((tick) => tick + 1),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [pending]);
   const planSpec = useMemo(
     () =>
       pending?.promptKind === "plan_confirmation" && pending.detail

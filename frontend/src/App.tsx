@@ -29,13 +29,26 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const prevSettingsOpenRef = useRef(settingsOpen);
-  const transport = useAgentStream();
   const api = useAPI();
+  // The transport fires onPermanentGap when replay recovery cannot heal a
+  // sequence gap; the controller (created below) rebuilds the task from an
+  // authoritative REST snapshot via this indirection.
+  const controllerRef = useRef<RuntimeController | null>(null);
+  const transport = useAgentStream(
+    useCallback((taskId: string) => {
+      void controllerRef.current
+        ?.hydrateTaskFromGap(taskId)
+        .catch(() => undefined);
+    }, []),
+  );
 
   const controller = useMemo(
     () => new RuntimeController(api, transport),
     [api, transport],
   );
+  useEffect(() => {
+    controllerRef.current = controller;
+  }, [controller]);
   const selectTask = useCallback(
     (taskId: string) => controller.selectTask(taskId),
     [controller],

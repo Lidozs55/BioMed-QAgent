@@ -454,6 +454,36 @@ export type EventPayload =
       covered_through_run_id: string;
       summary_digest: string;
     }
+  // V2 build-execution lifecycle (Design §15.1). Informational: the reducer
+  // advances the cursor without changing state.
+  | {
+      type: "operation_started";
+      operation_id: string;
+      label?: string;
+      category?: string;
+      attempt?: number;
+    }
+  | {
+      type: "operation_progress";
+      operation_id: string;
+      kind: string;
+      current: number;
+      total?: number | null;
+      detail?: Record<string, JsonValue>;
+    }
+  | {
+      type: "operation_completed";
+      operation_id: string;
+      status?: "succeeded" | "skipped";
+      output_digest?: string;
+      reused_operation_attempt_id?: string | null;
+    }
+  | {
+      type: "operation_failed";
+      operation_id: string;
+      status?: "failed" | "cancelled";
+      error?: ErrorDetail | null;
+    }
   | { type: "subagent_queued"; subagent_id: string; request: SubagentRequest }
   | { type: "subagent_started"; subagent_id: string }
   | {
