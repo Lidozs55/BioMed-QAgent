@@ -264,3 +264,46 @@ def test_provenance_document_backtraces(tmp_path: Path) -> None:
         "namespace_authorize"
     )
     assert len(document["field_mappings"]) > 0
+
+
+def test_compute_provenance_coverage(tmp_path: Path) -> None:
+    """Coverage counts traced vs untraced primary rows."""
+    from app.datasets.build.manifest import compute_provenance_coverage
+
+    primary = tmp_path / "primary.csv"
+    primary.write_text(
+        "gene_id,sample_id,asset_id,expression_value\n"
+        "TP53,S1,asset_traced1,1.5\n"
+        "BRCA1,S2,asset_traced2,2.5\n"
+        "TP53,S3,,3.5\n"
+        "TP53,S4,asset_unknown,4.5\n",
+        "utf-8",
+    )
+    coverage = compute_provenance_coverage(
+        primary, {"asset_traced1", "asset_traced2"}
+    )
+    assert coverage["traced_rows"] == 2
+    assert coverage["untraced_rows"] == 2
+    assert coverage["coverage_ratio"] == 0.5
+
+
+def test_build_confidence_summary_from_report(tmp_path: Path) -> None:
+    """confidence_summary counts detector anomalies from confidence_report.csv."""
+    from app.datasets.build.manifest import build_confidence_summary
+
+    (tmp_path / "confidence_report.csv").write_text(
+        "column,detector,applicable,statistic,anomaly,detail\n"
+        "expression_value,constant_column,true,,true,all values identical\n"
+        "expression_value,arithmetic_progression,true,,false,no sequence\n",
+        "utf-8",
+    )
+    summary = build_confidence_summary(tmp_path)
+    assert summary["detected_anomaly_count"] == 1
+    assert summary["report_file"] == "confidence_report.csv"
+
+
+def test_build_confidence_summary_missing_report(tmp_path: Path) -> None:
+    """No confidence report -> empty summary."""
+    from app.datasets.build.manifest import build_confidence_summary
+
+    assert build_confidence_summary(tmp_path) == {}
