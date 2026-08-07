@@ -176,8 +176,12 @@
       aggregate_confidence_metrics，含 `is_benford_applicable` 前置判定）（原 §6.1）
       （✅ 检测器纯函数已落地：`app/datasets/build/confidence.py` + 24 项单元测试；
       阈值由 Profile 持有 `ConfidenceThresholds`；VLM 图表点标注等契约侧落地待后续）
-- [ ] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
+- [x] **P0** 为 VLM 图表点填充置信度、页码/bbox/model 元数据；建立模型提取准入
       门禁（缺置信度或 source-of-record 时对应 Profile 失败）
+      （`extract_chart_data_vlm`：L1 点带 confidence + chart 行 page_number/bbox/
+      extraction_tier 元数据；新增 `validate_chart_extraction` 准入——L1 点缺
+      confidence 或缺 model_name → 整批拒绝、不落盘；L2/L3 确定性兜底豁免；
+      9 项新测试）
 - [x] **P1** 产出 `confidence_report.csv`；validation 增加 data_confidence 补充检查
       （低分 → valid_with_warnings）（原 §6.1）
       （`ExpressionValidationProfile` 增加 data_confidence check：统计异常仅作
