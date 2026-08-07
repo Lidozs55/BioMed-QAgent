@@ -130,7 +130,13 @@ class ExpressionValidationProfile:
         output_dir: Path,
     ) -> ValidationResult:
         checks = self._run_checks(manifest, primary_path, schema)
-        if primary_path.is_file():
+        # The confidence check reads the primary file; skip it when the
+        # encoding check already failed (a non-UTF-8 file must not crash it).
+        encoding_failed = any(
+            check.check_id == "csv_encoding_utf8" and not check.passed
+            for check in checks
+        )
+        if primary_path.is_file() and not encoding_failed:
             confidence_check, warnings = self._run_confidence_check(
                 primary_path, output_dir
             )
@@ -184,12 +190,38 @@ class ExpressionValidationProfile:
                     detail=f"missing primary dataset file: {primary_path}",
                 )
             ]
+        # Encoding is checked first so a non-UTF-8 primary fails fast with a
+        # stable single check instead of crashing the downstream readers.
+        encoding_check = self._check_csv_encoding(primary_path)
+        if not encoding_check.passed:
+            return [encoding_check]
         checks: list[ProfileCheck] = [
             self._check_min_rows(manifest, primary_path),
             self._check_column_count(primary_path, schema),
+            encoding_check,
         ]
         checks.extend(self._check_rows(primary_path, schema))
         return checks
+
+    def _check_csv_encoding(self, primary_path: Path) -> ProfileCheck:
+        """Rule (Design §16 Phase 6): the primary dataset must be UTF-8.
+
+        CSV encoding is a per-profile rule, not an architecture-level gate:
+        a non-UTF-8 primary file fails this check and the release gate.
+        """
+        try:
+            primary_path.read_bytes().decode("utf-8")
+            passed = True
+            detail = "primary dataset decodes as UTF-8"
+        except UnicodeDecodeError as exc:
+            passed = False
+            detail = f"primary dataset is not valid UTF-8: {exc}"
+        return ProfileCheck(
+            check_id="csv_encoding_utf8",
+            description="primary dataset is UTF-8 encoded",
+            passed=passed,
+            detail=detail,
+        )
 
     def _check_min_rows(
         self, manifest: DatasetManifest, primary_path: Path

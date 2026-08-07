@@ -152,6 +152,58 @@ def _sample_backtraces(primary_path: Path, limit: int = 5) -> list[dict[str, obj
     return backtraces
 
 
+def compute_provenance_coverage(
+    primary_path: Path,
+    source_asset_ids: set[str],
+) -> dict[str, object]:
+    """Provenance coverage of the primary dataset (Design §16 Phase 6 P2).
+
+    Counts how many primary rows carry an ``asset_id`` that belongs to the
+    build's source asset set. Rows with a missing/unknown asset are
+    ``untraced``. Returns a deterministic JSON-safe summary:
+
+    ``{"traced_rows": N, "untraced_rows": N, "coverage_ratio": 0..1}``
+    """
+    traced = 0
+    untraced = 0
+    with primary_path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            asset_id = str(row.get("asset_id", "")).strip()
+            if asset_id and asset_id in source_asset_ids:
+                traced += 1
+            else:
+                untraced += 1
+    total = traced + untraced
+    ratio = (traced / total) if total else 0.0
+    return {
+        "traced_rows": traced,
+        "untraced_rows": untraced,
+        "coverage_ratio": round(ratio, 4),
+    }
+
+
+def build_confidence_summary(output_dir: Path) -> dict[str, object]:
+    """Summarize the deterministic confidence detectors for the manifest.
+
+    Reads ``confidence_report.csv`` (written by the validation profile) and
+    returns ``{"detected_anomaly_count": N, "report_file": "..."}``, or an
+    empty dict when no report exists (e.g. no primary dataset). This is the
+    Confidence Contract's manifest-side surface (Design §16 Phase 6).
+    """
+    report_path = output_dir / "confidence_report.csv"
+    if not report_path.is_file():
+        return {}
+    anomaly_count = 0
+    with report_path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("anomaly", "").strip().lower() == "true":
+                anomaly_count += 1
+    return {
+        "detected_anomaly_count": anomaly_count,
+        "report_file": report_path.name,
+    }
+
+
 def assemble_manifest(
     *,
     task_id: str,
@@ -188,6 +240,20 @@ def assemble_manifest(
         for path in sorted(audit_paths)
     )
     digest = package_digest(entries)
+    # Provenance closure statistics: the coverage computation reads the source
+    # asset ids from the provenance document (already written by the caller).
+    try:
+        provenance_document = json.loads(provenance_path.read_text("utf-8"))
+        source_asset_ids = {
+            str(source.get("asset_id", ""))
+            for source in provenance_document.get("sources", [])
+            if source.get("asset_id")
+        }
+    except (OSError, json.JSONDecodeError):
+        source_asset_ids = set()
+    coverage = compute_provenance_coverage(
+        integration.merged_path, source_asset_ids
+    )
     return DatasetManifest(
         manifest_id=f"manifest_{digest[:16]}",
         task_id=task_id,
@@ -207,7 +273,7 @@ def assemble_manifest(
             "failed_count": validation.failed_count,
             "report_path": validation.report_path,
         },
-        confidence_summary={},
+        confidence_summary=build_confidence_summary(output_dir),
         provenance_summary={
             "source_count": len(source_summary),
             "field_mapping_count": sum(
@@ -222,6 +288,7 @@ def assemble_manifest(
             ),
             "dedup_count": integration.dedup_count,
             "conflict_count": integration.conflict_count,
+            "coverage": coverage,
         },
     )
 

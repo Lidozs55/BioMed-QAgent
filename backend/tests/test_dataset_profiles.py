@@ -108,7 +108,7 @@ def test_valid_primary_passes(tmp_path: Path) -> None:
     result, _ = _validate(tmp_path, [_valid_row()])
     assert result.status is ValidationResultStatus.PASSED
     assert result.failed_count == 0
-    assert result.checked_count == 7
+    assert result.checked_count == 8
     assert (tmp_path / "validation_report.json").is_file()
     assert (tmp_path / "confidence_report.csv").is_file()
 
@@ -239,3 +239,44 @@ def test_data_confidence_report_rows(tmp_path: Path) -> None:
     )
     assert constant["anomaly"] == "true"
     assert constant["applicable"] == "true"
+
+
+def test_non_utf8_primary_fails_csv_encoding(tmp_path: Path) -> None:
+    """A non-UTF-8 primary dataset fails the csv_encoding_utf8 rule."""
+    primary = tmp_path / "primary.csv"
+    primary.write_bytes(b"record_id\xff\xfe\x00broken")
+    manifest = _manifest(row_count=1)
+    profile = get_validation_profile("gene_expression.release.v1")
+    result = profile.validate(
+        manifest=manifest,
+        primary_path=primary,
+        schema=build_gene_expression_schema(),
+        manifest_digest="d" * 64,
+        output_dir=tmp_path,
+    )
+    assert result.status is ValidationResultStatus.FAILED
+    report = (tmp_path / "validation_report.json").read_text()
+    assert '"check_id": "csv_encoding_utf8"' in report
+    assert "not valid UTF-8" in report
+
+
+def test_utf8_primary_passes_csv_encoding(tmp_path: Path) -> None:
+    """A valid multi-byte UTF-8 primary passes the csv_encoding_utf8 rule."""
+    primary = tmp_path / "primary.csv"
+    _write_primary(primary, [_valid_row()])
+    # Replace one value with a multi-byte UTF-8 string to exercise decoding.
+    content = primary.read_bytes().replace(b"TP53", "TP53基因".encode())
+    primary.write_bytes(content)
+    manifest = _manifest(row_count=1)
+    profile = get_validation_profile("gene_expression.release.v1")
+    result = profile.validate(
+        manifest=manifest,
+        primary_path=primary,
+        schema=build_gene_expression_schema(),
+        manifest_digest="d" * 64,
+        output_dir=tmp_path,
+    )
+    assert result.status is ValidationResultStatus.PASSED
+    report = (tmp_path / "validation_report.json").read_text()
+    assert '"check_id": "csv_encoding_utf8"' in report
+    assert '"passed": true' in report

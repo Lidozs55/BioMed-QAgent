@@ -1,8 +1,18 @@
 """Deterministic Pipeline Runner state machine.
 
-Executes the five fixed stages (Discovery → Acquisition → Processing →
-Artifact Build → Validation) with append-only StageAttempt records, idempotent
-recovery via digest matching, per-stage timeouts, and cancel support.
+[V1 Legacy facade — Phase 2/8] This runner drives the original fixed
+five-stage pipeline (Discovery → Acquisition → Processing → Artifact Build →
+Validation). It remains the default Agent path and is fully supported, but it
+is no longer the system's core execution kernel: V2 dataset builds run
+through ``execute_dataset_build`` (``app/pipeline/dataset_build_tool.py``),
+which drives the same skeleton over the Phase 2 ``DatasetBuildExecutor`` with
+release invariants and Publication versioning. Per Phase 8 this module will
+be removed once the V2 closure passes all four required outcomes; it must not
+gain new stages or re-enter the core architecture.
+
+Executes the five fixed stages with append-only StageAttempt records,
+idempotent recovery via digest matching, per-stage timeouts, and cancel
+support.
 """
 from __future__ import annotations
 

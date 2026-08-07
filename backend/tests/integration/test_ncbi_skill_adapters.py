@@ -586,7 +586,11 @@ async def test_download_supplementary_adapter_uses_eutils_and_httpx(
     )
     # raw asset tracked
     assert context.raw_assets == [str(local_path)]
-    assert context.source_asset_ids == [payload["source_assets"][0]["asset_id"]]
+    # The efetch XML is registered first (TODO Phase 2.5 P1), then the
+    # supplementary file asset.
+    assert len(context.source_asset_ids) == 2
+    assert context.source_asset_ids[1] == payload["source_assets"][0]["asset_id"]
+    assert payload["pubmed_xml_asset"]["media_type"] == "application/xml"
     assert payload["source_assets"][0]["sha256"] == hashlib.sha256(
         supp_content
     ).hexdigest()

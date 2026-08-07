@@ -23,6 +23,7 @@ from app.model_config.token_estimation import (
     ChatCompletionsStructuralPolicy,
     serialize_function_tool_schemas,
 )
+from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.pipeline.tool import run_research_pipeline
 from app.skills.builtin import load_builtin_skill_descriptors
 from app.skills.catalog import SkillCatalog
@@ -459,6 +460,7 @@ def build_agent(
         invoke_skill,
         run_research_pipeline,
         request_human_correction,
+        execute_dataset_build,
         read_file,
         read_file_head,
         search_file,
