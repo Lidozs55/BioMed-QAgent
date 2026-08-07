@@ -108,7 +108,7 @@ def test_valid_primary_passes(tmp_path: Path) -> None:
     result, _ = _validate(tmp_path, [_valid_row()])
     assert result.status is ValidationResultStatus.PASSED
     assert result.failed_count == 0
-    assert result.checked_count == 8
+    assert result.checked_count == 9
     assert (tmp_path / "validation_report.json").is_file()
     assert (tmp_path / "confidence_report.csv").is_file()
 
@@ -189,6 +189,56 @@ def test_column_count_mismatch_fails(tmp_path: Path) -> None:
     assert result.status is ValidationResultStatus.FAILED
     report = (tmp_path / "validation_report.json").read_text()
     assert "column_count_matches_schema" in report
+
+
+def test_extra_column_row_fails_row_width(tmp_path: Path) -> None:
+    """B6: a row with an extra delimiter/column must fail the profile even
+    when the named required fields are valid. csv.DictReader stores extra
+    fields under the None key, so the width check must compare the parsed
+    field count against the header/schema count directly.
+    """
+    primary = tmp_path / "primary.csv"
+    with primary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CANONICAL_HEADER)
+        row = _valid_row()
+        writer.writerow(
+            [row.get(name, "") for name in CANONICAL_HEADER] + ["EXTRA"]
+        )
+    profile = get_validation_profile("gene_expression.release.v1")
+    result = profile.validate(
+        manifest=_manifest(1),
+        primary_path=primary,
+        schema=build_gene_expression_schema(),
+        manifest_digest="d" * 64,
+        output_dir=tmp_path,
+    )
+    assert result.status is ValidationResultStatus.FAILED
+    report = (tmp_path / "validation_report.json").read_text()
+    assert "row_width_matches_schema" in report
+
+
+def test_row_with_missing_cells_fails_row_width(tmp_path: Path) -> None:
+    """B6: a row with missing trailing cells (parsed field count < header
+    count) must fail the profile before field checks.
+    """
+    primary = tmp_path / "primary.csv"
+    with primary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CANONICAL_HEADER)
+        row = _valid_row()
+        writer.writerow([row.get(name, "") for name in CANONICAL_HEADER[:-3]])
+    profile = get_validation_profile("gene_expression.release.v1")
+    result = profile.validate(
+        manifest=_manifest(1),
+        primary_path=primary,
+        schema=build_gene_expression_schema(),
+        manifest_digest="d" * 64,
+        output_dir=tmp_path,
+    )
+    assert result.status is ValidationResultStatus.FAILED
+    report = (tmp_path / "validation_report.json").read_text()
+    assert "row_width_matches_schema" in report
 
 
 def test_missing_primary_file_fails(tmp_path: Path) -> None:

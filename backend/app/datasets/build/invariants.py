@@ -23,6 +23,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import ArtifactRole, DatasetManifest, ValidationResult
 
 #: Directory under the build workspace where immutable publication versions
@@ -32,11 +33,12 @@ PUBLISH_DIR = "publish"
 
 @dataclass(frozen=True)
 class ReleaseInvariantsResult:
-    """Outcome of the three-invariant release gate."""
+    """Outcome of the release gate (B4 extends it with artifact inventory)."""
 
     provenance_closed: bool
     profile_passed: bool
     atomic_promotion_ready: bool
+    artifacts_intact: bool
     violations: tuple[str, ...]
 
     @property
@@ -49,27 +51,35 @@ def check_release_invariants(
     manifest: DatasetManifest,
     validation: ValidationResult,
     output_dir: Path,
+    expected_source_asset_ids: set[str] | None = None,
 ) -> ReleaseInvariantsResult:
-    """Check the three release invariants for *manifest* + *validation*.
+    """Check the release invariants for *manifest* + *validation*.
 
     ``output_dir`` is the build workspace; the provenance document is read
     from disk (its path is taken from the manifest artifact) and the publish
     directory atomic-write mechanism is probed without persisting anything
-    meaningful.
+    meaningful. ``expected_source_asset_ids`` is the build's authoritative
+    source-asset set (B4): when provided, the provenance document's source
+    asset ids must equal it exactly — a same-count set of different ids
+    fails the gate.
 
     Returns a frozen result; the caller must refuse promotion when
     ``passed`` is False.
     """
     violations: list[str] = []
 
-    provenance_closed = _check_provenance_closure(manifest, output_dir, violations)
+    provenance_closed = _check_provenance_closure(
+        manifest, output_dir, violations, expected_source_asset_ids
+    )
     profile_passed = _check_profile_passed(validation, violations)
+    artifacts_intact = _check_manifest_artifacts(manifest, output_dir, violations)
     atomic_ready = _check_atomic_promotion(manifest, output_dir, violations)
 
     return ReleaseInvariantsResult(
         provenance_closed=provenance_closed,
         profile_passed=profile_passed,
         atomic_promotion_ready=atomic_ready,
+        artifacts_intact=artifacts_intact,
         violations=tuple(violations),
     )
 
@@ -78,6 +88,7 @@ def _check_provenance_closure(
     manifest: DatasetManifest,
     output_dir: Path,
     violations: list[str],
+    expected_source_asset_ids: set[str] | None,
 ) -> bool:
     provenance_entries = [
         entry for entry in manifest.artifacts
@@ -106,6 +117,20 @@ def _check_provenance_closure(
         for source in sources
         if source.get("asset_id")
     }
+    if expected_source_asset_ids is not None:
+        # B4 (Phase 4 review): exact source-asset identity, not just count.
+        # A tampered/replaced provenance document with the same number of
+        # sources must not pass the gate.
+        if declared_asset_ids != expected_source_asset_ids:
+            missing = sorted(expected_source_asset_ids - declared_asset_ids)
+            extra = sorted(declared_asset_ids - expected_source_asset_ids)
+            violations.append(
+                "provenance closure: provenance document source asset ids do "
+                "not match the build's source asset set "
+                f"(missing: {missing or 'none'}; extra: {extra or 'none'})"
+            )
+            return False
+        return True
     source_count = int(manifest.provenance_summary.get("source_count", 0))
     if len(declared_asset_ids) < source_count:
         violations.append(
@@ -115,6 +140,49 @@ def _check_provenance_closure(
         )
         return False
     return True
+
+
+def _check_manifest_artifacts(
+    manifest: DatasetManifest,
+    output_dir: Path,
+    violations: list[str],
+) -> bool:
+    """B4: every manifest artifact must exist as a regular file with the
+    exact declared size and SHA-256 before promotion. Files are hashed in
+    bounded chunks (``sha256_file``), so a deleted or edited artifact after
+    validation fails the release gate instead of being published.
+    """
+    ok = True
+    for entry in manifest.artifacts:
+        path = output_dir / entry.relative_path
+        if not path.is_file():
+            violations.append(
+                f"manifest artifacts: {entry.relative_path} is missing or not "
+                "a regular file"
+            )
+            ok = False
+            continue
+        try:
+            actual_size = path.stat().st_size
+            actual_sha256 = sha256_file(path)
+        except OSError as exc:
+            violations.append(
+                f"manifest artifacts: {entry.relative_path} unreadable: {exc}"
+            )
+            ok = False
+            continue
+        if actual_size != entry.size_bytes:
+            violations.append(
+                f"manifest artifacts: {entry.relative_path} size {actual_size} "
+                f"!= declared {entry.size_bytes}"
+            )
+            ok = False
+        if actual_sha256 != entry.sha256:
+            violations.append(
+                f"manifest artifacts: {entry.relative_path} sha256 mismatch"
+            )
+            ok = False
+    return ok
 
 
 def _check_profile_passed(

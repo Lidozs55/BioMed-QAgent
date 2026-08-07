@@ -30,12 +30,24 @@ from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
 from app.domain.contracts import (
     DataLevel,
+    ErrorDetail,
     SourceAsset,
     asset_id_from_sha256,
     generate_prefixed_uuid,
 )
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.tools.workdir import resolve_task_local_file
+
+_NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
+_NO_DATA_NEXT_ACTION = "检查数据源可用性或调整查询后重试。"
+
+# D1 (Phase 4 review): while a data-correction pause is pending, the build
+# tool refuses so no publication can be produced from inputs under correction.
+_PENDING_MAIN_INPUT_MESSAGE = (
+    "execute_dataset_build 被拒绝：当前 Run 正在等待人工修正"
+    "（request_human_correction 尚未答复）。请等待修正完成后重试，"
+    "或先处理待决的修正请求。"
+)
 
 _MEDIA_TYPES = {
     ".csv": "text/csv",
@@ -103,6 +115,19 @@ async def execute_dataset_build(
         invalid or the build fails.
     """
     run_ctx = ctx.context
+    if run_ctx.main_input_pending:
+        # D1 (Phase 4 review): a correction pause is an exclusivity boundary.
+        # The SDK may run sibling FunctionTools concurrently; refuse to build
+        # while the Run is waiting on request_human_correction so the build
+        # never publishes from inputs under correction.
+        return json.dumps(
+            {
+                "status": "error",
+                "message": _PENDING_MAIN_INPUT_MESSAGE,
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     try:
         build_spec = DatasetBuildSpec.model_validate_json(spec)
         files_mapping = json.loads(source_files)
@@ -206,6 +231,35 @@ async def execute_dataset_build(
     )
     outcome = await executor.run()
     if outcome.status != "completed":
+        if outcome.status == "failed" and _is_no_data_outcome(
+            output_dir, outcome.error
+        ):
+            # B5 (Phase 4 review): an empty input (header-only source or an
+            # integrated primary with zero rows) is a structured NO_DATA
+            # outcome, never a retryable execution error: no primary is
+            # published and valid_row_count is zero.
+            result = BuildResult(
+                status=BuildResultStatus.NO_DATA,
+                valid_row_count=0,
+                successful_sources=[],
+                rejected_sources=sorted(binding_ids),
+                reason_codes=["no_primary_data"],
+                user_summary=_NO_DATA_SUMMARY,
+                recommended_next_action=_NO_DATA_NEXT_ACTION,
+            )
+            manifest_path = output_dir / "dataset_manifest.json"
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "build_id": build_spec.build_id,
+                    "result": result.model_dump(mode="json"),
+                    "output_dir": output_dir.as_posix(),
+                    "manifest_file": (
+                        manifest_path.as_posix() if manifest_path.is_file() else None
+                    ),
+                },
+                ensure_ascii=False,
+            )
         return json.dumps(
             {
                 "status": "error",
@@ -248,6 +302,39 @@ async def execute_dataset_build(
             "manifest_file": manifest_path.as_posix(),
         },
         ensure_ascii=False,
+    )
+
+
+def _is_no_data_outcome(
+    output_dir: Path,
+    outcome_error: ErrorDetail | None,
+) -> bool:
+    """True when a failed build produced no valid rows at all (B5).
+
+    Two signals, both meaning "zero valid rows and nothing published":
+    - the parse stage rejected the source as empty (header-only input), or
+    - the integrated primary is empty (manifest row_count == 0) and no
+      immutable version was published.
+    """
+
+    if outcome_error is not None and "contains no data rows" in outcome_error.message:
+        return True
+    manifest_path = output_dir / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if int(manifest.get("row_count", 1)) != 0:
+        return False
+    publish_dir = output_dir / PUBLISH_DIR
+    return not (
+        publish_dir.is_dir()
+        and any(
+            child.is_dir() and not child.name.startswith(".")
+            for child in publish_dir.iterdir()
+        )
     )
 
 

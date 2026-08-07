@@ -1294,16 +1294,6 @@ class TaskManager:
 
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
-        if self._subagent_input_broker is not None and (
-            await self._subagent_input_broker.try_resume(
-                task_id=task_id,
-                run_id=run_id,
-                request_id=request_id,
-                decision=decision,
-                detail=detail,
-            )
-        ):
-            return await self._require_snapshot(task_id)
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)
@@ -1319,6 +1309,26 @@ class TaskManager:
             )
             if run is None:
                 raise LookupError(run_id)
+            # A5 (Phase 4 review): validate parent state before routing any
+            # resume. A child request must never be resolved after the parent
+            # run is terminal (cleanup race / late request) — terminal cleanup
+            # and broker removal both run under this same task lock, so the
+            # parent terminal event and the broker mutation are serialized.
+            if run.status in _TERMINAL_RUN_STATUSES:
+                raise RuntimeError(
+                    f"run {run_id} is not awaiting user input "
+                    f"(status: {run.status.value})"
+                )
+            if self._subagent_input_broker is not None and (
+                await self._subagent_input_broker.try_resume(
+                    task_id=task_id,
+                    run_id=run_id,
+                    request_id=request_id,
+                    decision=decision,
+                    detail=detail,
+                )
+            ):
+                return await self._require_snapshot(task_id)
             if run.status is not RunStatus.AWAITING_USER_INPUT:
                 raise RuntimeError(
                     f"run {run_id} is not awaiting user input "
@@ -1599,7 +1609,31 @@ class TaskManager:
                             error_code=_classify_error(error),
                         ),
                     )
-                if run.status is not RunStatus.CANCEL_REQUESTED:
+                elif run.status is RunStatus.CANCEL_REQUESTED:
+                    # A1 (Phase 4 review): the worker failed while a
+                    # cancellation was already requested, and no terminal event
+                    # was persisted (the cancel waiter/executor itself failed
+                    # after the cancel request). Reconcile the run to exactly
+                    # one terminal cancellation event and release live
+                    # ownership so the run cannot strand nonterminal in
+                    # CANCEL_REQUESTED. If the cancel waiter wins the lock
+                    # first and appends run_cancelled, this branch is not
+                    # reached (the run is already CANCELLED) — exactly one
+                    # terminal event exists either way.
+                    try:
+                        await self._append_status(
+                            accepted,
+                            RunCancelledPayload(
+                                reason=None,
+                                cancelled_at_stage=None,
+                            ),
+                        )
+                    finally:
+                        self._running.pop(
+                            (accepted.task_id, accepted.run_id),
+                            None,
+                        )
+                else:
                     self._running.pop(
                         (accepted.task_id, accepted.run_id),
                         None,

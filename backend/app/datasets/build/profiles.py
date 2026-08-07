@@ -263,29 +263,53 @@ class ExpressionValidationProfile:
             field.name for field in schema.fields if field.required
         }
         row_count = 0
+        malformed_width = 0
         blank_required: dict[str, int] = {}
         non_numeric = 0
         units: set[str] = set()
         missing_provenance = 0
         with primary_path.open("r", encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
+            reader = csv.reader(handle)
+            header = next(reader, None) or []
+            expected = len(header) if header else len(schema.fields)
+            for row in reader:
+                if not row:
+                    continue  # blank lines are not data rows
                 row_count += 1
+                # B6 (Phase 4 review): reject rows whose parsed field count
+                # differs from the header/schema count (extra fields that
+                # csv.DictReader would hide under the ``None`` key, or missing
+                # cells) BEFORE any field checks. Field checks only apply to
+                # well-formed rows, so malformed rows can never vacuous-pass.
+                if len(row) != expected:
+                    malformed_width += 1
+                    continue
+                values = dict(zip(header, row, strict=False))
                 for field in required:
-                    if not row.get(field, "").strip():
+                    if not values.get(field, "").strip():
                         blank_required[field] = blank_required.get(field, 0) + 1
                 try:
-                    if not math.isfinite(float(row.get("expression_value", ""))):
+                    if not math.isfinite(float(values.get("expression_value", ""))):
                         raise ValueError
                 except ValueError:
                     non_numeric += 1
-                unit = row.get("expression_unit", "")
+                unit = values.get("expression_unit", "")
                 if unit:
                     units.add(unit)
-                if not row.get("source_logical_file", "").strip() or not row.get(
+                if not values.get("source_logical_file", "").strip() or not values.get(
                     "asset_id", ""
                 ).strip():
                     missing_provenance += 1
         checks = [
+            ProfileCheck(
+                check_id="row_width_matches_schema",
+                description="every row has exactly the schema column count",
+                passed=malformed_width == 0,
+                detail=(
+                    f"{malformed_width} row(s) with a field count != "
+                    f"{expected} in {row_count} row(s)"
+                ),
+            ),
             ProfileCheck(
                 check_id="required_field_completeness",
                 description="required schema fields are non-blank for every row",

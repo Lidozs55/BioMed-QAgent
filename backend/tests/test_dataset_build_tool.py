@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
+from app.agent_loop.main_input_broker import MainInputBroker
 from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.tools.workdir import create_task_workdir
 
@@ -172,3 +173,126 @@ def test_execute_dataset_build_is_cancellation_aware(tmp_path: Path) -> None:
     build_root = run_ctx.work_dir.root / "datasets_build"
     publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
     assert publish_dirs == []
+
+
+def test_execute_dataset_build_header_only_source_is_no_data(tmp_path: Path) -> None:
+    """B5: an empty (header-only) source is a structured NO_DATA outcome, not a
+    retryable execution error: result.status == no_data, valid_row_count == 0,
+    no primary publication.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    dest = run_ctx.work_dir.source_asset_file("header_only.tsv")
+    dest.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    rel = "source_assets/header_only.tsv"
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "ok"
+    assert data.get("retryable") is not True
+    result = data["result"]
+    assert result["status"] == "no_data"
+    assert result["valid_row_count"] == 0
+    assert result["reason_codes"] == ["no_primary_data"]
+    assert result.get("publication_id") is None
+
+    # No primary publication exists.
+    build_root = run_ctx.work_dir.root / "datasets_build"
+    publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
+    assert publish_dirs == []
+    assert not (build_root / "build_tool_test" / "merged" / "primary.csv").exists()
+
+
+class _RecordingBrokerHooks:
+    """Record emits + submitter installs for a live MainInputBroker."""
+
+    def __init__(self) -> None:
+        self.emitted: list[object] = []
+        self.submitters: list[object] = []
+
+    async def emit(self, payload: object) -> None:
+        self.emitted.append(payload)
+
+    def install(self, submitter) -> None:
+        self.submitters.append(submitter)
+
+    def clear(self, submitter) -> None:
+        self.submitters = [s for s in self.submitters if s is not submitter]
+
+
+def _pending_broker(run_ctx: RunContext) -> MainInputBroker:
+    hooks = _RecordingBrokerHooks()
+    broker = MainInputBroker(
+        run_id=run_ctx.managed_run_id or "run_d1",
+        fixture=False,
+        emit=hooks.emit,
+        install_user_input_submitter=hooks.install,
+        clear_user_input_submitter=hooks.clear,
+        cancellation_requested=run_ctx.cancellation_requested,
+    )
+    run_ctx.bind_main_input_broker(broker)
+    return broker
+
+
+@pytest.mark.asyncio
+async def test_execute_dataset_build_refuses_while_main_input_pending(
+    tmp_path: Path,
+) -> None:
+    """D1: execute_dataset_build must refuse while request_human_correction is
+    pending (a concurrent HIL pause is an exclusivity boundary), so no
+    publication can be produced from inputs under correction.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    broker = _pending_broker(run_ctx)
+    pending = asyncio.create_task(
+        broker.request_input(summary="请修正数据源", detail={"field": "x"})
+    )
+    try:
+        for _ in range(100):
+            if run_ctx.main_input_pending:
+                break
+            await asyncio.sleep(0.01)
+        assert run_ctx.main_input_pending
+
+        args = json.dumps(
+            {"spec": _spec_json(), "source_files": json.dumps({"binding_gdc": rel})}
+        )
+        data = json.loads(await execute_dataset_build.on_invoke_tool(ctx, args))
+
+        assert data["status"] == "error"
+        assert data["retryable"] is False
+        assert "人工修正" in data["message"]
+        # No build output or publication may be produced.
+        build_root = run_ctx.work_dir.root / "datasets_build"
+        publish_dirs = list(
+            (build_root / "build_tool_test" / "publish").glob("build_tool_test_*")
+        )
+        assert publish_dirs == []
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_execute_dataset_build_proceeds_without_pending_main_input(
+    tmp_path: Path,
+) -> None:
+    """D1 happy path: with a broker installed but no pending correction, the
+    build proceeds and publishes normally.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    _pending_broker(run_ctx)
+    assert run_ctx.main_input_pending is False
+
+    args = json.dumps(
+        {"spec": _spec_json(), "source_files": json.dumps({"binding_gdc": rel})}
+    )
+    data = json.loads(await execute_dataset_build.on_invoke_tool(ctx, args))
+
+    assert data["status"] == "ok"
+    assert data["result"]["status"] == "succeeded"
+    assert data["result"]["publication_id"]

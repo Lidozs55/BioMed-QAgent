@@ -35,6 +35,7 @@ from app.domain.contracts import (
     StartTaskRequest,
     SubagentCancelledPayload,
     SubagentInputRequiredPayload,
+    SubagentInputResumedPayload,
     SubagentInterruptedPayload,
     SubagentQueuedPayload,
     SubagentRecord,
@@ -226,15 +227,22 @@ def snapshot_with_subagent(
     *,
     subagent_id: str = "sub_1",
     subagent_status: SubagentStatus = SubagentStatus.RUNNING,
+    run_status: RunStatus = RunStatus.RUNNING,
 ) -> TaskSnapshot:
     run_id = f"run_{task_id}"
+    active = run_status in {
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.FINALIZING,
+        RunStatus.CANCEL_REQUESTED,
+    }
     return TaskSnapshot(
         task=TaskSummary(
             task_id=task_id,
             mode=TaskMode.AGENT,
             title=task_id,
-            status=RunStatus.RUNNING,
-            active_run_id=run_id,
+            status=run_status,
+            active_run_id=run_id if active else None,
             created_at=NOW,
             updated_at=NOW,
         ),
@@ -243,11 +251,12 @@ def snapshot_with_subagent(
                 run_id=run_id,
                 task_id=task_id,
                 request_id=f"req_{task_id}",
-                status=RunStatus.RUNNING,
+                status=run_status,
                 input=task_id,
                 created_at=NOW,
                 updated_at=NOW,
-                started_at=NOW,
+                started_at=NOW if run_status is not RunStatus.QUEUED else None,
+                finished_at=NOW if not active else None,
             )
         ],
         subagents=[
@@ -507,6 +516,107 @@ async def test_resume_run_broker_miss_preserves_existing_parent_validation(
                 detail={},
             )
     finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_run_rejects_child_request_after_parent_terminal(
+    tmp_path,
+) -> None:
+    """A5: resume_run must validate parent run state before routing a child
+    resume to the global SubagentInputBroker. A matching child request must not
+    be resolved after the parent run is terminal (cleanup race / late request),
+    and no subagent_input_resumed event may be produced.
+    """
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+    hub = EventHub()
+    broker = SubagentInputBroker()
+    sink = DurableSubagentEventSink(repository=repository, hub=hub)
+
+    async def run(_execution) -> None:
+        return None
+
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=run,
+        event_hub=hub,
+        subagent_input_broker=broker,
+        subagent_event_sink=sink,
+    )
+    await manager.start()
+    task_id = "task_child_after_terminal"
+    run_id = f"run_{task_id}"
+    await repository.save_snapshot(snapshot_with_subagent(task_id))
+
+    child = RunContext(
+        task_id=task_id,
+        work_dir_root=str(tmp_path / "child-work"),
+        subagent_id="sub_1",
+        managed_run_id=run_id,
+    )
+    child.bind_subagent_runtime(
+        supervisor=object(),
+        runner=object(),
+        event_sink=sink,
+        input_broker=broker,
+    )
+    waiter = asyncio.create_task(
+        child.request_subagent_input(
+            summary="Confirm access",
+            prompt_kind="confirmation",
+        )
+    )
+    required = None
+    for _ in range(100):
+        required_events = await repository.list_events(task_id)
+        required = next(
+            (
+                event.payload
+                for event in required_events
+                if isinstance(event.payload, SubagentInputRequiredPayload)
+            ),
+            None,
+        )
+        if required is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert required is not None
+
+    try:
+        # Persist a parent terminal event (e.g. completed) while the child
+        # request is still pending — terminal cleanup did not (or has not yet)
+        # cancelled the broker request.
+        await repository.save_snapshot(
+            snapshot_with_subagent(
+                task_id,
+                run_status=RunStatus.COMPLETED,
+                subagent_status=SubagentStatus.RUNNING,
+            )
+        )
+        with pytest.raises(
+            RuntimeError,
+            match=f"run {run_id} is not awaiting user input",
+        ):
+            await manager.resume_run(
+                task_id,
+                run_id,
+                request_id=required.request_id,
+                decision="approve",
+                detail={"confirmed": True},
+            )
+
+        # The broker request must NOT be resolved and no resume event may exist.
+        assert not waiter.done()
+        events = await repository.list_events(task_id)
+        assert not any(
+            isinstance(event.payload, SubagentInputResumedPayload)
+            for event in events
+        )
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        await hub.close()
         await manager.close()
 
 
@@ -2907,10 +3017,15 @@ async def test_abort_failure_does_not_terminalize_cancellation_as_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_abort_failure_blocks_cancelled_when_failure_event_cannot_persist(
+async def test_cancel_worker_failure_terminalizes_cancellation_when_failure_cannot_persist(
     tmp_path,
     monkeypatch,
 ) -> None:
+    """A1: an unexpected worker failure while the run is CANCEL_REQUESTED must
+    reconcile the run to exactly one terminal cancellation event and clear live
+    ownership — even when the failure path itself cannot persist its event —
+    instead of stranding the run nonterminal in CANCEL_REQUESTED.
+    """
     manager_module = importlib.import_module("app.runtime.manager")
     repository = TaskRepository(tmp_path / "output")
     executor_ready = asyncio.Event()
@@ -2967,11 +3082,15 @@ async def test_abort_failure_blocks_cancelled_when_failure_event_cannot_persist(
 
         snapshot = await repository.get_snapshot(accepted.task_id)
         assert snapshot is not None
-        assert snapshot.runs[-1].status is RunStatus.CANCEL_REQUESTED
+        assert snapshot.runs[-1].status is RunStatus.CANCELLED
         events = await repository.list_events(accepted.task_id)
-        assert not any(
-            isinstance(event.payload, RunCancelledPayload) for event in events
+        # Exactly one terminal cancellation event; the worker-failure path must
+        # not double-emit alongside (or instead of) the cancel waiter.
+        assert (
+            sum(isinstance(event.payload, RunCancelledPayload) for event in events)
+            == 1
         )
+        assert (accepted.task_id, accepted.run_id) not in manager._running
     finally:
         release_executor.set()
         await manager.close()
