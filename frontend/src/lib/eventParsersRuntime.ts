@@ -1,7 +1,11 @@
 import { APIError } from "@/hooks/settingsContracts";
 import type {
+  BuildResult,
+  BuildResultStatus,
+  ErrorCode,
   EventPayload,
   JsonValue,
+  StageName,
   SubagentErrorCode,
   SubagentPromptKind,
   SubagentRequest,
@@ -97,6 +101,71 @@ function assertStringArray(value: unknown, path: string): string[] {
   );
 }
 
+function assertBuildResultStatus(value: unknown, path: string): BuildResultStatus {
+  switch (value) {
+    case "succeeded":
+    case "partial_success":
+    case "no_data":
+    case "spec_rejected":
+      return value;
+    default:
+      throw new APIError(502, `Invalid build result status at ${path}`);
+  }
+}
+
+function assertErrorCode(value: unknown, path: string): ErrorCode {
+  switch (value) {
+    case "configuration_error":
+    case "network_error":
+    case "timeout":
+    case "download_incomplete":
+    case "checksum_mismatch":
+    case "parse_error":
+    case "validation_error":
+    case "cancelled":
+    case "internal_error":
+      return value;
+    default:
+      throw new APIError(502, `Invalid error code at ${path}`);
+  }
+}
+
+function assertStageName(value: unknown, path: string): StageName {
+  switch (value) {
+    case "discovery":
+    case "acquisition":
+    case "processing":
+    case "artifact_build":
+    case "validation":
+      return value;
+    default:
+      throw new APIError(502, `Invalid stage name at ${path}`);
+  }
+}
+
+function parseBuildResult(value: unknown, path: string): BuildResult {
+  const result = assertJsonRecord(value, path);
+  return {
+    status: assertBuildResultStatus(Reflect.get(result, "status"), `${path}.status`),
+    valid_row_count: assertNonNegativeInteger(Reflect.get(result, "valid_row_count"), `${path}.valid_row_count`),
+    successful_sources: assertStringArray(Reflect.get(result, "successful_sources"), `${path}.successful_sources`),
+    rejected_sources: assertStringArray(Reflect.get(result, "rejected_sources"), `${path}.rejected_sources`),
+    available_artifact_roles: assertStringArray(Reflect.get(result, "available_artifact_roles"), `${path}.available_artifact_roles`),
+    publication_id: assertOptionalNull(Reflect.get(result, "publication_id"), `${path}.publication_id`, assertRequiredString),
+    reason_codes: assertStringArray(Reflect.get(result, "reason_codes"), `${path}.reason_codes`),
+    user_summary: assertRequiredString(Reflect.get(result, "user_summary"), `${path}.user_summary`),
+    recommended_next_action: assertRequiredString(Reflect.get(result, "recommended_next_action"), `${path}.recommended_next_action`),
+  };
+}
+
+function assertHex64(value: unknown, path: string): string {
+  const s = assertRequiredString(value, path);
+  if (!/^[0-9a-f]{64}$/.test(s)) {
+    throw new APIError(502, `Expected 64-char hex string at ${path}`);
+  }
+  return s;
+}
+
 function parseSubagentRequest(value: unknown, path: string): SubagentRequest {
   const request = assertJsonRecord(value, path);
   return {
@@ -163,20 +232,57 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
       return { type: "run_started" };
     case "run_finalizing":
       return { type: "run_finalizing" };
-    case "run_completed":
-      return { type: "run_completed" };
+    case "run_completed": {
+      const rawBuildResult = Reflect.get(payloadObj, "build_result");
+      return {
+        type: "run_completed",
+        build_result:
+          rawBuildResult === undefined || rawBuildResult === null
+            ? null
+            : parseBuildResult(rawBuildResult, path + ".build_result"),
+      };
+    }
     case "run_failed":
-      return { type: "run_failed", error: assertString(Reflect.get(payloadObj, "error"), path + ".error") };
+      return {
+        type: "run_failed",
+        error: assertString(Reflect.get(payloadObj, "error"), path + ".error"),
+        error_code: assertOptionalNull(
+          Reflect.get(payloadObj, "error_code"),
+          path + ".error_code",
+          assertErrorCode,
+        ),
+      };
     case "run_cancel_requested": {
       const reason = assertOptionalNull(Reflect.get(payloadObj, "reason"), path + ".reason", assertString);
       return { type: "run_cancel_requested", reason };
     }
     case "run_cancelled": {
       const reason = assertOptionalNull(Reflect.get(payloadObj, "reason"), path + ".reason", assertString);
-      return { type: "run_cancelled", reason };
+      return {
+        type: "run_cancelled",
+        reason,
+        cancelled_at_stage: assertOptionalNull(
+          Reflect.get(payloadObj, "cancelled_at_stage"),
+          path + ".cancelled_at_stage",
+          assertStageName,
+        ),
+      };
     }
     case "run_interrupted":
       return { type: "run_interrupted", reason: assertString(Reflect.get(payloadObj, "reason"), path + ".reason") };
+    case "publication_created":
+      return {
+        type: "publication_created",
+        publication_id: assertRequiredString(Reflect.get(payloadObj, "publication_id"), path + ".publication_id"),
+        run_id: assertRequiredString(Reflect.get(payloadObj, "run_id"), path + ".run_id"),
+        manifest_sha256: assertHex64(Reflect.get(payloadObj, "manifest_sha256"), path + ".manifest_sha256"),
+        supersedes_publication_id: assertOptionalNull(
+          Reflect.get(payloadObj, "supersedes_publication_id"),
+          path + ".supersedes_publication_id",
+          assertRequiredString,
+        ),
+        published_at: assertRequiredString(Reflect.get(payloadObj, "published_at"), path + ".published_at"),
+      };
     case "assistant_delta": {
       const delta = assertString(Reflect.get(payloadObj, "delta"), path + ".delta");
       const stream_id = Reflect.get(payloadObj, "stream_id");

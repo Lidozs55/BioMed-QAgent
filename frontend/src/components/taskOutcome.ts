@@ -17,7 +17,6 @@ export function taskHasArtifacts(task: TaskProjection): boolean {
 
 export function isNoArtifactFailure(task: TaskProjection): boolean {
   if (task.summary.status !== "failed") return false;
-  if (task.summary.no_artifact_failure === true) return true;
   const latestRunId = task.runOrder[task.runOrder.length - 1];
   const error =
     latestRunId === undefined ? null : task.runsById[latestRunId]?.error ?? null;

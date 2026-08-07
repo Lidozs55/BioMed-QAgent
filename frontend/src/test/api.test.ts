@@ -166,11 +166,14 @@ describe("runtime REST client", () => {
       ...snapshot,
       task: { ...snapshot.task, schema_version: undefined },
       subagents: snapshot.subagents ?? [],
+      current_publication_id: null,
+      publications: [],
     };
     const normalizedEvent: EventEnvelope = {
       ...event,
       subagent_id: null,
       parent_tool_call_id: null,
+      payload: { type: "run_completed", build_result: null },
     };
     const fetcher = vi
       .fn<FetchLike>()

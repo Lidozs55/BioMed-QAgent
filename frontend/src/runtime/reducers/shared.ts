@@ -74,6 +74,8 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     items: [],
     itemSequences: {},
     currentReasoningSegmentByRun: {},
+    currentPublicationId: null,
+    publications: [],
   };
 }
 
@@ -162,6 +164,7 @@ function projectRun(record: RunRecord): RunProjection {
     startedAt: record.started_at,
     finishedAt: record.finished_at,
     error: record.error,
+    summary: record.summary ?? null,
   };
 }
 
@@ -410,6 +413,12 @@ export function hydrateTaskSnapshot(
     subagentOrder,
     messages: mergeSnapshotMessages(base, snapshotMessages),
     assistantStreamsByRunId,
+    currentPublicationId:
+      snapshot.current_publication_id ?? base.currentPublicationId,
+    publications:
+      snapshot.publications === undefined
+        ? base.publications
+        : [...snapshot.publications],
     pendingUserInput:
       base.pendingUserInput !== null &&
       snapshot.task.active_run_id === base.pendingUserInput.runId &&
@@ -484,6 +493,7 @@ function placeholderRun(
     startedAt: null,
     finishedAt: null,
     error: null,
+    summary: null,
   };
 }
 

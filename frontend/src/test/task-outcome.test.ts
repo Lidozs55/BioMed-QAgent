@@ -37,6 +37,7 @@ function run(taskId: string, error: string) {
     startedAt: CREATED_AT,
     finishedAt: CREATED_AT,
     error,
+    summary: null,
   } as const;
 }
 
@@ -79,18 +80,19 @@ describe("taskOutcome", () => {
   });
 
   it("prefers data when the task produced validated artifacts", () => {
-    const task = createTaskProjection({
-      ...summary("g", "failed", 2),
-      no_artifact_failure: true,
-    });
+    const task = createTaskProjection(summary("g", "failed", 2));
     expect(taskOutcome(task)).toBe("data");
   });
 
   it("classifies a summary-only no-artifact failure as no_data", () => {
-    const task = createTaskProjection({
-      ...summary("d", "failed"),
-      no_artifact_failure: true,
-    });
+    const task = createTaskProjection(summary("d", "failed"));
+    task.runsById = {
+      run_d: run(
+        "d",
+        "agent completed without producing any artifacts (manifest missing or unchanged)",
+      ),
+    };
+    task.runOrder = ["run_d"];
     expect(isNoArtifactFailure(task)).toBe(true);
     expect(taskOutcome(task)).toBe("no_data");
   });

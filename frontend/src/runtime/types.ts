@@ -3,7 +3,9 @@ import type {
   AttemptStatus,
   DatabaseRecord,
   MessageRole,
+  PublicationSummary,
   RunStatus,
+  RunSummary,
   StageName,
   SubagentErrorCode,
   SubagentStatus,
@@ -40,6 +42,8 @@ export interface RunProjection {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  /** Server-generated per-run outcome summary (null until the run terminalizes). */
+  summary: RunSummary | null;
 }
 
 export interface SubagentProjection {
@@ -289,6 +293,10 @@ export interface TaskProjection {
   contextTokensUsed?: number;
   /** Whether a context compaction is currently in progress. */
   compacting?: boolean;
+  /** ID of the latest publication for this task (null when none was produced). */
+  currentPublicationId: string | null;
+  /** Immutable publication records in creation order. */
+  publications: PublicationSummary[];
 }
 
 export interface AgentRuntimeData {

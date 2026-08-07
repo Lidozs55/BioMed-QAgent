@@ -12,7 +12,7 @@ const PIPELINE_TYPES = new Set([
 
 const RUNTIME_TYPES = new Set([
   "run_queued", "run_started", "run_finalizing", "run_completed", "run_failed",
-  "run_cancel_requested", "run_cancelled", "run_interrupted",
+  "run_cancel_requested", "run_cancelled", "run_interrupted", "publication_created",
   "assistant_delta", "assistant_reasoning_delta", "tool_started", "conversation_compacted",
   "subagent_queued", "subagent_started", "subagent_progress", "subagent_completed",
   "subagent_failed", "subagent_cancel_requested", "subagent_cancelled",

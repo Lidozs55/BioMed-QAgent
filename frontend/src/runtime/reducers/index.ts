@@ -11,6 +11,7 @@ import {
 import {
   applyConversationCompactedEvent,
   applyFixtureEvent,
+  applyPublicationCreatedEvent,
   applyRunQueuedEvent,
   applyRunTerminalEvent,
   applyRunTransitionEvent,
@@ -81,6 +82,10 @@ export function reduceRuntimeEvent(
     case "run_cancelled":
     case "run_interrupted": {
       task = applyRunTerminalEvent(task, envelope, payload);
+      break;
+    }
+    case "publication_created": {
+      task = applyPublicationCreatedEvent(task, payload);
       break;
     }
     case "user_input_required":
