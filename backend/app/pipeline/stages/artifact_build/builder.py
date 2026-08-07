@@ -171,7 +171,7 @@ def _build_processing_log_rows(
             "warnings": "[]",
         }
         for asset in source_assets
-        if asset.derived_from_asset_id is not None
+        if asset.derived_from_asset_id is not None and primary is not None
     ]
     processing_log_rows.extend(
         {
@@ -333,6 +333,13 @@ def run_artifact_build(
     # package is staged instead, and no_primary_reason records why. (The old
     # geo_minimal_placeholder metadata-only signal was removed with the
     # placeholder itself in T1.)
+    #
+    # T2 review — schema.json deviation: the legacy pipeline's NO_DATA (and
+    # normal-expression) publication contains the audit CSVs + sample_metadata
+    # (supporting) + quality_report + run_manifest; schema.json is NOT produced
+    # by the legacy pipeline — it is a V2-chain artifact (Phase 5/7 territory),
+    # so the spec's "schema.json（如适用）" does not apply here and no
+    # schema.json writer is added.
     no_data = primary is None
     parsed_path = (
         ctx.workdir.root / primary.file_asset.relative_path
@@ -605,7 +612,9 @@ def run_artifact_build(
         download_attempts=download_attempts,
         retrieved_at=retrieved_at,
         started_at=ctx.started_at,
-        no_primary_reason=no_primary_reason if no_data else None,
+        no_primary_reason=(
+            (no_primary_reason or "no_expression_data") if no_data else None
+        ),
     )
 
     digest = _compute_package_digest(staging)

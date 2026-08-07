@@ -295,6 +295,74 @@ def test_no_primary_build_folds_warning_into_processing_log(tmp_path: Path) -> N
     assert logged == len(warnings_rows)
 
 
+def test_no_primary_build_with_derived_source_asset_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    """T2 MUST-FIX 1: ``_build_processing_log_rows`` builds one audit row per
+    derived source asset and dereferences ``primary.source_row_count`` for
+    every such row before the ``primary is None`` branch — a NO_DATA package
+    with a ``derived_from_asset_id`` source asset crashes. The derived-asset
+    (reactome) rows cannot exist without a primary, so they must be skipped
+    cleanly: the synthetic ``no_primary`` row is the ONLY processing_log row,
+    no ``main_data.csv`` is written, and the build succeeds."""
+    ctx = _stage_context(tmp_path)
+    now = datetime.now(UTC)
+    source_record, _ = _geo_source(ctx, now)
+    derived_asset = SourceAsset(
+        asset_id=asset_id_from_sha256("e" * 64),
+        kind="source",
+        relative_path="source_assets/GSE999999_reactome_participants.json",
+        sha256="e" * 64,
+        size_bytes=1024,
+        media_type="application/json",
+        source_id="src_geo_gse999999",
+        derived_from_asset_id=asset_id_from_sha256("d" * 64),
+        generated_by_step_id="step_reactome_json_to_tsv",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    result = run_artifact_build(
+        ctx=ctx,
+        sources=[source_record],
+        source_assets=[derived_asset],
+        download_attempts=[],
+        parsed_dataset=None,
+        parsed_datasets=[],
+        no_primary_reason=_NO_DATA_REASON,
+        samples=_samples(),
+        literature=None,
+        geo=None,
+        specification=ctx.specification,
+        retrieved_at=now,
+        stage_attempt_id="attempt_build",
+        dataset_id="ds_gse999999",
+        dataset_source_id="src_geo_gse999999",
+        dataset_accession="GSE999999",
+    )
+    staging = result.output.staging_dir
+    assert not (staging / "main_data.csv").exists()
+    proc_rows = _read_csv(staging / "processing_log.csv")
+    # The reactome derived-step row must not appear (it is primary-dependent
+    # and no primary exists): the no_primary row is the only row.
+    assert [row["operation"] for row in proc_rows] == ["no_primary"]
+    assert result.output.no_primary_reason == _NO_DATA_REASON
+
+
+def test_no_primary_reason_defaults_to_no_expression_data(tmp_path: Path) -> None:
+    """T2 MUST-FIX 3: the ``ArtifactBuildOutput.no_primary_reason`` contract is
+    non-None iff NO_DATA. When a NO_DATA call omits the explicit reason the
+    output must default to ``"no_expression_data"`` (the same fallback the
+    warning copy uses), never None."""
+    ctx = _stage_context(tmp_path)
+    result = _build_no_data(ctx, datetime.now(UTC), no_primary_reason=None)
+    assert result.output.no_primary_reason == "no_expression_data"
+    # The warning copy uses the same fallback.
+    staging = result.output.staging_dir
+    warnings_rows = _read_csv(staging / "warnings.csv")
+    no_expr = [w for w in warnings_rows if w.get("code") == "no_expression_data"]
+    assert len(no_expr) == 1
+    assert "no_expression_data" in no_expr[0]["message"]
+
+
 def _normal_primary(ctx: StageContext) -> ParsedDataset:
     """A minimal real-expression parsed dataset with its long-form file."""
     parsed_path = ctx.workdir.parsed / "ds_gse999999_tximport_long.csv"
