@@ -323,6 +323,184 @@ describe("ResultsViewer", () => {
     expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
   });
 
+  it("does not attach a historical NO_DATA summary to a later SUCCEEDED run", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {
+            artifact_main: {
+              artifact_id: "artifact_main",
+              name: "main_data.csv",
+              role: "primary_dataset",
+              size: 1024,
+              sha256: "g".repeat(64),
+              media_type: "text/csv",
+              taskId: "task_results",
+              generatedByStepId: null,
+            } satisfies ArtifactProjection,
+          },
+          artifactOrder: ["artifact_main"],
+          runsById: {
+            run_no_data: {
+              runId: "run_no_data",
+              taskId: "task_results",
+              requestId: "req_no_data",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["pubmed"],
+                  available_artifact_roles: ["supporting_dataset"],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "所选数据源未返回任何记录",
+                  recommended_next_action: "调整检索词后重试",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "所选数据源未返回任何记录",
+              },
+            },
+            run_ok: {
+              runId: "run_ok",
+              taskId: "task_results",
+              requestId: "req_ok",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:01:00Z",
+              updatedAt: "2026-07-14T00:01:00Z",
+              startedAt: "2026-07-14T00:01:00Z",
+              finishedAt: "2026-07-14T00:01:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "succeeded",
+                  valid_row_count: 42,
+                  successful_sources: ["geo"],
+                  rejected_sources: [],
+                  available_artifact_roles: ["primary_dataset"],
+                  publication_id: "pub_ok",
+                  reason_codes: [],
+                  user_summary: "数据构建成功",
+                  recommended_next_action: "",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: null,
+              },
+            },
+          },
+          runOrder: ["run_no_data", "run_ok"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    // The LATEST run succeeded: its artifacts are listed normally and the
+    // historical NO_DATA summary is not attached to them.
+    expect(screen.getByText("main_data.csv")).toBeVisible();
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
+    expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
+  });
+
+  it("does not attach a NO_DATA banner to artifacts when the latest run FAILED", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {
+            artifact_main: {
+              artifact_id: "artifact_main",
+              name: "main_data.csv",
+              role: "primary_dataset",
+              size: 1024,
+              sha256: "g".repeat(64),
+              media_type: "text/csv",
+              taskId: "task_results",
+              generatedByStepId: null,
+            } satisfies ArtifactProjection,
+          },
+          artifactOrder: ["artifact_main"],
+          runsById: {
+            run_ok: {
+              runId: "run_ok",
+              taskId: "task_results",
+              requestId: "req_ok",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "succeeded",
+                  valid_row_count: 42,
+                  successful_sources: ["geo"],
+                  rejected_sources: [],
+                  available_artifact_roles: ["primary_dataset"],
+                  publication_id: "pub_ok",
+                  reason_codes: [],
+                  user_summary: "数据构建成功",
+                  recommended_next_action: "",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: null,
+              },
+            },
+            run_failed: {
+              runId: "run_failed",
+              taskId: "task_results",
+              requestId: "req_failed",
+              status: "failed",
+              input: "question",
+              createdAt: "2026-07-14T00:01:00Z",
+              updatedAt: "2026-07-14T00:01:00Z",
+              startedAt: "2026-07-14T00:01:00Z",
+              finishedAt: "2026-07-14T00:01:00Z",
+              error: "boom",
+              summary: {
+                run_status: "failed",
+                build_result: null,
+                error_code: "internal_error",
+                cancelled_at_stage: null,
+                user_message: "执行失败",
+              },
+            },
+          },
+          runOrder: ["run_ok", "run_failed"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    // The latest run FAILED (build_result null): no NO_DATA banner, no
+    // NO_DATA summary text over the earlier run's artifacts.
+    expect(screen.getByText("main_data.csv")).toBeVisible();
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
+    expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
+  });
+
   it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {
     const task = useAgentStore.getState().tasksById.task_results;
     useAgentStore.setState({
