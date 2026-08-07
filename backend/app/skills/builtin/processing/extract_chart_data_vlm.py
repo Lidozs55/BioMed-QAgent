@@ -385,6 +385,39 @@ _CHART_DATA_POINTS_COLUMNS = [
 ]
 
 
+def validate_chart_data(
+    chart_rows: list[dict[str, Any]],
+    point_rows: list[dict[str, Any]],
+) -> list[str]:
+    """Check chart_data integrity: every chart has a source_asset_id and
+    every point references an existing chart_id (TODO Phase 6 P1, 原 §2.7.1).
+
+    Returns a list of violation messages (empty when the payload is complete).
+    The caller decides whether to reject or record warnings; the check itself
+    never mutates data.
+    """
+    violations: list[str] = []
+    chart_ids = {str(row.get("chart_id", "")).strip() for row in chart_rows}
+    for index, row in enumerate(chart_rows, 1):
+        if not str(row.get("source_asset_id", "")).strip():
+            violations.append(
+                f"chart_data.csv row {index}: missing source_asset_id "
+                f"(chart_id={row.get('chart_id', '')!r})"
+            )
+    for index, row in enumerate(point_rows, 1):
+        chart_id = str(row.get("chart_id", "")).strip()
+        if not chart_id:
+            violations.append(
+                f"chart_data_points.csv row {index}: missing chart_id"
+            )
+        elif chart_id not in chart_ids:
+            violations.append(
+                f"chart_data_points.csv row {index}: chart_id {chart_id!r} "
+                f"has no matching chart_data.csv row"
+            )
+    return violations
+
+
 def _write_chart_csvs(
     chart_data_dir: Path,
     chart_rows: list[dict[str, Any]],
@@ -455,6 +488,15 @@ def _write_chart_csvs(
             if row.get("chart_id") not in incoming_chart_ids
         ]
         merged_points = _merge_by_id(preserved_points, point_rows, "point_id")
+        # Integrity check (TODO Phase 6 P1, 原 §2.7.1) before anything is
+        # written: every chart row must carry a source_asset_id and every
+        # point row must reference an existing chart. Violations abort the
+        # write so a broken chart dataset is never persisted.
+        violations = validate_chart_data(merged_charts, merged_points)
+        if violations:
+            raise ValueError(
+                "chart_data integrity check failed: " + "; ".join(violations)
+            )
 
         chart_temp = _stage_csv(chart_csv, _CHART_DATA_COLUMNS, merged_charts)
         points_temp = _stage_csv(
@@ -896,9 +938,26 @@ async def extract_chart_data_vlm(
 
     # Write CSV artifacts
     chart_data_dir = _chart_data_dir(run_ctx.work_dir)
-    chart_csv, points_csv = _write_chart_csvs(
-        chart_data_dir, chart_rows, point_rows
-    )
+    try:
+        chart_csv, points_csv = _write_chart_csvs(
+            chart_data_dir, chart_rows, point_rows
+        )
+    except ValueError as exc:
+        # Integrity violations are user-facing, not crashes: report them as a
+        # structured error so the Agent can retry with a different source.
+        run_ctx.log_query(
+            str(path), "extract_chart_data_vlm", QueryStatus.FAILED, 0
+        )
+        run_ctx.add_warning(
+            severity="error",
+            message=f"chart_data integrity check failed for {path.name}: {exc}",
+            source="extract_chart_data_vlm",
+        )
+        return json.dumps({
+            "status": "error",
+            "error": str(exc),
+            "source_file": source_label,
+        }, ensure_ascii=False)
 
     # Register parsed datasets
     run_ctx.parsed_datasets.append(str(chart_csv))

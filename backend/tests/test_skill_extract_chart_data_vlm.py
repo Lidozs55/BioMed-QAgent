@@ -795,3 +795,75 @@ def test_pdf_image_cap_at_10(tmp_path: Path) -> None:
     # The cap is enforced inside _extract_pdf_images; here we just verify
     # the constant is correctly exported and the skill module exposes it
     # for future tuning.
+
+
+# ---------------------------------------------------------------------------
+# chart_data integrity validation (TODO Phase 6 P1, 原 §2.7.1)
+# ---------------------------------------------------------------------------
+
+
+def _valid_chart_rows() -> list[dict[str, Any]]:
+    return [{
+        "chart_id": "chart_asset_a_1",
+        "source_asset_id": "asset_a",
+        "chart_type": "bar",
+        "title": "T",
+        "x_label": "X", "x_unit": "", "x_scale": "linear",
+        "y_label": "Y", "y_unit": "", "y_scale": "linear",
+        "data_point_count": 2, "legend": "",
+        "extracted_at": "2026-01-01T00:00:00Z",
+        "model_name": "qwen-vl-max", "source_label": "a.png",
+    }]
+
+
+def _valid_point_rows() -> list[dict[str, Any]]:
+    return [
+        {"point_id": "p1", "chart_id": "chart_asset_a_1", "x_value": "1", "y_value": "2", "series_label": "s", "confidence": "0.9"},
+        {"point_id": "p2", "chart_id": "chart_asset_a_1", "x_value": "3", "y_value": "4", "series_label": "s", "confidence": "0.8"},
+    ]
+
+
+def test_validate_chart_data_accepts_complete_payload() -> None:
+    """A complete chart payload (source_asset_id + chart_id refs) passes."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    violations = validate_chart_data(_valid_chart_rows(), _valid_point_rows())
+    assert violations == []
+
+
+def test_validate_chart_data_rejects_missing_source_asset_id() -> None:
+    """Every chart row must carry a source_asset_id."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    chart_rows = _valid_chart_rows()
+    chart_rows[0]["source_asset_id"] = ""
+    violations = validate_chart_data(chart_rows, _valid_point_rows())
+    assert any("missing source_asset_id" in v for v in violations)
+
+
+def test_validate_chart_data_rejects_orphan_point() -> None:
+    """A point referencing a non-existent chart_id is a violation."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    point_rows = _valid_point_rows()
+    point_rows[0]["chart_id"] = "chart_ghost"
+    violations = validate_chart_data(_valid_chart_rows(), point_rows)
+    assert any("no matching chart_data.csv row" in v for v in violations)
+
+
+def test_validate_chart_data_rejects_point_missing_chart_id() -> None:
+    """A point with an empty chart_id is a violation."""
+    from app.skills.builtin.processing.extract_chart_data_vlm import (
+        validate_chart_data,
+    )
+
+    point_rows = _valid_point_rows()
+    point_rows[0]["chart_id"] = ""
+    violations = validate_chart_data(_valid_chart_rows(), point_rows)
+    assert any("missing chart_id" in v for v in violations)
