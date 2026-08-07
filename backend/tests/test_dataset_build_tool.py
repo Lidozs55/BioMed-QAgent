@@ -36,6 +36,12 @@ def _spec_json(binding_id: str = "binding_gdc", adapter_id: str = "gdc.expressio
     })
 
 
+def _spec_with_build_id(build_id: str) -> str:
+    spec = json.loads(_spec_json())
+    spec["build_id"] = build_id
+    return json.dumps(spec)
+
+
 def _make_ctx(tmp_path: Path, task_id: str = "test_build_tool") -> ToolContext:
     rc = RunContext(task_id=task_id)
     rc._work_dir = create_task_workdir(task_id, base_dir=str(tmp_path))
@@ -74,6 +80,13 @@ def test_execute_dataset_build_succeeds(tmp_path: Path) -> None:
     assert result["valid_row_count"] == 4
     assert result["successful_sources"] == ["binding_gdc"]
 
+    # V2 dataset cache entry committed with the published build.
+    cache_entry = data["cache_entry"]
+    assert cache_entry is not None
+    assert cache_entry["namespace"] == "build"
+    assert cache_entry["dataset_family"] == "gene_expression"
+    assert cache_entry["row_count"] == 4
+
     # Immutable version directory with a publication record.
     output_dir = Path(data["output_dir"])
     publish_dirs = list((output_dir / "publish").glob("build_tool_test_*"))
@@ -103,3 +116,12 @@ def test_execute_dataset_build_missing_binding_file(tmp_path: Path) -> None:
     )
     assert data["status"] == "error"
     assert data["retryable"] is True
+
+
+def test_execute_dataset_build_rejects_path_traversal_build_id(tmp_path: Path) -> None:
+    """build_id becomes a directory name; path separators must be rejected."""
+    ctx = _make_ctx(tmp_path)
+    for evil in ("../escape", "a/b", "..", "a b", ".hidden"):
+        data = _call_tool(ctx, _spec_with_build_id(evil), "{}")
+        assert data["status"] == "invalid_input", evil
+        assert data["retryable"] is False, evil
