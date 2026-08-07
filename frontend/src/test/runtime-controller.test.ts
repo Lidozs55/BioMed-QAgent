@@ -1991,6 +1991,8 @@ describe("runtime orchestration", () => {
         .mockResolvedValueOnce(snapshot("task_snapshot_generation", 2))
         .mockResolvedValueOnce(snapshot("task_snapshot_generation", 4)),
       fetchEvents: vi.fn().mockResolvedValue([
+        runStartedEvent("task_snapshot_generation", 1),
+        runStartedEvent("task_snapshot_generation", 2),
         runStartedEvent("task_snapshot_generation", 3),
         runStartedEvent("task_snapshot_generation", 4),
       ]),
@@ -2617,6 +2619,7 @@ describe("runtime orchestration", () => {
       fetchEvents: vi
         .fn<APIClient["fetchEvents"]>()
         .mockResolvedValueOnce([
+          runStartedEvent("task_cancel_generation", 1),
           runStartedEvent("task_cancel_generation", 2),
         ])
         .mockResolvedValueOnce([

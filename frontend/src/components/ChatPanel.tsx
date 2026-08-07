@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { AgentComposer } from "@/components/AgentComposer";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
+import { STAGE_LABELS } from "@/components/conversation/stageLabels";
 import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { UserInputDialog } from "@/components/UserInputDialog";
@@ -31,7 +32,7 @@ import type {
   StartTaskInput,
   TaskRunAccepted,
 } from "@/runtime/contracts";
-import type { ConversationItem } from "@/runtime/types";
+import type { ConversationItem, RunProjection } from "@/runtime/types";
 import { errorMessage } from "@/lib/utils";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -120,6 +121,54 @@ function formatActiveItemStatus(item: ConversationItem): string {
     default:
       return STATUS_LABELS.running;
   }
+}
+
+/**
+ * Compact secondary text for the latest terminal run, driven by the
+ * server-provided ``RunSummary`` (Phase 4a acceptance): build outcomes
+ * carry ``user_summary`` + ``recommended_next_action``, failed runs carry
+ * the stable ``error_code``/``user_message``, and cancelled/interrupted
+ * runs carry ``cancelled_at_stage``. Renders nothing when the run has no
+ * summary or none of the structured fields are populated.
+ */
+function renderLatestRunSummary(
+  latestRun: RunProjection | undefined,
+): React.ReactNode | null {
+  const summary = latestRun?.summary ?? null;
+  if (summary === null) return null;
+  const lines: string[] = [];
+  if (summary.build_result !== null) {
+    if (summary.build_result.user_summary.length > 0) {
+      lines.push(summary.build_result.user_summary);
+    }
+    if (summary.build_result.recommended_next_action.length > 0) {
+      lines.push(summary.build_result.recommended_next_action);
+    }
+  } else if (summary.run_status === "failed") {
+    if (summary.error_code !== null) {
+      lines.push(`错误码：${summary.error_code}`);
+    }
+    if (summary.user_message !== null && summary.user_message.length > 0) {
+      lines.push(summary.user_message);
+    }
+  } else if (
+    (summary.run_status === "cancelled" ||
+      summary.run_status === "interrupted") &&
+    summary.cancelled_at_stage !== null
+  ) {
+    lines.push(`取消于${STAGE_LABELS[summary.cancelled_at_stage]}阶段`);
+  }
+  if (lines.length === 0) return null;
+  return (
+    <div
+      data-slot="latest-run-summary"
+      className="flex flex-col gap-0.5 border-b border-border px-5 pb-2 text-xs text-muted-foreground"
+    >
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
 }
 
 function latestRunIsTerminal(
@@ -474,6 +523,7 @@ export function ChatPanel({
               </Button>
             ) : null}
           </Marker>
+          {renderLatestRunSummary(latestRun)}
         </div>
       )}
 

@@ -456,6 +456,61 @@ describe("runtime event projection", () => {
     });
   });
 
+  it("rejects a sequence gap without reducing or advancing the cursor", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_gap", "running", 4)),
+      false,
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(4);
+
+    // A frame at 5 was dropped or rejected; the next valid frame is 6.
+    // The cursor must NOT advance past the missing event, and the event
+    // must not be reduced; a recoverable gap is recorded from 4.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 6, {
+        type: "warning",
+        code: "rate_limit",
+        message: "Approaching rate limit",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(4);
+    expect(state.tasksById.task_gap.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+    expect(state.tasksById.task_gap.items).toHaveLength(0);
+
+    // Replay 5 then 6 → both applied, cursor 6, gap healed.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 5, {
+        type: "assistant_delta",
+        delta: "five",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(5);
+    expect(state.tasksById.task_gap.sequenceGap).toBeNull();
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 6, {
+        type: "warning",
+        code: "rate_limit",
+        message: "Approaching rate limit",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(6);
+    expect(state.tasksById.task_gap.sequenceGap).toBeNull();
+    // The replayed warning is now reduced (alongside the replayed delta).
+    expect(
+      state.tasksById.task_gap.items.some(
+        (item) => item.kind === "warning",
+      ),
+    ).toBe(true);
+  });
+
   it("routes overlapping task-local sequences independently", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
@@ -535,7 +590,7 @@ describe("runtime event projection", () => {
   it("returns the same root for duplicate and stale envelopes", () => {
     const initial = mergeTaskPage(
       createInitialRuntimeState(),
-      page(summary("task_a")),
+      page(summary("task_a", "running", 2)),
       false,
     );
     const artifactEvent = envelope("task_a", "run_task_a", 3, {
@@ -1545,7 +1600,7 @@ describe("runtime event projection", () => {
     );
     state = reduceRuntimeEvent(
       state,
-      envelope("task_reentry", "run_one", 50, {
+      envelope("task_reentry", "run_one", 2, {
         type: "assistant_delta",
         delta: "first reply",
         stream_id: "stream_one",
@@ -1555,7 +1610,7 @@ describe("runtime event projection", () => {
     );
     state = reduceRuntimeEvent(
       state,
-      envelope("task_reentry", "run_two", 90, {
+      envelope("task_reentry", "run_two", 3, {
         type: "run_queued",
         request_id: "req_two",
         input: "second request",
@@ -1573,7 +1628,7 @@ describe("runtime event projection", () => {
 
     // Re-entry: hydrate from the snapshot. user messages come from
     // snapshot.messages (ordinals 1 and 2), which would sort before the
-    // assistant reply at event sequence 50 without the fix.
+    // assistant reply at event sequence 2 without the fix.
     state = hydrateTaskSnapshot(
       state,
       taskSnapshot(
@@ -1599,7 +1654,7 @@ describe("runtime event projection", () => {
           }),
         ],
         null,
-        90,
+        3,
       ),
     );
 
@@ -1608,8 +1663,8 @@ describe("runtime event projection", () => {
     );
     expect(afterHydrate).toEqual([
       ["user_message", 1],
-      ["assistant_segment", 50],
-      ["user_message", 90],
+      ["assistant_segment", 2],
+      ["user_message", 3],
     ]);
   });
 
