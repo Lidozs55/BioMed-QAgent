@@ -35,7 +35,7 @@ import app.agent_loop.runner as runner_module
 import pytest
 from agents import Agent, RunContextWrapper, function_tool
 from agents.models.interface import Model
-from app.agent_loop.context import RunContext
+from app.agent_loop.context import RunContext, UserInputSubmitter
 from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
 from app.domain.contracts import (
     RunCompletedPayload,
@@ -159,9 +159,20 @@ def _read_corrections_todo(path: Path) -> list[dict[str, str]]:
 async def test_request_main_input_without_broker_raises_clear_error(
     tmp_path: Path,
 ) -> None:
-    """subagent/isolated contexts have no broker: the error must be explicit."""
+    """subagent/isolated contexts have no broker: the error must be explicit.
+
+    Final-review FIX 1: the missing-broker case raises the dedicated
+    ``MainInputBrokerUnavailableError`` (a ``RuntimeError`` subclass) so the
+    tool can degrade to a failure message for exactly this case while genuine
+    runtime failures still propagate.
+    """
+
+    from app.agent_loop.context import MainInputBrokerUnavailableError
 
     context = RunContext(task_id="task_no_broker", base_dir=tmp_path)
+
+    with pytest.raises(MainInputBrokerUnavailableError, match="main input broker"):
+        await context.request_main_input(summary="需要人工修正")
 
     with pytest.raises(RuntimeError, match="main input broker"):
         await context.request_main_input(summary="需要人工修正")
@@ -468,6 +479,238 @@ async def test_broker_request_ids_increment_per_run() -> None:
     assert (await fresh.request_input(summary="新 run")).request_id == (
         "data_correction-run_counter-0"
     )
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 (final review): deterministic deadline arbitration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_late_resume_after_deadline_is_rejected_and_timeout_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FIX 2 (a): a resume arriving after the deadline is rejected consistently.
+
+    Both rejection layers are exercised deterministically:
+
+    - in-flight request: the monotonic clock is advanced past the deadline
+      (monkeypatched ``loop.time``) and the captured submitter call is
+      rejected by the submitter's own deadline check
+      (``loop.time() > deadline``);
+    - completed request: the claimed-timed-out marker rejects any late submit
+      call after the timeout won.
+
+    In both cases the human path emits nothing and the synthetic timeout
+    resume is the single resumed event.
+    """
+
+    emitted: list[object] = []
+    installed: list[UserInputSubmitter] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    def install(submitter: UserInputSubmitter) -> None:
+        installed.append(submitter)
+
+    def clear(submitter: UserInputSubmitter) -> None:
+        pass
+
+    broker = _make_broker(
+        run_id="run_late_resume",
+        fixture=False,
+        emit=emit,
+        install=install,
+        clear=clear,
+        cancellation_requested=asyncio.Event(),
+        default_timeout_seconds=0.05,
+    )
+
+    # 1) in-flight request, clock advanced past the deadline: the submitter's
+    #    own deadline check rejects the late call (no human-path event).
+    pending = asyncio.create_task(
+        broker.request_input(summary="需要人工修正", timeout_seconds=0.05)
+    )
+    required = await _wait_for_required(emitted)
+    loop = asyncio.get_running_loop()
+    real_time = loop.time
+    monkeypatch.setattr(loop, "time", lambda: real_time() + 100.0)
+    try:
+        accepted = installed[0](
+            UserInputResumedPayload(
+                request_id=required.request_id,
+                decision="approve",
+                detail={"correction": "迟到的人类修正"},
+            )
+        )
+    finally:
+        monkeypatch.undo()
+    assert accepted is False
+
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+    assert decision.timed_out is True
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1  # 只有合成的超时 resume,无人类路径事件
+    assert resumed_payloads[0].detail["auto_approved"] is True
+    assert (
+        resumed_payloads[0].detail["auto_approve_reason"]
+        == "data_correction_timeout"
+    )
+
+    # 2) completed request: the claimed-timed-out marker rejects a late call.
+    assert installed[0](
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "更迟的提交"},
+        )
+    ) is False
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1  # 仍只有合成事件,无重复
+
+
+@pytest.mark.asyncio
+async def test_resume_before_deadline_wins_and_no_synthetic_resume() -> None:
+    """FIX 2 (b): a resume arriving before the deadline is accepted and wins.
+
+    The submitter accepts the call (the deadline is not reached), the broker
+    returns the human decision, and NO synthetic timeout resume is emitted.
+    """
+
+    emitted: list[object] = []
+    installed: list[UserInputSubmitter] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    def install(submitter: UserInputSubmitter) -> None:
+        installed.append(submitter)
+
+    def clear(submitter: UserInputSubmitter) -> None:
+        pass
+
+    broker = _make_broker(
+        run_id="run_early_resume",
+        fixture=False,
+        emit=emit,
+        install=install,
+        clear=clear,
+        cancellation_requested=asyncio.Event(),
+        default_timeout_seconds=30.0,
+    )
+
+    pending = asyncio.create_task(
+        broker.request_input(summary="需要人工修正", timeout_seconds=30.0)
+    )
+    required = await _wait_for_required(emitted)
+
+    # deadline 未到:submitter 接受,人类决策成为唯一赢家
+    accepted = installed[0](
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": "GPL570"},
+        )
+    )
+    assert accepted is True
+
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+    assert decision.timed_out is False
+    assert decision.resumed is not None
+    assert decision.resumed.detail == {"correction": "GPL570"}
+
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1
+    assert "auto_approved" not in resumed_payloads[0].detail
+    assert resumed_payloads[0].request_id == required.request_id
+
+
+@pytest.mark.asyncio
+async def test_resume_racing_timeout_resolves_to_single_deterministic_winner() -> None:
+    """FIX 2 (c): a resume racing the deadline resolves to exactly ONE winner.
+
+    Repeated races around the expiry tick: an accepted submission must never
+    be discarded by the timeout (accepted ⇒ human wins), and a rejected/late
+    submission must never produce a human resumed event (rejected ⇒ timeout
+    wins). Exactly one resumed event is emitted per race — no double resume
+    events, no lost decision.
+    """
+
+    for iteration in range(20):
+        await _run_single_deadline_race(iteration)
+
+
+async def _run_single_deadline_race(iteration: int) -> None:
+    """Run one deadline race and assert the single-winner invariant."""
+
+    emitted: list[object] = []
+
+    async def emit(payload: object) -> None:
+        emitted.append(payload)
+
+    execution = RunExecution(
+        task_id=f"task_race_{iteration}",
+        run_id=f"run_race_{iteration}",
+        request_id=f"request_race_{iteration}",
+        input="request a correction",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+        _event_emitter=emit,
+    )
+    broker = _make_broker(
+        run_id=execution.run_id,
+        fixture=False,
+        emit=execution.emit,
+        install=execution.set_user_input_submitter,
+        clear=execution.clear_user_input_submitter,
+        cancellation_requested=execution.context.cancellation_requested,
+        default_timeout_seconds=0.05,
+    )
+
+    pending = asyncio.create_task(
+        broker.request_input(summary="需要人工修正", timeout_seconds=0.05)
+    )
+    required = await _wait_for_required(emitted)
+    # 在 deadline 附近注入 resume:每次迭代落在边界两侧都可能
+    await asyncio.sleep(0.02 + (iteration % 5) * 0.008)
+    accepted = execution.submit_user_input(
+        UserInputResumedPayload(
+            request_id=required.request_id,
+            decision="approve",
+            detail={"correction": f"race-{iteration}"},
+        )
+    )
+    decision = await asyncio.wait_for(pending, timeout=2.0)
+
+    resumed_payloads = [
+        p for p in emitted if isinstance(p, UserInputResumedPayload)
+    ]
+    assert len(resumed_payloads) == 1, resumed_payloads
+    resumed = resumed_payloads[0]
+    assert resumed.request_id == required.request_id
+
+    if accepted:
+        # 被接受的提交绝不因超时被丢弃:人类决策成为唯一赢家
+        assert decision.timed_out is False, iteration
+        assert decision.resumed is not None
+        assert decision.resumed.detail == {
+            "correction": f"race-{iteration}"
+        }
+        assert resumed.detail.get("auto_approved") is not True
+    else:
+        # 被拒绝(迟到/已声明超时)的提交:超时赢,合成 resume 为唯一事件
+        assert decision.timed_out is True, iteration
+        assert resumed.detail.get("auto_approved") is True
+        assert (
+            resumed.detail.get("auto_approve_reason")
+            == "data_correction_timeout"
+        )
 
 
 # ---------------------------------------------------------------------------

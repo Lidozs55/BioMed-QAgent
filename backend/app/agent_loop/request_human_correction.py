@@ -27,7 +27,10 @@ import json
 
 from agents import RunContextWrapper, function_tool
 
-from app.agent_loop.context import RunContext
+from app.agent_loop.context import (
+    MainInputBrokerUnavailableError,
+    RunContext,
+)
 from app.agent_loop.main_input_broker import MainInputDecision
 from app.runtime.compaction import CompactionCancelledError
 
@@ -102,7 +105,12 @@ async def request_human_correction(
         )
     except CompactionCancelledError:
         raise
-    except RuntimeError as exc:
+    except MainInputBrokerUnavailableError as exc:
+        # FIX 1 (final review): only the missing-broker case degrades to a
+        # failure message. Broker, event-persistence, duplicate-request, and
+        # resume-emission failures are real runtime errors — they propagate
+        # so the HIL request (and the Run) fails instead of silently
+        # continuing without a valid HIL event chain.
         return (
             "request_human_correction 不可用：主 Run 未安装人工输入 broker"
             f"（详情：{exc}）。当前上下文可能为子代理或单元测试环境，无法"

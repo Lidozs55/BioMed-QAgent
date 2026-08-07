@@ -149,9 +149,21 @@ class MainInputBroker:
 
         event: asyncio.Event = asyncio.Event()
         decision_holder: list[UserInputResumedPayload] = []
+        loop = asyncio.get_running_loop()
+        # FIX 2 (final review): one immutable monotonic deadline captured at
+        # entry, shared by the submitter and the wait loop — the expiry
+        # boundary is a single deterministic point.
+        deadline = loop.time() + timeout
+        claimed_timed_out = False
 
         def submitter(payload: UserInputResumedPayload) -> bool:
             if payload.request_id != request_id:
+                return False
+            # Reject submissions that arrive after the deadline, and anything
+            # that races the timeout after the deadline already won the wait
+            # (the claim is set synchronously on the timeout path, before any
+            # other task can interleave).
+            if claimed_timed_out or loop.time() > deadline:
                 return False
             decision_holder.append(payload)
             event.set()
@@ -169,29 +181,57 @@ class MainInputBroker:
                     fixture_exempt=False,
                 )
             )
-            timed_out = await self._wait_for_decision(event, timeout)
-        finally:
+            timed_out = await self._wait_for_decision(event, deadline)
+        except BaseException:
             self._clear_user_input_submitter(submitter)
+            raise
 
         if timed_out:
-            corrections_path = self._write_corrections_todo(
-                request_id=request_id,
-                summary=summary,
-                detail=resolved_detail,
-                requested_at=requested_at,
-                expires_at=expires_at,
-            )
-            await self._emit(
-                UserInputResumedPayload(
+            # The deadline won: claim the request so any concurrently-arrived
+            # (or late) human submission is rejected, and discard whatever
+            # raced into the holder — only the timeout path may write the todo
+            # row and emit the synthetic resume.
+            claimed_timed_out = True
+            decision_holder.clear()
+        try:
+            if timed_out:
+                corrections_path = self._write_corrections_todo(
                     request_id=request_id,
-                    decision="approve",
-                    detail={
-                        "auto_approved": True,
-                        "auto_approve_reason": "data_correction_timeout",
-                        "timeout_seconds": timeout,
-                    },
+                    summary=summary,
+                    detail=resolved_detail,
+                    requested_at=requested_at,
+                    expires_at=expires_at,
                 )
-            )
+                await self._emit(
+                    UserInputResumedPayload(
+                        request_id=request_id,
+                        decision="approve",
+                        detail={
+                            "auto_approved": True,
+                            "auto_approve_reason": "data_correction_timeout",
+                            "timeout_seconds": timeout,
+                        },
+                    )
+                )
+                return MainInputDecision(
+                    request_id=request_id,
+                    summary=summary,
+                    detail=resolved_detail,
+                    requested_at=requested_at,
+                    expires_at=expires_at,
+                    timeout_seconds=timeout,
+                    timed_out=True,
+                    corrections_path=corrections_path,
+                )
+
+            if not decision_holder:
+                raise RuntimeError(
+                    "data_correction resume event set without a decision"
+                )
+            # Mirror the max_turns path: emit UserInputResumedPayload after
+            # waking so the reducer transitions AWAITING_USER_INPUT -> RUNNING
+            # before the manager finalizes the Run.
+            await self._emit(decision_holder[0])
             return MainInputDecision(
                 request_id=request_id,
                 summary=summary,
@@ -199,26 +239,16 @@ class MainInputBroker:
                 requested_at=requested_at,
                 expires_at=expires_at,
                 timeout_seconds=timeout,
-                timed_out=True,
-                corrections_path=corrections_path,
+                timed_out=False,
+                resumed=decision_holder[0],
             )
-
-        if not decision_holder:
-            raise RuntimeError("data_correction resume event set without a decision")
-        # Mirror the max_turns path: emit UserInputResumedPayload after waking
-        # so the reducer transitions AWAITING_USER_INPUT -> RUNNING before the
-        # manager finalizes the Run.
-        await self._emit(decision_holder[0])
-        return MainInputDecision(
-            request_id=request_id,
-            summary=summary,
-            detail=resolved_detail,
-            requested_at=requested_at,
-            expires_at=expires_at,
-            timeout_seconds=timeout,
-            timed_out=False,
-            resumed=decision_holder[0],
-        )
+        finally:
+            # FIX 2 reorder: the submitter is cleared only AFTER the winner is
+            # decided and the synthetic/human resumed event is emitted. While
+            # the resumed event is being persisted the submitter stays
+            # installed, but the claimed flag / deadline check reject anything
+            # late — a resume can never be accepted and then discarded.
+            self._clear_user_input_submitter(submitter)
 
     async def _fixture_approve(
         self,
@@ -329,18 +359,20 @@ class MainInputBroker:
     async def _wait_for_decision(
         self,
         event: asyncio.Event,
-        timeout: float,
+        deadline: float,
     ) -> bool:
         """Wait for the resume event, cancellation, or the deadline.
 
-        Returns ``True`` when the deadline elapsed without a decision.
-        Raises ``CompactionCancelledError`` when the Run is cancelled while
-        paused; ``asyncio.CancelledError`` propagates naturally when the
+        Returns ``True`` when the deadline elapsed without a decision (the
+        timeout fired before the resume event was set). The monotonic
+        ``deadline`` is captured once by ``request_input`` and shared with the
+        submitter, so the expiry boundary is a single deterministic point
+        (FIX 2). Raises ``CompactionCancelledError`` when the Run is cancelled
+        while paused; ``asyncio.CancelledError`` propagates naturally when the
         worker task itself is cancelled.
         """
 
         loop = asyncio.get_running_loop()
-        wait_deadline = loop.time() + timeout
         input_waiter = asyncio.create_task(event.wait())
         waiters: set[asyncio.Task[bool]] = {input_waiter}
         cancellation_waiter: asyncio.Task[bool] | None = None
@@ -352,7 +384,7 @@ class MainInputBroker:
         try:
             done, _ = await asyncio.wait(
                 waiters,
-                timeout=max(0.0, wait_deadline - loop.time()),
+                timeout=max(0.0, deadline - loop.time()),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if not done:

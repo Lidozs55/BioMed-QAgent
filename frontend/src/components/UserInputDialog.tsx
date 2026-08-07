@@ -182,24 +182,28 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
         decision,
         detail,
       });
+      // FIX 3 (final review): on SUCCESS the in-flight decision is retained
+      // while the same prompt stays pending — the manager may have returned
+      // its snapshot as-is (still awaiting_user_input) until the durable
+      // user_input_resumed event lands, and a briefly re-enabled button
+      // invites a second click the backend submitter would reject. The
+      // promptKey reset effect clears the submission state once the prompt
+      // is removed (or replaced), so nothing is retained beyond the prompt
+      // lifecycle.
     } catch (caught) {
+      // A confirmed rejection is the only path that restores the retry
+      // state: clear the in-flight decision and surface the error.
       setSubmission((current) =>
         current.promptKey === submittedPromptKey &&
         current.attemptId === submittedAttemptId
           ? {
               ...current,
+              pendingDecision: null,
               error:
                 caught instanceof Error
                   ? caught.message
                   : "提交决策失败，请重试",
             }
-          : current,
-      );
-    } finally {
-      setSubmission((current) =>
-        current.promptKey === submittedPromptKey &&
-        current.attemptId === submittedAttemptId
-          ? { ...current, pendingDecision: null }
           : current,
       );
     }

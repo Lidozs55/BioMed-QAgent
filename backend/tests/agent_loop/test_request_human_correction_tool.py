@@ -292,6 +292,48 @@ async def test_missing_broker_returns_failure_message_without_raising(
     assert "子代理" in result
 
 
+@pytest.mark.asyncio
+async def test_genuine_runtime_error_propagates_out_of_tool(
+    tmp_path: Path,
+) -> None:
+    """Real broker failures must NOT be swallowed by the missing-broker catch.
+
+    Final-review FIX 1: the tool previously caught every ``RuntimeError`` and
+    converted genuine failures (duplicate-submitter guard, pending-input
+    guard, durable event emission) into benign agent text. Only the dedicated
+    ``MainInputBrokerUnavailableError`` (no broker installed) degrades to a
+    failure message; a monkeypatched broker raising e.g. the duplicate-resume
+    guard error must escape the tool's own try/except. ``on_invoke_tool`` then
+    surfaces it through the SDK tool-error channel ("An error occurred while
+    running the tool...") instead of a benign "request_human_correction 不可用"
+    success text — the HIL request is NOT silently continued.
+    """
+
+    class _FailingBroker:
+        async def request_input(
+            self,
+            *,
+            summary: str,
+            detail: dict[str, object] | None = None,
+            timeout_seconds: float | None = None,
+        ) -> MainInputDecision:
+            raise RuntimeError(
+                "data_correction resume event already pending"
+            )
+
+    context = RunContext(task_id="task_t2_propagate", base_dir=tmp_path)
+    context.bind_main_input_broker(_FailingBroker())  # type: ignore[arg-type]
+
+    result = await _invoke_tool(context, summary="确认数据平台")
+
+    # NOT the benign missing-broker text (old catch-all swallowed real errors)
+    assert "request_human_correction 不可用" not in result
+    assert "主 Run 未安装人工输入 broker" not in result
+    # The SDK tool-error channel carries the genuine failure message.
+    assert "An error occurred while running the tool" in result
+    assert "data_correction resume event already pending" in result
+
+
 # ---------------------------------------------------------------------------
 # agent registration
 # ---------------------------------------------------------------------------

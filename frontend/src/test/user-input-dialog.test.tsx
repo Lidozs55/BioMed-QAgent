@@ -165,9 +165,110 @@ describe("UserInputDialog", () => {
     });
     await waitFor(() => {
       expect(screen.queryByText("Stale A1 failure")).toBeNull();
-      expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+      // FIX 3: after a SUCCESSFUL resume the in-flight decision is retained
+      // while the same prompt stays pending — buttons stay disabled instead
+      // of briefly re-enabling before user_input_resumed arrives.
+      expect(screen.getByRole("button", { name: "确认执行" })).toBeDisabled();
     });
     expect(onResumeRun).toHaveBeenCalledTimes(2);
+
+    // The in-flight state clears only with the prompt lifecycle: removing the
+    // prompt (pendingUserInput -> null) resets the submission; re-showing the
+    // same prompt starts fresh and re-enables the buttons.
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_a",
+      mode: "agent",
+      databases: [],
+      title: "Task task_a",
+      status: "running",
+      active_run_id: "run_a",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "确认执行" })).not.toBeInTheDocument();
+    });
+    rerender(<UserInputDialog task={taskA} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "确认执行" })).toBeEnabled();
+  });
+
+  it("retains the in-flight decision while the same prompt stays pending (FIX 3)", async () => {
+    // Regression (final review FIX 3): after an accepted resumeRun returns,
+    // the dialog used to clear pendingDecision even though the snapshot may
+    // still report awaiting_user_input — the buttons briefly re-enabled and a
+    // second click was rejected by the backend submitter. The in-flight
+    // decision must be retained while the SAME prompt remains pending and
+    // cleared only when the prompt disappears (promptKey reset effect).
+    const onResumeRun = vi.fn<
+      (
+        taskId: string,
+        runId: string,
+        input: ResumeRunInput,
+      ) => Promise<void>
+    >();
+    onResumeRun.mockResolvedValue(undefined);
+    const task = taskWithPrompt(
+      "task_inflight",
+      "run_inflight",
+      "run_inflight",
+      "request_inflight",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GSE12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交修正" }));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+
+    // resumeRun resolves (the manager returned its snapshot as-is), but the
+    // prompt is STILL pending: the dialog must stay in-flight — both buttons
+    // remain disabled and the spinner stays.
+    await waitFor(() => expect(onResumeRun).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+
+    // The prompt disappears (reducer processed user_input_resumed): the
+    // dialog closes and nothing in-flight leaks.
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_inflight",
+      mode: "agent",
+      databases: [],
+      title: "Task task_inflight",
+      status: "running",
+      active_run_id: "run_inflight",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "提交修正" })).not.toBeInTheDocument();
+    });
+
+    // Re-showing the same prompt starts fresh: the retained in-flight state
+    // was cleared with the prompt lifecycle.
+    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
   });
 
   it("renders plan_confirmation detail as structured fields instead of raw JSON", () => {
@@ -350,7 +451,9 @@ describe("UserInputDialog", () => {
         summary: "请确认数据源",
       },
     );
-    render(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
+    const { rerender } = render(
+      <UserInputDialog task={task} onResumeRun={onResumeRun} />,
+    );
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "改用 GEO 数据 GSE12345" },
@@ -366,6 +469,35 @@ describe("UserInputDialog", () => {
         detail: { correction: "改用 GEO 数据 GSE12345" },
       },
     );
+
+    // FIX 3: after a successful resume the SAME prompt stays in-flight — both
+    // buttons stay disabled until the prompt disappears (user_input_resumed).
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+
+    // A second decision needs a fresh prompt lifecycle: remove the prompt and
+    // re-show it (the promptKey reset effect clears the in-flight state).
+    const noPromptSummary: TaskSummary = {
+      task_id: "task_correction",
+      mode: "agent",
+      databases: [],
+      title: "Task task_correction",
+      status: "running",
+      active_run_id: "run_correction",
+      created_at: CREATED_AT,
+      updated_at: CREATED_AT,
+      latest_sequence: 1,
+    };
+    rerender(
+      <UserInputDialog
+        task={createTaskProjection(noPromptSummary)}
+        onResumeRun={onResumeRun}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "跳过并继续" })).not.toBeInTheDocument();
+    });
+    rerender(<UserInputDialog task={task} onResumeRun={onResumeRun} />);
 
     // 跳过并继续总是发送 reject + 空修正，忽略已输入的文本
     fireEvent.click(screen.getByRole("button", { name: "跳过并继续" }));

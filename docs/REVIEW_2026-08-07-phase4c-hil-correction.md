@@ -124,9 +124,18 @@
    任务工作目录文件存在（`<task>/artifacts/corrections_todo.csv`），**不进** `list_artifacts` /
    发布链（发布为 deterministic pipeline 独占，4a/4b 架构）。完整 manifest-driven 产物迁移属
    Phase 7（见 §5）。
-4. **timeout/resume 竞态窗口（T1 记录，文档化）**：人类 resume 在 deadline 之后、合成 resume
-   发射之前到达时，`resume_run` 会拒绝（submitter 已清 / Run 已离开 `AWAITING_USER_INPUT`）。
-   与既有 plan-confirmation 超时同一窗口，前端处理 API 错误——接受（既有模式）。
+4. **timeout/resume 竞态仲裁（最终复评 FIX 2，确定性替代原接受窗口）**：broker 在请求
+   入口捕获**单一不可变 monotonic deadline**，与 submitter 和等待循环共享同一个过期边界；
+   submitter 在 `loop.time() > deadline` 或请求已声明超时（claimed-timed-out）时拒绝提交；
+   `asyncio.wait` 返回后重检赢家——超时赢则丢弃竞态中落入的人类提交并发射合成 resume，
+   人类赢则忽略 deadline；submitter 仅在赢家确定**且**合成/人类 resumed 事件发射后才清理
+   （原实现先清 submitter 再发射）。由此：被接受的提交绝不因超时被丢弃（accepted ⇒ 人类赢），
+   被拒绝的迟到提交绝不产生人类路径 resumed 事件（rejected ⇒ 超时赢）——边界同 tick 竞争
+   解析为**恰好一个赢家**（无双重 resume 事件、无丢失决策）。`resume_run` 对迟到提交返回
+   拒绝（submitter 已清 / Run 已离开 `AWAITING_USER_INPUT`），前端按 API 错误处理——既有
+   模式保留。测试：`test_late_resume_after_deadline_is_rejected_and_timeout_wins`（时钟
+   拨快 + claimed 标记双路径）、`test_resume_before_deadline_wins_and_no_synthetic_resume`、
+   `test_resume_racing_timeout_resolves_to_single_deterministic_winner`（20 轮竞态不变量）。
 5. **max_turns/no_progress 字节级不变**：`_await_max_turns_resume` / `_await_no_progress_resume`
    **未修改**（broker 为平行实现复用同一 execution 辅助，未做规格 D1 提示的抽取）；既有 fixture
    E2E（`test_max_turns_continue.py`、`test_no_progress_detector.py`、`test_execution.py`、

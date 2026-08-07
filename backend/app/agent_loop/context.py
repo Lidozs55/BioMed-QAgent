@@ -49,6 +49,18 @@ ProgressEmitter = Callable[
 
 UserInputSubmitter = Callable[[UserInputResumedPayload], bool]
 
+
+class MainInputBrokerUnavailableError(RuntimeError):
+    """Raised when ``request_main_input`` runs without an installed broker.
+
+    Dedicated missing-broker marker (final review FIX 1): subagent/unit-test
+    contexts never install a ``MainInputBroker``, so the tool degrades to a
+    clear failure message for exactly this case. Genuine runtime failures
+    (duplicate submitter guard, pending-input guard, durable event emission)
+    raise plain ``RuntimeError``/``OSError`` and must propagate to the Run
+    failure path — tools catch only this dedicated type.
+    """
+
 _SENSITIVE_INPUT_KEYS = {
     "api_key",
     "authorization",
@@ -360,7 +372,7 @@ class RunContext:
         """
 
         if self._main_input_broker is None:
-            raise RuntimeError(
+            raise MainInputBrokerUnavailableError(
                 "main input broker is not available: request_human_correction "
                 "is only usable inside the main agent Run"
             )
