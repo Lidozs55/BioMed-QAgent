@@ -91,7 +91,7 @@ no prose) with this exact schema:
   },
   "data_points": [
     {"x": "<x value as string>", "y": "<y value as string>", \
-"series_label": "<series name>"}
+"series_label": "<series name>", "confidence": <0.0-1.0>}
   ],
   "legend": ["<series 1 name>", "<series 2 name>"]
 }
@@ -102,6 +102,8 @@ Rules:
 "unit":"","scale":"linear"}, "y": {"label":"","unit":"","scale":"linear"}}, \
 "data_points": [], "legend": []}
 - Numeric x/y values must be stringified (e.g., "1.5", "100", "NA").
+- "confidence" is your 0.0-1.0 self-assessment of how accurately you read
+  that data point off the figure (1.0 = fully certain, 0.0 = guessing).
 - For box/violin plots, each data_point.y may be a comma-separated list
   representing the quartiles/whiskers.
 - Extract at most 100 data_points; for dense scatter plots, sample
@@ -181,12 +183,16 @@ def _ensure_image_in_figures(
 # ---------------------------------------------------------------------------
 
 
-def _extract_pdf_images(pdf_path: Path, dest_dir: Path) -> list[Path]:
+def _extract_pdf_images(
+    pdf_path: Path, dest_dir: Path
+) -> list[tuple[Path, int, tuple[int, int, int, int]]]:
     """Extract embedded raster images from a PDF using pdfplumber.
 
-    Returns a list of image paths (PNG) under ``dest_dir``, named
-    ``<pdf_stem>_p<page>_img<idx>.png``. At most ``_MAX_PDF_IMAGES_PER_FILE``
-    images are returned; extra images are counted and logged as a warning.
+    Returns a list of ``(path, page_index, bbox_points)`` tuples — the PNG
+    path under ``dest_dir`` (named ``<pdf_stem>_p<page>_img<idx>.png``), the
+    1-based page index, and the image's bounding box in PDF points
+    ``(x0, top, x1, bottom)``. At most ``_MAX_PDF_IMAGES_PER_FILE`` images
+    are returned; extra images are counted and logged as a warning.
 
     Raises ``ChartExtractionError`` if pdfplumber is unavailable or the PDF
     cannot be opened.
@@ -200,7 +206,7 @@ def _extract_pdf_images(pdf_path: Path, dest_dir: Path) -> list[Path]:
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     stem = pdf_path.stem
-    extracted: list[Path] = []
+    extracted: list[tuple[Path, int, tuple[int, int, int, int]]] = []
     skipped_extra = 0
 
     try:
@@ -233,7 +239,7 @@ def _extract_pdf_images(pdf_path: Path, dest_dir: Path) -> list[Path]:
                         pil_img = im.original.crop(scaled_bbox)
                         out_path = dest_dir / f"{stem}_p{page_idx}_img{img_idx}.png"
                         pil_img.save(out_path, format="PNG")
-                        extracted.append(out_path)
+                        extracted.append((out_path, page_idx, bbox))
                     except Exception as exc:
                         logger.warning(
                             "failed to extract image p%d img%d from %s: %s",
@@ -319,11 +325,20 @@ def _normalize_chart_json(
     source_asset_id: str,
     chart_idx: int,
     source_label: str,
+    *,
+    page_number: str = "",
+    bbox: str = "",
+    extraction_tier: str = "L1_vlm",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Normalize VLM JSON into (chart_row, data_point_rows).
 
     ``chart_row`` matches ``chart_data.csv`` columns; each ``data_point_row``
     matches ``chart_data_points.csv`` columns.
+
+    ``extraction_tier`` marks where the rows came from (``L1_vlm`` for the
+    model path, ``L2_tables`` / ``L3_captions`` for the deterministic
+    fallbacks). Only model-extracted rows are subject to the confidence
+    admission gate (TODO Phase 6 P0).
     """
     chart_id = f"chart_{source_asset_id[:20]}_{chart_idx}"
     axes = data.get("axes") or {}
@@ -348,19 +363,23 @@ def _normalize_chart_json(
         "extracted_at": datetime.now(UTC).isoformat(),
         "model_name": VL_MODEL_NAME,
         "source_label": source_label,
+        "page_number": page_number,
+        "bbox": bbox,
+        "extraction_tier": extraction_tier,
     }
 
     point_rows: list[dict[str, Any]] = []
     for pt_idx, pt in enumerate(data_points, 1):
         if not isinstance(pt, dict):
             continue
+        confidence = pt.get("confidence")
         point_rows.append({
             "point_id": f"{chart_id}_p{pt_idx}",
             "chart_id": chart_id,
             "x_value": str(pt.get("x", "")),
             "y_value": str(pt.get("y", "")),
             "series_label": str(pt.get("series_label", "")),
-            "confidence": "",
+            "confidence": "" if confidence is None else str(confidence),
         })
 
     return chart_row, point_rows
@@ -377,6 +396,7 @@ _CHART_DATA_COLUMNS = [
     "y_label", "y_unit", "y_scale",
     "data_point_count", "legend",
     "extracted_at", "model_name", "source_label",
+    "page_number", "bbox", "extraction_tier",
 ]
 
 _CHART_DATA_POINTS_COLUMNS = [
@@ -414,6 +434,50 @@ def validate_chart_data(
             violations.append(
                 f"chart_data_points.csv row {index}: chart_id {chart_id!r} "
                 f"has no matching chart_data.csv row"
+            )
+    return violations
+
+
+def validate_chart_extraction(
+    chart_rows: list[dict[str, Any]],
+    point_rows: list[dict[str, Any]],
+) -> list[str]:
+    """Model-extraction admission gate (TODO Phase 6 P0, Design §16 Phase 6).
+
+    Model-extracted (``L1_vlm``) records must carry a per-point confidence
+    and a source-of-record (model_name) before they may be published; the
+    deterministic fallback tiers (``L2_tables`` / ``L3_captions``) are not
+    model extraction and are exempt from the confidence requirement.
+
+    Rows with no ``extraction_tier`` are treated as model-extracted for
+    backward compatibility with pre-tier chart payloads.
+
+    Returns a list of violation messages (empty when the payload is
+    publishable). The caller rejects the batch when violations are present —
+    a model-extracted chart dataset missing confidence is never persisted.
+    """
+    violations: list[str] = []
+    chart_by_id = {
+        str(row.get("chart_id", "")): row for row in chart_rows
+    }
+    for row in chart_rows:
+        tier = str(row.get("extraction_tier", "")).strip()
+        if tier and not tier.startswith("L1"):
+            continue
+        if not str(row.get("model_name", "")).strip():
+            violations.append(
+                f"chart_data.csv row {row.get('chart_id', '')!r}: "
+                "missing model_name on model-extracted chart"
+            )
+    for index, row in enumerate(point_rows, 1):
+        chart = chart_by_id.get(str(row.get("chart_id", "")), {})
+        tier = str(chart.get("extraction_tier", "")).strip()
+        if tier and not tier.startswith("L1"):
+            continue
+        if not str(row.get("confidence", "")).strip():
+            violations.append(
+                f"chart_data_points.csv row {index}: missing confidence on "
+                f"model-extracted point {row.get('point_id', '')!r}"
             )
     return violations
 
@@ -497,6 +561,18 @@ def _write_chart_csvs(
             raise ValueError(
                 "chart_data integrity check failed: " + "; ".join(violations)
             )
+        # Model-extraction admission gate (TODO Phase 6 P0, Design §16 Phase 6):
+        # model-extracted points must carry confidence and a source-of-record
+        # (model_name) before the batch may be published. Violations abort the
+        # write so an un-admitted model-extraction is never persisted.
+        admission_violations = validate_chart_extraction(
+            merged_charts, merged_points
+        )
+        if admission_violations:
+            raise ValueError(
+                "chart_data extraction admission check failed: "
+                + "; ".join(admission_violations)
+            )
 
         chart_temp = _stage_csv(chart_csv, _CHART_DATA_COLUMNS, merged_charts)
         points_temp = _stage_csv(
@@ -568,6 +644,9 @@ def _try_pdfplumber_tables(
                         "extracted_at": datetime.now(UTC).isoformat(),
                         "model_name": "pdfplumber",
                         "source_label": source_label,
+                        "page_number": str(page_idx),
+                        "bbox": "",
+                        "extraction_tier": "L2_tables",
                     })
                     for row_idx, row in enumerate(data_rows, 1):
                         for col_idx, cell in enumerate(row, 1):
@@ -629,6 +708,9 @@ async def _extract_from_image(
     chart_idx_offset: int,
     *,
     prompt: str = _VLM_PROMPT,
+    page_number: str = "",
+    bbox: str = "",
+    extraction_tier: str = "L1_vlm",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Extract chart data from a single image file via Qwen-VL (L1).
 
@@ -637,7 +719,9 @@ async def _extract_from_image(
     figures/.
 
     The ``prompt`` parameter allows the caller to inject a hint-augmented
-    prompt; it defaults to the bare ``_VLM_PROMPT``.
+    prompt; it defaults to the bare ``_VLM_PROMPT``. ``page_number`` /
+    ``bbox`` / ``extraction_tier`` become chart_data.csv provenance fields
+    (TODO Phase 6 P0).
     """
     # Ensure the image is preserved under source_assets/figures/
     figures_path, sha, was_copied = _ensure_image_in_figures(
@@ -661,6 +745,9 @@ async def _extract_from_image(
         source_asset_id=source_asset_id,
         chart_idx=chart_idx_offset,
         source_label=source_label,
+        page_number=page_number,
+        bbox=bbox,
+        extraction_tier=extraction_tier,
     )
 
     meta = {
@@ -710,13 +797,15 @@ async def _extract_from_pdf(
         l1_failed = True
 
     if images:
-        for idx, img_path in enumerate(images, 1):
+        for img_path, page_idx, bbox_pts in images:
             try:
                 rows, pts, meta = await _extract_from_image(
                     img_path, run_ctx,
-                    source_label=f"{source_label} (page image {idx})",
-                    chart_idx_offset=idx,
+                    source_label=f"{source_label} (page image {page_idx})",
+                    chart_idx_offset=page_idx,
                     prompt=prompt,
+                    page_number=str(page_idx),
+                    bbox=",".join(str(c) for c in bbox_pts),
                 )
                 # Override source_asset_id to the PDF-level id so the
                 # chart traces back to the PDF, not just the page image.
@@ -727,11 +816,11 @@ async def _extract_from_pdf(
                 metas.append(meta)
             except ChartExtractionError as exc:
                 logger.warning(
-                    "L1 VLM failed for %s image %d: %s", pdf_path, idx, exc
+                    "L1 VLM failed for %s image %d: %s", pdf_path, page_idx, exc
                 )
                 run_ctx.add_warning(
                     severity="warning",
-                    message=f"L1 VLM failed for {pdf_path.name} image {idx}: {exc}",
+                    message=f"L1 VLM failed for {pdf_path.name} image {page_idx}: {exc}",
                     source="extract_chart_data_vlm",
                 )
 
@@ -782,6 +871,9 @@ async def _extract_from_pdf(
             "extracted_at": datetime.now(UTC).isoformat(),
             "model_name": "pdfplumber_captions",
             "source_label": source_label,
+            "page_number": "",
+            "bbox": "",
+            "extraction_tier": "L3_captions",
         })
         for cap_idx, cap in enumerate(captions, 1):
             point_rows.append({
