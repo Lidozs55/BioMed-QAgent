@@ -36,7 +36,11 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
     expression value to compare. The placeholder-era
     ``measurement_type="sample_metadata"`` skip was deleted in phase 4b T6
     (T1 removed the placeholder producer; the row-level guard keeps the check
-    safe for the still-produced GDC clinical rows).
+    safe for the still-produced GDC clinical rows). A row whose locator is
+    unusable (line number <= 0, e.g. the placeholder-era line 0, or a negative
+    column index) fails immediately — there is no cell to verify, and negative
+    indexing would wrap to the LAST source row and mask the bad locator when
+    ``source_raw_value`` happens to match that wrapped cell (T6 review).
     """
     main_rows = ctx.main_rows
     source_path = ctx.source_path
@@ -66,9 +70,21 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
     lineage_failures = 0
     for row in sampled_rows:
         lines = _lines_for(row.get("asset_id", ""))
+        line_number = int(row["source_line_number"])
+        column_index = int(row["source_column_index"])
+        if line_number <= 0 or column_index < 0:
+            # No verifiable locator: a non-positive line number (placeholder
+            # rows carry line 0) or a negative column index points outside the
+            # source table. Reject rather than wrap — subtracting 1 from line 0
+            # would index the LAST source row and let a crafted
+            # placeholder-shaped row whose source_raw_value matches that
+            # wrapped cell pass lineage (ADR-011: placeholder-shaped rows must
+            # fail). Column index 0 stays valid: it is zero-based, e.g. GDC
+            # clinical sample_id lives at column 0 (gdc.py).
+            lineage_failures += 1
+            continue
         if reactome_rows:
-            line_index = int(row["source_line_number"]) - 1
-            column_index = int(row["source_column_index"])
+            line_index = line_number - 1
             try:
                 raw = lines[line_index][column_index]
             except (IndexError, ValueError):
@@ -77,8 +93,7 @@ def check_source_value_lineage(ctx: ValidationContext) -> dict[str, object]:
             if raw != row["source_raw_value"] or raw != row["participant_id"]:
                 lineage_failures += 1
             continue
-        line_index = int(row["source_line_number"]) - 1
-        column_index = int(row["source_column_index"])
+        line_index = line_number - 1
         try:
             raw = lines[line_index][column_index]
         except (IndexError, ValueError):

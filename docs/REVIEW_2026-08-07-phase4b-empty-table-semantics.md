@@ -90,8 +90,10 @@ NO_DATA 渲染与 SUCCEEDED 回归。全量门见 §4。
   `{total_rows, sampled}`；`checked_count = total_sampled`。**细化**：删除后发现 GDC
   clinical 行（`processing/gdc.py:315` 仍产出 `measurement_type="sample_metadata"` 真实行）
   依赖该 skip 免于 `float()` 崩溃——改为行内容守卫：无 `expression_value` 的行（GDC clinical）
-  做 locator-only 验证（`source_raw_value` 复现），有表达值的行全量验证；占位形状行仍失败
-  （统一检查，测试 pin）。
+  做 locator-only 验证（`source_raw_value` 复现），有表达值的行全量验证；占位形状行
+  在索引前被 locator 守卫拒绝（`line_number <= 0` 或 `column_index < 0` 直接判失败，
+  列 0 合法——GDC clinical 的 sample_id 位于列 0），杜绝行 0 减 1 负索引包装到末行时
+  `source_raw_value` 恰好等于包裹单元格而误通过（T6 review 修复，回归测试 pin）。
 - **core_data_existence 去豁免（D5）**：`checks/main_data.py` 删除 `is_metadata_only` 分支
   （`value_semantics == "metadata_only"` 全行豁免）+ 陈旧 docstring 注释（"download failure
   masked by geo_minimal_placeholder"）；check 现统一应用于所有 main_data。
@@ -129,7 +131,10 @@ NO_DATA 渲染与 SUCCEEDED 回归。全量门见 §4。
    两处 `commit_*` 站点仅 SUCCEEDED/PARTIAL_SUCCESS 保留 stamping）。
 6. **D5 细化（T6）**：`measurement_type == "sample_metadata"` skip 的删除需按行内容守卫
    收敛——GDC clinical 行（`gdc.py:315`）仍真实产出该 measurement_type；占位专用 skip
-   删除后这些行做 locator-only 验证（非跳过、非计数 flag），占位形状行仍被统一检查拒绝。
+   删除后这些行做 locator-only 验证（非跳过、非计数 flag）。占位形状行被 locator 守卫
+   拒绝：`line_number <= 0` / `column_index < 0` 在索引前即判失败——行 0 减 1 的负索引
+   会包装到源表末行，`source_raw_value` 恰好等于该包裹单元格时原实现会误通过（T6 review
+   修复）；列 0 不拒绝（GDC clinical sample_id 零基位于列 0）。
 7. **EOFError caveat 关闭方式**：加入 5 处 except 元组（含 fixture 路径与 helper 内部），
    而非仅 live 路径——同类截断 gzip 崩溃在 fallback 链任何节点都不应存活。
 8. **fixture 级无表达 E2E 的可执行性**：fixture 模式 acquisition 硬编码 pin 唯一数据集
