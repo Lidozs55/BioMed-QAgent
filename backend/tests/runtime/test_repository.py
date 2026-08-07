@@ -34,6 +34,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.runtime import event_store as event_store_module
 from app.runtime import repository as repository_module
 from app.runtime.event_store import CorruptEventLogError
@@ -78,6 +79,7 @@ def artifact_event(
         payload=ArtifactProducedPayload(
             artifact=ArtifactManifestEntry(
                 artifact_id=artifact_id,
+                role=ArtifactRole.AUDIT_REPORT,
                 name=f"{artifact_id}.csv",
                 relative_path=f"artifacts/{artifact_id}.csv",
                 media_type="text/csv",

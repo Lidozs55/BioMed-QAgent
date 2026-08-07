@@ -21,6 +21,7 @@ from app.domain.contracts import (
     TaskSpecification,
     TaskState,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.pipeline.stages.base import (
     ArtifactBuildOutput,
     StageContext,
@@ -36,6 +37,24 @@ from app.pipeline.stages.validation.publish import publish_artifacts
 
 _PINNED_GEO_ACCESSION = "GSE178352"
 _PINNED_PMID = "34180400"
+
+_ROLE_BY_FILENAME = {
+    "main_data.csv": ArtifactRole.PRIMARY_DATASET,
+    "sample_metadata.csv": ArtifactRole.SUPPORTING_DATASET,
+    "schema.json": ArtifactRole.SCHEMA,
+    "run_manifest.json": ArtifactRole.SCHEMA,
+    "field_descriptions.csv": ArtifactRole.SCHEMA,
+    "field_mapping.csv": ArtifactRole.PROVENANCE,
+    "cleaning_report.csv": ArtifactRole.AUDIT_REPORT,
+    "source_list.csv": ArtifactRole.AUDIT_REPORT,
+    "source_relations.csv": ArtifactRole.AUDIT_REPORT,
+    "source_assets.csv": ArtifactRole.AUDIT_REPORT,
+    "quality_report.csv": ArtifactRole.AUDIT_REPORT,
+}
+
+
+def role_for_filename(name: str) -> ArtifactRole:
+    return _ROLE_BY_FILENAME.get(name, ArtifactRole.AUDIT_REPORT)
 
 
 def _requires_full_lineage_validation(
@@ -102,6 +121,7 @@ def run_validation(
         entries.append(
             ArtifactManifestEntry(
                 artifact_id=f"artifact_{checksum_value[:32]}",
+                role=role_for_filename(path.name),
                 name=path.name,
                 relative_path=f"artifacts/{path.name}",
                 media_type="text/csv",

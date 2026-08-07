@@ -55,7 +55,11 @@ from app.domain.contracts import (
     build_event,
     generate_prefixed_uuid,
 )
-from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
+)
 from app.model_config import RunModelSettings
 from app.pipeline.stages import (
     STANDALONE_RUN_ID,
@@ -305,6 +309,7 @@ class PipelineRunner:
             raise RuntimeError("pending publication manifest task_id mismatch")
         manifest_entry = ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",

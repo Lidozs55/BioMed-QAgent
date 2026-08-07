@@ -52,7 +52,11 @@ from app.domain.contracts import (
     ValidationSummary,
     build_event,
 )
-from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
+)
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.tool import run_research_pipeline
 from app.runtime.compaction import CompactionCancelledError
@@ -1564,6 +1568,7 @@ async def test_executor_transfers_pending_publication_before_model_close(
         manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1659,6 +1664,7 @@ async def test_commit_artifacts_emits_publication_event(
         manifest=manifest,
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1742,6 +1748,7 @@ async def test_executor_transfers_pending_publication_on_stream_failure(
         manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1817,6 +1824,7 @@ async def test_executor_aborts_handle_when_completion_transfer_fails(
         manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",

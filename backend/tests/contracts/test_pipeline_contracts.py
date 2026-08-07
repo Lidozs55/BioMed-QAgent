@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from app.datasets.contracts import BuildResult, BuildResultStatus
+from app.datasets.contracts import ArtifactRole, BuildResult, BuildResultStatus
 from app.domain.contracts import (
     ArtifactManifestEntry,
     AttemptStatus,
@@ -45,6 +45,7 @@ def parsed_file() -> FileAsset:
 def _valid_manifest() -> RunManifest:
     artifact = ArtifactManifestEntry(
         artifact_id="artifact_main",
+        role=ArtifactRole.PRIMARY_DATASET,
         name="main_data.csv",
         relative_path="artifacts/main_data.csv",
         media_type="text/csv",
@@ -173,6 +174,7 @@ def test_artifact_manifest_entry_must_stay_in_artifacts_directory() -> None:
     with pytest.raises(ValidationError, match="artifacts"):
         ArtifactManifestEntry(
             artifact_id="artifact_main",
+            role=ArtifactRole.PRIMARY_DATASET,
             name="main_data.csv",
             relative_path="staging/main_data.csv",
             media_type="text/csv",

@@ -28,6 +28,7 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
 from app.pipeline.runner import PipelineRunner, _build_failed_manifest, _compute_build_result
+from app.pipeline.stages.validation.runner import role_for_filename
 
 _SHA = "a" * 64
 _NOW = datetime.now(UTC)
@@ -43,6 +44,7 @@ def _manifest_with_artifacts(names: list[str]) -> RunManifest:
     artifacts = [
         ArtifactManifestEntry(
             artifact_id=f"artifact_{name.replace('.', '_')}",
+            role=role_for_filename(name),
             name=name,
             relative_path=f"artifacts/{name}",
             media_type="text/csv",

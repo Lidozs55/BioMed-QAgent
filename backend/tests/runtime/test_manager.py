@@ -50,7 +50,7 @@ from app.domain.contracts import (
     WarningPayload,
     build_event,
 )
-from app.domain.contracts.dataset_state import BuildResultStatus
+from app.domain.contracts.dataset_state import ArtifactRole, BuildResultStatus
 from app.domain.contracts.enums import ErrorCode
 from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
@@ -3082,6 +3082,7 @@ async def test_durable_artifact_event_survives_hub_projection_failure(
                     payload=ArtifactProducedPayload(
                         artifact=ArtifactManifestEntry(
                             artifact_id="artifact_durable_hub_failure",
+                            role=ArtifactRole.AUDIT_REPORT,
                             name="durable.csv",
                             relative_path="artifacts/durable.csv",
                             media_type="text/csv",
@@ -3167,6 +3168,7 @@ async def test_durable_artifact_event_survives_append_projection_failure(
                     payload=ArtifactProducedPayload(
                         artifact=ArtifactManifestEntry(
                             artifact_id="artifact_durable_append_failure",
+                            role=ArtifactRole.AUDIT_REPORT,
                             name="durable-append.csv",
                             relative_path="artifacts/durable-append.csv",
                             media_type="text/csv",
@@ -4908,6 +4910,7 @@ async def test_manager_suppresses_artifact_when_cancel_wins_emitter_lock(
             ArtifactProducedPayload(
                 artifact=ArtifactManifestEntry(
                     artifact_id="artifact_cancel_race",
+                    role=ArtifactRole.AUDIT_REPORT,
                     name="cancelled.csv",
                     relative_path="artifacts/cancelled.csv",
                     media_type="text/csv",

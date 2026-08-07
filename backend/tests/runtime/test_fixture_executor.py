@@ -31,6 +31,7 @@ from app.domain.contracts import (
     ValidationSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.pipeline.stages import PipelineCancelledError
 from app.runtime.repository import TaskRepository
 
@@ -864,6 +865,7 @@ async def test_fixture_bridge_replays_buffered_audit_before_existing_cancellatio
             payload=ArtifactProducedPayload(
                 artifact=ArtifactManifestEntry(
                     artifact_id="artifact_buffered_cancel",
+                    role=ArtifactRole.AUDIT_REPORT,
                     name="cancelled.csv",
                     relative_path="artifacts/cancelled.csv",
                     media_type="text/csv",

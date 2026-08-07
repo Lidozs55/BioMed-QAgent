@@ -20,6 +20,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 
@@ -640,6 +641,7 @@ async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
                 payload=ArtifactProducedPayload(
                     artifact=ArtifactManifestEntry(
                         artifact_id=artifact_id,
+                        role=ArtifactRole.AUDIT_REPORT,
                         name=f"{artifact_id}.csv",
                         relative_path=f"artifacts/{artifact_id}.csv",
                         media_type="text/csv",

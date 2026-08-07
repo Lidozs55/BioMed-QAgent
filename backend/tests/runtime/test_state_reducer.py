@@ -25,6 +25,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.domain.contracts.enums import ErrorCode, StageName
 from app.runtime.state import reduce_task_event
 
@@ -92,6 +93,7 @@ def test_reducer_counts_artifact_produced_events() -> None:
             ArtifactProducedPayload(
                 artifact=ArtifactManifestEntry(
                     artifact_id="artifact_123",
+                    role=ArtifactRole.AUDIT_REPORT,
                     name="result.csv",
                     relative_path="artifacts/result.csv",
                     media_type="text/csv",

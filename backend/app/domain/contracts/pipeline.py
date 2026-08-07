@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.dataset_state import BuildResult
+from app.domain.contracts.dataset_state import ArtifactRole, BuildResult
 from app.domain.contracts.enums import (
     AttemptStatus,
     ErrorCode,
@@ -115,6 +115,7 @@ class StageAttempt(ContractModel):
 
 class ArtifactManifestEntry(ContractModel):
     artifact_id: str = Field(min_length=1)
+    role: ArtifactRole
     name: str = Field(min_length=1)
     relative_path: str
     media_type: str = Field(min_length=1)
