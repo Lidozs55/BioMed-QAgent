@@ -321,10 +321,17 @@ export function applyRunTransitionEvent(
     ...next,
     summary: { ...next.summary, status, active_run_id: runId },
   };
-  if (
-    payload.type === "run_finalizing" ||
-    payload.type === "run_cancel_requested"
-  ) {
+  if (payload.type === "run_cancel_requested") {
+    // A cancelled run is no longer awaiting user input: clear its prompt so
+    // the blocking dialog does not stay open (or race) while the
+    // cancellation settles.
+    if (next.pendingUserInput?.runId === runId) {
+      next = { ...next, pendingUserInput: null };
+    }
+    next = deactivateRunAssistantStream(next, runId);
+    next = deactivateRunStreamingItems(next, runId);
+  }
+  if (payload.type === "run_finalizing") {
     next = deactivateRunAssistantStream(next, runId);
     next = deactivateRunStreamingItems(next, runId);
   }

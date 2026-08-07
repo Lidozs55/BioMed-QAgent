@@ -2226,6 +2226,40 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeTaskId).toBe("task_terminal");
   });
 
+  it("re-subscribes a terminal task when it is continued (replacing the leaked subscription)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_terminal", "completed", 5)]),
+      false,
+    );
+    // Model a fully-hydrated terminal task (the normal live-path case after
+    // F2 unsubscribes it): its watermark must be preserved on re-subscribe.
+    const merged = useAgentStore.getState().tasksById.task_terminal;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_terminal: { ...merged, hydration: "snapshot" },
+      },
+    });
+    const accepted: TaskRunAccepted = {
+      request_id: "req_continue_subscribe",
+      task_id: "task_terminal",
+      run_id: "run_continue_subscribe",
+      status: "queued",
+    };
+    const apiClient = api({
+      continueTask: vi.fn().mockResolvedValue(accepted),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.continueTask("task_terminal", { input: "follow up" });
+
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_terminal",
+      5,
+    );
+  });
+
   it("sorts an older continued task among newer active tasks by immutable creation", async () => {
     useAgentStore.getState().mergeTaskPage(
       page(

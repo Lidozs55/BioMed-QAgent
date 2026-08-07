@@ -18,6 +18,8 @@ export function useAgentStream(): AgentEventTransport {
           useAgentStore.getState().deactivateAssistantStreams(taskId),
         setConnectionStatus: (status) =>
           useAgentStore.getState().setConnectionStatus(status),
+        shouldSubscribe: (taskId) =>
+          useAgentStore.getState().activeItems.includes(taskId),
         onControlError: (frame) => {
           // Recovery-path errors (task_not_found during resubscribe) are
           // already surfaced via transport internals; only surface generic
