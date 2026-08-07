@@ -689,3 +689,50 @@ def test_reducer_dedup_survives_run_boundary() -> None:
     )
 
     assert snapshot.task.artifact_count == 2
+
+
+def test_reducer_rejects_conflicting_duplicate_artifact_event() -> None:
+    """H6/A8: a duplicate artifact_id whose digest/path conflicts with the
+    first occurrence is a conflicting duplicate and must be rejected with a
+    ValueError (mirroring the publication duplicate handling) — an identical
+    replay stays a no-op.
+    """
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(2, RunStartedPayload()),
+    )
+    first = ArtifactManifestEntry(
+        artifact_id="artifact_x",
+        role=ArtifactRole.AUDIT_REPORT,
+        name="result.csv",
+        relative_path="artifacts/result.csv",
+        media_type="text/csv",
+        size_bytes=42,
+        sha256="0" * 64,
+        generated_by_step_id="stage_123",
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(3, ArtifactProducedPayload(artifact=first)),
+    )
+    # Identical replay stays a no-op (existing dedup semantics).
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(4, ArtifactProducedPayload(artifact=first)),
+    )
+    assert snapshot.task.artifact_count == 1
+
+    # Same artifact_id with a different digest/path is a conflicting duplicate.
+    conflicting = first.model_copy(update={"sha256": "f" * 64})
+    with pytest.raises(ValueError, match="conflicting duplicate artifact"):
+        reduce_task_event(
+            snapshot,
+            runtime_event(5, ArtifactProducedPayload(artifact=conflicting)),
+        )
+    conflicting_path = first.model_copy(update={"relative_path": "artifacts/other.csv"})
+    with pytest.raises(ValueError, match="conflicting duplicate artifact"):
+        reduce_task_event(
+            snapshot,
+            runtime_event(6, ArtifactProducedPayload(artifact=conflicting_path)),
+        )

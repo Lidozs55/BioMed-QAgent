@@ -14,9 +14,10 @@ invariants gate on the ``publish`` operation.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Mapping
-from datetime import datetime
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.datasets.build.adapters import get_adapter
@@ -56,6 +57,21 @@ from app.pipeline.state import StageOutputFile
 #: profile run; the authoritative manifest is re-assembled after validation.
 _PLACEHOLDER_DIGEST = "0" * 64
 
+#: H2 (Phase 4 review): marker prefix for the publish-time refusal when a
+#: main-run data-correction pause became pending mid-build. The tool maps any
+#: failed outcome whose message starts with this prefix to the agent-facing
+#: refusal envelope (same text family as the entry gate).
+_PUBLICATION_REFUSED_PREFIX = "publication refused: main input pending"
+
+
+class PublicationRefusedError(BuildError):
+    """The build reached publication while a correction pause is pending.
+
+    D1/H2 (Phase 4 review): the tool's entry gate is point-in-time; the
+    publish operation rechecks immediately before the immutable rename so a
+    correction that became pending mid-build can never promote a version.
+    """
+
 
 class ExpressionBuildRunner:
     """Executes the expression skeleton operations against real components."""
@@ -70,6 +86,7 @@ class ExpressionBuildRunner:
         output_dir: Path,
         gene_symbol_map: Mapping[str, str] | None = SYMBOL_TO_ENSEMBL,
         cancellation_requested: CancellationToken | None = None,
+        pending_check: Callable[[], bool] | None = None,
     ) -> None:
         self._spec = spec
         self._registry = registry
@@ -78,6 +95,10 @@ class ExpressionBuildRunner:
         self._output_dir = Path(output_dir)
         self._gene_symbol_map = gene_symbol_map
         self._cancellation_requested = cancellation_requested
+        # H2 (Phase 4 review): rechecked immediately before the immutable
+        # publication rename so a correction that became pending mid-build
+        # refuses promotion (the tool's entry gate is point-in-time only).
+        self._pending_check = pending_check
         self._schema = registry.get(spec.schema_ref)
         self._normalization_profile = get_normalization_profile(
             spec.normalization_profile_ref
@@ -139,7 +160,12 @@ class ExpressionBuildRunner:
         asset = self._source_assets[binding.binding_id]
         source_path = self._source_paths[binding.binding_id]
         adapter = get_adapter(binding.adapter_id)
-        batch = adapter.parse(
+        # D2/H1 (Phase 4 review): full-file parsing is heavy synchronous work;
+        # run it in a worker thread so the event loop stays responsive (the
+        # manager can process a cancel request while the parse runs) and the
+        # executor's operation-boundary cancellation checks can interrupt.
+        batch = await asyncio.to_thread(
+            adapter.parse,
             asset,
             source_path,
             build_id=self._spec.build_id,
@@ -170,7 +196,10 @@ class ExpressionBuildRunner:
         batch = self._batches.get(binding_id)
         if batch is None:
             raise BuildError(f"no parsed batch cached for binding {binding_id!r}")
-        result = canonicalize(
+        # D2/H1: canonicalization is heavy synchronous work; offload it to a
+        # worker thread so cancellation stays responsive during the operation.
+        result = await asyncio.to_thread(
+            canonicalize,
             batch=batch,  # type: ignore[arg-type]
             schema=self._schema,
             profile=self._normalization_profile,
@@ -212,7 +241,10 @@ class ExpressionBuildRunner:
         self, op: OperationSpec, upstream: dict[str, object]
     ) -> OperationOutput:
         results = self._canonical_results_for_bindings()
-        integration = integrate(
+        # D2/H1: integration is heavy synchronous work; offload it to a worker
+        # thread so the event loop stays responsive during the operation.
+        integration = await asyncio.to_thread(
+            integrate,
             results=results,
             merge_strategy=self._spec.merge_strategy,
             schema=self._schema,
@@ -342,7 +374,6 @@ class ExpressionBuildRunner:
         # directory + rename so a crash never leaves a half-written
         # publication and a prior version is never mutated.
         import shutil
-        from datetime import UTC, datetime
 
         from app.datasets.contracts import DatasetPublication
 
@@ -391,7 +422,18 @@ class ExpressionBuildRunner:
                 + "\n",
                 "utf-8",
             )
+            # H2 (Phase 4 review): recheck the pending-input gate immediately
+            # before the immutable rename — the entry gate is point-in-time
+            # and the broker may set pending later, mid-build. Refusal raises
+            # before any version directory exists.
+            if self._pending_check is not None and self._pending_check():
+                raise PublicationRefusedError(
+                    _PUBLICATION_REFUSED_PREFIX
+                )
             staged_dir.rename(version_dir)
+        except PublicationRefusedError:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise
         except OSError as exc:
             shutil.rmtree(staged_dir, ignore_errors=True)
             raise BuildError(f"atomic promotion failed: {exc}") from exc
@@ -488,6 +530,11 @@ def _find_latest_publication(publish_dir: Path) -> str | None:
         try:
             record = json.loads(publication_path.read_text("utf-8"))
             published_at = datetime.fromisoformat(record["published_at"])
+            if published_at.tzinfo is None:
+                # H5 (Phase 4 review): older records may carry naive ISO
+                # timestamps; normalize to UTC so naive and aware values can
+                # be compared deterministically (never a TypeError).
+                published_at = published_at.replace(tzinfo=UTC)
             publication_id = record["publication_id"]
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue

@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from pydantic import JsonValue
+
 from app.datasets.contracts import DatasetBuildSpec
 from app.datasets.runtime.checkpoint import (
     BuildState,
@@ -610,12 +612,24 @@ class DatasetBuildExecutor:
     async def _finalize_failed(
         self, exc: Exception, error_code: ErrorCode
     ) -> BuildRunOutcome:
+        # H3 (Phase 4 review): propagate structured failure signals into the
+        # outcome error details so callers never substring-match error text —
+        # the typed reason_code (e.g. an empty source) and the operation that
+        # was running when the build failed (which scopes a persisted manifest
+        # to this attempt).
+        details: dict[str, JsonValue] = {}
+        reason_code = getattr(exc, "reason_code", None)
+        if reason_code is not None:
+            details["reason_code"] = str(reason_code)
+        state = self._state
+        if state is not None and state.inflight_attempt is not None:
+            details["failed_operation"] = state.inflight_attempt.operation_id
         error = ErrorDetail(
             code=error_code,
             message=str(exc),
             retryable=error_code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR),
+            details=details,
         )
-        state = self._state
         if state is None:
             return BuildRunOutcome(status="failed", error=error)
         inflight = state.inflight_attempt

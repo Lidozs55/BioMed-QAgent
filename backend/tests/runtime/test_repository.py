@@ -1340,11 +1340,64 @@ async def test_repository_rejects_snapshot_ahead_of_event_journal(tmp_path) -> N
         await repository.close()
 
 
+@pytest.mark.asyncio
+async def test_repository_reconstructs_dedup_state_for_pre_fix_snapshot(
+    tmp_path: Path,
+) -> None:
+    """H6/A8: a pre-fix snapshot that already carries artifact_count but has no
+    stored dedup state must have its identity set reconstructed from the
+    artifact_produced events, so replaying an old duplicate after upgrade
+    cannot over-count.
+    """
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    await repository.initialize()
+    task_id = "task_pre_fix_dedup"
+    base = snapshot_with_run(task_id=task_id, run_id="run_123")
+    base = base.model_copy(
+        update={
+            "task": base.task.model_copy(
+                update={"latest_sequence": 2, "artifact_count": 2}
+            ),
+        }
+    )
+    await repository.save_snapshot(base)
+    try:
+        # Append two artifact events directly to the journal (as a pre-fix
+        # system would have), bypassing the reducer bookkeeping.
+        for event in (
+            artifact_event(task_id, 1, "artifact_a"),
+            artifact_event(task_id, 2, "artifact_b"),
+        ):
+            await asyncio.to_thread(repository.events.append, event)
+        # Simulate a pre-fix snapshot: drop the private dedup key entirely
+        # (artifact_count is present, so no legacy backfill path applies).
+        snapshot_path = (
+            output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
+        )
+        raw = json.loads(snapshot_path.read_text("utf-8"))
+        raw.pop("_artifact_ids_by_run", None)
+        snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
+
+        loaded = await repository.get_snapshot(task_id)
+        assert loaded is not None
+        assert loaded.task.artifact_count == 2
+        assert loaded._artifact_ids_by_run == {"run_123": {"artifact_a", "artifact_b"}}  # noqa: SLF001
+
+        # Replaying an old duplicate at a new sequence must not inflate the
+        # count — the dedup state was reconstructed from the events.
+        replayed = await repository.append_event(artifact_event(task_id, 3, "artifact_a"))
+        assert replayed.task.artifact_count == 2
+    finally:
+        await repository.close()
+
+
 def _load_persisted_snapshot(path: Path) -> TaskSnapshot:
-    """Validate a persisted snapshot JSON, ignoring the private dedup key."""
+    """Validate a persisted snapshot JSON, ignoring the private dedup keys."""
 
     raw = json.loads(path.read_text("utf-8"))
     raw.pop("_artifact_ids_by_run", None)
+    raw.pop("_artifact_fingerprints_by_run", None)
     return TaskSnapshot.model_validate(raw)
 
 

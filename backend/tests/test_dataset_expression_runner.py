@@ -8,6 +8,7 @@ validate profile -> publish) with the Phase 6 release invariants gate.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import json
@@ -620,3 +621,199 @@ async def test_runner_publish_refuses_cancelled_token_directly(
     )
     with pytest.raises(BuildCancelledError):
         await runner.run_operation(publish_op, {})
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_blocking_integrate_is_observed_and_blocks_publication(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """D2/H1: the heavy synchronous operations run off the event loop, so a
+    cancellation requested while integrate is blocked in a worker thread is
+    observed at the operation boundary — the build returns a cancelled
+    outcome within bounded time and never publishes. Before the to_thread
+    offload the loop was blocked for the whole operation, so a cancel request
+    could not even be processed until the build had already published.
+    """
+    import threading
+    import time
+
+    from app.datasets.build import expression_runner as expression_runner_module
+
+    token = _FlagToken()
+    real_integrate = expression_runner_module.integrate
+    integrate_started = threading.Event()
+
+    def blocking_integrate(*args, **kwargs):
+        integrate_started.set()
+        time.sleep(0.4)
+        return real_integrate(*args, **kwargs)
+
+    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path,
+        cancellation_requested=token,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        source_assets=assets,
+        cancellation_requested=token,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    run_task = asyncio.create_task(executor.run())
+    # Wait for integrate to be in flight (inside its worker thread pre-fix, or
+    # blocking the loop pre-fix) before requesting cancellation.
+    await asyncio.to_thread(integrate_started.wait, 5.0)
+    token.set()
+    outcome = await asyncio.wait_for(run_task, timeout=2.0)
+    assert outcome.status == "cancelled"
+    assert not list((tmp_path / "publish").glob("build_runner_test_*"))
+
+
+def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> None:
+    """B8/H5: older publication records may carry naive ISO timestamps;
+    mixing naive and timezone-aware values must not raise TypeError, and the
+    chronologically-later aware record wins deterministically.
+    """
+    from app.datasets.build.expression_runner import _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    records = [
+        ("pub_build_x_aaaa", "2026-08-08T00:00:00"),  # naive
+        ("pub_build_x_bbbb", "2026-08-08T01:00:00+00:00"),  # aware, later
+    ]
+    for publication_id, published_at in records:
+        version_dir = publish_dir / publication_id.removeprefix("pub_build_x_")
+        version_dir.mkdir(parents=True)
+        (version_dir / "publication.json").write_text(
+            json.dumps(
+                {"publication_id": publication_id, "published_at": published_at}
+            ),
+            "utf-8",
+        )
+
+    assert _find_latest_publication(publish_dir) == "pub_build_x_bbbb"
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_when_pending_check_flips_after_validation(
+    tmp_path: Path,
+) -> None:
+    """D1/H2: the publish operation rechecks a pending-input gate immediately
+    before the immutable promotion — a correction that became pending between
+    validation and publish refuses the version dir and surfaces the refusal
+    as the outcome error (never a silent promotion).
+    """
+    from app.datasets.build.expression_runner import _PUBLICATION_REFUSED_PREFIX
+    from app.datasets.runtime import OperationKind
+
+    pending = {"value": False}
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=tmp_path,
+        pending_check=lambda: pending["value"],
+    )
+
+    async def wrapped(op, upstream):
+        result = await runner.run_operation(op, upstream)
+        if op.kind is OperationKind.VALIDATE_PROFILE:
+            pending["value"] = True
+        return result
+
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=wrapped,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.message.startswith(_PUBLICATION_REFUSED_PREFIX)
+    assert not list((tmp_path / "publish").glob("build_runner_test_*"))
+    # No stray staged directory survives the refusal.
+    assert not list((tmp_path / "publish").glob(".*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_carries_structured_no_data_reason(
+    tmp_path: Path,
+) -> None:
+    """H3: an empty source surfaces a structured reason_code in the outcome
+    error details (no substring matching at the tool boundary).
+    """
+    header_only = tmp_path / "empty.tsv"
+    header_only.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    checksum = hashlib.sha256(header_only.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/empty.tsv",
+        sha256=checksum,
+        size_bytes=header_only.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_gdc",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_gdc": asset},
+        source_paths={"binding_gdc": header_only},
+        output_dir=tmp_path,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.details.get("reason_code") == "no_primary_data"
+    assert outcome.error.details.get("failed_operation") == "parse:binding_gdc"

@@ -203,6 +203,12 @@ def reduce_task_event(
     seen_artifact_ids = {
         run_id: set(ids) for run_id, ids in snapshot._artifact_ids_by_run.items()
     }
+    # H6: copy the first-occurrence fingerprints for conflicting-duplicate
+    # detection (same shape, also never aliased/mutated).
+    artifact_fingerprints = {
+        run_id: {artifact_id: fingerprint for artifact_id, fingerprint in fps.items()}
+        for run_id, fps in snapshot._artifact_fingerprints_by_run.items()
+    }
 
     if isinstance(payload, RunQueuedPayload):
         if event.run_id is None:
@@ -400,6 +406,23 @@ def reduce_task_event(
             if artifact_id not in run_seen:
                 run_seen.add(artifact_id)
                 artifact_count += 1
+                artifact_fingerprints.setdefault(event.run_id, {})[artifact_id] = (
+                    payload.artifact.sha256,
+                    payload.artifact.relative_path,
+                )
+            else:
+                # H6 (Phase 4 review): a duplicate identity whose digest/path
+                # conflicts with the first occurrence is a conflicting
+                # duplicate and is rejected, mirroring the publication
+                # duplicate handling; an identical replay stays a no-op.
+                first = artifact_fingerprints.get(event.run_id, {}).get(artifact_id)
+                if first is not None and (
+                    payload.artifact.sha256 != first[0]
+                    or payload.artifact.relative_path != first[1]
+                ):
+                    raise ValueError(
+                        f"conflicting duplicate artifact event: {artifact_id}"
+                    )
         else:
             artifact_count += 1
 
@@ -426,6 +449,7 @@ def reduce_task_event(
         }
     )
     updated._artifact_ids_by_run = seen_artifact_ids
+    updated._artifact_fingerprints_by_run = artifact_fingerprints
     return updated
 
 
@@ -477,3 +501,36 @@ def count_artifact_produced_events(
         if isinstance(event.payload, ArtifactProducedPayload)
         and (through_sequence is None or event.sequence <= through_sequence)
     )
+
+
+def artifact_identities_from_events(
+    events: Iterable[EventEnvelope],
+    *,
+    through_sequence: int | None = None,
+) -> tuple[dict[str, set[str]], dict[str, dict[str, tuple[str, str]]]]:
+    """Rebuild the artifact dedup state from artifact_produced events (H6).
+
+    Used when loading a snapshot whose private dedup key is missing (e.g. a
+    pre-fix snapshot that already carries ``artifact_count``) so replaying an
+    old duplicate after upgrade cannot over-count and conflicting duplicates
+    are still detected. Returns ``(seen_ids_by_run, fingerprints_by_run)``
+    matching the reducer's per-run bookkeeping.
+    """
+
+    ids_by_run: dict[str, set[str]] = {}
+    fingerprints: dict[str, dict[str, tuple[str, str]]] = {}
+    for event in events:
+        if through_sequence is not None and event.sequence > through_sequence:
+            continue
+        if event.run_id is None:
+            continue
+        payload = event.payload
+        if not isinstance(payload, ArtifactProducedPayload):
+            continue
+        artifact_id = payload.artifact.artifact_id
+        ids_by_run.setdefault(event.run_id, set()).add(artifact_id)
+        fingerprints.setdefault(event.run_id, {}).setdefault(
+            artifact_id,
+            (payload.artifact.sha256, payload.artifact.relative_path),
+        )
+    return ids_by_run, fingerprints

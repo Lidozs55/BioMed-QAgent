@@ -34,6 +34,7 @@ from app.runtime.event_store import CorruptEventLogError, EventStore, path_lock
 from app.runtime.index import TaskIndex
 from app.runtime.session import DurableTaskSession
 from app.runtime.state import (
+    artifact_identities_from_events,
     count_artifact_produced_events,
     reduce_task_event,
 )
@@ -112,17 +113,25 @@ def atomic_write_json(path: Path, value: BaseModel | Mapping[str, Any]) -> None:
 
 
 def _snapshot_with_internal(snapshot: TaskSnapshot) -> dict[str, Any]:
-    """Serialize a snapshot including its private artifact-id dedup map.
+    """Serialize a snapshot including its private artifact dedup bookkeeping.
 
-    A8 (Phase 4 review): the seen-artifact bookkeeping lives in a private
-    attribute (never part of the wire contract); it is persisted under a
-    private JSON key so the dedup survives repository round-trips and
-    restarts. ``_load_snapshot_sync`` restores it before reducing new events.
+    A8/H6 (Phase 4 review): the seen-artifact identity set and the
+    first-occurrence fingerprints live in private attributes (never part of
+    the wire contract); they are persisted under private JSON keys so dedup
+    and conflicting-duplicate detection survive repository round-trips and
+    restarts. ``_load_snapshot_sync`` restores them before reducing events.
     """
 
     raw = snapshot.model_dump(mode="json")
     raw["_artifact_ids_by_run"] = {
         run_id: sorted(ids) for run_id, ids in snapshot._artifact_ids_by_run.items()
+    }
+    raw["_artifact_fingerprints_by_run"] = {
+        run_id: {
+            artifact_id: {"sha256": sha256, "relative_path": relative_path}
+            for artifact_id, (sha256, relative_path) in fingerprints.items()
+        }
+        for run_id, fingerprints in snapshot._artifact_fingerprints_by_run.items()
     }
     return raw
 
@@ -602,13 +611,29 @@ class TaskRepository:
         # Snapshots persisted before the no_artifact_failure field was removed
         # still carry it; strict ContractModel (extra="forbid") would reject it.
         raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
-        # A8: restore the private artifact-id dedup map (stored under a private
-        # JSON key that is never part of the wire contract).
+        # A8/H6: restore the private artifact dedup bookkeeping (stored under
+        # private JSON keys that are never part of the wire contract); when a
+        # key is missing (pre-fix snapshot) the state is rebuilt from the
+        # artifact_produced events below.
         internal_artifact_ids = raw_snapshot.pop("_artifact_ids_by_run", None)
+        internal_fingerprints = raw_snapshot.pop(
+            "_artifact_fingerprints_by_run", None
+        )
         snapshot = TaskSnapshot.model_validate(raw_snapshot)
         if internal_artifact_ids:
             snapshot._artifact_ids_by_run = {  # noqa: SLF001
                 run_id: set(ids) for run_id, ids in internal_artifact_ids.items()
+            }
+        if internal_fingerprints:
+            snapshot._artifact_fingerprints_by_run = {  # noqa: SLF001
+                run_id: {
+                    artifact_id: (
+                        fingerprint["sha256"],
+                        fingerprint["relative_path"],
+                    )
+                    for artifact_id, fingerprint in fingerprints.items()
+                }
+                for run_id, fingerprints in internal_fingerprints.items()
             }
         latest_sequence = self.events.latest_sequence(task_id)
         if snapshot.task.latest_sequence > latest_sequence:
@@ -618,9 +643,18 @@ class TaskRepository:
                 f"{snapshot.task.latest_sequence} > {latest_sequence}"
             )
         legacy = "artifact_count" not in raw_snapshot.get("task", {})
+        # H6: a snapshot whose dedup bookkeeping is missing (e.g. a pre-fix
+        # snapshot that already carries artifact_count) must have its identity
+        # set reconstructed from the events so replaying an old duplicate
+        # after upgrade cannot over-count.
+        dedup_state_missing = (
+            internal_artifact_ids is None or internal_fingerprints is None
+        )
         legacy_artifact_count = 0
-        if legacy:
+        historical_events: list[EventEnvelope] = []
+        if legacy or dedup_state_missing:
             historical_events = self.events.read(task_id, after_sequence=0)
+        if legacy:
             legacy_artifact_count = count_artifact_produced_events(
                 historical_events,
                 through_sequence=snapshot.task.latest_sequence,
@@ -632,6 +666,17 @@ class TaskRepository:
                             update={"artifact_count": legacy_artifact_count}
                         )
                     }
+                )
+        if dedup_state_missing:
+            rebuilt_ids, rebuilt_fingerprints = artifact_identities_from_events(
+                historical_events,
+                through_sequence=snapshot.task.latest_sequence,
+            )
+            if internal_artifact_ids is None:
+                snapshot._artifact_ids_by_run = rebuilt_ids  # noqa: SLF001
+            if internal_fingerprints is None:
+                snapshot._artifact_fingerprints_by_run = (  # noqa: SLF001
+                    rebuilt_fingerprints
                 )
         events = (
             self.events.read(
@@ -646,7 +691,7 @@ class TaskRepository:
                 snapshot = reduce_task_event(snapshot, event)
             snapshot = self._snapshot_without_messages(snapshot)
             atomic_write_json(snapshot_path, _snapshot_with_internal(snapshot))
-        elif legacy and legacy_artifact_count > 0:
+        elif (legacy and legacy_artifact_count > 0) or dedup_state_missing:
             atomic_write_json(
                 snapshot_path,
                 _snapshot_with_internal(self._snapshot_without_messages(snapshot)),

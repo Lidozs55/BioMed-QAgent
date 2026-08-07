@@ -165,6 +165,13 @@ class TaskSnapshot(ContractModel):
     # the wire contract). The repository persists it in the snapshot JSON
     # under a private key so the dedup survives restarts.
     _artifact_ids_by_run: dict[str, set[str]] = PrivateAttr(default_factory=dict)
+    # H6 (Phase 4 review): fingerprints (sha256, relative_path) of the FIRST
+    # occurrence per (run_id, artifact_id) so a conflicting duplicate — same id
+    # with a different digest/path — is rejected on replay, mirroring the
+    # publication duplicate handling. Persisted under a private JSON key.
+    _artifact_fingerprints_by_run: dict[str, dict[str, tuple[str, str]]] = PrivateAttr(
+        default_factory=dict
+    )
 
 
 class TaskPage(ContractModel):

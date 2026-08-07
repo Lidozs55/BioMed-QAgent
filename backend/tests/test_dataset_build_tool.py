@@ -38,6 +38,37 @@ def _spec_json(binding_id: str = "binding_gdc", adapter_id: str = "gdc.expressio
     })
 
 
+def _mixed_spec_json() -> str:
+    """A two-binding spec: empty-capable GDC binding plus a Xena binding."""
+    return json.dumps({
+        "build_id": "build_tool_test",
+        "objective": "compare TP53 expression",
+        "dataset_family": "gene_expression",
+        "row_granularity": "gene_sample_measurement",
+        "schema_ref": "gene_expression.long.v1",
+        "source_bindings": [
+            {
+                "binding_id": "binding_gdc",
+                "source": "gdc",
+                "acquisition": {"mode": "builtin", "provider_id": "gdc.v1"},
+                "adapter_id": "gdc.expression.v1",
+            },
+            {
+                "binding_id": "binding_xena",
+                "source": "ucsc_xena",
+                "acquisition": {
+                    "mode": "builtin",
+                    "provider_id": "ucsc_xena.v1",
+                },
+                "adapter_id": "xena.matrix.v1",
+            },
+        ],
+        "merge_strategy": "append_by_canonical_row",
+        "validation_profile_ref": "gene_expression.release.v1",
+        "normalization_profile_ref": "gene_expression.normalization.v1",
+    })
+
+
 def _make_ctx(tmp_path: Path, task_id: str = "test_build_tool") -> ToolContext:
     rc = RunContext(task_id=task_id)
     rc._work_dir = create_task_workdir(task_id, base_dir=str(tmp_path))
@@ -296,3 +327,147 @@ async def test_execute_dataset_build_proceeds_without_pending_main_input(
     assert data["status"] == "ok"
     assert data["result"]["status"] == "succeeded"
     assert data["result"]["publication_id"]
+
+
+def test_no_data_classification_is_scoped_to_current_attempt(
+    tmp_path: Path,
+) -> None:
+    """H3: NO_DATA is attempt-scoped — a stale zero-row manifest from an
+    earlier attempt must not classify a later genuine failure as NO_DATA, and
+    a later attempt with data succeeds normally.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+
+    # Attempt A: a source that parses but yields zero valid rows produces a
+    # zero-row manifest and a NO_DATA envelope (the manifest is THIS attempt's).
+    all_invalid = run_ctx.work_dir.source_asset_file("all_invalid.tsv")
+    all_invalid.write_text(
+        "gene_id\tS1\tS2\nTP53\ta\tb\nBRCA1\tc\td\n", encoding="utf-8"
+    )
+    data_a = _call_tool(
+        ctx, _spec_json(), json.dumps({"binding_gdc": "source_assets/all_invalid.tsv"})
+    )
+    assert data_a["status"] == "ok"
+    assert data_a["result"]["status"] == "no_data"
+    assert (
+        run_ctx.work_dir.root
+        / "datasets_build"
+        / "build_tool_test"
+        / "dataset_manifest.json"
+    ).is_file()
+
+    # Attempt B: a genuine parse failure (malformed row) on the same build_id
+    # must NOT be misclassified as NO_DATA because of the stale zero-row
+    # manifest left by attempt A.
+    bad_row = run_ctx.work_dir.source_asset_file("bad_row.tsv")
+    bad_row.write_text("gene_id\tS1\tS2\nTP53\t1\t2\nmalformed\n", encoding="utf-8")
+    data_b = _call_tool(
+        ctx, _spec_json(), json.dumps({"binding_gdc": "source_assets/bad_row.tsv"})
+    )
+    assert data_b["status"] == "error"
+    assert data_b["retryable"] is True
+
+    # Attempt C: real data succeeds and publishes.
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    data_c = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+    assert data_c["status"] == "ok"
+    assert data_c["result"]["status"] == "succeeded"
+    assert data_c["result"]["publication_id"]
+
+
+def test_execute_dataset_build_mixed_empty_and_usable_sources_not_all_rejected(
+    tmp_path: Path,
+) -> None:
+    """H3: a mixed-source build (one empty + one usable) is NOT all-rejected
+    as NO_DATA — the usable source is surfaced as a partial outcome.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    empty = run_ctx.work_dir.source_asset_file("empty.tsv")
+    empty.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    xena_rel = _stage_fixture(run_ctx, "ncbi/gse178352/xena_matrix.tsv", "xena.tsv")
+
+    data = _call_tool(
+        ctx,
+        _mixed_spec_json(),
+        json.dumps(
+            {
+                "binding_gdc": "source_assets/empty.tsv",
+                "binding_xena": xena_rel,
+            }
+        ),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "partial_success"
+    assert result["successful_sources"] == ["binding_xena"]
+    assert result["rejected_sources"] == ["binding_gdc"]
+    assert result["valid_row_count"] == 0
+    assert result.get("publication_id") is None
+
+
+@pytest.mark.asyncio
+async def test_execute_dataset_build_refuses_publication_when_correction_pending_mid_build(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """D1/H2: the entry gate is a point-in-time check; a correction that
+    becomes pending between validation and publication must still refuse the
+    immutable promotion — no version dir / publication.json is created and
+    the tool returns the agent-facing refusal envelope.
+    """
+    from app.datasets.build.expression_runner import ExpressionBuildRunner
+
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    broker = _pending_broker(run_ctx)
+
+    release = asyncio.Event()
+    reached_hold = asyncio.Event()
+    real_validate = ExpressionBuildRunner._validate_profile
+
+    async def held_validate(self, op, upstream):
+        result = await real_validate(self, op, upstream)
+        reached_hold.set()
+        await release.wait()
+        return result
+
+    monkeypatch.setattr(ExpressionBuildRunner, "_validate_profile", held_validate)
+
+    args = json.dumps(
+        {"spec": _spec_json(), "source_files": json.dumps({"binding_gdc": rel})}
+    )
+    build_task = asyncio.create_task(execute_dataset_build.on_invoke_tool(ctx, args))
+    pending_task: asyncio.Task | None = None
+    try:
+        await asyncio.wait_for(reached_hold.wait(), timeout=5)
+        # A correction becomes pending now — between validation and publish.
+        pending_task = asyncio.create_task(
+            broker.request_input(summary="请修正数据源", detail={"field": "x"})
+        )
+        for _ in range(100):
+            if run_ctx.main_input_pending:
+                break
+            await asyncio.sleep(0.01)
+        assert run_ctx.main_input_pending
+        release.set()
+        data = json.loads(await asyncio.wait_for(build_task, timeout=10))
+
+        assert data["status"] == "error"
+        assert data["retryable"] is False
+        assert "人工修正" in data["message"]
+        build_root = run_ctx.work_dir.root / "datasets_build"
+        publish_dir = build_root / "build_tool_test" / "publish"
+        assert list(publish_dir.glob("build_tool_test_*")) == []
+        assert not (publish_dir / "publication.json").exists()
+    finally:
+        release.set()
+        if pending_task is not None:
+            pending_task.cancel()
+            await asyncio.gather(pending_task, return_exceptions=True)
+        if not build_task.done():
+            build_task.cancel()
+            await asyncio.gather(build_task, return_exceptions=True)
