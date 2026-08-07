@@ -1,25 +1,28 @@
-"""Regression tests: metadata-only GEO packages (GSE339404 case, 0805).
+"""Regression tests: metadata-only / NO_DATA GEO packages (GSE339404 case).
 
 A GEO series whose series_matrix expression block is empty and whose
-supplementary files carry no expression matrix legitimately produces a
-metadata-only ``main_data.csv``: one row per sample with
-``value_semantics="metadata_only"``. 0805 fixes two defects exposed by
-GSE339404:
+supplementary files carry no expression matrix has no publishable expression
+data. 0805 fixed two defects exposed by GSE339404:
 
-1. ``check_core_data_existence`` rejected such packages because the fixed
-   22-column schema still declares empty ``expression_value`` / ``gene_id``
-   columns (non-empty rate 0% < 10%) — the check now accepts packages that
-   explicitly declare ``value_semantics="metadata_only"`` on every row while
-   still rejecting packages that *claim* expression but are 100% blank.
+1. ``check_core_data_existence`` rejected packages whose rows all declare
+   ``value_semantics="metadata_only"`` because the fixed 22-column schema
+   still declares empty ``expression_value`` / ``gene_id`` columns (non-empty
+   rate 0% < 10%) — the check now accepts packages that explicitly declare
+   ``value_semantics="metadata_only"`` on every row while still rejecting
+   packages that *claim* expression but are 100% blank.
 2. The artifact builder emitted no signal telling the Agent *why* the
    artifact is metadata-only, so the Agent kept retrying the same dataset.
    A ``no_expression_data`` warning is now injected into ``warnings.csv``
    (and folded into ``processing_log.csv`` so
    ``warnings_metrics_consistency`` stays satisfied).
+
+Phase 4b (ADR-011): the metadata-only placeholder primary was removed in T1,
+so the builder-side warning test now drives the NO_DATA signal directly
+(``parsed_dataset=None`` + ``no_primary_reason``) instead of a
+``geo_minimal_placeholder`` ParsedDataset.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,8 +31,6 @@ from app.domain.contracts import (
     Database,
     DataLevel,
     DatasetSelection,
-    FileAsset,
-    ParsedDataset,
     SourceAsset,
     SourceRecord,
     TaskSpecification,
@@ -139,32 +140,6 @@ def test_core_data_existence_rejects_partial_expression_package(
     assert result["status"] == "failed"
 
 
-def _minimal_primary(ctx: StageContext) -> ParsedDataset:
-    parsed_path = ctx.workdir.parsed / "ds_gse_minimal_tximport_long.csv"
-    parsed_path.write_text("record_id\nr1\n", encoding="utf-8")
-    checksum = hashlib.sha256(parsed_path.read_bytes()).hexdigest()
-    return ParsedDataset(
-        dataset_id="ds_gse_minimal",
-        source_id="src_geo_gse339404",
-        source_asset_id="asset_series_matrix",
-        file_asset=FileAsset(
-            asset_id=asset_id_from_sha256(checksum),
-            kind="parsed",
-            relative_path=parsed_path.relative_to(ctx.workdir.root).as_posix(),
-            sha256=checksum,
-            size_bytes=parsed_path.stat().st_size,
-            media_type="text/csv",
-            generated_by_step_id="step_geo_minimal_v1",
-        ),
-        columns=["record_id"],
-        row_count=1,
-        parser_name="geo_minimal_placeholder",
-        parser_version="1.0.0",
-        source_row_count=0,
-        processing_parameters={"measurement_type": "sample_metadata"},
-    )
-
-
 def _minimal_specification() -> TaskSpecification:
     return TaskSpecification(
         topic="GSE339404",
@@ -195,15 +170,16 @@ def _minimal_stage_context(tmp_path: Path) -> StageContext:
     )
 
 
-def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
+def test_builder_adds_no_expression_data_warning_for_no_data_package(
     tmp_path: Path,
 ) -> None:
     """The artifact builder must inject a ``no_expression_data`` warning for a
-    metadata-only package, and processing_log must fold it in so
-    ``warnings_metrics_consistency`` stays satisfied.
+    NO_DATA package (no primary parsed dataset, phase 4b), with the recorded
+    ``no_primary_reason`` in the copy; no ``main_data.csv`` is written; and
+    processing_log must fold the warning in so ``warnings_metrics_consistency``
+    stays satisfied.
     """
     ctx = _minimal_stage_context(tmp_path)
-    primary = _minimal_primary(ctx)
     now = datetime.now(UTC)
     source_asset = SourceAsset(
         asset_id=asset_id_from_sha256("b" * 64),
@@ -229,7 +205,9 @@ def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
         sources=[source_record],
         source_assets=[source_asset],
         download_attempts=[],
-        parsed_dataset=primary,
+        parsed_dataset=None,
+        parsed_datasets=[],
+        no_primary_reason="series_matrix_expression_empty_and_no_supplementary",
         samples=[],
         literature=None,
         geo=None,
@@ -241,11 +219,19 @@ def test_builder_adds_no_expression_data_warning_for_metadata_only_package(
         dataset_accession="GSE339404",
     )
     staging = result.output.staging_dir
+    # ADR-011: a NO_DATA package must never publish a fake main table.
+    assert not (staging / "main_data.csv").exists()
     warnings_rows = _read_csv(staging / "warnings.csv")
     no_expr = [w for w in warnings_rows if w.get("code") == "no_expression_data"]
     assert len(no_expr) == 1
     assert no_expr[0]["severity"] == "warning"
-    assert "GSE339404" in no_expr[0]["message"]
+    assert (
+        "series_matrix_expression_empty_and_no_supplementary"
+        in no_expr[0]["message"]
+    )
+    assert result.output.no_primary_reason == (
+        "series_matrix_expression_empty_and_no_supplementary"
+    )
 
     proc_rows = _read_csv(staging / "processing_log.csv")
     logged = sum(len(json.loads(p.get("warnings", "[]"))) for p in proc_rows)

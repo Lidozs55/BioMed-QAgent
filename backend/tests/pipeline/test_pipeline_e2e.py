@@ -590,9 +590,17 @@ def test_e2e_cancel_before_validation_stops_pipeline(tmp_path: Path) -> None:
         parsed_datasets=None, merged_dataset=None,
     ):
         result = original_artifact_build(
-            ctx, sources, source_assets, download_attempts,
-            parsed_dataset, samples,
-            literature, geo, specification, retrieved_at, stage_attempt_id,
+            ctx=ctx,
+            sources=sources,
+            source_assets=source_assets,
+            download_attempts=download_attempts,
+            parsed_dataset=parsed_dataset,
+            samples=samples,
+            literature=literature,
+            geo=geo,
+            specification=specification,
+            retrieved_at=retrieved_at,
+            stage_attempt_id=stage_attempt_id,
             cleaning_report=cleaning_report, field_alignment=field_alignment,
             parsed_datasets=parsed_datasets, merged_dataset=merged_dataset,
         )

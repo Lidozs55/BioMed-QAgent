@@ -238,7 +238,15 @@ class ProcessingOutput(ContractModel):
 
 
 class ArtifactBuildOutput(ContractModel):
-    """Output of the artifact builder: staging dir + artifact file paths."""
+    """Output of the artifact builder: staging dir + artifact file paths.
+
+    ``no_primary_reason`` is non-None iff the package is a NO_DATA package
+    (phase 4b / ADR-011): processing produced no primary parsed dataset, so
+    no ``main_data.csv`` was written and only supporting + audit artifacts
+    were staged. The value carries the processing-stage reason and is the
+    signal the validation stage (T3) and runner (T4) use to treat the
+    package as NO_DATA instead of a failed main table.
+    """
 
     staging_dir: Path
     artifact_paths: list[Path]
@@ -258,6 +266,7 @@ class ArtifactBuildOutput(ContractModel):
     dataset_title: str = ""
     dataset_url: str = ""
     dataset_id: str = ""
+    no_primary_reason: str | None = None
 
 
 class ValidationOutput(ContractModel):

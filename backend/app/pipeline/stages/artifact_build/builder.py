@@ -51,18 +51,6 @@ from app.pipeline.stages.base import (
     write_csv,
 )
 
-
-def _is_metadata_only(primary: ParsedDataset) -> bool:
-    """True when the primary parsed dataset is a metadata-only fallback.
-
-    The GEO minimal placeholder emits one row per sample with
-    ``measurement_type="sample_metadata"`` and no expression values — the
-    series_matrix expression block was empty and no supplementary expression
-    file was found.
-    """
-    return primary.parser_name == "geo_minimal_placeholder"
-
-
 # Tokens that occur in real task topics but are not gene symbols. The list is
 # intentionally conservative: a false negative (no subset artifact) is far
 # less harmful than a false positive (a meaningless ``{gene}_expression.csv``).
@@ -133,20 +121,23 @@ def _write_target_gene_subset(staging: Path, main_name: str, topic: str) -> str 
 
 def _build_processing_log_rows(
     *,
-    primary: ParsedDataset,
+    primary: ParsedDataset | None,
     stage_attempt_id: str,
     all_warnings: list[dict[str, object]],
     ctx: StageContext,
     is_merged: bool,
     all_parsed: list[ParsedDataset],
     source_assets: list[SourceAsset],
+    no_primary_reason: str | None = None,
 ) -> list[dict[str, object]]:
     """Build ``processing_log.csv`` rows.
 
     The primary parse step records the upstream source file as ``input_refs``
     and the parsed long-form CSV as ``output_refs`` (TODO §1.3). When a
     deterministic merge exists a second ``alignment.merge_datasets`` step is
-    appended.
+    appended. When there is no primary (phase 4b NO_DATA / ADR-011) a single
+    ``no_primary`` step records the outcome and folds the warnings in, so
+    ``warnings_metrics_consistency`` stays satisfied.
     """
     processing_log_warnings = json.dumps(
         [
@@ -201,7 +192,36 @@ def _build_processing_log_rows(
         }
         for dataset in all_parsed
     )
-    if is_merged:
+    if primary is None:
+        # Phase 4b NO_DATA (ADR-011): processing recovered no primary
+        # expression dataset. Record the outcome as a processing step whose
+        # ``warnings`` column folds in the ``warn_no_expression_data`` row so
+        # ``warnings_metrics_consistency`` stays satisfied, exactly like the
+        # historic metadata-only parse step did.
+        processing_log_rows.append(
+            {
+                "step_id": "step_processing_no_primary",
+                "stage_attempt_id": stage_attempt_id,
+                "stage": "processing",
+                "operation": "no_primary",
+                "input_refs": json.dumps(
+                    [asset.asset_id for asset in source_assets], sort_keys=True
+                ),
+                "output_refs": "[]",
+                "tool_version": "1.0.0",
+                "rows_before": 0,
+                "rows_after": 0,
+                "parameters": json.dumps(
+                    {"no_primary_reason": no_primary_reason or "no_expression_data"},
+                    sort_keys=True,
+                ),
+                "status": "succeeded",
+                "started_at": ctx.started_at.isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "warnings": processing_log_warnings,
+            }
+        )
+    if is_merged and primary is not None:
         processing_log_rows.append(
             {
                 "step_id": primary.file_asset.generated_by_step_id,
@@ -259,8 +279,9 @@ def run_artifact_build(
     sources: list[SourceRecord],
     source_assets: list[SourceAsset],
     download_attempts: list[DownloadAttempt],
-    parsed_dataset: ParsedDataset,
-    samples: list[GeoSampleMetadata],
+    *,
+    parsed_dataset: ParsedDataset | None = None,
+    samples: list[GeoSampleMetadata] | None = None,
     literature: LiteratureRecord | None,
     geo: GeoSeriesRecord | None,
     specification: TaskSpecification,
@@ -270,6 +291,7 @@ def run_artifact_build(
     field_alignment: dict[str, list[str]] | None = None,
     parsed_datasets: list[ParsedDataset] | None = None,
     merged_dataset: ParsedDataset | None = None,
+    no_primary_reason: str | None = None,
     dataset_source_id: str | None = None,
     dataset_accession: str | None = None,
     dataset_title: str | None = None,
@@ -285,21 +307,48 @@ def run_artifact_build(
     when a deterministic multi-source merge exists (TODO §1.2) it is passed
     as ``merged_dataset`` and becomes the ``main_data.csv`` source instead of
     the first parsed dataset.
+
+    When processing recovered no primary expression dataset (phase 4b NO_DATA
+    / ADR-011: ``parsed_dataset`` and ``merged_dataset`` both None) no
+    ``main_data.csv`` is written; the supporting + audit package
+    (``sample_metadata.csv`` from the recovered samples, source CSVs,
+    ``warnings.csv`` with ``warn_no_expression_data``) is staged instead and
+    ``ArtifactBuildOutput.no_primary_reason`` signals the NO_DATA package.
     """
     staging = ctx.workdir.staging_run(ctx.run_id)
     if any(staging.iterdir()):
         shutil.rmtree(staging)
         staging.mkdir(parents=True)
 
-    all_parsed = parsed_datasets if parsed_datasets else [parsed_dataset]
+    samples = samples or []
+    if parsed_datasets:
+        all_parsed = parsed_datasets
+    elif parsed_dataset is not None:
+        all_parsed = [parsed_dataset]
+    else:
+        all_parsed = []
     primary = merged_dataset if merged_dataset is not None else parsed_dataset
-    parsed_path = ctx.workdir.root / primary.file_asset.relative_path
-    if not parsed_path.is_file():
+    # Phase 4b NO_DATA (ADR-011): processing recovered no primary expression
+    # dataset — no fake main table is published, the supporting + audit
+    # package is staged instead, and no_primary_reason records why. (The old
+    # geo_minimal_placeholder metadata-only signal was removed with the
+    # placeholder itself in T1.)
+    no_data = primary is None
+    parsed_path = (
+        ctx.workdir.root / primary.file_asset.relative_path
+        if primary is not None
+        else None
+    )
+    if parsed_path is not None and not parsed_path.is_file():
         raise FileNotFoundError(f"Parsed dataset not found: {parsed_path}")
-    is_reactome = primary.parser_name == "reactome_pathway_participants"
+    is_reactome = (
+        primary is not None
+        and primary.parser_name == "reactome_pathway_participants"
+    )
     is_merged = merged_dataset is not None
     main_name = "pathway_members.csv" if is_reactome else "main_data.csv"
-    shutil.copy2(parsed_path, staging / main_name)
+    if parsed_path is not None:
+        shutil.copy2(parsed_path, staging / main_name)
 
     pubmed_source_id = next(
         (s.source_id for s in sources if s.database.value == "pubmed"), None
@@ -345,13 +394,13 @@ def run_artifact_build(
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
     )
-    # A metadata-only package has no downloadable expression data (empty
-    # series_matrix block and no supplementary expression file). Surface a
-    # warning so the Agent sees why the artifact is metadata-only and can
-    # switch datasets instead of retrying the same download. The warning is
-    # folded into processing_log by _build_processing_log_rows, keeping
-    # warnings_metrics_consistency satisfied. (GSE339404 regression, 0805.)
-    if _is_metadata_only(primary):
+    # A NO_DATA package has no publishable expression data (phase 4b /
+    # ADR-011). Surface a warning so the Agent sees the recorded
+    # no_primary_reason and can switch datasets instead of retrying the same
+    # download. The warning is folded into processing_log by
+    # _build_processing_log_rows, keeping warnings_metrics_consistency
+    # satisfied. (GSE339404 regression, 0805.)
+    if no_data:
         all_warnings.append(
             {
                 "warning_id": "warn_no_expression_data",
@@ -359,9 +408,10 @@ def run_artifact_build(
                 "stage": "processing",
                 "code": "no_expression_data",
                 "message": (
-                    f"{dataset_accession} series_matrix 表达块为空且未找到 "
-                    "supplementary 表达文件，产物仅含样本元数据；如需表达数据 "
-                    "请更换数据集或检查数据集相关性"
+                    "未找到可发布的表达数据（原因: "
+                    f"{no_primary_reason or 'no_expression_data'}）；产物仅含"
+                    "样本元数据与审计报告；如需表达数据请更换数据集或检查数据集"
+                    "相关性"
                 ),
                 "source_id": geo_source_id or primary_source_id,
                 "asset_id": source_asset.asset_id,
@@ -373,7 +423,11 @@ def run_artifact_build(
     # no probe→gene mapping cannot be queried by gene symbol. Surface the
     # status so the Agent sees why ``main_data.csv`` is probe-IDs-only and can
     # switch to a gene-annotated dataset. (task_db204f6b review, 0805.)
-    probe_mapping = primary.processing_parameters.get("probe_gene_mapping")
+    probe_mapping = (
+        primary.processing_parameters.get("probe_gene_mapping")
+        if primary is not None
+        else None
+    )
     if probe_mapping in {"unmapped", "no_gene_annotation", "annotation_unavailable"}:
         platform = geo.platform_ids[0] if geo and geo.platform_ids else ""
         all_warnings.append(
@@ -412,6 +466,7 @@ def run_artifact_build(
         is_merged=is_merged,
         all_parsed=all_parsed,
         source_assets=source_assets,
+        no_primary_reason=no_primary_reason,
     )
 
     rows_by_file: dict[str, list[dict[str, object]]] = {
@@ -453,7 +508,10 @@ def run_artifact_build(
             dataset_id=dataset_id,
             source_id=dataset_source_id,
             field_alignment=field_alignment,
-            samples=samples,
+            # NO_DATA packages have no expression values to map, so the
+            # per-sample fallback rows (counts.<alias> -> expression_value)
+            # are suppressed: field_mapping.csv stays header-only and honest.
+            samples=[] if no_data else samples,
             parsed_datasets=all_parsed if len(all_parsed) > 1 else None,
         ),
         "cleaning_report.csv": _build_cleaning_report_rows(cleaning_report),
@@ -512,7 +570,7 @@ def run_artifact_build(
     # so the Agent/analyst can query the target gene without filtering the
     # full long-form table. Reactome pathway packages are excluded (their
     # rows are pathway members, not per-sample expression).
-    if not is_reactome:
+    if not is_reactome and parsed_path is not None:
         _write_target_gene_subset(staging, main_name, ctx.topic)
 
     # Multi-source manifest (TODO §1.5.4): produced only when a deterministic
@@ -547,6 +605,7 @@ def run_artifact_build(
         download_attempts=download_attempts,
         retrieved_at=retrieved_at,
         started_at=ctx.started_at,
+        no_primary_reason=no_primary_reason if no_data else None,
     )
 
     digest = _compute_package_digest(staging)
