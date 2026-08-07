@@ -46,6 +46,27 @@ export function reduceRuntimeEvent(
   if (current === undefined || envelope.sequence <= current.lastSequence) {
     return state;
   }
+  if (envelope.sequence > current.lastSequence + 1) {
+    // A frame at N was dropped or rejected before this one (e.g. unknown
+    // type, schema drift, or a transport-level reject). Never advance the
+    // cursor past the gap: a missed user_input_required would otherwise be
+    // permanently unrecoverable. Record a recoverable gap marker and leave
+    // the cursor at the last applied sequence so the transport can replay
+    // from there. The event payload is NOT reduced.
+    return {
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        [envelope.task_id]: {
+          ...current,
+          sequenceGap: {
+            expected: current.lastSequence + 1,
+            received: envelope.sequence,
+          },
+        },
+      },
+    };
+  }
 
   const payload = envelope.payload;
   let task = current;
@@ -150,6 +171,7 @@ export function reduceRuntimeEvent(
   task = {
     ...task,
     lastSequence: envelope.sequence,
+    sequenceGap: null,
     summary: {
       ...task.summary,
       updated_at: envelope.timestamp,

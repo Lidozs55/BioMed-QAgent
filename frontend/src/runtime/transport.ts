@@ -8,7 +8,7 @@ import {
   isValidSubagentEventPayload,
   parseSubagentEventPayload,
 } from "@/lib/eventParsersRuntime";
-import type { ConnectionStatus } from "./types";
+import type { ConnectionStatus, SequenceGapMarker } from "./types";
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -72,7 +72,7 @@ export type SocketFactory = (url: string) => WebSocketLike;
 interface TransportOptions {
   socketFactory: SocketFactory;
   getLastSequence: (taskId: string) => number;
-  applyEvent: (event: EventEnvelope) => void;
+  applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -369,6 +369,14 @@ export class AgentEventTransport {
   private pendingAssistantStreamFrames: AssistantStreamFrame[] = [];
   private animationFrameHandle: number | null = null;
   private animationFrameGeneration = 0;
+  /**
+   * Cursor at which a gap-driven replay recovery was last requested per
+   * task. Guards against recovery loops when the missing frame stays
+   * undeliverable (e.g. schema drift rejected at the gate): the reducer
+   * keeps the cursor at the gap, but we only replace the socket once per
+   * cursor position and rely on natural reconnects afterwards.
+   */
+  private readonly gapRecoveryCursors = new Map<string, number>();
 
   constructor(private readonly options: TransportOptions) {}
 
@@ -699,8 +707,30 @@ export class AgentEventTransport {
     if (isAssistantStreamBoundary(envelope) && envelope.run_id !== null) {
       this.discardAssistantStreamFrames(envelope.task_id, envelope.run_id);
     }
-    this.options.applyEvent(envelope);
+    const gap = this.options.applyEvent(envelope);
     this.reconcileSubscription(envelope.task_id);
+    if (gap !== null && gap !== undefined) {
+      if (this.desired.has(envelope.task_id)) {
+        this.recoverSequenceGap(envelope.task_id);
+      }
+    } else {
+      this.gapRecoveryCursors.delete(envelope.task_id);
+    }
+  }
+
+  /**
+   * When the reducer rejected a durable envelope because its sequence is
+   * not contiguous with the last applied sequence (a frame at N was
+   * dropped or rejected), request a replay from the last applied
+   * sequence. The server replays contiguously from ``after_sequence``, so
+   * the missing frame is re-sent and the gap heals. Bounded to one
+   * recovery per cursor position to avoid loops on permanent gaps.
+   */
+  private recoverSequenceGap(taskId: string): void {
+    if (this.gapRecoveryCursors.has(taskId)) return;
+    const afterSequence = this.options.getLastSequence(taskId);
+    this.gapRecoveryCursors.set(taskId, afterSequence);
+    void this.recoverSubscription(taskId, afterSequence).catch(() => undefined);
   }
 
   /**

@@ -168,7 +168,7 @@ describe("agent task projection store", () => {
     useAgentStore.getState().mergeTaskPage(
       page(
         [
-          summary("task_a", "running", 0),
+          summary("task_a", "running", 2),
           summary("task_b", "running", 0),
         ],
         [],
@@ -192,7 +192,7 @@ describe("agent task projection store", () => {
 
   it("keeps a locally terminal task in history when a stale first page still calls it active", () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_terminal", "running", 0)], [], null),
+      page([summary("task_terminal", "running", 2)], [], null),
       false,
     );
     useAgentStore.getState().applyEvent(completedEvent("task_terminal", 3));
@@ -302,7 +302,7 @@ describe("agent task projection store", () => {
 
   it("ignores a stale snapshot after a newer live event", () => {
     useAgentStore.getState().mergeTaskPage(
-      page([summary("task_live", "running", 0)], [], null),
+      page([summary("task_live", "running", 4)], [], null),
       false,
     );
     useAgentStore.getState().applyEvent(completedEvent("task_live", 5));

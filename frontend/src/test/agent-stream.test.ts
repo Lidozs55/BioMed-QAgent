@@ -320,6 +320,52 @@ describe("durable event transport", () => {
     expect(after.summary.status).toBe("completed");
   });
 
+  it("detects a sequence gap and re-subscribes after the last applied sequence", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied).
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // A frame at 5 was dropped or rejected; the next valid frame is 6.
+    // The event must not be reduced and the cursor must not advance.
+    sockets[0].message(event("task_a", 6, "jumped"));
+
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(4);
+    expect(useAgentStore.getState().tasksById.task_a.messages[0]?.content).toBe(
+      "onetwothreefour",
+    );
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+
+    // Recovery requested: the socket is replaced and the fresh connection
+    // re-subscribes after the last applied sequence (4).
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+    expect(sockets[1].sent.map((item) => JSON.parse(item))).toContainEqual({
+      type: "subscribe",
+      task_id: "task_a",
+      after_sequence: 4,
+    });
+
+    // Replay 5 then 6 → both applied, cursor 6, gap healed.
+    sockets[1].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    sockets[1].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
   it("applies valid realtime frames once on the next animation frame without advancing sequence", async () => {
     const scheduled: Array<() => void> = [];
     const batches: Array<readonly AssistantStreamFrame[]> = [];
@@ -939,7 +985,9 @@ describe("durable event transport", () => {
     const connected = transport.connect();
     sockets[0].open();
     await connected;
-    sockets[0].message(event("task_a", 8, "latest"));
+    for (let sequence = 1; sequence <= 8; sequence += 1) {
+      sockets[0].message(event("task_a", sequence, "latest"));
+    }
 
     sockets[0].abnormalClose(1013);
     expect(useAgentStore.getState().connectionStatus).toBe("reconnecting");

@@ -28,7 +28,7 @@ function summary(taskId: string): TaskSummary {
     active_run_id: "run_1",
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
-    latest_sequence: 0,
+    latest_sequence: 1,
   };
 }
 

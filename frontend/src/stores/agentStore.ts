@@ -27,6 +27,7 @@ import type {
   AgentRuntimeData,
   ConnectionStatus,
   HistoryStatus,
+  SequenceGapMarker,
   TaskProjection,
 } from "@/runtime/types";
 
@@ -52,7 +53,7 @@ export interface AgentStore extends AgentRuntimeData {
     requestedCursor: string,
     page: MessagePage,
   ) => void;
-  applyEvent: (event: EventEnvelope) => void;
+  applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setActiveTaskId: (taskId: string | null) => void;
@@ -305,8 +306,15 @@ export const useAgentStore = create<AgentStore>()(
           projectOlderMessagePage(state, taskId, requestedCursor, page),
         ),
 
-      applyEvent: (event) =>
-        set((state) => reduceRuntimeEvent(state, event)),
+      applyEvent: (event) => {
+        let gap: SequenceGapMarker | null = null;
+        set((state) => {
+          const next = reduceRuntimeEvent(state, event);
+          gap = next.tasksById[event.task_id]?.sequenceGap ?? null;
+          return next;
+        });
+        return gap;
+      },
 
       applyAssistantStreamFrames: (frames) =>
         set((state) => reduceAssistantStreamFrames(state, frames)),
