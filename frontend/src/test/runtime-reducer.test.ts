@@ -456,6 +456,67 @@ describe("runtime event projection", () => {
     });
   });
 
+  it("passes operation lifecycle events through without changing state (F4)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_operation", "running", 0)),
+      false,
+    );
+    const before = state.tasksById.task_operation;
+
+    // V2 build-execution events (Design §15.1) are informational: the
+    // cursor advances but no projection changes.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 1, {
+        type: "operation_started",
+        operation_id: "op-1",
+        label: "build skeleton",
+        category: "build",
+        attempt: 1,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 2, {
+        type: "operation_progress",
+        operation_id: "op-1",
+        kind: "rows_parsed",
+        current: 42,
+        total: 100,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 3, {
+        type: "operation_completed",
+        operation_id: "op-1",
+        status: "succeeded",
+        output_digest: "a".repeat(64),
+        reused_operation_attempt_id: null,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 4, {
+        type: "operation_failed",
+        operation_id: "op-1",
+        status: "failed",
+        error: null,
+      }),
+    );
+
+    const after = state.tasksById.task_operation;
+    expect(after.lastSequence).toBe(4);
+    expect(after.sequenceGap).toBeNull();
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runsById).toEqual(before.runsById);
+    expect(after.items).toEqual(before.items);
+    expect(after.summary.status).toBe(before.summary.status);
+    expect(after.summary.latest_sequence).toBe(4);
+  });
+
   it("rejects a sequence gap without reducing or advancing the cursor", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

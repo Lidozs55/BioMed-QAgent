@@ -13,6 +13,12 @@ import type { ConnectionStatus, SequenceGapMarker } from "./types";
 const CONNECTING = 0;
 const OPEN = 1;
 const MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048;
+/**
+ * Consecutive gap rejections at the same cursor position that are allowed
+ * before the transport gives up on replay recovery and asks the owner for
+ * an authoritative REST snapshot hydration (F2, final review).
+ */
+const GAP_RECOVERY_FAILURE_LIMIT = 2;
 const EVENT_TYPES = new Set([
   "task_created",
   "plan_ready",
@@ -41,6 +47,13 @@ const EVENT_TYPES = new Set([
   "run_cancelled",
   "run_interrupted",
   "publication_created",
+  // V2 build-execution lifecycle events (Design §15.1). The backend defines
+  // and emits them from the dataset executor; they are informational, so the
+  // reducer passes them through without changing state (cursor only).
+  "operation_started",
+  "operation_progress",
+  "operation_completed",
+  "operation_failed",
   "assistant_delta",
   "assistant_reasoning_delta",
   "tool_started",
@@ -89,6 +102,14 @@ interface TransportOptions {
    * kept (legacy behavior).
    */
   shouldSubscribe?: (taskId: string) => boolean;
+  /**
+   * Fired when a sequence gap could not be healed by replay recovery: the
+   * missing frame stayed undeliverable across a bounded number of recovery
+   * attempts at the same cursor position. The owner should rebuild the task
+   * authoritatively from a REST snapshot and resume the subscription after
+   * the snapshot watermark (see RuntimeController.hydrateTaskFromGap).
+   */
+  onPermanentGap?: (taskId: string) => void;
   url?: string | (() => string);
 }
 
@@ -374,9 +395,23 @@ export class AgentEventTransport {
    * task. Guards against recovery loops when the missing frame stays
    * undeliverable (e.g. schema drift rejected at the gate): the reducer
    * keeps the cursor at the gap, but we only replace the socket once per
-   * cursor position and rely on natural reconnects afterwards.
+   * cursor position. Cleared on a natural reconnect (the network may now
+   * deliver the missing frame) and when a contiguous event applies.
    */
   private readonly gapRecoveryCursors = new Map<string, number>();
+  /**
+   * Consecutive gap rejections observed at the current recovery cursor per
+   * task (i.e. the replay still cannot deliver the missing frame). Once the
+   * limit is crossed the transport fires ``onPermanentGap`` so the owner can
+   * rebuild the task from an authoritative REST snapshot.
+   */
+  private readonly gapRecoveryFailures = new Map<string, number>();
+  /**
+   * Cursor at which the snapshot fallback was last fired per task, so a
+   * permanently stuck gap degrades to defensive-only instead of repeating
+   * REST hydrations until the cursor moves or the connection is replaced.
+   */
+  private readonly gapFallbackFired = new Map<string, number>();
 
   constructor(private readonly options: TransportOptions) {}
 
@@ -421,6 +456,7 @@ export class AgentEventTransport {
     this.socket = null;
     this.active.clear();
     this.desired.clear();
+    this.clearGapRecoveryState();
     this.discardAssistantStreamFrames();
     this.options.deactivateAssistantStreams();
     if (socket !== null) {
@@ -645,6 +681,13 @@ export class AgentEventTransport {
       this.socket = null;
       this.active.clear();
       this.awaitingUnsubscribe.clear();
+      // A natural (server- or network-side) close resets the per-cursor gap
+      // recovery guard: the fresh connection replays from the current
+      // watermark, so a previously undeliverable frame may now arrive and a
+      // gap must be allowed a fresh recovery attempt. Recovery-driven socket
+      // replacements null the handlers before closing, so they do not reach
+      // this branch.
+      this.clearGapRecoveryState();
       this.discardAssistantStreamFrames();
       this.options.deactivateAssistantStreams();
       const error = new Error("WebSocket transport closed");
@@ -711,26 +754,54 @@ export class AgentEventTransport {
     this.reconcileSubscription(envelope.task_id);
     if (gap !== null && gap !== undefined) {
       if (this.desired.has(envelope.task_id)) {
-        this.recoverSequenceGap(envelope.task_id);
+        this.handleSequenceGap(envelope.task_id);
       }
     } else {
-      this.gapRecoveryCursors.delete(envelope.task_id);
+      this.clearGapRecoveryState(envelope.task_id);
     }
   }
 
   /**
-   * When the reducer rejected a durable envelope because its sequence is
-   * not contiguous with the last applied sequence (a frame at N was
-   * dropped or rejected), request a replay from the last applied
-   * sequence. The server replays contiguously from ``after_sequence``, so
-   * the missing frame is re-sent and the gap heals. Bounded to one
-   * recovery per cursor position to avoid loops on permanent gaps.
+   * A sequence gap was detected for a desired task. The first gap at a
+   * cursor requests one socket-replacement replay from the last applied
+   * sequence (the server replays contiguously from ``after_sequence``, so a
+   * dropped frame is re-sent). If the replay still cannot deliver the
+   * missing frame, consecutive gap rejections at the same cursor cross the
+   * failure limit and the transport fires ``onPermanentGap`` so the owner
+   * can rebuild the task from an authoritative REST snapshot and resume
+   * after its watermark. All paths are bounded per cursor position; a
+   * natural reconnect clears the guard so recovery is re-armed on the fresh
+   * connection.
    */
-  private recoverSequenceGap(taskId: string): void {
-    if (this.gapRecoveryCursors.has(taskId)) return;
-    const afterSequence = this.options.getLastSequence(taskId);
-    this.gapRecoveryCursors.set(taskId, afterSequence);
-    void this.recoverSubscription(taskId, afterSequence).catch(() => undefined);
+  private handleSequenceGap(taskId: string): void {
+    const lastSequence = this.options.getLastSequence(taskId);
+    if (this.gapRecoveryCursors.get(taskId) !== lastSequence) {
+      this.gapRecoveryCursors.set(taskId, lastSequence);
+      this.gapRecoveryFailures.set(taskId, 0);
+      void this.recoverSubscription(taskId, lastSequence).catch(() => undefined);
+      return;
+    }
+    const failures = (this.gapRecoveryFailures.get(taskId) ?? 0) + 1;
+    this.gapRecoveryFailures.set(taskId, failures);
+    if (
+      failures >= GAP_RECOVERY_FAILURE_LIMIT &&
+      this.gapFallbackFired.get(taskId) !== lastSequence
+    ) {
+      this.gapFallbackFired.set(taskId, lastSequence);
+      this.options.onPermanentGap?.(taskId);
+    }
+  }
+
+  private clearGapRecoveryState(taskId?: string): void {
+    if (taskId === undefined) {
+      this.gapRecoveryCursors.clear();
+      this.gapRecoveryFailures.clear();
+      this.gapFallbackFired.clear();
+      return;
+    }
+    this.gapRecoveryCursors.delete(taskId);
+    this.gapRecoveryFailures.delete(taskId);
+    this.gapFallbackFired.delete(taskId);
   }
 
   /**

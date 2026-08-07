@@ -253,10 +253,19 @@ export class RuntimeController {
       await this.replayTaskEvents(taskId, snapshot.task.latest_sequence);
       if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
       useAgentStore.getState().hydrateTaskSnapshot(snapshot);
-      const lastSequence =
-        useAgentStore.getState().tasksById[taskId]?.lastSequence ??
-        snapshot.task.latest_sequence;
-      this.transport.subscribe(taskId, lastSequence);
+      // F1 (final review): resume the live subscription only while the task
+      // is still active after hydration — the same shouldSubscribe check the
+      // transport applies to live terminal events. Selecting a terminal
+      // history task (or one that terminalized while the snapshot was being
+      // fetched) must not leave a permanent desired subscription that is
+      // never reconciled. continueTask explicitly re-subscribes when a new
+      // run is accepted.
+      if (useAgentStore.getState().activeItems.includes(taskId)) {
+        const lastSequence =
+          useAgentStore.getState().tasksById[taskId]?.lastSequence ??
+          snapshot.task.latest_sequence;
+        this.transport.subscribe(taskId, lastSequence);
+      }
       return true;
     } catch (error) {
       if (!this.isCurrentTaskHandoff(taskId, generation)) return false;
@@ -524,6 +533,23 @@ export class RuntimeController {
       this.transport.subscribe(accepted.task_id, lastSequence);
     });
     return accepted;
+  }
+
+  /**
+   * Authoritative REST fallback for a permanent sequence gap (F2, final
+   * review): rebuild the task from its server snapshot — which clears the
+   * recoverable gap marker and advances the cursor to the snapshot
+   * watermark — then resume the live subscription after that watermark so
+   * the undeliverable frame is skipped and later valid events apply. The
+   * transport fires ``onPermanentGap`` at most once per gap position.
+   */
+  async hydrateTaskFromGap(taskId: string): Promise<void> {
+    const snapshot = await this.api.fetchTask(taskId);
+    useAgentStore.getState().hydrateTaskSnapshot(snapshot);
+    const lastSequence =
+      useAgentStore.getState().tasksById[taskId]?.lastSequence ??
+      snapshot.task.latest_sequence;
+    await this.transport.recoverSubscription(taskId, lastSequence);
   }
 
   async cancelRun(taskId: string, runId: string): Promise<void> {
