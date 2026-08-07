@@ -88,6 +88,7 @@ interface TransportTestOptions {
   deactivateAssistantStreams?: (taskId?: string) => void;
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  shouldSubscribe?: (taskId: string) => boolean;
 }
 
 function setupTransport(options: TransportTestOptions = {}) {
@@ -113,6 +114,7 @@ function setupTransport(options: TransportTestOptions = {}) {
     scheduleAnimationFrame: options.scheduleAnimationFrame,
     cancelAnimationFrame: options.cancelAnimationFrame,
     reconnectDelayMs: 10,
+    shouldSubscribe: options.shouldSubscribe,
   });
   return { transport, sockets, controlErrors };
 }
@@ -221,6 +223,101 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
     expect(useAgentStore.getState().tasksById.task_b.lastSequence).toBe(4);
     expect(controlErrors).toHaveLength(1);
+  });
+
+  it("unsubscribes a task whose last run becomes terminal and never resubscribes it on reconnect", async () => {
+    const { transport, sockets } = setupTransport({
+      shouldSubscribe: (taskId) =>
+        useAgentStore.getState().activeItems.includes(taskId),
+    });
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // task_a's only run completes → the task leaves activeItems.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_done",
+      type: "run_completed",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: { type: "run_completed", build_result: null },
+    });
+
+    expect(transport.isSubscribed("task_a")).toBe(false);
+    expect(transport.isSubscribed("task_b")).toBe(true);
+    expect(
+      sockets[0].sent.some((raw) => {
+        const command = JSON.parse(raw);
+        return command.type === "unsubscribe" && command.task_id === "task_a";
+      }),
+    ).toBe(true);
+
+    // Reconnect: only the still-active task may be resubscribed.
+    sockets[0].abnormalClose(1013);
+    await vi.advanceTimersByTimeAsync(10);
+    sockets[1].open();
+
+    const commands = sockets[1].sent.map((raw) => JSON.parse(raw));
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: "subscribe", task_id: "task_a" }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "subscribe", task_id: "task_b" }),
+    );
+  });
+
+  it("accepts publication_created on the live path and keeps the cursor moving", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_1",
+      type: "publication_created",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: {
+        type: "publication_created",
+        publication_id: "pub-1",
+        run_id: "run_task_a",
+        manifest_sha256: "a".repeat(64),
+        supersedes_publication_id: null,
+        published_at: "2026-07-14T00:00:01Z",
+      },
+    });
+
+    const task = useAgentStore.getState().tasksById.task_a;
+    expect(task.currentPublicationId).toBe("pub-1");
+    expect(task.lastSequence).toBe(1);
+
+    // A later terminal event must still be applied after the publication.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_2",
+      type: "run_completed",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 2,
+      timestamp: "2026-07-14T00:00:02Z",
+      payload: { type: "run_completed", build_result: null },
+    });
+
+    const after = useAgentStore.getState().tasksById.task_a;
+    expect(after.lastSequence).toBe(2);
+    expect(after.summary.status).toBe("completed");
   });
 
   it("applies valid realtime frames once on the next animation frame without advancing sequence", async () => {

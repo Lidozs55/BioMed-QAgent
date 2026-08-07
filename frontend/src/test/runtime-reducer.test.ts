@@ -775,6 +775,179 @@ describe("runtime event projection", () => {
     expect(state.tasksById.task_a.pendingUserInput).toBeNull();
   });
 
+  it("clears pending input for the owning run on run_cancel_requested", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).not.toBeNull();
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 2, {
+        type: "run_cancel_requested",
+        reason: "user cancelled",
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+    expect(state.tasksById.task_a.runsById.run_prompt?.status).toBe(
+      "cancel_requested",
+    );
+    expect(state.tasksById.task_a.summary.status).toBe("cancel_requested");
+  });
+
+  it("keeps another run's pending input when a different run is cancel-requested", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, {
+        type: "run_cancel_requested",
+        reason: "stopped",
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it("ignores a stale user_input_resumed for a superseded request without regressing state", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 2, {
+        type: "user_input_resumed",
+        request_id: "request_old",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toMatchObject({
+      runId: "run_a",
+      requestId: "request_new",
+    });
+    expect(task.summary.status).toBe("awaiting_user_input");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_a?.status).toBe("awaiting_user_input");
+  });
+
+  it("ignores a user_input_resumed for a different run without regressing state", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_b", 2, {
+        type: "user_input_resumed",
+        request_id: "request_other",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toMatchObject({
+      runId: "run_a",
+      requestId: "request_new",
+    });
+    expect(task.summary.status).toBe("awaiting_user_input");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_b).toBeUndefined();
+  });
+
+  it("still applies a matching user_input_resumed as the running transition", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 2, {
+        type: "user_input_resumed",
+        request_id: "request_new",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toBeNull();
+    expect(task.summary.status).toBe("running");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_a?.status).toBe("running");
+  });
+
   it("clears an older pending prompt when a new Run is queued", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

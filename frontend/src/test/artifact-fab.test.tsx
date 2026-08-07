@@ -43,6 +43,20 @@ describe("artifact FAB", () => {
 });
 
 describe("artifact sheet", () => {
+  it("labels artifacts by role instead of the generic extension fallback (F7)", () => {
+    render(
+      <ArtifactSheet
+        open
+        onOpenChange={vi.fn()}
+        artifacts={[artifact("rejections-v2.csv")]}
+        taskId="task-artifacts"
+      />,
+    );
+
+    expect(screen.getByText("审计报告 · 128 B")).toBeVisible();
+    expect(screen.queryByText("CSV · 128 B")).not.toBeInTheDocument();
+  });
+
   it("downloads an individual artifact with its filename", () => {
     const download = vi.fn();
     render(

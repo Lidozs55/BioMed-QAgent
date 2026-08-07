@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { UserInputDialog } from "@/components/UserInputDialog";
 import type { ResumeRunInput, TaskSummary } from "@/runtime/contracts";
-import { createTaskProjection } from "@/runtime/reducer";
+import {
+  createInitialRuntimeState,
+  createTaskProjection,
+  mergeTaskPage,
+  reduceRuntimeEvent,
+} from "@/runtime/reducer";
 import type { PendingUserInput, TaskProjection } from "@/runtime/types";
 
 const CREATED_AT = "2026-07-14T00:00:00Z";
@@ -34,6 +39,22 @@ function taskWithPrompt(
   };
   return {
     ...createTaskProjection(summary),
+    runsById: {
+      [pendingRunId]: {
+        runId: pendingRunId,
+        taskId,
+        requestId,
+        status: "awaiting_user_input" as const,
+        input: null,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+        startedAt: CREATED_AT,
+        finishedAt: null,
+        error: null,
+        summary: null,
+      },
+    },
+    runOrder: [pendingRunId],
     pendingUserInput: {
       runId: pendingRunId,
       requestId,
@@ -49,6 +70,107 @@ function taskWithPrompt(
 }
 
 describe("UserInputDialog", () => {
+  it("closes the dialog when the owning run is cancel-requested (F3 reducer path)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      {
+        active_items: [
+          {
+            task_id: "task_cancel",
+            mode: "agent",
+            databases: [],
+            title: "Cancel",
+            status: "awaiting_user_input",
+            active_run_id: "run_cancel",
+            created_at: CREATED_AT,
+            updated_at: CREATED_AT,
+            latest_sequence: 0,
+          },
+        ],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      {
+        schema_version: "2.0",
+        event_id: "event_cancel_1",
+        type: "user_input_required",
+        task_id: "task_cancel",
+        run_id: "run_cancel",
+        stage_attempt_id: null,
+        sequence: 1,
+        timestamp: CREATED_AT,
+        payload: {
+          type: "user_input_required",
+          request_id: "request_cancel",
+          prompt_kind: "data_correction",
+          summary: "请修正数据源",
+          expires_at: null,
+          fixture_exempt: false,
+          detail: {},
+        },
+      },
+    );
+    state = reduceRuntimeEvent(
+      state,
+      {
+        schema_version: "2.0",
+        event_id: "event_cancel_2",
+        type: "run_cancel_requested",
+        task_id: "task_cancel",
+        run_id: "run_cancel",
+        stage_attempt_id: null,
+        sequence: 2,
+        timestamp: CREATED_AT,
+        payload: { type: "run_cancel_requested", reason: "user cancelled" },
+      },
+    );
+    const task = state.tasksById.task_cancel;
+    expect(task.pendingUserInput).toBeNull();
+
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交修正" })).not.toBeInTheDocument();
+  });
+
+  it("disables actions while the prompt's run is no longer awaiting input (F3 defensive)", () => {
+    const task = taskWithPrompt(
+      "task_stale",
+      "run_stale",
+      "run_stale",
+      "request_stale",
+      { promptKind: "data_correction", summary: "请修正" },
+    );
+    const staleRun: TaskProjection["runsById"][string] = {
+      runId: "run_stale",
+      taskId: "task_stale",
+      requestId: "request_stale",
+      status: "cancel_requested",
+      input: null,
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      summary: null,
+    };
+    render(
+      <UserInputDialog
+        task={{
+          ...task,
+          runsById: { run_stale: staleRun },
+        }}
+        onResumeRun={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+  });
+
   it("isolates an in-flight prompt from its replacement and submits the pending Run", async () => {
     let rejectFirst: ((reason?: unknown) => void) | undefined;
     const firstResume = new Promise<void>((_resolve, reject) => {
@@ -522,7 +644,7 @@ describe("UserInputDialog", () => {
       {
         promptKind: "data_correction",
         summary: "请尽快修正数据源",
-        expiresAt: "2026-07-14T00:05:00Z",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     );
     const withoutExpiry = taskWithPrompt(
@@ -752,5 +874,71 @@ describe("UserInputDialog", () => {
     expect(screen.getByRole("button", { name: "停止" })).toBeVisible();
     // no_progress 不应渲染 plan card
     expect(screen.queryByText("研究主题")).not.toBeInTheDocument();
+  });
+
+  it("renders an expired state with disabled actions once the deadline has passed (F5)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T00:10:00Z"));
+    const task = taskWithPrompt(
+      "task_expired",
+      "run_expired",
+      "run_expired",
+      "request_expired",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: "2026-07-14T00:09:59Z",
+      },
+    );
+
+    render(<UserInputDialog task={task} onResumeRun={vi.fn()} />);
+
+    expect(screen.getByText(/已超时/)).toBeVisible();
+    expect(screen.queryByText(/需在 .*前答复/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeDisabled();
+    vi.useRealTimers();
+  });
+
+  it("keeps actions enabled for a future deadline and treats an invalid deadline as expired (F5)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T00:10:00Z"));
+    const futureTask = taskWithPrompt(
+      "task_future",
+      "run_future",
+      "run_future",
+      "request_future",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: "2026-07-14T00:11:00Z",
+      },
+    );
+    const invalidTask = taskWithPrompt(
+      "task_invalid",
+      "run_invalid",
+      "run_invalid",
+      "request_invalid",
+      {
+        promptKind: "data_correction",
+        summary: "请尽快修正数据源",
+        expiresAt: "not-a-date",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={futureTask} onResumeRun={vi.fn()} />,
+    );
+    expect(screen.queryByText(/已超时/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跳过并继续" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据" },
+    });
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeEnabled();
+
+    rerender(<UserInputDialog task={invalidTask} onResumeRun={vi.fn()} />);
+    expect(screen.getByText(/已超时/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    vi.useRealTimers();
   });
 });

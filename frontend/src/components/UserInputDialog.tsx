@@ -147,6 +147,24 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   const error = submission.promptKey === promptKey ? submission.error : null;
 
   const open = pending !== null && taskId !== null && runId !== null;
+  // A prompt is only actionable while its run is still awaiting user input.
+  // After a cancel/failure transition the durable event clears the prompt;
+  // this guard covers the transient window where the prompt is still present
+  // but the run is no longer awaiting a decision.
+  const pendingRun =
+    pending === null || task === undefined
+      ? null
+      : (task.runsById[pending.runId] ?? null);
+  const awaitingInput = pendingRun?.status === "awaiting_user_input";
+  // A past or unparseable deadline is no longer actionable: render an
+  // expired state and disable submission instead of claiming the deadline
+  // is still open. The durable resume/synthetic event closes the dialog.
+  const deadline =
+    pending === null || pending.expiresAt === null
+      ? null
+      : new Date(pending.expiresAt).getTime();
+  const expired =
+    deadline !== null && (Number.isNaN(deadline) || deadline <= Date.now());
   const planSpec = useMemo(
     () =>
       pending?.promptKind === "plan_confirmation" && pending.detail
@@ -163,7 +181,9 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
       pending === null ||
       taskId === null ||
       runId === null ||
-      promptKey === null
+      promptKey === null ||
+      !awaitingInput ||
+      expired
     ) {
       return;
     }
@@ -377,15 +397,20 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
               />
             </div>
 
-            {pending.expiresAt !== null && (
-              <p className="text-xs text-muted-foreground">
-                需在{" "}
-                {new Date(pending.expiresAt).toLocaleString("zh-CN", {
-                  hour12: false,
-                })}{" "}
-                前答复，超时后将记录到 corrections_todo.csv 并继续
-              </p>
-            )}
+            {pending.expiresAt !== null &&
+              (expired ? (
+                <p className="text-xs text-muted-foreground">
+                  该请求已超时，将记录到 corrections_todo.csv 并继续
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  需在{" "}
+                  {new Date(pending.expiresAt).toLocaleString("zh-CN", {
+                    hour12: false,
+                  })}{" "}
+                  前答复，超时后将记录到 corrections_todo.csv 并继续
+                </p>
+              ))}
           </div>
         )}
 
@@ -410,7 +435,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             <>
               <Button
                 variant="outline"
-                disabled={pendingDecision !== null}
+                disabled={!awaitingInput || expired || pendingDecision !== null}
                 onClick={() => void submit("reject", { correction: "" })}
               >
                 {pendingDecision === "reject" ? (
@@ -422,7 +447,10 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
               </Button>
               <Button
                 disabled={
-                  pendingDecision !== null || correctionText.trim() === ""
+                  !awaitingInput ||
+                  expired ||
+                  pendingDecision !== null ||
+                  correctionText.trim() === ""
                 }
                 onClick={() =>
                   void submit("approve", { correction: correctionText })
@@ -440,7 +468,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
             <>
               <Button
                 variant="outline"
-                disabled={pendingDecision !== null}
+                disabled={!awaitingInput || expired || pendingDecision !== null}
                 onClick={() => void submit("reject")}
               >
                 {pendingDecision === "reject" ? (
@@ -454,7 +482,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
                   : "拒绝"}
               </Button>
               <Button
-                disabled={pendingDecision !== null}
+                disabled={!awaitingInput || expired || pendingDecision !== null}
                 onClick={() => void submit("approve")}
               >
                 {pendingDecision === "approve" ? (

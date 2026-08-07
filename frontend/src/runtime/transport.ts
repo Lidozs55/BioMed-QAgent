@@ -40,6 +40,7 @@ const EVENT_TYPES = new Set([
   "run_cancel_requested",
   "run_cancelled",
   "run_interrupted",
+  "publication_created",
   "assistant_delta",
   "assistant_reasoning_delta",
   "tool_started",
@@ -80,6 +81,14 @@ interface TransportOptions {
   pingTimeoutMs?: number;
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  /**
+   * Whether a task should keep its live subscription. When this returns
+   * false for a task that is currently subscribed, the transport drops the
+   * desired subscription and sends an unsubscribe — a terminal task must
+   * not be resubscribed on every reconnect. Absent, every subscription is
+   * kept (legacy behavior).
+   */
+  shouldSubscribe?: (taskId: string) => boolean;
   url?: string | (() => string);
 }
 
@@ -691,6 +700,25 @@ export class AgentEventTransport {
       this.discardAssistantStreamFrames(envelope.task_id, envelope.run_id);
     }
     this.options.applyEvent(envelope);
+    this.reconcileSubscription(envelope.task_id);
+  }
+
+  /**
+   * Drop the live subscription of a task that is no longer active (its last
+   * run reached a terminal state). Kept subscriptions otherwise accumulate
+   * for the whole session and are resubscribed on every reconnect.
+   */
+  private reconcileSubscription(taskId: string): void {
+    if (this.options.shouldSubscribe?.(taskId) ?? true) return;
+    if (!this.desired.has(taskId)) return;
+    this.desired.delete(taskId);
+    this.discardAssistantStreamFrames(taskId);
+    this.options.deactivateAssistantStreams(taskId);
+    if (this.isConnected && this.active.has(taskId)) {
+      this.send({ type: "unsubscribe", task_id: taskId });
+      this.awaitingUnsubscribe.add(taskId);
+    }
+    this.active.delete(taskId);
   }
 
   private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {

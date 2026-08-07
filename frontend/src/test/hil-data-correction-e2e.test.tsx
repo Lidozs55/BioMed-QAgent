@@ -132,7 +132,7 @@ function dataCorrectionRequired(
     request_id: "data_correction-run_e2e-0",
     prompt_kind: "data_correction",
     summary: "候选 GSE 无法判断，请确认使用哪个数据集？",
-    expires_at: "2026-07-14T00:05:00Z",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
     fixture_exempt: false,
     detail: { field: "dataset_id", options: ["GSE100500", "GSE12345"] },
   });

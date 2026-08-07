@@ -516,6 +516,12 @@ export class RuntimeController {
           false,
         ),
       );
+      // A continued task may have been unsubscribed when its previous run
+      // became terminal; restore the live subscription so the new run's
+      // events keep flowing.
+      const lastSequence =
+        useAgentStore.getState().tasksById[accepted.task_id]?.lastSequence ?? 0;
+      this.transport.subscribe(accepted.task_id, lastSequence);
     });
     return accepted;
   }
