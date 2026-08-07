@@ -299,6 +299,9 @@ def process_geo_series_matrix_expression(
                 row_count += 1
 
     if row_count == 0:
+        # No valid expression rows (all values NA/non-numeric): do NOT leave
+        # a schema-only placeholder CSV on disk (phase 4b T1 MUST-FIX 1).
+        output_path.unlink(missing_ok=True)
         return None
 
     if mapped_probes:
@@ -783,6 +786,9 @@ def process_geo_supplementary_expression(
                 row_count += 1
 
     if row_count == 0:
+        # No valid expression rows (all values NA/non-numeric): do NOT leave
+        # a schema-only placeholder CSV on disk (phase 4b T1 MUST-FIX 1).
+        output_path.unlink(missing_ok=True)
         return None
 
     file_bytes = output_path.read_bytes()

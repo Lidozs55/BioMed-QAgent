@@ -310,8 +310,9 @@ def test_run_processing_no_expression_yields_empty_parsed_with_samples(
 
 def test_no_primary_output_digest_is_deterministic(tmp_path: Path) -> None:
     """Same no-expression inputs must produce the same output_digest (the
-    no-primary digest hashes the reason + sorted sample ids, not a parsed
-    file's sha256)."""
+    no-primary digest hashes the reason + canonical sample records — full
+    serialized GeoSampleMetadata sorted by sample_id, not just the sample
+    ids and not a parsed file's sha256)."""
     from app.pipeline.stages.processing import run_processing
 
     ctx_a, asset_a = _make_no_expression_ctx(tmp_path, "task_dig_a")
@@ -323,6 +324,41 @@ def test_no_primary_output_digest_is_deterministic(tmp_path: Path) -> None:
     assert result_a.output.parsed_datasets == []
     assert result_a.output.no_primary_reason == result_b.output.no_primary_reason
     assert result_a.output_digest == result_b.output_digest
+
+
+def test_no_primary_digest_covers_full_sample_metadata(tmp_path: Path) -> None:
+    """The no-primary digest must cover the full sample records, not just the
+    sample ids: same ids with different metadata produce different digests,
+    list order must not matter, and changing the ids changes the digest
+    (phase 4b T1 review MUST-FIX 4)."""
+    from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+    from app.pipeline.stages.processing import _no_primary_digest
+
+    def _sample(sample_id: str, treatment: str) -> GeoSampleMetadata:
+        return GeoSampleMetadata(
+            sample_id=sample_id,
+            source_alias=sample_id,
+            cell_line_raw="MCF7",
+            cell_line_canonical="MCF7",
+            normalization_rule="identity",
+            treatment=treatment,
+            replicate=1,
+        )
+
+    reason = "series_matrix_expression_empty_and_no_supplementary"
+    samples_a = [_sample("GSM9000001", "DMSO"), _sample("GSM9000002", "DrugA")]
+    samples_b = [_sample("GSM9000001", "DMSO"), _sample("GSM9000002", "DMSO")]
+
+    digest_a = _no_primary_digest(reason, samples_a)
+    digest_b = _no_primary_digest(reason, samples_b)
+
+    # Same sample ids, different treatment metadata -> different digests.
+    assert digest_a != digest_b
+    # Sample list order must not matter (deterministic canonical sort).
+    assert _no_primary_digest(reason, list(reversed(samples_a))) == digest_a
+    # Changing the sample ids changes the digest too.
+    samples_c = [_sample("GSM9000001", "DMSO"), _sample("GSM9000099", "DrugA")]
+    assert _no_primary_digest(reason, samples_c) != digest_a
 
 
 def test_validation_skips_lineage_for_sample_metadata_rows(tmp_path: Path) -> None:
@@ -609,6 +645,113 @@ def test_run_processing_live_mode_uses_acquired_soft_for_tximport_counts(
     assert {row["measurement_type"] for row in rows} == {"tximport_estimated_count"}
 
 
+def _make_live_tximport_failure_assets(
+    tmp_path: Path, task_id: str, counts_content: bytes
+) -> tuple[object, list[SourceAsset]]:
+    """Live-mode workdir where the 'tximport counts' asset actually carries
+    *counts_content* — a file that fails the tximport parse (no counts.\
+    columns) but may be recoverable as a series_matrix — plus a valid family
+    SOFT asset so the live tximport branch is entered."""
+    from datetime import UTC, datetime
+
+    from app.pipeline.stages.base import StageContext
+
+    workdir = create_task_workdir(task_id, base_dir=str(tmp_path / task_id))
+    counts_path = workdir.source_assets / "GSE999999_tximportCounts.txt.gz"
+    counts_path.write_bytes(counts_content)
+    counts_checksum = hashlib.sha256(counts_content).hexdigest()
+    counts_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(counts_checksum),
+        kind="source",
+        relative_path="source_assets/GSE999999_tximportCounts.txt.gz",
+        sha256=counts_checksum,
+        size_bytes=len(counts_content),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_counts",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    soft_bytes = (FIXTURE_DIR / "gse178352_family.soft.gz").read_bytes()
+    soft_path = workdir.source_assets / "GSE999999_family.soft.gz"
+    soft_path.write_bytes(soft_bytes)
+    soft_checksum = hashlib.sha256(soft_bytes).hexdigest()
+    soft_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(soft_checksum),
+        kind="source",
+        relative_path="source_assets/GSE999999_family.soft.gz",
+        sha256=soft_checksum,
+        size_bytes=len(soft_bytes),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_soft",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    ctx = StageContext(
+        task_id=task_id,
+        workdir=workdir,
+        fixture_dir=tmp_path,
+        topic="live",
+        databases=["geo"],
+        started_at=datetime.now(tz=UTC),
+        mode="live",
+    )
+    return ctx, [counts_asset, soft_asset]
+
+
+def test_run_processing_live_tximport_failure_recovers_series_matrix_expression(
+    tmp_path: Path,
+) -> None:
+    """A live-mode tximport counts parse failure must fall back to
+    series_matrix recovery (mirroring fixture mode): a recoverable
+    series_matrix yields real expression rows instead of crashing
+    (phase 4b T1 MUST-FIX 2)."""
+    from app.pipeline.stages.processing import run_processing
+
+    counts_content = gzip.compress(
+        SERIES_MATRIX_WITH_EXPRESSION.encode("utf-8"), mtime=0
+    )
+    ctx, assets = _make_live_tximport_failure_assets(
+        tmp_path, "task_live_txi_recover", counts_content
+    )
+
+    result = run_processing(ctx, assets, "ds_geo_gse999999")
+
+    # Real expression success is not masked by the tximport failure.
+    assert result.output.no_primary_reason is None
+    parsed = result.output.parsed_datasets[0]
+    assert parsed.row_count == 6  # 3 genes x 2 samples
+    assert parsed.parser_name == "geo_series_matrix_expression"
+    assert parsed.processing_parameters["measurement_type"] == "series_matrix_expression"
+
+
+def test_run_processing_live_tximport_failure_no_expression_keeps_samples(
+    tmp_path: Path,
+) -> None:
+    """When a live tximport parse fails AND series_matrix recovery finds no
+    expression either, the run must return a no-primary output with an honest
+    reason and keep the recovered samples on the output
+    (phase 4b T1 MUST-FIX 2)."""
+    from app.pipeline.stages.processing import run_processing
+
+    counts_content = gzip.compress(
+        SERIES_MATRIX_EMPTY_BLOCK.encode("utf-8"), mtime=0
+    )
+    ctx, assets = _make_live_tximport_failure_assets(
+        tmp_path, "task_live_txi_none", counts_content
+    )
+
+    result = run_processing(ctx, assets, "ds_geo_gse999999")
+
+    assert result.output.parsed_datasets == []
+    assert result.output.no_primary_reason == "tximport_parse_failed_no_expression"
+    # Samples recovered from the series_matrix are preserved.
+    assert {s.sample_id for s in result.output.samples} == {
+        "GSM9000001", "GSM9000002", "GSM9000003",
+    }
+    # No leftover placeholder files in the parsed workdir.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
 # --- §1.1 run_processing live mode skips fixture SOFT ----------------------
 #
 #
@@ -783,6 +926,166 @@ def _make_series_matrix_asset(
         started_at=datetime.now(tz=UTC),
     )
     return ctx, source_asset
+
+
+def _make_supplementary_asset(
+    workdir, content: bytes, *, mismatched_checksum: bool = False
+) -> SourceAsset:
+    """Build a supplementary expression SourceAsset in *workdir*.
+
+    ``mismatched_checksum=True`` makes the parser raise ValueError (the
+    source asset checksum guard) — the "supplementary present but unparsable"
+    scenario of phase 4b T1 MUST-FIX 3.
+    """
+    path = workdir.source_assets / "GSE999999_counts.csv.gz"
+    path.write_bytes(content)
+    checksum = hashlib.sha256(content).hexdigest()
+    if mismatched_checksum:
+        checksum = "0" * 64
+    return SourceAsset(
+        asset_id=f"asset_{checksum}",
+        kind="source",
+        relative_path="source_assets/GSE999999_counts.csv.gz",
+        sha256=checksum,
+        size_bytes=len(content),
+        media_type="application/gzip",
+        source_id="src_geo_gse999999",
+        successful_attempt_id="attempt_suppl",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+
+
+def test_series_matrix_expression_parser_removes_file_when_all_values_invalid(
+    tmp_path: Path,
+) -> None:
+    """When every expression value in the series_matrix block is NA/non-numeric
+    the parser returns None and must NOT leave a schema-only
+    ``<dataset>_series_matrix_long.csv`` on disk (phase 4b T1 MUST-FIX 1)."""
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_series_matrix_expression,
+    )
+
+    all_na_matrix = (
+        '!Sample_geo_accession\t"GSM9000300"\t"GSM9000301"\n'
+        '!Sample_title\t"Ctrl rep. 1"\t"Trt rep. 2"\n'
+        '!Sample_organism_ch1\t"Homo sapiens"\t"Homo sapiens"\n'
+        '!series_matrix_table_begin\n'
+        '"ID_REF"\t"GSM9000300"\t"GSM9000301"\n'
+        '"GENE_A"\t"NA"\t"NA"\n'
+        '"GENE_B"\t"null"\t"NaN"\n'
+        '!series_matrix_table_end\n'
+    )
+    ctx, source_asset = _make_series_matrix_asset(tmp_path, all_na_matrix, "task_allna")
+    compressed = (
+        ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    ).read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+
+    result = process_geo_series_matrix_expression(
+        source_asset=source_asset,
+        dataset_id="ds_geo_allna",
+        workdir=ctx.workdir,
+        samples=samples,
+    )
+
+    assert result is None
+    # No schema-only placeholder CSV may remain on disk.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_supplementary_parser_removes_file_when_all_values_invalid(
+    tmp_path: Path,
+) -> None:
+    """A supplementary expression file whose values are all NA yields None and
+    must NOT leave a schema-only ``<dataset>_suppl_expression_long.csv`` on
+    disk (phase 4b T1 MUST-FIX 1)."""
+    from app.pipeline.processing.geo_tximport import (
+        parse_geo_series_matrix_samples,
+        process_geo_supplementary_expression,
+    )
+
+    ctx, _ = _make_series_matrix_asset(
+        tmp_path, SERIES_MATRIX_EMPTY_BLOCK, "task_suppl_clean"
+    )
+    samples = parse_geo_series_matrix_samples(
+        (ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz").read_bytes()
+    )
+    suppl_content = gzip.compress(
+        b'"gene"\t"GSM9000001"\t"GSM9000002"\n'
+        b'"GENE_A"\t"NA"\t"NA"\n'
+        b'"GENE_B"\t"null"\t"NaN"\n',
+        mtime=0,
+    )
+    suppl_asset = _make_supplementary_asset(ctx.workdir, suppl_content)
+
+    result = process_geo_supplementary_expression(
+        source_asset=suppl_asset,
+        dataset_id="ds_geo_suppl",
+        workdir=ctx.workdir,
+        samples=samples,
+    )
+
+    assert result is None
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_supplementary_present_but_empty_yields_honest_reason(
+    tmp_path: Path,
+) -> None:
+    """When a supplementary asset EXISTS but yields no rows the no-primary
+    reason must NOT claim 'no supplementary file' (phase 4b T1 MUST-FIX 3)."""
+    from app.pipeline.stages.processing import (
+        _try_series_matrix_expression_or_minimal,
+    )
+
+    ctx, source_asset = _make_no_expression_ctx(tmp_path, "task_suppl_empty")
+    compressed = (
+        ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    ).read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+    suppl_content = gzip.compress(
+        b'"gene"\t"GSM9000001"\t"GSM9000002"\n"GENE_A"\t"NA"\t"NA"\n',
+        mtime=0,
+    )
+    suppl_asset = _make_supplementary_asset(ctx.workdir, suppl_content)
+
+    parsed, reason = _try_series_matrix_expression_or_minimal(
+        source_asset, "ds_geo_test", ctx, samples, suppl_asset=suppl_asset
+    )
+
+    assert parsed is None
+    assert reason == "series_matrix_expression_empty_and_supplementary_empty"
+    # The empty supplementary file must not leave a schema-only CSV behind.
+    assert list(ctx.workdir.parsed.iterdir()) == []
+
+
+def test_supplementary_unparsable_yields_honest_reason(tmp_path: Path) -> None:
+    """When a supplementary asset EXISTS but fails to parse the no-primary
+    reason must distinguish it from both 'no supplementary file' and
+    'supplementary present but empty' (phase 4b T1 MUST-FIX 3)."""
+    from app.pipeline.stages.processing import (
+        _try_series_matrix_expression_or_minimal,
+    )
+
+    ctx, source_asset = _make_no_expression_ctx(tmp_path, "task_suppl_bad")
+    compressed = (
+        ctx.workdir.source_assets / "GSE999999_series_matrix.txt.gz"
+    ).read_bytes()
+    samples = parse_geo_series_matrix_samples(compressed)
+    suppl_content = gzip.compress(
+        b'"gene"\t"GSM9000001"\n"GENE_A"\t"1.0"\n', mtime=0
+    )
+    suppl_asset = _make_supplementary_asset(
+        ctx.workdir, suppl_content, mismatched_checksum=True
+    )
+
+    parsed, reason = _try_series_matrix_expression_or_minimal(
+        source_asset, "ds_geo_test", ctx, samples, suppl_asset=suppl_asset
+    )
+
+    assert parsed is None
+    assert reason == "series_matrix_expression_empty_and_supplementary_unparsable"
 
 
 def test_series_matrix_expression_parser_extracts_real_expression_rows(

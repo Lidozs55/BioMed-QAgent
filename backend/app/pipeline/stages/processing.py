@@ -494,15 +494,19 @@ def _try_series_matrix_expression_or_minimal(
                         suppl_parsed.row_count,
                     )
                     return suppl_parsed, None
+                # Supplementary asset is present but yielded no rows: the
+                # reason must not claim "no supplementary file" (phase 4b T1
+                # MUST-FIX 3).
                 logger.info(
                     "processing: supplementary expression file yielded no rows",
                 )
+                return None, "series_matrix_expression_empty_and_supplementary_empty"
             except (ValueError, FileNotFoundError, OSError) as exc:
                 logger.warning(
                     "processing: supplementary expression parse failed (%s)",
                     exc,
                 )
-                return None, "supplementary_expression_parse_failed"
+                return None, "series_matrix_expression_empty_and_supplementary_unparsable"
         logger.info(
             "processing: series_matrix expression block is empty; "
             "no primary dataset (no expression data)",
@@ -646,15 +650,22 @@ def _no_primary_digest(reason: str, samples: list[GeoSampleMetadata]) -> str:
 
     The regular processing digest hashes the parsed file's sha256; with no
     parsed file (no expression data) we hash the reason string plus the
-    sorted recovered sample ids instead, so the digest is stable for
-    identical inputs and changes when the recovered samples change.
+    canonical sample records — the full serialized ``GeoSampleMetadata``
+    metadata (``model_dump`` with sorted keys, records sorted by sample_id) —
+    so the digest is stable for identical inputs and changes when the
+    recovered samples' metadata changes, not just their ids (phase 4b T1
+    MUST-FIX 4).
     """
     import json
 
+    sample_records = sorted(
+        (sample.model_dump() for sample in samples),
+        key=lambda record: record["sample_id"],
+    )
     payload = json.dumps(
         {
             "no_primary_reason": reason,
-            "sample_ids": sorted(sample.sample_id for sample in samples),
+            "samples": sample_records,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -829,15 +840,42 @@ def run_processing(
                 no_primary_reason = "tximport_parse_failed_no_expression"
     else:
         if soft_asset is not None and "tximportCounts" in source_asset.relative_path:
-            soft_bytes = (ctx.workdir.root / soft_asset.relative_path).read_bytes()
-            parsed = process_geo_tximport_counts(
-                source_asset=source_asset,
-                dataset_id=dataset_id,
-                workdir=ctx.workdir,
-                soft_gzip=soft_bytes,
-                logical_file=source_asset.relative_path.rsplit("/", 1)[-1],
-            )
-            samples = parse_geo_soft_samples(soft_bytes)
+            try:
+                soft_bytes = (ctx.workdir.root / soft_asset.relative_path).read_bytes()
+                parsed = process_geo_tximport_counts(
+                    source_asset=source_asset,
+                    dataset_id=dataset_id,
+                    workdir=ctx.workdir,
+                    soft_gzip=soft_bytes,
+                    logical_file=source_asset.relative_path.rsplit("/", 1)[-1],
+                )
+                samples = parse_geo_soft_samples(soft_bytes)
+                logger.info(
+                    "processing: parsed tximport counts (%d rows, %d samples)",
+                    parsed.row_count,
+                    len(samples),
+                )
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                # Live-mode fallback (mirrors fixture mode): the tximport
+                # counts parse failed — attempt series_matrix expression
+                # recovery; if that finds no expression either, the tximport
+                # counts parse failure is the root cause of the no-primary
+                # outcome.
+                logger.warning(
+                    "processing: live tximport parse failed (%s); "
+                    "attempting series_matrix recovery",
+                    exc,
+                )
+                samples = _recover_samples_from_series_matrix(source_asset, ctx)
+                gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
+                parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
+                    source_asset, dataset_id, ctx, samples,
+                    suppl_asset=suppl_asset,
+                    gene_map=gene_map,
+                    probe_gene_mapping=probe_gene_mapping,
+                )
+                if parsed is None and no_primary_reason is not None:
+                    no_primary_reason = "tximport_parse_failed_no_expression"
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
             gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
@@ -852,8 +890,9 @@ def run_processing(
         # No expression data anywhere (empty block / parse failure / no
         # supplementary): ADR-011 — do NOT emit a metadata-only placeholder
         # primary. Recovered samples stay on the output for the supporting
-        # sample_metadata.csv; the digest hashes the reason + sorted sample
-        # ids (deterministic, and independent of any parsed file's sha256).
+        # sample_metadata.csv; the digest hashes the reason + canonical
+        # sample records (deterministic, and independent of any parsed
+        # file's sha256).
         logger.warning(
             "processing: no primary dataset; reason=%s (samples=%d)",
             no_primary_reason,
