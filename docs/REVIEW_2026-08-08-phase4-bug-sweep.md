@@ -68,8 +68,35 @@
 | A6 | Minor | `_task_locks` / repository `_task_locks` / EventStore `_checkpoints` 强键字典永不清除（重复建删任务内存增长） | 引用计数/弱引用注册表，独立任务 |
 | A7 | Minor | `TaskIndex.list_tasks` active 列表不受 limit 约束（长会话 API 序列化无界） | active 游标/分页，独立任务 |
 | C7 | Important | NO_DATA banner/预览按 role 存在性推断归属（task 级 artifact 聚合无法按 run/publication 过滤；4b REVIEW §3-4 已接受） | 前端 store 引入 artifact 归属元数据（与 4a 遗留 `list_artifacts` 暴露 role 一并做） |
+| V2-dup | Important | `execute_dataset_build` 的结构化结果（成功/NO_DATA）未写入 durable `execution.build_result`（manager 兑底为通用 NO_DATA；RunContext 不暴露 execution）——B9/B5 在端到端不一致（第二轮 MUST-FIX #10） | 需接线设计：V2 工具结果 → durable Run 结果路径，独立任务 |
+| V2-validation_ref | Minor | `DatasetPublication.validation_result_ref → validation_report.json` 未拷贝进 version 目录（发布引用闭包缺口，非 manifest artifact） | 随 A2/A3 publication-integrity 工作一并 |
 
-## 4. 验证（终态门，wave1 合并后实测）
+## 4. 第二轮（最终 re-review MUST-FIX，Wave 5/6）
+
+第一轮 23 项修复后，最终 scoped re-review（gpt-5.6-sol）对 11 项 MUST-FIX 判定：7 项部分/回归 + 4 项未闭合。
+Wave 5（后端）+ Wave 6（前端）处理 10 项；#10（V2 结果传播）转 §3 设计级。
+
+### Wave 5 后端（commit 待填）
+
+| 项 | 修复 |
+| --- | --- |
+| D2 | V2 parse/canonicalize/integrate 同步段 asyncio.to_thread 卸载（取消可中断） |
+| D1 | 发布前重检 `main_input_pending`（entry 检查之外的 publication-time 门） |
+| B5 | NO_DATA 结构化、attempt 限定（typed 错误码替代子串匹配；混合源不全拒） |
+| A1 | 终态化 append 有界重试；成功后才释放 ownership（失败留给恢复路径） |
+| B8 | 时区 naive/aware 归一化后再比较（防御 TypeError） |
+| A8 | 旧快照去重状态重建 + 冲突重复 artifact 拒绝 |
+
+### Wave 6 前端（commit 待填）
+
+| 项 | 修复 |
+| --- | --- |
+| C3 | 选择/水合终态历史任务不重订（shouldSubscribe 门控 selection-time subscribe） |
+| C2 | 永久缺口快照兑底（有界 recovery 失败 → REST snapshot 水合）；socket 替换清 marker |
+| C8 | 弹窗挂载期 deadline 定时重算（setInterval 链） |
+| #11 | `operation_*` 四事件入 EVENT_TYPES + reducer 无操作透传（游标前进，状态不变） |
+
+## 5. 验证（终态门，wave1 合并后实测）
 
 | 门 | 结果 |
 | --- | --- |
