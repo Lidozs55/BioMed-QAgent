@@ -134,9 +134,15 @@ async def test_artifact_api_uses_repository_root_and_preserves_success_wire(
         *[entry.artifact_id for entry in manifest.artifacts],
     ]
     assert all(
-        set(entry) == {"artifact_id", "name", "size", "sha256", "media_type"}
+        set(entry)
+        == {"artifact_id", "name", "role", "size", "sha256", "media_type"}
         for entry in artifacts
     )
+    run_manifest_entry = next(
+        entry for entry in artifacts if entry["name"] == "run_manifest.json"
+    )
+    assert run_manifest_entry["role"] == "schema"
+    assert main_entry["role"] == "primary_dataset"
     assert main_entry["artifact_id"].startswith("artifact_")
     assert download.status_code == 200
     assert download.headers["content-disposition"].endswith('filename="main_data.csv"')

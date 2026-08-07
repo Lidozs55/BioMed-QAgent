@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import logging
+import pathlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from app.domain.contracts import (
     AssistantDeltaPayload,
     AssistantStreamDeltaFrame,
     ConversationCompactedPayload,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -50,6 +52,8 @@ from app.domain.contracts import (
     WarningPayload,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole, BuildResultStatus
+from app.domain.contracts.enums import ErrorCode
 from app.runtime import repository as repository_module
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.runtime.hub import AssistantStreamHub, EventHub
@@ -3080,6 +3084,7 @@ async def test_durable_artifact_event_survives_hub_projection_failure(
                     payload=ArtifactProducedPayload(
                         artifact=ArtifactManifestEntry(
                             artifact_id="artifact_durable_hub_failure",
+                            role=ArtifactRole.AUDIT_REPORT,
                             name="durable.csv",
                             relative_path="artifacts/durable.csv",
                             media_type="text/csv",
@@ -3165,6 +3170,7 @@ async def test_durable_artifact_event_survives_append_projection_failure(
                     payload=ArtifactProducedPayload(
                         artifact=ArtifactManifestEntry(
                             artifact_id="artifact_durable_append_failure",
+                            role=ArtifactRole.AUDIT_REPORT,
                             name="durable-append.csv",
                             relative_path="artifacts/durable-append.csv",
                             media_type="text/csv",
@@ -3481,6 +3487,184 @@ async def test_recovery_repairs_partial_child_interruptions_idempotently(
     finally:
         await second_manager.close()
         await second_hub.close()
+
+
+@pytest.mark.parametrize(
+    "marker_content",
+    [
+        pytest.param(
+            "{bad json",
+            id="syntactically-malformed-json",
+        ),
+        pytest.param(
+            '"just a string"',
+            id="non-object-json",
+        ),
+        pytest.param(
+            json.dumps({
+                "schema_version": 1,
+                "task_id": "task_corrupt_marker",
+                "run_id": "run_corrupt_marker",
+                "manifest_sha256": "bad-sha256",
+                "manifest_entries": [],
+            }),
+            id="invalid-sha256",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_corrupt_publication_marker_does_not_abort_recovery(
+    tmp_path,
+    caplog,
+    marker_content,
+) -> None:
+    """A corrupt .runtime-publication.json marker must not crash startup
+    or synthesise a publication_created event; it must log a warning."""
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_corrupt_marker"
+    run_id = "run_corrupt_marker"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunQueuedPayload(
+            request_id="req_corrupt_marker",
+            input="corrupt marker test",
+        ),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunStartedPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunFinalizingPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunCompletedPayload(),
+    )
+
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    marker_path.write_text(marker_content, "utf-8")
+    await seed.close()
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.runtime.manager"):
+        await manager.start()
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        events = await repository.list_events(task_id)
+        # Must not synthesise a publication_created event
+        assert not any(
+            isinstance(event.payload, PublicationCreatedPayload)
+            for event in events
+        )
+        # A corrupt marker must be reported, not silently dropped
+        assert "Skipping corrupt publication marker" in caplog.text
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_publication_marker_warns_and_skips(
+    tmp_path,
+    caplog,
+    monkeypatch,
+) -> None:
+    """An OSError while reading the marker (raced removal, permissions) must
+    not crash startup; it must log a warning and skip reconciliation."""
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_unreadable_marker"
+    run_id = "run_unreadable_marker"
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunQueuedPayload(
+            request_id="req_unreadable_marker",
+            input="unreadable marker test",
+        ),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunStartedPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunFinalizingPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunCompletedPayload(),
+    )
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    marker_path = artifacts_dir / ".runtime-publication.json"
+    # A fully valid marker – without the OSError this would be reconciled.
+    marker_path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "manifest_sha256": "0" * 64,
+        }),
+        "utf-8",
+    )
+    await seed.close()
+
+    real_read_text = pathlib.Path.read_text
+
+    def raise_oserror(
+        path: pathlib.Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == marker_path:
+            raise OSError("simulated marker read failure")
+        return real_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", raise_oserror)
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+    )
+    with caplog.at_level(logging.WARNING, logger="app.runtime.manager"):
+        await manager.start()
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        events = await repository.list_events(task_id)
+        # Must not synthesise a publication_created event
+        assert not any(
+            isinstance(event.payload, PublicationCreatedPayload)
+            for event in events
+        )
+        # The read failure must be reported, not crash startup
+        assert "Skipping unreadable publication marker" in caplog.text
+    finally:
+        await manager.close()
 
 
 @pytest.mark.asyncio
@@ -4906,6 +5090,7 @@ async def test_manager_suppresses_artifact_when_cancel_wins_emitter_lock(
             ArtifactProducedPayload(
                 artifact=ArtifactManifestEntry(
                     artifact_id="artifact_cancel_race",
+                    role=ArtifactRole.AUDIT_REPORT,
                     name="cancelled.csv",
                     relative_path="artifacts/cancelled.csv",
                     media_type="text/csv",
@@ -5890,3 +6075,110 @@ async def test_emit_user_input_resumed_with_unknown_id_keeps_pending() -> None:
                 summary="correct the data",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_completed_run_emits_build_result_no_data(tmp_path) -> None:
+    """零产物完成 → COMPLETED + BuildResult(NO_DATA)，而不是 run_failed。
+
+    复用现有 manager 集成 fixture：executor 模拟真实 AgentRunExecutor
+    跑过（mark_agent_executed）但零 completion_events。Task 7 的 reducer
+    聚合会把该 build_result 投影到 run.summary；本测试断言权威事件日志
+    里的 RunCompletedPayload（Task 6 直接产出物）。
+    """
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        execution.mark_agent_executed()
+        return None
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_no_data_build"))
+        accepted = await manager.submit_run(
+            "task_no_data_build",
+            StartRunRequest(
+                request_id="req_no_data_build",
+                input="produce no artifacts",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.COMPLETED
+
+        events = await repository.list_events(accepted.task_id)
+        completed = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, RunCompletedPayload)
+        ]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
+        assert completed[0].build_result.valid_row_count == 0
+        assert completed[0].build_result.reason_codes == ["no_primary_data"]
+        assert not any(
+            isinstance(event.payload, RunFailedPayload) for event in events
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (RuntimeError("executor diagnostic"), ErrorCode.INTERNAL_ERROR),
+        (TimeoutError("executor timed out"), ErrorCode.TIMEOUT),
+    ],
+)
+async def test_failed_run_emits_structured_error_code(
+    tmp_path,
+    error: Exception,
+    expected_code: ErrorCode,
+) -> None:
+    """dispatch 异常 → run_failed 且 RunFailedPayload 携带结构化 error_code。
+
+    复用现有 \"dispatch 异常 → run_failed\" 集成 fixture；断言权威事件日志
+    里的 RunFailedPayload.error_code（Task 7 会投影到 run.summary.error_code）。
+    """
+
+    manager_module = importlib.import_module("app.runtime.manager")
+    repository = TaskRepository(tmp_path / "output")
+
+    async def run(execution) -> None:
+        raise error
+
+    manager = manager_module.TaskManager(repository, run_executor=run)
+    await manager.start()
+    try:
+        await repository.save_snapshot(empty_snapshot("task_structured_error"))
+        accepted = await manager.submit_run(
+            "task_structured_error",
+            StartRunRequest(
+                request_id="req_structured_error",
+                input="fail with structured error",
+            ),
+        )
+        await manager.wait_until_idle()
+
+        snapshot = await repository.get_snapshot(accepted.task_id)
+        assert snapshot is not None
+        assert snapshot.runs[-1].status is RunStatus.FAILED
+
+        events = await repository.list_events(accepted.task_id)
+        failed = [
+            event.payload
+            for event in events
+            if isinstance(event.payload, RunFailedPayload)
+        ]
+        assert len(failed) == 1
+        assert failed[0].error_code is expected_code
+        assert failed[0].error
+    finally:
+        await manager.close()

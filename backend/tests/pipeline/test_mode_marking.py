@@ -23,6 +23,7 @@ from app.domain.contracts import (
     TaskState,
     ValidationSummary,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.pipeline.runner import PipelineRunner
 from pydantic import ValidationError
 
@@ -39,6 +40,7 @@ def _valid_manifest_payload(
     """Build a minimal valid RunManifest payload for contract tests."""
     artifact = ArtifactManifestEntry(
         artifact_id="artifact_" + _SHA_A[:32],
+        role=ArtifactRole.PRIMARY_DATASET,
         name="main_data.csv",
         relative_path="artifacts/main_data.csv",
         media_type="text/csv",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.datasets.contracts import ArtifactRole, BuildResult, BuildResultStatus
 from app.domain.contracts import (
     ArtifactManifestEntry,
     AttemptStatus,
@@ -38,6 +39,42 @@ def parsed_file() -> FileAsset:
         size_bytes=1024,
         media_type="text/tab-separated-values",
         generated_by_step_id="step_parse_geo_1",
+    )
+
+
+def _valid_manifest() -> RunManifest:
+    artifact = ArtifactManifestEntry(
+        artifact_id="artifact_main",
+        role=ArtifactRole.PRIMARY_DATASET,
+        name="main_data.csv",
+        relative_path="artifacts/main_data.csv",
+        media_type="text/csv",
+        size_bytes=10,
+        sha256=SHA_A,
+        generated_by_step_id="step_build_1",
+    )
+    return RunManifest(
+        task_id="task_1",
+        id_generation_version="1.0",
+        request=TaskRequest(topic="breast cancer"),
+        specification=TaskSpecification(
+            topic="breast cancer",
+            requested_outputs=[RequestedOutput.MAIN_DATA],
+        ),
+        task_state=TaskState.COMPLETED,
+        stage_attempt_ids=["stage_attempt_1", "stage_attempt_2"],
+        source_ids=["src_article", "src_geo"],
+        artifacts=[artifact],
+        validation=ValidationSummary(
+            status="valid",
+            checked_count=10,
+            failed_count=0,
+            report_path="logs/validation_report.json",
+        ),
+        pipeline_version="0.1.0",
+        model_name=None,
+        started_at=NOW,
+        finished_at=NOW + timedelta(seconds=2),
     )
 
 
@@ -137,6 +174,7 @@ def test_artifact_manifest_entry_must_stay_in_artifacts_directory() -> None:
     with pytest.raises(ValidationError, match="artifacts"):
         ArtifactManifestEntry(
             artifact_id="artifact_main",
+            role=ArtifactRole.PRIMARY_DATASET,
             name="main_data.csv",
             relative_path="staging/main_data.csv",
             media_type="text/csv",
@@ -164,38 +202,7 @@ def test_validation_summary_status_matches_failure_count() -> None:
 
 
 def test_run_manifest_requires_sorted_unique_id_lists_and_time_order() -> None:
-    artifact = ArtifactManifestEntry(
-        artifact_id="artifact_main",
-        name="main_data.csv",
-        relative_path="artifacts/main_data.csv",
-        media_type="text/csv",
-        size_bytes=10,
-        sha256=SHA_A,
-        generated_by_step_id="step_build_1",
-    )
-    payload = {
-        "task_id": "task_1",
-        "id_generation_version": "1.0",
-        "request": TaskRequest(topic="breast cancer"),
-        "specification": TaskSpecification(
-            topic="breast cancer",
-            requested_outputs=[RequestedOutput.MAIN_DATA],
-        ),
-        "task_state": TaskState.COMPLETED,
-        "stage_attempt_ids": ["stage_attempt_1", "stage_attempt_2"],
-        "source_ids": ["src_article", "src_geo"],
-        "artifacts": [artifact],
-        "validation": ValidationSummary(
-            status="valid",
-            checked_count=10,
-            failed_count=0,
-            report_path="logs/validation_report.json",
-        ),
-        "pipeline_version": "0.1.0",
-        "model_name": None,
-        "started_at": NOW,
-        "finished_at": NOW + timedelta(seconds=2),
-    }
+    payload = _valid_manifest().model_dump()
     manifest = RunManifest(**payload)
     assert manifest.request.databases == [Database.PUBMED, Database.GEO]
 
@@ -205,3 +212,21 @@ def test_run_manifest_requires_sorted_unique_id_lists_and_time_order() -> None:
         RunManifest(**{**payload, "stage_attempt_ids": ["stage_attempt_1"] * 2})
     with pytest.raises(ValidationError, match="finished_at"):
         RunManifest(**{**payload, "finished_at": NOW - timedelta(seconds=1)})
+
+
+def test_run_manifest_carries_build_result_and_error_code() -> None:
+    manifest = _valid_manifest()
+    assert manifest.build_result is None
+    assert manifest.error_code is None
+    manifest = manifest.model_copy(
+        update={
+            "build_result": BuildResult(
+                status=BuildResultStatus.NO_DATA,
+                valid_row_count=0,
+                reason_codes=["no_primary_data"],
+            ),
+            "error_code": ErrorCode.PARSE_ERROR,
+        }
+    )
+    assert manifest.build_result.status is BuildResultStatus.NO_DATA
+    assert manifest.error_code is ErrorCode.PARSE_ERROR

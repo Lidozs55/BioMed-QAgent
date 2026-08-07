@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import type {
+  BuildResultStatus,
   ResumeRunInput,
   StartTaskInput,
   TaskRunAccepted,
@@ -92,6 +93,13 @@ const STATUS_LABELS = {
   cancelled: "任务已取消",
   interrupted: "任务已中断",
 } as const;
+
+const BUILD_LABELS: Record<BuildResultStatus, string> = {
+  succeeded: "构建成功",
+  partial_success: "部分成功",
+  no_data: "无数据",
+  spec_rejected: "规格被拒",
+};
 
 function formatActiveItemStatus(item: ConversationItem): string {
   switch (item.kind) {
@@ -236,6 +244,14 @@ export function ChatPanel({
       (item) =>
         item.runId === activeRunId && item.kind === "assistant_segment",
     );
+  const latestRunId = activeTask?.runOrder[activeTask.runOrder.length - 1];
+  const latestRun =
+    latestRunId === undefined ? undefined : activeTask?.runsById[latestRunId];
+  const buildLabel =
+    activeTask?.summary.status === "completed" &&
+    latestRun?.summary?.build_result?.status !== undefined
+      ? BUILD_LABELS[latestRun.summary.build_result.status]
+      : undefined;
   // 后端进入 JSON 缓冲模式时会先 end() 当前 segment
   // （finish_reason="tool_call_pending"），标记为"正在准备工具调用"。
   // 此时虽然有 assistant_segment 但需要显示提示。
@@ -432,12 +448,15 @@ export function ChatPanel({
         <div className="flex shrink-0 flex-col">
           <Marker variant="border" className="px-5 py-2" role="status">
             <MarkerIcon>
-              <TaskStatusIcon status={activeTask.summary.status} />
+              <TaskStatusIcon
+                status={activeTask.summary.status}
+                buildStatus={latestRun?.summary?.build_result?.status}
+              />
             </MarkerIcon>
             <MarkerContent>
               {activeItem !== undefined && activeTask.summary.status === "running"
                 ? formatActiveItemStatus(activeItem)
-                : STATUS_LABELS[activeTask.summary.status]}
+                : buildLabel ?? STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
             {isMobile && subagentCount > 0 ? (
               <Button

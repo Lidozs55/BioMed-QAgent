@@ -20,6 +20,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.index import SingleThreadExecutor, TaskIndex
 
@@ -176,13 +177,10 @@ async def test_index_persists_artifact_count(tmp_path) -> None:
     await index.initialize()
     try:
         base = snapshot("task_artifact_count")
-        base.task = base.task.model_copy(
-            update={"artifact_count": 3, "no_artifact_failure": True}
-        )
+        base.task = base.task.model_copy(update={"artifact_count": 3})
         await index.upsert_snapshot(base)
         listed = await index.list_tasks()
         assert listed.tasks[0].artifact_count == 3
-        assert listed.tasks[0].no_artifact_failure is True
     finally:
         await index.close()
 
@@ -643,6 +641,7 @@ async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
                 payload=ArtifactProducedPayload(
                     artifact=ArtifactManifestEntry(
                         artifact_id=artifact_id,
+                        role=ArtifactRole.AUDIT_REPORT,
                         name=f"{artifact_id}.csv",
                         relative_path=f"artifacts/{artifact_id}.csv",
                         media_type="text/csv",
@@ -662,38 +661,20 @@ async def test_index_rebuild_backfills_legacy_snapshot_artifact_count(
     finally:
         await index.close()
 
+
 @pytest.mark.asyncio
-async def test_index_rebuild_backfills_legacy_no_artifact_failure(
+async def test_index_rebuild_loads_legacy_snapshot_with_no_artifact_failure_field(
     tmp_path,
 ) -> None:
+    # Snapshots persisted before the no_artifact_failure field was removed carry
+    # it in the task sub-dict; the rebuild must tolerate it (the obsolete key is
+    # dropped before validation) instead of failing at startup.
     tasks_dir = tmp_path / "tasks"
-    task_id = "task_legacy_no_artifact"
-    initial = snapshot(
-        task_id,
-        request_id="req_legacy",
-        run_id="run_legacy",
-        status=RunStatus.FAILED,
-    )
-    initial = initial.model_copy(
-        update={
-            "runs": [
-                initial.runs[0].model_copy(
-                    update={
-                        "status": RunStatus.FAILED,
-                        "error": (
-                            "agent completed without producing any artifacts "
-                            "(manifest missing or unchanged)"
-                        ),
-                    }
-                )
-            ],
-        }
-    )
+    task_id = "task_legacy_no_artifact_failure"
     state_dir = tasks_dir / task_id / "state"
     state_dir.mkdir(parents=True)
-    raw = initial.model_dump(mode="json")
-    raw["task"].pop("artifact_count")
-    raw["task"].pop("no_artifact_failure")
+    raw = snapshot(task_id).model_dump(mode="json")
+    raw["task"]["no_artifact_failure"] = True
     (state_dir / "task_snapshot.json").write_text(
         json.dumps(raw, ensure_ascii=False) + "\n",
         "utf-8",
@@ -702,8 +683,8 @@ async def test_index_rebuild_backfills_legacy_no_artifact_failure(
     await index.initialize()
     try:
         await index.rebuild()
-        listed = await index.list_tasks()
-        assert listed.tasks[0].no_artifact_failure is True
+        page = await index.list_tasks()
+        assert [task.task_id for task in page.tasks] == [task_id]
     finally:
         await index.close()
 

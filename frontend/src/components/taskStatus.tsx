@@ -8,16 +8,15 @@ import {
 } from "@phosphor-icons/react";
 
 import { Spinner } from "@/components/ui/spinner";
-import type { RunStatus } from "@/runtime/contracts";
-import type { TaskOutcome } from "@/components/taskOutcome";
+import type { BuildResultStatus, RunStatus } from "@/runtime/contracts";
 
 export function TaskStatusIcon({
   status,
-  outcome,
+  buildStatus,
   className,
 }: {
   status: RunStatus;
-  outcome?: TaskOutcome;
+  buildStatus?: BuildResultStatus;
   className?: string;
 }) {
   switch (status) {
@@ -29,17 +28,15 @@ export function TaskStatusIcon({
     case "awaiting_user_input":
       return <Spinner className={className} aria-hidden="true" />;
     case "completed":
-      return outcome === "no_data" ? (
+      return buildStatus === "no_data" ? (
         <InfoIcon className={className} aria-hidden="true" />
+      ) : buildStatus === "spec_rejected" ? (
+        <ProhibitIcon className={className} aria-hidden="true" />
       ) : (
         <CheckCircleIcon className={className} aria-hidden="true" />
       );
     case "failed":
-      return outcome === "no_data" ? (
-        <InfoIcon className={className} aria-hidden="true" />
-      ) : (
-        <WarningCircleIcon className={className} aria-hidden="true" />
-      );
+      return <WarningCircleIcon className={className} aria-hidden="true" />;
     case "cancelled":
       return <ProhibitIcon className={className} aria-hidden="true" />;
     case "interrupted":

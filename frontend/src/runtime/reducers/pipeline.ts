@@ -17,6 +17,7 @@ export function applyArtifactProducedEvent(
   const artifact: ArtifactProjection = {
     artifact_id: payload.artifact.artifact_id,
     name: payload.artifact.name,
+    role: payload.artifact.role,
     size: payload.artifact.size_bytes,
     sha256: payload.artifact.sha256,
     media_type: payload.artifact.media_type,

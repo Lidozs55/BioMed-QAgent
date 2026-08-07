@@ -172,6 +172,51 @@ describe("parseEventPayload — runtime event family", () => {
     if (r.type !== "subagent_completed") throw new Error();
     expect(r.result.source_asset_ids).toEqual(["source_1"]);
   });
+
+  it("run_completed — accepts build_result with empty user_summary/recommended_next_action", () => {
+    const r = parseEventPayload(
+      o({
+        type: "run_completed",
+        build_result: {
+          status: "no_data",
+          valid_row_count: 0,
+          successful_sources: [],
+          rejected_sources: [],
+          available_artifact_roles: [],
+          publication_id: null,
+          reason_codes: ["no_primary_data"],
+          user_summary: "",
+          recommended_next_action: "",
+        },
+      }),
+      "run_completed",
+      "p",
+    );
+    if (r.type !== "run_completed") throw new Error();
+    expect(r.build_result?.user_summary).toBe("");
+    expect(r.build_result?.recommended_next_action).toBe("");
+  });
+
+  it("publication_created — parses the full publication payload", () => {
+    const r = parseEventPayload(
+      o({
+        type: "publication_created",
+        publication_id: "pub_1",
+        run_id: "run_1",
+        manifest_sha256: "a".repeat(64),
+        supersedes_publication_id: null,
+        published_at: "2026-08-06T00:00:00Z",
+      }),
+      "publication_created",
+      "p",
+    );
+    if (r.type !== "publication_created") throw new Error();
+    expect(r.publication_id).toBe("pub_1");
+    expect(r.run_id).toBe("run_1");
+    expect(r.manifest_sha256).toBe("a".repeat(64));
+    expect(r.supersedes_publication_id).toBeNull();
+    expect(r.published_at).toBe("2026-08-06T00:00:00Z");
+  });
 });
 
 /* ---- finite union parsers ---- */

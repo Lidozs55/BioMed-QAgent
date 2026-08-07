@@ -9,7 +9,13 @@ from typing import Annotated, ClassVar, Literal, Self
 from pydantic import Field, JsonValue, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.enums import AttemptStatus, StageName, SubagentStatus
+from app.domain.contracts.dataset_state import BuildResult
+from app.domain.contracts.enums import (
+    AttemptStatus,
+    ErrorCode,
+    StageName,
+    SubagentStatus,
+)
 from app.domain.contracts.ids import generate_prefixed_uuid
 from app.domain.contracts.pipeline import (
     ArtifactManifestEntry,
@@ -51,6 +57,7 @@ class RuntimeEventType(StrEnum):
     RUN_CANCEL_REQUESTED = "run_cancel_requested"
     RUN_CANCELLED = "run_cancelled"
     RUN_INTERRUPTED = "run_interrupted"
+    PUBLICATION_CREATED = "publication_created"
     ASSISTANT_DELTA = "assistant_delta"
     ASSISTANT_REASONING_DELTA = "assistant_reasoning_delta"
     TOOL_STARTED = "tool_started"
@@ -196,6 +203,7 @@ class TaskRecoveredPayload(ContractModel):
 class TaskCompletedPayload(ContractModel):
     type: Literal[PipelineEventType.TASK_COMPLETED] = PipelineEventType.TASK_COMPLETED
     validation: ValidationSummary
+    build_result: BuildResult | None = Field(default=None)
 
 
 class TaskFailedPayload(ContractModel):
@@ -223,11 +231,13 @@ class RunFinalizingPayload(ContractModel):
 
 class RunCompletedPayload(ContractModel):
     type: Literal[RuntimeEventType.RUN_COMPLETED] = RuntimeEventType.RUN_COMPLETED
+    build_result: BuildResult | None = Field(default=None)
 
 
 class RunFailedPayload(ContractModel):
     type: Literal[RuntimeEventType.RUN_FAILED] = RuntimeEventType.RUN_FAILED
     error: str = Field(min_length=1)
+    error_code: ErrorCode | None = Field(default=None)
 
 
 class RunCancelRequestedPayload(ContractModel):
@@ -240,11 +250,30 @@ class RunCancelRequestedPayload(ContractModel):
 class RunCancelledPayload(ContractModel):
     type: Literal[RuntimeEventType.RUN_CANCELLED] = RuntimeEventType.RUN_CANCELLED
     reason: str | None = Field(default=None, min_length=1)
+    cancelled_at_stage: StageName | None = Field(default=None)
 
 
 class RunInterruptedPayload(ContractModel):
     type: Literal[RuntimeEventType.RUN_INTERRUPTED] = RuntimeEventType.RUN_INTERRUPTED
     reason: str = Field(min_length=1)
+
+
+class PublicationCreatedPayload(ContractModel):
+    """Immutable publication record appended to the event log (ARCHITECTURE §9.3).
+
+    ``supersedes_publication_id`` is optional: the reducer derives the chain
+    head from the task's prior ``current_publication_id`` when the field is
+    absent, so the emit path never needs the current snapshot.
+    """
+
+    type: Literal[RuntimeEventType.PUBLICATION_CREATED] = (
+        RuntimeEventType.PUBLICATION_CREATED
+    )
+    publication_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supersedes_publication_id: str | None = Field(default=None, min_length=1)
+    published_at: datetime
 
 
 class UserInputRequiredPayload(ContractModel):
@@ -503,6 +532,7 @@ EventPayload = Annotated[
     | RunCancelRequestedPayload
     | RunCancelledPayload
     | RunInterruptedPayload
+    | PublicationCreatedPayload
     | UserInputRequiredPayload
     | UserInputResumedPayload
     | AssistantDeltaPayload

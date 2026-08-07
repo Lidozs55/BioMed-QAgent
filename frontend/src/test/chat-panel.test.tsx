@@ -3,7 +3,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPanel } from "@/components/ChatPanel";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
-import type { TaskRunAccepted, TaskSnapshot } from "@/runtime/contracts";
+import type {
+  BuildResultStatus,
+  TaskRunAccepted,
+  TaskSnapshot,
+} from "@/runtime/contracts";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -85,6 +89,50 @@ function seedTerminalTask(
   };
   useAgentStore.getState().hydrateTaskSnapshot(snapshot);
   useAgentStore.getState().setActiveTaskId(taskId);
+}
+
+function seedRunBuildResult(
+  buildStatus: BuildResultStatus,
+  userMessage: string,
+): void {
+  useAgentStore.setState((state) => {
+    const task = state.tasksById.task_terminal;
+    const runId = task.runOrder[task.runOrder.length - 1];
+    if (runId === undefined) return state;
+    return {
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        task_terminal: {
+          ...task,
+          runsById: {
+            ...task.runsById,
+            [runId]: {
+              ...task.runsById[runId],
+              status: "completed",
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: buildStatus,
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: [],
+                  available_artifact_roles: [],
+                  publication_id: null,
+                  reason_codes: [],
+                  user_summary: userMessage,
+                  recommended_next_action: "",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: userMessage,
+              },
+            },
+          },
+        },
+      },
+    };
+  });
 }
 
 function deferred<T>() {
@@ -568,6 +616,134 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("任务执行失败");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("模型未产出有效产物")).not.toBeInTheDocument();
+  });
+
+  it("shows the no_data build label from the latest run summary", () => {
+    seedTerminalTask();
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      const runId = task.runOrder[task.runOrder.length - 1];
+      if (runId === undefined) return state;
+      return {
+        ...state,
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            runsById: {
+              ...task.runsById,
+              [runId]: {
+                ...task.runsById[runId],
+                status: "completed",
+                summary: {
+                  run_status: "completed",
+                  build_result: {
+                    status: "no_data",
+                    valid_row_count: 0,
+                    successful_sources: [],
+                    rejected_sources: ["pubmed"],
+                    available_artifact_roles: [],
+                    publication_id: null,
+                    reason_codes: ["no_records"],
+                    user_summary: "未检索到数据",
+                    recommended_next_action: "调整检索词后重试",
+                  },
+                  error_code: null,
+                  cancelled_at_stage: null,
+                  user_message: "未检索到数据",
+                },
+              },
+            },
+          },
+        },
+      };
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("无数据");
+    expect(
+      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
+    ).toContain("M112,84a12,12,0,1,1"); // InfoIcon, not CheckCircleIcon
+  });
+
+  it("shows the spec_rejected build label from the latest run summary", () => {
+    seedTerminalTask();
+    useAgentStore.setState((state) => {
+      const task = state.tasksById.task_terminal;
+      const runId = task.runOrder[task.runOrder.length - 1];
+      if (runId === undefined) return state;
+      return {
+        ...state,
+        tasksById: {
+          ...state.tasksById,
+          task_terminal: {
+            ...task,
+            runsById: {
+              ...task.runsById,
+              [runId]: {
+                ...task.runsById[runId],
+                status: "completed",
+                summary: {
+                  run_status: "completed",
+                  build_result: {
+                    status: "spec_rejected",
+                    valid_row_count: 0,
+                    successful_sources: [],
+                    rejected_sources: ["pubmed"],
+                    available_artifact_roles: [],
+                    publication_id: null,
+                    reason_codes: ["spec_rejected"],
+                    user_summary: "产物未通过规格校验",
+                    recommended_next_action: "修正规格后重试",
+                  },
+                  error_code: null,
+                  cancelled_at_stage: null,
+                  user_message: "产物未通过规格校验",
+                },
+              },
+            },
+          },
+        },
+      };
+    });
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("规格被拒");
+    expect(
+      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
+    ).toContain("m88,104a87.56"); // ProhibitIcon, not CheckCircleIcon
+  });
+
+  it("shows the succeeded build label from the latest run summary", () => {
+    seedTerminalTask();
+    seedRunBuildResult("succeeded", "检索完成");
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("构建成功");
+    expect(
+      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
+    ).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
+  });
+
+  it("shows the partial_success build label from the latest run summary", () => {
+    seedTerminalTask();
+    seedRunBuildResult("partial_success", "部分来源未收录");
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("部分成功");
+    expect(
+      screen.getByRole("status").querySelector("svg path")?.getAttribute("d"),
+    ).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
+  });
+
+  it("keeps the generic completed label when the run summary has no build result", () => {
+    seedTerminalTask();
+
+    render(<ChatPanel startTask={vi.fn()} continueTask={vi.fn()} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("任务已完成");
   });
 
   it("does not show processing status while an Agent waits for user input", () => {

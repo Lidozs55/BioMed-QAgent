@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
@@ -10,6 +11,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import ArtifactRole, BuildResult
 from app.domain.contracts.enums import (
     AttemptStatus,
     ErrorCode,
@@ -114,12 +116,27 @@ class StageAttempt(ContractModel):
 
 class ArtifactManifestEntry(ContractModel):
     artifact_id: str = Field(min_length=1)
+    role: ArtifactRole
     name: str = Field(min_length=1)
     relative_path: str
     media_type: str = Field(min_length=1)
     size_bytes: int = Field(ge=0)
     sha256: str
     generated_by_step_id: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def inject_legacy_role(cls, data: object) -> object:
+        """Default ``role`` for pre-T8 payloads that omit it (legacy tolerance).
+
+        Older persisted ``events.jsonl`` (``ArtifactProducedPayload.artifact``)
+        and ``run_manifest.json`` files were written before role classification
+        and lack the ``role`` key. Inject ``AUDIT_REPORT`` so replay/load keeps
+        working; explicitly supplied roles pass through untouched.
+        """
+        if isinstance(data, Mapping) and "role" not in data:
+            return {**data, "role": ArtifactRole.AUDIT_REPORT}
+        return data
 
     @field_validator("relative_path")
     @classmethod
@@ -173,6 +190,8 @@ class RunManifest(ContractModel):
     live_accepted: bool = False
     started_at: datetime
     finished_at: datetime
+    build_result: BuildResult | None = Field(default=None)
+    error_code: ErrorCode | None = Field(default=None)
 
     @field_validator("stage_attempt_ids", "source_ids")
     @classmethod

@@ -154,6 +154,7 @@ export function addAcceptedTask(
     startedAt: null,
     finishedAt: null,
     error: null,
+    summary: null,
   };
   const acceptedMessage = {
     messageId: `live:${accepted.runId}:user`,

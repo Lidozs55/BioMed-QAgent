@@ -1,7 +1,9 @@
 import type {
   EventEnvelope,
   EventPayload,
+  PublicationSummary,
   RunStatus,
+  RunSummary,
   StageName,
 } from "../contracts";
 import type {
@@ -32,6 +34,58 @@ function terminalStatus(type: EventEnvelope["type"]): RunStatus | null {
       return "interrupted";
     default:
       return null;
+  }
+}
+
+/**
+ * Project a per-run outcome summary from a terminal event payload.
+ * Mirrors backend ``app.runtime.state._run_summary_for``: partial projection
+ * is legal, so legacy events missing ``build_result`` / ``error_code`` /
+ * ``cancelled_at_stage`` still produce a summary.
+ */
+function summaryForTerminalPayload(
+  payload: Extract<
+    EventPayload,
+    | { type: "run_completed" }
+    | { type: "run_failed" }
+    | { type: "run_cancelled" }
+    | { type: "run_interrupted" }
+  >,
+  status: RunStatus,
+): RunSummary {
+  switch (payload.type) {
+    case "run_completed":
+      return {
+        run_status: status,
+        build_result: payload.build_result ?? null,
+        error_code: null,
+        cancelled_at_stage: null,
+        user_message: payload.build_result?.user_summary ?? null,
+      };
+    case "run_failed":
+      return {
+        run_status: status,
+        build_result: null,
+        error_code: payload.error_code ?? null,
+        cancelled_at_stage: null,
+        user_message: payload.error,
+      };
+    case "run_cancelled":
+      return {
+        run_status: status,
+        build_result: null,
+        error_code: null,
+        cancelled_at_stage: payload.cancelled_at_stage ?? null,
+        user_message: payload.reason,
+      };
+    case "run_interrupted":
+      return {
+        run_status: status,
+        build_result: null,
+        error_code: null,
+        cancelled_at_stage: null,
+        user_message: payload.reason,
+      };
   }
 }
 
@@ -309,6 +363,7 @@ export function applyRunTerminalEvent(
       updatedAt: envelope.timestamp,
       finishedAt: envelope.timestamp,
       error,
+      summary: summaryForTerminalPayload(payload, status),
     }),
     status,
     envelope.timestamp,
@@ -333,6 +388,43 @@ export function applyRunTerminalEvent(
   next = deactivateRunAssistantStream(next, runId);
   next = deactivateRunStreamingItems(next, runId);
   return next;
+}
+
+export function applyPublicationCreatedEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "publication_created" }>,
+): TaskProjection {
+  // Mirror the backend reducer (raise, don't skip): publication events
+  // require an envelope run_id and the payload run_id must match it. A
+  // malformed event must not be silently consumed — skipping would advance
+  // lastSequence and make it unreplayable on reconnect. A re-delivered
+  // publication_id is a no-op so duplicate entries never accumulate.
+  if (envelope.run_id === null) {
+    throw new Error("publication events require run_id");
+  }
+  if (payload.run_id !== envelope.run_id) {
+    throw new Error("payload run_id must match envelope run_id");
+  }
+  if (
+    task.publications.some(
+      (publication) => publication.publication_id === payload.publication_id,
+    )
+  ) {
+    return task;
+  }
+  const previous = task.currentPublicationId;
+  const publication: PublicationSummary = {
+    publication_id: payload.publication_id,
+    manifest_sha256: payload.manifest_sha256,
+    supersedes_publication_id: payload.supersedes_publication_id ?? previous,
+    published_at: payload.published_at,
+  };
+  return {
+    ...task,
+    currentPublicationId: payload.publication_id,
+    publications: [...task.publications, publication],
+  };
 }
 
 export function applyWarningEvent(

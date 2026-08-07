@@ -164,7 +164,7 @@ describe("artifact envelope response parsing", () => {
   });
 
   it("accepts valid artifact envelope", async () => {
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ artifacts: [{ artifact_id: "a1", name: "A1", size: 100, sha256: "abc", media_type: "csv" }] }));
+    const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ artifacts: [{ artifact_id: "a1", name: "A1", role: "audit_report", size: 100, sha256: "abc", media_type: "csv" }] }));
     const api = createAPIClient({ fetcher });
     const arts = await api.fetchArtifacts("t1");
     expect(arts).toHaveLength(1);

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from app.domain.contracts import (
     ArtifactProducedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -33,6 +34,7 @@ from app.domain.contracts import (
     UserInputRequiredPayload,
     UserInputResumedPayload,
 )
+from app.domain.contracts.runtime import PublicationSummary, RunSummary
 
 _STATUS_PAYLOADS = {
     RunStartedPayload: RunStatus.RUNNING,
@@ -52,10 +54,6 @@ _TERMINAL_STATUSES = {
     RunStatus.CANCELLED,
     RunStatus.INTERRUPTED,
 }
-NO_ARTIFACT_FAILURE_MARKERS = (
-    "without producing any artifacts",
-    "manifest missing or unchanged",
-)
 
 _LEGAL_TRANSITIONS = {
     RunStatus.QUEUED: {RunStatus.RUNNING, RunStatus.CANCEL_REQUESTED},
@@ -197,6 +195,8 @@ def reduce_task_event(
 
     runs = list(snapshot.runs)
     subagents = list(snapshot.subagents)
+    publications = list(snapshot.publications)
+    current_publication_id = snapshot.current_publication_id
     payload = event.payload
 
     if isinstance(payload, RunQueuedPayload):
@@ -219,6 +219,44 @@ def reduce_task_event(
             )
         )
         status = RunStatus.QUEUED
+    elif isinstance(payload, PublicationCreatedPayload):
+        if event.run_id is None:
+            raise ValueError("publication events require run_id")
+        if payload.run_id != event.run_id:
+            raise ValueError("payload run_id must match envelope run_id")
+        _run_index(snapshot, event.run_id)
+        existing = next(
+            (
+                item
+                for item in publications
+                if item.publication_id == payload.publication_id
+            ),
+            None,
+        )
+        if existing is None:
+            previous = current_publication_id
+            publications.append(
+                PublicationSummary(
+                    publication_id=payload.publication_id,
+                    manifest_sha256=payload.manifest_sha256,
+                    supersedes_publication_id=(
+                        payload.supersedes_publication_id or previous
+                    ),
+                    published_at=payload.published_at,
+                )
+            )
+            current_publication_id = payload.publication_id
+        elif (
+            existing.manifest_sha256 != payload.manifest_sha256
+            or existing.published_at != payload.published_at
+        ):
+            raise ValueError(
+                f"conflicting duplicate publication event: "
+                f"{payload.publication_id}"
+            )
+        # Identical duplicate (same sha256 and published_at): no-op.
+        # supersedes_publication_id is state-derived, not compared.
+        status = snapshot.task.status
     elif type(payload) in _STATUS_PAYLOADS:
         if event.run_id is None:
             raise ValueError("run-scoped events require run_id")
@@ -241,6 +279,9 @@ def reduce_task_event(
             updates["started_at"] = event.timestamp
         if status in _TERMINAL_STATUSES:
             updates["finished_at"] = event.timestamp
+        summary = _run_summary_for(payload, status)
+        if summary is not None:
+            updates["summary"] = summary
         if isinstance(payload, RunFailedPayload):
             updates["error"] = payload.error
         runs[index] = RunRecord.model_validate(
@@ -345,7 +386,6 @@ def reduce_task_event(
     artifact_count = snapshot.task.artifact_count
     if isinstance(payload, ArtifactProducedPayload):
         artifact_count += 1
-    no_artifact_failure = no_artifact_failure_from_runs(runs)
 
     active_run_id = snapshot.task.active_run_id
     if isinstance(payload, RunQueuedPayload) or type(payload) in _STATUS_PAYLOADS:
@@ -358,24 +398,53 @@ def reduce_task_event(
             "updated_at": event.timestamp,
             "latest_sequence": event.sequence,
             "artifact_count": artifact_count,
-            "no_artifact_failure": no_artifact_failure,
         }
     )
     return snapshot.model_copy(
-        update={"task": task, "runs": runs, "subagents": subagents}
+        update={
+            "task": task,
+            "runs": runs,
+            "subagents": subagents,
+            "publications": publications,
+            "current_publication_id": current_publication_id,
+        }
     )
 
 
-def no_artifact_failure_from_runs(runs: list[RunRecord]) -> bool:
-    """True when the latest run failed with the no-artifact completion marker."""
-    latest = runs[-1] if runs else None
-    if (
-        latest is None
-        or latest.status is not RunStatus.FAILED
-        or latest.error is None
-    ):
-        return False
-    return any(marker in latest.error for marker in NO_ARTIFACT_FAILURE_MARKERS)
+def _run_summary_for(
+    payload: object, status: RunStatus
+) -> RunSummary | None:
+    """Project a server-generated per-run outcome summary from a terminal event.
+
+    Partial projection is legal: legacy events may lack ``build_result``
+    (RunCompletedPayload) or ``error_code`` (RunFailedPayload).
+    """
+
+    if isinstance(payload, RunCompletedPayload):
+        return RunSummary(
+            run_status=status,
+            build_result=payload.build_result,
+            user_message=(
+                payload.build_result.user_summary
+                if payload.build_result is not None
+                else None
+            ),
+        )
+    if isinstance(payload, RunFailedPayload):
+        return RunSummary(
+            run_status=status,
+            error_code=payload.error_code,
+            user_message=payload.error,
+        )
+    if isinstance(payload, RunCancelledPayload):
+        return RunSummary(
+            run_status=status,
+            cancelled_at_stage=payload.cancelled_at_stage,
+            user_message=payload.reason,
+        )
+    if isinstance(payload, RunInterruptedPayload):
+        return RunSummary(run_status=status, user_message=payload.reason)
+    return None
 
 
 def count_artifact_produced_events(

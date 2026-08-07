@@ -3,8 +3,9 @@
 走完整的 TaskManager → AgentRunExecutor → 事件持久化链路，
 验证 docs/REVIEW_2026-07-18.md §10 中的关键不变量：
 - 成功路径：pending publication 产出 → artifact_produced → run_completed
-- 失败路径：无 artifact → run_failed（不静默 completed）
-- 事件顺序：finalizing < artifact_produced < completed/failed
+- 无 artifact 路径：completed + BuildResult(NO_DATA)（phase 4a，见
+  docs/superpowers/plans/2026-08-06-phase4a-terminal-state.md Task 6）
+- 事件顺序：finalizing < artifact_produced/completed
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from app.domain.contracts import (
     StartTaskRequest,
     WarningPayload,
 )
+from app.domain.contracts.dataset_state import BuildResultStatus
 from app.pipeline.runner import PipelineRunner
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
@@ -176,15 +178,15 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
 
 
 @pytest.mark.asyncio
-async def test_agent_e2e_no_artifact_path_emits_failed(
+async def test_agent_e2e_no_artifact_path_emits_completed_no_data(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """失败路径：Agent 未产出 pending → run_failed（不静默 completed）。
+    """无 artifact 路径：Agent 未产出 pending → COMPLETED + BuildResult(NO_DATA)。
 
-    覆盖 manager.py 成功证据校验的 e2e 行为。
-    FakeResult 有 final_output 属性，触发 agent_executed 标记，
-    让 manager 的成功证据校验生效。
+    phase 4a：零产物完成不再是 run_failed，manager 发射结构化终态
+    completed + build_result.status == NO_DATA。
+    FakeResult 有 final_output 属性，触发 agent_executed 标记。
     """
 
     output_dir = tmp_path / "output"
@@ -218,25 +220,28 @@ async def test_agent_e2e_no_artifact_path_emits_failed(
         events = await repository.list_events(accepted.task_id)
         payloads = [event.payload for event in events]
 
-        # 必须有 RunFailedPayload
-        failures = [p for p in payloads if isinstance(p, RunFailedPayload)]
-        assert len(failures) == 1
-        assert "artifact" in failures[0].error.lower()
+        # 必须有 RunCompletedPayload 且 build_result.status == NO_DATA
+        completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
+        assert completed[0].build_result.valid_row_count == 0
+        assert completed[0].build_result.reason_codes == ["no_primary_data"]
 
-        # 必须没有 RunCompletedPayload
-        assert not any(isinstance(p, RunCompletedPayload) for p in payloads)
+        # 必须没有 RunFailedPayload
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
 
         # 必须没有 ArtifactProducedPayload
         assert not any(isinstance(p, ArtifactProducedPayload) for p in payloads)
 
-        # 事件顺序：finalizing < failed
+        # 事件顺序：finalizing < completed
         finalizing_idx = next(
             i for i, p in enumerate(payloads) if isinstance(p, RunFinalizingPayload)
         )
-        failed_idx = next(
-            i for i, p in enumerate(payloads) if isinstance(p, RunFailedPayload)
+        completed_idx = next(
+            i for i, p in enumerate(payloads) if isinstance(p, RunCompletedPayload)
         )
-        assert finalizing_idx < failed_idx
+        assert finalizing_idx < completed_idx
 
         # 不应有 publication marker
         marker_path = (
@@ -251,15 +256,15 @@ async def test_agent_e2e_no_artifact_path_emits_failed(
 
 
 @pytest.mark.asyncio
-async def test_agent_e2e_emits_warning_before_failed_when_no_pending(
+async def test_agent_e2e_emits_warning_before_completed_when_no_pending(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """无 pending publication 时 executor 先发 WarningPayload，manager 再发 RunFailedPayload。
+    """无 pending publication 时 executor 先发 WarningPayload，manager 再发 COMPLETED。
 
     验证两层防御协同工作：
     - executor 层：发射 WarningPayload(code=artifact_manifest_missing)
-    - manager 层：completion_events 为空 + agent_executed → RunFailedPayload
+    - manager 层：零产物完成 → COMPLETED + BuildResult(NO_DATA)
     """
 
     output_dir = tmp_path / "output"
@@ -297,16 +302,20 @@ async def test_agent_e2e_emits_warning_before_failed_when_no_pending(
         assert len(warnings) == 1
         assert warnings[0].code == "artifact_manifest_missing"
 
-        failures = [p for p in payloads if isinstance(p, RunFailedPayload)]
-        assert len(failures) == 1
+        completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.NO_DATA
 
-        # warning 必须在 failed 之前
+        # warning 必须在 completed 之前
         warning_idx = next(
             i for i, p in enumerate(payloads) if isinstance(p, WarningPayload)
         )
-        failed_idx = next(
-            i for i, p in enumerate(payloads) if isinstance(p, RunFailedPayload)
+        completed_idx = next(
+            i for i, p in enumerate(payloads) if isinstance(p, RunCompletedPayload)
         )
-        assert warning_idx < failed_idx
+        assert warning_idx < completed_idx
+        # 不应有 RunFailedPayload
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
     finally:
         await manager.close()

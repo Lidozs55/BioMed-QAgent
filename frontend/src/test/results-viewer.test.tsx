@@ -79,6 +79,7 @@ describe("ResultsViewer", () => {
         {
           artifact_id: artifactId,
           name: `artifact-${ordinal}.csv`,
+          role: "audit_report",
           size: ordinal,
           sha256: String(ordinal).padStart(64, "0"),
           media_type: "text/csv",
@@ -110,5 +111,140 @@ describe("ResultsViewer", () => {
       expect(scrollArea).toHaveClass("min-h-0", "flex-1");
       expect(scrollViewport).toContainElement(finalArtifact);
     });
+  });
+
+  it("shows the server no-data message when the run summary reports no_data", async () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          runsById: {
+            run_results: {
+              runId: "run_results",
+              taskId: "task_results",
+              requestId: "req_results",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["pubmed"],
+                  available_artifact_roles: [],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "所选数据源未返回任何记录",
+                  recommended_next_action: "调整检索词后重试",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "所选数据源未返回任何记录",
+              },
+            },
+          },
+          runOrder: ["run_results"],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
+    );
+
+    render(<ResultsViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+
+    expect(await screen.findByText("所选数据源未返回任何记录")).toBeVisible();
+  });
+
+  it("shows the server no-data message for a completed no_data run with zero artifacts", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {},
+          artifactOrder: [],
+          runsById: {
+            run_results: {
+              runId: "run_results",
+              taskId: "task_results",
+              requestId: "req_results",
+              status: "completed",
+              input: "question",
+              createdAt: "2026-07-14T00:00:00Z",
+              updatedAt: "2026-07-14T00:00:00Z",
+              startedAt: "2026-07-14T00:00:00Z",
+              finishedAt: "2026-07-14T00:00:00Z",
+              error: null,
+              summary: {
+                run_status: "completed",
+                build_result: {
+                  status: "no_data",
+                  valid_row_count: 0,
+                  successful_sources: [],
+                  rejected_sources: ["pubmed"],
+                  available_artifact_roles: [],
+                  publication_id: null,
+                  reason_codes: ["no_records"],
+                  user_summary: "所选数据源未返回任何记录",
+                  recommended_next_action: "调整检索词后重试",
+                },
+                error_code: null,
+                cancelled_at_stage: null,
+                user_message: "所选数据源未返回任何记录",
+              },
+            },
+          },
+          runOrder: ["run_results"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    expect(screen.getByText("所选数据源未返回任何记录")).toBeVisible();
+    expect(screen.queryByText("暂无结果")).not.toBeInTheDocument();
+  });
+
+  it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {
+    const task = useAgentStore.getState().tasksById.task_results;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_results: {
+          ...task,
+          artifactsById: {
+            artifact_json: {
+              artifact_id: "artifact_json",
+              name: "main_data.json",
+              role: "primary_dataset",
+              size: 128,
+              sha256: "b".repeat(64),
+              media_type: "application/json",
+              taskId: "task_results",
+              generatedByStepId: null,
+            } satisfies ArtifactProjection,
+          },
+          artifactOrder: ["artifact_json"],
+        },
+      },
+    });
+
+    render(<ResultsViewer />);
+
+    // Should show the role label "主数据" but NOT a CSV preview button
+    expect(screen.getByText("主数据")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "CSV 预览" })).not.toBeInTheDocument();
   });
 });

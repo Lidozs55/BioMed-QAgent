@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from app.domain.contracts import (
     AssistantStreamFrame,
     ConversationCompactedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -46,6 +48,8 @@ from app.domain.contracts import (
     generate_run_id,
     generate_task_id,
 )
+from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
+from app.domain.contracts.enums import ErrorCode
 from app.domain.contracts.runtime import validate_task_databases
 from app.model_config import RunModelSettings
 from app.model_settings import get_current_model_configuration
@@ -56,6 +60,28 @@ from app.subagents.input_broker import SubagentInputBroker
 from app.subagents.supervisor import SubagentSupervisor
 
 logger = logging.getLogger(__name__)
+
+_NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
+
+
+def _no_data_build_result() -> BuildResult:
+    """Structured NO_DATA outcome for a normally completed, zero-artifact run."""
+
+    return BuildResult(
+        status=BuildResultStatus.NO_DATA,
+        valid_row_count=0,
+        reason_codes=["no_primary_data"],
+        user_summary=_NO_DATA_SUMMARY,
+        recommended_next_action="检查数据源可用性或调整查询后重试。",
+    )
+
+
+def _classify_error(error: BaseException) -> ErrorCode:
+    """Map a run failure exception to a structured ErrorCode."""
+
+    if isinstance(error, asyncio.TimeoutError) or "timed out" in str(error).lower():
+        return ErrorCode.TIMEOUT
+    return ErrorCode.INTERNAL_ERROR
 
 _ResultT = TypeVar("_ResultT")
 
@@ -112,6 +138,7 @@ class RunExecution:
     model_settings: RunModelSettings | None = field(default=None, repr=False)
     mode: TaskMode = TaskMode.AGENT
     databases: list[str] = field(default_factory=list)
+    build_result: BuildResult | None = None
     _event_emitter: RunEventEmitter | None = field(default=None, repr=False)
     _assistant_stream_emitter: AssistantStreamEmitter | None = field(
         default=None,
@@ -183,6 +210,10 @@ class RunExecution:
             raise RuntimeError("streaming result is already attached")
         self._streaming_result = result
         self._stream_ready.set()
+
+    def set_build_result(self, build_result: BuildResult | None) -> None:
+        """Attach the authoritative BuildResult for this Run (set by executors)."""
+        self.build_result = build_result
 
     def reset_streaming_result(self) -> None:
         """Clear the streaming result so a new one can be attached.
@@ -1097,7 +1128,7 @@ class TaskManager:
                     )
                     await self._append_status(
                         accepted,
-                        RunCancelledPayload(reason=reason),
+                        RunCancelledPayload(reason=reason, cancelled_at_stage=None),
                         after_persist=lambda _: self._queue.remove((task_id, run_id)),
                     )
                     return await self._require_snapshot(task_id)
@@ -1135,7 +1166,7 @@ class TaskManager:
                 )
                 await self._append_status(
                     accepted,
-                    RunCancelledPayload(reason=reason),
+                    RunCancelledPayload(reason=reason, cancelled_at_stage=None),
                     after_persist=lambda _: self._queue.remove((task_id, run_id)),
                 )
                 return await self._require_snapshot(task_id)
@@ -1160,7 +1191,7 @@ class TaskManager:
                 raise RuntimeError(f"run {run_id} left cancellation state")
             await self._append_status(
                 accepted,
-                RunCancelledPayload(reason=reason),
+                RunCancelledPayload(reason=reason, cancelled_at_stage=None),
                 after_persist=lambda _: self._running.pop(
                     (task_id, run_id),
                     None,
@@ -1388,6 +1419,94 @@ class TaskManager:
 
             await self._interrupt_terminal_parent_subagents(snapshot)
 
+        # Reconcile publication markers for COMPLETED runs that have a
+        # .runtime-publication.json marker but no publication_created event
+        # (e.g. crash between filesystem publish and durable event persist).
+        for summary in summaries.values():
+            snapshot = await self.repository.get_snapshot(summary.task_id)
+            if snapshot is None:
+                continue
+            for run in snapshot.runs:
+                if run.status is not RunStatus.COMPLETED:
+                    continue
+                publication_id = f"pub-{run.run_id}"
+                if any(
+                    pub.publication_id == publication_id
+                    for pub in snapshot.publications
+                ):
+                    continue
+                marker_path = (
+                    self.repository.tasks_dir
+                    / summary.task_id
+                    / "artifacts"
+                    / ".runtime-publication.json"
+                )
+                if not marker_path.is_file():
+                    continue
+                try:
+                    marker = json.loads(marker_path.read_text("utf-8"))
+                    published_at = datetime.fromtimestamp(
+                        marker_path.stat().st_mtime, tz=UTC
+                    )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
+                    continue
+                except OSError:
+                    logger.warning(
+                        "Skipping unreadable publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
+                    continue
+                if not isinstance(marker, dict):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
+                    continue
+                # Strict marker validation – mirror _load_validated_manifest in routes.py
+                marker_task_id = marker.get("task_id")
+                marker_run_id = marker.get("run_id")
+                manifest_sha256 = marker.get("manifest_sha256")
+                if (
+                    marker.get("schema_version") != 1
+                    or marker_task_id != summary.task_id
+                    or not isinstance(marker_run_id, str)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", marker_run_id) is None
+                    or marker_run_id != run.run_id
+                    or not isinstance(manifest_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+                ):
+                    logger.warning(
+                        "Skipping corrupt publication marker for task %s run %s",
+                        summary.task_id,
+                        run.run_id,
+                    )
+                    continue
+                accepted = TaskRunAccepted(
+                    request_id="recovery",
+                    task_id=summary.task_id,
+                    run_id=run.run_id,
+                    request_fingerprint="recovery",
+                )
+                lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
+                async with lock:
+                    await self._append_status(
+                        accepted,
+                        PublicationCreatedPayload(
+                            publication_id=publication_id,
+                            run_id=run.run_id,
+                            manifest_sha256=manifest_sha256,
+                            supersedes_publication_id=None,
+                            published_at=published_at,
+                        ),
+                    )
+
         for _, _, _, queued_run in sorted(queued):
             try:
                 self._queue.put_nowait(queued_run)
@@ -1475,7 +1594,10 @@ class TaskManager:
                 if run.status in {RunStatus.RUNNING, RunStatus.FINALIZING}:
                     await self._append_status(
                         accepted,
-                        RunFailedPayload(error=str(error) or type(error).__name__),
+                        RunFailedPayload(
+                            error=str(error) or type(error).__name__,
+                            error_code=_classify_error(error),
+                        ),
                     )
                 if run.status is not RunStatus.CANCEL_REQUESTED:
                     self._running.pop(
@@ -1563,7 +1685,10 @@ class TaskManager:
             except Exception as error:
                 await self._append_status(
                     accepted,
-                    RunFailedPayload(error=str(error) or type(error).__name__),
+                    RunFailedPayload(
+                        error=str(error) or type(error).__name__,
+                        error_code=_classify_error(error),
+                    ),
                 )
                 raise
             self._running[(accepted.task_id, accepted.run_id)] = execution
@@ -1628,7 +1753,8 @@ class TaskManager:
                 await self._append_status(
                     accepted,
                     RunFailedPayload(
-                        error=self._format_completion_error(error, cleanup_error)
+                        error=self._format_completion_error(error, cleanup_error),
+                        error_code=_classify_error(error),
                     ),
                 )
                 return
@@ -1663,34 +1789,28 @@ class TaskManager:
                         stage_attempt_id=completion_event.stage_attempt_id,
                         timestamp=completion_event.timestamp,
                     )
-                # 成功证据校验：AGENT 模式下若 AgentRunExecutor 真的跑过
-                # 但未产出任何 artifact 事件，转 RunFailedPayload 而非
-                # RunCompletedPayload。修复"LLM 完成但无 artifact"与
-                # "LLM 截断静默完成"两个症状
-                # (见 docs/REVIEW_2026-07-18.md §0、§1、§2)。
-                # agent_executed 标记由 AgentRunExecutor 在真实 SDK result
-                # 完成时设置，mock executor 不设置，避免破坏测试。
+                # phase 4a：零产物完成不再是失败。空 completion_events + agent
+                # 确实跑过 → COMPLETED + BuildResult(NO_DATA)，由 manager 构造；
+                # 有产物时透传 executor 的 build_result（Task 5），否则同样落 NO_DATA。
                 if (
                     execution.mode is TaskMode.AGENT
                     and execution.agent_executed
                     and not completion_events
                     and not execution.context.cancellation_requested.is_set()
                 ):
-                    await self._append_status(
+                    await self._append_completion_status(
                         accepted,
-                        RunFailedPayload(
-                            error=(
-                                "agent completed without producing any artifacts "
-                                "(manifest missing or unchanged)"
-                            ),
-                        ),
+                        RunCompletedPayload(build_result=_no_data_build_result()),
                     )
                     outcome.completion_durable = True
                     execution.discard_completion()
                     return
                 await self._append_completion_status(
                     accepted,
-                    RunCompletedPayload(),
+                    RunCompletedPayload(
+                        build_result=execution.build_result
+                        or _no_data_build_result()
+                    ),
                 )
                 outcome.completion_durable = True
                 execution.discard_completion()
@@ -1730,7 +1850,8 @@ class TaskManager:
                         error=self._format_completion_error(
                             finalization_error,
                             cleanup_error,
-                        )
+                        ),
+                        error_code=_classify_error(finalization_error),
                     ),
                 )
             return
@@ -1801,7 +1922,8 @@ class TaskManager:
                     error=(
                         "completion abort failed: "
                         f"{type(cleanup_error).__name__}: {cleanup_error}"
-                    )
+                    ),
+                    error_code=_classify_error(cleanup_error),
                 ),
             )
 

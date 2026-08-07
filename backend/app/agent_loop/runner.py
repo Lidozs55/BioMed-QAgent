@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
+    PublicationCreatedPayload,
     StageName,
     StageProgressPayload,
     TaskCompletedPayload,
@@ -1277,6 +1279,7 @@ class AgentRunExecutor:
         try:
             if pending.run_id != execution.run_id:
                 raise RuntimeError("pending publication run_id does not match execution")
+            execution.set_build_result(pending.manifest.build_result)
             payloads = [
                 ArtifactProducedPayload(artifact=pending.manifest_entry),
                 *(
@@ -1287,6 +1290,26 @@ class AgentRunExecutor:
 
             async def commit_agent_artifacts() -> list[EventEnvelope]:
                 await _run_sync_operation(pending.publish)
+                manifest_digest = pending.manifest_entry.sha256
+                publication_id = f"pub-{execution.run_id}"
+                if execution.build_result is not None:
+                    execution.set_build_result(
+                        execution.build_result.model_copy(
+                            update={"publication_id": publication_id}
+                        )
+                    )
+                publication_event = build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=len(payloads) + 1,
+                    payload=PublicationCreatedPayload(
+                        publication_id=publication_id,
+                        run_id=execution.run_id,
+                        manifest_sha256=manifest_digest,
+                        supersedes_publication_id=None,
+                        published_at=datetime.now(UTC),
+                    ),
+                )
                 return [
                     build_event(
                         task_id=execution.task_id,
@@ -1295,7 +1318,7 @@ class AgentRunExecutor:
                         payload=payload,
                     )
                     for index, payload in enumerate(payloads, start=1)
-                ]
+                ] + [publication_event]
 
             async def abort_agent_artifacts() -> None:
                 await _run_sync_operation(pending.abort)
@@ -1423,6 +1446,7 @@ class FixtureRunExecutor:
             if manifest.task_state is TaskState.FAILED:
                 raise RuntimeError("fixture pipeline failed validation or execution")
             _check_fixture_bridge_cancellation(execution)
+            execution.set_build_result(manifest.build_result)
 
             pending_factory = getattr(runner, "pending_publication", None)
             pending = pending_factory() if callable(pending_factory) else None
@@ -1454,6 +1478,27 @@ class FixtureRunExecutor:
                             else partial(publish, execution.run_id)
                         )
                         await _run_sync_operation(operation)
+                    if pending is not None:
+                        publication_id = f"pub-{execution.run_id}"
+                        if execution.build_result is not None:
+                            execution.set_build_result(
+                                execution.build_result.model_copy(
+                                    update={"publication_id": publication_id}
+                                )
+                            )
+                        publication_event = build_event(
+                            task_id=execution.task_id,
+                            run_id=execution.run_id,
+                            sequence=len(completion_events) + 1,
+                            payload=PublicationCreatedPayload(
+                                publication_id=publication_id,
+                                run_id=execution.run_id,
+                                manifest_sha256=pending.manifest_entry.sha256,
+                                supersedes_publication_id=None,
+                                published_at=datetime.now(UTC),
+                            ),
+                        )
+                        return completion_events + [publication_event]
                     return completion_events
 
                 async def abort_fixture_completion() -> None:

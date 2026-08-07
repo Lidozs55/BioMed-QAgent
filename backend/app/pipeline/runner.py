@@ -55,6 +55,11 @@ from app.domain.contracts import (
     build_event,
     generate_prefixed_uuid,
 )
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
+)
 from app.model_config import RunModelSettings
 from app.pipeline.stages import (
     STANDALONE_RUN_ID,
@@ -304,6 +309,7 @@ class PipelineRunner:
             raise RuntimeError("pending publication manifest task_id mismatch")
         manifest_entry = ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1121,7 +1127,14 @@ class PipelineRunner:
             physical_manifest = RunManifest.model_validate_json(
                 run_manifest_path.read_text("utf-8")
             )
-            if physical_manifest != validation.manifest:
+            # In deferred-publication mode the physical manifest may carry the
+            # finalize-time ``build_result`` enrichment (_finalize_completed
+            # writes it back to the staging package); the validation output
+            # never does. Compare the stage-owned fields, excluding the
+            # enrichment.
+            if physical_manifest.model_dump(
+                exclude={"build_result"}
+            ) != validation.manifest.model_dump(exclude={"build_result"}):
                 raise ValueError("physical run manifest must match validation output")
             package_entries = list(physical_directory.iterdir())
             if any(path.is_symlink() or not path.is_file() for path in package_entries):
@@ -1459,6 +1472,7 @@ class PipelineRunner:
             self.topic,
             self.mode,
             self.model_name,
+            error_code=error_code,
         )
 
     async def _finalize_cancelled(self) -> RunManifest:
@@ -1506,12 +1520,33 @@ class PipelineRunner:
             stage_outputs, StageName.VALIDATION, ValidationOutput
         )
         manifest = validation_output.manifest
+        manifest = manifest.model_copy(
+            update={"build_result": _compute_build_result(manifest)}
+        )
+        # Keep the deferred staging package's run_manifest.json in sync with
+        # the enriched in-memory manifest so a deferred publication (and its
+        # pending_publication() reader) carries the computed BuildResult.
+        # This rewrite is deferred-publication-only: in the non-deferred path
+        # validation already moved the staging package into artifacts/, so
+        # rewriting would recreate an orphan staging directory while the
+        # published artifacts/run_manifest.json stays untouched. The published
+        # manifest lacking build_result is acceptable — the authoritative
+        # build_result lives in the run events.
+        if self._pending_publication is not None:
+            (self._pending_publication / "run_manifest.json").write_text(
+                manifest.model_dump_json(indent=2) + "\n", "utf-8"
+            )
 
         for entry in manifest.artifacts:
             await self._emit_event_with_payload(
                 _artifact_produced_payload(entry)
             )
-        await self._emit_event(TaskCompletedPayload(validation=manifest.validation))
+        await self._emit_event(
+            TaskCompletedPayload(
+                validation=manifest.validation,
+                build_result=manifest.build_result,
+            )
+        )
 
         self.state.task_state = TaskState.COMPLETED
         save_state(self.workdir.state, self.state)
@@ -1618,6 +1653,55 @@ def _hash_directory(directory: Path) -> str:
             hasher.update(file_hash.encode("utf-8"))
             hasher.update(b"\0")
     return hasher.hexdigest()
+
+
+_PRIMARY_ARTIFACT_NAME = "main_data.csv"
+
+
+def _compute_build_result(manifest: RunManifest) -> BuildResult:
+    """Conservative 4a BuildResult from a completed manifest.
+
+    Only the presence of a primary dataset artifact is considered. Source-level
+    partial-success statistics and accurate row counts arrive with 4b when the
+    V2 chain statistics are wired in.
+
+    ``SUCCEEDED`` carries a provisional ``publication_id`` (``pub-<task_id>``):
+    ``BuildResult.validate_state`` forbids a SUCCEEDED build without one, and
+    ``_compute_build_result`` receives no run identifier. The agent_loop
+    publish path replaces it with the run-scoped ``pub-<run_id>`` before
+    emitting ``PublicationCreatedPayload`` (4a Task 5). ``valid_row_count`` is
+    0 until 4b injects the artifact_build primary row statistics.
+    """
+
+    available_roles = sorted(
+        {entry.role for entry in manifest.artifacts}
+    )
+    has_primary = any(
+        entry.role is ArtifactRole.PRIMARY_DATASET for entry in manifest.artifacts
+    )
+    if has_primary:
+        return BuildResult(
+            status=BuildResultStatus.SUCCEEDED,
+            valid_row_count=0,
+            successful_sources=list(manifest.source_ids),
+            available_artifact_roles=available_roles,
+            reason_codes=[],
+            # Deterministic placeholder required by BuildResult.validate_state
+            # (a SUCCEEDED build must carry a non-None publication_id). Task 5
+            # stamps the real ``pub-<run_id>`` onto the run-level build_result
+            # copy at commit time; this placeholder is not authoritative.
+            publication_id=f"pub-{manifest.task_id}",
+            user_summary="完成：主数据已发布。",
+            recommended_next_action="可在产物区查看主表与审计报告。",
+        )
+    return BuildResult(
+        status=BuildResultStatus.NO_DATA,
+        valid_row_count=0,
+        available_artifact_roles=available_roles,
+        reason_codes=["no_primary_data"],
+        user_summary="任务完成，但未产出可发布的主数据。",
+        recommended_next_action="检查数据源可用性或调整查询后重试。",
+    )
 
 
 def _build_specification_for_plan(ctx: StageContext) -> TaskSpecification:
@@ -1761,6 +1845,7 @@ def _build_failed_manifest(
     topic: str,
     mode: Literal["fixture", "live"] = "fixture",
     model_name: str = RunModelSettings.default().model_name,
+    error_code: ErrorCode | None = None,
 ) -> RunManifest:
     """Build a minimal RunManifest for a failed task."""
     from app.domain.contracts import TaskRequest, TaskSpecification, ValidationSummary
@@ -1785,6 +1870,7 @@ def _build_failed_manifest(
         live_accepted=False,
         started_at=started_at,
         finished_at=datetime.now(UTC),
+        error_code=error_code,
     )
 
 

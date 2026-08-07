@@ -28,6 +28,50 @@ export type AttemptStatus =
   | "cancelled"
   | "skipped";
 
+export type BuildResultStatus =
+  | "succeeded"
+  | "partial_success"
+  | "no_data"
+  | "spec_rejected";
+
+export type ErrorCode =
+  | "configuration_error"
+  | "network_error"
+  | "timeout"
+  | "download_incomplete"
+  | "checksum_mismatch"
+  | "parse_error"
+  | "validation_error"
+  | "cancelled"
+  | "internal_error";
+
+export interface BuildResult {
+  status: BuildResultStatus;
+  valid_row_count: number;
+  successful_sources: string[];
+  rejected_sources: string[];
+  available_artifact_roles: string[];
+  publication_id: string | null;
+  reason_codes: string[];
+  user_summary: string;
+  recommended_next_action: string;
+}
+
+export interface RunSummary {
+  run_status: RunStatus;
+  build_result: BuildResult | null;
+  error_code: ErrorCode | null;
+  cancelled_at_stage: StageName | null;
+  user_message: string | null;
+}
+
+export interface PublicationSummary {
+  publication_id: string;
+  manifest_sha256: string;
+  supersedes_publication_id: string | null;
+  published_at: string;
+}
+
 export type SubagentType = "source_research" | "skill_builder";
 
 export type SubagentStatus =
@@ -93,8 +137,6 @@ export interface TaskSummary {
   latest_sequence: number;
   /** Number of validated artifacts produced by the task (absent in older snapshots). */
   artifact_count?: number;
-  /** True when the latest run failed only because no validated artifacts were produced. */
-  no_artifact_failure?: boolean;
 }
 
 export interface RunRecord {
@@ -109,6 +151,8 @@ export interface RunRecord {
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
+  /** Server-generated per-run outcome summary (absent in older snapshots). */
+  summary?: RunSummary | null;
 }
 
 export interface MessageRecord {
@@ -171,6 +215,8 @@ export interface TaskSnapshot {
   runs: RunRecord[];
   messages: MessageRecord[];
   subagents?: SubagentRecord[];
+  current_publication_id?: string | null;
+  publications?: PublicationSummary[];
   older_messages_cursor: string | null;
 }
 
@@ -214,6 +260,7 @@ export interface ResumeRunInput {
 export interface ArtifactRecord {
   artifact_id: string;
   name: string;
+  role?: string;
   size: number;
   sha256: string;
   media_type: string;
@@ -223,6 +270,7 @@ export interface ArtifactManifestEntry {
   schema_version?: "1.0";
   artifact_id: string;
   name: string;
+  role?: string;
   relative_path: string;
   media_type: string;
   size_bytes: number;
@@ -372,11 +420,27 @@ export type EventPayload =
   | { type: "run_queued"; request_id: string; input: string }
   | { type: "run_started" }
   | { type: "run_finalizing" }
-  | { type: "run_completed" }
-  | { type: "run_failed"; error: string }
+  | { type: "run_completed"; build_result?: BuildResult | null }
+  | {
+      type: "run_failed";
+      error: string;
+      error_code?: ErrorCode | null;
+    }
   | { type: "run_cancel_requested"; reason: string | null }
-  | { type: "run_cancelled"; reason: string | null }
+  | {
+      type: "run_cancelled";
+      reason: string | null;
+      cancelled_at_stage?: StageName | null;
+    }
   | { type: "run_interrupted"; reason: string }
+  | {
+      type: "publication_created";
+      publication_id: string;
+      run_id: string;
+      manifest_sha256: string;
+      supersedes_publication_id: string | null;
+      published_at: string;
+    }
   | AssistantDeltaPayload
   | AssistantReasoningDeltaPayload
   | {

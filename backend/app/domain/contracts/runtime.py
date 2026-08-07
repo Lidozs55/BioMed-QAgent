@@ -8,14 +8,40 @@ from typing import Literal, Self
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import BuildResult
 from app.domain.contracts.enums import (
+    ErrorCode,
     MessageRole,
     RunStatus,
+    StageName,
     SubagentErrorCode,
     SubagentStatus,
     SubagentType,
     TaskMode,
 )
+
+
+class RunSummary(ContractModel):
+    """Server-generated per-run outcome (ARCHITECTURE §9.2/9.4).
+
+    Partial projection is legal: legacy events may lack ``build_result``
+    or ``error_code``; the frontend renders only present fields.
+    """
+
+    run_status: RunStatus
+    build_result: BuildResult | None = None
+    error_code: ErrorCode | None = None
+    cancelled_at_stage: StageName | None = None
+    user_message: str | None = Field(default=None, min_length=1)
+
+
+class PublicationSummary(ContractModel):
+    """Immutable publication record aggregated from publication_created events."""
+
+    publication_id: str = Field(min_length=1)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supersedes_publication_id: str | None = Field(default=None, min_length=1)
+    published_at: datetime
 
 
 class RunRecord(ContractModel):
@@ -30,6 +56,7 @@ class RunRecord(ContractModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = Field(default=None, min_length=1)
+    summary: RunSummary | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> Self:
@@ -57,7 +84,6 @@ class TaskSummary(ContractModel):
     updated_at: datetime
     latest_sequence: int = Field(default=0, ge=0)
     artifact_count: int = Field(default=0, ge=0)
-    no_artifact_failure: bool = Field(default=False)
 
 
 class MessageRecord(ContractModel):
@@ -130,6 +156,8 @@ class TaskSnapshot(ContractModel):
     runs: list[RunRecord] = Field(default_factory=list)
     messages: list[MessageRecord] = Field(default_factory=list)
     subagents: list[SubagentRecord] = Field(default_factory=list)
+    current_publication_id: str | None = Field(default=None, min_length=1)
+    publications: list[PublicationSummary] = Field(default_factory=list)
     older_messages_cursor: str | None = None
 
 

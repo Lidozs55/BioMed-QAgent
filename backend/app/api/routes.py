@@ -46,6 +46,7 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
@@ -834,6 +835,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
         {
             "artifact_id": "run_manifest",
             "name": "run_manifest.json",
+            "role": ArtifactRole.SCHEMA.value,
             "size": manifest_path.stat().st_size,
             "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
             "media_type": "application/json",
@@ -852,6 +854,7 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
             {
                 "artifact_id": entry.artifact_id,
                 "name": entry.name,
+                "role": entry.role.value,
                 "size": entry.size_bytes,
                 "sha256": entry.sha256,
                 "media_type": entry.media_type,

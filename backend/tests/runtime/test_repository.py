@@ -14,9 +14,12 @@ from app.domain.contracts import (
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     EventEnvelope,
+    RunCompletedPayload,
+    RunFailedPayload,
     RunFinalizingPayload,
     RunQueuedPayload,
     RunRecord,
+    RunStartedPayload,
     RunStatus,
     SubagentCompletedPayload,
     SubagentQueuedPayload,
@@ -31,6 +34,7 @@ from app.domain.contracts import (
     TaskSummary,
     build_event,
 )
+from app.domain.contracts.dataset_state import ArtifactRole
 from app.runtime import event_store as event_store_module
 from app.runtime import repository as repository_module
 from app.runtime.event_store import CorruptEventLogError
@@ -75,6 +79,7 @@ def artifact_event(
         payload=ArtifactProducedPayload(
             artifact=ArtifactManifestEntry(
                 artifact_id=artifact_id,
+                role=ArtifactRole.AUDIT_REPORT,
                 name=f"{artifact_id}.csv",
                 relative_path=f"artifacts/{artifact_id}.csv",
                 media_type="text/csv",
@@ -130,56 +135,32 @@ async def test_repository_backfills_artifact_count_for_legacy_snapshot(
     finally:
         await repository.close()
 
+
 @pytest.mark.asyncio
-async def test_repository_backfills_no_artifact_failure_for_legacy_snapshot(
+async def test_repository_loads_legacy_snapshot_with_no_artifact_failure_field(
     tmp_path,
 ) -> None:
+    # Snapshots persisted before the no_artifact_failure field was removed carry
+    # it in the task sub-dict; strict ContractModel (extra="forbid") must not
+    # reject the load — the obsolete key is dropped before validation.
     output_dir = tmp_path / "output"
     repository = TaskRepository(output_dir)
     await repository.initialize()
-    task_id = "task_legacy_no_artifact"
-    base = snapshot_with_run(
-        task_id=task_id,
-        request_id="req_legacy",
-        run_id="run_legacy",
+    task_id = "task_legacy_no_artifact_failure"
+    await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    snapshot_path = (
+        output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
     )
-    base = base.model_copy(
-        update={
-            "task": base.task.model_copy(
-                update={"status": RunStatus.FAILED, "active_run_id": None}
-            ),
-            "runs": [
-                base.runs[0].model_copy(
-                    update={
-                        "status": RunStatus.FAILED,
-                        "finished_at": NOW + timedelta(seconds=1),
-                        "error": (
-                            "agent completed without producing any artifacts "
-                            "(manifest missing or unchanged)"
-                        ),
-                    }
-                )
-            ],
-        }
-    )
-    await repository.save_snapshot(base)
-    try:
-        snapshot_path = (
-            output_dir / "tasks" / task_id / "state" / "task_snapshot.json"
-        )
-        raw = json.loads(snapshot_path.read_text("utf-8"))
-        raw["task"].pop("artifact_count")
-        raw["task"].pop("no_artifact_failure")
-        snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
+    raw = json.loads(snapshot_path.read_text("utf-8"))
+    raw["task"]["no_artifact_failure"] = True
+    snapshot_path.write_text(json.dumps(raw, ensure_ascii=False), "utf-8")
 
-        loaded = await repository.get_snapshot(task_id)
+    loaded = await repository.get_snapshot(task_id)
 
-        assert loaded is not None
-        assert loaded.task.no_artifact_failure is True
-        persisted = json.loads(snapshot_path.read_text("utf-8"))
-        assert persisted["task"]["no_artifact_failure"] is True
-    finally:
-        await repository.close()
+    assert loaded is not None
+    assert loaded.task.task_id == task_id
+    assert not hasattr(loaded.task, "no_artifact_failure")
+    await repository.close()
 
 
 @pytest.mark.asyncio
@@ -628,6 +609,105 @@ async def test_cancelled_summary_save_waits_for_atomic_write_before_unlocking(
         elif lock_probe is not None:
             lock_probe.cancel()
             await asyncio.gather(lock_probe, return_exceptions=True)
+        await repository.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_events_replay_without_string_scan(tmp_path) -> None:
+    # Old-style journal: run_failed carries only error (no error_code key),
+    # run_completed has no build_result key, and no publication events exist.
+    # Replay must build the snapshot, project partial run summaries, and
+    # leave current_publication_id unset. The journal is written as RAW JSON
+    # with the optional payload keys omitted entirely (not explicit nulls) so
+    # the model's optional-field defaults are genuinely exercised on load.
+    repository = TaskRepository(tmp_path / "output")
+    await repository.initialize()
+    task_id = "task_legacy_replay"
+    await repository.save_snapshot(empty_snapshot(task_id=task_id))
+    events_path = repository.events.path_for(task_id)
+    try:
+        for event in (
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=1,
+                timestamp=NOW + timedelta(seconds=1),
+                payload=RunQueuedPayload(request_id="req_legacy", input="question"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=2,
+                timestamp=NOW + timedelta(seconds=2),
+                payload=RunStartedPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_123",
+                sequence=3,
+                timestamp=NOW + timedelta(seconds=3),
+                payload=RunFailedPayload(error="legacy failure"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=4,
+                timestamp=NOW + timedelta(seconds=4),
+                payload=RunQueuedPayload(request_id="req_456", input="second"),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=5,
+                timestamp=NOW + timedelta(seconds=5),
+                payload=RunStartedPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=6,
+                timestamp=NOW + timedelta(seconds=6),
+                payload=RunFinalizingPayload(),
+            ),
+            build_event(
+                task_id=task_id,
+                run_id="run_456",
+                sequence=7,
+                timestamp=NOW + timedelta(seconds=7),
+                payload=RunCompletedPayload(),
+            ),
+        ):
+            raw = event.model_dump(mode="json")
+            payload = raw["payload"]
+            if payload["type"] == "run_failed":
+                payload.pop("error_code", None)
+            if payload["type"] == "run_completed":
+                payload.pop("build_result", None)
+            event_store_module.append_jsonl(events_path, raw)
+
+        # The raw journal genuinely omits the optional payload keys.
+        raw_text = events_path.read_text("utf-8")
+        assert "error_code" not in raw_text
+        assert "build_result" not in raw_text
+
+        loaded = await repository.get_snapshot(task_id)
+
+        assert loaded is not None
+        assert loaded.task.latest_sequence == 7
+        failed = next(run for run in loaded.runs if run.run_id == "run_123")
+        assert failed.status is RunStatus.FAILED
+        assert failed.summary is not None
+        assert failed.summary.error_code is None
+        assert failed.summary.build_result is None
+        assert failed.summary.user_message == "legacy failure"
+        completed = next(run for run in loaded.runs if run.run_id == "run_456")
+        assert completed.status is RunStatus.COMPLETED
+        assert completed.summary is not None
+        assert completed.summary.build_result is None
+        assert completed.summary.user_message is None
+        assert loaded.current_publication_id is None
+        assert loaded.publications == []
+    finally:
         await repository.close()
 
 

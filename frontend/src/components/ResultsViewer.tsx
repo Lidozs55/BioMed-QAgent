@@ -58,6 +58,9 @@ function parseCSV(text: string): {
   rows: string[][];
   truncated: boolean;
 } {
+  if (text.trim() === "") {
+    return { headers: [], rows: [], truncated: false };
+  }
   const parsed = Papa.parse<string[]>(text, {
     preview: 101,
     skipEmptyLines: "greedy",
@@ -128,7 +131,13 @@ function parseSourceManifest(activities: readonly ActivityProjection[]): SourceE
   });
 }
 
-function CsvPreview({ artifactUrl }: { artifactUrl: string }) {
+function CsvPreview({
+  artifactUrl,
+  noDataMessage,
+}: {
+  artifactUrl: string;
+  noDataMessage?: string;
+}) {
   const [state, setState] = useState<{
     url: string;
     data: ReturnType<typeof parseCSV> | null;
@@ -165,7 +174,13 @@ function CsvPreview({ artifactUrl }: { artifactUrl: string }) {
     return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无法加载 CSV 数据</EmptyTitle></EmptyHeader></Empty>;
   }
   if (state.data === null || state.data.headers.length === 0) {
-    return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无数据</EmptyTitle></EmptyHeader></Empty>;
+    return (
+      <Empty className="border-0 py-4">
+        <EmptyHeader>
+          <EmptyTitle>{noDataMessage ?? "无数据"}</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    );
   }
 
   return (
@@ -199,11 +214,21 @@ function CsvPreview({ artifactUrl }: { artifactUrl: string }) {
   );
 }
 
-function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; taskId: string }) {
+function ArtifactCard({
+  artifact,
+  taskId,
+  noDataMessage,
+}: {
+  artifact: ArtifactProjection;
+  taskId: string;
+  noDataMessage?: string;
+}) {
   const { getArtifactUrl } = useAPI();
-  const { Icon, label } = fileType(artifact.name);
+  const { Icon, label } = fileType(artifact.name, artifact.role);
+  const ext = getExtension(artifact.name);
   const url = getArtifactUrl(taskId, artifact.artifact_id);
-  const isCsv = getExtension(artifact.name) === "csv";
+  const isCsvPreviewable = ext === "csv" || ext === "tsv" || ext === "txt";
+  const isPreviewable = isCsvPreviewable;
 
   return (
     <Card size="sm" className="min-w-0">
@@ -217,12 +242,12 @@ function ArtifactCard({ artifact, taskId }: { artifact: ArtifactProjection; task
         </div>
         <CardDescription>{formatSize(artifact.size)}</CardDescription>
       </CardHeader>
-      {isCsv && (
+      {isPreviewable && (
         <CardContent>
           <Accordion>
             <AccordionItem value={`csv-preview-${artifact.artifact_id}`}>
               <AccordionTrigger>CSV 预览</AccordionTrigger>
-              <AccordionContent><CsvPreview artifactUrl={url} /></AccordionContent>
+              <AccordionContent><CsvPreview artifactUrl={url} noDataMessage={noDataMessage} /></AccordionContent>
             </AccordionItem>
           </Accordion>
         </CardContent>
@@ -258,6 +283,13 @@ export default function ResultsViewer({
   const taskId = taskIdOverride ?? task?.summary.task_id ?? null;
   const artifacts = artifactOverride ?? activeArtifacts;
   const activities = activityOverride ?? activeActivities;
+  const latestRunId = task?.runOrder[task.runOrder.length - 1];
+  const latestRun =
+    latestRunId === undefined ? undefined : task?.runsById[latestRunId];
+  const noDataMessage =
+    latestRun?.summary?.build_result?.status === "no_data"
+      ? latestRun.summary.user_message ?? "无数据"
+      : undefined;
 
   if (taskId === null) {
     return (
@@ -285,7 +317,7 @@ export default function ResultsViewer({
     return (
       <Empty className="min-h-48">
         <EmptyHeader>
-          <EmptyTitle>暂无结果</EmptyTitle>
+          <EmptyTitle>{noDataMessage ?? "暂无结果"}</EmptyTitle>
           <EmptyDescription>该任务尚未生成可下载的产物。</EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -323,7 +355,12 @@ export default function ResultsViewer({
       <ScrollArea className="min-h-0 min-w-0 flex-1">
         <div className="flex min-w-0 flex-col gap-3">
           {artifacts.map((artifact) => (
-            <ArtifactCard key={artifact.artifact_id} artifact={artifact} taskId={taskId} />
+            <ArtifactCard
+              key={artifact.artifact_id}
+              artifact={artifact}
+              taskId={taskId}
+              noDataMessage={noDataMessage}
+            />
           ))}
         </div>
       </ScrollArea>

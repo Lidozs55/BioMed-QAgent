@@ -29,23 +29,34 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     AssistantStreamFrame,
     EventEnvelope,
+    PublicationCreatedPayload,
     RunCancelledPayload,
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
+    RunManifest,
     RunQueuedPayload,
     RunStartedPayload,
     RunStatus,
     StartTaskRequest,
     TaskFailedPayload,
     TaskMode,
+    TaskRequest,
     TaskSnapshot,
+    TaskSpecification,
+    TaskState,
     TaskSummary,
     ToolCompletedPayload,
     ToolStartedPayload,
     UserInputRequiredPayload,
     UserInputResumedPayload,
+    ValidationSummary,
     build_event,
+)
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
 )
 from app.pipeline.runner import PipelineRunner
 from app.pipeline.tool import run_research_pipeline
@@ -183,6 +194,41 @@ def make_executor(repository):
     return runner_module.AgentRunExecutor(
         repository,
         compactor=NoopCompactor(),
+    )
+
+
+def _execution_fixture() -> RunExecution:
+    return RunExecution(
+        task_id="task_build_result",
+        run_id="run_build_result",
+        request_id="request_build_result",
+        input="carry build result",
+        context=SimpleNamespace(cancellation_requested=asyncio.Event()),
+    )
+
+
+def _completed_run_manifest(task_id: str) -> RunManifest:
+    """Minimal completed RunManifest for pending-publication transfer fixtures."""
+    started = datetime.now(UTC)
+    return RunManifest(
+        task_id=task_id,
+        id_generation_version="1.0",
+        request=TaskRequest(topic="breast cancer", mode="fixture"),
+        specification=TaskSpecification(topic="breast cancer"),
+        task_state=TaskState.COMPLETED,
+        stage_attempt_ids=["stage_attempt_1"],
+        source_ids=["src_article", "src_geo"],
+        validation=ValidationSummary(
+            status="valid",
+            checked_count=10,
+            failed_count=0,
+            report_path="logs/validation_report.json",
+        ),
+        pipeline_version="0.1.0",
+        mode="fixture",
+        live_accepted=False,
+        started_at=started,
+        finished_at=started,
     )
 
 
@@ -1518,9 +1564,10 @@ async def test_executor_transfers_pending_publication_before_model_close(
     )
     pending = SimpleNamespace(
         run_id="run_transfer",
-        manifest=SimpleNamespace(artifacts=[]),
+        manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1570,9 +1617,116 @@ async def test_executor_transfers_pending_publication_before_model_close(
     completion_events = await execution.commit_completion()
 
     assert order == ["close", "publish"]
-    assert [event.payload.artifact.artifact_id for event in completion_events] == [
-        "run_manifest"
-    ]
+    assert [
+        event.payload.artifact.artifact_id
+        for event in completion_events
+        if isinstance(event.payload, ArtifactProducedPayload)
+    ] == ["run_manifest"]
+
+
+def test_executor_carries_build_result() -> None:
+    execution = _execution_fixture()
+    assert execution.build_result is None
+    execution.set_build_result(
+        BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            reason_codes=["no_primary_data"],
+        )
+    )
+    assert execution.build_result.status is BuildResultStatus.NO_DATA
+    assert execution.build_result.valid_row_count == 0
+
+
+@pytest.mark.asyncio
+async def test_commit_artifacts_emits_publication_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    context = RunContext(
+        task_id="task_publication_event",
+        base_dir=tmp_path,
+        managed_run_id="run_publication_event",
+    )
+    manifest = _completed_run_manifest(context.task_id).model_copy(
+        update={
+            "build_result": BuildResult(
+                status=BuildResultStatus.NO_DATA,
+                valid_row_count=0,
+                reason_codes=["no_primary_data"],
+            )
+        }
+    )
+    pending = SimpleNamespace(
+        run_id="run_publication_event",
+        manifest=manifest,
+        manifest_entry=ArtifactManifestEntry(
+            artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
+            name="run_manifest.json",
+            relative_path="artifacts/run_manifest.json",
+            media_type="application/json",
+            size_bytes=2,
+            sha256="3" * 64,
+            generated_by_step_id="step_artifact_builder_v1",
+        ),
+        publish=lambda: order.append("publish"),
+        abort=lambda: order.append("abort"),
+    )
+    context.reserve_pipeline_publication()
+    context.set_pending_publication(pending)
+    execution = RunExecution(
+        task_id=context.task_id,
+        run_id="run_publication_event",
+        request_id="request_publication_event",
+        input="emit publication event",
+        context=context,
+    )
+    build = SimpleNamespace(
+        agent=object(),
+        skill_names=(),
+        model=SimpleNamespace(close=AsyncMock()),
+    )
+
+    class FakeResult:
+        async def stream_events(self):
+            if False:
+                yield None
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(
+        runner_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: FakeResult(),
+    )
+
+    await make_executor(
+        SimpleNamespace(task_session=run_scoped_session(object()))
+    )(execution)
+    assert execution.build_result is manifest.build_result
+    assert execution.build_result.publication_id is None
+
+    execution.seal_completion()
+    completion_events = await execution.commit_completion()
+
+    assert order == ["publish"]
+    assert [
+        event.payload.artifact.artifact_id
+        for event in completion_events
+        if isinstance(event.payload, ArtifactProducedPayload)
+    ] == ["run_manifest"]
+    publication_event = completion_events[-1]
+    assert isinstance(publication_event.payload, PublicationCreatedPayload)
+    assert publication_event.payload.publication_id == "pub-run_publication_event"
+    assert publication_event.payload.run_id == "run_publication_event"
+    assert publication_event.payload.supersedes_publication_id is None
+    assert (
+        publication_event.payload.manifest_sha256
+        == pending.manifest_entry.sha256
+    )
+    assert publication_event.sequence == len(completion_events)
+    assert execution.build_result.publication_id == "pub-run_publication_event"
 
 
 @pytest.mark.asyncio
@@ -1590,9 +1744,10 @@ async def test_executor_transfers_pending_publication_on_stream_failure(
     )
     pending = SimpleNamespace(
         run_id=f"run_transfer_{outcome}",
-        manifest=SimpleNamespace(artifacts=[]),
+        manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
@@ -1665,9 +1820,10 @@ async def test_executor_aborts_handle_when_completion_transfer_fails(
     )
     pending = SimpleNamespace(
         run_id="run_transfer_failure",
-        manifest=SimpleNamespace(artifacts=[]),
+        manifest=_completed_run_manifest(context.task_id),
         manifest_entry=ArtifactManifestEntry(
             artifact_id="run_manifest",
+            role=ArtifactRole.SCHEMA,
             name="run_manifest.json",
             relative_path="artifacts/run_manifest.json",
             media_type="application/json",
