@@ -14,6 +14,8 @@ export function useAgentStream(
         getLastSequence: (taskId) =>
           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
         applyEvent: (event) => useAgentStore.getState().applyEvent(event),
+        markContiguous: (taskId) =>
+          useAgentStore.getState().markContiguous(taskId),
         applyAssistantStreamFrames: (frames) =>
           useAgentStore.getState().applyAssistantStreamFrames(frames),
         deactivateAssistantStreams: (taskId) =>

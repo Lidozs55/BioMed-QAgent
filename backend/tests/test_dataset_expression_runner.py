@@ -688,6 +688,147 @@ async def test_cancellation_during_blocking_integrate_is_observed_and_blocks_pub
     assert not list((tmp_path / "publish").glob("build_runner_test_*"))
 
 
+@pytest.mark.asyncio
+async def test_cancelled_integrate_outputs_are_discarded_and_retry_publishes_clean(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """D2/K1: a cancellation observed at the operation boundary must DISCARD
+    the cancelled operation's outputs — the completed-too-late worker thread's
+    files never remain in the build workspace — and a retry of the same
+    build_id with new inputs succeeds and publishes only the new run's data
+    (no overlap with the cancelled attempt's leftovers). Python cannot
+    interrupt the in-flight sync work; the honest close is output discard at
+    the boundary plus a clean checkpoint in the state dir.
+    """
+    import threading
+    import time
+
+    from app.datasets.build import expression_runner as expression_runner_module
+
+    token = _FlagToken()
+    real_integrate = expression_runner_module.integrate
+    integrate_started = threading.Event()
+
+    def blocking_integrate(*args, **kwargs):
+        integrate_started.set()
+        time.sleep(0.4)
+        return real_integrate(*args, **kwargs)
+
+    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
+
+    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
+    spec = _spec(bindings)
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    output_dir = tmp_path / "build"
+    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
+    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths,
+        output_dir=output_dir,
+        cancellation_requested=token,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        source_assets=assets,
+        cancellation_requested=token,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    run_task = asyncio.create_task(executor.run())
+    await asyncio.to_thread(integrate_started.wait, 5.0)
+    token.set()
+    outcome = await asyncio.wait_for(run_task, timeout=2.0)
+
+    assert outcome.status == "cancelled"
+    assert not list((output_dir / "publish").glob("build_runner_test_*"))
+    # K1: the cancelled integrate operation's outputs are discarded — the
+    # completed-too-late thread's merged primary must not remain in the build
+    # workspace where a retry or an inspection could mistake it for valid
+    # build state (or overlap with the next run's writes).
+    assert not (output_dir / "merged" / "primary.csv").exists()
+    assert not (output_dir / "merged" / "conflicts.csv").exists()
+
+    # The state dir records the cancellation (clean checkpoint): no SUCCEEDED
+    # integrate attempt exists for the retry to reuse, and the next run starts
+    # from a clean integrate.
+    attempts = [
+        json.loads(line)
+        for line in (
+            tmp_path / "state" / spec.build_id / "operation_attempts.jsonl"
+        )
+        .read_text()
+        .splitlines()
+    ]
+    integrate_attempts = [a for a in attempts if a["operation_id"] == "integrate"]
+    assert integrate_attempts and all(
+        a["status"] == "cancelled" for a in integrate_attempts
+    )
+
+    # Retry the same build_id with NEW inputs: the build succeeds and the
+    # published artifact reflects only the new run's data.
+    monkeypatch.setattr(expression_runner_module, "integrate", real_integrate)
+    new_input = tmp_path / "new_input.tsv"
+    new_input.write_text(
+        "gene_id\tS1\tS2\nTP53\t9\t10\nBRCA1\t11\t12\n", encoding="utf-8"
+    )
+    checksum = hashlib.sha256(new_input.read_bytes()).hexdigest()
+    new_asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/new_input.tsv",
+        sha256=checksum,
+        size_bytes=new_input.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_gdc",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    retry_runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_gdc": new_asset},
+        source_paths={"binding_gdc": new_input},
+        output_dir=output_dir,
+    )
+    retry_executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner_2",
+        state_dir=tmp_path / "state" / spec.build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=retry_runner,
+        source_assets={"binding_gdc": new_asset},
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    retry = await retry_executor.run()
+
+    assert retry.status == "completed"
+    version_dir = next((output_dir / "publish").glob("build_runner_test_*"))
+    with (version_dir / "merged" / "primary.csv").open(encoding="utf-8") as handle:
+        published = list(csv.DictReader(handle))
+    assert len(published) == 4  # 2 genes x 2 samples from the new input
+    # Only the new run's data is published: none of the old input's values
+    # (1.5 / 2 / 3 / 4.25) leaked into the new publication, and the gene
+    # symbols are the canonical ensembl ids from the new input's rows.
+    values = {row["expression_value"] for row in published}
+    assert values == {"9", "10", "11", "12"}
+    assert {row["sample_id"] for row in published} == {"S1", "S2"}
+    assert {row["gene_id_namespace"] for row in published} == {"ensembl_gene"}
+
+
 def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> None:
     """B8/H5: older publication records may carry naive ISO timestamps;
     mixing naive and timezone-aware values must not raise TypeError, and the

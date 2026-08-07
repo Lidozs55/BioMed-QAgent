@@ -10,6 +10,7 @@ per-operation timeout and typed events. Operation semantics are injected via
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
@@ -484,10 +485,41 @@ class DatasetBuildExecutor:
             raise BuildCancelledError(f"operation {op.operation_id} was cancelled")
         result = await self._operation_runner(op, upstream)
         if self._is_cancelled():
+            # K1 (D2 residual, Phase 4 review): the boundary check runs only
+            # after the operation's worker thread await completed, so the
+            # thread's files are finished but must be DISCARDED — the
+            # completed-too-late outputs never become part of the build state
+            # (a retry of the same build_id starts from a clean workspace and
+            # cannot overlap with, or leak, the cancelled attempt's leftovers).
+            # In-flight sync work itself is not preemptable; only its finished
+            # outputs are dropped here, never mid-write.
+            self._discard_cancelled_operation_outputs(op.operation_id)
             raise BuildCancelledError(
                 f"operation {op.operation_id} completed after cancel request"
             )
         return result
+
+    def _discard_cancelled_operation_outputs(self, operation_id: str) -> None:
+        """Best-effort workspace hygiene for a cancelled operation (K1)."""
+
+        op = next(
+            (
+                candidate
+                for candidate in self._plan
+                if candidate.operation_id == operation_id
+            ),
+            None,
+        )
+        if op is None:
+            return
+        discard = getattr(self._operation_runner, "discard_operation_outputs", None)
+        if discard is None:
+            return
+        # Output discard must never mask the cancellation outcome; a failure
+        # here degrades to the retry re-running the operation (no SUCCEEDED
+        # attempt is recorded) and rewriting the paths.
+        with contextlib.suppress(Exception):
+            discard(op)
 
     def _compute_input_digest(self, op: OperationSpec) -> str:
         upstream = {

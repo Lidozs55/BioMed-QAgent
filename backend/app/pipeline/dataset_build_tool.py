@@ -51,8 +51,11 @@ _REASON_NO_PRIMARY_DATA = "no_primary_data"
 #: zero-row evidence (validate_profile writes it; publish runs right after).
 _MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
 
-_PARTIAL_SUMMARY = "任务完成，但部分数据源为空；未发布主数据。"
-_PARTIAL_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
+#: B5/K2 (Phase 4 review): the mixed-source abort envelope keeps the
+#: NO_DATA status (the usable source was never parsed/validated/published)
+#: but its summary/next action describe the empty-source abort precisely.
+_MIXED_EMPTY_SOURCE_SUMMARY = "任务完成，但部分数据源为空导致构建中止；未发布主数据。"
+_MIXED_EMPTY_SOURCE_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
 
 # D1 (Phase 4 review): while a data-correction pause is pending, the build
 # tool refuses so no publication can be produced from inputs under correction.
@@ -340,10 +343,13 @@ def _classify_failed_outcome(
       parse layer reported an empty source (structured ``reason_code``
       ``no_primary_data``, which is this attempt's by construction) or the
       integrated primary has zero rows (manifest written by THIS attempt) and
-      no version was published for this build_id in this run.
-    - PARTIAL_SUCCESS: a mixed-source build where at least one source had
-      data rows but an empty source aborted the build — the usable sources
-      are surfaced, never all-rejected as NO_DATA.
+      no version was published for this build_id in this run. When the build
+      aborted at a first empty source while other bindings had data rows, the
+      NO_DATA envelope identifies the empty binding(s) in its reason codes
+      (``no_primary_data:<binding_id>``) — never PARTIAL_SUCCESS, because
+      ARCHITECTURE §9.2 defines PARTIAL_SUCCESS as remaining valid sources
+      validated AND publishable, which an abort-at-first-empty build never
+      did.
     """
 
     if outcome_error is None:
@@ -353,24 +359,30 @@ def _classify_failed_outcome(
     failed_operation = details.get("failed_operation")
 
     if reason_code == _REASON_NO_PRIMARY_DATA:
-        usable = [
+        # The plan aborts at the first empty source, so any other binding
+        # that had data rows was never parsed/validated/published. B5/K2
+        # (Phase 4 review): this abort case must not be emitted as
+        # PARTIAL_SUCCESS (the contract means remaining sources validated
+        # AND publishable; nothing was published here) — a structured NO_DATA
+        # envelope with the empty binding(s) identified is the
+        # contract-coherent outcome, and it is not retryable.
+        empty = [
             binding_id
             for binding_id in binding_ids
-            if _source_has_data_rows(source_paths.get(binding_id))
+            if not _source_has_data_rows(source_paths.get(binding_id))
         ]
-        if usable:
+        if empty and len(empty) < len(binding_ids):
             return BuildResult(
-                status=BuildResultStatus.PARTIAL_SUCCESS,
+                status=BuildResultStatus.NO_DATA,
                 valid_row_count=0,
-                successful_sources=sorted(usable),
-                rejected_sources=sorted(
-                    binding_id
-                    for binding_id in binding_ids
-                    if binding_id not in usable
-                ),
-                reason_codes=[_REASON_NO_PRIMARY_DATA],
-                user_summary=_PARTIAL_SUMMARY,
-                recommended_next_action=_PARTIAL_NEXT_ACTION,
+                successful_sources=[],
+                rejected_sources=sorted(empty),
+                reason_codes=[
+                    f"{_REASON_NO_PRIMARY_DATA}:{binding_id}"
+                    for binding_id in sorted(empty)
+                ],
+                user_summary=_MIXED_EMPTY_SOURCE_SUMMARY,
+                recommended_next_action=_MIXED_EMPTY_SOURCE_NEXT_ACTION,
             )
         return BuildResult(
             status=BuildResultStatus.NO_DATA,

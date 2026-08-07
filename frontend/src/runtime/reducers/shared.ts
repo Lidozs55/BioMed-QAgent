@@ -482,6 +482,22 @@ export function prepareTaskSnapshotReplay(
   };
 }
 
+export function markTaskContiguous(
+  state: AgentRuntimeData,
+  taskId: string,
+): AgentRuntimeData {
+  const task = state.tasksById[taskId];
+  if (task === undefined || task.sequenceGap === null) return state;
+  return {
+    ...state,
+    tasksById: {
+      ...state.tasksById,
+      [taskId]: { ...task, sequenceGap: null },
+    },
+  };
+}
+
+
 function placeholderRun(
   taskId: string,
   runId: string,
