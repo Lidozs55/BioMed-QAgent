@@ -123,7 +123,7 @@ export function UserInputDialog({ task, onResumeRun }: UserInputDialogProps) {
   const promptKey =
     pending === null || taskId === null
       ? null
-      : `${taskId}:${pending.runId}:${pending.requestId}`;
+      : `${taskId}:${pending.runId}:${pending.requestId}:${pending.promptKind}`;
   const nextAttemptId = useRef(0);
   const [correctionText, setCorrectionText] = useState("");
   const [submission, setSubmission] = useState<SubmissionState>({

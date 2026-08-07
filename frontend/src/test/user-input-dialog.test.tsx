@@ -414,6 +414,85 @@ describe("UserInputDialog", () => {
     expect(screen.queryByText(/corrections_todo\.csv/)).not.toBeInTheDocument();
   });
 
+  it("clears the correction text when the prompt kind changes with the same task/run/request ids", () => {
+    // Regression (T4 review): the reset effect was keyed only on taskId/runId/requestId,
+    // so a promptKind switch with identical ids kept the previous correction text and
+    // leaked it back into the next data_correction prompt.
+    const correctionTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "data_correction",
+        summary: "请修正检索词",
+      },
+    );
+    const noProgressTask = taskWithPrompt(
+      "task_same",
+      "run_same",
+      "run_same",
+      "request_same",
+      {
+        promptKind: "no_progress",
+        summary: "检测到无进展",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "改用 GEO 数据 GSE12345" },
+    });
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "改用 GEO 数据 GSE12345",
+    );
+
+    // Same task/run/request ids, different prompt kind → no textarea rendered.
+    rerender(<UserInputDialog task={noProgressTask} onResumeRun={vi.fn()} />);
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+
+    // Back to data_correction with the same ids: stale text must NOT leak back.
+    rerender(<UserInputDialog task={correctionTask} onResumeRun={vi.fn()} />);
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("clears the correction text when a same-kind prompt arrives with a new request id", () => {
+    // Guards the existing reset behavior: a new data_correction request id still
+    // resets the textarea even when task/run ids are unchanged.
+    const requestATask = taskWithPrompt(
+      "task_reset",
+      "run_reset",
+      "run_reset",
+      "request_a",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+    const requestBTask = taskWithPrompt(
+      "task_reset",
+      "run_reset",
+      "run_reset",
+      "request_b",
+      {
+        promptKind: "data_correction",
+        summary: "请修正数据源",
+      },
+    );
+
+    const { rerender } = render(
+      <UserInputDialog task={requestATask} onResumeRun={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "GSE12345" },
+    });
+
+    rerender(<UserInputDialog task={requestBTask} onResumeRun={vi.fn()} />);
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  });
+
   it("renders no_progress prompt without structured plan card", () => {
     const task = taskWithPrompt(
       "task_no_progress",
