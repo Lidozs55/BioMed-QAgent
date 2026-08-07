@@ -85,9 +85,10 @@
 - [x] **P0** 修复 `RecipeExecutor.execute()`、Store 发现与 promotion 状态不一致
       （当前 execute/find_verified 只面向 VERIFIED，PROMOTED 后反不可达）
 - [x] **P0** Recipe 输出经 Workspace 校验提交为 `SourceAsset` 后再交给 Adapter
-- [ ] **P1** 统一 SourceAsset 契约：PDB / browser 下载路径走 `acquire_source()`；
+- [x] **P1** 统一 SourceAsset 契约：PDB 下载路径走 `acquire_source()`；
       所有 acquisition skill 产出合规 SourceAsset（原 §2.4）
-- [ ] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
+      （browser 属任意 URL 兜底、不走 HTTPS 白名单，见 skills_interface_spec §browser_fallback）
+- [x] **P1** PubMed XML 注册为 SourceAsset；`download_supplementary` 走
       `acquire_source()` + 大文件 progress 事件（原 §2.5）
 
 ---
@@ -182,8 +183,8 @@
       （`ExpressionValidationProfile` 增加 data_confidence check：统计异常仅作
       warning（v1 不阻断发布，SURVEY §7），报告写入 validation_report.json 的
       warnings 字段并产出 `confidence_report.csv`；5 项新测试）
-- [ ] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
-- [ ] **P1** `chart_data` 完整性校验（原 §2.7.1）
+- [x] **P1** 单位不一致检测写入 `warnings.csv`（原 §2.7.2）
+- [x] **P1** `chart_data` 完整性校验（原 §2.7.1）
 - [ ] **P2** 通用 provenance coverage 统计
 - [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
 - [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）

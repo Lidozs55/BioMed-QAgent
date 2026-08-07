@@ -723,6 +723,54 @@ async def test_request_level_cache_skips_network_on_second_call(
     assert second.asset.source_id == "src_geo_other"
 
 
+@pytest.mark.asyncio
+async def test_acquire_source_progress_callback_reports_bytes(
+    tmp_path: Path,
+) -> None:
+    """The optional progress callback receives streamed byte counts."""
+    content = b"progress-reporting content bytes"
+    reported: list[tuple[int, int | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=content,
+            headers={
+                "Content-Length": str(len(content)),
+                "Content-Type": "application/gzip",
+            },
+        )
+
+    async def on_progress(received: int, total: int | None) -> None:
+        reported.append((received, total))
+
+    workdir = create_task_workdir("task_progress", base_dir=str(tmp_path / "tasks"))
+    cache = ContentCache(tmp_path / "cache")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await acquire_source(
+            source=source_record(),
+            filename="counts.gz",
+            workdir=workdir,
+            cache=cache,
+            http=http,
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+            max_bytes=1024,
+            progress=on_progress,
+        )
+
+    assert result.attempt.status is DownloadStatus.SUCCEEDED
+    assert result.asset is not None
+    assert reported
+    # The final report must carry the full byte count and declared total.
+    assert reported[-1] == (len(content), len(content))
+    # Intermediate reports are monotonically non-decreasing and bounded.
+    assert all(0 <= received <= len(content) for received, _ in reported)
+    assert all(
+        reported[i][0] <= reported[i + 1][0]
+        for i in range(len(reported) - 1)
+    )
+
+
 def test_canonical_request_hash_is_deterministic() -> None:
     """Same (database, accession, url) always produces the same hash."""
     from app.tools.content_cache import canonical_request_hash

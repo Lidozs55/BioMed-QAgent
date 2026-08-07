@@ -253,6 +253,16 @@ def canonicalize(
         media_type="text/csv",
         generated_by_step_id="step_canonicalizer_v1",
     )
+    # Unit-inconsistency detection (TODO Phase 6 P1, 原 §2.7.2): a canonical
+    # batch that mixes more than one expression unit is recorded as an audit
+    # warning so the publication decision can surface it instead of silently
+    # merging incompatible scales. The profile-level unit_consistency check
+    # remains the authoritative release gate.
+    unit_warnings: list[str] = []
+    if len(units) > 1:
+        unit_warnings.append(
+            f"multiple expression units in one batch: {sorted(units)!r}"
+        )
     statistics: dict[str, JsonValue] = dict(batch.statistics)
     statistics.update(
         {
@@ -261,6 +271,7 @@ def canonicalize(
             "gene_id_namespaces": sorted(namespaces),
             "gene_symbol_mapped_count": mapped_count,
             "expression_units": sorted(units),
+            "unit_inconsistency_detected": len(units) > 1,
             "measurement_identities": [
                 [semantics, scale, unit]
                 for semantics, scale, unit in sorted(identities)
@@ -280,7 +291,7 @@ def canonicalize(
         parser_id="expression.canonicalizer.v1",
         parser_version="1.0.0",
         statistics=statistics,
-        warnings=batch.warnings,
+        warnings=batch.warnings + unit_warnings,
         declared_mappings=batch.declared_mappings,
     )
     audit_paths = (rejected_path, log_path, mappings_path)

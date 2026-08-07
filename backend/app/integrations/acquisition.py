@@ -8,7 +8,7 @@ import ipaddress
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -276,6 +276,7 @@ async def acquire_source(
     expected_media_types: frozenset[str] | None = None,
     accept: str = "text/tab-separated-values",
     request_headers: Mapping[str, str] | None = None,
+    progress: Callable[[int, int | None], Awaitable[None]] | None = None,
 ) -> AcquisitionResult:
     attempt_id = generate_prefixed_uuid("download_attempt")
     started_at = datetime.now(UTC)
@@ -414,6 +415,13 @@ async def acquire_source(
                         target.write(chunk)
                         digest.update(chunk)
                         md5_digest.update(chunk)
+                        if progress is not None:
+                            declared = (
+                                int(declared_length)
+                                if declared_length is not None
+                                else None
+                            )
+                            await progress(bytes_received, declared)
                     target.flush()
                     os.fsync(target.fileno())
 
