@@ -172,8 +172,9 @@ describe("ResultsViewer", () => {
     // must NOT attach to the stale artifact left over from an earlier run.
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
-    // The stale artifact's preview shows its own empty state, not the later
-    // run's NO_DATA message.
+    // Await the settled preview: the stale artifact shows its OWN generic
+    // empty state ("无数据"), never the later run's NO_DATA message.
+    expect(await screen.findByText("无数据")).toBeVisible();
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
   });
 
@@ -418,7 +419,7 @@ describe("ResultsViewer", () => {
     expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
   });
 
-  it("does not attach a NO_DATA banner to artifacts when the latest run FAILED", () => {
+  it("does not attach a NO_DATA banner to artifacts when the latest run FAILED", async () => {
     const task = useAgentStore.getState().tasksById.task_results;
     useAgentStore.setState({
       tasksById: {
@@ -492,16 +493,22 @@ describe("ResultsViewer", () => {
         },
       },
     });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "" }),
+    );
 
     render(<ResultsViewer />);
 
-    // The latest run FAILED (build_result null): no NO_DATA banner and no
-    // NO_DATA preview message over the earlier run's artifacts — not even the
-    // generic "无数据" fallback.
+    // The latest run FAILED (build_result null): no NO_DATA banner over the
+    // earlier run's artifacts. The artifact's preview shows its OWN generic
+    // empty state ("无数据") — never the NO_DATA summary text.
     expect(screen.getByText("main_data.csv")).toBeVisible();
     expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
     expect(screen.queryByText("调整检索词后重试")).not.toBeInTheDocument();
-    expect(screen.queryByText("无数据")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+    expect(await screen.findByText("无数据")).toBeVisible();
+    expect(screen.queryByText("所选数据源未返回任何记录")).not.toBeInTheDocument();
   });
 
   it("does not show CSV preview for a primary_dataset artifact with a non-CSV extension", () => {
