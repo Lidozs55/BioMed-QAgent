@@ -286,18 +286,49 @@
 
 > 前提：V2 闭环通过四种必测结果（成功/部分成功/无数据/执行失败）。
 > 删除清单见 Design §16 Phase 8 与 ARCHITECTURE §2。
+> 收窄执行（2026-08-08，见 REVIEW_2026-08-08-phase8-legacy-cleanup.md）：
+> 审计发现大部分删除目标**已不存在**或**依赖 V1 生产路径退役**（未决架构决策，
+> 见下「遗留」）。本阶段勾选已完成的清理项 + 全量回归；未决项标注 `[~]` 遗留。
 
-- [ ] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
+- [~] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
       `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 语义门禁（可保留来源级安全 allowlist）
-- [ ] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
-- [ ] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
-- [ ] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
-- [ ] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
+      （**遗留**：V1 runner 仍是 agent 生产主线（INSTRUCTIONS 引导
+      `run_research_pipeline`），`StageName` 遍布 runner/state/stages/skills/events
+      共 36 个测试文件依赖；`SUPPORTED_...` 门禁为 spec 准入校验（工具层 + 发现阶段
+      preflight），符合「可保留来源级安全 allowlist」——依赖 V1 退役后重审）
+- [~] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
+      （**遗留**：`CacheStore.commit_dataset` 仍被生产 import_agent 调用；
+      `ParsedDataset` 链挂 `merge_datasets`，连锁依赖第 3 项）
+- [~] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
+      （**遗留**：审计确认 merge_datasets 仍是生产 V1 合并路径
+      （`stages/processing.py:630` → `merge_parsed_datasets`），非死代码；
+      `test_multisource_merge.py` 守卫其行为——删除=行为变更，依赖 V1 退役）
+- [~] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
+      （metadata-only 占位已在 Phase 4b 删除，回归测试守卫保留 ✅；
+      `run_research_pipeline` 9 参数仍全活（agent INSTRUCTIONS 主线 + 12+ 测试）
+      ——**遗留**：参数面裁剪依赖 V1 退役）
+- [x] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
       `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl
       依赖检查）——依据 REVIEW §5.2 结论
-- [ ] **P2** 删除任何 V2 `DatasetRequest` / `BuildRecipe` 临时实现
-- [ ] **P2** 全量回归：`uv run pytest`、Ruff、前端 `pnpm lint/tsc/build/test` 通过，
+      （审计确认：四文件均不存在；`test_processing.py` 不存在；openpyxl/xlrd 不在
+      `pyproject.toml` 依赖且 app/tests 零导入；`test_config.py:144-160` 死依赖检查
+      仅覆盖 biopython/geoparse 且已通过。REVIEW §5.2 删除清单已达成，仅剩
+      `domain/processing.py` 与 `tools/alignment.py`——见上遗留项）
+- [x] **P2** 删除任何 V2 `DatasetRequest` / `BuildRecipe` 临时实现
+      （审计确认：代码中已不存在，仅 docs 提及（TODO/ARCHITECTURE/design 与
+      `datasets/runtime/operations.py:6` 注释））
+- [x] **P2** 全量回归：`uv run pytest`、Ruff、前端 `pnpm lint/tsc/build/test` 通过，
       `uvicorn app.main:app` 干净启动；ARCHITECTURE 标记与代码一致
+      （2026-08-08 收尾：后端 2722 passed / ruff clean / import OK；前端 726
+      passed (47 files) / lint 0 / tsc 0 / build OK。ARCHITECTURE 顶注已诚实标注
+      「代码仍为 V1、V2 绞杀模式」，无需改动）
+
+**Phase 8 遗留（未决架构决策，需产品确认）**：V1 生产路径退役。
+删除清单中的 StageName 业务依赖、`_STAGES`、`merge_datasets` 正式路径、
+`run_research_pipeline` 旧参数面、22 列写入接口全部指向同一动作——把 agent 主线从
+V1 `run_research_pipeline` 切到 V2 `execute_dataset_build`（当前仅注册零引导，
+e2e 已走 V2 且四种必测结果有测试）。决策点与方案见
+REVIEW_2026-08-08-phase8-legacy-cleanup.md §5。
 
 ---
 
