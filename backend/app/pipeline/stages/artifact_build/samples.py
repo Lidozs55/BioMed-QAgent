@@ -11,6 +11,24 @@ from pathlib import Path
 
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 
+# Phase 5 T8: tumor/normal grouping + pairing columns appended to
+# sample_metadata.csv only when the extractor produced evidence (a non-empty
+# sample_group_raw or a pairing_id), so cell-line/treatment-only metadata
+# keeps the historic base columns (fixture regression).
+_SAMPLE_GROUP_EXTENDED_COLUMNS = [
+    "sample_group", "sample_group_raw", "pairing_id", "group_rule_id",
+]
+
+
+def samples_have_group_evidence(samples: list[GeoSampleMetadata]) -> bool:
+    """True when any sample carries extracted tumor/normal or pairing evidence.
+
+    Cell-line/treatment-only metadata (no classification field, no pairing
+    key) yields no evidence, so the extended ``sample_metadata.csv`` columns
+    are omitted and historic outputs stay unchanged (T8 fixture regression).
+    """
+    return any(sample.sample_group_raw or sample.pairing_id for sample in samples)
+
 
 def _read_parsed_rows(parsed_path: Path) -> list[dict[str, str]]:
     with parsed_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -50,8 +68,10 @@ def _build_sample_metadata_rows(
     exists (phase 4b NO_DATA — ``parsed_path`` is None) the fallback is
     skipped entirely: the rows can only come from the recovered samples list.
     """
-    sample_rows: list[dict[str, object]] = [
-        {
+    include_group_columns = samples_have_group_evidence(samples)
+    sample_rows: list[dict[str, object]] = []
+    for sample in samples:
+        row: dict[str, object] = {
             "sample_id": sample.sample_id,
             "dataset_id": dataset_id,
             "source_id": primary_source_id,
@@ -64,8 +84,14 @@ def _build_sample_metadata_rows(
             "organism": sample.organism,
             "source_url": geo_url,
         }
-        for sample in samples
-    ]
+        if include_group_columns:
+            row.update({
+                "sample_group": sample.sample_group,
+                "sample_group_raw": sample.sample_group_raw,
+                "pairing_id": sample.pairing_id or "",
+                "group_rule_id": sample.group_rule_id,
+            })
+        sample_rows.append(row)
     if not is_reactome and not sample_rows and parsed_path is not None:
         if not parsed_path.is_file():
             return sample_rows

@@ -40,7 +40,11 @@ from app.pipeline.stages.artifact_build.field_mapping import (
     _build_field_mapping_rows,
 )
 from app.pipeline.stages.artifact_build.relations import _build_source_relations
-from app.pipeline.stages.artifact_build.samples import _build_sample_metadata_rows
+from app.pipeline.stages.artifact_build.samples import (
+    _SAMPLE_GROUP_EXTENDED_COLUMNS,
+    _build_sample_metadata_rows,
+    samples_have_group_evidence,
+)
 from app.pipeline.stages.artifact_build.warnings import (
     _build_cell_line_warnings,
     _build_warnings_rows,
@@ -484,6 +488,14 @@ def run_artifact_build(
         parsed_path=parsed_path,
         dataset_url_value=dataset_url_value,
     )
+    # Phase 5 T8: append the sample-group columns only when the extractor
+    # produced evidence, so cell-line/treatment-only packages keep the
+    # historic base columns (fixture regression).
+    sample_group_columns = (
+        _SAMPLE_GROUP_EXTENDED_COLUMNS
+        if samples_have_group_evidence(samples)
+        else []
+    )
     field_descriptions = _build_field_descriptions_rows(primary)
     processing_log_rows = _build_processing_log_rows(
         primary=primary,
@@ -590,6 +602,8 @@ def run_artifact_build(
     }
 
     for name, columns in _ARTIFACT_COLUMNS.items():
+        if name == "sample_metadata.csv":
+            columns = [*columns, *sample_group_columns]
         write_csv(staging / name, columns, rows_by_file.get(name, []))
 
     # Phase 5 T3 D8 platform→sample audit: written ONLY when a live GEO run
