@@ -22,7 +22,7 @@ from pathlib import Path
 from agents import RunContextWrapper, function_tool
 from pydantic import ValidationError
 
-from app.agent_loop.context import RunContext
+from app.agent_loop.context import PendingDatasetBuild, RunContext
 from app.config import settings
 from app.datasets.build.cache import DatasetCacheV2
 from app.datasets.build.expression_runner import (
@@ -37,6 +37,8 @@ from app.datasets.contracts import (
     AdapterParams,
     BindingRejection,
     DatasetBuildSpec,
+    DatasetManifest,
+    DatasetPublication,
 )
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import (
@@ -381,6 +383,13 @@ async def execute_dataset_build(
                 ),
             )
             if classified is not None:
+                _install_dataset_build_outcome(
+                    ctx,
+                    build_id=build_spec.build_id,
+                    result=classified,
+                    output_dir=output_dir,
+                    manifest_path=output_dir / "dataset_manifest.json",
+                )
                 return json.dumps(
                     {
                         "status": "ok",
@@ -450,6 +459,16 @@ async def execute_dataset_build(
             )
         ),
     )
+    # Phase 7 T1 (bug-sweep REVIEW §3 V2-dup): bridge the structured V2
+    # BuildResult into the durable Run so the completion carries the real
+    # outcome (success/partial/no_data), never the generic NO_DATA fallback.
+    _install_dataset_build_outcome(
+        ctx,
+        build_id=build_spec.build_id,
+        result=result,
+        output_dir=output_dir,
+        manifest_path=manifest_path,
+    )
     # Phase 7 P0: commit the immutable version to the content-addressed V2
     # dataset cache so later tasks can discover/reuse it by keyword.
     cache_entry = None
@@ -484,6 +503,82 @@ async def execute_dataset_build(
         },
         ensure_ascii=False,
     )
+
+
+
+def _install_dataset_build_outcome(
+    ctx: RunContextWrapper[RunContext],
+    *,
+    build_id: str,
+    result: BuildResult,
+    output_dir: Path,
+    manifest_path: Path,
+) -> None:
+    """Bridge a V2 build outcome to the durable Run (bug-sweep §3 V2-dup).
+
+    Installs a ``PendingDatasetBuild`` on the managed RunContext so the Agent
+    executor can propagate the authoritative BuildResult into the durable
+    ``execution.build_result`` and emit the publication completion event.
+    The build outputs already live under ``datasets_build/<build_id>/`` and
+    are served by the builds API.
+
+    No-op for direct invocations without a managed run (unit tests call the
+    tool standalone — the JSON envelope stays the only result channel).
+    """
+
+    managed_run_id = ctx.context.managed_run_id
+    if managed_run_id is None:
+        return
+    manifest_sha256: str | None = None
+    if manifest_path.is_file():
+        try:
+            manifest = DatasetManifest.model_validate_json(
+                manifest_path.read_text("utf-8")
+            )
+        except (ValidationError, OSError, json.JSONDecodeError):
+            manifest = None
+        else:
+            manifest_sha256 = manifest.sha256
+    publication = (
+        _load_publication(output_dir, result.publication_id)
+        if result.publication_id is not None
+        else None
+    )
+    ctx.context.install_dataset_build_outcome(
+        PendingDatasetBuild(
+            run_id=managed_run_id,
+            build_id=build_id,
+            build_result=result,
+            publication=publication,
+            manifest_sha256=manifest_sha256,
+        )
+    )
+
+
+def _load_publication(
+    output_dir: Path,
+    publication_id: str,
+) -> DatasetPublication | None:
+    """Read the immutable ``DatasetPublication`` record for a publication id."""
+
+    publish_dir = output_dir / PUBLISH_DIR
+    if not publish_dir.is_dir():
+        return None
+    for child in publish_dir.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        publication_path = child / "publication.json"
+        if not publication_path.is_file():
+            continue
+        try:
+            publication = DatasetPublication.model_validate_json(
+                publication_path.read_text("utf-8")
+            )
+        except (ValidationError, OSError, json.JSONDecodeError):
+            continue
+        if publication.publication_id == publication_id:
+            return publication
+    return None
 
 
 

@@ -244,8 +244,8 @@ def test_v1_v2_platform_parsers_share_single_implementation(
     v1_mapping, v1_status = parse_platform_annotation(_gzip(PLATFORM_TABLE))
     v1_probe, v1_gene = platform_table_columns(_gzip(PLATFORM_TABLE))
     # V2 path.
-    v2_mapping, v2_namespace, v2_status, v2_ambiguous = parse_platform_table(
-        annotation_path
+    v2_mapping, v2_namespace, v2_status, v2_ambiguous, _v2_probe, _v2_gene = (
+        parse_platform_table(annotation_path)
     )
 
     # Both entry points must have reached the shared parser.

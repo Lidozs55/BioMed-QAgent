@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import shutil
 from pathlib import Path
@@ -713,6 +714,54 @@ def test_execute_dataset_build_probe_level_publishes_probe_primary(tmp_path: Pat
     assert "probe_coverage" in warnings
     assert list((build_root / "publish").glob("build_tool_test_*"))
     assert (build_root / "probe_mapping_summaries.csv").is_file()
+
+
+def test_execute_dataset_build_probe_level_emits_platform_records(
+    tmp_path: Path,
+) -> None:
+    """F4 (Phase 5 review §3): the V2 probe-primary publication emits a
+    PlatformRecord per GPL attempt (platform_audit.csv), mirroring the V1
+    platform audit — the audit lands in the manifest and in the immutable
+    publication package even when no annotation asset was supplied
+    (NOT_ATTEMPTED)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        ),
+        json.dumps({"binding_geo": rel}),
+    )
+
+    assert data["status"] == "ok"
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    audit_path = build_root / "platform_audit.csv"
+    assert audit_path.is_file()
+    with audit_path.open("r", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows and rows[0]["platform_id"] == "GPL570"
+    assert rows[0]["annotation_status"] == "not_attempted"
+    assert rows[0]["source_id"] == "binding_geo"
+
+    # The audit is registered in the manifest (audit_report role) and copied
+    # into the immutable publication package.
+    manifest = json.loads(
+        (build_root / "dataset_manifest.json").read_text("utf-8")
+    )
+    audit_artifacts = [
+        entry
+        for entry in manifest["artifacts"]
+        if entry["role"] == "audit_report"
+        and entry["relative_path"] == "platform_audit.csv"
+    ]
+    assert len(audit_artifacts) == 1
+    version_dir = list((build_root / "publish").glob("build_tool_test_*"))[0]
+    assert (version_dir / "platform_audit.csv").is_file()
 
 
 def test_execute_dataset_build_empty_geo_tximport_is_no_data_no_primary(

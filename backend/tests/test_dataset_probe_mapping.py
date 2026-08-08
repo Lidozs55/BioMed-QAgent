@@ -16,7 +16,10 @@ from app.datasets.build.probe_mapping import (
     build_probe_mapping,
     parse_platform_table,
 )
-from app.datasets.contracts import ProbeMappingStatus
+from app.datasets.contracts import (
+    AnnotationStatus,
+    ProbeMappingStatus,
+)
 
 
 def _write_annotation(path: Path, lines: list[str]) -> None:
@@ -58,11 +61,15 @@ def test_parse_platform_table_gene_symbol_mapping(tmp_path: Path) -> None:
             "!platform_table_end",
         ],
     )
-    mapping, target_namespace, status, ambiguous = parse_platform_table(annotation)
+    mapping, target_namespace, status, ambiguous, probe_column, gene_column = (
+        parse_platform_table(annotation)
+    )
     assert mapping == {"PROBE1": "TP53"}
     assert target_namespace == "gene_symbol"
     assert status is ProbeMappingStatus.MAPPED
     assert ambiguous == frozenset()
+    assert probe_column == "ID"
+    assert gene_column == "GENE_SYMBOL"
 
 
 def test_parse_platform_table_ensembl_target_namespace(tmp_path: Path) -> None:
@@ -76,9 +83,12 @@ def test_parse_platform_table_ensembl_target_namespace(tmp_path: Path) -> None:
             "!platform_table_end",
         ],
     )
-    mapping, target_namespace, _status, _ambiguous = parse_platform_table(annotation)
+    mapping, target_namespace, _status, _ambiguous, _probe, gene_column = (
+        parse_platform_table(annotation)
+    )
     assert mapping == {"PROBE1": "ENSG00000141510"}
     assert target_namespace == "ensembl_gene"
+    assert gene_column == "ENSEMBL_ID"
 
 
 def test_parse_platform_table_no_gene_column(tmp_path: Path) -> None:
@@ -87,9 +97,13 @@ def test_parse_platform_table_no_gene_column(tmp_path: Path) -> None:
         annotation,
         ["!platform_table_begin", '"ID"\t"DESCRIPTION"', '"PROBE1"\t"x"', "!platform_table_end"],
     )
-    mapping, _target, status, _ambiguous = parse_platform_table(annotation)
+    mapping, _target, status, _ambiguous, probe_column, gene_column = (
+        parse_platform_table(annotation)
+    )
     assert mapping == {}
     assert status is ProbeMappingStatus.NO_GENE_ANNOTATION
+    assert probe_column == "ID"
+    assert gene_column is None
 
 
 def test_build_probe_mapping_partial_summary_and_audit(tmp_path: Path) -> None:
@@ -129,6 +143,74 @@ def test_build_probe_mapping_partial_summary_and_audit(tmp_path: Path) -> None:
     audit = (tmp_path / "canonical" / "binding_geo_probe_mapping.csv").read_text()
     assert "PROBE1,TP53,gene_symbol,mapped" in audit
     assert "PROBE2,,,unmapped" in audit
+
+
+def test_build_probe_mapping_emits_platform_record(tmp_path: Path) -> None:
+    """F4 (Phase 5 review §3): ``build_probe_mapping`` emits one D3
+    ``PlatformRecord`` per GPL attempt alongside the ProbeMappingSummary —
+    mapped status carries the parsed probe/gene columns and the annotation
+    asset identity."""
+    annotation = tmp_path / "GPL570_annot.txt.gz"
+    _write_annotation(
+        annotation,
+        [
+            "!platform_table_begin",
+            '"ID"\t"GENE_SYMBOL"',
+            '"PROBE1"\t"TP53"',
+            '"PROBE2"\t"---"',
+            "!platform_table_end",
+        ],
+    )
+    batch = tmp_path / "batch.csv"
+    _write_batch(batch, ["PROBE1", "PROBE2"])
+    asset = _mapping_asset(annotation)
+    result = build_probe_mapping(
+        annotation_path=annotation,
+        batch_path=batch,
+        binding_id="binding_geo",
+        platform_id="GPL570",
+        annotation_asset=asset,
+        output_dir=tmp_path,
+    )
+    record = result.platform_record
+    assert record is not None
+    assert record.platform_id == "GPL570"
+    assert record.source_id == "src_annotation"
+    assert record.annotation_status is AnnotationStatus.MAPPED
+    assert record.probe_id_field == "ID"
+    assert record.gene_id_field == "GENE_SYMBOL"
+    assert record.target_namespace == "gene_symbol"
+    assert record.annotation_asset_id == asset.asset_id
+    assert record.annotation_sha256 == asset.sha256
+
+
+def test_build_probe_mapping_no_gene_column_platform_record(tmp_path: Path) -> None:
+    """F4: a parsed annotation without a recognized gene column emits a
+    NO_GENE_ANNOTATION PlatformRecord (probe column known, gene column
+    absent) — never a MAPPED record."""
+    annotation = tmp_path / "GPL1_annot.txt.gz"
+    _write_annotation(
+        annotation,
+        ["!platform_table_begin", '"ID"\t"DESCRIPTION"', '"PROBE1"\t"x"', "!platform_table_end"],
+    )
+    batch = tmp_path / "batch.csv"
+    _write_batch(batch, ["PROBE1"])
+    result = build_probe_mapping(
+        annotation_path=annotation,
+        batch_path=batch,
+        binding_id="binding_geo",
+        platform_id="GPL1",
+        annotation_asset=_mapping_asset(annotation),
+        output_dir=tmp_path,
+    )
+    record = result.platform_record
+    assert record is not None
+    assert record.platform_id == "GPL1"
+    assert record.annotation_status is AnnotationStatus.NO_GENE_ANNOTATION
+    assert record.probe_id_field == "ID"
+    assert record.gene_id_field is None
+    assert record.target_namespace is None
+    assert record.annotation_asset_id == _mapping_asset(annotation).asset_id
 
 
 def test_build_probe_mapping_zero_coverage_unmapped(tmp_path: Path) -> None:
@@ -199,7 +281,9 @@ def test_parse_platform_table_fail_closed(
 ) -> None:
     annotation = tmp_path / "GPL1_annot.txt.gz"
     _write_annotation(annotation, lines)
-    mapping, _target, status, _ambiguous = parse_platform_table(annotation)
+    mapping, _target, status, _ambiguous, _probe_column, _gene_column = (
+        parse_platform_table(annotation)
+    )
     assert mapping == {}
     assert status is expected_status
 
