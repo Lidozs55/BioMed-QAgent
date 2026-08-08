@@ -194,7 +194,7 @@ describe("ChatPanel", () => {
 
     expect(screen.getByRole("heading", { name: "今天想研究什么？" })).toBeVisible();
     expect(screen.getByRole("button", { name: "添加附件" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /切换主模型/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /未配置 API Key/ })).toBeVisible();
     expect(screen.getByRole("button", { name: "开始研究" })).toBeDisabled();
     expect(container.querySelector('[data-slot="agent-composer"]')).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "研究目标" })).toHaveClass("min-h-28");
