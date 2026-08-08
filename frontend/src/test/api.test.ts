@@ -312,6 +312,17 @@ describe("runtime REST client", () => {
           publication: null,
           artifacts: [],
         }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          build_id: "build_1",
+          task_id: "task_1",
+          manifest_ref: "datasets_build/build_1/dataset_manifest.json",
+          build_result: buildResult,
+          manifest,
+          publication: null,
+          artifacts: [],
+        }),
       );
     const api = createAPIClient({ fetcher });
 
@@ -325,6 +336,22 @@ describe("runtime REST client", () => {
     expect(detail.build_result?.valid_row_count).toBe(4);
     expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/builds/build_1", undefined);
     expect(api.getBuildArtifactUrl("build_1", "artifact_x")).toBe(
+      "/api/v1/builds/build_1/artifacts/artifact_x",
+    );
+
+    // F7-02: an optional task_id scopes colliding build ids; it is only
+    // appended when provided, and never with an empty/null value.
+    const scoped = await api.fetchBuild("build_1", "task_7");
+    expect(scoped.manifest.dataset_family).toBe("gene_expression");
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/builds/build_1?task_id=task_7",
+      undefined,
+    );
+    expect(api.getBuildArtifactUrl("build_1", "artifact_x", "task_7")).toBe(
+      "/api/v1/builds/build_1/artifacts/artifact_x?task_id=task_7",
+    );
+    expect(api.getBuildArtifactUrl("build_1", "artifact_x", null)).toBe(
       "/api/v1/builds/build_1/artifacts/artifact_x",
     );
   });

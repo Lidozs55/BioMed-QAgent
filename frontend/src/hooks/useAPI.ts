@@ -68,8 +68,8 @@ export interface APIClient {
   getArtifactUrl: (taskId: string, artifactId: string) => string;
   getCacheExportUrl: () => string;
   fetchBuilds: (params?: { limit?: number; cursor?: string | null }) => Promise<BuildPage>;
-  fetchBuild: (buildId: string) => Promise<BuildDetail>;
-  getBuildArtifactUrl: (buildId: string, artifactId: string) => string;
+  fetchBuild: (buildId: string, taskId?: string | null) => Promise<BuildDetail>;
+  getBuildArtifactUrl: (buildId: string, artifactId: string, taskId?: string | null) => string;
 }
 
 interface APIClientOptions {
@@ -195,9 +195,17 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
     getCacheExportUrl: () => `${baseUrl}/cache/export`,
     fetchBuilds: (params = {}) =>
       request(withQuery(`${baseUrl}/builds`, [["limit", params.limit], ["cursor", params.cursor]])).then((b) => parseBuildPage(b)),
-    fetchBuild: (buildId) =>
-      request(`${baseUrl}/builds/${encodeId(buildId)}`).then((b) => parseBuildDetail(b)),
-    getBuildArtifactUrl: (buildId, artifactId) => `${baseUrl}/builds/${encodeId(buildId)}/artifacts/${encodeId(artifactId)}`,
+    fetchBuild: (buildId, taskId) =>
+      request(
+        withQuery(`${baseUrl}/builds/${encodeId(buildId)}`, [
+          ["task_id", taskId ?? undefined],
+        ]),
+      ).then((b) => parseBuildDetail(b)),
+    getBuildArtifactUrl: (buildId, artifactId, taskId) =>
+      withQuery(
+        `${baseUrl}/builds/${encodeId(buildId)}/artifacts/${encodeId(artifactId)}`,
+        [["task_id", taskId ?? undefined]],
+      ),
     fetchSettings: () => fetcher(`${baseUrl}/settings`).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     saveSettings: (changes) => fetcher(`${baseUrl}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     fetchVendors: () => fetcher(`${baseUrl}/vendors`).then((r) => parseResponse(r).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors)),
