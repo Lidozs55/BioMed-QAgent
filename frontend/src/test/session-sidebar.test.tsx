@@ -515,7 +515,7 @@ describe("SessionSidebar", () => {
         active_items: [],
         items: [
           summary("legacy_no_data", "failed", "Legacy No Data", 0, "no_data"),
-          summary("genuine_error", "failed", "Genuine Error", 0, null),
+          summary("genuine_error", "failed", "Genuine Error", 0),
           summary("with_data", "completed", "With Data", 0, "succeeded"),
           summary("rejected", "completed", "Rejected", 0, "spec_rejected"),
         ],
