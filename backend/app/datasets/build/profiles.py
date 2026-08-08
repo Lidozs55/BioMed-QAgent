@@ -30,6 +30,7 @@ from app.datasets.contracts import (
     ValidationProfile,
     ValidationResult,
     ValidationResultStatus,
+    ValueScale,
 )
 
 # --- normalization profiles -------------------------------------------------
@@ -50,12 +51,23 @@ def _expression_normalization_v1() -> NormalizationProfile:
             "estimated_count",
         ],
         allowed_semantics=["expression_value", "normalized_expression", "raw_count"],
+        # Phase 5 D3/T4: every scale the expression chain may honestly declare.
+        # GDC/Xena emit ``linear``; GEO series matrices declare ``log2`` or
+        # ``unknown``; supplementary matrices ``linear``.  ``unknown`` is
+        # explicit: a scale that cannot be proven is declared, never guessed.
+        allowed_value_scales=[
+            ValueScale.LINEAR,
+            ValueScale.LOG2,
+            ValueScale.LOG10,
+            ValueScale.UNKNOWN,
+        ],
         unit_conversions=[],  # no conversion is silently allowed without a rule
         aggregation_policy="keep_all",
         description=(
             "Expression entity/unit normalization: authorize ensembl_gene or "
-            "gene_symbol namespaces, accept the declared unit/semantics set, "
-            "and require an explicit conversion rule before any unit change."
+            "gene_symbol namespaces, accept the declared unit/semantics/scale "
+            "sets, and require an explicit conversion rule before any unit "
+            "change."
         ),
     )
 
@@ -99,9 +111,14 @@ class ExpressionValidationProfile:
     v1 policy is warning-only — anomalies never flip the release gate, they
     are recorded in ``confidence_report.csv`` and as report warnings until
     the thresholds are calibrated (SURVEY §7).
+
+    ``required_entity_level`` (Phase 5 D4) is the entity level this profile's
+    release gate requires; the Spec Validator enforces its compatibility with
+    the build's schema/target.
     """
 
     profile_id = "gene_expression.release.v1"
+    required_entity_level = "gene"
 
     def __init__(self) -> None:
         self.profile = ValidationProfile(
@@ -117,6 +134,7 @@ class ExpressionValidationProfile:
                 "rows, schema-conformant columns, complete required fields, "
                 "numeric values, a single unit, and closed provenance."
             ),
+            required_entity_level=self.required_entity_level,
         )
         self.confidence_thresholds = ConfidenceThresholds()
 
@@ -390,8 +408,21 @@ class ExpressionValidationProfile:
         return check, warnings
 
 
+class ProbeExpressionValidationProfile(ExpressionValidationProfile):
+    """``gene_expression.probe_release.v1`` — probe-level release gate.
+
+    Same server-side checks as the gene profile; ``required_entity_level`` is
+    ``probe`` (Phase 5 D4), which drives the Spec Validator's entity-level
+    compatibility check (and, in T5, the probe-coverage policy matrix).
+    """
+
+    profile_id = "gene_expression.probe_release.v1"
+    required_entity_level = "probe"
+
+
 VALIDATION_PROFILES: dict[str, ExpressionValidationProfile] = {
-    ExpressionValidationProfile.profile_id: ExpressionValidationProfile()
+    ExpressionValidationProfile.profile_id: ExpressionValidationProfile(),
+    ProbeExpressionValidationProfile.profile_id: ProbeExpressionValidationProfile(),
 }
 
 

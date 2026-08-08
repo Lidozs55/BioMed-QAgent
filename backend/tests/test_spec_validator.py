@@ -125,11 +125,14 @@ def test_probe_schema_selectable_with_matching_entity_level() -> None:
     """The probe-level contract is a valid Spec Validator target (Phase 5 D2)."""
     result = SpecValidator(
         _dual_registry(),
-        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+        allowed_validation_profiles=frozenset(
+            {"gene_expression.release.v1", "gene_expression.probe_release.v1"}
+        ),
     ).validate(
         _spec(
             schema_ref="gene_expression.probe_long.v1",
             row_granularity="probe_sample_measurement",
+            validation_profile_ref="gene_expression.probe_release.v1",
             target_entity_level="probe",
         )
     )
@@ -161,17 +164,85 @@ def test_entity_level_mismatch_with_schema_rejected() -> None:
     assert "entity_level_schema_mismatch" in result.reason_codes
 
 
-def test_unset_target_entity_level_is_always_consistent() -> None:
-    result = SpecValidator(
+def test_unset_target_entity_level_derives_from_profile() -> None:
+    """An unset target_entity_level derives from the profile's required level.
+
+    Phase 5 D4: the effective entity level is the selected validation
+    profile's ``required_entity_level`` and must be consistent with the
+    selected schema's granularity.
+    """
+    validator = SpecValidator(
         _dual_registry(),
-        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
-    ).validate(
+        allowed_validation_profiles=frozenset(
+            {"gene_expression.release.v1", "gene_expression.probe_release.v1"}
+        ),
+    )
+    # gene profile + gene schema: consistent
+    assert validator.validate(_spec()).valid is True
+    # probe profile + probe schema: consistent
+    assert validator.validate(
+        _spec(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            validation_profile_ref="gene_expression.probe_release.v1",
+        )
+    ).valid is True
+    # gene profile + probe schema: profile decides "gene" -> inconsistent
+    result = validator.validate(
         _spec(
             schema_ref="gene_expression.probe_long.v1",
             row_granularity="probe_sample_measurement",
         )
     )
-    assert result.valid is True
+    assert result.valid is False
+    assert "entity_level_schema_mismatch" in result.reason_codes
+    # probe profile + gene schema: profile decides "probe" -> inconsistent
+    result = validator.validate(
+        _spec(validation_profile_ref="gene_expression.probe_release.v1")
+    )
+    assert result.valid is False
+    assert "entity_level_schema_mismatch" in result.reason_codes
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T4: target_entity_level vs profile.required_entity_level (spec D4)
+# ---------------------------------------------------------------------------
+
+
+def test_gene_build_with_probe_profile_rejected() -> None:
+    """gene build + probe profile is invalid input (D4)."""
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset(
+            {"gene_expression.release.v1", "gene_expression.probe_release.v1"}
+        ),
+    ).validate(
+        _spec(
+            validation_profile_ref="gene_expression.probe_release.v1",
+            target_entity_level="gene",
+        )
+    )
+    assert result.valid is False
+    assert "entity_level_profile_mismatch" in result.reason_codes
+
+
+def test_probe_build_with_gene_profile_rejected() -> None:
+    """probe build + gene profile is invalid input (D4)."""
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset(
+            {"gene_expression.release.v1", "gene_expression.probe_release.v1"}
+        ),
+    ).validate(
+        _spec(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            validation_profile_ref="gene_expression.release.v1",
+            target_entity_level="probe",
+        )
+    )
+    assert result.valid is False
+    assert "entity_level_profile_mismatch" in result.reason_codes
 
 
 # ---------------------------------------------------------------------------

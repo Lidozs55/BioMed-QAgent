@@ -439,13 +439,17 @@ class ValidationProfile(ContractModel):
     """Versioned validation profile skeleton (ARCHITECTURE §10; Design §8).
 
     Per-family checks (units, probe mapping coverage, chart bbox/model, ...)
-    are filled in during Phase 3/6; the acceptance policy is authoritative here.
+    are filled in during Phase 3/6; the acceptance policy is authoritative
+    here.  ``required_entity_level`` (Phase 5 D4) is the entity level this
+    profile's release gate requires; it is a server-side versioned field and
+    drives the Spec Validator's entity-level compatibility check.
     """
 
     profile_id: str = Field(min_length=1)
     dataset_family: str = Field(min_length=1)
     acceptance: AcceptancePolicy = Field(default_factory=AcceptancePolicy)
     description: str = ""
+    required_entity_level: Literal["gene", "probe", "any"]
 
 
 class UnitConversionRule(ContractModel):
@@ -462,8 +466,11 @@ class NormalizationProfile(ContractModel):
     """Versioned entity/unit normalization policy (ARCHITECTURE §8; Design §8.5).
 
     Authorizes gene-id namespaces, the units and value semantics a source may
-    declare, and the many-to-one aggregation policy.  Conversions are opt-in:
-    without a declared rule, two units are never silently merged.
+    declare, the value scales (Phase 5 D3) and the many-to-one aggregation
+    policy.  Conversions are opt-in: without a declared rule, two units are
+    never silently merged.  ``allowed_value_scales`` is a required non-empty
+    allowlist: ``unknown`` is honest but must be explicitly allowed, and is
+    never promoted to a known scale by inference.
     """
 
     profile_id: str = Field(min_length=1)
@@ -471,6 +478,7 @@ class NormalizationProfile(ContractModel):
     allowed_namespaces: list[str] = Field(min_length=1)
     allowed_units: list[str] = Field(min_length=1)
     allowed_semantics: list[str] = Field(min_length=1)
+    allowed_value_scales: list[ValueScale] = Field(min_length=1)
     unit_conversions: list[UnitConversionRule] = Field(default_factory=list)
     aggregation_policy: str = Field(default="keep_all", min_length=1)
     description: str = ""

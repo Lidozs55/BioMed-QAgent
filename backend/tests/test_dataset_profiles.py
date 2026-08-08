@@ -330,3 +330,48 @@ def test_utf8_primary_passes_csv_encoding(tmp_path: Path) -> None:
     report = (tmp_path / "validation_report.json").read_text()
     assert '"check_id": "csv_encoding_utf8"' in report
     assert '"passed": true' in report
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T4: required_entity_level + probe_release.v1 profile (spec D4)
+# ---------------------------------------------------------------------------
+
+
+def test_gene_profile_declares_gene_entity_level() -> None:
+    profile = get_validation_profile("gene_expression.release.v1")
+    assert profile.profile_id == "gene_expression.release.v1"
+    assert profile.required_entity_level == "gene"
+    # The contract-level profile carries the same declaration.
+    assert profile.profile.required_entity_level == "gene"
+
+
+def test_probe_release_profile_registered() -> None:
+    profile = get_validation_profile("gene_expression.probe_release.v1")
+    assert profile.profile_id == "gene_expression.probe_release.v1"
+    assert profile.required_entity_level == "probe"
+    assert profile.profile.required_entity_level == "probe"
+    assert profile.profile.dataset_family == "gene_expression"
+    assert profile.profile.acceptance.minimum_valid_rows == 1
+
+
+def test_probe_release_profile_runs_the_release_gate(tmp_path: Path) -> None:
+    """The probe profile shares the server-side release checks (T4 D4).
+
+    Entity-level policy (probe required) is enforced by the Spec Validator
+    against the selected schema (D4); ``validate()`` itself runs the same
+    schema-driven checks as the gene profile.
+    """
+    profile = get_validation_profile("gene_expression.probe_release.v1")
+    primary = tmp_path / "primary.csv"
+    _write_primary(primary, [_valid_row()])
+    manifest = _manifest(row_count=1)
+    result = profile.validate(
+        manifest=manifest,
+        primary_path=primary,
+        schema=build_gene_expression_schema(),
+        manifest_digest="d" * 64,
+        output_dir=tmp_path,
+    )
+    assert result.profile_ref == "gene_expression.probe_release.v1"
+    assert result.status is ValidationResultStatus.PASSED
+    assert result.failed_count == 0
