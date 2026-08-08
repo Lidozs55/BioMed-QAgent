@@ -159,3 +159,47 @@ def test_run_differential_expression_success(tmp_path: Path) -> None:
     # volcano plot should be generated
     assert data["volcano_plot"]
     assert Path(data["volcano_plot"]).exists()
+
+
+def test_run_differential_expression_has_padj(tmp_path: Path) -> None:
+    """run_differential_expression outputs BH-FDR-adjusted padj per DEG."""
+    csv_path = _write_csv(tmp_path)
+    data = _call(
+        run_differential_expression,
+        task_id="test_stats_de_padj",
+        csv_path=str(csv_path),
+        group_a_cols=["sample1", "sample2"],
+        group_b_cols=["sample3", "sample4"],
+        gene_col="gene",
+    )
+    assert data["status"] == "ok"
+    assert data["fdr_method"] == "Benjamini–Hochberg"
+    assert len(data["degs"]) == 5
+    for deg in data["degs"]:
+        assert "padj" in deg
+        assert 0.0 <= deg["padj"] <= 1.0
+        assert deg["padj"] >= deg["pvalue"]  # FDR 校正不会使 p 值变小
+
+
+def test_bh_fdr_monotonic_and_capped() -> None:
+    """_bh_fdr returns monotonic adjusted p-values capped at 1.0."""
+    from app.skills.builtin.analysis.stats import _bh_fdr
+
+    pvals = [0.001, 0.01, 0.02, 0.05, 0.1, 0.5]
+    padj = _bh_fdr(pvals)
+    assert len(padj) == len(pvals)
+    # 校正后按原 p 顺序应单调不减
+    by_p = sorted(zip(pvals, padj, strict=False))
+    for (_, pa_prev), (_, pa_cur) in zip(by_p, by_p[1:], strict=False):
+        assert pa_cur >= pa_prev - 1e-12
+    for pa in padj:
+        assert 0.0 <= pa <= 1.0
+    # 最大 p 的 padj 通常为 1.0（BH 性质）
+    assert padj[pvals.index(max(pvals))] == 1.0
+
+
+def test_bh_fdr_empty() -> None:
+    """_bh_fdr handles empty input."""
+    from app.skills.builtin.analysis.stats import _bh_fdr
+
+    assert _bh_fdr([]) == []

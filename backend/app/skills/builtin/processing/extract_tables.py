@@ -66,6 +66,12 @@ _PDF_TEXT_RE = re.compile(
 _PDF_STRING_RE = re.compile(
     r"""\(([^)]*(?:\\.[^)]*)*)\)\s*Tj""",
 )
+_PDF_HEX_STRING_RE = re.compile(
+    r"""<([0-9a-fA-F\s]+)>\s*Tj""",
+)
+_PDF_HEX_INNER_RE = re.compile(
+    r"""<([0-9a-fA-F]*)>""",
+)
 _PDF_ARRAY_RE = re.compile(
     r"""\[(.*?)\]\s*TJ""", re.DOTALL
 )
@@ -99,6 +105,35 @@ def _decompress_pdf_streams(raw: bytes) -> bytes:
     return result
 
 
+def _decode_pdf_hex_string(hex_text: str) -> str:
+    """Decode a PDF hex string like ``<FEFF57FA56E0>`` to text.
+
+    PDF hex strings are byte sequences; non-ASCII text (e.g. Chinese) is
+    typically UTF-16BE.  We try UTF-16BE first (with or without a BOM),
+    then UTF-8, then fall back to latin-1 so byte values are preserved.
+    """
+    compact = re.sub(r"\s+", "", hex_text)
+    if not compact:
+        return ""
+    try:
+        raw = bytes.fromhex(compact)
+    except ValueError:
+        return ""
+    # explicit UTF-16BE BOM → decode as UTF-16BE
+    if raw[:2] == b"\xfe\xff":
+        try:
+            return raw[2:].decode("utf-16-be")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1", errors="replace")
+    # try UTF-8 first (common for ASCII/CJK), then UTF-16BE, then latin-1
+    for encoding in ("utf-8", "utf-16-be"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1", errors="replace")
+
+
 def _extract_text_via_regex(file_path: str) -> str:
     """Extract plain text from a PDF using regex on raw content streams.
 
@@ -106,6 +141,8 @@ def _extract_text_via_regex(file_path: str) -> str:
     - Decompressed content streams (FlateDecode)
     - BT/ET text blocks
     - Tj (single string) and TJ (array of strings) operators
+    - Parenthesized strings and hex strings (``<...>``, incl. UTF-16BE
+      Chinese text)
     - Basic escape-sequence cleanup
 
     Returns extracted text, one line per text-showing operation.
@@ -124,10 +161,16 @@ def _extract_text_via_regex(file_path: str) -> str:
     for block_match in _PDF_TEXT_RE.finditer(content):
         block = block_match.group(1)
 
-        # Single Tj calls
+        # Single Tj calls — parenthesized strings
         for tj in _PDF_STRING_RE.finditer(block):
             text = _PDF_STRIP_ESCAPES.sub(r"\1", tj.group(1))
             text = text.strip()
+            if text:
+                lines.append(text)
+
+        # Single Tj calls — hex strings (UTF-16BE / UTF-8 Chinese support)
+        for tj_hex in _PDF_HEX_STRING_RE.finditer(block):
+            text = _decode_pdf_hex_string(tj_hex.group(1)).strip()
             if text:
                 lines.append(text)
 
@@ -139,6 +182,11 @@ def _extract_text_via_regex(file_path: str) -> str:
             for sm in re.finditer(r"\(([^)]*(?:\\.[^)]*)*)\)", inner):
                 t = _PDF_STRIP_ESCAPES.sub(r"\1", sm.group(1))
                 parts.append(t)
+            # Extract hex strings from array
+            for sm in _PDF_HEX_INNER_RE.finditer(inner):
+                t = _decode_pdf_hex_string(sm.group(1))
+                if t:
+                    parts.append(t)
             line = "".join(parts).strip()
             if line:
                 lines.append(line)

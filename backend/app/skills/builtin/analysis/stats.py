@@ -41,6 +41,29 @@ def _safe_float(value: Any, digits: int = 4) -> float | None:
     return round(result, digits)
 
 
+def _bh_fdr(pvalues: list[float]) -> list[float]:
+    """Benjamini–Hochberg FDR correction (pure Python, no extra deps).
+
+    Returns one adjusted p-value (``padj``) per input p-value, in the same
+    order. Inputs are expected to be finite floats in ``[0, 1]``; values
+    outside the range are clamped before correction. The adjusted values
+    are monotonically non-decreasing with respect to the sorted raw p-values
+    and are capped at 1.0.
+    """
+    n = len(pvalues)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda i: pvalues[i])
+    adjusted: list[float] = [0.0] * n
+    running = 1.0
+    for rank, idx in enumerate(reversed(order), start=1):
+        # BH: padj = p * n / rank, 从最大 p 开始累计取 min
+        adj = min(1.0, pvalues[idx] * n / rank)
+        running = min(running, adj)
+        adjusted[idx] = running
+    return adjusted
+
+
 logger = logging.getLogger(__name__)
 
 _PNG_DPI = 150
@@ -147,7 +170,8 @@ def run_differential_expression(
     """Perform differential expression analysis between two sample groups.
 
     Reads a gene expression CSV (rows=genes, columns=samples), computes
-    log2 fold-change and p-values via two-sided Welch's t-test, and
+    log2 fold-change and p-values via two-sided Welch's t-test, applies
+    Benjamini–Hochberg FDR correction to produce ``padj``, and
     generates a volcano plot saved to task/artifacts/.
 
     Args:
@@ -169,7 +193,8 @@ def run_differential_expression(
             group_b_count    — number of samples in group B
             significant_up   — count of up-regulated DEGs
             significant_down — count of down-regulated DEGs
-            degs             — list of top DEG entries (strand, log2FC, pvalue)
+            degs             — list of top DEG entries (strand, log2FC, pvalue, padj)
+            fdr_method       — "Benjamini–Hochberg" when padj is computed
             volcano_plot     — path to PNG in artifacts/
             outputs          — list of artifact file paths
             error            — present only on failure
@@ -232,6 +257,9 @@ def run_differential_expression(
             if float(p) <= pval_threshold and float(fc) <= -log2fc_threshold
         ))
 
+        # BH FDR correction → padj per gene
+        padj_list = _bh_fdr(pval_list)
+
         # Build top DEG list sorted by p-value
         deg_records = sorted(
             [
@@ -239,12 +267,15 @@ def run_differential_expression(
                     "gene": str(g),
                     "log2FC": round(float(fc), 4),
                     "pvalue": round(float(pv), 6),
+                    "padj": round(float(pa), 6),
                     "neg_log10_pval": round(float(-np.log10(max(float(pv), 1e-300))), 4),
                     "significant": bool(
                         float(pv) <= pval_threshold and abs(float(fc)) >= log2fc_threshold
                     ),
                 }
-                for g, fc, pv in zip(genes, log2fc_list, pval_list, strict=False)
+                for g, fc, pv, pa in zip(
+                    genes, log2fc_list, pval_list, padj_list, strict=False
+                )
             ],
             key=lambda x: x["pvalue"],
         )[:top_n]
@@ -312,6 +343,7 @@ def run_differential_expression(
             "significant_down": sig_down,
             "pval_threshold": pval_threshold,
             "log2fc_threshold": log2fc_threshold,
+            "fdr_method": "Benjamini–Hochberg",
             "degs": deg_records,
             "volcano_plot": str(volcano_path),
             "outputs": outputs,

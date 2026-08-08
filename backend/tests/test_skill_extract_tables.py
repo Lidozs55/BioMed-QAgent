@@ -159,6 +159,56 @@ def test_extract_tables_success(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# extract_pdf_tables — real pdfplumber path with a minimal PDF fixture
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tables_real_pdfplumber_path(tmp_path: Path) -> None:
+    """extract_pdf_tables works end-to-end on a real minimal PDF via pdfplumber.
+
+    Uses ``tests/fixtures/pdf/minimal_table.pdf`` (a hand-built PDF with a
+    2x2 bordered table) — exercises the real pdfplumber backend without
+    mocking ``_extract_raw_tables``.
+    """
+    fixture = Path(__file__).parent / "fixtures" / "pdf" / "minimal_table.pdf"
+    assert fixture.is_file(), f"fixture missing: {fixture}"
+
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_extract_real", "minimal_table.pdf", fixture.read_bytes()
+    )
+    args = json.dumps({"file_path": str(pdf_file)})
+    data = json.loads(asyncio.run(extract_pdf_tables.on_invoke_tool(ctx, args)))
+
+    assert data["status"] == "ok"
+    assert data["summary"]["total_tables"] == 1
+    assert len(data["outputs"]) == 1
+    table_meta = data["summary"]["tables"][0]
+    assert table_meta["page"] == 1
+    # 首行被识别为表头，数据行 = 1
+    assert table_meta["row_count"] == 1
+    assert table_meta["column_names"] == ["BRCA1", "1.5"]
+    assert Path(data["outputs"][0]).is_file()
+
+
+def test_extract_metadata_real_pdfplumber_path(tmp_path: Path) -> None:
+    """extract_pdf_metadata extracts text/page-count from a real minimal PDF."""
+    fixture = Path(__file__).parent / "fixtures" / "pdf" / "minimal_table.pdf"
+    assert fixture.is_file(), f"fixture missing: {fixture}"
+
+    ctx, pdf_file = _task_file(
+        tmp_path, "test_extract_meta_real", "minimal_table.pdf", fixture.read_bytes()
+    )
+    ctx.tool_name = "extract_pdf_metadata"
+    args = json.dumps({"file_path": str(pdf_file)})
+    data = json.loads(asyncio.run(extract_pdf_metadata.on_invoke_tool(ctx, args)))
+
+    assert data["status"] == "ok"
+    assert data["summary"]["num_pages"] == 1
+    # title heuristic picks the first substantive line
+    assert "Gene Expression" in data["summary"]["title"]
+
+
+# ---------------------------------------------------------------------------
 # extract_pdf_metadata — error cases
 # ---------------------------------------------------------------------------
 
@@ -231,3 +281,66 @@ def test_extract_metadata_success(tmp_path: Path) -> None:
     assert "doi" in summary
     assert "abstract" in summary
     assert summary["num_pages"] == 5
+
+
+# ---------------------------------------------------------------------------
+# regex fallback — Chinese (UTF-16BE hex string) support
+# ---------------------------------------------------------------------------
+
+
+def test_decode_pdf_hex_string_utf16be_chinese() -> None:
+    """_decode_pdf_hex_string decodes UTF-16BE hex strings (Chinese text)."""
+    from app.skills.builtin.processing.extract_tables import _decode_pdf_hex_string
+
+    # "基因表达" UTF-16BE hex, no BOM
+    assert _decode_pdf_hex_string("57FA56E08868 8FBE") == "基因表达"
+    # with BOM
+    assert _decode_pdf_hex_string("FEFF57FA56E0") == "基因"
+
+
+def test_decode_pdf_hex_string_utf8_and_fallback() -> None:
+    """_decode_pdf_hex_string handles UTF-8 and falls back to latin-1."""
+    from app.skills.builtin.processing.extract_tables import _decode_pdf_hex_string
+
+    # UTF-8 bytes for "基因" (E5 9F BA E5 9B A0)
+    assert _decode_pdf_hex_string("E59FBAE59BA0") == "基因"
+    # ASCII passes through latin-1 path
+    assert _decode_pdf_hex_string("48656C6C6F") == "Hello"
+    # empty / invalid input
+    assert _decode_pdf_hex_string("") == ""
+    assert _decode_pdf_hex_string("ZZ") == ""
+
+
+def test_regex_fallback_extracts_chinese_pdf(tmp_path: Path) -> None:
+    """_extract_text_via_regex reads Chinese text from a hex-string PDF.
+
+    Builds a minimal PDF whose content stream uses ``<...> Tj`` with
+    UTF-16BE hex strings (a common encoding for CJK PDFs) and verifies the
+    regex fallback decodes them without a real PDF library.
+    """
+    from app.skills.builtin.processing.extract_tables import _extract_text_via_regex
+
+    stream = (
+        b"BT /F1 12 Tf 72 720 Td <FEFF57FA56E0> Tj ET\n"
+        b"BT /F1 12 Tf 72 700 Td <FEFF88688FBE> Tj ET\n"
+    )
+    content = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n"
+        b"4 0 obj\n<< /Length "
+        + str(len(stream)).encode()
+        + b" >>\nstream\n"
+        + stream
+        + b"endstream\nendobj\n"
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+        b"trailer\n<< /Root 1 0 R /Size 6 >>\n%%EOF\n"
+    )
+    pdf_file = tmp_path / "chinese.pdf"
+    pdf_file.write_bytes(content)
+
+    text = _extract_text_via_regex(str(pdf_file))
+    assert "基因" in text
+    assert "表达" in text

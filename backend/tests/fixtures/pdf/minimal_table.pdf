@@ -1,0 +1,32 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 318 >>
+stream
+BT /F1 12 Tf 72 720 Td (Gene Expression) Tj ET
+72 700 m 372 700 l S
+72 680 m 372 680 l S
+72 660 m 372 660 l S
+72 700 m 72 660 l S
+222 700 m 222 660 l S
+372 700 m 372 660 l S
+BT /F1 10 Tf 80 690 Td (BRCA1) Tj ET
+BT /F1 10 Tf 230 690 Td (1.5) Tj ET
+BT /F1 10 Tf 80 670 Td (TP53) Tj ET
+BT /F1 10 Tf 230 670 Td (2.0) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+trailer
+<< /Root 1 0 R /Size 6 >>
+%%EOF
