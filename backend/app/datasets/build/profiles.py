@@ -34,6 +34,20 @@ from app.datasets.contracts import (
     ValueScale,
 )
 
+
+def _value_field(schema: DatasetSchema) -> str:
+    """The schema's per-record numeric measurement column.
+
+    The gene schema declares ``expression_value``; the probe-level schema
+    (``gene_expression.probe_long.v1``) declares ``value``.  Both mark the
+    field with ``unit_policy="declared_per_record"``, so the column is
+    derived from the schema metadata — never hardcoded per schema id.
+    """
+    for field in schema.fields:
+        if field.unit_policy == "declared_per_record":
+            return field.name
+    return "expression_value"
+
 # --- normalization profiles -------------------------------------------------
 
 
@@ -41,7 +55,7 @@ def _expression_normalization_v1() -> NormalizationProfile:
     return NormalizationProfile(
         profile_id="gene_expression.normalization.v1",
         dataset_family="gene_expression",
-        allowed_namespaces=["ensembl_gene", "gene_symbol"],
+        allowed_namespaces=["ensembl_gene", "gene_symbol", "geo_probe"],
         allowed_units=[
             "expression_value",
             "tpm_unstranded",
@@ -65,10 +79,13 @@ def _expression_normalization_v1() -> NormalizationProfile:
         unit_conversions=[],  # no conversion is silently allowed without a rule
         aggregation_policy="keep_all",
         description=(
-            "Expression entity/unit normalization: authorize ensembl_gene or "
-            "gene_symbol namespaces, accept the declared unit/semantics/scale "
-            "sets, and require an explicit conversion rule before any unit "
-            "change."
+            "Expression entity/unit normalization: authorize ensembl_gene, "
+            "gene_symbol and geo_probe namespaces, accept the declared "
+            "unit/semantics/scale sets, and require an explicit conversion "
+            "rule before any unit change.  geo_probe is an honest "
+            "adapter-declared namespace for probe rows; the entity-level "
+            "publish policy (residual geo_probe rows fail the gene release "
+            "gate) lives in the validation profile (Phase 5 T7)."
         ),
     )
 
@@ -160,7 +177,7 @@ class ExpressionValidationProfile:
         )
         if primary_path.is_file() and not encoding_failed:
             confidence_check, confidence_warnings = self._run_confidence_check(
-                primary_path, output_dir
+                primary_path, output_dir, schema
             )
             checks.append(confidence_check)
         else:
@@ -300,6 +317,7 @@ class ExpressionValidationProfile:
         required = {
             field.name for field in schema.fields if field.required
         }
+        value_field = _value_field(schema)
         row_count = 0
         malformed_width = 0
         blank_required: dict[str, int] = {}
@@ -327,7 +345,7 @@ class ExpressionValidationProfile:
                     if not values.get(field, "").strip():
                         blank_required[field] = blank_required.get(field, 0) + 1
                 try:
-                    if not math.isfinite(float(values.get("expression_value", ""))):
+                    if not math.isfinite(float(values.get(value_field, ""))):
                         raise ValueError
                 except ValueError:
                     non_numeric += 1
@@ -359,7 +377,7 @@ class ExpressionValidationProfile:
             ),
             ProfileCheck(
                 check_id="expression_value_numeric",
-                description="expression_value parses as a number for every row",
+                description=f"{value_field} parses as a number for every row",
                 passed=non_numeric == 0,
                 detail=f"{non_numeric} non-numeric value(s) in {row_count} row(s)",
             ),
@@ -463,19 +481,23 @@ class ExpressionValidationProfile:
         self,
         primary_path: Path,
         output_dir: Path,
+        schema: DatasetSchema,
     ) -> tuple[ProfileCheck, list[dict[str, str]]]:
         """Supplementary statistical check on the primary numeric column.
 
-        Reads ``expression_value`` once, runs the deterministic detectors, and
-        writes ``confidence_report.csv``. v1 policy: the check always passes —
-        anomalies are surfaced as warnings, never as a failed gate (SURVEY §7).
+        Reads the schema's value field once (``expression_value`` for the gene
+        schema, ``value`` for the probe schema), runs the deterministic
+        detectors, and writes ``confidence_report.csv``. v1 policy: the check
+        always passes — anomalies are surfaced as warnings, never as a failed
+        gate (SURVEY §7).
         """
         values: list[str] = []
+        value_field = _value_field(schema)
         with primary_path.open("r", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
-                values.append(row.get("expression_value", ""))
+                values.append(row.get(value_field, ""))
         summary = aggregate_confidence_metrics(
-            {"expression_value": values},
+            {value_field: values},
             thresholds=self.confidence_thresholds,
         )
         report_path = output_dir / "confidence_report.csv"

@@ -26,7 +26,13 @@ from typing import Any, Literal, Protocol
 
 from pydantic import JsonValue
 
-from app.datasets.contracts import DatasetBuildSpec
+from app.datasets.build.errors import (
+    AdapterError,
+    BindingRejectedError,
+    BuildError,
+    EmptySourceError,
+)
+from app.datasets.contracts import BindingRejection, BindingRejectionKind, DatasetBuildSpec
 from app.datasets.runtime.checkpoint import (
     BuildState,
     load_build_state,
@@ -90,6 +96,40 @@ class BuildCancelledError(RuntimeError):
 
 class BuildOperationTimeoutError(RuntimeError):
     """Raised when one operation exceeds its timeout budget."""
+
+
+class AllBindingsRejectedError(BuildError):
+    """Phase A rejected every source binding (Phase 5 T7 D5).
+
+    Raised by ``_run_plan`` when the per-binding fan-out rejected all
+    bindings: phase B (integrate/validate/publish) is skipped entirely and
+    the build ends with a structured outcome.  ``reason_code`` collapses to
+    the single distinct rejection reason when every binding failed for the
+    same reason (e.g. all empty -> ``no_primary_data``), otherwise it is
+    ``all_bindings_rejected`` and the per-binding granularity lives in
+    ``per_binding_outcomes``.
+    """
+
+    def __init__(self, per_binding_outcomes: dict[str, BindingRejection]) -> None:
+        self.per_binding_outcomes = dict(per_binding_outcomes)
+        reasons = {rejection.reason_code for rejection in per_binding_outcomes.values()}
+        self.reason_code = (
+            next(iter(reasons)) if len(reasons) == 1 else "all_bindings_rejected"
+        )
+        detail = "; ".join(
+            f"{binding_id}={rejection.reason_code}"
+            for binding_id, rejection in sorted(per_binding_outcomes.items())
+        )
+        super().__init__(f"all source bindings rejected: {detail}")
+
+
+#: Phase 5 T7: the per-binding fan-out phase-A operation kinds.  A phase-A
+#: failure is captured as a per-binding rejection (never aborting the other
+#: bindings); phase-B operations (gate/integrate/validate/publish) are the
+#: fan-in that only receives phase-A successes.
+_PHASE_A_KINDS = frozenset(
+    {OperationKind.ACQUIRE, OperationKind.PARSE, OperationKind.CANONICALIZE}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +254,7 @@ class DatasetBuildExecutor:
         unstable_poll_interval: float = 0.05,
         unstable_poll_cap: float = 5.0,
         resume_from: str | None = None,
+        per_binding_outcomes: dict[str, BindingRejection] | None = None,
     ) -> None:
         self._task_id = task_id
         self._build_id = build_id
@@ -257,6 +298,12 @@ class DatasetBuildExecutor:
             raise ValueError(
                 f"resume_from must name a plan operation, got {resume_from!r}"
             )
+        # Phase 5 T7: per-binding rejections captured during phase A.  The
+        # caller (e.g. the dataset-build tool) may pass its own dict so the
+        # runner, executor and tool all read/write one shared outcome map.
+        self._per_binding_outcomes = (
+            per_binding_outcomes if per_binding_outcomes is not None else {}
+        )
         self._state: BuildState | None = None
         self._outputs: dict[str, Any] = {}
         self._sequence: int = 1
@@ -352,13 +399,118 @@ class DatasetBuildExecutor:
     async def _run_plan(self) -> BuildRunOutcome:
         state = self._state
         assert state is not None
+        phase_a_done = False
         for op in self._plan:
             if self._is_cancelled():
                 raise BuildCancelledError("build was cancelled before an operation")
-            await self._run_operation_once(op, force=(op.operation_id == self._resume_from))
+            if op.kind in _PHASE_A_KINDS:
+                if op.category in self._per_binding_outcomes:
+                    # The binding was already rejected (phase A per-binding
+                    # fan-out): skip its remaining acquire/parse/canonicalize
+                    # operations instead of aborting the whole plan.
+                    continue
+                try:
+                    await self._run_operation_once(
+                        op, force=(op.operation_id == self._resume_from)
+                    )
+                except (BindingRejectedError, EmptySourceError, AdapterError, BuildError) as exc:
+                    rejection = self._rejection_for_exception(op.category, exc)
+                    self._per_binding_outcomes[op.category] = rejection
+                    await self._finalize_binding_rejected(exc, rejection)
+                continue
+            if not phase_a_done:
+                phase_a_done = True
+                # Phase A fan-out completed: phase B only runs when at least
+                # one binding survived; otherwise the build ends with a
+                # structured all-rejected outcome (D5: NO_DATA for empty
+                # sources, per-binding reason codes preserved).
+                if self._all_bindings_rejected():
+                    raise AllBindingsRejectedError(self._per_binding_outcomes)
+            await self._run_operation_once(
+                op, force=(op.operation_id == self._resume_from)
+            )
         return BuildRunOutcome(
             status="completed",
             completed_operation_ids=tuple(state.completed_operations.keys()),
+        )
+
+    def _phase_a_binding_ids(self) -> set[str]:
+        """The binding ids phase A fans out over (from the plan's categories)."""
+        return {
+            op.category for op in self._plan if op.kind in _PHASE_A_KINDS
+        }
+
+    def _all_bindings_rejected(self) -> bool:
+        return self._phase_a_binding_ids() <= set(self._per_binding_outcomes)
+
+    def _rejection_for_exception(
+        self, binding_id: str, exc: Exception
+    ) -> BindingRejection:
+        """Map a phase-A failure onto a typed per-binding rejection."""
+        if isinstance(exc, BindingRejectedError):
+            return exc.rejection
+        if isinstance(exc, EmptySourceError):
+            return BindingRejection(
+                binding_id=binding_id,
+                kind=BindingRejectionKind.NO_PRIMARY,
+                reason_code=exc.reason_code,
+                message=str(exc),
+            )
+        if isinstance(exc, AdapterError):
+            return BindingRejection(
+                binding_id=binding_id,
+                kind=BindingRejectionKind.ERROR,
+                reason_code="parse_error",
+                message=str(exc),
+            )
+        return BindingRejection(
+            binding_id=binding_id,
+            kind=BindingRejectionKind.ERROR,
+            reason_code="build_error",
+            message=str(exc),
+        )
+
+    async def _finalize_binding_rejected(
+        self, exc: Exception, rejection: BindingRejection
+    ) -> None:
+        """Record the inflight phase-A attempt as FAILED (per-binding).
+
+        Mirrors ``_finalize_failed``'s attempt recording but lets the plan
+        continue with the other bindings instead of ending the build.
+        """
+        state = self._state
+        if state is None or state.inflight_attempt is None:
+            return
+        error = ErrorDetail(
+            code=ErrorCode.PARSE_ERROR,
+            message=str(exc),
+            retryable=False,
+            details={
+                "reason_code": rejection.reason_code,
+                "failed_operation": state.inflight_attempt.operation_id,
+            },
+        )
+        failed = self._build_attempt(
+            state.inflight_attempt.operation_id,
+            state.inflight_attempt.input_digest,
+            state.inflight_attempt.parameter_digest,
+            AttemptStatus.FAILED,
+            attempt=state.inflight_attempt.attempt,
+            operation_attempt_id=state.inflight_attempt.operation_attempt_id,
+            started=state.inflight_attempt.started_at,
+            finished=datetime.now(UTC),
+            error=error,
+        )
+        state.append_attempt(failed)
+        state.inflight_attempt = None
+        save_build_state(self._state_dir, state)
+        self._persist_attempts()
+        await self._emit(
+            OperationFailedPayload(
+                operation_id=failed.operation_id,
+                status=AttemptStatus.FAILED,
+                error=error,
+            )
         )
 
     async def _run_operation_once(
@@ -404,10 +556,7 @@ class DatasetBuildExecutor:
         )
 
         try:
-            upstream = {
-                upstream_id: self._outputs[upstream_id]
-                for upstream_id in op.upstream
-            }
+            upstream = self._available_upstream(op)
             result = await self._run_with_timeout(op, upstream)
         except BuildCancelledError:
             cancelled = self._build_attempt(
@@ -845,11 +994,22 @@ class DatasetBuildExecutor:
             ),
         )
 
-    def _compute_input_digest(self, op: OperationSpec) -> str:
-        upstream = {
+    def _available_upstream(self, op: OperationSpec) -> dict[str, Any]:
+        """The op's upstream outputs that actually exist.
+
+        Phase 5 T7: phase-A fan-out skips the remaining operations of a
+        rejected binding, so its acquire/parse/canonicalize outputs never
+        exist; phase-B ops (gate/integrate/validate/publish) legitimately see
+        a reduced upstream set (only the successful bindings).
+        """
+        return {
             upstream_id: self._outputs[upstream_id]
             for upstream_id in op.upstream
+            if upstream_id in self._outputs
         }
+
+    def _compute_input_digest(self, op: OperationSpec) -> str:
+        upstream = self._available_upstream(op)
         payload: dict[str, object] = {
             "build_id": self._build_id,
             "operation_id": op.operation_id,
@@ -986,6 +1146,15 @@ class DatasetBuildExecutor:
         state = self._state
         if state is not None and state.inflight_attempt is not None:
             details["failed_operation"] = state.inflight_attempt.operation_id
+        # Phase 5 T7: when phase A rejected every binding, the structured
+        # per-binding outcomes ride along so the tool classifier never has to
+        # substring-match error text.
+        per_binding = getattr(exc, "per_binding_outcomes", None)
+        if per_binding:
+            details["per_binding_outcomes"] = {
+                binding_id: rejection.model_dump(mode="json")
+                for binding_id, rejection in sorted(per_binding.items())
+            }
         error = ErrorDetail(
             code=error_code,
             message=str(exc),

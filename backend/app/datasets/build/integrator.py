@@ -71,6 +71,9 @@ def integrate(
     conflicts_path = merged_dir / "conflicts.csv"
 
     columns = [field.name for field in schema.fields]
+    # Phase 5 T7: the probe contract keys rows by probe_id (no gene_id
+    # column); row identity follows the schema's entity identifier.
+    id_field = "probe_id" if any(f.name == "probe_id" for f in schema.fields) else "gene_id"
     seen: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
     row_count = 0
     dedup_count = 0
@@ -86,7 +89,7 @@ def integrate(
         for result in results:
             with result.canonical_path.open("r", encoding="utf-8", newline="") as handle:
                 for row in csv.DictReader(handle):
-                    key = _row_identity(row)
+                    key = _row_identity(row, id_field)
                     value = row.get("expression_value", "")
                     previous = seen.get(key)
                     if previous is None:
@@ -155,9 +158,9 @@ def integrate(
     )
 
 
-def _row_identity(row: dict[str, str]) -> tuple[str, str, str, str]:
+def _row_identity(row: dict[str, str], id_field: str = "gene_id") -> tuple[str, str, str, str]:
     return (
-        row.get("gene_id", ""),
+        row.get(id_field, ""),
         row.get("sample_id", ""),
         row.get("measurement_type", ""),
         row.get("value_semantics", ""),

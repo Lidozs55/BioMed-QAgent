@@ -32,7 +32,7 @@ from app.datasets.build.canonicalizer import (
     canonicalize,
 )
 from app.datasets.build.compat_gate import check_expression_compatibility
-from app.datasets.build.errors import BuildError
+from app.datasets.build.errors import BindingRejectedError, BuildError
 from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.hashing import sha256_file
 from app.datasets.build.integrator import IntegrationResult, integrate
@@ -46,13 +46,18 @@ from app.datasets.build.manifest import (
     build_provenance_document,
     write_manifest,
 )
+from app.datasets.build.probe_mapping import build_probe_mapping
 from app.datasets.build.profiles import (
     get_normalization_profile,
     get_validation_profile,
 )
 from app.datasets.contracts import (
+    BindingRejection,
+    BindingRejectionKind,
     DatasetBuildSpec,
     DatasetManifest,
+    ProbeMappingStatus,
+    ProbeMappingSummary,
     ValidationResult,
     ValidationResultStatus,
 )
@@ -127,6 +132,9 @@ class ExpressionBuildRunner:
         gene_symbol_map: Mapping[str, str] | None = SYMBOL_TO_ENSEMBL,
         cancellation_requested: CancellationToken | None = None,
         pending_check: Callable[[], bool] | None = None,
+        per_binding_outcomes: dict[str, BindingRejection] | None = None,
+        mapping_assets: Mapping[str, SourceAsset] | None = None,
+        mapping_paths: Mapping[str, Path] | None = None,
     ) -> None:
         self._spec = spec
         self._registry = registry
@@ -139,6 +147,21 @@ class ExpressionBuildRunner:
         # publication rename so a correction that became pending mid-build
         # refuses promotion (the tool's entry gate is point-in-time only).
         self._pending_check = pending_check
+        # Phase 5 T7: the per-binding fan-out outcomes map.  The caller (the
+        # dataset-build tool) may pass its own dict so the runner, executor
+        # and tool share one outcome map.
+        self._per_binding_outcomes = (
+            per_binding_outcomes if per_binding_outcomes is not None else {}
+        )
+        # Phase 5 T7 D3: optional per-binding GPL annotation assets used to
+        # map probes to genes; the mapping assets and their on-disk paths.
+        self._mapping_assets = dict(mapping_assets or {})
+        self._mapping_paths = dict(mapping_paths or {})
+        # Per-binding ProbeMappingSummary objects + mapping-detail audit paths
+        # produced during canonicalization (D3), fed to the validation profile
+        # and the manifest audit list.
+        self._probe_mapping_summaries: dict[str, ProbeMappingSummary] = {}
+        self._mapping_detail_paths: list[Path] = []
         self._schema = registry.get(spec.schema_ref)
         self._normalization_profile = get_normalization_profile(
             spec.normalization_profile_ref
@@ -362,6 +385,53 @@ class ExpressionBuildRunner:
         batch = self._batches.get(binding_id)
         if batch is None:
             raise BuildError(f"no parsed batch cached for binding {binding_id!r}")
+        # Phase 5 T7 D3: when a GPL annotation asset is supplied for this
+        # binding, build the probe→gene map + ProbeMappingSummary before
+        # canonicalizing so mapped rows are re-namespaced and the coverage
+        # policy consumes the real summary.  Without an asset, a binding
+        # whose batch declares probes gets an honest not_attempted summary.
+        probe_map: Mapping[str, str] | None = None
+        probe_target_namespace = "gene_symbol"
+        mapping_result = None
+        annotation_path = self._mapping_paths.get(binding_id)
+        if annotation_path is not None and annotation_path.is_file():
+            mapping_asset = self._mapping_assets.get(binding_id)
+            platform_ids = [
+                str(platform_id)
+                for platform_id in batch.statistics.get("platform_ids", [])
+            ]
+            mapping_result = await self._offload(
+                build_probe_mapping,
+                annotation_path=annotation_path,
+                batch_path=self._output_dir / batch.file_asset.relative_path,
+                binding_id=binding_id,
+                platform_id=platform_ids[0] if platform_ids else None,
+                source_asset_id=(
+                    mapping_asset.asset_id if mapping_asset is not None else None
+                ),
+                output_dir=self._output_dir,
+            )
+            probe_map = mapping_result.probe_to_gene
+            probe_target_namespace = mapping_result.target_namespace
+        elif "geo_probe" in str(batch.statistics.get("source_gene_id_namespace", "")):
+            platform_ids = [
+                str(platform_id)
+                for platform_id in batch.statistics.get("platform_ids", [])
+            ]
+            self._probe_mapping_summaries[binding_id] = ProbeMappingSummary(
+                binding_id=binding_id,
+                platform_id=platform_ids[0] if platform_ids else None,
+                source_namespace="geo_probe",
+                target_namespace=None,
+                mapping_status=ProbeMappingStatus.NOT_ATTEMPTED,
+                total_probe_count=0,
+                mapped_probe_count=0,
+                unmapped_probe_count=0,
+                ambiguous_probe_count=0,
+                coverage_ratio=0.0,
+                mapping_asset_id=None,
+                mapping_rule_id=None,
+            )
         # D2/H1: canonicalization is heavy synchronous work; offload it to a
         # worker thread so cancellation stays responsive during the operation.
         result = await self._offload(
@@ -371,8 +441,42 @@ class ExpressionBuildRunner:
             profile=self._normalization_profile,
             output_dir=self._output_dir,
             gene_symbol_map=self._gene_symbol_map,
+            probe_map=probe_map,
+            probe_target_namespace=probe_target_namespace,
         )
+        # Phase 5 T7 D5: per-binding rejection for a binding that produced no
+        # usable rows (parsed-but-zero-valid) or — for gene-required builds —
+        # no publishable gene rows.  The binding is recorded as a per-binding
+        # rejection; its canonical audits stay on disk (4b audit survival) and
+        # phase B ignores it.
+        if result.row_count == 0:
+            raise BindingRejectedError(
+                BindingRejection(
+                    binding_id=binding_id,
+                    kind=BindingRejectionKind.NO_PRIMARY,
+                    reason_code="no_primary_data",
+                    message="source yielded zero valid rows after canonicalization",
+                )
+            )
+        if (
+            self._validation_profile.required_entity_level == "gene"
+            and not _has_gene_namespace(result.namespaces)
+        ):
+            raise BindingRejectedError(
+                BindingRejection(
+                    binding_id=binding_id,
+                    kind=BindingRejectionKind.NO_PRIMARY,
+                    reason_code="probe_mapping_unavailable_required_gene_level",
+                    message=(
+                        "gene-required build: binding produced no publishable "
+                        "gene rows (probe->gene coverage is zero)"
+                    ),
+                )
+            )
         self._canonical_results[binding_id] = result
+        if mapping_result is not None:
+            self._probe_mapping_summaries[binding_id] = mapping_result.summary
+            self._mapping_detail_paths.append(mapping_result.detail_path)
         relative_paths = [
             result.canonical_path.relative_to(self._output_dir).as_posix(),
             *[p.relative_to(self._output_dir).as_posix() for p in result.audit_paths],
@@ -444,18 +548,38 @@ class ExpressionBuildRunner:
         self, op: OperationSpec, upstream: dict[str, object]
     ) -> OperationOutput:
         integration = self._require_integration()
+        successful_results = self._canonical_results_for_bindings()
+        # Phase 5 T7: provenance covers only the phase-A-successful bindings
+        # (rejected bindings have no canonical rows in the primary).
+        successful_assets = {
+            binding_id: asset
+            for binding_id, asset in self._source_assets.items()
+            if binding_id not in self._per_binding_outcomes
+        }
         provenance_path = build_provenance_document(
             schema=self._schema,
             integration=integration,
-            canonical_results=self._canonical_results_for_bindings(),
-            source_assets=self._source_assets,
+            canonical_results=successful_results,
+            source_assets=successful_assets,
             output_dir=self._output_dir,
         )
         audit_paths = _collect_audit_paths(
             self._output_dir,
-            list(self._canonical_results.values()),
+            successful_results,
             integration,
         )
+        # Phase 5 T7 D3: publish the ProbeMappingSummary + mapping-detail
+        # audits with the build (supporting/audit survive even when the
+        # release gate fails and no primary is published).
+        summaries = [
+            self._probe_mapping_summaries[binding_id]
+            for binding_id in sorted(self._probe_mapping_summaries)
+        ]
+        if summaries:
+            summaries_path = self._output_dir / "probe_mapping_summaries.csv"
+            _write_probe_mapping_summaries(summaries_path, summaries)
+            audit_paths.append(summaries_path)
+        audit_paths.extend(self._mapping_detail_paths)
         source_summary = self._source_summary()
         manifest = assemble_manifest(
             task_id=self._spec.build_id,
@@ -463,7 +587,7 @@ class ExpressionBuildRunner:
             spec=self._spec,
             schema=self._schema,
             integration=integration,
-            canonical_results=self._canonical_results_for_bindings(),
+            canonical_results=successful_results,
             provenance_path=provenance_path,
             audit_paths=audit_paths,
             validation=_placeholder_validation(),
@@ -476,6 +600,7 @@ class ExpressionBuildRunner:
             schema=self._schema,
             manifest_digest=manifest.sha256,
             output_dir=self._output_dir,
+            probe_mapping_summaries=summaries or None,
         )
         self._validation = validation
         # Re-assemble with the authoritative validation summary and persist
@@ -486,7 +611,7 @@ class ExpressionBuildRunner:
             spec=self._spec,
             schema=self._schema,
             integration=integration,
-            canonical_results=self._canonical_results_for_bindings(),
+            canonical_results=successful_results,
             provenance_path=provenance_path,
             audit_paths=audit_paths,
             validation=validation,
@@ -528,8 +653,13 @@ class ExpressionBuildRunner:
             manifest=manifest,
             validation=validation,
             output_dir=self._output_dir,
+            # Phase 5 T7: provenance closure covers only the phase-A-successful
+            # bindings (the provenance document lists their assets; rejected
+            # bindings have no rows in the primary).
             expected_source_asset_ids={
-                asset.asset_id for asset in self._source_assets.values()
+                asset.asset_id
+                for binding_id, asset in self._source_assets.items()
+                if binding_id not in self._per_binding_outcomes
             },
         )
         if not invariants.passed:
@@ -682,16 +812,17 @@ class ExpressionBuildRunner:
         raise BuildError(f"binding {binding_id!r} is not part of the spec")
 
     def _canonical_results_for_bindings(self) -> list[CanonicalizationResult]:
-        missing = [
-            binding.binding_id
-            for binding in self._spec.source_bindings
-            if binding.binding_id not in self._canonical_results
+        """Canonical results of the phase-A-successful bindings only.
+
+        Phase 5 T7: rejected bindings never enter ``_canonical_results``, so
+        phase B (gate/integrate/validate/publish) only sees the bindings that
+        survived the per-binding fan-out.
+        """
+        return [
+            self._canonical_results[b.binding_id]
+            for b in self._spec.source_bindings
+            if b.binding_id in self._canonical_results
         ]
-        if missing:
-            raise BuildError(
-                "missing canonical results for binding(s): " + ", ".join(missing)
-            )
-        return [self._canonical_results[b.binding_id] for b in self._spec.source_bindings]
 
     def _require_integration(self) -> IntegrationResult:
         if self._integration is None:
@@ -727,8 +858,71 @@ class ExpressionBuildRunner:
                 "rejected_count": result.rejected_count,
                 "unit": ", ".join(result.batch.statistics.get("expression_units", [])),
                 "namespace": ", ".join(result.namespaces),
+                # Phase 5 D2: the entity level of the published rows — probe
+                # when any geo_probe namespace is present, otherwise gene.
+                "entity_level": (
+                    "probe" if "geo_probe" in result.namespaces else "gene"
+                ),
             }
         return summary
+
+
+def _has_gene_namespace(namespaces: tuple[str, ...]) -> bool:
+    """True when any canonical namespace is a gene-level namespace.
+
+    Phase 5 T7 D5: a gene-required build needs at least one binding with
+    publishable gene rows (ensembl_gene/gene_symbol); a binding whose rows
+    are all ``geo_probe`` yields zero publishable gene rows and is rejected
+    per-binding.
+    """
+    return any(
+        namespace in ("ensembl_gene", "gene_symbol") for namespace in namespaces
+    )
+
+
+#: ProbeMappingSummary audit CSV columns (Phase 5 D3).
+_PROBE_MAPPING_SUMMARY_COLUMNS = (
+    "binding_id",
+    "platform_id",
+    "source_namespace",
+    "target_namespace",
+    "mapping_status",
+    "total_probe_count",
+    "mapped_probe_count",
+    "unmapped_probe_count",
+    "ambiguous_probe_count",
+    "coverage_ratio",
+    "mapping_asset_id",
+    "mapping_rule_id",
+)
+
+
+def _write_probe_mapping_summaries(
+    path: Path, summaries: list[ProbeMappingSummary]
+) -> None:
+    """Write the per-binding/platform ProbeMappingSummary audit CSV."""
+    import csv as csv_module
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv_module.DictWriter(handle, fieldnames=_PROBE_MAPPING_SUMMARY_COLUMNS)
+        writer.writeheader()
+        for summary in summaries:
+            writer.writerow(
+                {
+                    "binding_id": summary.binding_id,
+                    "platform_id": summary.platform_id or "",
+                    "source_namespace": summary.source_namespace,
+                    "target_namespace": summary.target_namespace or "",
+                    "mapping_status": summary.mapping_status.value,
+                    "total_probe_count": summary.total_probe_count,
+                    "mapped_probe_count": summary.mapped_probe_count,
+                    "unmapped_probe_count": summary.unmapped_probe_count,
+                    "ambiguous_probe_count": summary.ambiguous_probe_count,
+                    "coverage_ratio": f"{summary.coverage_ratio:.4f}",
+                    "mapping_asset_id": summary.mapping_asset_id or "",
+                    "mapping_rule_id": summary.mapping_rule_id or "",
+                }
+            )
 
 
 def _placeholder_validation() -> ValidationResult:
