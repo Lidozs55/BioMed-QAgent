@@ -53,10 +53,12 @@ from app.datasets.build.profiles import (
 )
 from app.datasets.contracts import (
     REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
+    AnnotationStatus,
     BindingRejection,
     BindingRejectionKind,
     DatasetBuildSpec,
     DatasetManifest,
+    PlatformRecord,
     ProbeMappingStatus,
     ProbeMappingSummary,
     ValidationResult,
@@ -163,6 +165,9 @@ class ExpressionBuildRunner:
         # and the manifest audit list.
         self._probe_mapping_summaries: dict[str, ProbeMappingSummary] = {}
         self._mapping_detail_paths: list[Path] = []
+        # F4 (Phase 5 review §3): one D3 PlatformRecord per GPL attempt,
+        # emitted with the probe-primary publication (platform_audit.csv).
+        self._platform_records: dict[str, PlatformRecord] = {}
         self._schema = registry.get(spec.schema_ref)
         self._normalization_profile = get_normalization_profile(
             spec.normalization_profile_ref
@@ -409,6 +414,11 @@ class ExpressionBuildRunner:
                 platform_id=platform_ids[0] if platform_ids else None,
                 annotation_asset=mapping_asset,
                 output_dir=self._output_dir,
+                source_id=(
+                    mapping_asset.source_id
+                    if mapping_asset is not None and mapping_asset.source_id
+                    else binding_id
+                ),
             )
             probe_map = mapping_result.probe_to_gene
             probe_target_namespace = mapping_result.target_namespace
@@ -417,9 +427,10 @@ class ExpressionBuildRunner:
                 str(platform_id)
                 for platform_id in batch.statistics.get("platform_ids", [])
             ]
+            platform_id = platform_ids[0] if platform_ids else None
             self._probe_mapping_summaries[binding_id] = ProbeMappingSummary(
                 binding_id=binding_id,
-                platform_id=platform_ids[0] if platform_ids else None,
+                platform_id=platform_id,
                 source_namespace="geo_probe",
                 target_namespace=None,
                 mapping_status=ProbeMappingStatus.NOT_ATTEMPTED,
@@ -431,6 +442,17 @@ class ExpressionBuildRunner:
                 mapping_asset_id=None,
                 mapping_rule_id=None,
             )
+            if platform_id is not None:
+                source_asset = self._source_assets.get(binding_id)
+                self._platform_records[binding_id] = PlatformRecord(
+                    platform_id=platform_id,
+                    source_id=(
+                        source_asset.source_id
+                        if source_asset is not None and source_asset.source_id
+                        else binding_id
+                    ),
+                    annotation_status=AnnotationStatus.NOT_ATTEMPTED,
+                )
         # D2/H1: canonicalization is heavy synchronous work; offload it to a
         # worker thread so cancellation stays responsive during the operation.
         result = await self._offload(
@@ -476,6 +498,8 @@ class ExpressionBuildRunner:
         if mapping_result is not None:
             self._probe_mapping_summaries[binding_id] = mapping_result.summary
             self._mapping_detail_paths.append(mapping_result.detail_path)
+            if mapping_result.platform_record is not None:
+                self._platform_records[binding_id] = mapping_result.platform_record
         relative_paths = [
             result.canonical_path.relative_to(self._output_dir).as_posix(),
             *[p.relative_to(self._output_dir).as_posix() for p in result.audit_paths],
@@ -579,6 +603,16 @@ class ExpressionBuildRunner:
             _write_probe_mapping_summaries(summaries_path, summaries)
             audit_paths.append(summaries_path)
         audit_paths.extend(self._mapping_detail_paths)
+        # F4: the probe-primary publication carries one PlatformRecord per GPL
+        # attempt (platform_audit.csv), mirroring the V1 platform audit.
+        platform_records = [
+            self._platform_records[binding_id]
+            for binding_id in sorted(self._platform_records)
+        ]
+        if platform_records:
+            platform_audit_path = self._output_dir / "platform_audit.csv"
+            _write_platform_audit(platform_audit_path, platform_records)
+            audit_paths.append(platform_audit_path)
         source_summary = self._source_summary()
         manifest = assemble_manifest(
             task_id=self._spec.build_id,
@@ -900,6 +934,45 @@ _PROBE_MAPPING_SUMMARY_COLUMNS = (
     "mapping_asset_id",
     "mapping_rule_id",
 )
+
+#: PlatformRecord audit CSV columns (F4) — identical to the V1
+#: ``_PLATFORM_AUDIT_COLUMNS`` in ``artifact_build/builder.py`` so the two
+#: pipelines emit the same platform-level provenance surface.
+_PLATFORM_AUDIT_COLUMNS = (
+    "platform_id",
+    "source_id",
+    "annotation_status",
+    "annotation_asset_id",
+    "probe_id_field",
+    "gene_id_field",
+    "target_namespace",
+    "mapping_source_url",
+    "annotation_sha256",
+)
+
+
+def _write_platform_audit(path: Path, records: list[PlatformRecord]) -> None:
+    """Write the per-platform D3 PlatformRecord audit CSV (F4)."""
+    import csv as csv_module
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv_module.DictWriter(handle, fieldnames=_PLATFORM_AUDIT_COLUMNS)
+        writer.writeheader()
+        for record in records:
+            writer.writerow(
+                {
+                    "platform_id": record.platform_id,
+                    "source_id": record.source_id,
+                    "annotation_status": record.annotation_status.value,
+                    "annotation_asset_id": record.annotation_asset_id or "",
+                    "probe_id_field": record.probe_id_field or "",
+                    "gene_id_field": record.gene_id_field or "",
+                    "target_namespace": record.target_namespace or "",
+                    "mapping_source_url": record.mapping_source_url or "",
+                    "annotation_sha256": record.annotation_sha256 or "",
+                }
+            )
+
 
 
 def _write_probe_mapping_summaries(

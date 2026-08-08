@@ -9,6 +9,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -16,6 +18,7 @@ import shutil
 import tempfile
 import threading
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -33,9 +36,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.skills import SkillStoreDep
+from app.datasets.contracts import (
+    DatasetManifest,
+    DatasetPublication,
+    ManifestArtifactEntry,
+)
 from app.domain.contracts import (
     EventEnvelope,
     MessagePage,
+    RunCompletedPayload,
     RunManifest,
     RunRecord,
     RunStatus,
@@ -46,7 +55,12 @@ from app.domain.contracts import (
     TaskRunAccepted,
     TaskSnapshot,
 )
-from app.domain.contracts.dataset_state import ArtifactRole
+from app.domain.contracts.base import ContractModel
+from app.domain.contracts.dataset_state import (
+    ArtifactRole,
+    BuildResult,
+    BuildResultStatus,
+)
 from app.runtime.manager import (
     FixtureTaskContinuationError,
     RequestIdConflictError,
@@ -1018,3 +1032,435 @@ def _load_validated_manifest(
             detail="Artifact publication marker does not match manifest",
         )
     return manifest, artifacts_dir, False
+
+
+# ---------------------------------------------------------------------------
+# V2 builds (Phase 7 T1): BuildResult + dataset manifest pointer
+# ---------------------------------------------------------------------------
+
+
+class BuildSummary(ContractModel):
+    """One V2 build's listing entry: BuildResult + dataset manifest pointer."""
+
+    build_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    dataset_family: str = Field(min_length=1)
+    row_granularity: str = Field(min_length=1)
+    schema_ref: str = Field(min_length=1)
+    row_count: int = Field(ge=0)
+    status: BuildResultStatus
+    publication_id: str | None = None
+    manifest_ref: str = Field(min_length=1)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    published_at: datetime | None = None
+    build_result: BuildResult | None = None
+
+
+class BuildPage(ContractModel):
+    """One ascending page of V2 builds (newest manifest first)."""
+
+    items: list[BuildSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class BuildDetail(ContractModel):
+    """One build's authoritative BuildResult with its manifest summary."""
+
+    build_id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    manifest_ref: str = Field(min_length=1)
+    build_result: BuildResult | None = None
+    manifest: DatasetManifest
+    publication: DatasetPublication | None = None
+    artifacts: list[ManifestArtifactEntry] = Field(default_factory=list)
+
+
+_BUILD_CURSOR_SEPARATOR = "|"
+_BUILD_MANIFEST_NAME = "dataset_manifest.json"
+
+
+def _encode_build_cursor(mtime_ns: int, task_id: str, build_id: str) -> str:
+    raw = f"{mtime_ns}{_BUILD_CURSOR_SEPARATOR}{task_id}{_BUILD_CURSOR_SEPARATOR}{build_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_build_cursor(cursor: str) -> tuple[int, str, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        mtime_ns_str, task_id, build_id = raw.split(_BUILD_CURSOR_SEPARATOR, 2)
+        return int(mtime_ns_str), task_id, build_id
+    except (ValueError, UnicodeDecodeError, binascii.Error) as error:
+        raise ValueError("invalid build cursor") from error
+
+
+def _scan_build_dirs(tasks_dir: Path) -> list[tuple[Path, str, str]]:
+    """Return ``(build_dir, task_id, build_id)`` for every V2 build manifest.
+
+    A build is a ``datasets_build/<build_id>/dataset_manifest.json`` file
+    inside a task directory — the manifest is the build's immutable record.
+    """
+
+    found: list[tuple[Path, str, str]] = []
+    if not tasks_dir.is_dir():
+        return found
+    for task_dir in sorted(tasks_dir.iterdir(), key=lambda item: item.name):
+        if not task_dir.is_dir() or task_dir.name.startswith("."):
+            continue
+        build_root = task_dir / "datasets_build"
+        if not build_root.is_dir():
+            continue
+        for build_dir in sorted(build_root.iterdir(), key=lambda item: item.name):
+            if not build_dir.is_dir() or build_dir.name.startswith("."):
+                continue
+            if (build_dir / _BUILD_MANIFEST_NAME).is_file():
+                found.append((build_dir, task_dir.name, build_dir.name))
+    return found
+
+
+def _build_sort_key(item: tuple[Path, str, str]) -> tuple[int, str, str]:
+    build_dir, task_id, build_id = item
+    return (build_dir.stat().st_mtime_ns, task_id, build_id)
+
+
+def _locate_build_id(tasks_dir: Path, build_id: str) -> tuple[str, Path] | None:
+    """Locate the newest build dir with the given build_id across tasks."""
+
+    if _SAFE_RUNTIME_ID.fullmatch(build_id) is None:
+        return None
+    best: tuple[int, str, Path] | None = None
+    for build_dir, task_id, candidate in _scan_build_dirs(tasks_dir):
+        if candidate != build_id:
+            continue
+        key = build_dir.stat().st_mtime_ns
+        if best is None or key > best[0]:
+            best = (key, task_id, build_dir)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
+def _load_build(
+    tasks_dir: Path,
+    task_id: str,
+    build_id: str,
+) -> tuple[Path, DatasetManifest, DatasetPublication | None] | None:
+    """Load ``(build_dir, manifest, publication)`` for one V2 build.
+
+    Returns ``None`` when the build does not exist; raises 409 when the
+    manifest is present but invalid (a corrupt build must never be served).
+    """
+
+    if (
+        _SAFE_RUNTIME_ID.fullmatch(task_id) is None
+        or _SAFE_RUNTIME_ID.fullmatch(build_id) is None
+    ):
+        return None
+    build_dir = (tasks_dir / task_id / "datasets_build" / build_id).resolve()
+    try:
+        build_dir.relative_to(tasks_dir.resolve())
+    except ValueError:
+        return None
+    manifest_path = build_dir / _BUILD_MANIFEST_NAME
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = DatasetManifest.model_validate_json(
+            manifest_path.read_text("utf-8")
+        )
+    except (ValidationError, OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=409, detail="Build manifest is invalid"
+        ) from error
+    if manifest.build_id != build_id:
+        raise HTTPException(
+            status_code=409, detail="Build manifest is invalid"
+        )
+    return build_dir, manifest, _load_build_publication(build_dir)
+
+
+def _load_build_publication(build_dir: Path) -> DatasetPublication | None:
+    """Load the newest immutable ``DatasetPublication`` record of a build."""
+
+    publish_dir = build_dir / "publish"
+    if not publish_dir.is_dir():
+        return None
+    newest: tuple[str, DatasetPublication] | None = None
+    for child in publish_dir.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        record_path = child / "publication.json"
+        if not record_path.is_file():
+            continue
+        try:
+            publication = DatasetPublication.model_validate_json(
+                record_path.read_text("utf-8")
+            )
+        except (ValidationError, OSError, json.JSONDecodeError):
+            continue
+        key = publication.published_at.isoformat()
+        if newest is None or key > newest[0]:
+            newest = (key, publication)
+    return newest[1] if newest is not None else None
+
+
+def _derive_build_result(
+    manifest: DatasetManifest,
+    publication: DatasetPublication | None,
+) -> BuildResult:
+    """Deterministic BuildResult projection from the immutable manifest.
+
+    Used when the durable run events do not carry an authoritative
+    BuildResult for the build (pre-wiring builds or builds created outside a
+    managed run). The durable event correlation in ``_resolve_build_result``
+    wins whenever it can.
+    """
+
+    if publication is None or manifest.row_count == 0:
+        return BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            rejected_sources=[],
+            reason_codes=["no_primary_data"],
+            user_summary=(
+                f"build {manifest.build_id} produced no publishable data"
+            ),
+        )
+    return BuildResult(
+        status=BuildResultStatus.SUCCEEDED,
+        valid_row_count=manifest.row_count,
+        successful_sources=sorted(manifest.source_summary),
+        publication_id=publication.publication_id,
+        user_summary=(
+            f"build {manifest.build_id} published "
+            f"{manifest.row_count} valid row(s)"
+        ),
+    )
+
+
+async def _resolve_build_result(
+    repository: TaskRepository,
+    task_id: str,
+    manifest: DatasetManifest,
+    publication: DatasetPublication | None,
+    events: list[EventEnvelope] | None = None,
+) -> BuildResult:
+    """Authoritative BuildResult for a build.
+
+    Phase 7 T1 seam 2: when the durable ``RunCompletedPayload`` carries the
+    V2 BuildResult (wired by the executor from ``execute_dataset_build``),
+    that result is returned — including PARTIAL_SUCCESS/NO_DATA envelopes the
+    manifest alone cannot express. Falls back to the manifest projection.
+    """
+
+    if publication is not None:
+        if events is None:
+            events = await repository.list_events(task_id)
+        for event in reversed(events):
+            payload = event.payload
+            if (
+                isinstance(payload, RunCompletedPayload)
+                and payload.build_result is not None
+                and payload.build_result.publication_id
+                == publication.publication_id
+            ):
+                return payload.build_result
+    return _derive_build_result(manifest, publication)
+
+
+def _verified_build_artifact_path(build_dir: Path, relative_path: str) -> Path:
+    file_path = (build_dir / relative_path).resolve()
+    try:
+        file_path.relative_to(build_dir.resolve())
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409, detail="Invalid build artifact path"
+        ) from error
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=409, detail="Registered build artifact is missing"
+        )
+    return file_path
+
+
+@router.get("/builds", response_model=BuildPage)
+async def list_builds(
+    repository: TaskRepositoryDep,
+    limit: Annotated[int | None, Query(ge=1)] = None,
+    cursor: str | None = None,
+) -> BuildPage:
+    """Return one page of V2 builds (newest manifest first).
+
+    Each item carries the BuildResult (durable events when available, else a
+    manifest projection) and the task-relative dataset manifest pointer.
+    """
+
+    if cursor == "":
+        raise HTTPException(status_code=422, detail="invalid build cursor")
+    try:
+        boundary = _decode_build_cursor(cursor) if cursor else None
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="invalid build cursor") from error
+    page_limit = repository.settings.task_page_size if limit is None else limit
+    maximum = repository.settings.task_page_max_size
+    if page_limit < 1 or page_limit > maximum:
+        raise HTTPException(
+            status_code=422, detail=f"limit must be between 1 and {maximum}"
+        )
+    found = _scan_build_dirs(repository.tasks_dir)
+    found.sort(key=_build_sort_key, reverse=True)
+    if boundary is not None:
+        found = [
+            item for item in found if _build_sort_key(item) < boundary
+        ]
+
+    # Durable event correlation is per-task; load each task's events at most
+    # once per request (published builds only — NO_DATA builds have no
+    # publication id to correlate and use the manifest projection).
+    events_by_task: dict[str, list[EventEnvelope]] = {}
+
+    async def events_for(task_id: str) -> list[EventEnvelope]:
+        cached = events_by_task.get(task_id)
+        if cached is None:
+            cached = await repository.list_events(task_id)
+            events_by_task[task_id] = cached
+        return cached
+
+    items: list[BuildSummary] = []
+    for _build_dir, task_id, build_id in found:
+        loaded = _load_build(repository.tasks_dir, task_id, build_id)
+        if loaded is None:
+            continue
+        _resolved_build_dir, manifest, publication = loaded
+        events = (
+            await events_for(task_id) if publication is not None else []
+        )
+        build_result = await _resolve_build_result(
+            repository,
+            task_id,
+            manifest,
+            publication,
+            events=events,
+        )
+        items.append(
+            BuildSummary(
+                build_id=build_id,
+                task_id=task_id,
+                dataset_family=manifest.dataset_family,
+                row_granularity=manifest.row_granularity,
+                schema_ref=manifest.schema_ref,
+                row_count=manifest.row_count,
+                status=(
+                    build_result.status
+                    if build_result is not None
+                    else BuildResultStatus.NO_DATA
+                ),
+                publication_id=(
+                    publication.publication_id
+                    if publication is not None
+                    else None
+                ),
+                manifest_ref=(
+                    f"datasets_build/{build_id}/{_BUILD_MANIFEST_NAME}"
+                ),
+                manifest_sha256=manifest.sha256,
+                published_at=(
+                    publication.published_at
+                    if publication is not None
+                    else None
+                ),
+                build_result=build_result,
+            )
+        )
+        if len(items) >= page_limit + 1:
+            break
+    next_cursor = None
+    if len(items) > page_limit:
+        items = items[:page_limit]
+        last = items[-1]
+        next_cursor = _encode_build_cursor(
+            (repository.tasks_dir / last.task_id / "datasets_build" / last.build_id)
+            .stat()
+            .st_mtime_ns,
+            last.task_id,
+            last.build_id,
+        )
+    return BuildPage(items=items, next_cursor=next_cursor)
+
+
+@router.get("/builds/{build_id}", response_model=BuildDetail)
+async def get_build(
+    build_id: str,
+    repository: TaskRepositoryDep,
+) -> BuildDetail:
+    """Return one build's BuildResult with its manifest summary."""
+
+    located = _locate_build_id(repository.tasks_dir, build_id)
+    if located is None:
+        raise HTTPException(status_code=404, detail="Build not found")
+    task_id, _build_dir = located
+    loaded = _load_build(repository.tasks_dir, task_id, build_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Build not found")
+    _resolved_build_dir, manifest, publication = loaded
+    events = (
+        await repository.list_events(task_id)
+        if publication is not None
+        else []
+    )
+    build_result = await _resolve_build_result(
+        repository, task_id, manifest, publication, events=events
+    )
+    return BuildDetail(
+        build_id=build_id,
+        task_id=task_id,
+        manifest_ref=f"datasets_build/{build_id}/{_BUILD_MANIFEST_NAME}",
+        build_result=build_result,
+        manifest=manifest,
+        publication=publication,
+        artifacts=manifest.artifacts,
+    )
+
+
+@router.get("/builds/{build_id}/artifacts/{artifact_id}")
+async def get_build_artifact(
+    build_id: str,
+    artifact_id: str,
+    repository: TaskRepositoryDep,
+):
+    """Resolve a build artifact (manifest inventory + dataset manifest)."""
+
+    located = _locate_build_id(repository.tasks_dir, build_id)
+    if located is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    task_id, build_dir = located
+    loaded = _load_build(repository.tasks_dir, task_id, build_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    resolved_build_dir, manifest, _publication = loaded
+    if artifact_id == "dataset_manifest":
+        file_path = resolved_build_dir / _BUILD_MANIFEST_NAME
+        media_type = "application/json"
+    else:
+        entry = next(
+            (
+                candidate
+                for candidate in manifest.artifacts
+                if candidate.artifact_id == artifact_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        file_path = _verified_build_artifact_path(
+            resolved_build_dir, entry.relative_path
+        )
+        if (
+            file_path.stat().st_size != entry.size_bytes
+            or _file_sha256(file_path) != entry.sha256
+        ):
+            raise HTTPException(
+                status_code=409, detail="Artifact integrity check failed"
+            )
+        media_type = entry.media_type
+    return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)

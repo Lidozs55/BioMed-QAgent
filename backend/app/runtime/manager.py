@@ -1853,12 +1853,15 @@ class TaskManager:
                         timestamp=completion_event.timestamp,
                     )
                 # phase 4a：零产物完成不再是失败。空 completion_events + agent
-                # 确实跑过 → COMPLETED + BuildResult(NO_DATA)，由 manager 构造；
-                # 有产物时透传 executor 的 build_result（Task 5），否则同样落 NO_DATA。
+                # 确实跑过且未附上结构化 build_result → COMPLETED + BuildResult(NO_DATA)，
+                # 由 manager 构造；有产物时透传 executor 的 build_result（Task 5），
+                # 否则同样落 NO_DATA。Phase 7 T1（bug-sweep §3 V2-dup）：executor
+                # 显式附上的结构化 build_result（含 NO_DATA 信封）始终优先于通用兑底。
                 if (
                     execution.mode is TaskMode.AGENT
                     and execution.agent_executed
                     and not completion_events
+                    and execution.build_result is None
                     and not execution.context.cancellation_requested.is_set()
                 ):
                     await self._append_completion_status(

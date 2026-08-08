@@ -30,11 +30,16 @@ from typing import Literal
 
 from app.datasets.build.errors import ProbeMappingAssetMismatchError
 from app.datasets.contracts import (
+    AnnotationStatus,
+    PlatformRecord,
     ProbeMappingStatus,
     ProbeMappingSummary,
 )
 from app.domain.contracts import SourceAsset
-from app.pipeline.processing.geo_annotation import parse_platform_table_text
+from app.pipeline.processing.geo_annotation import (
+    SoftPlatformTable,
+    parse_platform_table_text,
+)
 
 #: Stable server-side mapping rule id (D3 ``mapping_rule_id``).
 PROBE_MAPPING_RULE_ID = "geo.probe-map.v1"
@@ -60,6 +65,11 @@ class ProbeMappingResult:
     target_namespace: Literal["gene_symbol", "ensembl_gene"]
     summary: ProbeMappingSummary
     detail_path: Path
+    # F4 (Phase 5 review §3): one D3 ``PlatformRecord`` per GPL attempt —
+    # the probe-primary publication must carry platform-level provenance
+    # (mirrors the V1 platform audit). ``None`` when no annotation was
+    # parsed (the caller records an explicit NOT_ATTEMPTED record instead).
+    platform_record: PlatformRecord | None = None
 
 
 def _target_namespace_for(gene_column: str) -> Literal["gene_symbol", "ensembl_gene"]:
@@ -83,9 +93,11 @@ def parse_platform_table(
     Literal["gene_symbol", "ensembl_gene"],
     ProbeMappingStatus,
     frozenset[str],
+    str | None,
+    str | None,
 ]:
     """Parse a SOFT platform table into ``(probe→gene, target_namespace,
-    status, ambiguous_probes)``.
+    status, ambiguous_probes, probe_column, gene_column)``.
 
     Status mirrors the V1 vocabulary: ``no_gene_annotation`` when the table
     block or a recognized gene column is missing, ``unmapped`` when the gene
@@ -98,11 +110,23 @@ def parse_platform_table(
     DISTINCT gene targets have no explicit disambiguation rule (D2/F3): they
     are ambiguous, excluded from the map (the canonicalizer keeps them in the
     ``geo_probe`` namespace) and returned for the caller to count.
+
+    The parsed probe/gene columns (F4) feed the D3 ``PlatformRecord``
+    (``probe_id_field`` / ``gene_id_field``); ``gene_column`` is None when no
+    recognized gene column exists.
     """
     text = _read_table(annotation_path)
-    table = parse_platform_table_text(text)
+    table: SoftPlatformTable = parse_platform_table_text(text)
+    probe_column, gene_column = table.probe_column, table.gene_column
     if not table.has_table or table.gene_column is None:
-        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION, frozenset()
+        return (
+            {},
+            "gene_symbol",
+            ProbeMappingStatus.NO_GENE_ANNOTATION,
+            frozenset(),
+            probe_column,
+            gene_column,
+        )
     target_namespace = _target_namespace_for(table.gene_column)
 
     targets: dict[str, set[str]] = {}
@@ -117,8 +141,22 @@ def parse_platform_table(
         if len(genes) == 1
     }
     if not mapping:
-        return {}, target_namespace, ProbeMappingStatus.UNMAPPED, ambiguous_probes
-    return mapping, target_namespace, ProbeMappingStatus.MAPPED, ambiguous_probes
+        return (
+            {},
+            target_namespace,
+            ProbeMappingStatus.UNMAPPED,
+            ambiguous_probes,
+            probe_column,
+            gene_column,
+        )
+    return (
+        mapping,
+        target_namespace,
+        ProbeMappingStatus.MAPPED,
+        ambiguous_probes,
+        probe_column,
+        gene_column,
+    )
 
 
 def _distinct_probes(batch_path: Path) -> list[str]:
@@ -137,6 +175,57 @@ def _distinct_probes(batch_path: Path) -> list[str]:
     return sorted(probes)
 
 
+def _platform_annotation_status(
+    mapping_status: ProbeMappingStatus,
+    table_status: ProbeMappingStatus,
+) -> AnnotationStatus:
+    """Map the computed probe-mapping outcome to the D3 annotation status.
+
+    A parsed annotation that maps at least one probe (full or partial
+    coverage) is ``mapped``; an annotation that could not be parsed or lacks
+    a gene column is ``no_gene_annotation``; an annotation with a gene column
+    but no usable values is ``unmapped``.
+    """
+    if mapping_status in (ProbeMappingStatus.MAPPED, ProbeMappingStatus.PARTIAL):
+        return AnnotationStatus.MAPPED
+    if table_status is ProbeMappingStatus.NO_GENE_ANNOTATION:
+        return AnnotationStatus.NO_GENE_ANNOTATION
+    return AnnotationStatus.UNMAPPED
+
+
+def _build_platform_record(
+    *,
+    platform_id: str,
+    source_id: str,
+    annotation_path: Path,
+    probe_column: str | None,
+    gene_column: str | None,
+    target_namespace: Literal["gene_symbol", "ensembl_gene"] | None,
+    annotation_status: AnnotationStatus,
+    annotation_asset: SourceAsset | None,
+) -> PlatformRecord:
+    """Build the D3 ``PlatformRecord`` for one GPL annotation attempt (F4)."""
+    return PlatformRecord(
+        platform_id=platform_id,
+        source_id=source_id,
+        annotation_asset_id=(
+            annotation_asset.asset_id if annotation_asset is not None else None
+        ),
+        annotation_status=annotation_status,
+        probe_id_field=probe_column,
+        gene_id_field=gene_column if annotation_status is AnnotationStatus.MAPPED else None,
+        target_namespace=(
+            target_namespace if annotation_status is AnnotationStatus.MAPPED else None
+        ),
+        mapping_source_url=None,
+        annotation_sha256=(
+            hashlib.sha256(annotation_path.read_bytes()).hexdigest()
+            if annotation_status is not AnnotationStatus.NOT_ATTEMPTED
+            else None
+        ),
+    )
+
+
 def build_probe_mapping(
     *,
     annotation_path: Path,
@@ -146,6 +235,7 @@ def build_probe_mapping(
     annotation_asset: SourceAsset | None = None,
     output_dir: Path,
     mapping_rule_id: str = PROBE_MAPPING_RULE_ID,
+    source_id: str | None = None,
 ) -> ProbeMappingResult:
     """Compute the probe→gene mapping + ProbeMappingSummary for one binding.
 
@@ -164,7 +254,7 @@ def build_probe_mapping(
                 f"match the parsed file ({annotation_path}): declared "
                 f"{annotation_asset.sha256}, actual {actual}"
             )
-    probe_to_gene, target_namespace, table_status, ambiguous_probes = (
+    probe_to_gene, target_namespace, table_status, ambiguous_probes, probe_column, gene_column = (
         parse_platform_table(annotation_path)
     )
     probes = _distinct_probes(batch_path)
@@ -234,9 +324,29 @@ def build_probe_mapping(
         ),
         mapping_rule_id=mapping_rule_id,
     )
+    # F4: one D3 PlatformRecord per GPL attempt accompanies the summary when
+    # an annotation was parsed; NOT_ATTEMPTED records are the caller's
+    # responsibility (no annotation supplied).
+    platform_record = None
+    if platform_id is not None:
+        platform_record = _build_platform_record(
+            platform_id=platform_id,
+            source_id=(
+                source_id
+                or (annotation_asset.source_id if annotation_asset is not None else None)
+                or binding_id
+            ),
+            annotation_path=annotation_path,
+            probe_column=probe_column,
+            gene_column=gene_column,
+            target_namespace=target_namespace if mapped else None,
+            annotation_status=_platform_annotation_status(status, table_status),
+            annotation_asset=annotation_asset,
+        )
     return ProbeMappingResult(
         probe_to_gene=probe_to_gene,
         target_namespace=target_namespace,
         summary=summary,
         detail_path=detail_path,
+        platform_record=platform_record,
     )
