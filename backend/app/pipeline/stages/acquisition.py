@@ -31,6 +31,7 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.integrations.acquisition import AcquisitionResult, acquire_source
+from app.pipeline.processing.geo_accession import extract_gse_accession
 from app.pipeline.processing.geo_provider import (
     MAX_BYTES,
     select_series_fixture_assets,
@@ -55,8 +56,13 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_gse_accession(value: str) -> str | None:
-    match = re.search(r"(GSE\d+)(?:\[Accession\])?", value, re.IGNORECASE)
-    return match.group(1).upper() if match else None
+    """Return the single GSE accession, or None.
+
+    Phase 5 D7: delegated to the shared helper which RAISES ValueError
+    (listing all accessions) when the value embeds more than one — the
+    historical first-match truncation is gone.
+    """
+    return extract_gse_accession(value)
 
 
 def _resolve_geo_dataset(ctx: StageContext) -> DatasetSelection:

@@ -20,6 +20,7 @@ def check_source_relation_evidence(ctx: ValidationContext) -> dict[str, object]:
         to_source = ctx.sources_by_id.get(row.get("to_source_id", ""))
         valid = False
         if row.get("relation_type") == "article_describes_dataset":
+            # acquired PubMed -> GEO (forward)
             valid = bool(
                 from_source
                 and to_source
@@ -29,6 +30,17 @@ def check_source_relation_evidence(ctx: ValidationContext) -> dict[str, object]:
                 and evidence_value == from_source.get("accession")
                 and evidence_url == to_source.get("url")
             )
+        elif row.get("relation_type") == "dataset_described_by_article":
+            # GEO -> acquired PubMed (inverse of article_describes_dataset)
+            valid = bool(
+                from_source
+                and to_source
+                and from_source.get("database") == "geo"
+                and to_source.get("database") == "pubmed"
+                and evidence_type == "geo_pubmed_id"
+                and evidence_value == to_source.get("accession")
+                and evidence_url == from_source.get("url")
+            )
         elif row.get("relation_type") == "geo_references_pubmed":
             valid = bool(
                 from_source
@@ -37,6 +49,17 @@ def check_source_relation_evidence(ctx: ValidationContext) -> dict[str, object]:
                 and evidence_type == "geo_pubmed_id"
                 and evidence_value
                 and evidence_url == from_source.get("url")
+            )
+        elif row.get("relation_type") == "pubmed_referenced_by_geo":
+            # ext:pubmed:<pmid> -> GEO (inverse of geo_references_pubmed);
+            # the external endpoint is intentionally not in source_list.csv.
+            valid = bool(
+                to_source
+                and to_source.get("database") == "geo"
+                and row.get("from_source_id") == f"ext:pubmed:{evidence_value}"
+                and evidence_type == "geo_pubmed_id"
+                and evidence_value
+                and evidence_url == to_source.get("url")
             )
         failures += int(duplicate_id or not valid)
     return {

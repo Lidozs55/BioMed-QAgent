@@ -234,7 +234,7 @@ def _check_atomic_promotion(
     return True
 
 
-def find_latest_publication(publish_dir: Path) -> str | None:
+def find_latest_publication(publish_dir: Path, build_id: str | None = None) -> str | None:
     """Return the publication_id of the newest immutable version.
 
     Version directories are content-addressed (``<build_id>_<digest16>``);
@@ -242,13 +242,22 @@ def find_latest_publication(publish_dir: Path) -> str | None:
     lexicographic ordering of publication_ids, which is not a time ordering
     when the same build publishes multiple digests.
 
-    Returns None when no prior publication exists. Corrupt or unreadable
+    Phase 5 T6 (D6): the supersede lookup is BUILD-SCOPED — when ``build_id``
+    is given, only version directories of that build are considered, so
+    distinct builds (e.g. two GSE builds) sharing one publish directory can
+    NEVER supersede each other. ``None`` keeps the legacy unscoped scan for
+    callers whose publish directory is per-build by construction.
+
+    Returns None when no prior publication exists (or none for this
+    ``build_id`` when scoped). Corrupt or unreadable
     version records are skipped (a broken record must not poison the
     supersedes chain).
     """
     newest: tuple[str, str] | None = None  # (published_at, publication_id)
     for child in publish_dir.iterdir():
         if not child.is_dir() or child.name.startswith("."):
+            continue
+        if build_id is not None and not child.name.startswith(f"{build_id}_"):
             continue
         publication_path = child / "publication.json"
         if not publication_path.is_file():

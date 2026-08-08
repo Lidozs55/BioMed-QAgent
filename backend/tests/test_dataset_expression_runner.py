@@ -284,8 +284,10 @@ async def test_publish_rejects_missing_manifest_artifact_after_validation(
 
 
 @pytest.mark.asyncio
-async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
-    """A later build's publication supersedes the prior build's publication."""
+async def test_publish_does_not_supersede_across_build_ids(tmp_path: Path) -> None:
+    """Phase 5 T6: the supersede lookup is build-scoped — a publication of
+    one build_id must NEVER supersede a publication of another build_id even
+    when both share the same publish directory."""
     first, output_dir = await _run_executor(
         tmp_path,
         [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
@@ -316,9 +318,78 @@ async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
     assert len(publications) == 2
     first_pub, second_pub = publications
     assert first_pub["publication_id"] != second_pub["publication_id"]
-    # The newest publication supersedes the prior one.
-    assert second_pub["supersedes_publication_id"] == first_pub["publication_id"]
+    # Distinct build_ids -> neither supersedes the other.
     assert first_pub["supersedes_publication_id"] is None
+    assert second_pub["supersedes_publication_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_publish_supersedes_within_same_build(tmp_path: Path) -> None:
+    """Phase 5 T6: re-publishing the SAME build_id with a new digest still
+    supersedes that build's own prior version (build-scoped supersede chain)."""
+    source_a = tmp_path / "src_a.tsv"
+    source_b = tmp_path / "src_b.tsv"
+    source_a.write_text("gene_id\tS1\tS2\nTP53\t1.5\t2\nBRCA1\t3\t4.25\n", "utf-8")
+    source_b.write_text("gene_id\tS1\tS2\nTP53\t99\t100\nBRCA1\t101\t102\n", "utf-8")
+
+    async def build_with(source_path: Path) -> tuple[object, list[dict[str, str]]]:
+        spec = _spec([_binding("binding_gdc", "gdc", "gdc.expression.v1")], build_id="build_same")
+        registry = SchemaRegistry([build_gene_expression_schema()])
+        checksum = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        asset = SourceAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="source",
+            relative_path=f"source_assets/{source_path.name}",
+            sha256=checksum,
+            size_bytes=source_path.stat().st_size,
+            media_type="text/tab-separated-values",
+            source_id="src_binding_gdc",
+            successful_attempt_id="attempt_1",
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+        )
+        assets = {"binding_gdc": asset}
+        paths = {"binding_gdc": source_path}
+        runner = ExpressionBuildRunner(
+            spec=spec,
+            registry=registry,
+            source_assets=assets,
+            source_paths=paths,
+            output_dir=tmp_path,
+        )
+        plan = build_operation_plan(spec)
+        executor = DatasetBuildExecutor(
+            task_id="task_runner",
+            build_id=spec.build_id,
+            run_id="run_runner",
+            state_dir=tmp_path / "state" / spec.build_id,
+            lock_path=tmp_path / "build.lock",
+            task_root=tmp_path,
+            plan=plan,
+            run_operation=runner,
+            source_assets=assets,
+            implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        )
+        outcome = await executor.run()
+        return outcome, _primary_rows(tmp_path)
+
+    first_outcome, _ = await build_with(source_a)
+    assert first_outcome.status == "completed"
+    first_pub_dir = list((tmp_path / "publish").glob("build_same_*"))[0]
+    first_pub = json.loads(
+        (first_pub_dir / "publication.json").read_text("utf-8")
+    )
+    assert first_pub["supersedes_publication_id"] is None
+
+    second_outcome, _ = await build_with(source_b)
+    assert second_outcome.status == "completed"
+    publish_dirs = list((tmp_path / "publish").glob("build_same_*"))
+    assert len(publish_dirs) == 2
+    second_pub_dir = [d for d in publish_dirs if d.name != first_pub_dir.name][0]
+    second_pub = json.loads(
+        (second_pub_dir / "publication.json").read_text("utf-8")
+    )
+    # Same build_id -> the newer version supersedes the older one.
+    assert second_pub["supersedes_publication_id"] == first_pub["publication_id"]
 
 
 @pytest.mark.asyncio
@@ -428,6 +499,39 @@ async def test_runner_rerun_with_changed_source_invalidates_checkpoints(
     ]
     assert acquire_attempts[-1]["status"] == "succeeded"
     assert acquire_attempts[-1]["input_digest"] != acquire_attempts[0]["input_digest"]
+
+
+def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
+    """Phase 5 T6: ``find_latest_publication(..., build_id=...)`` must only
+    consider version directories of THAT build — distinct builds sharing one
+    publish directory never see each other's versions."""
+    from datetime import UTC, datetime
+
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+
+    def _write(build_id: str, digest: str, published_at: datetime) -> None:
+        version_dir = publish_dir / f"{build_id}_{digest}"
+        version_dir.mkdir(parents=True)
+        (version_dir / "publication.json").write_text(
+            json.dumps(
+                {
+                    "publication_id": f"pub_{build_id}_{digest}",
+                    "published_at": published_at.isoformat(),
+                }
+            ),
+            "utf-8",
+        )
+
+    _write("build_a", "aaaaaaaaaaaaaaaa", base)
+    _write("build_b", "bbbbbbbbbbbbbbbb", base)
+    _write("build_a", "cccccccccccccccc", base)
+
+    # build-scoped: each build sees only its own newest version.
+    assert _find_latest_publication(publish_dir, build_id="build_a") == "pub_build_a_cccccccccccccccc"
+    assert _find_latest_publication(publish_dir, build_id="build_b") == "pub_build_b_bbbbbbbbbbbbbbbb"
 
 
 def test_find_latest_publication_selects_newest_by_published_at(

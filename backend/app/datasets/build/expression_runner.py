@@ -551,7 +551,13 @@ class ExpressionBuildRunner:
                 f"atomic promotion: version directory already exists: "
                 f"{version_dir.name}"
             )
-        superseded = find_latest_publication(publish_dir)
+        # Phase 5 T6 (D6): the supersede lookup is build-scoped — a
+        # publication of one build_id must never supersede a publication of
+        # another build_id even when both share this publish directory
+        # (e.g. two distinct GSE builds orchestrated by MultiBuildOrchestrator).
+        superseded = find_latest_publication(
+            publish_dir, build_id=self._spec.build_id
+        )
         publication_id = f"pub_{manifest.build_id}_{manifest.sha256[:16]}"
         publication = DatasetPublication(
             publication_id=publication_id,
