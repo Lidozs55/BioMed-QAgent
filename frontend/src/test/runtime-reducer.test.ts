@@ -611,7 +611,7 @@ describe("runtime event projection", () => {
       status: "completed",
     });
     // The stage state map is still tracked (drives pipeline status panels).
-    expect(state.tasksById.task_items.stages.discovery.status).toBe(
+    expect(state.tasksById.task_items.stages.discovery!.status).toBe(
       "succeeded",
     );
   });
