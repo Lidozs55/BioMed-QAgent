@@ -23,6 +23,7 @@ from app.api.skills import router as skills_router
 from app.api.ws import router as ws_router
 from app.config import Settings, settings
 from app.domain.contracts import TaskMode, generate_prefixed_uuid
+from app.logging_setup import configure_logging
 from app.model_config.context_budget import (
     ContextBudgetConfigurationError,
     resolve_context_budget,
@@ -51,12 +52,11 @@ from app.tools.browser_pool import BrowserPool
 from app.tools.cache_store import init_cache_store
 from app.tools.crawler import CrawlerFacade
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+# 结构化 JSON 日志（REVIEW 2026-07-18 §9.3）：控制台文本 + logs/app.jsonl 轮转，
+# 带 task_id/run_id/stage 执行上下文（见 app.logging_setup）。
+configure_logging(level=settings.log_level, log_dir=Path("logs"))
 
-# 结构化 JSON 审计日志：PipelineRunner._publish_event 通过
+# 事件审计 JSONL：PipelineRunner._publish_event 通过
 # logging.getLogger("app.pipeline") 输出每个 EventEnvelope 的 JSON 表示。
 # FileHandler 上加 filter 只接受 logger name 恰好为 "app.pipeline" 的记录，
 # 防止子 logger（app.pipeline.stages.* 等文本日志）污染 JSONL 文件。

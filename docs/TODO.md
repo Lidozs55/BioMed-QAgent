@@ -276,7 +276,16 @@
 
 ## 独立维护项（不阻塞 V2 主线，随阶段推进）
 
-- [ ] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
+- [x] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
+      （零新依赖标准库实现 `app/logging_setup.py`：`JsonFormatter` 输出
+      `logs/app.jsonl` JSON 行 + `RotatingFileHandler` 轮转（1MB×5）；
+      `set_log_context` 基于 contextvars 绑定 task_id/run_id/stage，
+      manager `_execute` 绑定 task/run、runner `_run_stage` 绑定 stage
+      （`asyncio.to_thread` 自动传播 context 到 stage 线程）；控制台保持
+      人类可读文本；事件审计 pipeline.jsonl 通道不变；7 项新测试。
+      附带修复：`_recover` 补发 PublicationCreatedPayload 时
+      `request_fingerprint="recovery"` 违反 `^[0-9a-f]{64}$` 契约导致
+      带历史 marker 数据启动崩溃 → 改确定性 sha256 指纹）
 - [x] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
       （根因是 S3 ListObjectsV2 桶策略拒绝（403）；`search_xena` 改走官方
       hub 查询 API `POST https://toil.xenahubs.net/data/`（all-datasets，
