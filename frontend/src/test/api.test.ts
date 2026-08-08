@@ -141,6 +141,7 @@ describe("runtime REST client", () => {
         created_at: "2026-07-14T00:00:00Z",
         updated_at: "2026-07-14T00:00:00Z",
         latest_sequence: 4,
+        latest_build_status: null,
       },
       runs: [],
       messages: [],

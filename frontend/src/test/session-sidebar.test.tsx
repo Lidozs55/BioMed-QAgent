@@ -24,6 +24,7 @@ function summary(
   status: RunStatus,
   title = taskId,
   artifactCount?: number,
+  latestBuildStatus?: BuildResultStatus,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -32,6 +33,7 @@ function summary(
     title,
     status,
     artifact_count: artifactCount,
+    latest_build_status: latestBuildStatus,
     active_run_id:
       status === "queued" ||
       status === "running" ||
@@ -505,6 +507,34 @@ describe("SessionSidebar", () => {
     expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
+  });
+
+  it("classifies history rows from summary.latest_build_status", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("legacy_no_data", "failed", "Legacy No Data", 0, "no_data"),
+          summary("genuine_error", "failed", "Genuine Error", 0, null),
+          summary("with_data", "completed", "With Data", 0, "succeeded"),
+          summary("rejected", "completed", "Rejected", 0, "spec_rejected"),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
+    expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
+    expect(iconFor("With Data 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
   });
 
   it("renders legacy no-artifact failures as neutral once run data hydrates", () => {

@@ -14,6 +14,7 @@ function projection(
   options: {
     artifactCount?: number;
     buildStatus?: BuildResultStatus;
+    latestBuildStatus?: BuildResultStatus;
   } = {},
 ) {
   const task = createTaskProjection({
@@ -27,6 +28,7 @@ function projection(
     updated_at: CREATED_AT,
     latest_sequence: 1,
     artifact_count: options.artifactCount,
+    latest_build_status: options.latestBuildStatus,
   });
   if (options.buildStatus !== undefined) {
     return {
@@ -97,6 +99,24 @@ describe("taskOutcome", () => {
     expect(taskOutcome(projection("completed", { artifactCount: 0 }))).toBe(
       "neutral",
     );
+  });
+
+  it("classifies from summary.latest_build_status before runs hydrate", () => {
+    expect(
+      taskOutcome(
+        projection("failed", { latestBuildStatus: "no_data" }),
+      ),
+    ).toBe("neutral");
+    expect(
+      taskOutcome(
+        projection("completed", { latestBuildStatus: "succeeded" }),
+      ),
+    ).toBe("data");
+    expect(
+      taskOutcome(
+        projection("completed", { latestBuildStatus: "spec_rejected" }),
+      ),
+    ).toBe("problem");
   });
 
   it("treats cancellation as neutral and interruption as a problem", () => {

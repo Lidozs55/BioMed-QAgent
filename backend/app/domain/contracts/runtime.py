@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import Field, JsonValue, PrivateAttr, field_validator, model_validator
 
 from app.domain.contracts.base import ContractModel
-from app.domain.contracts.dataset_state import BuildResult
+from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.domain.contracts.enums import (
     ErrorCode,
     MessageRole,
@@ -84,6 +84,10 @@ class TaskSummary(ContractModel):
     updated_at: datetime
     latest_sequence: int = Field(default=0, ge=0)
     artifact_count: int = Field(default=0, ge=0)
+    #: Outcome of the most recent terminal run, normalized so the history
+    #: list can classify a task without hydrating its runs. Legacy failed
+    #: runs that merely produced no artifacts are normalized to NO_DATA.
+    latest_build_status: BuildResultStatus | None = Field(default=None)
 
 
 class MessageRecord(ContractModel):

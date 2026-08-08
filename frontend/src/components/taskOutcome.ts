@@ -36,6 +36,20 @@ export function taskHasArtifacts(task: TaskProjection): boolean {
   );
 }
 
+function outcomeForBuildStatus(
+  buildStatus: BuildResultStatus,
+): TaskOutcome {
+  switch (buildStatus) {
+    case "succeeded":
+    case "partial_success":
+      return "data";
+    case "no_data":
+      return "neutral";
+    case "spec_rejected":
+      return "problem";
+  }
+}
+
 /**
  * Older runs failed with a message like "without producing any artifacts"
  * instead of a structured NO_DATA result. Treat those as a normal no-product
@@ -64,18 +78,13 @@ export function taskOutcome(task: TaskProjection): TaskOutcome | null {
   const status = task.summary.status;
   if (ACTIVE_STATUSES.has(status)) return null;
 
-  const buildStatus = latestBuildStatus(task);
-  if (buildStatus !== null) {
-    switch (buildStatus) {
-      case "succeeded":
-      case "partial_success":
-        return "data";
-      case "no_data":
-        return "neutral";
-      case "spec_rejected":
-        return "problem";
-    }
+  const summaryBuildStatus = task.summary.latest_build_status ?? null;
+  if (summaryBuildStatus !== null) {
+    return outcomeForBuildStatus(summaryBuildStatus);
   }
+
+  const buildStatus = latestBuildStatus(task);
+  if (buildStatus !== null) return outcomeForBuildStatus(buildStatus);
 
   if (taskHasArtifacts(task)) return "data";
 
