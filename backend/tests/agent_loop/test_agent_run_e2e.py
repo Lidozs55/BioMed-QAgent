@@ -17,9 +17,11 @@ from unittest.mock import AsyncMock
 
 import app.agent_loop.runner as runner_module
 import pytest
+from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     ArtifactProducedPayload,
+    PublicationCreatedPayload,
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
@@ -28,9 +30,11 @@ from app.domain.contracts import (
     WarningPayload,
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
+from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.pipeline.runner import PipelineRunner
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
+from app.tools.workdir import create_task_workdir
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -173,6 +177,143 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
         assert marker["task_id"] == accepted.task_id
         assert marker["run_id"] == accepted.run_id
         assert "manifest_sha256" in marker
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_e2e_v2_dataset_build_wires_durable_build_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """V2 durable execution.build_result (bug-sweep REVIEW §3): when the
+    Agent calls ``execute_dataset_build`` and the build succeeds, the run
+    must complete with the REAL BuildResult (SUCCEEDED + publication_id),
+    plus artifact_produced + publication_created events — never the generic
+    NO_DATA fallback."""
+
+    output_dir = tmp_path / "output"
+    repository = TaskRepository(output_dir)
+    build = _make_build()
+
+    class FakeResult:
+        def __init__(self, context: RunContext) -> None:
+            self.context = context
+
+        async def stream_events(self):
+            run_ctx = self.context
+            workdir = create_task_workdir(run_ctx.task_id, base_dir=str(output_dir / "tasks"))
+            matrix = workdir.source_asset_file("geo_matrix.txt.gz")
+            import gzip
+
+            with gzip.open(matrix, "wt", encoding="utf-8") as handle:
+                handle.write(
+                    "!series_matrix_table_begin\n"
+                    '"ID_REF"\t"GSM1"\t"GSM2"\n'
+                    '"AFFX-BioB-5"\t1.5\t2.0\n'
+                    '"AFFX-BioB-6"\t3.0\t4.0\n'
+                    "!series_matrix_table_end\n"
+                )
+            spec = json.dumps(
+                {
+                    "build_id": "build_e2e",
+                    "objective": "compare GEO probe expression",
+                    "dataset_family": "gene_expression",
+                    "row_granularity": "probe_sample_measurement",
+                    "schema_ref": "gene_expression.probe_long.v1",
+                    "source_bindings": [
+                        {
+                            "binding_id": "binding_geo",
+                            "source": "geo",
+                            "accession": "GSE1",
+                            "acquisition": {"mode": "builtin", "provider_id": "geo.series.v1"},
+                            "adapter_id": "geo.expression.v1",
+                            "parameters": {
+                                "format": "series_matrix",
+                                "value_semantics": "expression_value",
+                                "value_scale": "log2",
+                                "expression_unit": "log2_expression",
+                                "platform_ids": ["GPL570"],
+                            },
+                        }
+                    ],
+                    "merge_strategy": "append_by_canonical_row",
+                    "validation_profile_ref": "gene_expression.probe_release.v1",
+                    "normalization_profile_ref": "gene_expression.normalization.v1",
+                }
+            )
+            tool = ToolContext(
+                context=run_ctx,
+                tool_name="execute_dataset_build",
+                tool_call_id="call_e2e",
+                tool_arguments="{}",
+            )
+            data = json.loads(
+                await execute_dataset_build.on_invoke_tool(
+                    tool,
+                    json.dumps(
+                        {
+                            "spec": spec,
+                            "source_files": json.dumps(
+                                {"binding_geo": "source_assets/geo_matrix.txt.gz"}
+                            ),
+                        }
+                    ),
+                )
+            )
+            assert data["status"] == "ok"
+            if False:
+                yield None
+
+    def run_streamed(*args, **kwargs):
+        return FakeResult(kwargs["context"])
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda databases=None: build)
+    monkeypatch.setattr(runner_module.Runner, "run_streamed", run_streamed)
+    manager = TaskManager(repository, run_executor=make_executor(repository))
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="request_e2e_v2_build",
+                input="e2e v2 dataset build",
+            )
+        )
+        await manager.wait_until_idle()
+
+        events = await repository.list_events(accepted.task_id)
+        payloads = [event.payload for event in events]
+
+        assert not any(isinstance(p, RunFailedPayload) for p in payloads)
+
+        completed = [p for p in payloads if isinstance(p, RunCompletedPayload)]
+        assert len(completed) == 1
+        result = completed[0].build_result
+        assert result is not None
+        # The durable BuildResult must be the real V2 outcome, not the
+        # generic NO_DATA fallback.
+        assert result.status is BuildResultStatus.SUCCEEDED
+        assert result.valid_row_count == 4
+        assert result.successful_sources == ["binding_geo"]
+        assert result.publication_id is not None
+        assert result.reason_codes == []
+
+        # Publication + completion events accompany the run; the V2 build's
+        # files stay under datasets_build/ (served by the builds API), so no
+        # artifact_produced events are emitted for them.
+        publications = [
+            p for p in payloads if isinstance(p, PublicationCreatedPayload)
+        ]
+        assert len(publications) == 1
+        assert publications[0].publication_id == result.publication_id
+        assert publications[0].run_id == accepted.run_id
+        assert len(publications[0].manifest_sha256) == 64
+
+        # No "no artifact" warning: the V2 build is real completion evidence.
+        assert not any(
+            isinstance(p, WarningPayload) and p.code == "artifact_manifest_missing"
+            for p in payloads
+        )
     finally:
         await manager.close()
 

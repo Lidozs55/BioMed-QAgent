@@ -33,6 +33,8 @@ from app.tools.workdir import TaskWorkDir, create_task_workdir
 
 if TYPE_CHECKING:
     from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
+    from app.datasets.contracts import DatasetPublication
+    from app.domain.contracts.dataset_state import BuildResult
     from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
     from app.subagents.input_broker import SubagentInputBroker
@@ -91,6 +93,29 @@ class ManagedPipelineBridge:
     event_sink: Callable[[EventEnvelope], Awaitable[None]]
     install_user_input_submitter: Callable[[UserInputSubmitter], None]
     clear_user_input_submitter: Callable[[UserInputSubmitter], None]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingDatasetBuild:
+    """V2 ``execute_dataset_build`` outcome awaiting durable transfer.
+
+    The V2 build tool installs this on the managed RunContext so the Agent
+    executor can bridge the structured BuildResult into the durable Run
+    (bug-sweep REVIEW §3 V2-dup): ``execution.build_result`` plus the
+    publication_created completion event.  The build outputs already live
+    under the task's ``datasets_build/<build_id>/`` directory and are served
+    by the builds API — no file copying happens at transfer time (unlike the
+    V1 pending publication package).
+
+    ``publication`` is ``None`` for NO_DATA builds that did not publish;
+    ``manifest_sha256`` is the ``DatasetManifest.sha256`` package digest.
+    """
+
+    run_id: str
+    build_id: str
+    build_result: BuildResult
+    publication: DatasetPublication | None = None
+    manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +235,15 @@ class RunContext:
         repr=False,
     )
     _pending_publication: PendingPublication | PendingPublicationCleanup | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    # V2 ``execute_dataset_build`` outcome awaiting durable transfer by the
+    # Agent executor (bug-sweep REVIEW §3 V2-dup).  One slot per Run: a
+    # second build call in the same Run replaces the first (the executor
+    # transfers the last outcome).
+    _pending_dataset_build: PendingDatasetBuild | None = field(
         default=None,
         init=False,
         repr=False,
@@ -773,6 +807,28 @@ class RunContext:
         if handle is not None:
             self._pending_publication = None
             self._pipeline_publication_reserved = False
+        return handle
+
+    def install_dataset_build_outcome(self, handle: PendingDatasetBuild) -> None:
+        """Install the V2 dataset-build outcome awaiting durable transfer.
+
+        Called by ``execute_dataset_build`` on a managed Run (no-op for
+        direct/unit-test invocations that never bind a managed run).  The
+        Agent executor consumes it once via ``take_dataset_build_outcome``
+        and bridges the BuildResult into the durable Run completion.
+        """
+
+        if handle.run_id != self.managed_run_id:
+            raise ValueError(
+                "pending dataset build run_id must match managed run_id"
+            )
+        self._pending_dataset_build = handle
+
+    def take_dataset_build_outcome(self) -> PendingDatasetBuild | None:
+        """Transfer the V2 dataset-build outcome to the Run owner at most once."""
+
+        handle = self._pending_dataset_build
+        self._pending_dataset_build = None
         return handle
 
     def add_source(self, source: Any) -> None:

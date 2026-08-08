@@ -255,4 +255,105 @@ describe("runtime REST client", () => {
     );
   });
 
+  it("lists and fetches V2 builds through the builds API", async () => {
+    const buildResult = {
+      status: "succeeded",
+      valid_row_count: 4,
+      successful_sources: ["binding_gdc"],
+      rejected_sources: [],
+      available_artifact_roles: ["primary_dataset"],
+      publication_id: "pub_1",
+      reason_codes: [],
+      user_summary: "ok",
+      recommended_next_action: "",
+    };
+    const manifest = {
+      manifest_id: "manifest_1",
+      task_id: "task_1",
+      build_id: "build_1",
+      dataset_family: "gene_expression",
+      row_granularity: "gene",
+      schema_ref: "gene_expression.long.v1",
+      primary_key: ["record_id"],
+      row_count: 4,
+      sha256: "a".repeat(64),
+      artifacts: [],
+      source_summary: {},
+      validation_summary: { status: "passed", checked_count: 1, failed_count: 0 },
+      confidence_summary: {},
+      provenance_summary: {},
+    };
+    const fetcher = vi.fn<FetchLike>()
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [
+          {
+            build_id: "build_1",
+            task_id: "task_1",
+            dataset_family: "gene_expression",
+            row_granularity: "gene",
+            schema_ref: "gene_expression.long.v1",
+            row_count: 4,
+            status: "succeeded",
+            publication_id: "pub_1",
+            manifest_ref: "datasets_build/build_1/dataset_manifest.json",
+            manifest_sha256: "a".repeat(64),
+            published_at: null,
+            build_result: buildResult,
+          },
+        ], next_cursor: null }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          build_id: "build_1",
+          task_id: "task_1",
+          manifest_ref: "datasets_build/build_1/dataset_manifest.json",
+          build_result: buildResult,
+          manifest,
+          publication: null,
+          artifacts: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          build_id: "build_1",
+          task_id: "task_1",
+          manifest_ref: "datasets_build/build_1/dataset_manifest.json",
+          build_result: buildResult,
+          manifest,
+          publication: null,
+          artifacts: [],
+        }),
+      );
+    const api = createAPIClient({ fetcher });
+
+    const page = await api.fetchBuilds({ limit: 50 });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.build_id).toBe("build_1");
+    expect(fetcher).toHaveBeenNthCalledWith(1, "/api/v1/builds?limit=50", undefined);
+
+    const detail = await api.fetchBuild("build_1");
+    expect(detail.manifest.dataset_family).toBe("gene_expression");
+    expect(detail.build_result?.valid_row_count).toBe(4);
+    expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/builds/build_1", undefined);
+    expect(api.getBuildArtifactUrl("build_1", "artifact_x")).toBe(
+      "/api/v1/builds/build_1/artifacts/artifact_x",
+    );
+
+    // F7-02: an optional task_id scopes colliding build ids; it is only
+    // appended when provided, and never with an empty/null value.
+    const scoped = await api.fetchBuild("build_1", "task_7");
+    expect(scoped.manifest.dataset_family).toBe("gene_expression");
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/builds/build_1?task_id=task_7",
+      undefined,
+    );
+    expect(api.getBuildArtifactUrl("build_1", "artifact_x", "task_7")).toBe(
+      "/api/v1/builds/build_1/artifacts/artifact_x?task_id=task_7",
+    );
+    expect(api.getBuildArtifactUrl("build_1", "artifact_x", null)).toBe(
+      "/api/v1/builds/build_1/artifacts/artifact_x",
+    );
+  });
+
 });

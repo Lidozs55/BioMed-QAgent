@@ -228,7 +228,7 @@
 > 目标：Schema-aware Cache、Manifest-driven 前端、通用 operation 事件、API 状态分离。
 > 验收见 Design §16 Phase 7。
 
-- [ ] **P0** V2 Dataset Cache：`cache/datasets/<namespace>/<dataset_id>/`
+- [x] **P0** V2 Dataset Cache：`cache/datasets/<namespace>/<dataset_id>/`
       （manifest + data + schema + provenance）；键含 family / Schema version /
       source binding / Adapter version / normalization profile / query / asset digest；
       关键词仅用于检索
@@ -236,21 +236,49 @@
       `dataset_id`（`derive_dataset_id` 覆盖 family/schema_ref/bindings/adapter/
       normalization/merge/asset digests，关键词仅检索）、原子写（staging+rename）、
       幂等 commit；`execute_dataset_build` 发布成功后 commit 到 `build` namespace；
-      6 项测试。API/检索端点与双读双写迁移待后续）
-- [ ] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
+      6 项测试。✅ API/检索端点（Phase 7 T2）已落地：`GET /cache/datasets` /
+      `GET /cache/datasets/{id}` / 缓存 artifact 下载 + 旧 artifact API 双读双写迁移）
+- [x] **P0** Manifest-driven ResultsViewer：读 `dataset_manifest.json`，展示 family /
       row grain / Schema / 有效行数 / 来源覆盖 / Validation / confidence /
       provenance 覆盖率 / 部分成功或 NO_DATA 原因（原 §3.1 改写）
-- [ ] **P0** 通用 operation events 前端渲染（`operation_id` / `label` / `category`，
+      （Phase 7 T4：`BuildResultsViewer`——`GET /builds/{build_id}` + `?task_id=`，
+      family/grain/schema 徽章、有效行数、来源覆盖、validation、confidence、
+      provenance 覆盖率；NO_DATA/partial/spec-rejected 横幅带原因，NO_DATA 用
+      sky/info 样式绝不红色；`useTaskBuildId` 从最新 run 派生 build_id；11 项测试）
+- [x] **P0** 通用 operation events 前端渲染（`operation_id` / `label` / `category`，
       替代固定 StageName union；兼容期保留旧 `stage_*`）
-- [ ] **P0** API 分别返回 RunStatus / BuildResult / ValidationResult / Publication；
+      （Phase 7 T3 后端 + T5 前端：复用既有 `operation_started/progress/completed/
+      failed` 事件类型（label/category 可选，旧 events.jsonl 回放走 pydantic 默认
+      `""`，reducer 纯游标推进）；pipeline stage 发射侧镜像；前端按 operation_id
+      归组为 `OperationItem`（label→operation_id→category 回退、分类图标/色、状态徽章）
+      + 完成后自动折叠为可展开摘要行（`tool_completed` 归组，保留手动开关））
+- [x] **P0** API 分别返回 RunStatus / BuildResult / ValidationResult / Publication；
       新增 builds 端点（BuildResult 与 manifest 产物）
-- [ ] **P1** 旧缓存与旧 artifact API 双读双写迁移；旧 `main_data.csv` 包装为
-      `gene_expression.long.legacy.v1`
-- [ ] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
-- [ ] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
-- [ ] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）
-- [ ] **P2** 模型搜索框恢复与 `LEGACY_MODELS` 硬编码清理（原 §3.3）
-- [ ] **P2** 通用 UI 改进（command/menubar、缓存导出按钮、对话路由等）（原 §3.5）
+      （Phase 7 T1：`GET /builds`（分页 BuildResult + manifest 指针）、
+      `GET /builds/{build_id}`（BuildResult + manifest + publication + artifacts，
+      支持 `?task_id=` 消歧）、`GET /builds/{build_id}/artifacts/{artifact_id}`；
+      durable `execution.build_result`：`execute_dataset_build` 安装 PendingDatasetBuild，
+      executor `_transfer_dataset_build_outcome` 写入 `execution.build_result` 并发射
+      真实 PublicationCreatedPayload；F4：V2 probe-primary 发布发射 PlatformRecord
+      （`platform_audit.csv` + NOT_ATTEMPTED 记录））
+- [x] **P1** 旧缓存与旧 artifact API 双读双写迁移；旧 `main_data.csv` 包装为
+      `gene_expression.long.legacy.v1`（Phase 7 T2：`build/legacy_cache.py` 只读投影 +
+      `build/v1_bridge.py` 双写 artifacts/ 面 + artifact API 双读；测试见
+      `test_legacy_cache_wrapper.py` / `test_cache_api.py` / `test_artifact_api.py`）
+- [x] **P1** 前端：ResultsViewer Tabs 分离主数据/来源/处理/警告（原 §3.1）
+      （Phase 7 T4：shadcn Tabs 主数据/来源/处理/警告，复用 Table/CsvPreview；
+      legacy 无 manifest 路径保留回退）
+- [x] **P1** 前端：对话流任务节点自动折叠（以 `tool_completed` 归组）（原 §3.4）
+      （Phase 7 T5：operation/tool 事件按完成归组折叠为紧凑摘要行，手动开关保留）
+- [x] **P2** `toolLabels` 新增 `invoke_skill` / `find_skill` formatter（原 §3.2）
+      （T6 核实：工具标签映射已含两者（19 项测试），无需新增）
+- [x] **P2** 模型搜索框恢复与 `LEGACY_MODELS` 硬编码清理（原 §3.3）
+      （Phase 7 T6：删除死 `LEGACY_MODELS` 分支，搜索框始终走真实 `GET /models`
+      端点 + 4 项小离线回退 `lib/modelChoices.ts`）
+- [~] **P2** 通用 UI 改进（command/menubar、缓存导出按钮、对话路由等）（原 §3.5）
+      （Phase 7 T6 部分完成：缓存导出按钮已接线（sidebar + settings，复用既有
+      `GET /cache/export`）；command/menubar 跳过（无现有模式、成本高）与对话路由
+      延后——见 REVIEW §5 遗留）
 
 ---
 

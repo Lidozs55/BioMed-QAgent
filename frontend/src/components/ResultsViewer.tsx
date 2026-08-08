@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import Papa from "papaparse";
 
+import BuildResultsViewer from "@/components/BuildResultsViewer";
 import { useAPI } from "@/hooks/useAPI";
+import { useTaskBuildId } from "@/hooks/useTaskBuild";
 import {
   Accordion,
   AccordionContent,
@@ -52,28 +53,8 @@ import {
   getExtension,
   triggerArtifactDownload,
 } from "@/lib/fileUtils";
+import { parseCSV } from "@/lib/csvUtils";
 import { isActiveStatus } from "@/runtime/reducer";
-
-function parseCSV(text: string): {
-  headers: string[];
-  rows: string[][];
-  truncated: boolean;
-} {
-  if (text.trim() === "") {
-    return { headers: [], rows: [], truncated: false };
-  }
-  const parsed = Papa.parse<string[]>(text, {
-    preview: 101,
-    skipEmptyLines: "greedy",
-  });
-  if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
-  const [headers = [], ...rows] = parsed.data;
-  return {
-    headers: headers.map((header) => header.trim()),
-    rows: rows.map((row) => row.map((cell) => cell.trim())),
-    truncated: parsed.meta.truncated,
-  };
-}
 
 interface SourceEntry {
   id: string;
@@ -132,7 +113,7 @@ function parseSourceManifest(activities: readonly ActivityProjection[]): SourceE
   });
 }
 
-function CsvPreview({
+export function CsvPreview({
   artifactUrl,
   noDataMessage,
 }: {
@@ -278,12 +259,15 @@ interface ResultsViewerProps {
   taskId?: string | null;
   artifacts?: readonly ArtifactProjection[];
   activities?: readonly ActivityProjection[];
+  /** V2 build id — renders the manifest-driven view for this build. */
+  buildId?: string | null;
 }
 
 export default function ResultsViewer({
   taskId: taskIdOverride,
   artifacts: artifactOverride,
   activities: activityOverride,
+  buildId: buildIdOverride,
 }: ResultsViewerProps = {}) {
   const task = useAgentStore(selectActiveTask);
   const tasksById = useAgentStore((state) => state.tasksById);
@@ -292,6 +276,18 @@ export default function ResultsViewer({
   const taskId = taskIdOverride ?? task?.summary.task_id ?? null;
   const artifacts = artifactOverride ?? activeArtifacts;
   const activities = activityOverride ?? activeActivities;
+  // V2 builds are served by the builds API, not the legacy artifact store
+  // (Phase 7 T1: V2 build files are deliberately not emitted as V1 artifact
+  // events). When a buildId is not given, derive it from the task's latest
+  // completed run via the builds API — but only for the full task view
+  // (no overrides), so the ArtifactSheet single-artifact preview keeps its
+  // legacy behavior.
+  const hasViewOverrides =
+    artifactOverride !== undefined || activityOverride !== undefined;
+  const buildState = useTaskBuildId(
+    buildIdOverride == null && !hasViewOverrides ? taskId : null,
+  );
+  const resolvedBuildId = buildIdOverride ?? buildState.buildId;
   // The run summary (latestRun/buildResult/noDataMessage) must describe the
   // SAME task the rendered artifacts belong to. The store keeps every loaded
   // task keyed by task_id, so when overrides target another task the summary
@@ -348,6 +344,10 @@ export default function ResultsViewer({
   // over that run's OWN artifacts (see noDataOwnsArtifacts above).
   const showNoDataBanner =
     noDataContext !== undefined && noDataOwnsArtifacts;
+
+  if (resolvedBuildId !== null) {
+    return <BuildResultsViewer buildId={resolvedBuildId} taskId={taskId} />;
+  }
 
   if (taskId === null) {
     return (

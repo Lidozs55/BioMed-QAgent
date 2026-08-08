@@ -15,6 +15,7 @@ import pytest
 from app.domain.contracts import (
     AssistantDeltaPayload,
     AssistantStreamDeltaFrame,
+    OperationStartedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
     RunCompletedPayload,
@@ -510,6 +511,52 @@ async def test_invalid_json_then_run_keeps_event_session_usable(
             await stop_socket(websocket, endpoint)
 
         assert hub.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_subscribe_replays_operation_events(
+    tmp_path: Path,
+) -> None:
+    """Durable operation events stream over the WebSocket envelope unchanged.
+
+    T3 (Phase 7): the WS adapter has no allowlist — any persisted EventEnvelope
+    is forwarded on subscribe. Operation events must therefore reach the
+    frontend without backend filtering.
+    """
+    async with websocket_runtime(tmp_path) as (application, repository, _):
+        task_id = "task_operation_ws"
+        await repository.save_snapshot(running_snapshot(task_id))
+        event = build_event(
+            task_id=task_id,
+            run_id=f"run_{task_id}",
+            sequence=1,
+            timestamp=NOW,
+            payload=OperationStartedPayload(
+                operation_id="stage:discovery",
+                label="文献/数据发现",
+                category="discovery",
+                attempt=1,
+            ),
+        )
+        await repository.append_event(event)
+
+        websocket, endpoint = await start_socket(application)
+        try:
+            await websocket.send_command(
+                {
+                    "type": "subscribe",
+                    "task_id": task_id,
+                    "after_sequence": 0,
+                }
+            )
+            assert await websocket.receive_frame() == event.model_dump(
+                mode="json"
+            )
+
+            await websocket.send_command({"type": "ping"})
+            assert await websocket.receive_frame() == {"type": "pong"}
+        finally:
+            await stop_socket(websocket, endpoint)
 
 
 @pytest.mark.asyncio

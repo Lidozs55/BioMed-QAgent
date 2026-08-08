@@ -22,7 +22,11 @@ from app.agent_loop.agent import (
     AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
 )
 from app.agent_loop.agent import AgentBuild, build_agent, resolve_agent_max_turns
-from app.agent_loop.context import ManagedPipelineBridge, RunContext
+from app.agent_loop.context import (
+    ManagedPipelineBridge,
+    PendingDatasetBuild,
+    RunContext,
+)
 from app.agent_loop.import_agent import (
     ATTACHMENT_PARSING_MAX_TURNS,
     build_attachment_parsing_agent,
@@ -41,6 +45,7 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
+    OperationProgressPayload,
     PublicationCreatedPayload,
     StageName,
     StageProgressPayload,
@@ -53,6 +58,7 @@ from app.domain.contracts import (
     UserInputResumedPayload,
     WarningPayload,
     build_event,
+    stage_operation_spec,
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
 from app.domain.contracts.runtime import validate_task_databases
@@ -919,6 +925,20 @@ class AgentRunExecutor:
                         detail=detail,
                     )
                 )
+                # T3 (Phase 7): mirror the stage_progress event with an
+                # operation_progress event (ARCHITECTURE §14.2).
+                operation_id, label, category = stage_operation_spec(stage)
+                await execution.emit(
+                    OperationProgressPayload(
+                        operation_id=operation_id,
+                        label=label,
+                        category=category,
+                        kind=kind,
+                        current=current,
+                        total=total,
+                        detail=detail,
+                    )
+                )
 
             bind_progress_emitter(emit_progress)
         try:
@@ -1270,6 +1290,14 @@ class AgentRunExecutor:
             return
         pending = take_pending()
         if pending is None:
+            take_build = getattr(
+                execution.context, "take_dataset_build_outcome", None
+            )
+            if callable(take_build):
+                outcome = take_build()
+                if outcome is not None:
+                    await _transfer_dataset_build_outcome(execution, outcome)
+                    return
             # Agent 未产出 pending publication(未调 tool 或 tool 未产出 artifact)。
             # 发射 warning 让用户知道无 artifact 产出。
             # manager 的成功证据校验会把空 completion_events 转 RunFailed
@@ -1365,6 +1393,52 @@ class AgentRunExecutor:
         except BaseException:
             await _run_sync_operation(pending.abort)
             raise
+
+
+async def _transfer_dataset_build_outcome(
+    execution: RunExecution, outcome: PendingDatasetBuild
+) -> None:
+    """Bridge a V2 ``execute_dataset_build`` outcome into the durable Run.
+
+    Bug-sweep REVIEW §3 (V2-dup): sets ``execution.build_result`` to the
+    tool's authoritative BuildResult and registers the publication completion
+    event so the Run completes with the real outcome (never the generic
+    NO_DATA fallback).  No files are moved — the build outputs already live
+    under the task's ``datasets_build/<build_id>/`` directory and are served
+    by the builds API.
+    """
+
+    if outcome.run_id != execution.run_id:
+        raise RuntimeError("pending dataset build run_id does not match execution")
+    execution.set_build_result(outcome.build_result)
+    publication = outcome.publication
+    manifest_sha256 = outcome.manifest_sha256
+
+    async def commit_dataset_build() -> list[EventEnvelope]:
+        events: list[EventEnvelope] = []
+        if publication is not None and manifest_sha256 is not None:
+            events.append(
+                build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=1,
+                    payload=PublicationCreatedPayload(
+                        publication_id=publication.publication_id,
+                        run_id=execution.run_id,
+                        manifest_sha256=manifest_sha256,
+                        supersedes_publication_id=publication.supersedes_publication_id,
+                        published_at=publication.published_at,
+                    ),
+                )
+            )
+        return events
+
+    async def noop_abort_dataset_build() -> None:
+        return None
+
+    execution.set_completion_operations(
+        commit_dataset_build, noop_abort_dataset_build
+    )
 
 
 async def _run_sync_operation[ResultT](
