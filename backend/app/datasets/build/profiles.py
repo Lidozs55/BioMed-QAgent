@@ -23,8 +23,8 @@ from app.datasets.build.confidence import (
     write_confidence_report,
 )
 from app.datasets.contracts import (
-    AcceptancePolicy,
     CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
+    AcceptancePolicy,
     DatasetManifest,
     DatasetSchema,
     NormalizationProfile,

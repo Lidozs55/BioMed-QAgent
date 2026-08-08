@@ -32,11 +32,11 @@ from app.datasets.build.expression_runner import (
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
 from app.datasets.contracts import (
+    CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
+    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
     AdapterParams,
     BindingRejection,
-    CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
     DatasetBuildSpec,
-    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
 )
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import (
