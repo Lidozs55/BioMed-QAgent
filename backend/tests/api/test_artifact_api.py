@@ -396,3 +396,252 @@ async def test_artifact_routes_hash_chunked_without_full_file_reads(
             / "main_data.csv"
         ).read_bytes()
     ).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 T2 dual-read: artifact endpoints read the V2 dataset cache first
+# ---------------------------------------------------------------------------
+
+
+def _seed_v2_cache_entry(
+    repository: object,
+    task_id: str,
+    *,
+    primary_rows: bytes = b"record_id,gene_id\nrow_1,TP53\n",
+) -> tuple[str, Path]:
+    """Commit one V2 cache entry whose manifest belongs to ``task_id``.
+
+    Returns ``(dataset_id, entry_dir)``. The entry lives under the app's
+    cache root (``<output_dir>/../cache``), the same root the dual-read
+    resolution uses.
+    """
+    import hashlib as _hashlib
+
+    from app.datasets.build.cache import DatasetCacheV2
+    from app.datasets.contracts import (
+        AcquisitionMode,
+        ArtifactRole,
+        DatasetBuildSpec,
+        SourceBinding,
+        SourceBindingAcquisition,
+    )
+    from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
+
+    cache_root = repository.tasks_dir.parent.parent / "cache"
+    output_dir = repository.tasks_dir.parent.parent / "build_fixture"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    primary = output_dir / "merged" / "primary.csv"
+    primary.parent.mkdir(parents=True, exist_ok=True)
+    primary.write_bytes(primary_rows)
+    schema = output_dir / "schema.json"
+    schema_bytes = b'{"schema_id": "gene_expression.long.v1"}'
+    schema.write_bytes(schema_bytes)
+    (output_dir / "dataset_manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_id": "manifest_dual_read",
+                "task_id": task_id,
+                "build_id": "build_dual_read",
+                "dataset_family": "gene_expression",
+                "row_granularity": "gene_sample_measurement",
+                "schema_ref": "gene_expression.long.v1",
+                "primary_key": ["record_id"],
+                "row_count": 1,
+                "sha256": "a" * 64,
+                "artifacts": [
+                    {
+                        "artifact_id": "artifact_primary",
+                        "role": ArtifactRole.PRIMARY_DATASET.value,
+                        "relative_path": "merged/primary.csv",
+                        "media_type": "text/csv",
+                        "size_bytes": len(primary_rows),
+                        "sha256": _hashlib.sha256(primary_rows).hexdigest(),
+                    },
+                    {
+                        "artifact_id": "artifact_schema",
+                        "role": ArtifactRole.SCHEMA.value,
+                        "relative_path": "schema.json",
+                        "media_type": "application/json",
+                        "size_bytes": len(schema_bytes),
+                        "sha256": _hashlib.sha256(schema_bytes).hexdigest(),
+                    },
+                ],
+                "source_summary": {"src_gdc": 1},
+                "validation_summary": {"status": "passed"},
+                "confidence_summary": {},
+                "provenance_summary": {"source_count": 1},
+            },
+            ensure_ascii=False,
+        ),
+        "utf-8",
+    )
+    source_path = (
+        Path(__file__).parents[1] / "fixtures" / "gdc" / "gdc_expression.tsv"
+    )
+    checksum = _hashlib.sha256(source_path.read_bytes()).hexdigest()
+    spec = DatasetBuildSpec(
+        build_id="build_dual_read",
+        objective="compare TP53 expression",
+        dataset_family="gene_expression",
+        row_granularity="gene_sample_measurement",
+        schema_ref="gene_expression.long.v1",
+        source_bindings=[
+            SourceBinding(
+                binding_id="binding_gdc",
+                source="gdc",
+                acquisition=SourceBindingAcquisition(
+                    mode=AcquisitionMode.BUILTIN, provider_id="gdc.v1"
+                ),
+                adapter_id="gdc.expression.v1",
+            )
+        ],
+        merge_strategy="append_by_canonical_row",
+        validation_profile_ref="gene_expression.release.v1",
+        normalization_profile_ref="gene_expression.normalization.v1",
+    )
+    assets = {
+        "binding_gdc": SourceAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="source",
+            relative_path="source_assets/gdc_expression.tsv",
+            sha256=checksum,
+            size_bytes=source_path.stat().st_size,
+            media_type="text/tab-separated-values",
+            source_id="src_gdc",
+            successful_attempt_id="attempt_1",
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+        )
+    }
+    entry = DatasetCacheV2(cache_root).commit(
+        namespace="build",
+        output_dir=output_dir,
+        spec=spec,
+        source_assets=assets,
+        keywords=["TP53"],
+    )
+    return entry.dataset_id, entry.directory
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_reads_v2_cache_first(tmp_path: Path) -> None:
+    """A V2 build committed to the dataset cache is served by the legacy
+    artifact API (dual-read): list + download resolve through the cache."""
+    task_id = "task_cache_dual"
+    run_id = "run_cache_dual"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+        )
+        dataset_id, _entry_dir = _seed_v2_cache_entry(repository, task_id)
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        primary = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/artifact_primary"
+        )
+        run_manifest = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/run_manifest"
+        )
+
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["degraded"] is False
+    artifacts = payload["artifacts"]
+    assert artifacts[0]["artifact_id"] == "run_manifest"
+    assert artifacts[0]["name"] == "dataset_manifest.json"
+    primary_entry = next(
+        entry
+        for entry in artifacts
+        if entry["artifact_id"] == "artifact_primary"
+    )
+    assert primary_entry["role"] == "primary_dataset"
+    assert primary_entry["name"] == "primary.csv"
+    assert primary.status_code == 200
+    assert primary.content.startswith(b"record_id,gene_id")
+    assert run_manifest.status_code == 200
+    assert json.loads(run_manifest.content)["task_id"] == task_id
+    assert dataset_id.startswith("dataset_")
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_cache_wins_over_legacy_dirs(tmp_path: Path) -> None:
+    """When both the V2 cache entry and a legacy artifacts/ surface exist
+    for a task, the cache is authoritative (new builds dual-write both)."""
+    task_id = "task_cache_priority"
+    run_id = "run_cache_priority"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+        )
+        _seed_v2_cache_entry(
+            repository,
+            task_id,
+            primary_rows=b"record_id,gene_id\nrow_cache,TP53\n",
+        )
+        # A stale legacy surface with different content must NOT win.
+        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "main_data.csv").write_text(
+            "record_id,gene_id\nrow_legacy,TP53\n", "utf-8"
+        )
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        primary_entry = next(
+            entry
+            for entry in listed.json()["artifacts"]
+            if entry["role"] == "primary_dataset"
+        )
+        downloaded = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/{primary_entry['artifact_id']}"
+        )
+
+    assert listed.status_code == 200
+    assert primary_entry["name"] == "primary.csv"
+    assert downloaded.content.startswith(b"record_id,gene_id\nrow_cache")
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_cache_path_requires_completed_run(
+    tmp_path: Path,
+) -> None:
+    """Mirrors legacy semantics: cached artifacts surface only once the run
+    is COMPLETED (mid-run the cache entry is not exposed)."""
+    task_id = "task_cache_running"
+    run_id = "run_cache_running"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.RUNNING)
+        )
+        _seed_v2_cache_entry(repository, task_id)
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        download = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/artifact_primary"
+        )
+
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "degraded": False}
+    assert download.status_code == 404
+    assert download.json() == {"detail": "Artifact not found"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> None:
+    """A tampered cached artifact fails the same integrity gate as legacy."""
+    task_id = "task_cache_corrupt"
+    run_id = "run_cache_corrupt"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+        )
+        _dataset_id, entry_dir = _seed_v2_cache_entry(repository, task_id)
+        primary = entry_dir / "merged" / "primary.csv"
+        primary.write_bytes(primary.read_bytes() + b"x")
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+
+    assert listed.status_code == 409
+    assert listed.json() == {"detail": "Artifact integrity check failed"}

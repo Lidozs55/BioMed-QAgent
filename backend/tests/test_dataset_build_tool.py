@@ -12,6 +12,7 @@ import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.agent_loop.main_input_broker import MainInputBroker
+from app.domain.contracts import RunManifest, TaskState
 from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.tools.workdir import create_task_workdir
 
@@ -130,6 +131,64 @@ def test_execute_dataset_build_succeeds(tmp_path: Path) -> None:
     )
     assert publication["publication_id"] == result["publication_id"]
     assert publication["supersedes_publication_id"] is None
+
+
+def test_execute_dataset_build_dual_writes_legacy_artifact_surface(
+    tmp_path: Path,
+) -> None:
+    """Phase 7 T2 dual-write: a successful managed build mirrors its outputs
+    onto the legacy ``artifacts/`` surface with a valid V1 ``run_manifest.json``
+    (no ``.runtime-publication.json`` marker — the marker would make the
+    runtime reconcile loop synthesize a fake publication record)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    run_ctx.managed_run_id = "run_dual_write"
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "ok"
+    artifacts_dir = run_ctx.work_dir.root / "artifacts"
+    manifest_path = artifacts_dir / "run_manifest.json"
+    assert manifest_path.is_file()
+    run_manifest = RunManifest.model_validate_json(
+        manifest_path.read_text("utf-8")
+    )
+    assert run_manifest.task_id == "test_build_tool"
+    assert run_manifest.task_state is TaskState.COMPLETED
+    assert run_manifest.validation.status == "valid"
+    assert run_manifest.validation.failed_count == 0
+    # Every declared artifact is artifacts/-prefixed and present on disk.
+    assert run_manifest.artifacts
+    for entry in run_manifest.artifacts:
+        assert entry.relative_path.startswith("artifacts/")
+        assert (
+            artifacts_dir / entry.relative_path.removeprefix("artifacts/")
+        ).is_file()
+    # The V2 dataset manifest itself is bridged as an artifact.
+    assert any(
+        entry.artifact_id == "dataset_manifest" for entry in run_manifest.artifacts
+    )
+    # The primary dataset was copied under its V2 relative layout.
+    assert (artifacts_dir / "merged" / "primary.csv").is_file()
+    # No marker: the legacy surface is served in degraded mode after the run
+    # completes, and the runtime reconcile never fabricates a publication.
+    assert not (artifacts_dir / ".runtime-publication.json").exists()
+
+
+def test_execute_dataset_build_skips_legacy_bridge_without_managed_run(
+    tmp_path: Path,
+) -> None:
+    """Direct (unmanaged) tool invocations keep writing only the build dir;
+    no legacy artifact surface is fabricated for them."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    assert data["status"] == "ok"
+    assert not (run_ctx.work_dir.root / "artifacts" / "run_manifest.json").exists()
 
 
 def test_execute_dataset_build_invalid_spec(tmp_path: Path) -> None:

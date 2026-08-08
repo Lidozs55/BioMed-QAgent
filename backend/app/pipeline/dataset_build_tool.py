@@ -31,6 +31,7 @@ from app.datasets.build.expression_runner import (
 )
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
+from app.datasets.build.v1_bridge import mirror_build_to_legacy_artifacts
 from app.datasets.contracts import (
     CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
     REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
@@ -483,6 +484,26 @@ async def execute_dataset_build(
         )
     except (OSError, ValueError, FileNotFoundError) as exc:
         logger.warning("dataset cache commit failed for build %s: %s", build_spec.build_id, exc)
+    # Phase 7 T2 (P1): dual-write the same build onto the legacy V1 artifact
+    # surface (artifacts/ + run_manifest.json) for the transition period, so
+    # filesystem-level consumers and the legacy artifact API keep serving V2
+    # outputs. Best-effort (a failure must never fail the build) and
+    # managed-run-only: direct tool invocations have no task artifact
+    # contract to satisfy.
+    if run_ctx.managed_run_id is not None:
+        try:
+            mirror_build_to_legacy_artifacts(
+                task_id=run_ctx.task_id,
+                task_root=run_ctx.work_dir.root,
+                build_dir=output_dir,
+                objective=build_spec.objective,
+            )
+        except (OSError, ValueError, ValidationError) as exc:
+            logger.warning(
+                "V1 artifact bridge failed for build %s: %s",
+                build_spec.build_id,
+                exc,
+            )
     return json.dumps(
         {
             "status": "ok",
