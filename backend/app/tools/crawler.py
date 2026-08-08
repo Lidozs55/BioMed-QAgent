@@ -207,6 +207,7 @@ class CrawlerFacadeProtocol(Protocol):
         *,
         method: str = "GET",
         json_body: dict[str, object] | None = None,
+        raw_body: str | None = None,
     ) -> FetchResult: ...
 
     async def html(self, url: str) -> FetchResult: ...
@@ -243,21 +244,33 @@ class CrawlerFacade:
         *,
         method: str = "GET",
         json_body: dict[str, object] | None = None,
+        raw_body: str | None = None,
     ) -> FetchResult:
-        """Send one pinned JSON API request without following redirects."""
+        """Send one pinned API request without following redirects.
+
+        ``json_body`` sends a JSON payload (Content-Type: application/json);
+        ``raw_body`` sends a raw string payload (Content-Type: text/plain),
+        used for plain-text query APIs such as the UCSC Xena hub ``/data/``
+        endpoint. ``json_body`` and ``raw_body`` are mutually exclusive.
+        """
 
         normalized_method = method.upper().strip()
         if normalized_method not in {"GET", "POST"}:
             raise ValueError("crawler API method must be GET or POST")
+        if json_body is not None and raw_body is not None:
+            raise ValueError("crawler API body must be either JSON or raw text, not both")
+        content_type = "text/plain" if raw_body is not None else "application/json"
         return await self._request(
             url,
             headers={
                 "User-Agent": BROWSER_UA,
                 "Accept": "application/json",
+                "Content-Type": content_type,
             },
             method_used="api",
             method=normalized_method,
             json_body=json_body,
+            raw_body=raw_body,
         )
 
     async def html(self, url: str) -> FetchResult:
@@ -472,6 +485,7 @@ class CrawlerFacade:
         method_used: str,
         method: str = "GET",
         json_body: dict[str, object] | None = None,
+        raw_body: str | None = None,
     ) -> FetchResult:
         started_at = time.monotonic()
         current_url = url
@@ -484,13 +498,22 @@ class CrawlerFacade:
                 }
                 request_headers["Host"] = pinned.host_header
                 async with self._open_http_client() as http:
-                    request = http.build_request(
-                        method,
-                        pinned.connect_url,
-                        headers=request_headers,
-                        json=json_body,
-                        extensions={"sni_hostname": pinned.sni_hostname},
-                    )
+                    if raw_body is not None:
+                        request = http.build_request(
+                            method,
+                            pinned.connect_url,
+                            headers=request_headers,
+                            content=raw_body.encode("utf-8"),
+                            extensions={"sni_hostname": pinned.sni_hostname},
+                        )
+                    else:
+                        request = http.build_request(
+                            method,
+                            pinned.connect_url,
+                            headers=request_headers,
+                            json=json_body,
+                            extensions={"sni_hostname": pinned.sni_hostname},
+                        )
                     response = await http.send(
                         request,
                         follow_redirects=False,
