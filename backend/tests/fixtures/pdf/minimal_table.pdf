@@ -1,0 +1,51 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 677 >>
+stream
+BT /F1 12 Tf 72 760 Td (Gene Expression Analysis in Cancer) Tj ET
+BT /F1 12 Tf 72 746 Td (Smith, J., Doe, A.) Tj ET
+BT /F1 12 Tf 72 732 Td (Abstract) Tj ET
+BT /F1 12 Tf 72 718 Td (This study analyzes gene expression patterns in cancer tissues.) Tj ET
+BT /F1 12 Tf 72 704 Td (DOI: 10.1234/test.5678) Tj ET
+q 1 w
+72 660 m 300 660 l S
+72 640 m 300 640 l S
+72 620 m 300 620 l S
+72 600 m 300 600 l S
+72 660 m 72 600 l S
+180 660 m 180 600 l S
+300 660 m 300 600 l S
+Q
+BT /F1 12 Tf 80 652 Td (Gene) Tj ET
+BT /F1 12 Tf 190 652 Td (FC) Tj ET
+BT /F1 12 Tf 80 632 Td (BRCA1) Tj ET
+BT /F1 12 Tf 190 632 Td (1.5) Tj ET
+BT /F1 12 Tf 80 612 Td (TP53) Tj ET
+BT /F1 12 Tf 190 612 Td (2.0) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1038
+%%EOF

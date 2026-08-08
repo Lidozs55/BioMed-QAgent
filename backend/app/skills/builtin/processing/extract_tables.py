@@ -63,11 +63,13 @@ def _resolve_pdf_backend() -> tuple[str | None, Any]:
 _PDF_TEXT_RE = re.compile(
     r"BT\s*(.*?)\s*ET", re.DOTALL
 )
-_PDF_STRING_RE = re.compile(
-    r"""\(([^)]*(?:\\.[^)]*)*)\)\s*Tj""",
-)
+# A PDF string operand: literal ``(...)`` or hex ``<...>``.  Hex strings are
+# how CJK-aware producers emit non-ASCII text (usually UTF-16BE).
+_PDF_STRING_PART = r"(?:\(([^)]*(?:\\.[^)]*)*)\)|<([0-9a-fA-F\s]+)>)"
+_PDF_STRING_RE = re.compile(_PDF_STRING_PART)
+_PDF_TJ_CALL_RE = re.compile(_PDF_STRING_PART + r"\s*Tj")
 _PDF_ARRAY_RE = re.compile(
-    r"""\[(.*?)\]\s*TJ""", re.DOTALL
+    r"\[(.*?)\]\s*TJ", re.DOTALL
 )
 _PDF_STRIP_ESCAPES = re.compile(r"\\([()\\nrtbf])")
 _PDF_DOI_RE = re.compile(r"(10\.\d{4,}/[^\s]+)")
@@ -75,7 +77,9 @@ _PDF_CAPTION_RE = re.compile(
     r"^(Fig(?:ure)?|Table)\s*\d+[\.:]\s*(.*)", re.IGNORECASE | re.MULTILINE
 )
 _PDF_PAGE_RE = re.compile(r"/Type\s*/Page[^s]")
-_PDF_STREAM_RE = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
+_PDF_STREAM_RE = re.compile(
+    rb"(?:<<[^>]*>>\s*)?stream\r?\n(.*?)\r?\nendstream", re.DOTALL
+)
 _PDF_FILTER_RE = re.compile(rb"/Filter\s*/FlateDecode")
 _TABLE_SEP_RE = re.compile(r"\s{3,}|\t")
 _HEADING_RE = re.compile(
@@ -99,6 +103,85 @@ def _decompress_pdf_streams(raw: bytes) -> bytes:
     return result
 
 
+def _recover_utf8_literal(text: str) -> str:
+    """Recover a UTF-8 literal (e.g. CJK) from latin-1-decoded PDF content.
+
+    ``_extract_text_via_regex`` decodes the raw bytes as latin-1 to preserve
+    PDF operator bytes, which turns UTF-8 CJK literals into mojibake.  Re-encode
+    to bytes and retry as UTF-8; if that fails the text is genuine latin-1 and
+    is returned unchanged (ASCII is untouched).
+    """
+    if text.isascii():
+        return text
+    try:
+        raw = text.encode("latin-1")
+    except UnicodeEncodeError:
+        return text
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return text
+
+
+def _looks_like_utf16be_cjk(data: bytes) -> bool:
+    """Heuristic: at least half the 16-bit pairs fall in CJK Unified Ideographs
+    (U+4E00..U+9FFF), i.e. the string is likely UTF-16BE CJK without a BOM."""
+    if len(data) < 2 or len(data) % 2:
+        return False
+    pairs = [int.from_bytes(data[i:i + 2], "big") for i in range(0, len(data), 2)]
+    cjk = sum(1 for cp in pairs if 0x4E00 <= cp <= 0x9FFF)
+    return cjk >= len(pairs) // 2
+
+
+def _decode_pdf_bytes(data: bytes) -> str:
+    """Decode raw bytes of a PDF hex string to text.
+
+    CJK-aware producers emit UTF-16BE (usually BOM-prefixed); ASCII producers
+    emit single-byte (latin-1) text.  Heuristic order:
+      1. UTF-16 BOM present -> decode as UTF-16 (BOM-aware).
+      2. Interleaved NUL bytes -> UTF-16BE.
+      3. Valid UTF-8 -> UTF-8.
+      4. Mostly CJK code points -> UTF-16BE (no BOM).
+      5. Otherwise -> latin-1.
+    """
+    if not data:
+        return ""
+    if data[:2] in (b"\xfe\xff", b"\xff\xfe"):
+        return data.decode("utf-16")
+    if data.count(0x00) and data.count(0x00) >= len(data) // 2:
+        try:
+            return data.decode("utf-16-be")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    if _looks_like_utf16be_cjk(data):
+        return data.decode("utf-16-be")
+    return data.decode("latin-1")
+
+
+def _decode_hex_string(hex_content: str) -> str:
+    """Decode a PDF ``<...>`` hex string (whitespace ignored) to text."""
+    compact = re.sub(r"\s+", "", hex_content)
+    if len(compact) % 2:
+        compact += "0"
+    try:
+        data = bytes.fromhex(compact)
+    except ValueError:
+        return ""
+    return _decode_pdf_bytes(data)
+
+
+def _decode_pdf_string(literal: str | None, hex_content: str | None) -> str:
+    """Decode one PDF string operand: a literal ``(...)`` or a hex ``<...>``."""
+    if literal is not None:
+        text = _PDF_STRIP_ESCAPES.sub(r"\1", literal)
+        return _recover_utf8_literal(text)
+    return _decode_hex_string(hex_content or "")
+
+
 def _extract_text_via_regex(file_path: str) -> str:
     """Extract plain text from a PDF using regex on raw content streams.
 
@@ -106,6 +189,8 @@ def _extract_text_via_regex(file_path: str) -> str:
     - Decompressed content streams (FlateDecode)
     - BT/ET text blocks
     - Tj (single string) and TJ (array of strings) operators
+    - Literal ``(...)`` strings and hex ``<...>`` strings (UTF-16BE CJK
+      hex strings are decoded; UTF-8 CJK literals are recovered)
     - Basic escape-sequence cleanup
 
     Returns extracted text, one line per text-showing operation.
@@ -125,8 +210,8 @@ def _extract_text_via_regex(file_path: str) -> str:
         block = block_match.group(1)
 
         # Single Tj calls
-        for tj in _PDF_STRING_RE.finditer(block):
-            text = _PDF_STRIP_ESCAPES.sub(r"\1", tj.group(1))
+        for tj in _PDF_TJ_CALL_RE.finditer(block):
+            text = _decode_pdf_string(tj.group(1), tj.group(2))
             text = text.strip()
             if text:
                 lines.append(text)
@@ -134,11 +219,10 @@ def _extract_text_via_regex(file_path: str) -> str:
         # TJ array calls
         for tj_arr in _PDF_ARRAY_RE.finditer(block):
             inner = tj_arr.group(1)
-            # Extract parenthesized strings from array
+            # Extract literal and hex strings from the array, in order
             parts: list[str] = []
-            for sm in re.finditer(r"\(([^)]*(?:\\.[^)]*)*)\)", inner):
-                t = _PDF_STRIP_ESCAPES.sub(r"\1", sm.group(1))
-                parts.append(t)
+            for sm in _PDF_STRING_RE.finditer(inner):
+                parts.append(_decode_pdf_string(sm.group(1), sm.group(2)))
             line = "".join(parts).strip()
             if line:
                 lines.append(line)
@@ -246,10 +330,21 @@ def _extract_raw_tables(
 
 
 def _extract_via_pdfplumber(plumber: Any, file_path: str) -> tuple[list[dict], str]:
-    """Extract tables via pdfplumber."""
+    """Extract tables via pdfplumber.
+
+    Detects image-only (scanned) PDFs — no text layer, no tables, but image
+    objects present — and returns a warning pointing the Agent at the Qwen-VL
+    ``extract_chart_data_vlm`` channel.  OCR (pytesseract) is intentionally
+    not part of the stack (see pyproject.toml / TODO §5.2).
+    """
     tables: list[dict] = []
+    total_text_len = 0
+    has_images = False
     with plumber.open(file_path) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
+            total_text_len += len((page.extract_text() or "").strip())
+            if page.images:
+                has_images = True
             page_tables = page.extract_tables()
             for tbl in page_tables:
                 if not tbl:
@@ -271,7 +366,16 @@ def _extract_via_pdfplumber(plumber: Any, file_path: str) -> tuple[list[dict], s
                     "page": page_num,
                     "header": header,
                 })
-    return tables, ""
+    warning = ""
+    if not tables and total_text_len == 0 and has_images:
+        warning = (
+            "该 PDF 未检测到文本层但包含页面图像（疑似扫描件或图片型 PDF），"
+            "pdfplumber 无法提取文本表格。本项目不依赖 OCR（pytesseract 已被"
+            "移除，见 TODO §5.2）；请改用 extract_chart_data_vlm 技能（Qwen-VL "
+            "视觉模型）从该 PDF/页面图像中提取图表数据。"
+        )
+        logger.warning("Scanned/image-only PDF detected (no text layer): %s", file_path)
+    return tables, warning
 
 
 def _extract_via_pypdf2(pypdf2: Any, file_path: str) -> tuple[list[dict], str]:
