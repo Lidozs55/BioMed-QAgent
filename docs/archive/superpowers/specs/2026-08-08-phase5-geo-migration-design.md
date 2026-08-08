@@ -93,7 +93,7 @@ provider 层只负责 accession 校验、URL 构造、下载尝试/大小限制/
 **验证与传播**：
 - Spec Validator（`dataset_build_tool.py` 入口 + `DatasetBuildSpec` 模型）校验：`format` 必填且合法；`platform_ids` 全部匹配 `^GPL\d+$`；`delimiter="auto"` 之外仅限 supplementary；未知/不适用参数 → `invalid_input`。
 - `ExpressionBuildRunner.run_operation` 把 `binding.parameters` 构造为 `AdapterParams` 传给 `adapter.parse(..., parameters=...)`；`chain.py` 同步透传。
-- **digest 效果**：`AdapterParams` 的规范化 JSON 进入该 binding 的 operation input digest——参数变更（format/scale/unit/platform_ids 等）使既有 checkpoint 失效，绝不复用旧解析结果。
+- **digest 效果**：`AdapterParams` 的规范化 JSON 进入**按 binding 键控的 parameter digest**——`DatasetBuildExecutor._compute_parameter_digest` 扩展为 per-binding `parameter_scope`（键为 `binding_id`，值为该 binding 的 `AdapterParams` 规范化 JSON），同时将该 digest 纳入 `_compute_input_digest` 的依赖（参数变更 → input digest 变化 → 既有 checkpoint 失效）。T2 必须验证：同一 binding 修改 format/scale/unit/platform_ids 任一参数后重跑，不复用旧 checkpoint。
 
 #### Adapter 接口
 
@@ -120,7 +120,7 @@ V1 parser 可被小步重构为共享纯解析 helper，但 Phase 5 不要求删
 
 1. **Schema Registry 注册两个实体级 schema**：
    - `gene_expression.long.v1`（现有；granularity `gene_sample_measurement`；`gene_id_namespace ∈ {ensembl_gene, gene_symbol}`，不含 `geo_probe`）。
-   - **新增 `gene_expression.probe_long.v1`**（granularity `probe_sample_measurement`；主键为 `probe_id` + `platform_id`；`gene_id_namespace` 允许 `geo_probe`，映射成功行可为目标 namespace——但**整表实体级为 probe**，manifest 记录 `entity_level="probe"`）。
+   - **新增 `gene_expression.probe_long.v1`**（granularity `probe_sample_measurement`）。**完整字段清单（基于 22 列 gene schema 的实体级镜像）**：`probe_id`（probe 标识，如 ID_REF）、`platform_id`（`^GPL\d+$`）、`sample_id`、`value`（表达值）、`gene_id_namespace`（允许 `geo_probe`；映射成功行可为目标 namespace）、`value_semantics`、`value_scale`、`expression_unit`、`is_normalized`、`source_id`/`binding_id`/`provenance` 等 source-long 列。**主键 `(probe_id, platform_id, sample_id)`**；无 `gene_symbol`/`ensembl_gene` 主列（那是 gene 级概念）。Schema Registry 注册该 schema 时声明其 granularity 与主键；适配器/规范化器/积分器/验证 Profile 按 schema 元数据驱动列处理，不在代码中硬编码列名。
 2. **声明**：`DatasetBuildSpec` 新增可选 `target_entity_level: Literal["gene","probe"] | None = None`（None → 由所选 validation profile 的 `required_entity_level` 决定）。Spec Validator 校验其与 profile 兼容（见 D4）。
 3. **Schema 选择**：`gene_expression.long.v1` 配 `gene_sample_measurement`；`gene_expression.probe_long.v1` 配 `probe_sample_measurement`。manifest `dataset_manifest.json` 记录 `entity_level`（发布行的实际实体级：全部 gene → `gene`；存在 `geo_probe` → `probe`）；**manifest 必须列出全部实际 namespace**，不得汇总成 "gene-level"。
 4. **Gate/Profile 选择**：Compatibility Gate 的 schema/granularity 检查天然区分两契约；跨实体级 build（probe primary + gene primary）→ `namespace_mismatch`/granularity 不符 reason（见 D5 矩阵）。Validation Profile 按实体级选择（`gene_expression.release.v1` 要求 gene；新增 `gene_expression.probe_release.v1` 要求 probe）。
@@ -163,7 +163,7 @@ V1 parser 可被小步重构为共享纯解析 helper，但 Phase 5 不要求删
 | `platform_id` | `str | None` | 使用的平台；未尝试可 None |
 | `source_namespace` | 固定 `geo_probe` | 映射源 namespace |
 | `target_namespace` | `gene_symbol | ensembl_gene | None` | 映射目标 |
-| `mapping_status` | 同 annotation status | 本次映射结果 |
+| `mapping_status` | enum | `mapped | partial | unmapped | no_gene_annotation | annotation_unavailable | not_attempted`；**语义**：`mapped` = coverage==1.0 完全映射；`partial` = 0 < coverage < 1；`unmapped` = coverage==0 |
 | `total_probe_count` | `int >= 0` | 去重 probe 数 |
 | `mapped_probe_count` | `0 <= int <= total` | 至少一个可信映射的 probe 数 |
 | `unmapped_probe_count` | `int >= 0` | 未命中 probe 数 |
@@ -172,15 +172,16 @@ V1 parser 可被小步重构为共享纯解析 helper，但 Phase 5 不要求删
 | `mapping_asset_id` | `str | None` | annotation SourceAsset |
 | `mapping_rule_id` | `str | None` | 映射/多对一处理规则版本 |
 
-**跨字段校验（P1 MUST-FIX 8）**：
+**跨字段校验（P1 MUST-FIX 8，全集）**：
 - `mapped_probe_count + unmapped_probe_count == total_probe_count`；
 - `ambiguous_probe_count <= unmapped_probe_count`（ambiguous ⊆ unmapped）；
 - `0 <= mapped_probe_count <= total_probe_count`；
 - `coverage_ratio` 与 `mapped/total` 一致（`total=0 → 0.0`），容差 1e-9；
-- `mapping_status == "mapped"` ⇒ `mapping_asset_id` 非 None；
-- `mapping_status == "not_attempted"` ⇒ 计数全 0、`mapping_asset_id`/`mapping_rule_id` None。
+- **status ↔ 计数一致性**：`mapped` ⇒ `coverage_ratio == 1.0`；`partial` ⇒ `0 < coverage_ratio < 1`；`unmapped` ⇒ `coverage_ratio == 0.0`；`not_attempted` ⇒ 计数全 0、`mapping_asset_id`/`mapping_rule_id` None；
+- `mapping_status ∈ {mapped, partial}` ⇒ `mapping_asset_id` 非 None；
+- `mapping_asset_id` 存在 ⇒ 对应 `SourceAsset.sha256` 必须与 mapping audit 记录的资产摘要一致（**双向一致性**：asset 缺 sha 或 sha 不匹配均拒绝）。
 
-**部分映射 vs 完全映射**：`mapping_status` 取 `mapped`（coverage==1.0 完全映射）、`unmapped`（coverage==0）、`partial` 由 `mapped_probe_count` 表达——注意：**状态枚举不含 `partial`**；部分映射用 `mapping_status="mapped"` + `coverage_ratio<1.0` + 计数表达，序列化保持最小。
+**序列化/往返不变量（T1 测试必含）**：`model_dump → model_validate` 往返保真（extra=forbid 下无字段丢失/新增）；`coverage_ratio` 序列化保留精度（容差 1e-9）；空计数/全零对象合法序列化。
 
 映射明细 audit CSV 至少包含 `binding_id, platform_id, probe_id, target_gene_id, target_namespace, status, evidence_asset_id, rule_id`。
 
@@ -232,9 +233,10 @@ Gate 继续复用 `check_expression_compatibility`，不引入 GEO 特例绕过�
 | 4 | 有 | probe 级、部分映射 | **发布混合 namespace** | mapped 行可为目标 namespace，未映射保持 `geo_probe`；混合 namespace 单源可发布，但 manifest 必须列出两个 namespace；不能通过跨源 merge gate |
 
 **操作级细节（T7 必须实现并可测）**：
-- **per-binding fan-in**：`DatasetBuildExecutor` 的 plan 对多 binding 顺序执行；**一个 binding 失败（EmptySourceError/parse 失败）不中止整个 build**——失败 binding 记录 per-binding rejection（`per_binding_outcomes`），其余 binding 继续到 validate/publish（与 wave-7"中止的混合源不判 PARTIAL_SUCCESS"一致：仅当仍有可发布 binding 时才产出成功/partial 结果；全部失败 → NO_DATA/failed）。
-- **audit 存活**：Profile FAILED 时不发布 primary，但 audit artifacts（mapping report、probe audit、platform provenance、rejected）随 **NO_DATA-with-audit 信封** 保留（沿用 4b 的 supporting/audit 发布；**不新建 audit-only publication 路径**）。
-- **分类器**：`probe_mapping_unavailable_required_gene_level` 由 `_classify_failed_outcome`（`dataset_build_tool.py`）在"gene 要求 + 零可发布 gene 行"时产出；probe-level coverage 0 走 #2 不产该码。
+- **per-binding fan-out plan**：`DatasetBuildExecutor` 的 plan 结构改为**按 binding 扇出的二段拓扑**——段 A（per-binding：acquire/parse/canonicalize 对每个 binding 独立执行，一个 binding 的 `EmptySourceError`/parse 失败被**捕获为 per-binding rejection**（`per_binding_outcomes: dict[binding_id, BindingRejection]`），不中止其他 binding 的段 A）；段 B（integrate/validate/publish 只接收段 A 成功的 binding；全部 binding 失败时段 B 跳过）。该拓扑变更在 T7 内实现并测试（保留既有 GDC/Xena 单 binding 路径行为不变）。
+- **audit 存活**：段 A 的 mapping report/probe audit/platform provenance/rejected 在段 B 前已写入 staging supporting/audit 资产；Profile FAILED 时不发布 primary，但这些 supporting/audit 资产随 **4b 的 NO_DATA-with-audit 包路径** 发布（沿用 4b `validate_package` 的 NO_DATA 授权分支；**不新建 audit-only publication 路径**）。
+- **pipeline 层与 tool 层分工**：pipeline 层在"build 要求 gene 且无任何可发布 gene 行"时进入 4b NO_DATA 授权路径（等价无表达）；"要求 gene 且存在可发布行但 coverage<1.0"时 Profile FAILED（不发布 primary，supporting/audit 已发布）。**tool 层**（`dataset_build_tool.py` 的 `_classify_failed_outcome`）把上述两种情况统一归类为 **NO_DATA**，稳定 reason code `probe_mapping_unavailable_required_gene_level`——classifier 输入扩展为 `(outcome_error, per_binding_outcomes, profile_required_entity_level)`，不再仅靠 `no_primary_data` 子串/枚举。
+- **分类器**：`probe_mapping_unavailable_required_gene_level` 仅在"gene 要求 + 零可发布 gene 行"时产出；probe-level coverage 0 走 #2 不产该码。
 
 ### D6. 多 GSE 独立发布与双向关系（P0 MUST-FIX 9：编排 owner）
 
@@ -242,9 +244,9 @@ Gate 继续复用 `check_expression_compatibility`，不引入 GEO 特例绕过�
 
 **编排 owner**：新增 `backend/app/datasets/build/multi_build.py` —— `MultiBuildOrchestrator`：
 
-- 输入：`list[DatasetBuildSpec]`（调用方/Agent 为每个 GSE 生成一个）；输出 `MultiBuildResult`（`list[BuildOutcome]`，每项含 build_id/status/BuildResult/publication_id/audit 摘要）。
+- 输入：`list[DatasetBuildSpec]`（调用方/Agent 为每个 GSE 生成一个）；输出 `MultiBuildResult`（`list[BuildExecutionSummary]`，每项含 build_id/status/`BuildResult`/publication_id/audit 摘要——**不使用已删除的 `BuildOutcome` 概念**；`BuildResult` 是权威业务结果，`BuildExecutionSummary` 仅聚合 build_id→BuildResult 的映射与失败详情）。
 - **失败隔离**：逐 build 执行（顺序或受限并发），一个 GSE 失败/NO_DATA **不回滚、不污染**其他 GSE publication。
-- **no-supersede 断言**：不同 GSE 的 publication 互不 supersede（各 build_id 的 `pub_<build_id>_<digest16>` 空间天然隔离；orchestrator 在汇总时断言无跨 build supersede）。
+- **no-supersede 断言**：不同 GSE 的 publication 互不 supersede。**实现边界**：supersede 查找必须按 build_id 作用域——`ExpressionBuildRunner._publish` 的 `find_latest_publication(publish_dir)` 改为限定同一 build_id 的版本目录（或每 build 使用隔离的 publish 子目录 `publish/<build_id>/`）；orchestrator 汇总时断言无跨 build supersede。T6 必须实现该作用域，不能仅事后断言。
 - `execute_dataset_build` Agent 工具保持单 build 语义（Agent 可多次调用）；orchestrator 是服务端编排入口（V1 多 GSE 显式 raise 后的建议路径与 Phase 7 build API 的接缝）。
 
 `SourceRelation` 已是有向边，最终选择**每个方向一条显式 row**，不新增 direction 字段：
@@ -387,6 +389,6 @@ Gate 继续复用 `check_expression_compatibility`，不引入 GEO 特例绕过�
 
 ## 8. 实施顺序与完成定义
 
-依赖 DAG：`T1 → T2`；`T1 → T3`；`T1 → T4`；`T2+T4 → T5`；`T1+T5 → T6`；`T2+T3+T5 → T7`；T8 可并行（最终与 T2 做 E2E）。T1 为唯一根任务，**先于一切实现提交**。
+依赖 DAG：`T1 → T2`；`T1 → T3`；`T1 → T4`；`T2+T4 → T5`；`T1+T5 → T6`；`T2+T3+T5 → T7`；T8 无依赖、可并行（最终与 T2 做 E2E）。**T1 是主实现链的唯一根任务，先于一切实现提交**；T8 为独立并行支线（自身根），不与主链共享前置。
 
 每个任务先提交失败测试，再做最小实现，再跑目标测试。Phase 5 完成前必须通过全部新增测试、GEO V1/V2 相关回归、后端全量 pytest 与 ruff，并验证应用导入/启动；TODO 六项和 §16 三项只能在对应证据全部成立后勾选。
