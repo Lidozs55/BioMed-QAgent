@@ -52,13 +52,13 @@ from app.datasets.build.profiles import (
     get_validation_profile,
 )
 from app.datasets.contracts import (
+    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
     BindingRejection,
     BindingRejectionKind,
     DatasetBuildSpec,
     DatasetManifest,
     ProbeMappingStatus,
     ProbeMappingSummary,
-    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
     ValidationResult,
     ValidationResultStatus,
 )

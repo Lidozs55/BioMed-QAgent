@@ -78,7 +78,12 @@ def _read_table(annotation_path: Path) -> str:
 
 def parse_platform_table(
     annotation_path: Path,
-) -> tuple[dict[str, str], Literal["gene_symbol", "ensembl_gene"], ProbeMappingStatus, frozenset[str]]:
+) -> tuple[
+    dict[str, str],
+    Literal["gene_symbol", "ensembl_gene"],
+    ProbeMappingStatus,
+    frozenset[str],
+]:
     """Parse a SOFT platform table into ``(probe→gene, target_namespace, status, ambiguous_probes)``.
 
     Status mirrors the V1 vocabulary: ``no_gene_annotation`` when the table
