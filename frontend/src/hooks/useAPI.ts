@@ -2,6 +2,8 @@ import { useMemo } from "react";
 
 import type {
   ArtifactRecord,
+  BuildDetail,
+  BuildPage,
   ContinueTaskInput,
   DatabaseRecord,
   EventPage,
@@ -30,6 +32,7 @@ import {
   parseArtifactsEnvelope, parseDatabasesEnvelope,
   parseSkillDetail, parseSkillsEnvelope, parseSkillValidation,
 } from "@/lib/apiEnvelopeParsers";
+import { parseBuildDetail, parseBuildPage } from "@/lib/apiResponseParsers";
 import type { SettingsAPIClient } from "@/hooks/settingsContracts";
 
 const DEFAULT_BASE_URL = "/api/v1";
@@ -64,6 +67,9 @@ export interface APIClient {
   fetchArtifacts: (taskId: string) => Promise<ArtifactRecord[]>;
   getArtifactUrl: (taskId: string, artifactId: string) => string;
   getCacheExportUrl: () => string;
+  fetchBuilds: (params?: { limit?: number; cursor?: string | null }) => Promise<BuildPage>;
+  fetchBuild: (buildId: string) => Promise<BuildDetail>;
+  getBuildArtifactUrl: (buildId: string, artifactId: string) => string;
 }
 
 interface APIClientOptions {
@@ -187,6 +193,11 @@ export function createAPIClient(options: APIClientOptions = {}): APIClient & Set
       request(`${baseUrl}/tasks/${encodeId(taskId)}/artifacts`).then((b) => parseArtifactsEnvelope(b)).then(({ artifacts }) => artifacts),
     getArtifactUrl: (taskId, artifactId) => `${baseUrl}/tasks/${encodeId(taskId)}/artifacts/${encodeId(artifactId)}`,
     getCacheExportUrl: () => `${baseUrl}/cache/export`,
+    fetchBuilds: (params = {}) =>
+      request(withQuery(`${baseUrl}/builds`, [["limit", params.limit], ["cursor", params.cursor]])).then((b) => parseBuildPage(b)),
+    fetchBuild: (buildId) =>
+      request(`${baseUrl}/builds/${encodeId(buildId)}`).then((b) => parseBuildDetail(b)),
+    getBuildArtifactUrl: (buildId, artifactId) => `${baseUrl}/builds/${encodeId(buildId)}/artifacts/${encodeId(artifactId)}`,
     fetchSettings: () => fetcher(`${baseUrl}/settings`).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     saveSettings: (changes) => fetcher(`${baseUrl}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) }).then((r) => parseResponse(r).then((b) => parseModelSettings(b))),
     fetchVendors: () => fetcher(`${baseUrl}/vendors`).then((r) => parseResponse(r).then((b) => parseVendorsEnvelope(b)).then(({ vendors }) => vendors)),

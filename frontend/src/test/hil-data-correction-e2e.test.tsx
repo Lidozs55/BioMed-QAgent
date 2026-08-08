@@ -156,6 +156,9 @@ function api(overrides: Partial<APIClient> = {}): APIClient {
     fetchArtifacts: vi.fn().mockResolvedValue([]),
     getArtifactUrl: vi.fn(),
     getCacheExportUrl: vi.fn(),
+    fetchBuilds: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+    fetchBuild: vi.fn(),
+    getBuildArtifactUrl: vi.fn(),
     ...overrides,
   };
 }

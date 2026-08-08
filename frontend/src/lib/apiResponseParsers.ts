@@ -5,10 +5,15 @@
 
 import { APIError } from "@/hooks/settingsContracts";
 import type {
+  BuildDetail,
+  BuildPage,
   BuildResult,
   BuildResultStatus,
+  DatasetManifest,
+  DatasetPublication,
   ErrorCode,
   EventPage,
+  ManifestArtifactEntry,
   MessagePage,
   PublicationSummary,
   RunSummary,
@@ -19,7 +24,7 @@ import type {
 } from "@/runtime/contracts";
 import { parseEventPayload } from "@/lib/eventParsers";
 import {
-  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion, assertHex64, assertNonNegativeInt,
+  assertString, assertNumber, assertObject, assertArray, assertStringOrNull, assertOptionalNull, assertFinite, optSchemaVersion, assertHex64, assertNonNegativeInt, assertJsonRecord,
 } from "@/lib/eventValidatorHelpers";
 
 function optionalNumber(value: unknown): number | undefined {
@@ -438,5 +443,112 @@ function parseEventEnvelope(json: unknown, idx: number): EventPage["events"][num
     sequence: sequence,
     timestamp: assertString(Reflect.get(obj, "timestamp"), `events[${idx}].timestamp`),
     payload,
+  };
+}
+
+/* ---- V2 builds (Phase 7 T1 backend contract) ---- */
+
+function parseArtifactRole(
+  v: unknown,
+  path: string,
+): ManifestArtifactEntry["role"] {
+  if (typeof v !== "string") throw new APIError(502, `Expected ArtifactRole string at ${path}, got ${typeof v}`);
+  switch (v) {
+    case "primary_dataset":
+    case "supporting_dataset":
+    case "schema":
+    case "provenance":
+    case "audit_report":
+      return v;
+    default:
+      throw new APIError(502, `Invalid ArtifactRole "${v}" at ${path}`);
+  }
+}
+
+function parseManifestArtifactEntry(
+  json: unknown,
+  path: string,
+): ManifestArtifactEntry {
+  const obj = assertObject(json, path);
+  return {
+    artifact_id: assertString(Reflect.get(obj, "artifact_id"), `${path}.artifact_id`, true),
+    role: parseArtifactRole(Reflect.get(obj, "role"), `${path}.role`),
+    relative_path: assertString(Reflect.get(obj, "relative_path"), `${path}.relative_path`, true),
+    media_type: assertString(Reflect.get(obj, "media_type"), `${path}.media_type`, true),
+    size_bytes: assertNonNegativeInt(Reflect.get(obj, "size_bytes"), `${path}.size_bytes`),
+    sha256: assertString(Reflect.get(obj, "sha256"), `${path}.sha256`, true),
+  };
+}
+
+function parseDatasetManifest(json: unknown, path: string): DatasetManifest {
+  const obj = assertObject(json, path);
+  return {
+    manifest_id: assertString(Reflect.get(obj, "manifest_id"), `${path}.manifest_id`, true),
+    task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
+    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
+    row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
+    schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
+    primary_key: assertArray(Reflect.get(obj, "primary_key"), `${path}.primary_key`, (value, index) => assertString(value, `${path}.primary_key[${index}]`)),
+    row_count: assertNonNegativeInt(Reflect.get(obj, "row_count"), `${path}.row_count`),
+    sha256: assertString(Reflect.get(obj, "sha256"), `${path}.sha256`, true),
+    artifacts: assertArray(Reflect.get(obj, "artifacts"), `${path}.artifacts`, (value, index) => parseManifestArtifactEntry(value, `${path}.artifacts[${index}]`)),
+    source_summary: assertJsonRecord(Reflect.get(obj, "source_summary"), `${path}.source_summary`),
+    validation_summary: assertJsonRecord(Reflect.get(obj, "validation_summary"), `${path}.validation_summary`),
+    confidence_summary: assertJsonRecord(Reflect.get(obj, "confidence_summary"), `${path}.confidence_summary`),
+    provenance_summary: assertJsonRecord(Reflect.get(obj, "provenance_summary"), `${path}.provenance_summary`),
+  };
+}
+
+function parseDatasetPublication(
+  json: unknown,
+  path: string,
+): DatasetPublication {
+  const obj = assertObject(json, path);
+  return {
+    publication_id: assertString(Reflect.get(obj, "publication_id"), `${path}.publication_id`, true),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
+    validation_result_ref: assertString(Reflect.get(obj, "validation_result_ref"), `${path}.validation_result_ref`, true),
+    published_at: assertString(Reflect.get(obj, "published_at"), `${path}.published_at`, true),
+    supersedes_publication_id: assertStringOrNull(Reflect.get(obj, "supersedes_publication_id"), `${path}.supersedes_publication_id`),
+  };
+}
+
+function parseBuildSummary(json: unknown, path: string): BuildPage["items"][number] {
+  const obj = assertObject(json, path);
+  return {
+    build_id: assertString(Reflect.get(obj, "build_id"), `${path}.build_id`, true),
+    task_id: assertString(Reflect.get(obj, "task_id"), `${path}.task_id`, true),
+    dataset_family: assertString(Reflect.get(obj, "dataset_family"), `${path}.dataset_family`, true),
+    row_granularity: assertString(Reflect.get(obj, "row_granularity"), `${path}.row_granularity`, true),
+    schema_ref: assertString(Reflect.get(obj, "schema_ref"), `${path}.schema_ref`, true),
+    row_count: assertNonNegativeInt(Reflect.get(obj, "row_count"), `${path}.row_count`),
+    status: assertBuildResultStatus(Reflect.get(obj, "status"), `${path}.status`),
+    publication_id: assertStringOrNull(Reflect.get(obj, "publication_id"), `${path}.publication_id`),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), `${path}.manifest_ref`, true),
+    manifest_sha256: assertString(Reflect.get(obj, "manifest_sha256"), `${path}.manifest_sha256`, true),
+    published_at: assertOptionalNull(Reflect.get(obj, "published_at"), `${path}.published_at`, (value, p) => assertString(value, p)),
+    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), `${path}.build_result`, (value, p) => parseBuildResult(value, p)),
+  };
+}
+
+export function parseBuildPage(json: unknown): BuildPage {
+  const obj = assertObject(json, "builds response");
+  return {
+    items: assertArray(Reflect.get(obj, "items"), "builds response.items", (value, index) => parseBuildSummary(value, `builds response.items[${index}]`)),
+    next_cursor: assertStringOrNull(Reflect.get(obj, "next_cursor"), "builds response.next_cursor"),
+  };
+}
+
+export function parseBuildDetail(json: unknown): BuildDetail {
+  const obj = assertObject(json, "build response");
+  return {
+    build_id: assertString(Reflect.get(obj, "build_id"), "build response.build_id", true),
+    task_id: assertString(Reflect.get(obj, "task_id"), "build response.task_id", true),
+    manifest_ref: assertString(Reflect.get(obj, "manifest_ref"), "build response.manifest_ref", true),
+    build_result: assertOptionalNull(Reflect.get(obj, "build_result"), "build response.build_result", (value, p) => parseBuildResult(value, p)),
+    manifest: parseDatasetManifest(Reflect.get(obj, "manifest"), "build response.manifest"),
+    publication: assertOptionalNull(Reflect.get(obj, "publication"), "build response.publication", (value, p) => parseDatasetPublication(value, p)),
+    artifacts: assertArray(Reflect.get(obj, "artifacts"), "build response.artifacts", (value, index) => parseManifestArtifactEntry(value, `build response.artifacts[${index}]`)),
   };
 }
