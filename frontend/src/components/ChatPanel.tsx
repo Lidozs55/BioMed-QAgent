@@ -212,8 +212,11 @@ export function ChatPanel({
   const items = useAgentStore(selectActiveItems);
   const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
+  const hydratingTaskId = useAgentStore((state) => state.hydratingTaskId);
   const activeTaskHydrating =
-    activeTaskId !== null && activeTask?.hydration === "summary";
+    activeTaskId !== null &&
+    activeTaskId === hydratingTaskId &&
+    activeTask !== undefined;
   const [showLoadingScreen, setShowLoadingScreen] = useState(false);
   useEffect(() => {
     if (!activeTaskHydrating) {

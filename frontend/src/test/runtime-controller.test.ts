@@ -3172,4 +3172,44 @@ describe("runtime orchestration", () => {
     expect(fetchEvents).not.toHaveBeenCalled();
     expect(eventTransport.subscribe).not.toHaveBeenCalled();
   });
+
+  it("marks the selected task as hydrating until selection finishes", async () => {
+    const taskId = "task_hydrating_marker";
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary(taskId, "completed", 3)]),
+      false,
+    );
+    const snapshotRequest = deferred<TaskSnapshot>();
+    const apiClient = api({
+      fetchTask: vi.fn(() => snapshotRequest.promise),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    const selection = controller.selectTask(taskId);
+    expect(useAgentStore.getState().hydratingTaskId).toBe(taskId);
+
+    snapshotRequest.resolve(snapshot(taskId, 3, "agent", "completed"));
+    await selection;
+
+    expect(useAgentStore.getState().hydratingTaskId).toBeNull();
+  });
+
+  it("clears the hydration marker when selection fails", async () => {
+    const taskId = "task_hydrating_failure";
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary(taskId, "completed", 3)]),
+      false,
+    );
+    const apiClient = api({
+      fetchTask: vi.fn(() => Promise.reject(new Error("snapshot failed"))),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const controller = new RuntimeController(apiClient, transport());
+
+    await expect(controller.selectTask(taskId)).rejects.toThrow(
+      "snapshot failed",
+    );
+    expect(useAgentStore.getState().hydratingTaskId).toBeNull();
+  });
 });

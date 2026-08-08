@@ -136,6 +136,7 @@ export class RuntimeController {
   async selectTask(taskId: string): Promise<void> {
     const generation = ++this.foregroundIntentGeneration;
     const previousActiveTaskId = useAgentStore.getState().activeTaskId;
+    useAgentStore.getState().setHydratingTaskId(taskId);
     if (
       !this.deletedTaskIds.has(taskId) &&
       useAgentStore.getState().tasksById[taskId] !== undefined
@@ -153,16 +154,24 @@ export class RuntimeController {
           taskId,
           previousActiveTaskId,
         );
+        this.finishTaskHydration(taskId);
         return;
       }
       await this.getArtifactHydration(taskId, handoffGeneration);
     } catch (error) {
+      this.finishTaskHydration(taskId);
       this.restoreForegroundSelection(
         generation,
         taskId,
         previousActiveTaskId,
       );
       throw error;
+    }
+  }
+
+  private finishTaskHydration(taskId: string): void {
+    if (useAgentStore.getState().hydratingTaskId === taskId) {
+      useAgentStore.getState().setHydratingTaskId(null);
     }
   }
 
@@ -286,6 +295,8 @@ export class RuntimeController {
         this.transport.subscribe(taskId, lastSequence);
       }
       throw error;
+    } finally {
+      this.finishTaskHydration(taskId);
     }
   }
 

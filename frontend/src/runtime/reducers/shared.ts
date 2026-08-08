@@ -36,6 +36,7 @@ export function createInitialRuntimeState(): AgentRuntimeData {
     tasksById: {},
     taskOrder: [],
     activeTaskId: null,
+    hydratingTaskId: null,
     activeItems: [],
     nextCursor: null,
     connectionStatus: "idle",

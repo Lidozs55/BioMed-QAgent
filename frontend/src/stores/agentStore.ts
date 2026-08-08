@@ -68,6 +68,7 @@ export interface AgentStore extends AgentRuntimeData {
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setActiveTaskId: (taskId: string | null) => void;
+  setHydratingTaskId: (taskId: string | null) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setHistoryState: (status: HistoryStatus, error?: string | null) => void;
   setDatabases: (databases: DatabaseRecord[]) => void;
@@ -340,6 +341,8 @@ export const useAgentStore = create<AgentStore>()(
         set((state) => projectDeactivateAssistantStreams(state, taskId)),
 
       setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
+
+      setHydratingTaskId: (hydratingTaskId) => set({ hydratingTaskId }),
 
       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
 
