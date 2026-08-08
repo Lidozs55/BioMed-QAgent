@@ -57,3 +57,13 @@
 - **Phase 7 承接**：`PlatformRecord` V2 publication 发射、corrections_todo/audit 可见性、build API（`MultiBuildOrchestrator` 为接缝）、operation event UI。
 - **V2-dup 延后项**：`execute_dataset_build` 结构化结果 → durable `execution.build_result` 接线仍开放（bug-sweep REVIEW §3）。
 - **fixture 资产**：新增的 probe/GPL 关联与 tumor/normal 样例均基于 copy-dir + 合成资产（未改共享 fixture、无 live network 依赖）。
+
+## 6. 父编排 Review Loop（3 轮，全部子代理 dsv4-flash）
+
+| 轮 | 审查 | 结论 | 修复（合并 454e819） |
+| --- | --- | --- | --- |
+| 1 | 3 fresh reviewers（正确性 R1 / 测试 R2 / 简洁·文档 R3） | 全 PASS，1 MUST-FIX + 若干值得修 | R1-01 probe primary 泄漏内部列（schema_registry 移除 `gene_id_namespace_declared`，TDD）；R3-2 SOFT 表解析器三重复 → 共享 `parse_platform_table_text`；R3-3/4 删死 `series_landing_url` + seam 标记；R3-6 check-id/reason 常量共享；R2-01/02/03 测试卫生；R2-04 chain 级 unknown×unknown 集成测试；R3-1 provider-seam 文档 |
+| 2 | 2 fresh reviewers（fix 分支正确性 R2a / 测试·scope R2b） | 全 PASS，2 MUST-FIX（HEAD ruff 门）+ 5 小项 | 提交 pending ruff 排序；R2b-02 GPL-prefix 双份生产逻辑 → `platform_dir_prefix` 委托 `geo_platform_dir` 单一规则 + 标记纠正；删 `_decode_table_bytes` 死代码；V1/V2 解析器 parity 测试；R2b-05 文档措辞修正 |
+| 3 | 1 fresh reviewer（round-2 fix 最终验收） | **PASS，无 MUST-FIX**（1 Note 级 docstring 措辞，忽略） | 无需修复；全门 2641 passed |
+
+**验证**：每轮 reviewers 独立跑定向测试（合计 470+110+336+161 定向），第 3 轮全量 **2641 passed**（baseline 2638 + 3 新测试：probe 泄漏 pin + chain 集成 + parity）；ruff 门在 committed HEAD 干净；uvicorn/import OK。**未实现**：R1-02/03/04/05/06、R3-5/8、F4/F5（文档化 forward seam，Phase 7 接线时处理）。
