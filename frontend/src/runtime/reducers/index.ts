@@ -19,7 +19,7 @@ import {
   applySubagentStatusEvent,
   applyWarningEvent,
 } from "./runtime";
-import { applyArtifactProducedEvent, applyStageTransitionEvent } from "./pipeline";
+import { applyArtifactProducedEvent, applyOperationEvent, applyStageTransitionEvent } from "./pipeline";
 import { applyUserInputEvent } from "./hil";
 
 export {
@@ -163,6 +163,13 @@ export function reduceRuntimeEvent(
     }
     case "stage_progress": {
       task = applyStageProgressEvent(task, envelope, payload);
+      break;
+    }
+    case "operation_started":
+    case "operation_progress":
+    case "operation_completed":
+    case "operation_failed": {
+      task = applyOperationEvent(task, envelope, payload);
       break;
     }
     default:
