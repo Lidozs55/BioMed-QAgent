@@ -7,6 +7,8 @@ and validation profile report structured rejections instead of raising.
 
 from __future__ import annotations
 
+from app.datasets.contracts import BindingRejection
+
 
 class BuildError(ValueError):
     """Base class for a failed dataset build step."""
@@ -28,5 +30,32 @@ class EmptySourceError(AdapterError):
     reason_code: str = "no_primary_data"
 
 
+class BindingRejectedError(BuildError):
+    """One source binding is rejected during phase A (Phase 5 T7 D5).
+
+    Raised by the runner when a binding canonicalized to zero usable rows
+    (or, for gene-required builds, to zero publishable gene rows) after its
+    parse succeeded.  The executor catches it per-binding — the binding's
+    remaining phase-A operations are skipped and phase B only receives the
+    bindings that did not raise.
+    """
+
+    def __init__(self, rejection: BindingRejection) -> None:
+        self.rejection = rejection
+        super().__init__(rejection.message or rejection.reason_code)
+
+
 class IntegratorError(BuildError):
     """The merge strategy or merge inputs are invalid."""
+
+
+class ProbeMappingAssetMismatchError(BuildError):
+    """The annotation asset's declared sha256 does not match the file parsed.
+
+    Phase 5 final review (F2, D3 bidirectional invariant): a
+    ``ProbeMappingSummary.mapping_asset_id`` may only be recorded against a
+    ``SourceAsset`` whose digest is consistent with the annotation file the
+    mapping was actually computed from.  The FileAsset contract already
+    enforces ``asset_id == asset_<sha256>``; this error closes the remaining
+    gap between the declared digest and the parsed file's content.
+    """

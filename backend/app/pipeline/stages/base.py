@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from app.datasets.contracts import PlatformRecord
 from app.domain.contracts import (
     ArtifactManifestEntry,
     ContractModel,
@@ -24,6 +25,7 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
 from app.model_config import RunModelSettings
+from app.pipeline.processing.geo_association import SamplePlatformEvidenceRow
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.tools.workdir import TaskWorkDir
 
@@ -235,6 +237,13 @@ class ProcessingOutput(ContractModel):
     field_alignment: dict[str, list[str]] | None = None
     merged_dataset: ParsedDataset | None = None
     no_primary_reason: str | None = None
+    # Phase 5 T3: D8 platform→sample association provenance. ``platform_records``
+    # holds one D3 PlatformRecord per GPL attempt (mapped/unmapped/
+    # no_gene_annotation/annotation_unavailable/not_attempted);
+    # ``sample_platform_evidence`` is the per-sample GPL audit (a GPL
+    # annotation maps only to samples declaring it). Empty for non-GEO paths.
+    platform_records: list[PlatformRecord] = []
+    sample_platform_evidence: list[SamplePlatformEvidenceRow] = []
 
 
 class ArtifactBuildOutput(ContractModel):

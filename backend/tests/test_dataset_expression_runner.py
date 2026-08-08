@@ -18,15 +18,23 @@ import pytest
 from app.datasets.build.expression_runner import ExpressionBuildRunner
 from app.datasets.contracts import (
     AcquisitionMode,
+    AdapterParams,
     DatasetBuildSpec,
     SourceBinding,
     SourceBindingAcquisition,
+    ValueScale,
 )
 from app.datasets.runtime import (
     DatasetBuildExecutor,
+    OperationKind,
+    OperationSpec,
     build_operation_plan,
 )
-from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
+from app.datasets.schema_registry import (
+    SchemaRegistry,
+    build_gene_expression_schema,
+    build_probe_expression_schema,
+)
 from app.domain.contracts import DataLevel, ErrorCode, SourceAsset, asset_id_from_sha256
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -280,8 +288,10 @@ async def test_publish_rejects_missing_manifest_artifact_after_validation(
 
 
 @pytest.mark.asyncio
-async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
-    """A later build's publication supersedes the prior build's publication."""
+async def test_publish_does_not_supersede_across_build_ids(tmp_path: Path) -> None:
+    """Phase 5 T6: the supersede lookup is build-scoped — a publication of
+    one build_id must NEVER supersede a publication of another build_id even
+    when both share the same publish directory."""
     first, output_dir = await _run_executor(
         tmp_path,
         [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
@@ -312,9 +322,78 @@ async def test_publish_supersedes_previous_version(tmp_path: Path) -> None:
     assert len(publications) == 2
     first_pub, second_pub = publications
     assert first_pub["publication_id"] != second_pub["publication_id"]
-    # The newest publication supersedes the prior one.
-    assert second_pub["supersedes_publication_id"] == first_pub["publication_id"]
+    # Distinct build_ids -> neither supersedes the other.
     assert first_pub["supersedes_publication_id"] is None
+    assert second_pub["supersedes_publication_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_publish_supersedes_within_same_build(tmp_path: Path) -> None:
+    """Phase 5 T6: re-publishing the SAME build_id with a new digest still
+    supersedes that build's own prior version (build-scoped supersede chain)."""
+    source_a = tmp_path / "src_a.tsv"
+    source_b = tmp_path / "src_b.tsv"
+    source_a.write_text("gene_id\tS1\tS2\nTP53\t1.5\t2\nBRCA1\t3\t4.25\n", "utf-8")
+    source_b.write_text("gene_id\tS1\tS2\nTP53\t99\t100\nBRCA1\t101\t102\n", "utf-8")
+
+    async def build_with(source_path: Path) -> tuple[object, list[dict[str, str]]]:
+        spec = _spec([_binding("binding_gdc", "gdc", "gdc.expression.v1")], build_id="build_same")
+        registry = SchemaRegistry([build_gene_expression_schema()])
+        checksum = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        asset = SourceAsset(
+            asset_id=asset_id_from_sha256(checksum),
+            kind="source",
+            relative_path=f"source_assets/{source_path.name}",
+            sha256=checksum,
+            size_bytes=source_path.stat().st_size,
+            media_type="text/tab-separated-values",
+            source_id="src_binding_gdc",
+            successful_attempt_id="attempt_1",
+            data_level=DataLevel.REPOSITORY_PROCESSED,
+        )
+        assets = {"binding_gdc": asset}
+        paths = {"binding_gdc": source_path}
+        runner = ExpressionBuildRunner(
+            spec=spec,
+            registry=registry,
+            source_assets=assets,
+            source_paths=paths,
+            output_dir=tmp_path,
+        )
+        plan = build_operation_plan(spec)
+        executor = DatasetBuildExecutor(
+            task_id="task_runner",
+            build_id=spec.build_id,
+            run_id="run_runner",
+            state_dir=tmp_path / "state" / spec.build_id,
+            lock_path=tmp_path / "build.lock",
+            task_root=tmp_path,
+            plan=plan,
+            run_operation=runner,
+            source_assets=assets,
+            implementation_versions={op.operation_id: "1.0.0" for op in plan},
+        )
+        outcome = await executor.run()
+        return outcome, _primary_rows(tmp_path)
+
+    first_outcome, _ = await build_with(source_a)
+    assert first_outcome.status == "completed"
+    first_pub_dir = list((tmp_path / "publish").glob("build_same_*"))[0]
+    first_pub = json.loads(
+        (first_pub_dir / "publication.json").read_text("utf-8")
+    )
+    assert first_pub["supersedes_publication_id"] is None
+
+    second_outcome, _ = await build_with(source_b)
+    assert second_outcome.status == "completed"
+    publish_dirs = list((tmp_path / "publish").glob("build_same_*"))
+    assert len(publish_dirs) == 2
+    second_pub_dir = [d for d in publish_dirs if d.name != first_pub_dir.name][0]
+    second_pub = json.loads(
+        (second_pub_dir / "publication.json").read_text("utf-8")
+    )
+    # Same build_id -> the newer version supersedes the older one.
+    assert second_pub["supersedes_publication_id"] == first_pub["publication_id"]
 
 
 @pytest.mark.asyncio
@@ -424,6 +503,39 @@ async def test_runner_rerun_with_changed_source_invalidates_checkpoints(
     ]
     assert acquire_attempts[-1]["status"] == "succeeded"
     assert acquire_attempts[-1]["input_digest"] != acquire_attempts[0]["input_digest"]
+
+
+def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
+    """Phase 5 T6: ``find_latest_publication(..., build_id=...)`` must only
+    consider version directories of THAT build — distinct builds sharing one
+    publish directory never see each other's versions."""
+    from datetime import UTC, datetime
+
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
+
+    publish_dir = tmp_path / "publish"
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+
+    def _write(build_id: str, digest: str, published_at: datetime) -> None:
+        version_dir = publish_dir / f"{build_id}_{digest}"
+        version_dir.mkdir(parents=True)
+        (version_dir / "publication.json").write_text(
+            json.dumps(
+                {
+                    "publication_id": f"pub_{build_id}_{digest}",
+                    "published_at": published_at.isoformat(),
+                }
+            ),
+            "utf-8",
+        )
+
+    _write("build_a", "aaaaaaaaaaaaaaaa", base)
+    _write("build_b", "bbbbbbbbbbbbbbbb", base)
+    _write("build_a", "cccccccccccccccc", base)
+
+    # build-scoped: each build sees only its own newest version.
+    assert _find_latest_publication(publish_dir, build_id="build_a") == "pub_build_a_cccccccccccccccc"
+    assert _find_latest_publication(publish_dir, build_id="build_b") == "pub_build_b_bbbbbbbbbbbbbbbb"
 
 
 def test_find_latest_publication_selects_newest_by_published_at(
@@ -1784,4 +1896,444 @@ async def test_failed_outcome_carries_structured_no_data_reason(
     assert outcome.status == "failed"
     assert outcome.error is not None
     assert outcome.error.details.get("reason_code") == "no_primary_data"
-    assert outcome.error.details.get("failed_operation") == "parse:binding_gdc"
+    # Phase 5 T7 fan-out: the empty binding is captured per-binding (the
+    # all-rejected outcome carries the structured per-binding outcomes).
+    per_binding = outcome.error.details.get("per_binding_outcomes")
+    assert per_binding is not None
+    assert per_binding["binding_gdc"]["reason_code"] == "no_primary_data"
+
+
+def test_runner_forwards_binding_adapter_params_to_geo_adapter(
+    tmp_path: Path,
+) -> None:
+    """Phase 5 D1: run_operation forwards binding.parameters to adapter.parse.
+
+    The GEO adapter receives the typed ``AdapterParams``; the parsed batch
+    must reflect the declared format/semantics/scale/unit — proving the
+    parameters flow through the runner (never inferred from the file name).
+    """
+    import gzip as gzip_module
+
+    matrix = tmp_path / "GSE1_series_matrix.txt.gz"
+    text = (
+        "!series_matrix_table_begin\n"
+        "\"ID_REF\"\t\"GSM1\"\t\"GSM2\"\n"
+        "\"AFFX-BioB-5\"\t1.5\t2.0\n"
+        "!series_matrix_table_end\n"
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+
+    binding = SourceBinding(
+        binding_id="binding_geo",
+        source="geo",
+        acquisition=SourceBindingAcquisition(
+            mode=AcquisitionMode.BUILTIN, provider_id="geo.series.v1"
+        ),
+        adapter_id="geo.expression.v1",
+        accession="GSE1",
+        parameters=AdapterParams(
+            format="series_matrix",
+            value_semantics="normalized_expression_value",
+            value_scale=ValueScale.LOG2,
+            expression_unit="normalized_expression_value",
+            platform_ids=["GPL570"],
+        ).model_dump(mode="json"),
+    )
+    spec = _spec([binding])
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/series.txt.gz",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_geo": asset},
+        source_paths={"binding_geo": matrix},
+        output_dir=tmp_path,
+    )
+    parse_op = OperationSpec(
+        operation_id="parse:binding_geo",
+        kind=OperationKind.PARSE,
+        label="解析 geo",
+        category="binding_geo",
+        upstream=("acquire:binding_geo",),
+    )
+    output = asyncio.run(runner.run_operation(parse_op, {}))
+    assert output.output["batch_id"] == "batch_binding_geo"
+
+    batch = runner._batches["binding_geo"]
+    assert batch.parser_id == "geo.expression.v1"
+    assert batch.statistics["format"] == "series_matrix"
+    assert batch.statistics["value_semantics"] == "normalized_expression_value"
+    assert batch.statistics["value_scale"] == "log2"
+    assert batch.statistics["expression_unit"] == "normalized_expression_value"
+    rows = (tmp_path / batch.file_asset.relative_path).read_text().splitlines()[1:]
+    assert len(rows) == 2
+    assert all(",geo_probe," in row for row in rows)
+    assert all(",log2," in row for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T7: per-binding fan-out + ProbeMappingSummary emission (spec D5)
+# ---------------------------------------------------------------------------
+
+
+def _asset_for_path(path: Path, source_id: str) -> SourceAsset:
+    checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+    return SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=f"source_assets/{path.name}",
+        sha256=checksum,
+        size_bytes=path.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id=source_id,
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+
+
+async def _run_executor_with_paths(
+    tmp_path: Path,
+    bindings: list[SourceBinding],
+    paths_by_binding: dict[str, Path],
+    *,
+    build_id: str = "build_runner_test",
+    per_binding_outcomes: dict | None = None,
+    mapping_paths: dict[str, Path] | None = None,
+    registry: SchemaRegistry | None = None,
+    spec: DatasetBuildSpec | None = None,
+) -> tuple[object, Path, ExpressionBuildRunner]:
+    if spec is None:
+        spec = _spec(bindings, build_id=build_id)
+    if registry is None:
+        registry = SchemaRegistry([build_gene_expression_schema()])
+    assets = {
+        binding_id: _asset_for_path(paths_by_binding[binding_id], f"src_{binding_id}")
+        for binding_id in paths_by_binding
+    }
+    mapping_assets = None
+    if mapping_paths:
+        mapping_assets = {
+            binding_id: _asset_for_path(path, f"map_{binding_id}")
+            for binding_id, path in mapping_paths.items()
+        }
+    output_dir = tmp_path / "build"
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets=assets,
+        source_paths=paths_by_binding,
+        output_dir=output_dir,
+        per_binding_outcomes=per_binding_outcomes,
+        mapping_assets=mapping_assets,
+        mapping_paths=mapping_paths,
+    )
+    plan = build_operation_plan(spec)
+    executor = DatasetBuildExecutor(
+        task_id="task_runner",
+        build_id=spec.build_id,
+        run_id="run_runner",
+        state_dir=tmp_path / "state" / build_id,
+        lock_path=tmp_path / "build.lock",
+        task_root=tmp_path,
+        plan=plan,
+        run_operation=runner,
+        per_binding_outcomes=per_binding_outcomes,
+        implementation_versions={op.operation_id: "1.0.0" for op in plan},
+    )
+    outcome = await executor.run()
+    return outcome, output_dir, runner
+
+
+def _geo_binding(
+    binding_id: str = "binding_geo",
+    *,
+    platform_ids: list[str] | None = None,
+    profile_ref: str = "gene_expression.release.v1",
+) -> SourceBinding:
+    return SourceBinding(
+        binding_id=binding_id,
+        source="geo",
+        acquisition=SourceBindingAcquisition(
+            mode=AcquisitionMode.BUILTIN, provider_id="geo.series.v1"
+        ),
+        adapter_id="geo.expression.v1",
+        accession="GSE1",
+        parameters=AdapterParams(
+            format="series_matrix",
+            value_semantics="expression_value",
+            value_scale=ValueScale.LOG2,
+            expression_unit="log2_expression",
+            platform_ids=platform_ids or ["GPL570"],
+        ).model_dump(mode="json"),
+    )
+
+
+def _geo_probe_spec(bindings: list[SourceBinding], build_id: str = "build_runner_test") -> DatasetBuildSpec:
+    """A probe-level spec (probe schema + probe release profile)."""
+    return DatasetBuildSpec(
+        build_id=build_id,
+        objective="compare probe expression",
+        dataset_family="gene_expression",
+        row_granularity="probe_sample_measurement",
+        schema_ref="gene_expression.probe_long.v1",
+        source_bindings=bindings,
+        merge_strategy="append_by_canonical_row",
+        validation_profile_ref="gene_expression.probe_release.v1",
+        normalization_profile_ref="gene_expression.normalization.v1",
+    )
+
+
+def _write_series_matrix(path: Path, rows: list[tuple[str, str, str]]) -> None:
+    """Write a gzip series matrix: (probe_id, gsm1_value, gsm2_value) rows."""
+    import gzip as gzip_module
+
+    lines = ["!series_matrix_table_begin", '"ID_REF"\t"GSM1"\t"GSM2"']
+    lines.extend(f'"{probe}"\t{v1}\t{v2}' for probe, v1, v2 in rows)
+    lines.append("!series_matrix_table_end")
+    with gzip_module.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def _write_platform_annotation(path: Path, mapping: dict[str, str]) -> None:
+    """Write a gzip SOFT platform table: probe -> gene symbol rows."""
+    import gzip as gzip_module
+
+    lines = ["!platform_table_begin", '"ID"\t"GENE_SYMBOL"']
+    lines.extend(f'"{probe}"\t"{gene}"' for probe, gene in sorted(mapping.items()))
+    lines.append("!platform_table_end")
+    with gzip_module.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_t7_fanout_one_empty_binding_completes_with_other_binding_data(
+    tmp_path: Path,
+) -> None:
+    """D5 (operation-level): per-binding fan-out — an empty binding is
+    captured as a per-binding rejection while the usable binding continues
+    through phase B and publishes.  No cross-binding abort."""
+    empty = tmp_path / "empty.tsv"
+    empty.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, runner = await _run_executor_with_paths(
+        tmp_path,
+        [
+            _binding("binding_gdc", "gdc", "gdc.expression.v1"),
+            _binding("binding_xena", "ucsc_xena", "xena.matrix.v1"),
+        ],
+        {
+            "binding_gdc": empty,
+            "binding_xena": FIXTURES / "ncbi/gse178352/xena_matrix.tsv",
+        },
+        per_binding_outcomes=per_binding_outcomes,
+    )
+    assert outcome.status == "completed"
+    assert outcome.error is None
+    # The empty binding is captured as a typed per-binding rejection.
+    assert set(per_binding_outcomes) == {"binding_gdc"}
+    assert per_binding_outcomes["binding_gdc"].kind.value == "no_primary"
+    assert per_binding_outcomes["binding_gdc"].reason_code == "no_primary_data"
+    # The usable binding's data is published.
+    rows = _primary_rows(output_dir)
+    assert len(rows) >= 1
+    assert {row["source_logical_file"] for row in rows} == {"xena_matrix.tsv"}
+    assert any((output_dir / "publish").glob("build_runner_test_*"))
+
+
+@pytest.mark.asyncio
+async def test_t7_fanout_both_empty_is_no_data_without_phase_b(tmp_path: Path) -> None:
+    """D5 row 1: when every binding is rejected, phase B is skipped and the
+    outcome carries the structured no_primary_data reason + per-binding
+    outcomes (no cross-binding abort, no primary)."""
+    empty_a = tmp_path / "empty_a.tsv"
+    empty_a.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    empty_b = tmp_path / "empty_b.tsv"
+    empty_b.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [
+            _binding("binding_gdc", "gdc", "gdc.expression.v1"),
+            _binding("binding_xena", "ucsc_xena", "xena.matrix.v1"),
+        ],
+        {"binding_gdc": empty_a, "binding_xena": empty_b},
+        per_binding_outcomes=per_binding_outcomes,
+    )
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.details.get("reason_code") == "no_primary_data"
+    assert set(per_binding_outcomes) == {"binding_gdc", "binding_xena"}
+    # Phase B (integrate/validate/publish) never ran.
+    assert not (output_dir / "merged" / "primary.csv").exists()
+    assert not (output_dir / "publish").exists()
+
+
+@pytest.mark.asyncio
+async def test_t7_fanout_parse_error_in_one_binding_does_not_abort_other(
+    tmp_path: Path,
+) -> None:
+    """D5 (operation-level): a parse/structure failure in one binding is a
+    per-binding error rejection; the other binding still publishes."""
+    bad = tmp_path / "bad.tsv"
+    bad.write_text("gene_id\tS1\tS2\nTP53\t1\t2\nmalformed\n", encoding="utf-8")
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [
+            _binding("binding_gdc", "gdc", "gdc.expression.v1"),
+            _binding("binding_xena", "ucsc_xena", "xena.matrix.v1"),
+        ],
+        {
+            "binding_gdc": bad,
+            "binding_xena": FIXTURES / "ncbi/gse178352/xena_matrix.tsv",
+        },
+        per_binding_outcomes=per_binding_outcomes,
+    )
+    assert outcome.status == "completed"
+    assert per_binding_outcomes["binding_gdc"].kind.value == "error"
+    assert per_binding_outcomes["binding_gdc"].reason_code == "parse_error"
+    rows = _primary_rows(output_dir)
+    assert len(rows) >= 1
+
+
+@pytest.mark.asyncio
+async def test_t7_gene_required_zero_gene_rows_is_per_binding_rejection(
+    tmp_path: Path,
+) -> None:
+    """D5 row 3: a gene-required build whose geo source has expression rows
+    but zero publishable gene rows (all probes unmapped) rejects the binding
+    with ``probe_mapping_unavailable_required_gene_level`` — phase B skipped,
+    outcome carries the reason."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("AFFX-BioB-5", "1.5", "2.0")])
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_outcomes,
+    )
+    assert outcome.status == "failed"
+    assert per_binding_outcomes["binding_geo"].kind.value == "no_primary"
+    assert (
+        per_binding_outcomes["binding_geo"].reason_code
+        == "probe_mapping_unavailable_required_gene_level"
+    )
+    assert outcome.error is not None
+    assert (
+        outcome.error.details.get("reason_code")
+        == "probe_mapping_unavailable_required_gene_level"
+    )
+    # Canonical audits survive for the rejected binding (4b audit survival).
+    assert list((output_dir / "canonical").glob("binding_geo*"))
+
+
+@pytest.mark.asyncio
+async def test_t7_probe_build_publishes_probe_primary_with_mapping_asset(
+    tmp_path: Path,
+) -> None:
+    """D5 row 4: a probe-level build with a partial mapping asset publishes
+    the probe primary with mixed namespaces (mapped rows re-namespaced,
+    unmapped rows stay geo_probe) and a ProbeMappingSummary audit."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("PROBE1", "1.5", "2.0"), ("PROBE2", "3.0", "4.0")])
+    annotation = tmp_path / "GPL570_annot.txt.gz"
+    _write_platform_annotation(annotation, {"PROBE1": "TP53"})
+    registry = SchemaRegistry([build_probe_expression_schema()])
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, runner = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding(profile_ref="gene_expression.probe_release.v1")],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_outcomes,
+        mapping_paths={"binding_geo": annotation},
+        registry=registry,
+        spec=_geo_probe_spec([_geo_binding(profile_ref="gene_expression.probe_release.v1")]),
+    )
+    assert outcome.status == "completed"
+    assert outcome.error is None
+    rows = _primary_rows(output_dir)
+    assert len(rows) == 4  # 2 probes x 2 samples
+    # Mixed namespace publication: PROBE1 rows mapped to gene_symbol, PROBE2
+    # rows stay geo_probe (D5 row 4).
+    by_probe = {row["probe_id"]: row["gene_id_namespace"] for row in rows}
+    assert by_probe["PROBE1"] == "gene_symbol"
+    assert by_probe["PROBE2"] == "geo_probe"
+    # The summary was consumed by the probe profile: a probe_coverage warning
+    # with coverage 0.5 (partial) appears in the validation report.
+    report = json.loads((output_dir / "validation_report.json").read_text("utf-8"))
+    warnings = {w["check_id"] for w in report["warnings"]}
+    assert "probe_coverage" in warnings
+    cov = [w for w in report["warnings"] if w["check_id"] == "probe_coverage"][0]
+    assert cov["coverage_ratio"] == "0.5000"
+    # ProbeMappingSummary audit CSVs are published with the build.
+    assert (output_dir / "probe_mapping_summaries.csv").is_file()
+    assert (output_dir / "canonical" / "binding_geo_probe_mapping.csv").is_file()
+
+
+@pytest.mark.asyncio
+async def test_t7_gene_profile_consumes_probe_mapping_summary(
+    tmp_path: Path,
+) -> None:
+    """T7 deliverable 3: a real geo build with a mapping asset produces a
+    ProbeMappingSummary consumed by the gene profile's
+    ``probe_coverage_required_gene_level`` check (partial coverage → the
+    check reports coverage_below_1.0 and the primary is not published)."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("PROBE1", "1.5", "2.0"), ("PROBE2", "3.0", "4.0")])
+    annotation = tmp_path / "GPL570_annot.txt.gz"
+    _write_platform_annotation(annotation, {"PROBE1": "TP53"})
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],  # gene release profile
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_outcomes,
+        mapping_paths={"binding_geo": annotation},
+    )
+    # Partial coverage under gene-required: validation FAILED, nothing
+    # published, but the summary-driven check ran against the real summary.
+    assert outcome.status == "failed"
+    report = json.loads((output_dir / "validation_report.json").read_text("utf-8"))
+    checks = {check["check_id"]: check for check in report["checks"]}
+    coverage = checks["probe_coverage_required_gene_level"]
+    assert coverage["passed"] is False
+    assert "coverage_below_1.0=['binding_geo']" in coverage["detail"]
+    assert not any((output_dir / "publish").glob("build_runner_test_*"))
+
+
+@pytest.mark.asyncio
+async def test_t7_gene_required_full_coverage_publishes_gene_primary(
+    tmp_path: Path,
+) -> None:
+    """D5 row 3 complement: gene-required with complete probe→gene coverage
+    publishes the gene primary (mapped rows only pass the gate)."""
+    matrix = tmp_path / "probe_matrix.txt.gz"
+    _write_series_matrix(matrix, [("PROBE1", "1.5", "2.0")])
+    annotation = tmp_path / "GPL570_annot.txt.gz"
+    _write_platform_annotation(annotation, {"PROBE1": "TP53"})
+    per_binding_outcomes: dict = {}
+    outcome, output_dir, _ = await _run_executor_with_paths(
+        tmp_path,
+        [_geo_binding()],
+        {"binding_geo": matrix},
+        per_binding_outcomes=per_binding_outcomes,
+        mapping_paths={"binding_geo": annotation},
+    )
+    assert outcome.status == "completed"
+    rows = _primary_rows(output_dir)
+    assert len(rows) == 2
+    assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
+    assert any((output_dir / "publish").glob("build_runner_test_*"))

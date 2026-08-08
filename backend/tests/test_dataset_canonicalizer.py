@@ -14,6 +14,7 @@ from app.datasets.build.canonicalizer import (
 )
 from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.profiles import _expression_normalization_v1
+from app.datasets.contracts import NormalizationProfile
 from app.datasets.schema_registry import build_gene_expression_schema
 from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256, make_record_id
 
@@ -72,6 +73,21 @@ def test_authorize_namespace_rules() -> None:
     assert authorize_namespace("BRCA1") == ("BRCA1", "gene_symbol", "")
     assert authorize_namespace("1007_s_at") is None
     assert authorize_namespace("") is None
+
+
+def test_probe_id_misclassified_by_symbol_regex_is_regression_target() -> None:
+    """GEO probe IDs must not be authorized as ``gene_symbol`` by shape alone.
+
+    ``authorize_namespace`` (canonicalizer.py:88-96) currently treats any
+    alphanumeric token starting with a letter as ``gene_symbol``, so a probe
+    like ``AFFX-BioB-5`` is misclassified into the gene contract (and a
+    numeric probe like ``1007_s_at`` is wrongly rejected instead of being
+    declared ``geo_probe``).  T2 replaces the shape heuristic with the
+    adapter-declared ``gene_id_namespace_declared`` source-long column; this
+    test pins the bug until that fix lands.
+    """
+    assert authorize_namespace("AFFX-BioB-5") is None
+    assert authorize_namespace("1007_s_at") is None
 
 
 def test_canonical_matrix_rows(tmp_path: Path) -> None:
@@ -168,6 +184,7 @@ def test_unknown_unit_rejected(tmp_path: Path) -> None:
         allowed_namespaces=profile.allowed_namespaces,
         allowed_units=["expression_value"],  # tpm_unstranded not allowed
         allowed_semantics=profile.allowed_semantics,
+        allowed_value_scales=profile.allowed_value_scales,
         aggregation_policy="keep_all",
     )
     asset = _source_asset("gdc/gdc_star_counts.tsv")
@@ -294,6 +311,7 @@ def test_multi_unit_batch_detected_as_inconsistency(tmp_path: Path) -> None:
         allowed_namespaces=base.allowed_namespaces,
         allowed_units=["tpm_unstranded", "unstranded", "expression_value"],
         allowed_semantics=base.allowed_semantics,
+        allowed_value_scales=base.allowed_value_scales,
         aggregation_policy="keep_all",
     )
     # Inject a second unit into the parsed batch rows so the canonicalizer
@@ -355,3 +373,326 @@ def test_multi_unit_batch_detected_as_inconsistency(tmp_path: Path) -> None:
         "expression_value",
         "unstranded",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T2: the canonicalizer consumes the adapter-declared namespace
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalizer_consumes_declared_namespace(tmp_path: Path) -> None:
+    """GEO probe rows are not authorized as gene_symbol by ID shape alone.
+
+    Phase 5 D1: the adapter declares ``geo_probe`` for non-ENSG ID_REF rows;
+    the canonicalizer must consume that declaration — the probe row keeps the
+    honest ``geo_probe`` namespace instead of being guessed as
+    ``gene_symbol``.  Phase 5 T7 (D2/D5): ``geo_probe`` is a canonical
+    namespace (the entity-level publish policy — residual probe rows fail the
+    gene release gate — lives in the validation profile, not here), so the
+    probe rows pass canonicalization with ``geo_probe``.
+    """
+    import gzip as gzip_module
+
+    from app.datasets.build.adapters import GeoExpressionAdapter
+
+    matrix = tmp_path / "geo_series_matrix.txt.gz"
+    text = (
+        "!series_matrix_table_begin\n"
+        "\"ID_REF\"\t\"GSM1\"\t\"GSM2\"\n"
+        "\"AFFX-BioB-5\"\t1.5\t2.0\n"
+        "\"ENSG00000141510\"\t5.0\t6.0\n"
+        "!series_matrix_table_end\n"
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    from app.datasets.contracts import AdapterParams, ValueScale
+
+    params = AdapterParams(
+        format="series_matrix",
+        value_semantics="normalized_expression",
+        value_scale=ValueScale.LOG2,
+        expression_unit="log2_expression",
+        platform_ids=["GPL570"],
+    )
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=f"source_assets/{matrix.name}",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GeoExpressionAdapter().parse(
+        asset,
+        matrix,
+        build_id="build_geo",
+        binding_id="binding_geo",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+        parameters=params,
+    )
+    result = canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+    )
+    # Both namespaces pass canonicalization; the probe row keeps the honest
+    # geo_probe namespace (never guessed as gene_symbol).  The gene release
+    # profile fails residual geo_probe rows (T5 probe_coverage_required_gene_
+    # level), which is the entity-level enforcement point.
+    assert result.namespaces == ("ensembl_gene", "geo_probe")
+    assert result.row_count == 4
+    assert result.rejected_count == 0
+    normalization = result.audit_paths[1].read_text()
+    assert "AFFX-BioB-5" in normalization
+    assert "namespace_geo_probe" in normalization
+
+
+def test_canonicalizer_accepts_declared_ensembl_gene(tmp_path: Path) -> None:
+    """tximport rows (declared ensembl_gene) canonicalize under the gene schema."""
+    from app.datasets.build.adapters import GeoExpressionAdapter
+    from app.datasets.contracts import AdapterParams, ValueScale
+
+    counts = tmp_path / "counts.tsv"
+    counts.write_text(
+        "counts.S1\tcounts.S2\n"
+        "ENSG00000141510\t10\t20\n"
+        "ENSG00000000003\t30\t40\n",
+        encoding="utf-8",
+    )
+    params = AdapterParams(
+        format="tximport_counts",
+        value_semantics="raw_count",
+        value_scale=ValueScale.LINEAR,
+        expression_unit="estimated_count",
+        is_normalized=False,
+    )
+    checksum = hashlib.sha256(counts.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/counts.tsv",
+        sha256=checksum,
+        size_bytes=counts.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GeoExpressionAdapter().parse(
+        asset,
+        counts,
+        build_id="build_geo",
+        binding_id="binding_geo",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+        parameters=params,
+    )
+    result = canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+    )
+    assert result.namespaces == ("ensembl_gene",)
+    assert result.row_count == 4
+    assert result.rejected_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T4: canonicalizer value-scale validation (spec D3)
+# ---------------------------------------------------------------------------
+
+
+def _series_matrix_source(tmp_path: Path) -> tuple[Path, Path]:
+    """Write a small GEO series-matrix file; return (source_path, source_asset_path)."""
+    import gzip as gzip_module
+
+    matrix = tmp_path / "geo_scale_matrix.txt.gz"
+    text = (
+        "!series_matrix_table_begin\n"
+        "\"ID_REF\"\t\"GSM1\"\t\"GSM2\"\n"
+        "\"ENSG00000141510\"\t5.0\t6.0\n"
+        "!series_matrix_table_end\n"
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=f"source_assets/{matrix.name}",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    return matrix, asset
+
+
+def _canonicalize_geo_series(
+    tmp_path: Path,
+    *,
+    value_scale: str,
+    profile: NormalizationProfile,
+) -> CanonicalizationResult:
+    from app.datasets.build.adapters import GeoExpressionAdapter
+    from app.datasets.contracts import AdapterParams, ValueScale
+
+    matrix, asset = _series_matrix_source(tmp_path)
+    params = AdapterParams(
+        format="series_matrix",
+        value_semantics="normalized_expression",
+        value_scale=ValueScale(value_scale),
+        expression_unit="log2_expression",
+        platform_ids=["GPL570"],
+    )
+    batch = GeoExpressionAdapter().parse(
+        asset,
+        matrix,
+        build_id="build_geo",
+        binding_id="binding_geo",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+        parameters=params,
+    )
+    return canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=profile,
+        output_dir=tmp_path,
+    )
+
+
+def test_scale_outside_allowlist_rejected(tmp_path: Path) -> None:
+    """A row whose value_scale is not in the profile allowlist is rejected.
+
+    T4 D3: ``unknown`` is honest but must be explicitly allowed — a profile
+    allowing only {log2, linear} rejects an unknown-scale declaration.
+    """
+    from app.datasets.contracts import NormalizationProfile, ValueScale
+
+    profile = NormalizationProfile(
+        profile_id="gene_expression.normalization.restricted_scale.v1",
+        dataset_family="gene_expression",
+        allowed_namespaces=["ensembl_gene"],
+        allowed_units=["log2_expression"],
+        allowed_semantics=["normalized_expression"],
+        allowed_value_scales=[ValueScale.LOG2, ValueScale.LINEAR],
+        aggregation_policy="keep_all",
+    )
+    result = _canonicalize_geo_series(
+        tmp_path,
+        value_scale="unknown",
+        profile=profile,
+    )
+    assert result.row_count == 0
+    assert result.rejected_count == 2
+    rejected = (tmp_path / "canonical" / "binding_geo_rejected.csv").read_text()
+    assert "unknown_scale" in rejected
+
+
+def test_unknown_scale_accepted_when_explicitly_allowed(tmp_path: Path) -> None:
+    """A profile allowing ``unknown`` accepts an honestly declared unknown.
+
+    T4 D3: ``unknown`` must never be promoted to a known scale (log2) by
+    inference; the canonical row and the measurement identity keep it.
+    """
+    from app.datasets.contracts import NormalizationProfile, ValueScale
+
+    profile = NormalizationProfile(
+        profile_id="gene_expression.normalization.unknown_ok.v1",
+        dataset_family="gene_expression",
+        allowed_namespaces=["ensembl_gene"],
+        allowed_units=["log2_expression"],
+        allowed_semantics=["normalized_expression"],
+        allowed_value_scales=[ValueScale.LOG2, ValueScale.UNKNOWN],
+        aggregation_policy="keep_all",
+    )
+    result = _canonicalize_geo_series(
+        tmp_path,
+        value_scale="unknown",
+        profile=profile,
+    )
+    assert result.row_count == 2
+    assert result.rejected_count == 0
+    assert result.batch.statistics["measurement_identities"] == [
+        ["normalized_expression", "unknown", "log2_expression"]
+    ]
+    with result.canonical_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert all(row["value_scale"] == "unknown" for row in rows)
+
+
+def test_raw_count_scale_declaration_rejected(tmp_path: Path) -> None:
+    """``raw_count`` is a semantics, not a scale: the canonicalizer rejects it.
+
+    AdapterParams already rejects ``raw_count`` as a ValueScale; this proves
+    the canonicalizer fails closed too when a raw unparseable scale string
+    reaches it (defense in depth, T4 D3).
+    """
+    from app.datasets.build.adapters import GdcExpressionAdapter
+    from app.datasets.contracts import DataBatch
+
+    asset = _source_asset("gdc/gdc_expression.tsv")
+    batch = GdcExpressionAdapter().parse(
+        asset,
+        FIXTURES / "gdc/gdc_expression.tsv",
+        build_id="build_test",
+        binding_id="binding_1",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+    )
+    source_path = tmp_path / batch.file_asset.relative_path
+    remap_dir = tmp_path / "source_assets"
+    remap_dir.mkdir(parents=True, exist_ok=True)
+    remapped = remap_dir / "raw_count_scale.tsv"
+    with source_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames
+        rows = []
+        for row in reader:
+            row["value_scale"] = "raw_count"
+            rows.append(row)
+    with remapped.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    remapped_checksum = hashlib.sha256(remapped.read_bytes()).hexdigest()
+    remapped_batch = DataBatch(
+        batch_id=batch.batch_id,
+        binding_id=batch.binding_id,
+        dataset_family=batch.dataset_family,
+        row_granularity=batch.row_granularity,
+        schema_ref=batch.schema_ref,
+        file_asset=batch.file_asset.model_copy(
+            update={
+                "asset_id": asset_id_from_sha256(remapped_checksum),
+                "sha256": remapped_checksum,
+                "relative_path": "source_assets/raw_count_scale.tsv",
+                "size_bytes": remapped.stat().st_size,
+            }
+        ),
+        row_count=batch.row_count,
+        column_count=batch.column_count,
+        parser_id=batch.parser_id,
+        parser_version=batch.parser_version,
+        statistics=dict(batch.statistics),
+    )
+    result = canonicalize(
+        batch=remapped_batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+    )
+    assert result.row_count == 0
+    assert result.rejected_count == 4
+    rejected = (tmp_path / "canonical" / "binding_1_rejected.csv").read_text()
+    assert "unknown_scale" in rejected

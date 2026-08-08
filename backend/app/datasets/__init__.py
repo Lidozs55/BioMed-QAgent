@@ -30,6 +30,7 @@ from app.datasets.contracts import (
 from app.datasets.schema_registry import (
     SchemaRegistry,
     build_gene_expression_schema,
+    build_probe_expression_schema,
 )
 from app.datasets.spec_validator import SpecValidationResult, SpecValidator
 
@@ -63,4 +64,5 @@ __all__ = [
     "ValidationResult",
     "ValidationResultStatus",
     "build_gene_expression_schema",
+    "build_probe_expression_schema",
 ]

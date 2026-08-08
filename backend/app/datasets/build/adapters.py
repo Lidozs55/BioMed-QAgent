@@ -24,9 +24,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, TextIO
 
-from app.datasets.build.errors import AdapterError, EmptySourceError
+from pydantic import ValidationError
+
+from app.datasets.build.errors import AdapterError, BuildError, EmptySourceError
 from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import (
+    AdapterParams,
     ConfidenceLevel,
     DataBatch,
     FieldMapping,
@@ -34,18 +37,23 @@ from app.datasets.contracts import (
     JsonValue,
     MappingMethod,
     MappingReviewStatus,
+    SourceBinding,
 )
 from app.domain.contracts import SourceAsset, asset_id_from_sha256, make_record_id
 
 # Source-long layout emitted by every expression adapter.  ``gene_id_raw`` is
 # verbatim; namespace/version authorization and unit policy are applied later
-# by the Canonicalizer.
+# by the Canonicalizer.  ``gene_id_namespace_declared`` (Phase 5 D1) is the
+# internal namespace the adapter declares for the row; the canonical schema
+# output keeps ``gene_id_namespace`` authoritative, and the canonicalizer
+# (T2) consumes the declared value instead of guessing from the ID shape.
 SOURCE_LONG_COLUMNS: tuple[str, ...] = (
     "record_id",
     "dataset_id",
     "source_id",
     "asset_id",
     "gene_id_raw",
+    "gene_id_namespace_declared",
     "sample_id",
     "measurement_type",
     "value_semantics",
@@ -225,6 +233,41 @@ def _emit_matrix_cells(
     return emitted, rejected
 
 
+def _row_granularity_for(schema_ref: str) -> str:
+    """Map the target schema to the parsed row granularity (Phase 5 D2).
+
+    The probe-level contract describes probe x sample measurements; every
+    other expression schema is gene-level.  The schema registry remains the
+    authority for a schema's declared granularity; this mirrors it for the
+    adapter's ``DataBatch`` without a registry dependency.
+    """
+    return (
+        "probe_sample_measurement"
+        if schema_ref == "gene_expression.probe_long.v1"
+        else "gene_sample_measurement"
+    )
+
+
+def adapter_params_for_binding(binding: SourceBinding) -> AdapterParams | None:
+    """Build typed AdapterParams from a binding's declared parameters.
+
+    Returns ``None`` when the binding declares no parameters (legacy GDC/Xena
+    adapters ignore them).  Declared parameters must form a valid
+    ``AdapterParams`` (Phase 5 D1); a violation raises ``BuildError`` so the
+    build fails closed instead of reaching the adapter with a partial
+    contract.
+    """
+    if not binding.parameters:
+        return None
+    try:
+        return AdapterParams.model_validate(binding.parameters)
+    except ValidationError as exc:
+        raise BuildError(
+            f"binding {binding.binding_id!r} has invalid adapter parameters: "
+            f"{exc}"
+        ) from exc
+
+
 class SourceAdapter(ABC):
     """Base class for expression source adapters (fail closed)."""
 
@@ -241,12 +284,15 @@ class SourceAdapter(ABC):
         binding_id: str,
         schema_ref: str,
         output_dir: Path,
+        parameters: AdapterParams | None = None,
     ) -> DataBatch:
         """Parse *source_asset* into a source-long DataBatch.
 
-        Raises ``AdapterError`` on checksum mismatch or malformed input; a
-        partially written output file is removed so the chain never consumes
-        a truncated batch.
+        ``parameters`` (Phase 5 D1) carries the typed ``AdapterParams`` for
+        format-selected adapters (geo.expression.v1); legacy adapters ignore
+        it.  Raises ``AdapterError`` on checksum mismatch or malformed input;
+        a partially written output file is removed so the chain never
+        consumes a truncated batch.
         """
         source_path = Path(source_path)
         _verify_sha256(source_path, source_asset.sha256)
@@ -273,6 +319,7 @@ class SourceAdapter(ABC):
                     build_id=build_id,
                     binding_id=binding_id,
                     source_name=source_name,
+                    parameters=parameters,
                 )
         except Exception:
             output_path.unlink(missing_ok=True)
@@ -294,7 +341,7 @@ class SourceAdapter(ABC):
             batch_id=f"batch_{binding_id}",
             binding_id=binding_id,
             dataset_family="gene_expression",
-            row_granularity="gene_sample_measurement",
+            row_granularity=_row_granularity_for(schema_ref),
             schema_ref=schema_ref,
             file_asset=file_asset,
             row_count=int(statistics["row_count"]),
@@ -317,6 +364,7 @@ class SourceAdapter(ABC):
         build_id: str,
         binding_id: str,
         source_name: str,
+        parameters: AdapterParams | None = None,
     ) -> tuple[dict[str, JsonValue], list[str], list[FieldMapping], int]:
         """Stream validated source-long rows; return (statistics, warnings, mappings, rejected)."""
 
@@ -401,6 +449,7 @@ class GdcExpressionAdapter(SourceAdapter):
         build_id: str,
         binding_id: str,
         source_name: str,
+        parameters: AdapterParams | None = None,
     ) -> tuple[dict[str, JsonValue], list[str], list[FieldMapping], int]:
         rows = enumerate(csv.reader(source_handle, delimiter="\t"), start=1)
         header_line, header = _next_header(rows)
@@ -612,6 +661,7 @@ class XenaMatrixAdapter(SourceAdapter):
         build_id: str,
         binding_id: str,
         source_name: str,
+        parameters: AdapterParams | None = None,
     ) -> tuple[dict[str, JsonValue], list[str], list[FieldMapping], int]:
         rows = enumerate(csv.reader(source_handle, delimiter="\t"), start=1)
         header_line, header = _next_header(rows)
@@ -683,9 +733,15 @@ def _next_header(rows: enumerate[list[str]]) -> tuple[int, list[str]]:
     raise AdapterError("expression table contains no header")
 
 
+#: GeoExpressionAdapter lives in a sibling module that imports the shared
+#: adapter helpers above; the import is placed after those definitions so the
+#: module graph stays acyclic (Phase 5 T2).
+from app.datasets.build.geo_adapter import GeoExpressionAdapter  # noqa: E402
+
 ADAPTER_REGISTRY: dict[str, SourceAdapter] = {
     GdcExpressionAdapter.adapter_id: GdcExpressionAdapter(),
     XenaMatrixAdapter.adapter_id: XenaMatrixAdapter(),
+    GeoExpressionAdapter.adapter_id: GeoExpressionAdapter(),
 }
 
 

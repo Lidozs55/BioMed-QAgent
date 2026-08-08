@@ -14,6 +14,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.datasets.contracts import PlatformRecord
 from app.domain.contracts import (
     DownloadAttempt,
     LiteratureRecord,
@@ -23,6 +24,7 @@ from app.domain.contracts import (
     TaskSpecification,
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
+from app.pipeline.processing.geo_association import SamplePlatformEvidenceRow
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.pipeline.stages.artifact_build.catalog import (
     _build_dataset_catalog_rows,
@@ -38,9 +40,14 @@ from app.pipeline.stages.artifact_build.field_mapping import (
     _build_field_mapping_rows,
 )
 from app.pipeline.stages.artifact_build.relations import _build_source_relations
-from app.pipeline.stages.artifact_build.samples import _build_sample_metadata_rows
+from app.pipeline.stages.artifact_build.samples import (
+    _SAMPLE_GROUP_EXTENDED_COLUMNS,
+    _build_sample_metadata_rows,
+    samples_have_group_evidence,
+)
 from app.pipeline.stages.artifact_build.warnings import (
     _build_cell_line_warnings,
+    _build_sample_group_warnings,
     _build_warnings_rows,
 )
 from app.pipeline.stages.base import (
@@ -67,6 +74,22 @@ _GENE_TOKEN_STOP = frozenset({
     "PANCREAS", "BREAST", "LUNG", "LIVER", "COLON", "GASTRIC", "RENAL",
     "HEPATIC", "OVARIAN", "PROSTATE", "BRAIN", "BLOOD", "SERUM",
 })
+
+# Phase 5 T3 D8: platform→sample association audit columns (written only
+# when a live GEO run produced PlatformRecords / sample evidence).
+_PLATFORM_AUDIT_COLUMNS = [
+    "platform_id",
+    "source_id",
+    "annotation_status",
+    "annotation_asset_id",
+    "probe_id_field",
+    "gene_id_field",
+    "target_namespace",
+    "mapping_source_url",
+    "annotation_sha256",
+]
+
+_SAMPLE_PLATFORM_EVIDENCE_COLUMNS = ["sample_id", "platform_id"]
 
 
 def _extract_target_gene(topic: str) -> str | None:
@@ -292,6 +315,8 @@ def run_artifact_build(
     parsed_datasets: list[ParsedDataset] | None = None,
     merged_dataset: ParsedDataset | None = None,
     no_primary_reason: str | None = None,
+    platform_records: list[PlatformRecord] | None = None,
+    sample_platform_evidence: list[SamplePlatformEvidenceRow] | None = None,
     dataset_source_id: str | None = None,
     dataset_accession: str | None = None,
     dataset_title: str | None = None,
@@ -392,10 +417,20 @@ def run_artifact_build(
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
     )
+    # Phase 5 final review (F6): T8 sample-group conflict + one-sided-pairing
+    # warnings are persisted into warnings.csv through the same artifact
+    # channel as the cell-line corrections (mirroring the cell-line pattern).
+    sample_group_warnings = [] if is_reactome else _build_sample_group_warnings(
+        samples=samples,
+        geo_source_id=geo_source_id or primary_source_id,
+        asset_id=source_asset.asset_id,
+        retrieved_at=retrieved_at,
+    )
     # Merge cleaning anomalies into the warnings list so
     # warnings_metrics_consistency validation stays satisfied.
     all_warnings = _build_warnings_rows(
         cell_line_warnings=cell_line_warnings,
+        sample_group_warnings=sample_group_warnings,
         cleaning_report=cleaning_report,
         geo_source_id=geo_source_id,
         asset_id=source_asset.asset_id,
@@ -463,6 +498,14 @@ def run_artifact_build(
         is_reactome=is_reactome,
         parsed_path=parsed_path,
         dataset_url_value=dataset_url_value,
+    )
+    # Phase 5 T8: append the sample-group columns only when the extractor
+    # produced evidence, so cell-line/treatment-only packages keep the
+    # historic base columns (fixture regression).
+    sample_group_columns = (
+        _SAMPLE_GROUP_EXTENDED_COLUMNS
+        if samples_have_group_evidence(samples)
+        else []
     )
     field_descriptions = _build_field_descriptions_rows(primary)
     processing_log_rows = _build_processing_log_rows(
@@ -570,7 +613,42 @@ def run_artifact_build(
     }
 
     for name, columns in _ARTIFACT_COLUMNS.items():
+        if name == "sample_metadata.csv":
+            columns = [*columns, *sample_group_columns]
         write_csv(staging / name, columns, rows_by_file.get(name, []))
+
+    # Phase 5 T3 D8 platform→sample audit: written ONLY when a live GEO run
+    # produced per-GPL PlatformRecords / per-sample GPL evidence, so historic
+    # artifact sets stay unchanged for every other flow. Both files default
+    # to ArtifactRole.AUDIT_REPORT in the manifest.
+    if platform_records:
+        write_csv(
+            staging / "platform_audit.csv",
+            _PLATFORM_AUDIT_COLUMNS,
+            [
+                {
+                    "platform_id": record.platform_id,
+                    "source_id": record.source_id,
+                    "annotation_status": record.annotation_status.value,
+                    "annotation_asset_id": record.annotation_asset_id or "",
+                    "probe_id_field": record.probe_id_field or "",
+                    "gene_id_field": record.gene_id_field or "",
+                    "target_namespace": record.target_namespace or "",
+                    "mapping_source_url": record.mapping_source_url or "",
+                    "annotation_sha256": record.annotation_sha256 or "",
+                }
+                for record in platform_records
+            ],
+        )
+    if sample_platform_evidence:
+        write_csv(
+            staging / "sample_platform_evidence.csv",
+            _SAMPLE_PLATFORM_EVIDENCE_COLUMNS,
+            [
+                {"sample_id": row.sample_id, "platform_id": row.platform_id}
+                for row in sample_platform_evidence
+            ],
+        )
 
     # Target-gene subset artifact (P0-2): when the task topic names a gene
     # symbol that exists in main_data.csv, ship a filtered ``{gene}_expression.csv``

@@ -31,6 +31,16 @@ from app.domain.contracts import (
     make_source_id,
 )
 from app.integrations.acquisition import AcquisitionResult, acquire_source
+from app.pipeline.processing.geo_accession import extract_gse_accession
+from app.pipeline.processing.geo_provider import (
+    MAX_BYTES,
+    select_series_fixture_assets,
+    series_counts_url,
+    series_dir_prefix,
+    series_family_soft_url,
+    series_matrix_url,
+    series_suppl_directory_url,
+)
 from app.pipeline.stages.base import (
     AcquisitionOutput,
     DownloadError,
@@ -40,14 +50,19 @@ from app.pipeline.stages.base import (
 from app.tools.content_cache import ContentCache, canonical_request_hash
 
 _DEFAULT_GSE = "GSE178352"
-_MAX_BYTES = 100 * 1024 * 1024  # 100 MB safety cap
+_MAX_BYTES = MAX_BYTES  # 100 MB safety cap (shared with the Phase 5 provider)
 
 logger = logging.getLogger(__name__)
 
 
 def _extract_gse_accession(value: str) -> str | None:
-    match = re.search(r"(GSE\d+)(?:\[Accession\])?", value, re.IGNORECASE)
-    return match.group(1).upper() if match else None
+    """Return the single GSE accession, or None.
+
+    Phase 5 D7: delegated to the shared helper which RAISES ValueError
+    (listing all accessions) when the value embeds more than one — the
+    historical first-match truncation is gone.
+    """
+    return extract_gse_accession(value)
 
 
 def _resolve_geo_dataset(ctx: StageContext) -> DatasetSelection:
@@ -98,48 +113,31 @@ def _default_specification(ctx: StageContext) -> TaskSpecification:
 def _geo_series_dir(gse: str) -> str:
     """Return the NCBI GEO series directory prefix for a GSE accession.
 
-    NCBI stores series under ``geo/series/GSE{prefix}nnn/`` where the numeric
-    prefix is the accession number with its last three digits replaced by
-    ``nnn`` (e.g. GSE15471 → GSE15nnn, GSE178352 → GSE178nnn). This matches
-    the convention used by the skill layer (``app/skills/builtin/acquisition/geo.py``).
-
-    The previous implementation sliced ``gse[:6]``, which only happened to
-    match 6-digit accessions (e.g. the fixture GSE178352) and produced dead
-    404 directories (``GSE154nnn``) for the far more common 5-digit series —
-    the root cause of repeated live GEO acquisition failures.
+    Delegates to the shared Phase 5 provider helper (geo.series.v1); the
+    behavior is byte-for-byte the verified V1 layout: the numeric prefix is
+    the accession with its last three digits replaced by ``nnn`` (e.g.
+    GSE15471 → GSE15nnn, GSE178352 → GSE178nnn).
     """
-    return f"{gse[:-3].upper()}nnn"
+    return series_dir_prefix(gse)
 
 
 def _counts_download_url(gse: str) -> str:
     """Build the NCBI GEO supplemental counts URL for a GSE accession."""
-    return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
-        f"{gse}/suppl/{gse}_tximportCounts.txt.gz"
-    )
+    return series_counts_url(gse)
 
 
 def _family_soft_url(gse: str) -> str:
-    return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
-        f"{gse}/soft/{gse}_family.soft.gz"
-    )
+    return series_family_soft_url(gse)
 
 
 def _series_matrix_url(gse: str) -> str:
     """Build the NCBI GEO series matrix URL (universally available fallback)."""
-    return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
-        f"{gse}/matrix/{gse}_series_matrix.txt.gz"
-    )
+    return series_matrix_url(gse)
 
 
 def _suppl_directory_url(gse: str) -> str:
     """Build the NCBI GEO supplementary files directory URL."""
-    return (
-        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{_geo_series_dir(gse)}/"
-        f"{gse}/suppl/"
-    )
+    return series_suppl_directory_url(gse)
 
 
 # 启发式关键词优先级：counts > tpm > fpkm > expression
@@ -780,9 +778,12 @@ async def _run_gdc_xena_acquisition_live(
 def _run_acquisition_fixture(ctx: StageContext, retrieved_at: datetime, gse: str) -> StageResult:
     if gse.upper() != _DEFAULT_GSE:
         raise ValueError(f"fixture mode only supports the pinned dataset {_DEFAULT_GSE}, got {gse}")
-    compressed = gzip.compress(
-        (ctx.fixture_dir / "tximport_counts_slice.tsv").read_bytes(), mtime=0
-    )
+    fixture_assets = dict(select_series_fixture_assets(ctx.fixture_dir, gse))
+    if "tximport_counts" not in fixture_assets:
+        raise FileNotFoundError(
+            f"fixture tximport counts missing for {gse} under {ctx.fixture_dir}"
+        )
+    compressed = gzip.compress(fixture_assets["tximport_counts"].read_bytes(), mtime=0)
     checksum = hashlib.sha256(compressed).hexdigest()
     source_path = ctx.workdir.source_assets / f"{gse}_tximportCounts.fixture.txt.gz"
     if source_path.exists():

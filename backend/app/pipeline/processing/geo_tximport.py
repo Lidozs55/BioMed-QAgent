@@ -6,6 +6,8 @@ import csv
 import gzip
 import hashlib
 import re
+from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import Field
 
@@ -18,6 +20,52 @@ from app.domain.contracts import (
     make_record_id,
 )
 from app.tools.workdir import TaskWorkDir
+
+GROUP_RULE_ID = "geo.sample-group.v1"
+
+GroupLabel = Literal["tumor", "normal", "unknown"]
+
+# T8 词汇表定稿 (phase 5): versioned, closed vocabulary for tumor/normal
+# sample grouping and explicit pairing. High-confidence keys are listed in
+# priority order; every present high-confidence hit is same-priority evidence
+# (a conflict between them → unknown + warning, never token-count voting).
+_HIGH_CONFIDENCE_KEYS: tuple[str, ...] = (
+    "sample type",
+    "tissue type",
+    "disease state",
+    "condition",
+    "tumor normal",
+    "tumour normal",
+)
+
+# Multi-word tokens are matched (and their words consumed) before single
+# words so "non-tumor" / "adjacent normal" / "primary tumor" classify
+# directly instead of surfacing as single-word conflicts ("non tumor"
+# contains "tumor"). "control" alone is NOT a normal token — only
+# "control tissue" is, so cell-line "control" never auto-classifies normal.
+_GROUP_PHRASES: tuple[tuple[str, GroupLabel], ...] = (
+    ("primary tumor", "tumor"),
+    ("adjacent normal", "normal"),
+    ("normal adjacent", "normal"),
+    ("non tumor", "normal"),
+    ("non tumour", "normal"),
+    ("control tissue", "normal"),
+)
+_TUMOR_WORDS: frozenset[str] = frozenset({
+    "tumor", "tumour", "cancer", "carcinoma", "malignant", "metastatic",
+})
+_NORMAL_WORDS: frozenset[str] = frozenset({"normal", "healthy"})
+
+# Pairing is accepted ONLY from these explicit keys (词汇表 point 6) — never
+# inferred from GSM order, title similarity, or same-GSE membership.
+_PAIRING_KEYS: tuple[str, ...] = (
+    "pair id",
+    "pairing id",
+    "patient id",
+    "subject id",
+    "donor id",
+    "individual id",
+)
 
 
 class GeoSampleMetadata(ContractModel):
@@ -32,12 +80,193 @@ class GeoSampleMetadata(ContractModel):
     treatment: str
     replicate: int = Field(ge=1)
     organism: str = "Homo sapiens"
+    # Phase 5 T8: tumor/normal grouping + explicit pairing. Populated by the
+    # shared versioned extractors below (group_rule_id="geo.sample-group.v1");
+    # samples without classification fields stay sample_group="unknown".
+    sample_group: GroupLabel = "unknown"
+    sample_group_raw: str = ""
+    pairing_id: str | None = None
+    group_rule_id: str = GROUP_RULE_ID
 
 
 _CELL_LINE_CANONICAL = {
     "MD-MBA-231": "MDA-MB-231",
     "MD-MBA-453": "MDA-MB-453",
 }
+
+
+@dataclass
+class SampleGroupResult:
+    """Outcome of the versioned tumor/normal group extractor."""
+
+    sample_group: GroupLabel
+    sample_group_raw: str
+    warnings: list[str]
+
+
+def _normalize_token(text: str) -> str:
+    """T8 vocabulary key/value normalization (词汇表 point 1): trim,
+    lowercase, ``_``/``-`` → space, collapse whitespace."""
+    return " ".join(
+        text.strip().lower().replace("_", " ").replace("-", " ").split()
+    )
+
+
+def _value_words(value: str) -> list[str]:
+    """Lowercase alphanumeric word tokens of a characteristic value."""
+    return re.findall(r"[a-z0-9]+", _normalize_token(value))
+
+
+def _matched_group_tokens(value: str) -> set[str]:
+    """Set of groups ("tumor"/"normal") matched by a value's tokens.
+
+    Multi-word phrases are matched and their words consumed before single
+    words, so "non-tumor" / "adjacent normal" / "primary tumor" classify
+    directly instead of surfacing as single-word conflicts. Returns the
+    empty set when no token matches (including cell-line "control", which
+    is not a normal token unless it reads "control tissue").
+    """
+    words = _value_words(value)
+    if not words:
+        return set()
+    remaining = list(words)
+    matched: set[str] = set()
+    for phrase, group in _GROUP_PHRASES:
+        phrase_words = phrase.split(" ")
+        for start in range(len(remaining) - len(phrase_words) + 1):
+            if remaining[start : start + len(phrase_words)] == phrase_words:
+                del remaining[start : start + len(phrase_words)]
+                matched.add(group)
+                break
+    for word in remaining:
+        if word in _TUMOR_WORDS:
+            matched.add("tumor")
+        if word in _NORMAL_WORDS:
+            matched.add("normal")
+    return matched
+
+
+def _raw_evidence(raw_key: str, raw_value: str) -> str:
+    """``key:value`` evidence string for ``sample_group_raw``."""
+    return f"{raw_key.strip()}:{raw_value.strip()}"
+
+
+def _classify_evidence(
+    evidence: list[tuple[str, str]], rule_id: str
+) -> SampleGroupResult:
+    """Classify same-priority evidence entries ``(raw_key, raw_value)``.
+
+    ``sample_group_raw`` keeps the ``key:value`` of the highest-priority
+    classified hit; a conflict between tumor and normal markers →
+    ``unknown`` + a warning (词汇表 point 4 — no token-count voting).
+    """
+    classified: list[tuple[str, str, set[str]]] = []
+    for raw_key, raw_value in evidence:
+        groups = _matched_group_tokens(raw_value)
+        if groups:
+            classified.append((raw_key, raw_value, groups))
+    if not classified:
+        return SampleGroupResult("unknown", "", [])
+    raw_key, raw_value, _ = classified[0]
+    raw = _raw_evidence(raw_key, raw_value)
+    matched_groups: set[str] = set()
+    for _, _, groups in classified:
+        matched_groups |= groups
+    if matched_groups == {"tumor"}:
+        return SampleGroupResult("tumor", raw, [])
+    if matched_groups == {"normal"}:
+        return SampleGroupResult("normal", raw, [])
+    raws = [_raw_evidence(k, v) for k, v, _ in classified]
+    warning = (
+        f"{rule_id}: conflicting tumor/normal evidence "
+        f"({' vs '.join(raws)}) → sample_group=unknown"
+    )
+    return SampleGroupResult("unknown", raw, [warning])
+
+
+def extract_sample_group(
+    characteristics: dict[str, str] | None,
+    title: str | None,
+    *,
+    rule_id: str = GROUP_RULE_ID,
+) -> SampleGroupResult:
+    """Extract a tumor/normal group from sample characteristics (T8).
+
+    Implements the ``geo.sample-group.v1`` vocabulary exactly:
+
+    * keys are normalized (trim/lower/``_``/``-`` → space/collapse) and the
+      high-confidence key priority list decides which fields are evidence;
+    * values are classified against the closed tumor/normal token lists;
+    * same-priority conflicts → ``unknown`` + a warning; unrecognized values
+      → ``unknown`` without a warning;
+    * ``source name``/``title`` are low-priority evidence used only when no
+      high-confidence field is present — and never for samples declaring a
+      ``cell line`` characteristic (in-vitro models have no tissue
+      tumor/normal identity, so titles saying "Breast Cancer cells" must
+      not classify a cell-line sample as tumor).
+    """
+    characteristics = characteristics or {}
+    evidence: list[tuple[str, str]] = []
+    for key in _HIGH_CONFIDENCE_KEYS:
+        for raw_key, raw_value in characteristics.items():
+            if _normalize_token(raw_key) == key:
+                evidence.append((raw_key, raw_value))
+    if not evidence:
+        if any(_normalize_token(key) == "cell line" for key in characteristics):
+            return SampleGroupResult("unknown", "", [])
+        for raw_key, raw_value in characteristics.items():
+            if _normalize_token(raw_key) == "source name":
+                evidence.append((raw_key, raw_value))
+                break
+        if title:
+            evidence.append(("title", title))
+        if not evidence:
+            return SampleGroupResult("unknown", "", [])
+    return _classify_evidence(evidence, rule_id)
+
+
+def extract_pairing_id(characteristics: dict[str, str] | None) -> str | None:
+    """Extract an explicit pairing identifier (T8 词汇表 point 6).
+
+    Only the explicit pairing keys (pair id / pairing id / patient id /
+    subject id / donor id / individual id) are accepted; pairing is NEVER
+    inferred from GSM order, title similarity, or same-GSE membership. The
+    value is normalized (trim/lower/``_``/``-`` → space/collapse) so
+    inconsistently-cased GEO metadata yields one stable ``pairing_id``.
+    """
+    if not characteristics:
+        return None
+    for key in _PAIRING_KEYS:
+        for raw_key, raw_value in characteristics.items():
+            if _normalize_token(raw_key) == key:
+                normalized = _normalize_token(raw_value)
+                return normalized or None
+    return None
+
+
+def validate_pairings(samples: list[GeoSampleMetadata]) -> list[str]:
+    """Warn about pairings missing a tumor or normal side.
+
+    A pairing is valid only when at least one tumor and at least one normal
+    sample share the same ``pairing_id`` (T8 词汇表 point 6). One-sided
+    pairings produce a warning; ``unknown``-group samples never satisfy a
+    side. Samples without a ``pairing_id`` are ignored.
+    """
+    groups_by_pairing: dict[str, set[str]] = {}
+    for sample in samples:
+        if sample.pairing_id:
+            groups_by_pairing.setdefault(sample.pairing_id, set()).add(
+                sample.sample_group
+            )
+    warnings: list[str] = []
+    for pairing_id in sorted(groups_by_pairing):
+        groups = groups_by_pairing[pairing_id]
+        if "tumor" not in groups or "normal" not in groups:
+            warnings.append(
+                f"pairing {pairing_id} is one-sided "
+                f"(groups={sorted(groups)}) — no valid tumor/normal pair"
+            )
+    return warnings
 
 
 def parse_geo_soft_samples(compressed: bytes) -> list[GeoSampleMetadata]:
@@ -161,6 +390,7 @@ def parse_geo_series_matrix_samples(compressed: bytes) -> list[GeoSampleMetadata
         canonical = _CELL_LINE_CANONICAL.get(raw_cell_line, raw_cell_line)
         replicate_match = re.search(r"rep\.\s*(\d+)", title)
         treatment = char_map.get("treatment", "") or title
+        group = extract_sample_group(char_map, title)
         samples.append(
             GeoSampleMetadata(
                 sample_id=accession,
@@ -175,6 +405,10 @@ def parse_geo_series_matrix_samples(compressed: bytes) -> list[GeoSampleMetadata
                 treatment=treatment,
                 replicate=int(replicate_match.group(1)) if replicate_match else 1,
                 organism=organism,
+                sample_group=group.sample_group,
+                sample_group_raw=group.sample_group_raw,
+                pairing_id=extract_pairing_id(char_map),
+                group_rule_id=GROUP_RULE_ID,
             )
         )
     return samples
@@ -187,6 +421,7 @@ def process_geo_series_matrix_expression(
     workdir: TaskWorkDir,
     samples: list[GeoSampleMetadata],
     gene_map: dict[str, str] | None = None,
+    sample_gene_maps: dict[str, dict[str, str]] | None = None,
     probe_gene_mapping: str = "not_attempted",
 ) -> ParsedDataset | None:
     """Parse the expression matrix block from a GEO ``*_series_matrix.txt.gz``.
@@ -204,6 +439,13 @@ def process_geo_series_matrix_expression(
     annotation status (mapped/unmapped/no_gene_annotation/...) in
     ``processing_parameters`` so the artifact builder can surface a warning
     when the platform provides no usable gene mapping.
+
+    ``sample_gene_maps`` (Phase 5 D8) is the per-sample variant: a dict
+    mapping each sample id to the gene map of the GPL that sample declares.
+    When provided it takes precedence over ``gene_map`` and each row uses
+    only its sample's GPL annotation — a GPL A annotation is never applied
+    to GPL B samples. Samples absent from the map (no attributable GPL) keep
+    raw probe IDs.
 
     Raises ``ValueError`` for malformed data within the block (e.g. a header
     row with no sample columns), and ``FileNotFoundError`` when the source
@@ -254,11 +496,6 @@ def process_geo_series_matrix_expression(
             if len(values) < 2:
                 continue
             gene_id_raw = values[0]
-            mapped_gene = (gene_map or {}).get(gene_id_raw)
-            if mapped_gene:
-                mapped_probes.add(gene_id_raw)
-            gene_id_out = mapped_gene or gene_id_raw
-            gene_namespace = "gene_symbol" if mapped_gene else "geo_id_ref"
             source_row_count += 1
             source_line_number = begin_idx + 3 + offset
             for col_idx, sample_id in enumerate(sample_ids):
@@ -270,6 +507,11 @@ def process_geo_series_matrix_expression(
                     float(raw_value)
                 except (ValueError, TypeError):
                     continue
+                mapped_gene = _lookup_gene(gene_id_raw, sample_id, gene_map, sample_gene_maps)
+                if mapped_gene:
+                    mapped_probes.add(gene_id_raw)
+                gene_id_out = mapped_gene or gene_id_raw
+                gene_namespace = "gene_symbol" if mapped_gene else "geo_id_ref"
                 sample = sample_map.get(sample_id)
                 source_alias = sample.source_alias if sample else sample_id
                 writer.writerow({
@@ -349,6 +591,27 @@ def process_geo_series_matrix_expression(
     )
 
 
+def _lookup_gene(
+    gene_id_raw: str,
+    sample_id: str,
+    gene_map: dict[str, str] | None,
+    sample_gene_maps: dict[str, dict[str, str]] | None,
+) -> str | None:
+    """Resolve a probe row's mapped gene for one sample (Phase 5 D8).
+
+    ``sample_gene_maps`` (per-sample GPL attribution) takes precedence: the
+    sample's own GPL annotation decides the mapping, and samples without an
+    attributable GPL get no mapping. Otherwise the single ``gene_map``
+    applies (single-platform series).
+    """
+    if sample_gene_maps is not None:
+        sample_map = sample_gene_maps.get(sample_id)
+        if not sample_map:
+            return None
+        return sample_map.get(gene_id_raw)
+    return (gene_map or {}).get(gene_id_raw)
+
+
 def _build_sample(values: dict[str, object]) -> GeoSampleMetadata:
     characteristics = values["characteristics"]
     raw_cell_line = str(characteristics.get("cell line", ""))
@@ -357,6 +620,7 @@ def _build_sample(values: dict[str, object]) -> GeoSampleMetadata:
     replicate_match = re.search(r"rep\.\s*(\d+)", title)
     if not replicate_match:
         raise ValueError("sample title does not contain a replicate number")
+    group = extract_sample_group(characteristics, title)
     return GeoSampleMetadata(
         sample_id=str(values["sample_id"]),
         source_alias=str(values["source_alias"]),
@@ -367,6 +631,10 @@ def _build_sample(values: dict[str, object]) -> GeoSampleMetadata:
         ),
         treatment=str(characteristics.get("treatment", "")),
         replicate=int(replicate_match.group(1)),
+        sample_group=group.sample_group,
+        sample_group_raw=group.sample_group_raw,
+        pairing_id=extract_pairing_id(characteristics),
+        group_rule_id=GROUP_RULE_ID,
     )
 
 

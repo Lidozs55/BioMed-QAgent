@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
+from pydantic import ValidationError
 
 from app.agent_loop.context import RunContext
 from app.config import settings
@@ -29,9 +30,19 @@ from app.datasets.build.expression_runner import (
     ExpressionBuildRunner,
 )
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
-from app.datasets.contracts import DatasetBuildSpec
+from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
+from app.datasets.contracts import (
+    AdapterParams,
+    BindingRejection,
+    DatasetBuildSpec,
+)
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
-from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
+from app.datasets.schema_registry import (
+    SchemaRegistry,
+    build_gene_expression_schema,
+    build_probe_expression_schema,
+)
+from app.datasets.spec_validator import SpecValidator
 from app.domain.contracts import (
     DataLevel,
     ErrorDetail,
@@ -39,7 +50,10 @@ from app.domain.contracts import (
     asset_id_from_sha256,
     generate_prefixed_uuid,
 )
-from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
+from app.domain.contracts.dataset_state import (
+    BuildResult,
+    BuildResultStatus,
+)
 from app.tools.workdir import resolve_task_local_file
 
 _NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
@@ -54,11 +68,19 @@ _REASON_NO_PRIMARY_DATA = "no_primary_data"
 #: zero-row evidence (validate_profile writes it; publish runs right after).
 _MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
 
-#: B5/K2 (Phase 4 review): the mixed-source abort envelope keeps the
-#: NO_DATA status (the usable source was never parsed/validated/published)
-#: but its summary/next action describe the empty-source abort precisely.
-_MIXED_EMPTY_SOURCE_SUMMARY = "任务完成，但部分数据源为空导致构建中止；未发布主数据。"
-_MIXED_EMPTY_SOURCE_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
+#: Phase 5 T7 (D5): stable reason code for a gene-required build that could
+#: not produce any publishable gene rows (probe->gene coverage zero or a
+#: partial mapping that leaves residual probe rows).
+_REASON_PROBE_MAPPING_UNAVAILABLE = "probe_mapping_unavailable_required_gene_level"
+
+#: Phase 5 T7 (D5 row 3): NO_DATA copy for a gene-required build that could
+#: not produce any publishable gene rows (probe->gene mapping unavailable).
+_PROBE_MAPPING_NO_DATA_SUMMARY = (
+    "任务完成，但未产出满足 gene 级要求的主数据（probe→gene 映射不可用）。"
+)
+_PROBE_MAPPING_NO_DATA_NEXT_ACTION = (
+    "检查 GPL 注释资产可用性或改用 probe 级构建。"
+)
 
 # D1 (Phase 4 review): while a data-correction pause is pending, the build
 # tool refuses so no publication can be produced from inputs under correction.
@@ -178,6 +200,32 @@ async def execute_dataset_build(
             },
             ensure_ascii=False,
         )
+    # Phase 5 final review (F1): the SpecValidator's registry + entity-level
+    # compatibility checks are wired into the production entry here, before
+    # any source file is touched or any build workspace is created. A gene
+    # build under a probe schema (or a probe build under the gene profile) is
+    # invalid_input with the validator's structured reasons — never a build
+    # that could publish probe rows under the gene release gate.
+    spec_validation = SpecValidator(
+        registry=SchemaRegistry(
+            [build_gene_expression_schema(), build_probe_expression_schema()]
+        ),
+        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
+    ).validate(build_spec)
+    if not spec_validation.valid:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "spec validation failed ["
+                    + ", ".join(spec_validation.reason_codes)
+                    + "]: "
+                    + "; ".join(spec_validation.reasons)
+                ),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     if not isinstance(files_mapping, dict):
         return json.dumps(
             {
@@ -245,15 +293,46 @@ async def execute_dataset_build(
             },
             ensure_ascii=False,
         )
+    # Phase 5 T7: the per-binding fan-out outcomes map is shared by the
+    # runner (records rejections), the executor (skips phase B when every
+    # binding is rejected) and this tool (classification).
+    per_binding_outcomes: dict[str, BindingRejection] = {}
     runner = ExpressionBuildRunner(
         spec=build_spec,
-        registry=SchemaRegistry([build_gene_expression_schema()]),
+        registry=SchemaRegistry(
+            [build_gene_expression_schema(), build_probe_expression_schema()]
+        ),
         source_assets=assets,
         source_paths=paths,
         output_dir=output_dir,
         cancellation_requested=run_ctx.cancellation_requested,
         pending_check=lambda: run_ctx.main_input_pending,
     )
+    # Phase 5 D1: per-binding parameter scope — each binding's normalized
+    # AdapterParams JSON enters the operation digest, so changing a binding's
+    # format/scale/unit/platform_ids invalidates every checkpoint.  Invalid
+    # declared parameters are rejected as invalid input before any operation
+    # runs (the SpecValidator at the tool entry already rejects
+    # missing/invalid AdapterParams for geo bindings — final review F1 —
+    # this block additionally rejects binding-level parameter errors that
+    # only surface at model validation time, e.g. an invalid scale).
+    try:
+        parameter_scope = {
+            binding.binding_id: AdapterParams.model_validate(
+                binding.parameters
+            ).model_dump(mode="json")
+            for binding in build_spec.source_bindings
+            if binding.parameters
+        }
+    except ValidationError as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": f"binding adapter parameters are invalid: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     plan = build_operation_plan(build_spec)
     executor = DatasetBuildExecutor(
         task_id=run_ctx.task_id,
@@ -265,6 +344,8 @@ async def execute_dataset_build(
         plan=plan,
         run_operation=runner,
         source_assets=assets,
+        parameter_scope=parameter_scope,
+        per_binding_outcomes=per_binding_outcomes,
         cancellation_requested=run_ctx.cancellation_requested,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )
@@ -289,6 +370,12 @@ async def execute_dataset_build(
                 outcome.error,
                 sorted(binding_ids),
                 paths,
+                per_binding_outcomes=per_binding_outcomes,
+                profile_required_entity_level=(
+                    get_validation_profile(
+                        build_spec.validation_profile_ref
+                    ).required_entity_level
+                ),
             )
             if classified is not None:
                 return json.dumps(
@@ -328,15 +415,37 @@ async def execute_dataset_build(
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text("utf-8"))
         valid_row_count = int(manifest.get("row_count", 0))
+    # Phase 5 T7 D5: per-binding fan-out — only the phase-A-successful
+    # bindings contributed to the published primary; a build with one or more
+    # rejected bindings is PARTIAL_SUCCESS (a genuinely publishable surviving
+    # source), never a silent success that counts rejected sources.
+    rejected_sources = sorted(per_binding_outcomes)
+    successful_sources = [
+        binding_id for binding_id in sorted(binding_ids)
+        if binding_id not in rejected_sources
+    ]
+    status = (
+        BuildResultStatus.PARTIAL_SUCCESS
+        if rejected_sources
+        else BuildResultStatus.SUCCEEDED
+    )
     result = BuildResult(
-        status=BuildResultStatus.SUCCEEDED,
+        status=status,
         valid_row_count=valid_row_count,
-        successful_sources=sorted(binding_ids),
-        rejected_sources=[],
+        successful_sources=successful_sources,
+        rejected_sources=rejected_sources,
         publication_id=publication_id,
         reason_codes=[],
-        user_summary=f"build {build_spec.build_id} published "
-        f"{valid_row_count} valid row(s)",
+        user_summary=(
+            f"build {build_spec.build_id} published "
+            f"{valid_row_count} valid row(s)"
+            if not rejected_sources
+            else (
+                f"build {build_spec.build_id} partially published: "
+                f"{len(successful_sources)} source(s) published, "
+                f"{len(rejected_sources)} rejected"
+            )
+        ),
     )
     # Phase 7 P0: commit the immutable version to the content-addressed V2
     # dataset cache so later tasks can discover/reuse it by keyword.
@@ -380,23 +489,29 @@ def _classify_failed_outcome(
     outcome_error: ErrorDetail | None,
     binding_ids: list[str],
     source_paths: dict[str, Path],
+    *,
+    per_binding_outcomes: dict[str, BindingRejection] | None = None,
+    profile_required_entity_level: str | None = None,
 ) -> BuildResult | None:
     """Map a failed build outcome to a structured BuildResult envelope (H3).
 
     Returns ``None`` for genuine execution failures (the caller keeps the
     generic retryable-error envelope).
 
-    - NO_DATA: this attempt produced no publishable primary data — either the
-      parse layer reported an empty source (structured ``reason_code``
-      ``no_primary_data``, which is this attempt's by construction) or the
-      integrated primary has zero rows (manifest written by THIS attempt) and
-      no version was published for this build_id in this run. When the build
-      aborted at a first empty source while other bindings had data rows, the
-      NO_DATA envelope identifies the empty binding(s) in its reason codes
-      (``no_primary_data:<binding_id>``) — never PARTIAL_SUCCESS, because
-      ARCHITECTURE §9.2 defines PARTIAL_SUCCESS as remaining valid sources
-      validated AND publishable, which an abort-at-first-empty build never
-      did.
+    - NO_DATA (all bindings rejected, Phase 5 T7 fan-out): phase A rejected
+      every binding, so phase B never ran and nothing was published.  The
+      reason codes follow the per-binding rejections: all-empty builds keep
+      the generic ``no_primary_data``; a gene-required build whose sources
+      produced zero publishable gene rows keeps the stable
+      ``probe_mapping_unavailable_required_gene_level``; mixed reasons are
+      binding-scoped (``no_primary_data:<id>`` / ``parse_error:<id>``).
+    - NO_DATA (empty source, D5 row 1): the parse layer reported a typed
+      ``no_primary_data``.
+    - NO_DATA (gene-required + probe coverage failed, D5 row 3): the build
+      had rows but the gene release gate failed on residual probe rows — no
+      publishable gene rows, nothing published, supporting/audit survive.
+    - NO_DATA (manifest signal): the integrated primary has zero rows
+      (manifest written by THIS attempt) and no version was published.
     """
 
     if outcome_error is None:
@@ -405,41 +520,46 @@ def _classify_failed_outcome(
     reason_code = details.get("reason_code")
     failed_operation = details.get("failed_operation")
 
-    if reason_code == _REASON_NO_PRIMARY_DATA:
-        # The plan aborts at the first empty source, so any other binding
-        # that had data rows was never parsed/validated/published. B5/K2
-        # (Phase 4 review): this abort case must not be emitted as
-        # PARTIAL_SUCCESS (the contract means remaining sources validated
-        # AND publishable; nothing was published here) — a structured NO_DATA
-        # envelope with the empty binding(s) identified is the
-        # contract-coherent outcome, and it is not retryable.
-        empty = [
-            binding_id
-            for binding_id in binding_ids
-            if not _source_has_data_rows(source_paths.get(binding_id))
-        ]
-        if empty and len(empty) < len(binding_ids):
-            return BuildResult(
-                status=BuildResultStatus.NO_DATA,
-                valid_row_count=0,
-                successful_sources=[],
-                rejected_sources=sorted(empty),
-                reason_codes=[
-                    f"{_REASON_NO_PRIMARY_DATA}:{binding_id}"
-                    for binding_id in sorted(empty)
-                ],
-                user_summary=_MIXED_EMPTY_SOURCE_SUMMARY,
-                recommended_next_action=_MIXED_EMPTY_SOURCE_NEXT_ACTION,
-            )
-        return BuildResult(
-            status=BuildResultStatus.NO_DATA,
-            valid_row_count=0,
-            successful_sources=[],
-            rejected_sources=sorted(binding_ids),
-            reason_codes=[_REASON_NO_PRIMARY_DATA],
-            user_summary=_NO_DATA_SUMMARY,
-            recommended_next_action=_NO_DATA_NEXT_ACTION,
+    per_binding = per_binding_outcomes or {}
+    # Phase 5 T7 D5: phase A rejected every binding -> NO_DATA with per-binding
+    # reason codes (phase B never ran; nothing was published).
+    if binding_ids and set(per_binding) >= set(binding_ids):
+        return _no_data_envelope(
+            binding_ids,
+            _reason_codes_for_all_rejected(per_binding),
         )
+
+    if reason_code == _REASON_NO_PRIMARY_DATA:
+        return _no_data_envelope(binding_ids, [_REASON_NO_PRIMARY_DATA])
+
+    # Phase 5 T7 D5 row 3 (tool layer): a gene-required build whose release
+    # gate failed on the probe-coverage check produced no publishable gene
+    # rows — the classifier unifies the 4b NO_DATA path (zero publishable
+    # gene rows) and the Profile-FAILED path (rows exist, coverage < 1.0)
+    # into NO_DATA with the stable reason code.  Probe-level builds never
+    # take this branch (they publish the honest probe primary, D5 row 2).
+    if (
+        profile_required_entity_level == "gene"
+        and isinstance(failed_operation, str)
+        and failed_operation in _MANIFEST_WRITING_OPERATIONS
+    ):
+        report_path = output_dir / "validation_report.json"
+        if report_path.is_file():
+            try:
+                report = json.loads(report_path.read_text("utf-8"))
+            except (OSError, json.JSONDecodeError):
+                report = None
+            if report is not None and any(
+                check.get("check_id") == "probe_coverage_required_gene_level"
+                and check.get("passed") is False
+                for check in report.get("checks", [])
+            ):
+                return _no_data_envelope(
+                    binding_ids,
+                    [_REASON_PROBE_MAPPING_UNAVAILABLE],
+                    summary=_PROBE_MAPPING_NO_DATA_SUMMARY,
+                    next_action=_PROBE_MAPPING_NO_DATA_NEXT_ACTION,
+                )
 
     # Manifest signal: only trust a persisted manifest when THIS attempt wrote
     # it (validate_profile persists it; publish runs immediately after). A
@@ -465,42 +585,50 @@ def _classify_failed_outcome(
         for child in publish_dir.iterdir()
     ):
         return None
+    return _no_data_envelope(binding_ids, [_REASON_NO_PRIMARY_DATA])
+
+
+def _no_data_envelope(
+    binding_ids: list[str],
+    reason_codes: list[str],
+    *,
+    rejected_sources: list[str] | None = None,
+    summary: str = _NO_DATA_SUMMARY,
+    next_action: str = _NO_DATA_NEXT_ACTION,
+) -> BuildResult:
+    """A NO_DATA BuildResult with zero valid rows and no publication."""
     return BuildResult(
         status=BuildResultStatus.NO_DATA,
         valid_row_count=0,
         successful_sources=[],
-        rejected_sources=sorted(binding_ids),
-        reason_codes=[_REASON_NO_PRIMARY_DATA],
-        user_summary=_NO_DATA_SUMMARY,
-        recommended_next_action=_NO_DATA_NEXT_ACTION,
+        rejected_sources=(
+            sorted(rejected_sources) if rejected_sources is not None else sorted(binding_ids)
+        ),
+        reason_codes=reason_codes,
+        user_summary=summary,
+        recommended_next_action=next_action,
     )
 
 
-def _source_has_data_rows(path: Path | None) -> bool:
-    """True when a source file has at least one data row beyond its header.
+def _reason_codes_for_all_rejected(
+    per_binding: dict[str, BindingRejection],
+) -> list[str]:
+    """Reason codes for an all-rejected phase A (D5).
 
-    Adapter-agnostic emptiness probe used to scope mixed-source NO_DATA
-    classification to the sources that actually produced rows (H3). The plan
-    aborts at the first empty source's parse, so later bindings' parse
-    operations never run — the source files are the authoritative signal for
-    whether they had data.
+    All-empty keeps the generic ``no_primary_data``; a gene-required build
+    where every binding yielded zero publishable gene rows keeps the stable
+    probe-mapping code; mixed reasons are binding-scoped.
     """
+    rejections = [per_binding[binding_id] for binding_id in sorted(per_binding)]
+    codes = {rejection.reason_code for rejection in rejections}
+    if codes == {_REASON_NO_PRIMARY_DATA}:
+        return [_REASON_NO_PRIMARY_DATA]
+    if codes == {_REASON_PROBE_MAPPING_UNAVAILABLE}:
+        return [_REASON_PROBE_MAPPING_UNAVAILABLE]
+    return [f"{rejection.reason_code}:{rejection.binding_id}" for rejection in rejections]
 
-    if path is None or not path.is_file():
-        return False
-    seen_header = False
-    try:
-        with path.open("r", encoding="utf-8", newline="") as handle:
-            for line in handle:
-                if not line.strip() or line.lstrip().startswith("#"):
-                    continue
-                if not seen_header:
-                    seen_header = True
-                    continue
-                return True
-    except (OSError, UnicodeDecodeError):
-        return False
-    return False
+
+
 
 
 def _latest_publication_id(publish_dir: Path) -> str | None:

@@ -160,14 +160,14 @@
 > 目标：GEO 按 Acquisition Provider + Adapter 拆分，多 GSE 独立发布。
 > 验收见 Design §16 Phase 5。
 
-- [ ] **P0** GEO acquisition/parser 按 Acquisition Provider 与 Adapter 拆分
-- [ ] **P0** 正式建模 platform、probe mapping、value scale 与 normalization
-- [ ] **P0** 多 GSE 各数据集独立发布（不做跨数据集行级合并），`source_relations`
+- [x] **P0** GEO acquisition/parser 按 Acquisition Provider 与 Adapter 拆分（5 完成 2026-08-08）
+- [x] **P0** 正式建模 platform、probe mapping、value scale 与 normalization（5 完成 2026-08-08）
+- [x] **P0** 多 GSE 各数据集独立发布（不做跨数据集行级合并），`source_relations`（5 完成 2026-08-08）
       记录双侧关系（原 §1.5.6）
-- [ ] **P1** 只有通过 Compatibility Gate 的 GEO 数据才能与其他表达数据整合；
+- [x] **P1** 只有通过 Compatibility Gate 的 GEO 数据才能与其他表达数据整合；（5 完成 2026-08-08）
       映射失败保留审计报告或 NO_DATA，不伪装 gene-level 数据
-- [ ] **P1** 消除 `_resolve_gse` 静默截断（原 §1.5.6）
-- [ ] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（原 §1.5.8）
+- [x] **P1** 消除 `_resolve_gse` 静默截断（原 §1.5.6）（5 完成 2026-08-08）
+- [x] **P2** `sample_metadata` 结构化 tumor/normal 分组与配对 ID（原 §1.5.8）（5 完成 2026-08-08）
 
 ---
 

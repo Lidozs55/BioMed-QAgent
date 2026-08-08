@@ -327,15 +327,24 @@ def test_source_relations_relation_id_derived_from_pmid_and_gse(
     accession = catalog[0]["accession"]
     expected_relation_id = f"rel_pmid{pmid}_{accession.lower()}"
 
-    primary = relation_rows[0]
-    assert primary["relation_id"] == expected_relation_id, (
+    # Phase 5 T6 (D3): bidirectional rows — find the forward edge by type
+    # (rows are sorted by the dedup key, not by semantic direction).
+    forward = next(
+        row for row in relation_rows if row["relation_type"] == "article_describes_dataset"
+    )
+    assert forward["relation_id"] == expected_relation_id, (
         f"relation_id must be derived from PMID/GSE; "
-        f"expected {expected_relation_id!r}, got {primary['relation_id']!r}"
+        f"expected {expected_relation_id!r}, got {forward['relation_id']!r}"
     )
-    assert primary["evidence_value"] == pmid, (
+    assert forward["evidence_value"] == pmid, (
         f"evidence_value must be the actual PMID ({pmid!r}); "
-        f"got {primary['evidence_value']!r}"
+        f"got {forward['evidence_value']!r}"
     )
+    # The inverse edge exists with a distinct relation_id.
+    inverse = next(
+        row for row in relation_rows if row["relation_type"] == "dataset_described_by_article"
+    )
+    assert inverse["relation_id"] != forward["relation_id"]
 
 
 def test_source_relations_supports_multiple_pubmed_ids() -> None:
@@ -401,28 +410,51 @@ def test_source_relations_supports_multiple_pubmed_ids() -> None:
         geo_url=geo_url,
     )
 
-    # Primary relation + 2 extra PMIDs = 3 rows total.
-    assert len(relations) == 3, (
-        f"expected 3 relations (1 primary + 2 extra PMIDs); got {len(relations)}"
+    # Phase 5 T6 (D3): every evidenced GSE×PMID pair yields TWO rows (forward
+    # + inverse). 1 primary + 2 extra PMIDs = 3 pairs = 6 rows.
+    assert len(relations) == 6, (
+        f"expected 6 relations (2 per pair x 3 evidenced pairs); "
+        f"got {len(relations)}"
     )
 
     # Primary relation: PubMed → GEO with article_describes_dataset.
-    primary = relations[0]
+    primary = next(
+        row for row in relations if row["relation_type"] == "article_describes_dataset"
+    )
     assert primary["relation_id"] == "rel_pmid34180400_gse178352"
     assert primary["from_source_id"] == pubmed_source_id
     assert primary["to_source_id"] == geo_source_id
-    assert primary["relation_type"] == "article_describes_dataset"
     assert primary["evidence_value"] == "34180400"
 
-    # Extra PMIDs: GEO → ext:pubmed:<pmid> with geo_references_pubmed.
-    extras = relations[1:]
+    # Primary inverse: GEO → PubMed with dataset_described_by_article.
+    inverse = next(
+        row for row in relations if row["relation_type"] == "dataset_described_by_article"
+    )
+    assert inverse["from_source_id"] == geo_source_id
+    assert inverse["to_source_id"] == pubmed_source_id
+    assert inverse["evidence_value"] == "34180400"
+
+    # Extra PMIDs: GEO → ext:pubmed:<pmid> with geo_references_pubmed,
+    # plus the inverse ext:pubmed:<pmid> -> GEO.
+    extras = [row for row in relations if row["relation_type"] == "geo_references_pubmed"]
+    assert len(extras) == 2
     assert {row["to_source_id"] for row in extras} == {
         "ext:pubmed:12345678",
         "ext:pubmed:87654321",
     }
     for row in extras:
         assert row["from_source_id"] == geo_source_id
-        assert row["relation_type"] == "geo_references_pubmed"
+        assert row["evidence_type"] == "geo_pubmed_id"
+    external_inverses = [
+        row for row in relations if row["relation_type"] == "pubmed_referenced_by_geo"
+    ]
+    assert len(external_inverses) == 2
+    assert {row["from_source_id"] for row in external_inverses} == {
+        "ext:pubmed:12345678",
+        "ext:pubmed:87654321",
+    }
+    for row in external_inverses:
+        assert row["to_source_id"] == geo_source_id
         assert row["evidence_type"] == "geo_pubmed_id"
 
 

@@ -27,10 +27,26 @@ from app.datasets.contracts import (
     DatasetManifest,
     DatasetSchema,
     NormalizationProfile,
+    ProbeMappingSummary,
     ValidationProfile,
     ValidationResult,
     ValidationResultStatus,
+    ValueScale,
 )
+
+
+def _value_field(schema: DatasetSchema) -> str:
+    """The schema's per-record numeric measurement column.
+
+    The gene schema declares ``expression_value``; the probe-level schema
+    (``gene_expression.probe_long.v1``) declares ``value``.  Both mark the
+    field with ``unit_policy="declared_per_record"``, so the column is
+    derived from the schema metadata — never hardcoded per schema id.
+    """
+    for field in schema.fields:
+        if field.unit_policy == "declared_per_record":
+            return field.name
+    return "expression_value"
 
 # --- normalization profiles -------------------------------------------------
 
@@ -39,7 +55,7 @@ def _expression_normalization_v1() -> NormalizationProfile:
     return NormalizationProfile(
         profile_id="gene_expression.normalization.v1",
         dataset_family="gene_expression",
-        allowed_namespaces=["ensembl_gene", "gene_symbol"],
+        allowed_namespaces=["ensembl_gene", "gene_symbol", "geo_probe"],
         allowed_units=[
             "expression_value",
             "tpm_unstranded",
@@ -50,12 +66,26 @@ def _expression_normalization_v1() -> NormalizationProfile:
             "estimated_count",
         ],
         allowed_semantics=["expression_value", "normalized_expression", "raw_count"],
+        # Phase 5 D3/T4: every scale the expression chain may honestly declare.
+        # GDC/Xena emit ``linear``; GEO series matrices declare ``log2`` or
+        # ``unknown``; supplementary matrices ``linear``.  ``unknown`` is
+        # explicit: a scale that cannot be proven is declared, never guessed.
+        allowed_value_scales=[
+            ValueScale.LINEAR,
+            ValueScale.LOG2,
+            ValueScale.LOG10,
+            ValueScale.UNKNOWN,
+        ],
         unit_conversions=[],  # no conversion is silently allowed without a rule
         aggregation_policy="keep_all",
         description=(
-            "Expression entity/unit normalization: authorize ensembl_gene or "
-            "gene_symbol namespaces, accept the declared unit/semantics set, "
-            "and require an explicit conversion rule before any unit change."
+            "Expression entity/unit normalization: authorize ensembl_gene, "
+            "gene_symbol and geo_probe namespaces, accept the declared "
+            "unit/semantics/scale sets, and require an explicit conversion "
+            "rule before any unit change.  geo_probe is an honest "
+            "adapter-declared namespace for probe rows; the entity-level "
+            "publish policy (residual geo_probe rows fail the gene release "
+            "gate) lives in the validation profile (Phase 5 T7)."
         ),
     )
 
@@ -99,9 +129,14 @@ class ExpressionValidationProfile:
     v1 policy is warning-only — anomalies never flip the release gate, they
     are recorded in ``confidence_report.csv`` and as report warnings until
     the thresholds are calibrated (SURVEY §7).
+
+    ``required_entity_level`` (Phase 5 D4) is the entity level this profile's
+    release gate requires; the Spec Validator enforces its compatibility with
+    the build's schema/target.
     """
 
     profile_id = "gene_expression.release.v1"
+    required_entity_level = "gene"
 
     def __init__(self) -> None:
         self.profile = ValidationProfile(
@@ -117,6 +152,7 @@ class ExpressionValidationProfile:
                 "rows, schema-conformant columns, complete required fields, "
                 "numeric values, a single unit, and closed provenance."
             ),
+            required_entity_level=self.required_entity_level,
         )
         self.confidence_thresholds = ConfidenceThresholds()
 
@@ -128,8 +164,11 @@ class ExpressionValidationProfile:
         schema: DatasetSchema,
         manifest_digest: str,
         output_dir: Path,
+        probe_mapping_summaries: list[ProbeMappingSummary] | None = None,
     ) -> ValidationResult:
-        checks = self._run_checks(manifest, primary_path, schema)
+        checks = self._run_checks(
+            manifest, primary_path, schema, probe_mapping_summaries
+        )
         # The confidence check reads the primary file; skip it when the
         # encoding check already failed (a non-UTF-8 file must not crash it).
         encoding_failed = any(
@@ -137,12 +176,17 @@ class ExpressionValidationProfile:
             for check in checks
         )
         if primary_path.is_file() and not encoding_failed:
-            confidence_check, warnings = self._run_confidence_check(
-                primary_path, output_dir
+            confidence_check, confidence_warnings = self._run_confidence_check(
+                primary_path, output_dir, schema
             )
             checks.append(confidence_check)
         else:
-            warnings = []
+            confidence_warnings = []
+        # Phase 5 D4/T5: probe-level builds surface probe-coverage as warnings
+        # (data_confidence-style) instead of failing the release gate.
+        warnings = confidence_warnings + self._probe_coverage_warnings(
+            probe_mapping_summaries
+        )
         report = {
             "profile_ref": self.profile_id,
             "manifest_digest": manifest_digest,
@@ -180,6 +224,7 @@ class ExpressionValidationProfile:
         manifest: DatasetManifest,
         primary_path: Path,
         schema: DatasetSchema,
+        probe_mapping_summaries: list[ProbeMappingSummary] | None = None,
     ) -> list[ProfileCheck]:
         if not primary_path.is_file():
             return [
@@ -201,6 +246,16 @@ class ExpressionValidationProfile:
             encoding_check,
         ]
         checks.extend(self._check_rows(primary_path, schema))
+        # Phase 5 D4/T5: ``required_entity_level == "gene"`` demands complete
+        # probe→gene coverage — any residual geo_probe/ambiguous row fails the
+        # release gate (output-integrity semantics, not a calibrated
+        # threshold). Probe-level profiles skip this and warn instead.
+        if self.required_entity_level == "gene":
+            checks.append(
+                self._check_probe_coverage_required_gene_level(
+                    primary_path, probe_mapping_summaries
+                )
+            )
         return checks
 
     def _check_csv_encoding(self, primary_path: Path) -> ProfileCheck:
@@ -262,6 +317,7 @@ class ExpressionValidationProfile:
         required = {
             field.name for field in schema.fields if field.required
         }
+        value_field = _value_field(schema)
         row_count = 0
         malformed_width = 0
         blank_required: dict[str, int] = {}
@@ -289,7 +345,7 @@ class ExpressionValidationProfile:
                     if not values.get(field, "").strip():
                         blank_required[field] = blank_required.get(field, 0) + 1
                 try:
-                    if not math.isfinite(float(values.get("expression_value", ""))):
+                    if not math.isfinite(float(values.get(value_field, ""))):
                         raise ValueError
                 except ValueError:
                     non_numeric += 1
@@ -321,7 +377,7 @@ class ExpressionValidationProfile:
             ),
             ProfileCheck(
                 check_id="expression_value_numeric",
-                description="expression_value parses as a number for every row",
+                description=f"{value_field} parses as a number for every row",
                 passed=non_numeric == 0,
                 detail=f"{non_numeric} non-numeric value(s) in {row_count} row(s)",
             ),
@@ -340,24 +396,108 @@ class ExpressionValidationProfile:
         ]
         return checks
 
+    def _check_probe_coverage_required_gene_level(
+        self,
+        primary_path: Path,
+        summaries: list[ProbeMappingSummary] | None,
+    ) -> ProfileCheck:
+        """Phase 5 D4: gene-required builds need complete probe→gene coverage.
+
+        Any residual ``geo_probe``/ambiguous row in the primary, or any
+        binding whose ``ProbeMappingSummary`` coverage is below 1.0, fails the
+        release gate.  The 1.0 requirement is server-owned output-integrity
+        semantics (D4), never a calibrated threshold the Agent can pass.
+        Builds with no probes at all (e.g. GDC/Xena gene sources) have no
+        residual rows and no summaries, so they are unaffected.
+        """
+        residual = self._count_residual_geo_probe_rows(primary_path)
+        below_one: list[str] = []
+        if summaries:
+            for summary in summaries:
+                if summary.total_probe_count > 0 and not math.isclose(
+                    summary.coverage_ratio, 1.0, rel_tol=0.0, abs_tol=1e-9
+                ):
+                    below_one.append(summary.binding_id)
+        passed = residual == 0 and not below_one
+        detail = f"residual_geo_probe_rows={residual}"
+        if summaries:
+            detail += f"; coverage_below_1.0={below_one if below_one else 'none'}"
+        return ProfileCheck(
+            check_id="probe_coverage_required_gene_level",
+            description=(
+                "gene-required build: probe→gene coverage must be 1.0 with "
+                "no residual geo_probe/ambiguous rows in the primary dataset"
+            ),
+            passed=passed,
+            detail=detail,
+        )
+
+    def _count_residual_geo_probe_rows(self, primary_path: Path) -> int:
+        """Count primary rows whose ``gene_id_namespace`` is still ``geo_probe``.
+
+        Ambiguous probes remain ``geo_probe`` (D2), so this scan covers both
+        unmapped and ambiguous residual rows in one pass.
+        """
+        residual = 0
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if row.get("gene_id_namespace", "").strip() == "geo_probe":
+                    residual += 1
+        return residual
+
+    def _probe_coverage_warnings(
+        self, summaries: list[ProbeMappingSummary] | None
+    ) -> list[dict[str, str]]:
+        """Phase 5 D4: probe-level builds surface coverage as warnings only.
+
+        A probe-level build publishes any coverage (0 included) as honest
+        ``geo_probe`` data plus audit; the warning mirrors the
+        ``data_confidence`` policy and never blocks release.
+        """
+        if self.required_entity_level != "probe" or not summaries:
+            return []
+        warnings: list[dict[str, str]] = []
+        for summary in summaries:
+            warnings.append(
+                {
+                    "check_id": "probe_coverage",
+                    "binding_id": summary.binding_id,
+                    "platform_id": summary.platform_id or "",
+                    "mapping_status": summary.mapping_status.value,
+                    "coverage_ratio": f"{summary.coverage_ratio:.4f}",
+                    "detail": (
+                        f"probe-level build: probe→gene coverage "
+                        f"{summary.coverage_ratio:.4f} (mapped "
+                        f"{summary.mapped_probe_count}/"
+                        f"{summary.total_probe_count}) is publishable at probe "
+                        "level (warning-only; entity policy requires probe)"
+                    ),
+                }
+            )
+        return warnings
 
     def _run_confidence_check(
         self,
         primary_path: Path,
         output_dir: Path,
+        schema: DatasetSchema,
     ) -> tuple[ProfileCheck, list[dict[str, str]]]:
         """Supplementary statistical check on the primary numeric column.
 
-        Reads ``expression_value`` once, runs the deterministic detectors, and
-        writes ``confidence_report.csv``. v1 policy: the check always passes —
-        anomalies are surfaced as warnings, never as a failed gate (SURVEY §7).
+        Reads the schema's value field once (``expression_value`` for the gene
+        schema, ``value`` for the probe schema), runs the deterministic
+        detectors, and writes ``confidence_report.csv``. v1 policy: the check
+        always passes — anomalies are surfaced as warnings, never as a failed
+        gate (SURVEY §7).
         """
         values: list[str] = []
+        value_field = _value_field(schema)
         with primary_path.open("r", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
-                values.append(row.get("expression_value", ""))
+                values.append(row.get(value_field, ""))
         summary = aggregate_confidence_metrics(
-            {"expression_value": values},
+            {value_field: values},
             thresholds=self.confidence_thresholds,
         )
         report_path = output_dir / "confidence_report.csv"
@@ -390,8 +530,21 @@ class ExpressionValidationProfile:
         return check, warnings
 
 
+class ProbeExpressionValidationProfile(ExpressionValidationProfile):
+    """``gene_expression.probe_release.v1`` — probe-level release gate.
+
+    Same server-side checks as the gene profile; ``required_entity_level`` is
+    ``probe`` (Phase 5 D4), which drives the Spec Validator's entity-level
+    compatibility check (and, in T5, the probe-coverage policy matrix).
+    """
+
+    profile_id = "gene_expression.probe_release.v1"
+    required_entity_level = "probe"
+
+
 VALIDATION_PROFILES: dict[str, ExpressionValidationProfile] = {
-    ExpressionValidationProfile.profile_id: ExpressionValidationProfile()
+    ExpressionValidationProfile.profile_id: ExpressionValidationProfile(),
+    ProbeExpressionValidationProfile.profile_id: ProbeExpressionValidationProfile(),
 }
 
 

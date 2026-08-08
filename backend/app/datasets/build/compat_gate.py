@@ -18,7 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.datasets.build.canonicalizer import CanonicalizationResult
-from app.datasets.contracts import DataBatch, DatasetBuildSpec, MappingMethod
+from app.datasets.build.identity import MeasurementIdentity
+from app.datasets.contracts import DataBatch, DatasetBuildSpec, MappingMethod, ValueScale
 
 _MERGEABLE_MEASUREMENT_REASON = "measurement_identity_mismatch"
 _NAMESPACE_REASON = "namespace_mismatch"
@@ -59,6 +60,13 @@ def check_expression_compatibility(
         }
         if len(identities) > 1:
             reasons.append(_MERGEABLE_MEASUREMENT_REASON)
+        # Phase 5 D4: a cross-source merge may never mix an *unknown* scale
+        # with anything — including another unknown.  The gate alone cannot
+        # prove equivalence; only a server-owned evidence-backed
+        # normalization/conversion rule could, and Phase 5 registers none.
+        # Single-source builds keep their honest ``unknown`` scale untouched.
+        if any(_source_has_unknown_scale(result) for result in non_empty):
+            reasons.append(_MERGEABLE_MEASUREMENT_REASON)
         namespaces = {
             namespace
             for result in non_empty
@@ -68,6 +76,26 @@ def check_expression_compatibility(
             reasons.append(_NAMESPACE_REASON)
     unique_reasons = tuple(dict.fromkeys(reasons))
     return CompatibilityReport(compatible=not unique_reasons, reasons=unique_reasons)
+
+
+def _source_has_unknown_scale(result: CanonicalizationResult) -> bool:
+    """True when any measurement identity of *result* declares an unknown scale.
+
+    The canonicalizer records per-row identities as serialized triples
+    (``measurement_identities``); the batch-level ``value_scale`` statistic is
+    the adapter-declared scale for batches without per-row identities.  An
+    undecodable identity never counts as unknown (fail-open would be wrong, so
+    it is simply ignored — the canonicalizer always emits decodable triples).
+    """
+    statistics = result.batch.statistics
+    for serialized in statistics.get("measurement_identities", []):
+        try:
+            identity = MeasurementIdentity.deserialize(serialized)
+        except (TypeError, ValueError):
+            continue
+        if identity.value_scale is ValueScale.UNKNOWN:
+            return True
+    return statistics.get("value_scale") == ValueScale.UNKNOWN.value
 
 
 def _has_formal_mapping_evidence(batch: DataBatch) -> bool:

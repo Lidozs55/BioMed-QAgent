@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 from app.datasets.contracts import (
     AcquisitionMode,
+    AdapterParams,
     DatasetBuildSpec,
     SourceBinding,
     SourceBindingAcquisition,
+    ValueScale,
 )
 from app.datasets.runtime import (
     DatasetBuildExecutor,
@@ -244,6 +246,42 @@ def test_executor_reruns_when_parameters_change(tmp_path: Path) -> None:
     runner2 = _Runner()
     asyncio.run(_make_executor(tmp_path, runner2, scope={"v": 2}).run())
     assert len(runner2.calls) == 10  # parameter scope change invalidates reuse
+
+
+def test_executor_per_binding_adapter_params_gate_reuse(tmp_path: Path) -> None:
+    """Phase 5 D1: per-binding AdapterParams are part of the operation digest.
+
+    The parameter scope is keyed by binding_id and holds the binding's
+    normalized ``AdapterParams`` JSON.  Changing one parameter (scale
+    log2 -> linear) must invalidate every checkpoint; restoring the same
+    parameters must reuse them.
+    """
+
+    def params(scale: ValueScale) -> dict[str, object]:
+        return AdapterParams(
+            format="series_matrix",
+            value_semantics="normalized_expression_value",
+            value_scale=scale,
+            expression_unit="normalized_expression_value",
+            platform_ids=["GPL570"],
+        ).model_dump(mode="json")
+
+    log2_scope = {"srcbind_gdc": params(ValueScale.LOG2)}
+    linear_scope = {"srcbind_gdc": params(ValueScale.LINEAR)}
+
+    runner = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner, scope=log2_scope).run())
+    assert len(runner.calls) == 10
+
+    # Same normalized parameters again: every operation is reused.
+    runner2 = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner2, scope=log2_scope).run())
+    assert runner2.calls == []
+
+    # scale change log2 -> linear: nothing may be reused.
+    runner3 = _Runner()
+    asyncio.run(_make_executor(tmp_path, runner3, scope=linear_scope).run())
+    assert len(runner3.calls) == 10
 
 
 def test_executor_reruns_when_implementation_version_changes(tmp_path: Path) -> None:

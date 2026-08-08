@@ -157,6 +157,43 @@ def parse_platform_annotation(compressed: bytes) -> tuple[dict[str, str], str]:
     return mapping, MAPPED
 
 
+def platform_table_columns(compressed: bytes) -> tuple[str | None, str | None]:
+    """Return ``(probe_column, gene_column)`` for a SOFT platform table.
+
+    Uses the same table-marker scan and gene-column priority as
+    :func:`parse_platform_annotation`, so a MAPPED parse always has a
+    non-None gene column. Returns ``(None, None)`` for malformed tables.
+    """
+    try:
+        text = gzip.decompress(compressed).decode("utf-8", errors="replace")
+    except (gzip.BadGzipFile, OSError):
+        return None, None
+
+    lines = text.splitlines()
+    begin: int | None = None
+    end: int | None = None
+    for index, line in enumerate(lines):
+        marker = line.strip().casefold()
+        if marker == "!platform_table_begin":
+            begin = index
+        elif marker == "!platform_table_end" and begin is not None:
+            end = index
+            break
+    if begin is None or end is None or end <= begin + 1:
+        return None, None
+
+    header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
+    if not header:
+        return None, None
+    probe_column = header[0]
+    gene_column: str | None = None
+    for candidate in _GENE_COLUMN_PRIORITY:
+        if candidate in header:
+            gene_column = candidate
+            break
+    return probe_column, gene_column
+
+
 def fetch_platform_annotation(
     gpl: str,
     cache: ContentCache,
@@ -230,4 +267,5 @@ __all__: list[str] = [
     "fetch_platform_annotation",
     "geo_platform_dir",
     "parse_platform_annotation",
+    "platform_table_columns",
 ]

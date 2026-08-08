@@ -22,6 +22,10 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.discovery import GeoSeriesRecord, LiteratureRecord
 from app.integrations.ncbi.parsers import parse_geo_esummary, parse_pubmed_xml
+from app.pipeline.processing.geo_accession import (
+    MULTI_GSE_SPLIT_HINT,
+    extract_gse_accessions,
+)
 from app.pipeline.stages.base import DiscoveryOutput, StageContext, StageResult
 
 _DEFAULT_PMID = "34180400"
@@ -74,11 +78,6 @@ def _validate_pipeline_source_specification(
 def _extract_pmid(query: str) -> str | None:
     match = re.search(r"(\d+)(?:\[PMID\])?", query)
     return match.group(1) if match else None
-
-
-def _extract_gse_accession(query: str) -> str | None:
-    match = re.search(r"(GSE\d+)(?:\[Accession\])?", query, re.IGNORECASE)
-    return match.group(1).upper() if match else None
 
 
 async def _search_pubmed_with_fallback(
@@ -340,18 +339,33 @@ def _resolve_pmid(specification: TaskSpecification) -> str | None:
 
 
 def _resolve_gse(specification: TaskSpecification) -> str | None:
-    """Return an explicit GSE accession from the specification, or None to search by topic."""
+    """Return an explicit GSE accession from the specification, or None to search by topic.
+
+    Phase 5 D7: considers the FULL candidate set across every GEO query and
+    GEO dataset selection.  More than one distinct accession (e.g. query
+    GSE1 + dataset GSE2) raises an explicit ``ValueError`` listing ALL
+    accessions instead of silently truncating to the first match.
+    """
+    candidates: list[str] = []
     for query in specification.queries:
         if query.database == Database.GEO:
-            gse = _extract_gse_accession(query.query)
-            if gse:
-                return gse
+            candidates.extend(extract_gse_accessions(query.query))
     for dataset in specification.datasets:
         if dataset.database == Database.GEO:
-            gse = _extract_gse_accession(dataset.accession)
-            if gse:
-                return gse
-    return None
+            candidates.extend(extract_gse_accessions(dataset.accession))
+    distinct: list[str] = []
+    seen: set[str] = set()
+    for accession in candidates:
+        if accession not in seen:
+            seen.add(accession)
+            distinct.append(accession)
+    if len(distinct) <= 1:
+        return distinct[0] if distinct else None
+    raise ValueError(
+        "multiple GEO accessions across query/dataset selections: "
+        + ", ".join(distinct)
+        + f"; {MULTI_GSE_SPLIT_HINT}"
+    )
 
 
 def _run_discovery_fixture(

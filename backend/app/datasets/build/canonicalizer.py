@@ -4,8 +4,9 @@ Applies the expression normalization profile (ARCHITECTURE §8; Design §8.5):
 
 - authorizes each gene-id namespace (ensembl_gene / gene_symbol) and splits
   version suffixes, recording a normalization-log entry per entity;
-- enforces the profile's allowed units / value semantics (no silent unit
-  conversion without a declared rule);
+- enforces the profile's allowed units / value semantics / value scales
+  (Phase 5 D3: a scale outside the profile's ``allowed_value_scales`` is
+  rejected; ``unknown`` is honest and never promoted to a known scale);
 - separates normalization-rejected rows into an audit file.
 
 The canonicalizer is pure and deterministic: identical inputs produce
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from app.datasets.build.errors import BuildError
 from app.datasets.build.hashing import sha256_file
+from app.datasets.build.identity import MeasurementIdentity
 from app.datasets.contracts import (
     DataBatch,
     DatasetSchema,
@@ -31,11 +33,16 @@ from app.datasets.contracts import (
     FileAsset,
     JsonValue,
     NormalizationProfile,
+    ValueScale,
 )
 from app.domain.contracts import asset_id_from_sha256, make_record_id
 
 _ENSEMBL_PATTERN = re.compile(r"^(ENSG\d{11})(?:\.(\d+))?$")
 _SYMBOL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]*$")
+#: Affymetrix control/quality probes (``AFFX-...``) are not gene symbols;
+#: namespace must come from the adapter declaration, never the ID shape
+#: (Phase 5 D1).
+_AFFYMETRIX_CONTROL_PATTERN = re.compile(r"^AFFX-", re.IGNORECASE)
 
 NORMALIZATION_LOG_COLUMNS = (
     "record_id",
@@ -85,12 +92,35 @@ class CanonicalizationResult:
     audit_paths: tuple[Path, ...]
 
 
-def authorize_namespace(gene_id_raw: str) -> tuple[str, str, str] | None:
-    """Return ``(gene_id, namespace, version)`` or None when unauthorized."""
+def authorize_namespace(
+    gene_id_raw: str, declared_namespace: str = ""
+) -> tuple[str, str, str] | None:
+    """Return ``(gene_id, namespace, version)`` or None when unauthorized.
+
+    Phase 5 D1: the adapter-declared namespace
+    (``gene_id_namespace_declared`` source-long column) is authoritative when
+    present — ``geo_probe`` rows are never guessed into ``gene_symbol`` by ID
+    shape.  Without a declaration (legacy GDC/Xena rows) the ENSG shape and a
+    conservative gene-symbol shape authorize; probe-like identifiers such as
+    Affymetrix control probes are never authorized as ``gene_symbol``.
+    """
+    if declared_namespace:
+        if declared_namespace == "ensembl_gene":
+            ensembl = _ENSEMBL_PATTERN.fullmatch(gene_id_raw)
+            if ensembl:
+                return ensembl.group(1), "ensembl_gene", ensembl.group(2) or ""
+            return None
+        if declared_namespace == "gene_symbol":
+            return gene_id_raw, "gene_symbol", ""
+        if declared_namespace == "geo_probe":
+            return gene_id_raw, "geo_probe", ""
+        return None
     ensembl = _ENSEMBL_PATTERN.fullmatch(gene_id_raw)
     if ensembl:
         return ensembl.group(1), "ensembl_gene", ensembl.group(2) or ""
-    if _SYMBOL_PATTERN.fullmatch(gene_id_raw):
+    if _SYMBOL_PATTERN.fullmatch(gene_id_raw) and not (
+        _AFFYMETRIX_CONTROL_PATTERN.match(gene_id_raw)
+    ):
         return gene_id_raw, "gene_symbol", ""
     return None
 
@@ -102,6 +132,8 @@ def canonicalize(
     profile: NormalizationProfile,
     output_dir: Path,
     gene_symbol_map: Mapping[str, str] | None = None,
+    probe_map: Mapping[str, str] | None = None,
+    probe_target_namespace: str = "gene_symbol",
 ) -> CanonicalizationResult:
     """Transform one source-long batch into canonical schema rows.
 
@@ -109,6 +141,15 @@ def canonicalize(
     IDs (local, ship-bound; REVIEW §9.6).  A mapped row is re-namespaced to
     ``ensembl_gene`` and the conversion is recorded in the normalization log;
     unmapped symbols stay in their original namespace and are never dropped.
+
+    Phase 5 T7 (D2/D5): ``probe_map`` optionally maps ``geo_probe`` rows to
+    gene identifiers (a GPL platform annotation).  A hit is re-namespaced to
+    ``probe_target_namespace`` (``gene_symbol`` or ``ensembl_gene``) and
+    recorded with rule ``probe_gene_map``; an unmapped probe stays
+    ``geo_probe`` (entity-level publish policy lives in the validation
+    profile).  Under the probe schema (``gene_expression.probe_long.v1``)
+    the canonical row carries ``probe_id``/``platform_id``/``value`` instead
+    of the gene-schema primary columns.
     """
     source_path = output_dir / batch.file_asset.relative_path
     if not source_path.is_file():
@@ -121,9 +162,14 @@ def canonicalize(
     mappings_path = canonical_dir / f"{batch.binding_id}_field_mappings.csv"
 
     columns = [field.name for field in schema.fields]
+    probe_schema = any(field.name == "probe_id" for field in schema.fields)
+    platform_ids = [
+        str(platform_id) for platform_id in batch.statistics.get("platform_ids", [])
+    ]
     row_count = 0
     rejected_count = 0
     mapped_count = 0
+    probe_mapped_count = 0
     namespaces: set[str] = set()
     units: set[str] = set()
     identities: set[tuple[str, str, str]] = set()
@@ -142,7 +188,10 @@ def canonicalize(
         log_writer.writeheader()
         for row in reader:
             gene_id_raw = row.get("gene_id_raw", "")
-            normalized = authorize_namespace(gene_id_raw) if gene_id_raw else None
+            declared = row.get("gene_id_namespace_declared", "") or ""
+            normalized = (
+                authorize_namespace(gene_id_raw, declared) if gene_id_raw else None
+            )
             if normalized is None:
                 rejected_writer.writerow(_rejected_row(row, batch, "unauthorized_namespace"))
                 rejected_count += 1
@@ -163,6 +212,25 @@ def canonicalize(
             if semantics not in profile.allowed_semantics:
                 rejected_writer.writerow(
                     _rejected_row(row, batch, "unknown_semantics", f"semantics={semantics!r}")
+                )
+                rejected_count += 1
+                continue
+            # Phase 5 D3/T4: the declared value scale must be an honest
+            # ``ValueScale`` member that the profile explicitly allows.
+            # ``unknown`` is accepted only when allowed; it is never promoted
+            # to a known scale (log2) by inference.
+            scale_raw = row.get("value_scale", "")
+            try:
+                scale = ValueScale(scale_raw)
+            except ValueError:
+                rejected_writer.writerow(
+                    _rejected_row(row, batch, "unknown_scale", f"scale={scale_raw!r}")
+                )
+                rejected_count += 1
+                continue
+            if scale not in profile.allowed_value_scales:
+                rejected_writer.writerow(
+                    _rejected_row(row, batch, "unknown_scale", f"scale={scale_raw!r}")
                 )
                 rejected_count += 1
                 continue
@@ -191,13 +259,42 @@ def canonicalize(
                 version = ""
                 mapped = True
                 mapped_count += 1
-            canonical_row = dict(row)
+            probe_mapped = False
+            if (
+                namespace == "geo_probe"
+                and probe_map is not None
+                and gene_id in probe_map
+            ):
+                gene_id = probe_map[gene_id]
+                namespace = probe_target_namespace
+                version = ""
+                probe_mapped = True
+                probe_mapped_count += 1
+            canonical_row = {
+                # Canonical output carries exactly the schema's columns: internal
+                # source-long columns the schema does not declare (e.g. the
+                # Phase 5 ``gene_id_namespace_declared``) must not leak into the
+                # published contract, which keeps ``gene_id_namespace``
+                # authoritative.
+                key: value for key, value in row.items() if key in columns
+            }
             canonical_row["record_id"] = make_record_id(
                 row["dataset_id"], row["gene_id_raw"], row["sample_id"]
             )
-            canonical_row["gene_id"] = gene_id
+            if probe_schema:
+                # Under the probe contract the identity column is the ORIGINAL
+                # probe id; probe->gene mapping only flips the namespace (D2:
+                # mapped rows carry the target namespace, unmapped rows stay
+                # geo_probe; the mapped gene id itself lives in the mapping
+                # audit CSV).
+                canonical_row["probe_id"] = row.get("gene_id_raw", "")
+                canonical_row["platform_id"] = platform_ids[0] if platform_ids else ""
+                if "value" in columns:
+                    canonical_row["value"] = row.get("expression_value", "")
+            else:
+                canonical_row["gene_id"] = gene_id
+                canonical_row["gene_id_version"] = version
             canonical_row["gene_id_namespace"] = namespace
-            canonical_row["gene_id_version"] = version
             is_star = batch.statistics.get("format") == "star_counts"
             canonical_row["source_sample_alias"] = (
                 "" if is_star else row.get("source_column_name", "")
@@ -211,21 +308,29 @@ def canonicalize(
                     "gene_id_namespace": namespace,
                     "gene_id_version": version,
                     "rule_id": (
-                        "gene_symbol_map"
-                        if mapped
+                        "probe_gene_map"
+                        if probe_mapped
                         else (
-                            "ensembl_version_split"
-                            if namespace == "ensembl_gene" and version
-                            else f"namespace_{namespace}"
+                            "gene_symbol_map"
+                            if mapped
+                            else (
+                                "ensembl_version_split"
+                                if namespace == "ensembl_gene" and version
+                                else f"namespace_{namespace}"
+                            )
                         )
                     ),
                     "evidence": (
-                        "local gene symbol map (symbol->ensembl)"
-                        if mapped
+                        "GPL platform annotation (probe->gene)"
+                        if probe_mapped
                         else (
-                            "Ensembl ID pattern ENSG###########(.N)"
-                            if namespace == "ensembl_gene"
-                            else "HGNC gene symbol pattern"
+                            "local gene symbol map (symbol->ensembl)"
+                            if mapped
+                            else (
+                                "Ensembl ID pattern ENSG###########(.N)"
+                                if namespace == "ensembl_gene"
+                                else "HGNC gene symbol pattern"
+                            )
                         )
                     ),
                 }
@@ -233,10 +338,10 @@ def canonicalize(
             namespaces.add(namespace)
             units.add(unit)
             identities.add(
-                (
-                    row.get("value_semantics", ""),
-                    row.get("value_scale", ""),
-                    unit,
+                MeasurementIdentity(
+                    value_semantics=row.get("value_semantics", ""),
+                    value_scale=scale,
+                    expression_unit=unit,
                 )
             )
             row_count += 1
@@ -270,11 +375,11 @@ def canonicalize(
             "rejected_count": rejected_count,
             "gene_id_namespaces": sorted(namespaces),
             "gene_symbol_mapped_count": mapped_count,
+            "probe_mapped_count": probe_mapped_count,
             "expression_units": sorted(units),
             "unit_inconsistency_detected": len(units) > 1,
             "measurement_identities": [
-                [semantics, scale, unit]
-                for semantics, scale, unit in sorted(identities)
+                identity.serialize() for identity in sorted(identities)
             ],
             "schema_ref": schema.schema_id,
         }

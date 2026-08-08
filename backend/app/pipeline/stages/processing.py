@@ -8,7 +8,9 @@ import logging
 import os
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass, field
 
+from app.datasets.contracts import PlatformRecord
 from app.domain.contracts import (
     ParsedDataset,
     SourceAsset,
@@ -18,9 +20,20 @@ from app.domain.contracts import (
 from app.domain.contracts.discovery import GeoSeriesRecord
 from app.domain.processing import ParsedDataset as OldParsedDataset
 from app.pipeline.processing.gdc import parse_gdc_table
-from app.pipeline.processing.geo_annotation import (
-    NOT_ATTEMPTED,
-    fetch_platform_annotation,
+from app.pipeline.processing.geo_annotation import NOT_ATTEMPTED
+from app.pipeline.processing.geo_association import (
+    MULTI_PLATFORM_FAIL_CLOSED_STATUS,
+    PlatformAssociationMode,
+    SamplePlatformEvidenceRow,
+    associate_platforms,
+    parse_series_matrix_platform_evidence,
+    parse_soft_platform_evidence,
+)
+from app.pipeline.processing.geo_provider import (
+    acquire_platform_annotation,
+    build_platform_record,
+    platform_not_attempted_record,
+    platform_source_id,
 )
 from app.pipeline.processing.geo_tximport import (
     GeoSampleMetadata,
@@ -444,6 +457,7 @@ def _try_series_matrix_expression_or_minimal(
     samples: list[GeoSampleMetadata],
     suppl_asset: SourceAsset | None = None,
     gene_map: dict[str, str] | None = None,
+    sample_gene_maps: dict[str, dict[str, str]] | None = None,
     probe_gene_mapping: str = NOT_ATTEMPTED,
     skip_series_matrix: bool = False,
 ) -> tuple[ParsedDataset | None, str | None]:
@@ -474,9 +488,10 @@ def _try_series_matrix_expression_or_minimal(
     removed: without expression data no parsed primary dataset is produced
     (ADR-011 / phase 4b T1).
 
-    ``gene_map`` / ``probe_gene_mapping`` are forwarded to the expression
-    parser so probe rows can be rewritten to gene symbols and the annotation
-    status (mapped/unmapped/...) is recorded in processing_parameters.
+    ``gene_map`` / ``sample_gene_maps`` / ``probe_gene_mapping`` are
+    forwarded to the expression parser so probe rows can be rewritten to gene
+    symbols per their sample's GPL (Phase 5 D8) and the annotation status
+    (mapped/unmapped/...) is recorded in processing_parameters.
     """
     # The series_matrix expression block needs samples to map its columns;
     # the supplementary parser does NOT (GSM columns map directly and raw
@@ -493,6 +508,7 @@ def _try_series_matrix_expression_or_minimal(
                 workdir=ctx.workdir,
                 samples=samples,
                 gene_map=gene_map,
+                sample_gene_maps=sample_gene_maps,
                 probe_gene_mapping=probe_gene_mapping,
             )
             if expression_parsed is not None:
@@ -650,28 +666,169 @@ def _data_type_datasets(
     ]
 
 
-def _load_geo_gene_map(
-    ctx: StageContext, geo: GeoSeriesRecord | None
-) -> tuple[dict[str, str] | None, str]:
-    """Load the platform probe → gene map for the first GPL of *geo*.
+def _extract_platform_evidence(
+    ctx: StageContext,
+    evidence_asset: SourceAsset | None,
+) -> dict[str, str]:
+    """Recover per-sample GPL evidence (GSM → GPL) from a source asset.
 
-    Returns ``(map, status)``. When *geo* carries no platform, returns
-    ``(None, NOT_ATTEMPTED)``. Download/discovery failures degrade to
-    ``(None, "annotation_unavailable")`` — a missing probe→gene map is a
-    data-quality warning, not a processing failure.
+    Tries the series-matrix ``!Sample_platform_id`` rows first, then SOFT
+    sample metadata. Any parse failure degrades to an empty dict — the
+    caller falls back to series-level platform declarations only.
     """
-    if geo is None or not geo.platform_ids:
-        return None, NOT_ATTEMPTED
-    gpl = geo.platform_ids[0]
-    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
+    if evidence_asset is None:
+        return {}
+    source_path = ctx.workdir.root / evidence_asset.relative_path
+    if not source_path.is_file():
+        return {}
     try:
-        return fetch_platform_annotation(gpl, cache)
-    except Exception as exc:
-        logger.warning(
-            "processing: GEO annotation fetch failed for %s (%s: %s)",
-            gpl, type(exc).__name__, exc,
+        compressed = source_path.read_bytes()
+    except OSError as exc:
+        logger.warning("processing: cannot read evidence asset %s: %s", source_path, exc)
+        return {}
+    evidence = parse_series_matrix_platform_evidence(compressed)
+    if evidence:
+        return evidence
+    return parse_soft_platform_evidence(compressed)
+
+
+@dataclass(frozen=True)
+class GeoGeneMapResult:
+    """Result of the converged D8 GEO gene-map loader.
+
+    ``gene_map`` is the single-platform probe→gene map (series-level
+    fallback or the caller's legacy shape); ``sample_gene_maps`` is the
+    per-sample variant used whenever per-sample GPL evidence exists — a GPL A
+    annotation is never applied to GPL B samples. ``platform_records`` holds
+    one D3 ``PlatformRecord`` per GPL attempt (mapped / unmapped /
+    no_gene_annotation / annotation_unavailable / not_attempted), and
+    ``sample_platform_evidence`` is the deterministic audit row set.
+    """
+
+    gene_map: dict[str, str] | None = None
+    sample_gene_maps: dict[str, dict[str, str]] | None = None
+    probe_gene_mapping: str = NOT_ATTEMPTED
+    platform_records: list[PlatformRecord] = field(default_factory=list)
+    sample_platform_evidence: tuple[tuple[str, str], ...] = ()
+
+
+def _aggregate_mapping_status(statuses: list[str]) -> str:
+    """Aggregate per-GPL annotation statuses into one honest summary.
+
+    Any usable mapping wins ("mapped"); otherwise the most severe failure
+    drives the artifact warning.
+    """
+    if not statuses:
+        return NOT_ATTEMPTED
+    if any(status == "mapped" for status in statuses):
+        return "mapped"
+    for status in ("annotation_unavailable", "no_gene_annotation"):
+        if any(item == status for item in statuses):
+            return status
+    return "unmapped"
+
+
+def _load_geo_gene_map(
+    ctx: StageContext,
+    geo: GeoSeriesRecord | None,
+    samples: list[GeoSampleMetadata] | None = None,
+    evidence_asset: SourceAsset | None = None,
+) -> GeoGeneMapResult:
+    """Load per-GPL probe→gene maps from platform annotations (Phase 5 D8).
+
+    Converges the old ``platform_ids[0]`` behavior: sample-level GPL evidence
+    (series-matrix GSM rows / SOFT metadata) drives the association; a GPL
+    annotation maps ONLY to samples declaring it; multi-platform matrices
+    split per platform; attribution failures fail closed (no unconditional
+    first GPL). Every GPL attempt records a ``PlatformRecord``.
+
+    Returns a :class:`GeoGeneMapResult`; never raises for annotation
+    problems (missing annotation is a data-quality warning).
+    """
+    declared = list(geo.platform_ids) if geo is not None else []
+    evidence = _extract_platform_evidence(ctx, evidence_asset)
+    sample_ids = [sample.sample_id for sample in (samples or [])]
+    association = associate_platforms(declared, evidence, sample_ids)
+
+    if association.mode is PlatformAssociationMode.NO_PLATFORM:
+        return GeoGeneMapResult()
+
+    if association.mode is PlatformAssociationMode.FAIL_CLOSED_NO_EVIDENCE:
+        records = [
+            platform_not_attempted_record(gpl, source_id=platform_source_id(gpl))
+            for gpl in association.declared_platform_ids
+        ]
+        return GeoGeneMapResult(
+            probe_gene_mapping=MULTI_PLATFORM_FAIL_CLOSED_STATUS,
+            platform_records=records,
         )
-        return None, "annotation_unavailable"
+
+    cache = ContentCache(ctx.workdir.root.parent.parent / "cache" / "ncbi")
+    gene_maps: dict[str, dict[str, str]] = {}
+    records: list[PlatformRecord] = []
+    statuses: list[str] = []
+    for gpl in sorted(association.gpl_to_samples):
+        result = acquire_platform_annotation(
+            gpl,
+            cache=cache,
+            fixture_dir=ctx.fixture_dir if ctx.mode == "fixture" else None,
+        )
+        statuses.append(result.status)
+        records.append(
+            build_platform_record(gpl, result, source_id=platform_source_id(gpl))
+        )
+        if result.status == "mapped" and result.gene_map:
+            gene_maps[gpl] = result.gene_map
+
+    # Declared-but-unattributed GPLs are recorded as not_attempted — nothing
+    # was fetched for them because no sample declares them (D8: no guessing).
+    attempted = set(association.gpl_to_samples)
+    for gpl in association.declared_platform_ids:
+        if gpl not in attempted:
+            records.append(
+                platform_not_attempted_record(gpl, source_id=platform_source_id(gpl))
+            )
+
+    aggregate_status = _aggregate_mapping_status(statuses)
+    if association.mode is PlatformAssociationMode.SINGLE_PLATFORM:
+        if not evidence:
+            # Narrow series-level fallback: a single declared GPL with no
+            # per-sample evidence covers the whole series (D8).
+            gpl = next(iter(association.gpl_to_samples))
+            return GeoGeneMapResult(
+                gene_map=gene_maps.get(gpl),
+                probe_gene_mapping=aggregate_status,
+                platform_records=records,
+                sample_platform_evidence=association.sample_platform_evidence,
+            )
+        # Unanimous per-sample evidence: per-sample maps for every sample
+        # declaring the single GPL.
+        gpl = next(iter(association.gpl_to_samples))
+        sample_maps = {
+            sample_id: gene_maps[gpl]
+            for sample_id in association.gpl_to_samples[gpl]
+            if gpl in gene_maps
+        }
+        return GeoGeneMapResult(
+            sample_gene_maps=sample_maps or None,
+            probe_gene_mapping=aggregate_status,
+            platform_records=records,
+            sample_platform_evidence=association.sample_platform_evidence,
+        )
+
+    # PER_PLATFORM_SPLIT: per-sample maps keyed by each sample's declared GPL.
+    sample_maps: dict[str, dict[str, str]] = {}
+    for gpl, gpl_samples in association.gpl_to_samples.items():
+        if gpl not in gene_maps:
+            continue
+        for sample_id in gpl_samples:
+            sample_maps[sample_id] = gene_maps[gpl]
+    return GeoGeneMapResult(
+        sample_gene_maps=sample_maps or None,
+        probe_gene_mapping=aggregate_status,
+        platform_records=records,
+        sample_platform_evidence=association.sample_platform_evidence,
+    )
 
 
 def _no_primary_digest(reason: str, samples: list[GeoSampleMetadata]) -> str:
@@ -836,6 +993,7 @@ def run_processing(
     samples: list[GeoSampleMetadata] = []
     parsed: ParsedDataset | None = None
     no_primary_reason: str | None = None
+    geo_map: GeoGeneMapResult | None = None
     if ctx.mode == "fixture":
         try:
             parsed = process_geo_tximport_counts(
@@ -913,12 +1071,13 @@ def run_processing(
                         soft_exc,
                     )
                     samples = []
-                gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
+                geo_map = _load_geo_gene_map(ctx, geo, samples, evidence_asset=soft_asset)
                 parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
                     source_asset, dataset_id, ctx, samples,
                     suppl_asset=suppl_asset,
-                    gene_map=gene_map,
-                    probe_gene_mapping=probe_gene_mapping,
+                    gene_map=geo_map.gene_map,
+                    sample_gene_maps=geo_map.sample_gene_maps,
+                    probe_gene_mapping=geo_map.probe_gene_mapping,
                     # source_asset here is the tximport COUNTS file, NOT a
                     # series matrix: never route counts bytes through the
                     # series-matrix parser (a corrupt counts gzip would raise
@@ -930,13 +1089,25 @@ def run_processing(
                     no_primary_reason = "tximport_parse_failed_no_expression"
         else:
             samples = _recover_samples_from_series_matrix(source_asset, ctx)
-            gene_map, probe_gene_mapping = _load_geo_gene_map(ctx, geo)
+            geo_map = _load_geo_gene_map(
+                ctx, geo, samples, evidence_asset=source_asset
+            )
             parsed, no_primary_reason = _try_series_matrix_expression_or_minimal(
                 source_asset, dataset_id, ctx, samples,
                 suppl_asset=suppl_asset,
-                gene_map=gene_map,
-                probe_gene_mapping=probe_gene_mapping,
+                gene_map=geo_map.gene_map,
+                sample_gene_maps=geo_map.sample_gene_maps,
+                probe_gene_mapping=geo_map.probe_gene_mapping,
             )
+
+    platform_records: list[PlatformRecord] = []
+    sample_platform_evidence: list[SamplePlatformEvidenceRow] = []
+    if geo_map is not None:
+        platform_records = geo_map.platform_records
+        sample_platform_evidence = [
+            SamplePlatformEvidenceRow(sample_id=sid, platform_id=gpl)
+            for sid, gpl in geo_map.sample_platform_evidence
+        ]
 
     if parsed is None:
         # No expression data anywhere (empty block / parse failure / no
@@ -964,6 +1135,8 @@ def run_processing(
             parsed_datasets=[],
             samples=samples,
             no_primary_reason=no_primary_reason,
+            platform_records=platform_records,
+            sample_platform_evidence=sample_platform_evidence,
         )
         digest = _no_primary_digest(
             no_primary_reason or "no_expression_data", samples
@@ -994,6 +1167,8 @@ def run_processing(
         samples=samples,
         cleaning_report=cleaning_report,
         field_alignment=field_alignment,
+        platform_records=platform_records,
+        sample_platform_evidence=sample_platform_evidence,
     )
     digest = hashlib.sha256(parsed.file_asset.sha256.encode("utf-8")).hexdigest()
     return StageResult(output_digest=digest, output=output)

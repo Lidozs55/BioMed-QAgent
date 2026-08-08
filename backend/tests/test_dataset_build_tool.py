@@ -345,9 +345,9 @@ async def test_execute_dataset_build_proceeds_without_pending_main_input(
 def test_no_data_classification_is_scoped_to_current_attempt(
     tmp_path: Path,
 ) -> None:
-    """H3: NO_DATA is attempt-scoped — a stale zero-row manifest from an
-    earlier attempt must not classify a later genuine failure as NO_DATA, and
-    a later attempt with data succeeds normally.
+    """H3 + T7: NO_DATA classification is attempt-scoped — it is driven by the
+    per-binding outcomes of THIS run, never by a stale zero-row manifest from
+    an earlier attempt; a later attempt with data succeeds normally.
     """
     ctx = _make_ctx(tmp_path)
     run_ctx: RunContext = ctx.context
@@ -363,23 +363,29 @@ def test_no_data_classification_is_scoped_to_current_attempt(
     )
     assert data_a["status"] == "ok"
     assert data_a["result"]["status"] == "no_data"
-    assert (
+    assert data_a["result"]["reason_codes"] == ["no_primary_data"]
+    # T7 fan-out: the zero-valid-row source is rejected per-binding at phase A,
+    # so no manifest is written for attempt A (classification is driven by the
+    # per-binding outcomes, which are fresh per run).
+    assert not (
         run_ctx.work_dir.root
         / "datasets_build"
         / "build_tool_test"
         / "dataset_manifest.json"
-    ).is_file()
+    ).exists()
 
-    # Attempt B: a genuine parse failure (malformed row) on the same build_id
-    # must NOT be misclassified as NO_DATA because of the stale zero-row
-    # manifest left by attempt A.
+    # Attempt B: a parse failure (malformed row) on the same build_id is a
+    # per-binding error rejection — the NO_DATA envelope carries the binding
+    # scoped parse_error code and is NOT influenced by attempt A's outcome.
     bad_row = run_ctx.work_dir.source_asset_file("bad_row.tsv")
     bad_row.write_text("gene_id\tS1\tS2\nTP53\t1\t2\nmalformed\n", encoding="utf-8")
     data_b = _call_tool(
         ctx, _spec_json(), json.dumps({"binding_gdc": "source_assets/bad_row.tsv"})
     )
-    assert data_b["status"] == "error"
-    assert data_b["retryable"] is True
+    assert data_b["status"] == "ok"
+    assert data_b["result"]["status"] == "no_data"
+    assert data_b["result"]["reason_codes"] == ["parse_error:binding_gdc"]
+    assert data_b["result"].get("publication_id") is None
 
     # Attempt C: real data succeeds and publishes.
     rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
@@ -389,16 +395,16 @@ def test_no_data_classification_is_scoped_to_current_attempt(
     assert data_c["result"]["publication_id"]
 
 
-def test_execute_dataset_build_mixed_empty_and_usable_sources_is_no_data_not_partial_success(
+def test_execute_dataset_build_mixed_empty_and_usable_sources_is_partial_success(
     tmp_path: Path,
 ) -> None:
-    """B5/K2: a mixed-source build (one empty + one usable) where the plan
-    aborts at the first empty source must NOT emit a contract-incoherent
-    zero-row/no-publication PARTIAL_SUCCESS (ARCHITECTURE §9.2 defines
-    PARTIAL_SUCCESS as remaining valid sources validated and publishable,
-    which this build never did). The contract-coherent outcome is a
-    structured NO_DATA envelope whose reason codes identify the empty
-    binding; it is not retryable.
+    """T7 D5 fan-out: a mixed-source build (one empty + one usable) no longer
+    aborts at the first empty source.  The empty binding is captured as a
+    per-binding rejection while the usable binding continues through phase B
+    and publishes — a genuinely publishable surviving source yields
+    PARTIAL_SUCCESS (wave-7: aborted mixed is never PARTIAL_SUCCESS; only a
+    publishable surviving source yields partial/success).  The empty binding
+    is reported in rejected_sources, not silently counted as successful.
     """
     ctx = _make_ctx(tmp_path)
     run_ctx: RunContext = ctx.context
@@ -419,21 +425,16 @@ def test_execute_dataset_build_mixed_empty_and_usable_sources_is_no_data_not_par
 
     assert data["status"] == "ok"
     result = data["result"]
-    # NOT the previous zero-row/no-publication PARTIAL_SUCCESS envelope.
-    assert result["status"] != "partial_success"
-    assert result["status"] == "no_data"
-    assert result["valid_row_count"] == 0
-    assert result["successful_sources"] == []
+    assert result["status"] == "partial_success"
+    assert result["valid_row_count"] >= 1
+    assert result["successful_sources"] == ["binding_xena"]
     assert result["rejected_sources"] == ["binding_gdc"]
-    # The reason codes identify the empty binding(s), not just the generic
-    # code — the usable source was never parsed/validated/published.
-    assert result["reason_codes"] == ["no_primary_data:binding_gdc"]
-    assert result.get("publication_id") is None
-    assert data.get("retryable") is not True
+    assert result["reason_codes"] == []
+    assert result.get("publication_id")
 
     build_root = run_ctx.work_dir.root / "datasets_build"
     publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
-    assert publish_dirs == []
+    assert len(publish_dirs) == 1
 
 
 def test_execute_dataset_build_all_empty_mixed_sources_is_no_data(tmp_path: Path) -> None:
@@ -589,3 +590,285 @@ def test_execute_dataset_build_rejects_path_traversal_build_id(tmp_path: Path) -
         assert data["status"] == "invalid_input", evil
         assert data["retryable"] is False, evil
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T7: D5 outcome matrix end-to-end (per-binding fan-out + classifier)
+# ---------------------------------------------------------------------------
+
+
+def _geo_spec_json(
+    *,
+    build_id: str = "build_tool_test",
+    schema_ref: str = "gene_expression.long.v1",
+    row_granularity: str = "gene_sample_measurement",
+    profile_ref: str = "gene_expression.release.v1",
+) -> str:
+    """A GEO series-matrix binding spec (gene- or probe-level)."""
+    return json.dumps({
+        "build_id": build_id,
+        "objective": "compare GEO probe expression",
+        "dataset_family": "gene_expression",
+        "row_granularity": row_granularity,
+        "schema_ref": schema_ref,
+        "source_bindings": [
+            {
+                "binding_id": "binding_geo",
+                "source": "geo",
+                "accession": "GSE1",
+                "acquisition": {"mode": "builtin", "provider_id": "geo.series.v1"},
+                "adapter_id": "geo.expression.v1",
+                "parameters": {
+                    "format": "series_matrix",
+                    "value_semantics": "expression_value",
+                    "value_scale": "log2",
+                    "expression_unit": "log2_expression",
+                    "platform_ids": ["GPL570"],
+                },
+            }
+        ],
+        "merge_strategy": "append_by_canonical_row",
+        "validation_profile_ref": profile_ref,
+        "normalization_profile_ref": "gene_expression.normalization.v1",
+    })
+
+
+def _stage_geo_matrix(
+    run_ctx: RunContext,
+    rows: list[tuple[str, str, str]],
+    name: str = "geo_matrix.txt.gz",
+) -> str:
+    """Stage a gzip series matrix into the run workdir; returns the relative path."""
+    import gzip
+
+    dest = run_ctx.work_dir.source_asset_file(name)
+    lines = ["!series_matrix_table_begin", '"ID_REF"\t"GSM1"\t"GSM2"']
+    lines.extend(f'"{probe}"\t{v1}\t{v2}' for probe, v1, v2 in rows)
+    lines.append("!series_matrix_table_end")
+    with gzip.open(dest, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return f"source_assets/{name}"
+
+
+def test_execute_dataset_build_gene_required_probe_source_is_no_data_with_probe_code(
+    tmp_path: Path,
+) -> None:
+    """D5 row 3: gene-required build whose only source has expression rows but
+    zero publishable gene rows → NO_DATA with the stable reason code
+    ``probe_mapping_unavailable_required_gene_level``; no primary, no
+    publication_id, canonical audits preserved (4b audit survival)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx, _geo_spec_json(), json.dumps({"binding_geo": rel})
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "no_data"
+    assert result["valid_row_count"] == 0
+    assert result["successful_sources"] == []
+    assert result["rejected_sources"] == ["binding_geo"]
+    assert result["reason_codes"] == [
+        "probe_mapping_unavailable_required_gene_level"
+    ]
+    assert result.get("publication_id") is None
+
+    # Supporting/audit artifacts written in phase A survive.
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    assert list((build_root / "canonical").glob("binding_geo*"))
+    assert not list((build_root / "publish").glob("build_tool_test_*"))
+
+
+def test_execute_dataset_build_probe_level_publishes_probe_primary(tmp_path: Path) -> None:
+    """D5 row 2: a probe-level build publishes the probe primary even with
+    zero mapped coverage — honest geo_probe rows, a probe_coverage warning,
+    audits, and NO reason code (the probe-level build is never NO_DATA)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")])
+
+    data = _call_tool(
+        ctx,
+        _geo_spec_json(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            profile_ref="gene_expression.probe_release.v1",
+        ),
+        json.dumps({"binding_geo": rel}),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "succeeded"
+    assert result["valid_row_count"] == 2
+    assert result["reason_codes"] == []
+    assert result["publication_id"]
+
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    report = json.loads((build_root / "validation_report.json").read_text("utf-8"))
+    warnings = {w["check_id"] for w in report["warnings"]}
+    assert "probe_coverage" in warnings
+    assert list((build_root / "publish").glob("build_tool_test_*"))
+    assert (build_root / "probe_mapping_summaries.csv").is_file()
+
+
+def test_execute_dataset_build_empty_geo_tximport_is_no_data_no_primary(
+    tmp_path: Path,
+) -> None:
+    """E2E (a) empty: a header-only GEO tximport yields NO_DATA with no
+    primary publication and no publication_id."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    empty = run_ctx.work_dir.source_asset_file("empty_tximport.tsv")
+    empty.write_text("gene_id\tcounts.S1\tcounts.S2\n", encoding="utf-8")
+
+    spec = json.loads(_geo_spec_json())
+    spec["source_bindings"][0]["parameters"]["format"] = "tximport_counts"
+    spec["source_bindings"][0]["parameters"]["value_semantics"] = "raw_count"
+    spec["source_bindings"][0]["parameters"]["value_scale"] = "linear"
+    spec["source_bindings"][0]["parameters"]["expression_unit"] = "estimated_count"
+
+    data = _call_tool(
+        ctx, json.dumps(spec), json.dumps({"binding_geo": "source_assets/empty_tximport.tsv"})
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "no_data"
+    assert result["valid_row_count"] == 0
+    assert result["reason_codes"] == ["no_primary_data"]
+    assert result.get("publication_id") is None
+
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    assert not list((build_root / "publish").glob("build_tool_test_*"))
+    assert not (build_root / "merged" / "primary.csv").exists()
+
+
+def test_execute_dataset_build_corrupted_geo_tximport_is_no_data(tmp_path: Path) -> None:
+    """E2E (a) corrupted: a structurally-corrupted GEO tximport (missing
+    counts.* columns) is a per-binding parse rejection → NO_DATA with the
+    binding-scoped parse_error code, never a generic retryable error."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    corrupted = run_ctx.work_dir.source_asset_file("corrupted_tximport.tsv")
+    corrupted.write_text("gene\tvalue\nACTB\t1.5\n", encoding="utf-8")
+
+    spec = json.loads(_geo_spec_json())
+    spec["source_bindings"][0]["parameters"]["format"] = "tximport_counts"
+    spec["source_bindings"][0]["parameters"]["value_semantics"] = "raw_count"
+    spec["source_bindings"][0]["parameters"]["value_scale"] = "linear"
+    spec["source_bindings"][0]["parameters"]["expression_unit"] = "estimated_count"
+
+    data = _call_tool(
+        ctx, json.dumps(spec), json.dumps({"binding_geo": "source_assets/corrupted_tximport.tsv"})
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "no_data"
+    assert result["valid_row_count"] == 0
+    assert result["reason_codes"] == ["parse_error:binding_geo"]
+    assert result.get("publication_id") is None
+    assert data.get("retryable") is not True
+
+
+def test_execute_dataset_build_multi_binding_geo_failed_gdc_usable_is_partial(
+    tmp_path: Path,
+) -> None:
+    """E2E (d): a gene-required multi-binding build with one usable gene
+    source and one failed GEO binding (probe rows, zero gene rows) yields
+    PARTIAL_SUCCESS — the surviving GDC source publishes and the failed GEO
+    binding's audits are preserved (never PARTIAL_SUCCESS for an aborted
+    build; partial only when a genuinely publishable surviving source
+    exists)."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    geo_rel = _stage_geo_matrix(run_ctx, [("AFFX-BioB-5", "1.5", "2.0")], "geo_matrix.txt.gz")
+    gdc_rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    spec = json.loads(_geo_spec_json())
+    spec["source_bindings"].append(
+        {
+            "binding_id": "binding_gdc",
+            "source": "gdc",
+            "acquisition": {"mode": "builtin", "provider_id": "gdc.v1"},
+            "adapter_id": "gdc.expression.v1",
+        }
+    )
+
+    data = _call_tool(
+        ctx,
+        json.dumps(spec),
+        json.dumps({"binding_geo": geo_rel, "binding_gdc": gdc_rel}),
+    )
+
+    assert data["status"] == "ok"
+    result = data["result"]
+    assert result["status"] == "partial_success"
+    assert result["successful_sources"] == ["binding_gdc"]
+    assert result["rejected_sources"] == ["binding_geo"]
+    assert result["valid_row_count"] >= 1
+    assert result["reason_codes"] == []
+    assert result.get("publication_id")
+
+    # The failed GEO binding's canonical audits are preserved in the build.
+    build_root = run_ctx.work_dir.root / "datasets_build" / "build_tool_test"
+    assert list((build_root / "canonical").glob("binding_geo*"))
+    # The published manifest only lists the successful binding's source.
+    manifest = json.loads((build_root / "dataset_manifest.json").read_text("utf-8"))
+    assert set(manifest["source_summary"]) == {"binding_gdc"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 final review F1: SpecValidator wired at the tool entry
+# ---------------------------------------------------------------------------
+
+
+def test_execute_dataset_build_rejects_probe_schema_with_gene_profile_as_invalid_input(
+    tmp_path: Path,
+) -> None:
+    """F1: a probe-schema build submitted with the gene validation profile
+    must be rejected ``invalid_input`` at the tool entry — never run a build
+    that could publish probe rows under the gene release gate. The spec is
+    fully wired (staged source file supplied) so only the entity-level
+    compatibility check can stop it, and no build workspace may be created."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("PROBE1", "1.5", "2.0")])
+
+    spec = _geo_spec_json(
+        schema_ref="gene_expression.probe_long.v1",
+        row_granularity="probe_sample_measurement",
+        profile_ref="gene_expression.release.v1",
+    )
+
+    data = _call_tool(ctx, spec, json.dumps({"binding_geo": rel}))
+
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+    assert "entity_level" in data["message"]
+    # The validator fired before any build was started.
+    assert not (run_ctx.work_dir.root / "datasets_build").exists()
+
+
+def test_execute_dataset_build_rejects_target_entity_level_mismatch_as_invalid_input(
+    tmp_path: Path,
+) -> None:
+    """F1: an explicit ``target_entity_level`` that contradicts the selected
+    schema's granularity is invalid input at the tool entry."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("PROBE1", "1.5", "2.0")])
+
+    spec = json.loads(_geo_spec_json())
+    spec["target_entity_level"] = "probe"  # gene schema + probe target
+
+    data = _call_tool(ctx, json.dumps(spec), json.dumps({"binding_geo": rel}))
+
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+    assert "entity_level" in data["message"]
+    assert not (run_ctx.work_dir.root / "datasets_build").exists()

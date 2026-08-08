@@ -353,3 +353,13 @@ def test_adapter_registry_entries() -> None:
         "gdc.expression.v1", "xena.matrix.v1",
     }
     assert get_adapter("xena.matrix.v1").source_database == "ucsc_xena"
+
+
+def test_source_long_carries_declared_namespace_column() -> None:
+    """Phase 5 D1: every source-long row declares its namespace explicitly.
+
+    The canonical schema output keeps ``gene_id_namespace`` authoritative, but
+    the source-long contract must carry the adapter-declared namespace so the
+    canonicalizer (T2) stops guessing the namespace from the ID shape.
+    """
+    assert "gene_id_namespace_declared" in SOURCE_LONG_COLUMNS
