@@ -3,7 +3,10 @@
 > Phase 5 (GEO migration), branch `feat/phase5-geo-migration`
 > TDD: red first → fix → green. Backend only; frontend untouched.
 > Spec: `docs/archive/superpowers/specs/2026-08-08-phase5-geo-migration-design.md` §4 D5, §5 T7.
-> Base: `ba6e779` (T5 + T8). **Phase 5 T6 was NOT merged into this base** (no T6 branch/commit exists in the repo at T7 time); T7 does not depend on T6-owned files, so work proceeded and the merge note is recorded in the commit chain.
+> Base: `ba6e779` (T5 + T8). **Phase 5 T6 was merged by the controller while T7 was in flight**
+> (commit `887b234`); the final merge (`687e32a`) combines T6 + T7 on
+> `feat/phase5-geo-migration` with no conflicts. T7's seams do not overlap
+> T6-owned files (`multi_build.py`, `discovery.py`, `acquisition.py`, `relations.py`).
 
 ## Deliverables
 
@@ -65,7 +68,7 @@
 
 ## Concerns / notes
 
-- **T6 not merged**: Phase 5 T6 (multi-GSE orchestration, inverse relations, raise-not-truncate) has no branch/commit in the repo at T7 time; the controller should merge/land T6 separately. T7's seams (`executor.py`, `expression_runner.py`, `dataset_build_tool.py`) do not overlap T6-owned files (`multi_build.py`, `discovery.py`, `acquisition.py`, `relations.py`).
+- **T6 merged mid-flight**: Phase 5 T6 (multi-GSE orchestration, inverse relations, raise-not-truncate, `887b234`) was landed by the controller while T7 was in progress; the phase5 branch now carries T6 + T7 together (merge `687e32a`) and the combined suite is green (2631 passed).
 - **All-rejected parse failures now NO_DATA**: a structurally-corrupted source (AdapterError) is now a per-binding `parse_error` rejection; when every binding is rejected the tool emits a NO_DATA envelope with the binding-scoped code instead of the old generic retryable-error envelope. This matches the D5 E2E (a) corrupted-asset expectation and the 4b fixture semantics (corrupted asset → no primary). `test_no_data_classification_is_scoped_to_current_attempt` was updated: classification is driven by per-binding outcomes (attempt-scoped by construction), so a stale manifest can never misclassify a later run.
 - **Partial-coverage multi-binding nuance**: the partial policy applies when a binding is rejected at phase A (empty/parse/zero-gene-rows) and a surviving source publishes. When two bindings both parse with rows and one carries residual probe rows under a gene-required profile, the gene release gate fails the whole build (residual-row integrity rule, D4/T5) → NO_DATA with the probe code. Excluding a partial-coverage binding's rows from the merged primary is not implementable with the append integrator and is not required by the D5 matrix rows.
 - **V2 does not (yet) accept mapping assets through the tool interface**: `mapping_assets`/`mapping_paths` are wired at the `ExpressionBuildRunner` seam (used by the runner-level D3 tests); the Agent-facing tool interface is unchanged (no mapping_files param) per the T7 seam list. A future task can thread mapping assets through `source_files` if live GEO probe builds need them at the tool boundary.
