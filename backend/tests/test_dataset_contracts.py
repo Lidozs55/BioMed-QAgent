@@ -24,12 +24,14 @@ from app.datasets.contracts import (
     ManifestArtifactEntry,
     MappingMethod,
     MappingReviewStatus,
+    NormalizationProfile,
     PlatformRecord,
     ProbeMappingStatus,
     ProbeMappingSummary,
     SchemaField,
     SourceBinding,
     SourceBindingAcquisition,
+    ValidationProfile,
     ValidationResult,
     ValidationResultStatus,
     ValueScale,
@@ -691,3 +693,95 @@ def test_spec_accepts_target_entity_level() -> None:
 def test_spec_rejects_unknown_target_entity_level() -> None:
     with pytest.raises(ValidationError, match="target_entity_level"):
         _spec(target_entity_level="transcript")
+
+
+# -- NormalizationProfile.allowed_value_scales (Phase 5 T4, spec D3) ---------
+
+
+def _normalization_profile(**overrides: object) -> NormalizationProfile:
+    base: dict[str, object] = {
+        "profile_id": "gene_expression.normalization.test.v1",
+        "dataset_family": "gene_expression",
+        "allowed_namespaces": ["ensembl_gene", "gene_symbol"],
+        "allowed_units": ["expression_value", "tpm"],
+        "allowed_semantics": ["expression_value", "raw_count"],
+        "allowed_value_scales": [ValueScale.LINEAR, ValueScale.LOG2],
+        "aggregation_policy": "keep_all",
+    }
+    base.update(overrides)
+    return NormalizationProfile(**base)
+
+
+def test_normalization_profile_requires_allowed_value_scales() -> None:
+    """A profile without a value-scale allowlist is rejected (T4 D3)."""
+    with pytest.raises(ValidationError, match="allowed_value_scales"):
+        NormalizationProfile(
+            profile_id="gene_expression.normalization.test.v1",
+            dataset_family="gene_expression",
+            allowed_namespaces=["ensembl_gene"],
+            allowed_units=["expression_value"],
+            allowed_semantics=["expression_value"],
+        )
+
+
+def test_normalization_profile_rejects_empty_scale_allowlist() -> None:
+    with pytest.raises(ValidationError, match="allowed_value_scales"):
+        _normalization_profile(allowed_value_scales=[])
+
+
+def test_normalization_profile_accepts_value_scale_members() -> None:
+    profile = _normalization_profile()
+    assert profile.allowed_value_scales == [ValueScale.LINEAR, ValueScale.LOG2]
+
+
+def test_normalization_profile_coerces_scale_strings() -> None:
+    profile = _normalization_profile(
+        allowed_value_scales=["linear", "unknown", "log10"]
+    )
+    assert profile.allowed_value_scales == [
+        ValueScale.LINEAR,
+        ValueScale.UNKNOWN,
+        ValueScale.LOG10,
+    ]
+
+
+def test_normalization_profile_rejects_unknown_scale_literal() -> None:
+    """A non-ValueScale literal is invalid input, not silently accepted."""
+    with pytest.raises(ValidationError):
+        _normalization_profile(allowed_value_scales=["raw_count"])
+
+
+# -- ValidationProfile.required_entity_level (Phase 5 T4, spec D4) -----------
+
+
+def _validation_profile(**overrides: object) -> ValidationProfile:
+    base: dict[str, object] = {
+        "profile_id": "gene_expression.release.test.v1",
+        "dataset_family": "gene_expression",
+        "required_entity_level": "gene",
+    }
+    base.update(overrides)
+    return ValidationProfile(**base)
+
+
+def test_validation_profile_requires_entity_level() -> None:
+    """The server-side profile must declare its required entity level (D4)."""
+    with pytest.raises(ValidationError, match="required_entity_level"):
+        ValidationProfile(
+            profile_id="gene_expression.release.test.v1",
+            dataset_family="gene_expression",
+        )
+
+
+def test_validation_profile_entity_level_values() -> None:
+    assert _validation_profile().required_entity_level == "gene"
+    assert (
+        _validation_profile(required_entity_level="probe").required_entity_level
+        == "probe"
+    )
+    assert _validation_profile(required_entity_level="any").required_entity_level == "any"
+
+
+def test_validation_profile_rejects_unknown_entity_level() -> None:
+    with pytest.raises(ValidationError, match="required_entity_level"):
+        _validation_profile(required_entity_level="transcript")

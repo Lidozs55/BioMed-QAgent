@@ -4,8 +4,9 @@ Applies the expression normalization profile (ARCHITECTURE §8; Design §8.5):
 
 - authorizes each gene-id namespace (ensembl_gene / gene_symbol) and splits
   version suffixes, recording a normalization-log entry per entity;
-- enforces the profile's allowed units / value semantics (no silent unit
-  conversion without a declared rule);
+- enforces the profile's allowed units / value semantics / value scales
+  (Phase 5 D3: a scale outside the profile's ``allowed_value_scales`` is
+  rejected; ``unknown`` is honest and never promoted to a known scale);
 - separates normalization-rejected rows into an audit file.
 
 The canonicalizer is pure and deterministic: identical inputs produce
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from app.datasets.build.errors import BuildError
 from app.datasets.build.hashing import sha256_file
+from app.datasets.build.identity import MeasurementIdentity
 from app.datasets.contracts import (
     DataBatch,
     DatasetSchema,
@@ -31,6 +33,7 @@ from app.datasets.contracts import (
     FileAsset,
     JsonValue,
     NormalizationProfile,
+    ValueScale,
 )
 from app.domain.contracts import asset_id_from_sha256, make_record_id
 
@@ -196,6 +199,25 @@ def canonicalize(
                 )
                 rejected_count += 1
                 continue
+            # Phase 5 D3/T4: the declared value scale must be an honest
+            # ``ValueScale`` member that the profile explicitly allows.
+            # ``unknown`` is accepted only when allowed; it is never promoted
+            # to a known scale (log2) by inference.
+            scale_raw = row.get("value_scale", "")
+            try:
+                scale = ValueScale(scale_raw)
+            except ValueError:
+                rejected_writer.writerow(
+                    _rejected_row(row, batch, "unknown_scale", f"scale={scale_raw!r}")
+                )
+                rejected_count += 1
+                continue
+            if scale not in profile.allowed_value_scales:
+                rejected_writer.writerow(
+                    _rejected_row(row, batch, "unknown_scale", f"scale={scale_raw!r}")
+                )
+                rejected_count += 1
+                continue
             try:
                 if not math.isfinite(float(row.get("expression_value", ""))):
                     raise ValueError
@@ -270,10 +292,10 @@ def canonicalize(
             namespaces.add(namespace)
             units.add(unit)
             identities.add(
-                (
-                    row.get("value_semantics", ""),
-                    row.get("value_scale", ""),
-                    unit,
+                MeasurementIdentity(
+                    value_semantics=row.get("value_semantics", ""),
+                    value_scale=scale,
+                    expression_unit=unit,
                 )
             )
             row_count += 1
@@ -310,8 +332,7 @@ def canonicalize(
             "expression_units": sorted(units),
             "unit_inconsistency_detected": len(units) > 1,
             "measurement_identities": [
-                [semantics, scale, unit]
-                for semantics, scale, unit in sorted(identities)
+                identity.serialize() for identity in sorted(identities)
             ],
             "schema_ref": schema.schema_id,
         }
