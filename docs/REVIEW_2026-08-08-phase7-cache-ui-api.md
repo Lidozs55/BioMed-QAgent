@@ -44,3 +44,22 @@
 4. **T6 延后**：command/menubar（无现有模式、成本高）、对话路由（§3.5 剩余）——TODO 标注 `[~]` 部分完成。
 5. **T1 residual（接受）**：V2 build 文件不发 `artifact_produced` 事件（V1 `ArtifactManifestEntry` 需 `artifacts/` 前缀路径）——builds API 为 serving surface；单 run 单 outcome slot（多 build run 保留最后 build 的 BuildResult）。
 6. **T2 residual**：build-tool cache root 用模块 `settings.output_dir`，与 API 读的 app 配置 root 可能不一致（测试不依赖，Phase 8 可统一）。
+
+---
+
+## §6 Parent-orchestrated review loop（round 1 + fix + round 2，subagent 工具）
+
+Round 1（3 平行 fresh-context reviewers @ main 94316f4）：**均 PASS、无 BLOCKER**，双端全门复核 2718/712。
+
+| 发现 | 级别 | 处置 |
+| --- | --- | --- |
+| R1C-01 `list_builds` 一个坏 manifest 拖垮整个 `/builds` | Should-Fix | **修复**（F1） |
+| R1S-01 托管 run 中 stage_*/operation_*/progress 同台三行（§17.2 要求按 operation 身份渲染） | Should-Fix | **修复**（F2，父核验为真） |
+| R1S-02 `useTaskBuildId` 二次 build run 后不重取（key 缺 latestRunId） | Should-Fix | **修复**（F3） |
+| R1C-02..06、R1T-01..08、R1S-03..07 | Optional/Note | 延后（§5 遗留扩容：混合 run V1 优先、publication 损坏下报、artifact 逐请求重哈希、/builds 首页 50 条限制、reducer terminal 硬化、测试补强） |
+
+Fix wave（1 async worker，TDD 红→绿）：F1 `list_builds` 捕 409 跳过坏 build（detail 仍响亮 409，红测真）；F2 reducer 后置 `pruneStageItemsForOperationRuns`——带 operation 事件的 run 仅保留归组 operation 行，legacy 无 operation 事件的 run 保留 stage/progress（兼容测试保绿，无既有测试依赖旧双行前提）；F3 fetch key/effect deps 加 `latestRunId`（红测：bug 代码停在 build_x，修复后取 build_y，断言 2 次 fetch）。
+
+Round 2（2 平行 fresh-context reviewers，仅 fix diff）：**均 PASS、无 Should-Fix**。红测实证（对 pre-fix main 源码重跑新测试）：3 个新测试均真红→绿；断言全为行为级；门输出精确匹配（2719/715）。R2C/R2T 剩余均为 Optional/Note：父直接应用 R2T-01（import 行拆分）、R2T-02（docstring 同步）；可选测试（detail-409、中间页损坏、顺序无关、部分镜像 run、负向用例）记入 §5 延后。
+
+**终态：main @ aab17a0，后端 2719 / 前端 715，全门绿。**
