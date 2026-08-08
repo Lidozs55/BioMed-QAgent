@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -128,6 +129,45 @@ def _save_png(fig: Figure, artifacts_dir: Path, filename: str) -> Path:
     return dest
 
 
+def _bh_adjust_pvalues(pvals: Sequence[float]) -> list[float]:
+    """Benjamini-Hochberg FDR-adjusted p-values (BH step-up), order-preserving.
+
+    For m raw p-values sorted ascending p(1) <= ... <= p(m), the BH step-up
+    sets q(i) = min(1, p(i) * m / i) and then enforces monotonicity from the
+    largest: q(i) = min(q(i), q(i+1)).  Returns adjusted values in the same
+    order as the input (not sorted), matching
+    scipy.stats.false_discovery_control(method="bh").
+
+    Degenerate inputs are safe and never crash:
+      - empty input -> []
+      - single value -> [min(1, p)]
+      - all-identical p-values -> unchanged (the BH minimum sits at i = m)
+      - non-finite values (NaN/Inf) are clamped to 1.0 ("no significance"),
+        so the helper never emits NaN/Inf in the adjusted output
+
+    Args:
+        pvals: Raw p-values in [0, 1] (any order).
+
+    Returns:
+        BH-adjusted p-values, one per input value, in input order.
+    """
+    n = len(pvals)
+    if n == 0:
+        return []
+    values = [1.0 if not math.isfinite(p) else float(p) for p in pvals]
+    if n == 1:
+        return [min(1.0, values[0])]
+    order = sorted(range(n), key=lambda i: (values[i], i))
+    adjusted = [min(1.0, values[i] * n / (rank + 1)) for rank, i in enumerate(order)]
+    for rank in range(n - 2, -1, -1):
+        if adjusted[rank + 1] < adjusted[rank]:
+            adjusted[rank] = adjusted[rank + 1]
+    result = [0.0] * n
+    for rank, i in enumerate(order):
+        result[i] = adjusted[rank]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Tool 1 — Differential Expression
 # ---------------------------------------------------------------------------
@@ -147,8 +187,9 @@ def run_differential_expression(
     """Perform differential expression analysis between two sample groups.
 
     Reads a gene expression CSV (rows=genes, columns=samples), computes
-    log2 fold-change and p-values via two-sided Welch's t-test, and
-    generates a volcano plot saved to task/artifacts/.
+    log2 fold-change and p-values via two-sided Welch's t-test, applies
+    Benjamini-Hochberg FDR correction (padj), and generates a volcano plot
+    saved to task/artifacts/.
 
     Args:
         ctx: Run context (injected by SDK).
@@ -169,7 +210,10 @@ def run_differential_expression(
             group_b_count    — number of samples in group B
             significant_up   — count of up-regulated DEGs
             significant_down — count of down-regulated DEGs
-            degs             — list of top DEG entries (strand, log2FC, pvalue)
+            degs             — list of top DEG entries (gene, log2FC, pvalue,
+                                padj, neg_log10_pval, significant); ranked by
+                                raw p-value, padj is the BH FDR-adjusted
+                                p-value computed over ALL tested genes
             volcano_plot     — path to PNG in artifacts/
             outputs          — list of artifact file paths
             error            — present only on failure
@@ -232,6 +276,11 @@ def run_differential_expression(
             if float(p) <= pval_threshold and float(fc) <= -log2fc_threshold
         ))
 
+        # BH FDR correction over the FULL p-value set (all genes tested),
+        # before any top-N truncation.  Ranking stays on the raw p-value;
+        # padj is reported alongside for multiplicity-aware significance.
+        padj_list = _bh_adjust_pvalues(pval_list)
+
         # Build top DEG list sorted by p-value
         deg_records = sorted(
             [
@@ -239,12 +288,15 @@ def run_differential_expression(
                     "gene": str(g),
                     "log2FC": round(float(fc), 4),
                     "pvalue": round(float(pv), 6),
+                    "padj": round(float(adj), 6),
                     "neg_log10_pval": round(float(-np.log10(max(float(pv), 1e-300))), 4),
                     "significant": bool(
                         float(pv) <= pval_threshold and abs(float(fc)) >= log2fc_threshold
                     ),
                 }
-                for g, fc, pv in zip(genes, log2fc_list, pval_list, strict=False)
+                for g, fc, pv, adj in zip(
+                    genes, log2fc_list, pval_list, padj_list, strict=False
+                )
             ],
             key=lambda x: x["pvalue"],
         )[:top_n]
@@ -727,7 +779,8 @@ analysis_skill = SkillDef(
         "Use the analysis tools to perform statistical computations and "
         "generate publication-quality visualizations. "
         "run_differential_expression computes log2 fold-changes and "
-        "p-values between two sample groups with a volcano plot. "
+        "Benjamini-Hochberg FDR-adjusted p-values (`padj`) between two "
+        "sample groups with a volcano plot. "
         "generate_heatmap creates clustered heatmaps with optional z-score "
         "normalization. basic_statistics produces descriptive stats "
         "(mean/median/std/min/max/missing counts) per column. "
