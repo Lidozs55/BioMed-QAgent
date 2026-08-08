@@ -211,9 +211,15 @@
       （`manifest.compute_provenance_coverage`：primary 行 `traced_rows` / `untraced_rows` /
       `coverage_ratio`，asset 集合来自 provenance.json 的 source assets；coverage 写入
       `dataset_manifest.json` 的 `provenance_summary.coverage`）
-- [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
-- [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
-- [ ] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+- [x] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
+      （Qwen-VL 已替代传统 OCR（pyproject 注释）；落地为扫描 PDF 无文本层诊断 + VLM 通道
+      warning + regex 回退 CJK/UTF-16 解码；修复 `_decompress_pdf_streams` FlateDecode
+      匹配 bug——原 decompression 为静默 no-op）
+- [x] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
+      （`run_differential_expression`：BH 校正全集 p 值（截断前），DEG 条目新增 `padj`，
+      排序保持原始 pvalue，NaN 收敛为 1.0；10 项新测试）
+- [x] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+      （`tests/fixtures/pdf/minimal_table.pdf` + `scanned_image.pdf`，真实解析无 mock）
 
 ---
 
