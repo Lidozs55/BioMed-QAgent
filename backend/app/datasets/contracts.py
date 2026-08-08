@@ -78,6 +78,37 @@ class ValueScale(StrEnum):
     UNKNOWN = "unknown"
 
 
+class BindingRejectionKind(StrEnum):
+    """Why one source binding was rejected during phase A (Phase 5 T7 D5).
+
+    ``no_primary`` means the binding produced no publishable primary rows
+    (empty source, zero valid rows, or — for gene-required builds — no
+    publishable gene rows); ``error`` means the binding's parse/structure
+    step failed.
+    """
+
+    NO_PRIMARY = "no_primary"
+    ERROR = "error"
+
+
+class BindingRejection(ContractModel):
+    """Per-binding rejection captured by the per-binding fan-out (Phase 5 T7).
+
+    Phase A (acquire/parse/canonicalize) executes independently per binding;
+    a binding's ``EmptySourceError`` / parse failure / zero-usable-rows
+    outcome is recorded here instead of aborting the other bindings.  Phase B
+    (integrate/validate/publish) only receives phase-A successes and is
+    skipped entirely when every binding is rejected.
+    """
+
+    binding_id: str = Field(min_length=1)
+    kind: BindingRejectionKind
+    #: Stable reason code: ``no_primary_data``, ``parse_error``,
+    #: ``build_error``, or ``probe_mapping_unavailable_required_gene_level``.
+    reason_code: str = Field(min_length=1)
+    message: str = ""
+
+
 class AnnotationStatus(StrEnum):
     """GEO platform annotation outcome (Phase 5 D3 ``PlatformRecord``)."""
 

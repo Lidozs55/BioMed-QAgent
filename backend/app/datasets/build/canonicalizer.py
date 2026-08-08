@@ -132,6 +132,8 @@ def canonicalize(
     profile: NormalizationProfile,
     output_dir: Path,
     gene_symbol_map: Mapping[str, str] | None = None,
+    probe_map: Mapping[str, str] | None = None,
+    probe_target_namespace: str = "gene_symbol",
 ) -> CanonicalizationResult:
     """Transform one source-long batch into canonical schema rows.
 
@@ -139,6 +141,15 @@ def canonicalize(
     IDs (local, ship-bound; REVIEW §9.6).  A mapped row is re-namespaced to
     ``ensembl_gene`` and the conversion is recorded in the normalization log;
     unmapped symbols stay in their original namespace and are never dropped.
+
+    Phase 5 T7 (D2/D5): ``probe_map`` optionally maps ``geo_probe`` rows to
+    gene identifiers (a GPL platform annotation).  A hit is re-namespaced to
+    ``probe_target_namespace`` (``gene_symbol`` or ``ensembl_gene``) and
+    recorded with rule ``probe_gene_map``; an unmapped probe stays
+    ``geo_probe`` (entity-level publish policy lives in the validation
+    profile).  Under the probe schema (``gene_expression.probe_long.v1``)
+    the canonical row carries ``probe_id``/``platform_id``/``value`` instead
+    of the gene-schema primary columns.
     """
     source_path = output_dir / batch.file_asset.relative_path
     if not source_path.is_file():
@@ -151,9 +162,14 @@ def canonicalize(
     mappings_path = canonical_dir / f"{batch.binding_id}_field_mappings.csv"
 
     columns = [field.name for field in schema.fields]
+    probe_schema = any(field.name == "probe_id" for field in schema.fields)
+    platform_ids = [
+        str(platform_id) for platform_id in batch.statistics.get("platform_ids", [])
+    ]
     row_count = 0
     rejected_count = 0
     mapped_count = 0
+    probe_mapped_count = 0
     namespaces: set[str] = set()
     units: set[str] = set()
     identities: set[tuple[str, str, str]] = set()
@@ -243,6 +259,17 @@ def canonicalize(
                 version = ""
                 mapped = True
                 mapped_count += 1
+            probe_mapped = False
+            if (
+                namespace == "geo_probe"
+                and probe_map is not None
+                and gene_id in probe_map
+            ):
+                gene_id = probe_map[gene_id]
+                namespace = probe_target_namespace
+                version = ""
+                probe_mapped = True
+                probe_mapped_count += 1
             canonical_row = {
                 # Canonical output carries exactly the schema's columns: internal
                 # source-long columns the schema does not declare (e.g. the
@@ -254,9 +281,20 @@ def canonicalize(
             canonical_row["record_id"] = make_record_id(
                 row["dataset_id"], row["gene_id_raw"], row["sample_id"]
             )
-            canonical_row["gene_id"] = gene_id
+            if probe_schema:
+                # Under the probe contract the identity column is the ORIGINAL
+                # probe id; probe->gene mapping only flips the namespace (D2:
+                # mapped rows carry the target namespace, unmapped rows stay
+                # geo_probe; the mapped gene id itself lives in the mapping
+                # audit CSV).
+                canonical_row["probe_id"] = row.get("gene_id_raw", "")
+                canonical_row["platform_id"] = platform_ids[0] if platform_ids else ""
+                if "value" in columns:
+                    canonical_row["value"] = row.get("expression_value", "")
+            else:
+                canonical_row["gene_id"] = gene_id
+                canonical_row["gene_id_version"] = version
             canonical_row["gene_id_namespace"] = namespace
-            canonical_row["gene_id_version"] = version
             is_star = batch.statistics.get("format") == "star_counts"
             canonical_row["source_sample_alias"] = (
                 "" if is_star else row.get("source_column_name", "")
@@ -270,21 +308,29 @@ def canonicalize(
                     "gene_id_namespace": namespace,
                     "gene_id_version": version,
                     "rule_id": (
-                        "gene_symbol_map"
-                        if mapped
+                        "probe_gene_map"
+                        if probe_mapped
                         else (
-                            "ensembl_version_split"
-                            if namespace == "ensembl_gene" and version
-                            else f"namespace_{namespace}"
+                            "gene_symbol_map"
+                            if mapped
+                            else (
+                                "ensembl_version_split"
+                                if namespace == "ensembl_gene" and version
+                                else f"namespace_{namespace}"
+                            )
                         )
                     ),
                     "evidence": (
-                        "local gene symbol map (symbol->ensembl)"
-                        if mapped
+                        "GPL platform annotation (probe->gene)"
+                        if probe_mapped
                         else (
-                            "Ensembl ID pattern ENSG###########(.N)"
-                            if namespace == "ensembl_gene"
-                            else "HGNC gene symbol pattern"
+                            "local gene symbol map (symbol->ensembl)"
+                            if mapped
+                            else (
+                                "Ensembl ID pattern ENSG###########(.N)"
+                                if namespace == "ensembl_gene"
+                                else "HGNC gene symbol pattern"
+                            )
                         )
                     ),
                 }
@@ -329,6 +375,7 @@ def canonicalize(
             "rejected_count": rejected_count,
             "gene_id_namespaces": sorted(namespaces),
             "gene_symbol_mapped_count": mapped_count,
+            "probe_mapped_count": probe_mapped_count,
             "expression_units": sorted(units),
             "unit_inconsistency_detected": len(units) > 1,
             "measurement_identities": [

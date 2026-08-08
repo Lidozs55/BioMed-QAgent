@@ -384,10 +384,12 @@ def test_canonicalizer_consumes_declared_namespace(tmp_path: Path) -> None:
     """GEO probe rows are not authorized as gene_symbol by ID shape alone.
 
     Phase 5 D1: the adapter declares ``geo_probe`` for non-ENSG ID_REF rows;
-    the canonicalizer must consume that declaration, so under the gene schema
-    (whose normalization profile allows only ensembl_gene/gene_symbol) the
-    probe row is rejected as an unauthorized namespace instead of being
-    silently accepted as ``gene_symbol``.
+    the canonicalizer must consume that declaration — the probe row keeps the
+    honest ``geo_probe`` namespace instead of being guessed as
+    ``gene_symbol``.  Phase 5 T7 (D2/D5): ``geo_probe`` is a canonical
+    namespace (the entity-level publish policy — residual probe rows fail the
+    gene release gate — lives in the validation profile, not here), so the
+    probe rows pass canonicalization with ``geo_probe``.
     """
     import gzip as gzip_module
 
@@ -439,14 +441,16 @@ def test_canonicalizer_consumes_declared_namespace(tmp_path: Path) -> None:
         profile=_expression_normalization_v1(),
         output_dir=tmp_path,
     )
-    # Only the declared ensembl_gene row is accepted under the gene schema;
-    # the declared geo_probe row is rejected (never guessed as gene_symbol).
-    assert result.namespaces == ("ensembl_gene",)
-    assert result.row_count == 2
-    assert result.rejected_count == 2  # AFFX-BioB-5 x 2 samples
-    rejected = result.audit_paths[0].read_text()
-    assert "AFFX-BioB-5" in rejected
-    assert "unauthorized_namespace" in rejected
+    # Both namespaces pass canonicalization; the probe row keeps the honest
+    # geo_probe namespace (never guessed as gene_symbol).  The gene release
+    # profile fails residual geo_probe rows (T5 probe_coverage_required_gene_
+    # level), which is the entity-level enforcement point.
+    assert result.namespaces == ("ensembl_gene", "geo_probe")
+    assert result.row_count == 4
+    assert result.rejected_count == 0
+    normalization = result.audit_paths[1].read_text()
+    assert "AFFX-BioB-5" in normalization
+    assert "namespace_geo_probe" in normalization
 
 
 def test_canonicalizer_accepts_declared_ensembl_gene(tmp_path: Path) -> None:
