@@ -15,17 +15,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
+from app.config import settings
+from app.datasets.build.cache import DatasetCacheV2
 from app.datasets.build.expression_runner import (
     _PUBLICATION_REFUSED_PREFIX,
     ExpressionBuildRunner,
-    _find_latest_publication,
 )
-from app.datasets.build.invariants import PUBLISH_DIR
+from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.contracts import DatasetBuildSpec
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
@@ -64,6 +67,7 @@ _PENDING_MAIN_INPUT_MESSAGE = (
     "（request_human_correction 尚未答复）。请等待修正完成后重试，"
     "或先处理待决的修正请求。"
 )
+logger = logging.getLogger(__name__)
 
 _MEDIA_TYPES = {
     ".csv": "text/csv",
@@ -72,6 +76,11 @@ _MEDIA_TYPES = {
     ".json": "application/json",
     ".xml": "application/xml",
 }
+
+#: build_id becomes a directory name under the task root (output_dir,
+#: state_dir, version dirs) so it must be a safe path segment. Agent-supplied
+#: values are validated before any file system access.
+_BUILD_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 
 def _infer_media_type(path: Path) -> str:
@@ -152,6 +161,19 @@ async def execute_dataset_build(
             {
                 "status": "invalid_input",
                 "message": f"could not parse spec/source_files: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    if not _BUILD_ID_RE.fullmatch(build_spec.build_id):
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "build_id must match "
+                    r"[a-zA-Z0-9][a-zA-Z0-9_-]* (no path separators, "
+                    "dots, or whitespace)"
+                ),
                 "retryable": False,
             },
             ensure_ascii=False,
@@ -300,7 +322,7 @@ async def execute_dataset_build(
             ensure_ascii=False,
         )
 
-    publication_id = _latest_publication_id(output_dir / PUBLISH_DIR)
+    publication_id = find_latest_publication(output_dir / PUBLISH_DIR)
     manifest_path = output_dir / "dataset_manifest.json"
     valid_row_count = 0
     if manifest_path.is_file():
@@ -316,6 +338,20 @@ async def execute_dataset_build(
         user_summary=f"build {build_spec.build_id} published "
         f"{valid_row_count} valid row(s)",
     )
+    # Phase 7 P0: commit the immutable version to the content-addressed V2
+    # dataset cache so later tasks can discover/reuse it by keyword.
+    cache_entry = None
+    try:
+        cache = DatasetCacheV2(Path(settings.output_dir).parent / "cache")
+        cache_entry = cache.commit(
+            namespace="build",
+            output_dir=output_dir,
+            spec=build_spec,
+            source_assets=assets,
+            keywords=[build_spec.dataset_family, build_spec.objective],
+        )
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        logger.warning("dataset cache commit failed for build %s: %s", build_spec.build_id, exc)
     return json.dumps(
         {
             "status": "ok",
@@ -323,9 +359,20 @@ async def execute_dataset_build(
             "result": result.model_dump(mode="json"),
             "output_dir": output_dir.as_posix(),
             "manifest_file": manifest_path.as_posix(),
+            "cache_entry": (
+                {
+                    "namespace": cache_entry.namespace,
+                    "dataset_id": cache_entry.dataset_id,
+                    "dataset_family": cache_entry.dataset_family,
+                    "row_count": cache_entry.row_count,
+                }
+                if cache_entry is not None
+                else None
+            ),
         },
         ensure_ascii=False,
     )
+
 
 
 def _classify_failed_outcome(
@@ -464,4 +511,4 @@ def _latest_publication_id(publish_dir: Path) -> str | None:
     lexicographic publication_id order (B8).
     """
 
-    return _find_latest_publication(publish_dir)
+    return find_latest_publication(publish_dir)

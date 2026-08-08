@@ -1,0 +1,171 @@
+{
+  "runId": "fc1ee07f",
+  "agent": "reviewer",
+  "task": "Read-only scoped final re-review in /mnt/d/code-linux/BioMed-QAgent branch fix/phase4-review-bugs. Inspect diff and supplied reviews/reports plus actual files. Focus C1 C3 C4 C5 C8 C9 C10 C2 C6. For each verdict with exact current file:line evidence. Deeply assess six wave-4 sequence fixture changes for loss of intent; shouldSubscribe + continueTask resubscribe including pending prompt/hydration; sequence gap recovery permanent-gap/loop behavior; C1+C2 interaction. Do not modify or rerun controller-verified gates.",
+  "exitCode": 0,
+  "usage": {
+    "input": 424683,
+    "output": 8509,
+    "cacheRead": 476672,
+    "cacheWrite": 0,
+    "cost": 2.6170210000000003,
+    "turns": 10
+  },
+  "model": "bifrost/gpt-5.6-sol:high",
+  "attemptedModels": [
+    "bifrost/gpt-5.6-sol:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "bifrost/gpt-5.6-sol:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 424683,
+        "output": 8509,
+        "cacheRead": 476672,
+        "cacheWrite": 0,
+        "cost": 2.6170210000000003,
+        "turns": 10
+      }
+    }
+  ],
+  "durationMs": 379047,
+  "toolCount": 39,
+  "launchContractDigest": "54538dc5483433bd3866b0cbb93a1adfb63b6a5f54f0e12c9002d7106f64bfee",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:2222081303b1606c"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:2222081303b1606c"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete Important findings for C3 and C2 plus a Minor C8 finding are cited to exact current frontend file:line locations; all requested C1/C3/C4/C5/C8/C9/C10/C2/C6 verdicts are included."
+        }
+      ],
+      "changedFiles": [
+        "frontend/src/runtime/transport.ts",
+        "frontend/src/runtime/controller.ts",
+        "frontend/src/runtime/reducers/index.ts",
+        "frontend/src/runtime/reducers/runtime.ts",
+        "frontend/src/runtime/reducers/hil.ts",
+        "frontend/src/runtime/reducers/shared.ts",
+        "frontend/src/stores/agentStore.ts",
+        "frontend/src/components/UserInputDialog.tsx",
+        "frontend/src/components/ResultsViewer.tsx",
+        "frontend/src/components/ArtifactSheet.tsx",
+        "frontend/src/components/ChatPanel.tsx"
+      ],
+      "testsAddedOrUpdated": [
+        "frontend/src/test/agent-stream.test.ts",
+        "frontend/src/test/runtime-controller.test.ts",
+        "frontend/src/test/runtime-reducer.test.ts",
+        "frontend/src/test/store.test.ts",
+        "frontend/src/runtime/__tests__/terminal-state.test.ts",
+        "frontend/src/test/user-input-dialog.test.tsx",
+        "frontend/src/test/results-viewer.test.tsx",
+        "frontend/src/test/artifact-fab.test.tsx",
+        "frontend/src/test/chat-panel.test.tsx"
+      ],
+      "commandsRun": [
+        {
+          "command": "git diff --check main...HEAD",
+          "result": "passed",
+          "summary": "No whitespace errors in the branch diff."
+        },
+        {
+          "command": "controller-verified backend/frontend quality gates",
+          "result": "not-run",
+          "summary": "Not rerun per the read-only instruction; supplied report attests 2377 backend and 677 frontend tests."
+        }
+      ],
+      "validationOutput": [
+        "Reviewed branch fix/phase4-review-bugs at 272b2b1 against main, supplied reviews A-D, final diff/report, production files, and focused tests.",
+        "Six wave-4 sequence fixture changes preserve their original test intent."
+      ],
+      "residualRisks": [
+        "Important: selecting terminal snapshots bypasses shouldSubscribe reconciliation and leaks subscriptions.",
+        "Important: a permanently unparseable durable event freezes the client cursor and all later state with no snapshot fallback.",
+        "Minor: a mounted HIL dialog does not automatically become expired when its deadline passes.",
+        "Known deferred backend A2/A3/A4 publication-finalization and restart-HIL risks remain outside this frontend fix scope."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Read-only final re-review of the Phase 4 frontend fixes and sequence-fixture updates; no files were modified.",
+      "reviewFindings": [
+        "important: frontend/src/runtime/controller.ts:240-260 - terminal task selection always subscribes, bypassing post-event shouldSubscribe cleanup",
+        "important: frontend/src/runtime/transport.ts:703-733 - permanent incompatible event gaps receive one recovery attempt and then freeze the cursor",
+        "minor: frontend/src/components/UserInputDialog.tsx:162-188 - expiry is render-time only and can become stale while mounted",
+        "no blockers"
+      ],
+      "manualNotes": "No controller-verified gates were rerun and no files were modified. Untracked supplied review artifacts and .pi-subagents were left untouched."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": false
+    }
+  },
+  "transcriptPath": "/mnt/d/code-linux/BioMed-QAgent/.pi-subagents/artifacts/fc1ee07f_reviewer_0_transcript.jsonl",
+  "timestamp": 1786126995131
+}

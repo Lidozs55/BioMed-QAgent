@@ -36,7 +36,10 @@ from app.datasets.build.errors import BuildError
 from app.datasets.build.gene_maps import SYMBOL_TO_ENSEMBL
 from app.datasets.build.hashing import sha256_file
 from app.datasets.build.integrator import IntegrationResult, integrate
-from app.datasets.build.invariants import check_release_invariants
+from app.datasets.build.invariants import (
+    check_release_invariants,
+    find_latest_publication,
+)
 from app.datasets.build.manifest import (
     MANIFEST_FILE,
     assemble_manifest,
@@ -545,7 +548,7 @@ class ExpressionBuildRunner:
                 f"atomic promotion: version directory already exists: "
                 f"{version_dir.name}"
             )
-        superseded = _find_latest_publication(publish_dir)
+        superseded = find_latest_publication(publish_dir)
         publication_id = f"pub_{manifest.build_id}_{manifest.sha256[:16]}"
         publication = DatasetPublication(
             publication_id=publication_id,
@@ -723,43 +726,6 @@ class ExpressionBuildRunner:
                 "namespace": ", ".join(result.namespaces),
             }
         return summary
-
-
-def _find_latest_publication(publish_dir: Path) -> str | None:
-    """Return the publication_id of the newest existing version directory.
-
-    Version directories are named ``<build_id>_<manifest_digest16>`` and
-    publication_ids are ``pub_<build_id>_<digest-prefix>``, so digest order is
-    unrelated to publication time (B8). The newest record is selected by its
-    authoritative ``published_at`` timestamp from ``publication.json``;
-    equal timestamps tie-break deterministically on publication_id. Returns
-    None when no prior publication exists.
-    """
-
-    candidates: list[tuple[datetime, str]] = []
-    for child in publish_dir.iterdir():
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        publication_path = child / "publication.json"
-        if not publication_path.is_file():
-            continue
-        try:
-            record = json.loads(publication_path.read_text("utf-8"))
-            published_at = datetime.fromisoformat(record["published_at"])
-            if published_at.tzinfo is None:
-                # H5 (Phase 4 review): older records may carry naive ISO
-                # timestamps; normalize to UTC so naive and aware values can
-                # be compared deterministically (never a TypeError).
-                published_at = published_at.replace(tzinfo=UTC)
-            publication_id = record["publication_id"]
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-            continue
-        if not isinstance(publication_id, str) or not publication_id:
-            continue
-        candidates.append((published_at, publication_id))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: (item[0], item[1]))[1]
 
 
 def _placeholder_validation() -> ValidationResult:
