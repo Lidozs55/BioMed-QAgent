@@ -211,9 +211,16 @@
       （`manifest.compute_provenance_coverage`：primary 行 `traced_rows` / `untraced_rows` /
       `coverage_ratio`，asset 集合来自 provenance.json 的 source assets；coverage 写入
       `dataset_manifest.json` 的 `provenance_summary.coverage`）
-- [ ] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
-- [ ] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
-- [ ] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+- [x] **P2** `extract_tables` OCR 回退 + 中文支持（原 §2.7.3）
+      （尊重 pyproject 架构决策不引入 pytesseract；regex fallback 增加
+      PDF hex 字符串解码 `_decode_pdf_hex_string`，支持 UTF-16BE/UTF-8
+      中文文本与 `Tj`/`TJ` 两种操作符；4 项新测试）
+- [x] **P2** DE 分析 BH FDR 校正与 `padj` 输出（原 §2.7.4）
+      （`stats.py` 新增纯 Python `_bh_fdr`；`run_differential_expression`
+      每条 DEG 输出 `padj`，响应含 `fdr_method`；3 项新测试）
+- [x] **P2** `extract_tables` 真实 pdfplumber 路径测试与最小 PDF fixture（原 §2.7.5）
+      （新增 `tests/fixtures/pdf/minimal_table.pdf` 手工 2x2 表格 PDF；
+      tables/metadata 两端到端真实 pdfplumber 测试，不再全 mock）
 
 ---
 
@@ -270,10 +277,21 @@
 ## 独立维护项（不阻塞 V2 主线，随阶段推进）
 
 - [ ] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
-- [ ] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
+- [x] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
+      （根因是 S3 ListObjectsV2 桶策略拒绝（403）；`search_xena` 改走官方
+      hub 查询 API `POST https://toil.xenahubs.net/data/`（all-datasets，
+      text/plain body，xenaPython 同款查询），S3 XML 列表保留为兜底；
+      crawler `api_request` 新增 `raw_body` 支持；live xfail 移除；
+      END-TO-END 实测返回 27 个 TCGA 数据集）
 - [ ] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
-- [ ] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
+- [x] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
       `DASHSCOPE_API_KEY` 启动校验、`OUTPUT_DIR` 绝对路径默认值（原 §5.3）
+      （`Settings` 新增 crawler_ua / rate_limit_seconds / stage_timeouts（frozen
+      dataclass 用 `field(default_factory=...)` 解析 `STAGE_TIMEOUTS` JSON）；
+      `main.py` lifespan 接线 `CrawlerFacade(min_interval=rate_limit_seconds)`
+      并校验 `DASHSCOPE_API_KEY` 缺失告警；`tool.py` 新增
+      `_stage_timeouts_from_settings` 映射 StageName；`OUTPUT_DIR` 默认解析为
+      绝对路径；`.env.example` 补充文档；5 项新测试）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 §4.5）
 - [ ] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）
