@@ -174,11 +174,18 @@ function CsvPreview({
   if (state.error) {
     return <Empty className="border-0 py-4"><EmptyHeader><EmptyTitle>无法加载 CSV 数据</EmptyTitle></EmptyHeader></Empty>;
   }
-  if (state.data === null || state.data.headers.length === 0) {
+  if (state.data === null || state.data.headers.length === 0 || state.data.rows.length === 0) {
+    const headerNote =
+      state.data !== null && state.data.headers.length > 0
+        ? `仅含表头：${state.data.headers.join("、")}`
+        : undefined;
     return (
       <Empty className="border-0 py-4">
         <EmptyHeader>
           <EmptyTitle>{noDataMessage ?? "无数据"}</EmptyTitle>
+          {headerNote !== undefined && (
+            <EmptyDescription>{headerNote}</EmptyDescription>
+          )}
         </EmptyHeader>
       </Empty>
     );

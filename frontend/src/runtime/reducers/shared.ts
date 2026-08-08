@@ -76,6 +76,7 @@ export function createTaskProjection(summary: TaskSummary): TaskProjection {
     currentReasoningSegmentByRun: {},
     currentPublicationId: null,
     publications: [],
+    sequenceGap: null,
   };
 }
 
@@ -433,6 +434,9 @@ export function hydrateTaskSnapshot(
         ? base.olderMessagesCursor
         : snapshot.older_messages_cursor,
     lastSequence: snapshot.task.latest_sequence,
+    // A snapshot is authoritative: its latest_sequence covers any earlier
+    // event-window gap, so the recoverable gap marker is healed.
+    sequenceGap: null,
     hydration: "snapshot",
   });
   const classification = updateClassification(state, task);
@@ -477,6 +481,22 @@ export function prepareTaskSnapshotReplay(
     },
   };
 }
+
+export function markTaskContiguous(
+  state: AgentRuntimeData,
+  taskId: string,
+): AgentRuntimeData {
+  const task = state.tasksById[taskId];
+  if (task === undefined || task.sequenceGap === null) return state;
+  return {
+    ...state,
+    tasksById: {
+      ...state.tasksById,
+      [taskId]: { ...task, sequenceGap: null },
+    },
+  };
+}
+
 
 function placeholderRun(
   taskId: string,

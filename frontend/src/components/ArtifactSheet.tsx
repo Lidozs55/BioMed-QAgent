@@ -91,7 +91,10 @@ export function ArtifactSheet({
           <TabsContent value="list" className="min-h-0 overflow-y-auto">
             <AttachmentGroup className="flex-col overflow-x-visible">
               {artifacts.map((artifact) => {
-                const { Icon, label } = fileType(artifact.name);
+                const { Icon, label } = fileType(
+                  artifact.name,
+                  artifact.role,
+                );
                 return (
                   <Attachment
                     key={artifact.artifact_id}

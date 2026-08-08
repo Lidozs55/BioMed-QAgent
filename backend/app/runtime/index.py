@@ -25,6 +25,7 @@ from app.domain.contracts import (
 )
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.state import (
+    artifact_identities_from_events,
     count_artifact_produced_events,
     reduce_task_event,
 )
@@ -432,29 +433,70 @@ class TaskIndex:
                 # removed still carry it; strict ContractModel (extra="forbid")
                 # would reject it.
                 raw_snapshot.get("task", {}).pop("no_artifact_failure", None)
+                internal_artifact_ids = raw_snapshot.pop("_artifact_ids_by_run", None)
+                internal_fingerprints = raw_snapshot.pop(
+                    "_artifact_fingerprints_by_run", None
+                )
                 snapshot = TaskSnapshot.model_validate(raw_snapshot)
+                if internal_artifact_ids:
+                    snapshot._artifact_ids_by_run = {  # noqa: SLF001
+                        run_id: set(ids)
+                        for run_id, ids in internal_artifact_ids.items()
+                    }
+                if internal_fingerprints:
+                    snapshot._artifact_fingerprints_by_run = {  # noqa: SLF001
+                        run_id: {
+                            artifact_id: (
+                                fingerprint["sha256"],
+                                fingerprint["relative_path"],
+                            )
+                            for artifact_id, fingerprint in fingerprints.items()
+                        }
+                        for run_id, fingerprints in internal_fingerprints.items()
+                    }
                 if task_dir.name != snapshot.task.task_id:
                     raise ValueError(
                         "task directory name does not match snapshot task_id: "
                         f"{task_dir.name} != {snapshot.task.task_id}"
                     )
-                if "artifact_count" not in raw_snapshot.get("task", {}):
+                # H6: rebuild missing dedup bookkeeping from the events (a
+                # pre-fix snapshot that already carries artifact_count), so
+                # replaying an old duplicate after upgrade cannot over-count.
+                dedup_state_missing = (
+                    internal_artifact_ids is None or internal_fingerprints is None
+                )
+                if "artifact_count" not in raw_snapshot.get("task", {}) or dedup_state_missing:
                     historical_events = event_store.read(
                         snapshot.task.task_id,
                         after_sequence=0,
                     )
-                    legacy_count = count_artifact_produced_events(
-                        historical_events,
-                        through_sequence=snapshot.task.latest_sequence,
-                    )
-                    if legacy_count > 0:
-                        snapshot = snapshot.model_copy(
-                            update={
-                                "task": snapshot.task.model_copy(
-                                    update={"artifact_count": legacy_count}
-                                )
-                            }
+                    legacy_count = 0
+                    if "artifact_count" not in raw_snapshot.get("task", {}):
+                        legacy_count = count_artifact_produced_events(
+                            historical_events,
+                            through_sequence=snapshot.task.latest_sequence,
                         )
+                        if legacy_count > 0:
+                            snapshot = snapshot.model_copy(
+                                update={
+                                    "task": snapshot.task.model_copy(
+                                        update={"artifact_count": legacy_count}
+                                    )
+                                }
+                            )
+                    if dedup_state_missing:
+                        rebuilt_ids, rebuilt_fingerprints = (
+                            artifact_identities_from_events(
+                                historical_events,
+                                through_sequence=snapshot.task.latest_sequence,
+                            )
+                        )
+                        if internal_artifact_ids is None:
+                            snapshot._artifact_ids_by_run = rebuilt_ids  # noqa: SLF001
+                        if internal_fingerprints is None:
+                            snapshot._artifact_fingerprints_by_run = (  # noqa: SLF001
+                                rebuilt_fingerprints
+                            )
                 events = event_store.read(
                     snapshot.task.task_id,
                     after_sequence=snapshot.task.latest_sequence,

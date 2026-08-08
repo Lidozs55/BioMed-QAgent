@@ -265,6 +265,11 @@ export type ConversationItem =
   | WarningItem
   | ArtifactItem;
 
+export interface SequenceGapMarker {
+  expected: number;
+  received: number;
+}
+
 export interface TaskProjection {
   summary: TaskSummary;
   runsById: Record<string, RunProjection>;
@@ -297,6 +302,12 @@ export interface TaskProjection {
   currentPublicationId: string | null;
   /** Immutable publication records in creation order. */
   publications: PublicationSummary[];
+  /**
+   * Recoverable sequence gap: set when an event with
+   * ``sequence > lastSequence + 1`` was rejected without advancing the
+   * cursor. Cleared once the missing frame is replayed and applied.
+   */
+  sequenceGap: SequenceGapMarker | null;
 }
 
 export interface AgentRuntimeData {

@@ -8,11 +8,17 @@ import {
   isValidSubagentEventPayload,
   parseSubagentEventPayload,
 } from "@/lib/eventParsersRuntime";
-import type { ConnectionStatus } from "./types";
+import type { ConnectionStatus, SequenceGapMarker } from "./types";
 
 const CONNECTING = 0;
 const OPEN = 1;
 const MAX_PENDING_ASSISTANT_STREAM_FRAMES = 2048;
+/**
+ * Consecutive gap rejections at the same cursor position that are allowed
+ * before the transport gives up on replay recovery and asks the owner for
+ * an authoritative REST snapshot hydration (F2, final review).
+ */
+const GAP_RECOVERY_FAILURE_LIMIT = 2;
 const EVENT_TYPES = new Set([
   "task_created",
   "plan_ready",
@@ -40,6 +46,14 @@ const EVENT_TYPES = new Set([
   "run_cancel_requested",
   "run_cancelled",
   "run_interrupted",
+  "publication_created",
+  // V2 build-execution lifecycle events (Design §15.1). The backend defines
+  // and emits them from the dataset executor; they are informational, so the
+  // reducer passes them through without changing state (cursor only).
+  "operation_started",
+  "operation_progress",
+  "operation_completed",
+  "operation_failed",
   "assistant_delta",
   "assistant_reasoning_delta",
   "tool_started",
@@ -71,7 +85,13 @@ export type SocketFactory = (url: string) => WebSocketLike;
 interface TransportOptions {
   socketFactory: SocketFactory;
   getLastSequence: (taskId: string) => number;
-  applyEvent: (event: EventEnvelope) => void;
+  applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
+  /**
+   * Clear the store-level ``sequenceGap`` marker for a task on a fresh
+   * connection: the server replays every subscribed task from its current
+   * watermark, so the stream is contiguous again (K3/C2, Phase 4 review).
+   */
+  markContiguous?: (taskId: string) => void;
   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
   deactivateAssistantStreams: (taskId?: string) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -80,6 +100,22 @@ interface TransportOptions {
   pingTimeoutMs?: number;
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  /**
+   * Whether a task should keep its live subscription. When this returns
+   * false for a task that is currently subscribed, the transport drops the
+   * desired subscription and sends an unsubscribe — a terminal task must
+   * not be resubscribed on every reconnect. Absent, every subscription is
+   * kept (legacy behavior).
+   */
+  shouldSubscribe?: (taskId: string) => boolean;
+  /**
+   * Fired when a sequence gap could not be healed by replay recovery: the
+   * missing frame stayed undeliverable across a bounded number of recovery
+   * attempts at the same cursor position. The owner should rebuild the task
+   * authoritatively from a REST snapshot and resume the subscription after
+   * the snapshot watermark (see RuntimeController.hydrateTaskFromGap).
+   */
+  onPermanentGap?: (taskId: string) => void;
   url?: string | (() => string);
 }
 
@@ -360,6 +396,28 @@ export class AgentEventTransport {
   private pendingAssistantStreamFrames: AssistantStreamFrame[] = [];
   private animationFrameHandle: number | null = null;
   private animationFrameGeneration = 0;
+  /**
+   * Cursor at which a gap-driven replay recovery was last requested per
+   * task. Guards against recovery loops when the missing frame stays
+   * undeliverable (e.g. schema drift rejected at the gate): the reducer
+   * keeps the cursor at the gap, but we only replace the socket once per
+   * cursor position. Cleared on a natural reconnect (the network may now
+   * deliver the missing frame) and when a contiguous event applies.
+   */
+  private readonly gapRecoveryCursors = new Map<string, number>();
+  /**
+   * Consecutive gap rejections observed at the current recovery cursor per
+   * task (i.e. the replay still cannot deliver the missing frame). Once the
+   * limit is crossed the transport fires ``onPermanentGap`` so the owner can
+   * rebuild the task from an authoritative REST snapshot.
+   */
+  private readonly gapRecoveryFailures = new Map<string, number>();
+  /**
+   * Cursor at which the snapshot fallback was last fired per task, so a
+   * permanently stuck gap degrades to defensive-only instead of repeating
+   * REST hydrations until the cursor moves or the connection is replaced.
+   */
+  private readonly gapFallbackFired = new Map<string, number>();
 
   constructor(private readonly options: TransportOptions) {}
 
@@ -404,6 +462,7 @@ export class AgentEventTransport {
     this.socket = null;
     this.active.clear();
     this.desired.clear();
+    this.clearGapRecoveryState();
     this.discardAssistantStreamFrames();
     this.options.deactivateAssistantStreams();
     if (socket !== null) {
@@ -607,6 +666,14 @@ export class AgentEventTransport {
       this.active.clear();
       this.awaitingUnsubscribe.clear();
       this.hasConnected = true;
+      // K3 (C2, Phase 4 review): a fresh connection replays every desired
+      // task from its current watermark (flushSubscriptions below), so each
+      // stream is contiguous again — clear the store-level sequenceGap
+      // marker now instead of letting it linger after a recovery-driven
+      // socket replacement or a natural reconnect. A still-undeliverable
+      // frame simply re-sets the marker on the next replay; the transport's
+      // bounded recovery guards are untouched.
+      this.clearStoreSequenceGaps();
       this.options.setConnectionStatus("connected");
       this.flushSubscriptions();
       this.resolveConnectionWaiters();
@@ -628,6 +695,13 @@ export class AgentEventTransport {
       this.socket = null;
       this.active.clear();
       this.awaitingUnsubscribe.clear();
+      // A natural (server- or network-side) close resets the per-cursor gap
+      // recovery guard: the fresh connection replays from the current
+      // watermark, so a previously undeliverable frame may now arrive and a
+      // gap must be allowed a fresh recovery attempt. Recovery-driven socket
+      // replacements null the handlers before closing, so they do not reach
+      // this branch.
+      this.clearGapRecoveryState();
       this.discardAssistantStreamFrames();
       this.options.deactivateAssistantStreams();
       const error = new Error("WebSocket transport closed");
@@ -690,7 +764,83 @@ export class AgentEventTransport {
     if (isAssistantStreamBoundary(envelope) && envelope.run_id !== null) {
       this.discardAssistantStreamFrames(envelope.task_id, envelope.run_id);
     }
-    this.options.applyEvent(envelope);
+    const gap = this.options.applyEvent(envelope);
+    this.reconcileSubscription(envelope.task_id);
+    if (gap !== null && gap !== undefined) {
+      if (this.desired.has(envelope.task_id)) {
+        this.handleSequenceGap(envelope.task_id);
+      }
+    } else {
+      this.clearGapRecoveryState(envelope.task_id);
+    }
+  }
+
+  /**
+   * A sequence gap was detected for a desired task. The first gap at a
+   * cursor requests one socket-replacement replay from the last applied
+   * sequence (the server replays contiguously from ``after_sequence``, so a
+   * dropped frame is re-sent). If the replay still cannot deliver the
+   * missing frame, consecutive gap rejections at the same cursor cross the
+   * failure limit and the transport fires ``onPermanentGap`` so the owner
+   * can rebuild the task from an authoritative REST snapshot and resume
+   * after its watermark. All paths are bounded per cursor position; a
+   * natural reconnect clears the guard so recovery is re-armed on the fresh
+   * connection.
+   */
+  private handleSequenceGap(taskId: string): void {
+    const lastSequence = this.options.getLastSequence(taskId);
+    if (this.gapRecoveryCursors.get(taskId) !== lastSequence) {
+      this.gapRecoveryCursors.set(taskId, lastSequence);
+      this.gapRecoveryFailures.set(taskId, 0);
+      void this.recoverSubscription(taskId, lastSequence).catch(() => undefined);
+      return;
+    }
+    const failures = (this.gapRecoveryFailures.get(taskId) ?? 0) + 1;
+    this.gapRecoveryFailures.set(taskId, failures);
+    if (
+      failures >= GAP_RECOVERY_FAILURE_LIMIT &&
+      this.gapFallbackFired.get(taskId) !== lastSequence
+    ) {
+      this.gapFallbackFired.set(taskId, lastSequence);
+      this.options.onPermanentGap?.(taskId);
+    }
+  }
+
+  private clearGapRecoveryState(taskId?: string): void {
+    if (taskId === undefined) {
+      this.gapRecoveryCursors.clear();
+      this.gapRecoveryFailures.clear();
+      this.gapFallbackFired.clear();
+      return;
+    }
+    this.gapRecoveryCursors.delete(taskId);
+    this.gapRecoveryFailures.delete(taskId);
+    this.gapFallbackFired.delete(taskId);
+  }
+
+  private clearStoreSequenceGaps(): void {
+    if (this.options.markContiguous === undefined) return;
+    for (const taskId of this.desired.keys()) {
+      this.options.markContiguous(taskId);
+    }
+  }
+
+  /**
+   * Drop the live subscription of a task that is no longer active (its last
+   * run reached a terminal state). Kept subscriptions otherwise accumulate
+   * for the whole session and are resubscribed on every reconnect.
+   */
+  private reconcileSubscription(taskId: string): void {
+    if (this.options.shouldSubscribe?.(taskId) ?? true) return;
+    if (!this.desired.has(taskId)) return;
+    this.desired.delete(taskId);
+    this.discardAssistantStreamFrames(taskId);
+    this.options.deactivateAssistantStreams(taskId);
+    if (this.isConnected && this.active.has(taskId)) {
+      this.send({ type: "unsubscribe", task_id: taskId });
+      this.awaitingUnsubscribe.add(taskId);
+    }
+    this.active.delete(taskId);
   }
 
   private queueAssistantStreamFrame(frame: AssistantStreamFrame): void {

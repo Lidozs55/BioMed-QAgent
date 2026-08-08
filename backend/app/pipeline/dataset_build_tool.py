@@ -24,13 +24,17 @@ from agents import RunContextWrapper, function_tool
 from app.agent_loop.context import RunContext
 from app.config import settings
 from app.datasets.build.cache import DatasetCacheV2
-from app.datasets.build.expression_runner import ExpressionBuildRunner
+from app.datasets.build.expression_runner import (
+    _PUBLICATION_REFUSED_PREFIX,
+    ExpressionBuildRunner,
+)
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.contracts import DatasetBuildSpec
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
 from app.domain.contracts import (
     DataLevel,
+    ErrorDetail,
     SourceAsset,
     asset_id_from_sha256,
     generate_prefixed_uuid,
@@ -38,6 +42,31 @@ from app.domain.contracts import (
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.tools.workdir import resolve_task_local_file
 
+_NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
+_NO_DATA_NEXT_ACTION = "检查数据源可用性或调整查询后重试。"
+
+#: H3 (Phase 4 review): structured reason code carried by the parse layer for
+#: an empty source and propagated through the outcome error details.
+_REASON_NO_PRIMARY_DATA = "no_primary_data"
+
+#: H3: operation ids that persist the manifest for the current attempt — only
+#: a failure at/after these may use the persisted manifest as this attempt's
+#: zero-row evidence (validate_profile writes it; publish runs right after).
+_MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
+
+#: B5/K2 (Phase 4 review): the mixed-source abort envelope keeps the
+#: NO_DATA status (the usable source was never parsed/validated/published)
+#: but its summary/next action describe the empty-source abort precisely.
+_MIXED_EMPTY_SOURCE_SUMMARY = "任务完成，但部分数据源为空导致构建中止；未发布主数据。"
+_MIXED_EMPTY_SOURCE_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
+
+# D1 (Phase 4 review): while a data-correction pause is pending, the build
+# tool refuses so no publication can be produced from inputs under correction.
+_PENDING_MAIN_INPUT_MESSAGE = (
+    "execute_dataset_build 被拒绝：当前 Run 正在等待人工修正"
+    "（request_human_correction 尚未答复）。请等待修正完成后重试，"
+    "或先处理待决的修正请求。"
+)
 logger = logging.getLogger(__name__)
 
 _MEDIA_TYPES = {
@@ -56,6 +85,25 @@ _BUILD_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 def _infer_media_type(path: Path) -> str:
     return _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
+    """Resolve the build output dir and prove it stays inside the workspace.
+
+    Defense in depth for B1 (Phase 4 review): ``DatasetBuildSpec`` rejects
+    path-like ``build_id`` values at model construction, but the tool must
+    never trust a value that slips through — ``build_root / build_id`` is
+    only used when the resolved path remains under ``build_root``.
+    """
+
+    output_dir = build_root / build_id
+    try:
+        output_dir.resolve().relative_to(build_root.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"build_id must remain inside the build workspace: {build_id!r}"
+        ) from exc
+    return output_dir
 
 
 @function_tool(
@@ -92,6 +140,19 @@ async def execute_dataset_build(
         invalid or the build fails.
     """
     run_ctx = ctx.context
+    if run_ctx.main_input_pending:
+        # D1 (Phase 4 review): a correction pause is an exclusivity boundary.
+        # The SDK may run sibling FunctionTools concurrently; refuse to build
+        # while the Run is waiting on request_human_correction so the build
+        # never publishes from inputs under correction.
+        return json.dumps(
+            {
+                "status": "error",
+                "message": _PENDING_MAIN_INPUT_MESSAGE,
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     try:
         build_spec = DatasetBuildSpec.model_validate_json(spec)
         files_mapping = json.loads(source_files)
@@ -173,13 +234,25 @@ async def execute_dataset_build(
 
     build_root = run_ctx.work_dir.root / "datasets_build"
     build_root.mkdir(parents=True, exist_ok=True)
-    output_dir = build_root / build_spec.build_id
+    try:
+        output_dir = _ensure_build_output_inside(build_root, build_spec.build_id)
+    except ValueError as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": str(exc),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     runner = ExpressionBuildRunner(
         spec=build_spec,
         registry=SchemaRegistry([build_gene_expression_schema()]),
         source_assets=assets,
         source_paths=paths,
         output_dir=output_dir,
+        cancellation_requested=run_ctx.cancellation_requested,
+        pending_check=lambda: run_ctx.main_input_pending,
     )
     plan = build_operation_plan(build_spec)
     executor = DatasetBuildExecutor(
@@ -191,10 +264,47 @@ async def execute_dataset_build(
         task_root=build_root,
         plan=plan,
         run_operation=runner,
+        source_assets=assets,
+        cancellation_requested=run_ctx.cancellation_requested,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )
     outcome = await executor.run()
     if outcome.status != "completed":
+        if outcome.status == "failed" and outcome.error is not None:
+            # H2 (Phase 4 review): a correction that became pending between
+            # validation and publication refuses the immutable promotion —
+            # same agent-facing text family as the entry gate, never a
+            # retryable error.
+            if outcome.error.message.startswith(_PUBLICATION_REFUSED_PREFIX):
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "message": _PENDING_MAIN_INPUT_MESSAGE,
+                        "retryable": False,
+                    },
+                    ensure_ascii=False,
+                )
+            classified = _classify_failed_outcome(
+                output_dir,
+                outcome.error,
+                sorted(binding_ids),
+                paths,
+            )
+            if classified is not None:
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "build_id": build_spec.build_id,
+                        "result": classified.model_dump(mode="json"),
+                        "output_dir": output_dir.as_posix(),
+                        "manifest_file": (
+                            (output_dir / "dataset_manifest.json").as_posix()
+                            if (output_dir / "dataset_manifest.json").is_file()
+                            else None
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
         return json.dumps(
             {
                 "status": "error",
@@ -262,3 +372,143 @@ async def execute_dataset_build(
         },
         ensure_ascii=False,
     )
+
+
+
+def _classify_failed_outcome(
+    output_dir: Path,
+    outcome_error: ErrorDetail | None,
+    binding_ids: list[str],
+    source_paths: dict[str, Path],
+) -> BuildResult | None:
+    """Map a failed build outcome to a structured BuildResult envelope (H3).
+
+    Returns ``None`` for genuine execution failures (the caller keeps the
+    generic retryable-error envelope).
+
+    - NO_DATA: this attempt produced no publishable primary data — either the
+      parse layer reported an empty source (structured ``reason_code``
+      ``no_primary_data``, which is this attempt's by construction) or the
+      integrated primary has zero rows (manifest written by THIS attempt) and
+      no version was published for this build_id in this run. When the build
+      aborted at a first empty source while other bindings had data rows, the
+      NO_DATA envelope identifies the empty binding(s) in its reason codes
+      (``no_primary_data:<binding_id>``) — never PARTIAL_SUCCESS, because
+      ARCHITECTURE §9.2 defines PARTIAL_SUCCESS as remaining valid sources
+      validated AND publishable, which an abort-at-first-empty build never
+      did.
+    """
+
+    if outcome_error is None:
+        return None
+    details = outcome_error.details or {}
+    reason_code = details.get("reason_code")
+    failed_operation = details.get("failed_operation")
+
+    if reason_code == _REASON_NO_PRIMARY_DATA:
+        # The plan aborts at the first empty source, so any other binding
+        # that had data rows was never parsed/validated/published. B5/K2
+        # (Phase 4 review): this abort case must not be emitted as
+        # PARTIAL_SUCCESS (the contract means remaining sources validated
+        # AND publishable; nothing was published here) — a structured NO_DATA
+        # envelope with the empty binding(s) identified is the
+        # contract-coherent outcome, and it is not retryable.
+        empty = [
+            binding_id
+            for binding_id in binding_ids
+            if not _source_has_data_rows(source_paths.get(binding_id))
+        ]
+        if empty and len(empty) < len(binding_ids):
+            return BuildResult(
+                status=BuildResultStatus.NO_DATA,
+                valid_row_count=0,
+                successful_sources=[],
+                rejected_sources=sorted(empty),
+                reason_codes=[
+                    f"{_REASON_NO_PRIMARY_DATA}:{binding_id}"
+                    for binding_id in sorted(empty)
+                ],
+                user_summary=_MIXED_EMPTY_SOURCE_SUMMARY,
+                recommended_next_action=_MIXED_EMPTY_SOURCE_NEXT_ACTION,
+            )
+        return BuildResult(
+            status=BuildResultStatus.NO_DATA,
+            valid_row_count=0,
+            successful_sources=[],
+            rejected_sources=sorted(binding_ids),
+            reason_codes=[_REASON_NO_PRIMARY_DATA],
+            user_summary=_NO_DATA_SUMMARY,
+            recommended_next_action=_NO_DATA_NEXT_ACTION,
+        )
+
+    # Manifest signal: only trust a persisted manifest when THIS attempt wrote
+    # it (validate_profile persists it; publish runs immediately after). A
+    # stale zero-row manifest from an earlier attempt must never drive the
+    # NO_DATA classification for a build that failed before validation.
+    if (
+        not isinstance(failed_operation, str)
+        or failed_operation not in _MANIFEST_WRITING_OPERATIONS
+    ):
+        return None
+    manifest_path = output_dir / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if int(manifest.get("row_count", 1)) != 0:
+        return None
+    publish_dir = output_dir / PUBLISH_DIR
+    if publish_dir.is_dir() and any(
+        child.is_dir() and not child.name.startswith(".")
+        for child in publish_dir.iterdir()
+    ):
+        return None
+    return BuildResult(
+        status=BuildResultStatus.NO_DATA,
+        valid_row_count=0,
+        successful_sources=[],
+        rejected_sources=sorted(binding_ids),
+        reason_codes=[_REASON_NO_PRIMARY_DATA],
+        user_summary=_NO_DATA_SUMMARY,
+        recommended_next_action=_NO_DATA_NEXT_ACTION,
+    )
+
+
+def _source_has_data_rows(path: Path | None) -> bool:
+    """True when a source file has at least one data row beyond its header.
+
+    Adapter-agnostic emptiness probe used to scope mixed-source NO_DATA
+    classification to the sources that actually produced rows (H3). The plan
+    aborts at the first empty source's parse, so later bindings' parse
+    operations never run — the source files are the authoritative signal for
+    whether they had data.
+    """
+
+    if path is None or not path.is_file():
+        return False
+    seen_header = False
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for line in handle:
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                if not seen_header:
+                    seen_header = True
+                    continue
+                return True
+    except (OSError, UnicodeDecodeError):
+        return False
+    return False
+
+
+def _latest_publication_id(publish_dir: Path) -> str | None:
+    """Read the newest version directory's publication_id (if any).
+
+    Delegates to ``ExpressionBuildRunner._find_latest_publication`` so the
+    tool and the supersedes chain agree: newest by ``published_at``, never by
+    lexicographic publication_id order (B8).
+    """
+
+    return find_latest_publication(publish_dir)

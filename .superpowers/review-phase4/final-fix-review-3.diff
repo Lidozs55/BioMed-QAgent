@@ -1,0 +1,1127 @@
+75511d8 merge: phase4 review wave 7 final (3 fixes)
+52a282e fix(phase4): review wave 7 — discard cancelled V2 outputs, contract-coherent mixed-source NO_DATA, store gap cleared on socket reset (TDD)
+=====DIFF=====
+diff --git a/.superpowers/review-phase4/fix-wave7-final.md b/.superpowers/review-phase4/fix-wave7-final.md
+new file mode 100644
+index 0000000..9da2e55
+--- /dev/null
++++ b/.superpowers/review-phase4/fix-wave7-final.md
+@@ -0,0 +1,179 @@
++# Fix Wave 7 (Final) — Phase 4 Review MUST-FIX Items (K1/K2/K3)
++
++Branch: `fix/phase4-review-bugs` · Base: wave 6 merged HEAD (`e55103a`)
++Worktree: `/tmp/pi-agent-969ac217-41f0-48f-45006a7c` (detached at base)
++Commit: `c521197` — `fix(phase4): review wave 7 — discard cancelled V2 outputs,
++contract-coherent mixed-source NO_DATA, store gap cleared on socket reset (TDD)`
++
++3 fixes, all TDD (red test → fix → green). K1/K2 backend, K3 frontend. No
++redesign beyond the directives.
++
++## Verification summary (exact outputs)
++
++| Gate | Command | Result |
++|---|---|---|
++| Backend full suite | `python -m pytest -q` | **2390 passed, 2 skipped, 28 deselected** (baseline 2388 → +2 new tests: K1 discard/retry, K2 all-empty-mixed regression) |
++| Backend lint | `ruff check app/ tests/ launcher.py` | All checks passed |
++| Backend import | `python -c "import app.main"` | OK |
++| Frontend full suite | `cd frontend && pnpm test` | **42 files, 687 passed** (baseline 686 → +1 new test: K3 store-gap clear on replacement) |
++| Frontend lint | `pnpm lint` (eslint . --max-warnings 0) | 0 errors, exit 0 |
++| Frontend build | `pnpm build` (tsc -b && vite build) | OK (only pre-existing chunk-size warning) |
++
++---
++
++## K1 = D2 — in-flight sync op not interruptible: cancelled worker outputs discarded + workspace hygiene (backend)
++
++Files: `backend/app/datasets/build/expression_runner.py`,
++`backend/app/datasets/runtime/executor.py`,
++`backend/tests/test_dataset_expression_runner.py`
++
++- **Round-2 verdict recap**: the `asyncio.to_thread` offload (wave 5) keeps the
++  loop responsive, but the worker thread keeps running after the executor
++  returns on cancellation; the honest close is (a) discard the cancelled
++  operation's outputs at the boundary, (b) record the cancellation so a retry
++  starts from a clean checkpoint, (c) document the residual.
++- **Mechanism established**: the tool-level cancellation channel is the
++  cooperative `cancellation_requested` token (`RunContext`, an `asyncio.Event`
++  set by `manager.request_cancellation` — never a task cancel). The
++  operation-boundary check in `_execute_operation` runs **only after** the
++  `to_thread` await completed, i.e. the thread's files are finished at the
++  moment cancellation is observed — so discarding at the boundary is safe,
++  never mid-write.
++- **Repro (test-first)**:
++  `test_cancelled_integrate_outputs_are_discarded_and_retry_publishes_clean`
++  — monkeypatched blocking integrate (event + `time.sleep(0.4)` then the real
++  integrate), cancel the token while integrate is in flight → executor returns
++  `cancelled` without publishing; **RED pre-fix**: the completed-too-late
++  thread's `merged/primary.csv` (and `conflicts.csv`) remained in the build
++  workspace after the cancelled run. Also asserts the state dir records the
++  CANCELLED integrate attempt (clean checkpoint — no SUCCEEDED attempt for the
++  retry to reuse), then re-runs the same `build_id` with **new inputs** and
++  asserts the retry completes and the published version's `merged/primary.csv`
++  contains only the new run's data (`{9,10,11,12}`, ensembl namespace), i.e.
++  no old-input values leaked into the publication.
++- **Fix**:
++  - `ExpressionBuildRunner.discard_operation_outputs(op)` deletes the
++    deterministic per-operation output paths (parse → `batches/<binding>*.csv`;
++    canonicalize → `canonical/<binding>.*`; integrate →
++    `merged/primary.csv`+`conflicts.csv`; validate_profile → manifest,
++    validation report, provenance; publish → `.*.tmp` staged dirs), best-effort
++    per file (`OSError` ignored: a file held open by a dying thread may refuse
++    deletion and the retry rewrites the same paths anyway).
++  - `DatasetBuildExecutor._execute_operation` post-cancellation-check calls the
++    new `_discard_cancelled_operation_outputs(op.operation_id)` (duck-typed on
++    the operation runner; `contextlib.suppress` so discard never masks the
++    cancellation outcome) **before** raising `BuildCancelledError`. The
++    pre-check path is untouched (nothing to discard there), and the existing
++    operation-boundary checks + `_finalize_cancelled` flow are unchanged.
++  - Workspace-hygiene record: the state dir already records the CANCELLED
++    attempt (append-only `operation_attempts.jsonl` + saved `BuildState`), and
++    `load_operation_output` verifies referenced files before digest-reuse, so a
++    retry can never reuse a cancelled attempt's leftovers — a retry acquires a
++    clean checkpoint for the cancelled operation by construction.
++- **Residual (documented in code)**: in-flight sync work is not preemptable;
++  the cooperative token path discards only the *finished* outputs at the
++  boundary, never mid-write. The operation-timeout path
++  (`asyncio.timeout` cancels the await while the thread keeps running) is a
++  FAILURE outcome, out of K1's cancellation scope; a retry there re-runs the
++  operation (no SUCCEEDED attempt) and rewrites the paths.
++
++## K2 = B5 — mixed-source abort must not emit contract-incoherent PARTIAL_SUCCESS (backend)
++
++Files: `backend/app/pipeline/dataset_build_tool.py`,
++`backend/tests/test_dataset_build_tool.py`
++
++- **Round-2 verdict recap**: `_classify_failed_outcome` returned
++  `PARTIAL_SUCCESS` with `valid_row_count=0` and no publication for the
++  mixed-source abort case; ARCHITECTURE §9.2 defines `PARTIAL_SUCCESS` as
++  "remaining valid sources validated AND publishable" (a Publication is
++  allowed), which an abort-at-first-empty build never did. Per-binding
++  tolerance + publishing the usable source was evaluated: the fixed
++  `build_operation_plan` skeleton aborts at the first empty parse, integrate
++  requires **all** bindings' canonical results (`_canonical_results_for_bindings`
++  raises on any missing binding), and nothing validates/publishes a subset —
++  per-binding independence is a feature, not small effort. So the verdict's
++  fallback was taken: **NO_DATA with precise reason codes**.
++- **Repro (test-first)**:
++  - (i)/(ii) `test_execute_dataset_build_mixed_empty_and_usable_sources_is_no_data_not_partial_success`
++    — empty GDC + usable Xena: **RED pre-fix** (`status == "partial_success"`);
++    GREEN post-fix: `status == "no_data"`, `valid_row_count == 0`,
++    `successful_sources == []`, `rejected_sources == ["binding_gdc"]`,
++    `reason_codes == ["no_primary_data:binding_gdc"]` (the empty binding is
++    identified in the codes), `publication_id` None, not retryable, no version
++    dirs.
++  - (iii) `test_execute_dataset_build_all_empty_mixed_sources_is_no_data` —
++    both bindings empty → regression: the established all-empty NO_DATA
++    envelope (`reason_codes == ["no_primary_data"]`, all sources rejected).
++  - Existing single-binding header-only NO_DATA test stays green.
++- **Fix**: the `no_primary_data` branch of `_classify_failed_outcome` computes
++  the empty bindings (adapter-agnostic data-row probe, unchanged) and returns:
++  - mixed abort (`empty` non-empty and `<` all bindings) → `NO_DATA` with
++    `rejected_sources == sorted(empty)`, `reason_codes ==
++    ["no_primary_data:<binding_id>" ...]`, the (renamed)
++    `_MIXED_EMPTY_SOURCE_SUMMARY` / `_MIXED_EMPTY_SOURCE_NEXT_ACTION` text;
++  - all-empty → the previous NO_DATA envelope, byte-for-byte unchanged.
++  `PARTIAL_SUCCESS` is no longer produced by the V2 tool (V1 never produced it;
++  the enum value and the V1-side handling are untouched). The build-result
++  model validator is unaffected (`NO_DATA` requires only `valid_row_count == 0`).
++
++## K3 = C2 — store-level sequenceGap must clear on socket replacement (frontend)
++
++Files: `frontend/src/runtime/transport.ts`, `frontend/src/runtime/reducer.ts`,
++`frontend/src/runtime/reducers/shared.ts`, `frontend/src/runtime/reducers/index.ts`,
++`frontend/src/stores/agentStore.ts`, `frontend/src/hooks/useAgentStream.ts`,
++`frontend/src/test/agent-stream.test.ts`
++
++- **Round-2 verdict recap**: the recovery-driven socket replacement cleared only
++  transport-internal maps (`gapRecoveryCursors/Failures/gapFallbackFired`); the
++  store-level `sequenceGap` marker stayed set, so a lingering marker kept
++  treating valid replayed events as gapped until the first contiguous frame or
++  a snapshot hydration.
++- **Fix**: new store action `markContiguous(taskId)` (reducer
++  `markTaskContiguous` in `reducers/shared.ts`, exported through
++  `reducers/index.ts` and the `runtime/reducer.ts` barrel; clears
++  `sequenceGap` to null, no-op for unknown tasks / no marker). The transport
++  gains an optional `markContiguous` option (guarded, backward compatible) and
++  calls it for every desired task from the `openSocket` `onopen` handler (via
++  `clearStoreSequenceGaps()`), i.e. at the point a fresh connection
++  establishes and `flushSubscriptions` replays every subscribed task from its
++  watermark — the stream is contiguous again by construction. A
++  still-undeliverable frame simply re-sets the marker on the next replay; the
++  transport's bounded recovery guards are untouched (the marker is the
++  reducer's truthful record; the transport re-arms recovery independently).
++  Wiring: `useAgentStream.ts` passes `useAgentStore.getState().markContiguous`.
++- **Repro (test-first)**: `clears the store-level sequenceGap when the
++  replacement socket opens (K3)` — seed task_a at cursor 4, deliver frame 6
++  (gap marker `{expected:5, received:6}` recorded, recovery armed, socket
++  replaced); **RED pre-fix**: after `sockets[1].open()` the marker is still set;
++  GREEN post-fix: marker null, cursor still 4, then frames 5/6 apply normally
++  (`lastSequence` 5/6) with no additional recovery. Existing gap tests
++  (detection, F2 natural-reconnect re-arm, F2 permanent-gap snapshot fallback)
++  all stay green — the marker assertions that precede the replacement and the
++  post-hydration assertions are unaffected.
++
++## Concerns / notes
++
++1. **K1 discard placement**: the discard fires only on the *post-run* boundary
++   check (the `_execute_operation` after-check), never the pre-check, so it is
++   scoped to operations whose worker thread actually finished writing — the
++   exact "completed-too-late" case. Runner-internal raises (e.g. `_publish`'s
++   own token check) raise before writing anything, so nothing to discard there.
++   The one residual not closed by K1 is the live-process *timeout* path where a
++   thread may still be writing after the executor returns a failed outcome;
++   this is documented in the executor/runner docstrings and is out of the
++   cancellation directive's scope.
++2. **K2 reason-code shape**: the mixed envelope uses binding-scoped codes
++   (`no_primary_data:<binding_id>`) while the all-empty envelope keeps the
++   generic `no_primary_data`. No consumer matches on the generic code
++   substring (frontend renders codes opaquely), so the precision is safe; the
++   all-empty envelope is byte-identical to before (regression-protected).
++3. **K3 placement**: clearing happens at `onopen` (fresh connection
++   established) rather than at `replaceSocket()`/`onclose` — this preserves
++   the wave-5 test's observation that the marker is truthfully set while the
++   stream is broken, and clears it exactly when the replay makes the stream
++   contiguous again. Transport-internal guards are deliberately not reset at
++   `onopen` (only the natural-close path resets them, unchanged from wave 6).
++4. **Frontend gate note**: the isolated worktree has no `node_modules`; tests
++   ran with `CI=true pnpm ...` (pnpm otherwise wants to reinstall when the
++   modules dir is missing). A temporary `node_modules` symlink to the main
++   repo was used for the raw vitest run and removed before commit.
+diff --git a/backend/app/datasets/build/expression_runner.py b/backend/app/datasets/build/expression_runner.py
+index bd4d3a8..71ca262 100644
+--- a/backend/app/datasets/build/expression_runner.py
++++ b/backend/app/datasets/build/expression_runner.py
+@@ -9,20 +9,21 @@ validate_profile/publish) with digest reuse and crash recovery.
+ 
+ The runner delegates to the same server-side components as the chain
+ (adapters, canonicalizer, compatibility gate, integrator, validation
+ profile, manifest) and adds the Phase 6 architecture-level release
+ invariants gate on the ``publish`` operation.
+ """
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
++import shutil
+ from collections.abc import Callable, Mapping
+ from datetime import UTC, datetime
+ from pathlib import Path
+ 
+ from app.datasets.build.adapters import get_adapter
+ from app.datasets.build.canonicalizer import (
+     CanonicalizationResult,
+     canonicalize,
+ )
+ from app.datasets.build.compat_gate import check_expression_compatibility
+@@ -446,20 +447,76 @@ class ExpressionBuildRunner:
+                     "provenance_closed": invariants.provenance_closed,
+                     "profile_passed": invariants.profile_passed,
+                     "atomic_promotion_ready": invariants.atomic_promotion_ready,
+                     "artifacts_intact": invariants.artifacts_intact,
+                 },
+             }
+         )
+ 
+     # -------------------------------------------------------------- helpers
+ 
++    def discard_operation_outputs(self, op: OperationSpec) -> None:
++        """Delete the outputs a (cancelled) operation would have written.
++
++        D2/K1 (Phase 4 review): the operation-boundary cancellation check
++        runs only after the worker thread's await completed, so the thread's
++        files are finished but must not become part of the build state — a
++        completed-too-late parse/canonicalize/integrate would otherwise leave
++        intermediates that a retry (or an inspection) could mistake for valid
++        state or overlap with. Discarding at the boundary is safe (never
++        mid-write); the in-flight sync work itself is not preemptable, that
++        residual is documented.
++        """
++
++        output_dir = self._output_dir
++        if op.kind is OperationKind.PARSE or op.kind is OperationKind.CANONICALIZE:
++            binding_id = op.category
++            if op.kind is OperationKind.PARSE:
++                targets = [
++                    output_dir / "batches" / f"{binding_id}.csv",
++                    output_dir / "batches" / f"{binding_id}_rejected.csv",
++                ]
++            else:
++                targets = list(
++                    (output_dir / "canonical").glob(f"{binding_id}.*")
++                )
++        elif op.kind is OperationKind.INTEGRATE:
++            targets = [
++                output_dir / "merged" / "primary.csv",
++                output_dir / "merged" / "conflicts.csv",
++            ]
++        elif op.kind is OperationKind.VALIDATE_PROFILE:
++            targets = [
++                output_dir / "dataset_manifest.json",
++                output_dir / "validation_report.json",
++                output_dir / "provenance.json",
++            ]
++        elif op.kind is OperationKind.PUBLISH:
++            targets = [
++                staged
++                for staged in (output_dir / "publish").glob(".*.tmp")
++                if staged.is_dir()
++            ]
++        else:
++            targets = []
++        for target in targets:
++            try:
++                if target.is_dir():
++                    shutil.rmtree(target)
++                else:
++                    target.unlink(missing_ok=True)
++            except OSError:
++                # Best-effort hygiene: a file held open by a dying worker
++                # thread may refuse deletion; the retry re-runs the operation
++                # and rewrites the same paths anyway.
++                continue
++
+     def _binding(self, binding_id: str) -> object:
+         for binding in self._spec.source_bindings:
+             if binding.binding_id == binding_id:
+                 return binding
+         raise BuildError(f"binding {binding_id!r} is not part of the spec")
+ 
+     def _canonical_results_for_bindings(self) -> list[CanonicalizationResult]:
+         missing = [
+             binding.binding_id
+             for binding in self._spec.source_bindings
+diff --git a/backend/app/datasets/runtime/executor.py b/backend/app/datasets/runtime/executor.py
+index ff40b62..091ed23 100644
+--- a/backend/app/datasets/runtime/executor.py
++++ b/backend/app/datasets/runtime/executor.py
+@@ -3,20 +3,21 @@
+ The skeleton is fixed in code (``build_operation_plan``); the Agent cannot
+ declare steps. Each operation records an append-only ``OperationAttempt`` with
+ digest-matched idempotent reuse, checkpointed output, cooperative cancellation,
+ per-operation timeout and typed events. Operation semantics are injected via
+ ``run_operation`` — real Adapter/Acquisition implementations arrive in Phase 3.
+ """
+ 
+ from __future__ import annotations
+ 
+ import asyncio
++import contextlib
+ import hashlib
+ import json
+ from collections.abc import Awaitable, Callable, Mapping
+ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any, Literal, Protocol
+ 
+ from pydantic import JsonValue
+ 
+@@ -477,25 +478,56 @@ class DatasetBuildExecutor:
+                 f"operation {op.operation_id} exceeded {self._operation_timeout}s"
+             ) from exc
+ 
+     async def _execute_operation(
+         self, op: OperationSpec, upstream: dict[str, Any]
+     ) -> OperationOutput:
+         if self._is_cancelled():
+             raise BuildCancelledError(f"operation {op.operation_id} was cancelled")
+         result = await self._operation_runner(op, upstream)
+         if self._is_cancelled():
++            # K1 (D2 residual, Phase 4 review): the boundary check runs only
++            # after the operation's worker thread await completed, so the
++            # thread's files are finished but must be DISCARDED — the
++            # completed-too-late outputs never become part of the build state
++            # (a retry of the same build_id starts from a clean workspace and
++            # cannot overlap with, or leak, the cancelled attempt's leftovers).
++            # In-flight sync work itself is not preemptable; only its finished
++            # outputs are dropped here, never mid-write.
++            self._discard_cancelled_operation_outputs(op.operation_id)
+             raise BuildCancelledError(
+                 f"operation {op.operation_id} completed after cancel request"
+             )
+         return result
+ 
++    def _discard_cancelled_operation_outputs(self, operation_id: str) -> None:
++        """Best-effort workspace hygiene for a cancelled operation (K1)."""
++
++        op = next(
++            (
++                candidate
++                for candidate in self._plan
++                if candidate.operation_id == operation_id
++            ),
++            None,
++        )
++        if op is None:
++            return
++        discard = getattr(self._operation_runner, "discard_operation_outputs", None)
++        if discard is None:
++            return
++        # Output discard must never mask the cancellation outcome; a failure
++        # here degrades to the retry re-running the operation (no SUCCEEDED
++        # attempt is recorded) and rewriting the paths.
++        with contextlib.suppress(Exception):
++            discard(op)
++
+     def _compute_input_digest(self, op: OperationSpec) -> str:
+         upstream = {
+             upstream_id: self._outputs[upstream_id]
+             for upstream_id in op.upstream
+         }
+         payload: dict[str, object] = {
+             "build_id": self._build_id,
+             "operation_id": op.operation_id,
+             "upstream": {
+                 operation_id: _sha256_json(value)
+diff --git a/backend/app/pipeline/dataset_build_tool.py b/backend/app/pipeline/dataset_build_tool.py
+index 8c15bb5..a693597 100644
+--- a/backend/app/pipeline/dataset_build_tool.py
++++ b/backend/app/pipeline/dataset_build_tool.py
+@@ -44,22 +44,25 @@ _NO_DATA_NEXT_ACTION = "检查数据源可用性或调整查询后重试。"
+ 
+ #: H3 (Phase 4 review): structured reason code carried by the parse layer for
+ #: an empty source and propagated through the outcome error details.
+ _REASON_NO_PRIMARY_DATA = "no_primary_data"
+ 
+ #: H3: operation ids that persist the manifest for the current attempt — only
+ #: a failure at/after these may use the persisted manifest as this attempt's
+ #: zero-row evidence (validate_profile writes it; publish runs right after).
+ _MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
+ 
+-_PARTIAL_SUMMARY = "任务完成，但部分数据源为空；未发布主数据。"
+-_PARTIAL_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
++#: B5/K2 (Phase 4 review): the mixed-source abort envelope keeps the
++#: NO_DATA status (the usable source was never parsed/validated/published)
++#: but its summary/next action describe the empty-source abort precisely.
++_MIXED_EMPTY_SOURCE_SUMMARY = "任务完成，但部分数据源为空导致构建中止；未发布主数据。"
++_MIXED_EMPTY_SOURCE_NEXT_ACTION = "补充空数据源后重新构建，或确认仅使用非空数据源。"
+ 
+ # D1 (Phase 4 review): while a data-correction pause is pending, the build
+ # tool refuses so no publication can be produced from inputs under correction.
+ _PENDING_MAIN_INPUT_MESSAGE = (
+     "execute_dataset_build 被拒绝：当前 Run 正在等待人工修正"
+     "（request_human_correction 尚未答复）。请等待修正完成后重试，"
+     "或先处理待决的修正请求。"
+ )
+ 
+ _MEDIA_TYPES = {
+@@ -333,51 +336,60 @@ def _classify_failed_outcome(
+ ) -> BuildResult | None:
+     """Map a failed build outcome to a structured BuildResult envelope (H3).
+ 
+     Returns ``None`` for genuine execution failures (the caller keeps the
+     generic retryable-error envelope).
+ 
+     - NO_DATA: this attempt produced no publishable primary data — either the
+       parse layer reported an empty source (structured ``reason_code``
+       ``no_primary_data``, which is this attempt's by construction) or the
+       integrated primary has zero rows (manifest written by THIS attempt) and
+-      no version was published for this build_id in this run.
+-    - PARTIAL_SUCCESS: a mixed-source build where at least one source had
+-      data rows but an empty source aborted the build — the usable sources
+-      are surfaced, never all-rejected as NO_DATA.
++      no version was published for this build_id in this run. When the build
++      aborted at a first empty source while other bindings had data rows, the
++      NO_DATA envelope identifies the empty binding(s) in its reason codes
++      (``no_primary_data:<binding_id>``) — never PARTIAL_SUCCESS, because
++      ARCHITECTURE §9.2 defines PARTIAL_SUCCESS as remaining valid sources
++      validated AND publishable, which an abort-at-first-empty build never
++      did.
+     """
+ 
+     if outcome_error is None:
+         return None
+     details = outcome_error.details or {}
+     reason_code = details.get("reason_code")
+     failed_operation = details.get("failed_operation")
+ 
+     if reason_code == _REASON_NO_PRIMARY_DATA:
+-        usable = [
++        # The plan aborts at the first empty source, so any other binding
++        # that had data rows was never parsed/validated/published. B5/K2
++        # (Phase 4 review): this abort case must not be emitted as
++        # PARTIAL_SUCCESS (the contract means remaining sources validated
++        # AND publishable; nothing was published here) — a structured NO_DATA
++        # envelope with the empty binding(s) identified is the
++        # contract-coherent outcome, and it is not retryable.
++        empty = [
+             binding_id
+             for binding_id in binding_ids
+-            if _source_has_data_rows(source_paths.get(binding_id))
++            if not _source_has_data_rows(source_paths.get(binding_id))
+         ]
+-        if usable:
++        if empty and len(empty) < len(binding_ids):
+             return BuildResult(
+-                status=BuildResultStatus.PARTIAL_SUCCESS,
++                status=BuildResultStatus.NO_DATA,
+                 valid_row_count=0,
+-                successful_sources=sorted(usable),
+-                rejected_sources=sorted(
+-                    binding_id
+-                    for binding_id in binding_ids
+-                    if binding_id not in usable
+-                ),
+-                reason_codes=[_REASON_NO_PRIMARY_DATA],
+-                user_summary=_PARTIAL_SUMMARY,
+-                recommended_next_action=_PARTIAL_NEXT_ACTION,
++                successful_sources=[],
++                rejected_sources=sorted(empty),
++                reason_codes=[
++                    f"{_REASON_NO_PRIMARY_DATA}:{binding_id}"
++                    for binding_id in sorted(empty)
++                ],
++                user_summary=_MIXED_EMPTY_SOURCE_SUMMARY,
++                recommended_next_action=_MIXED_EMPTY_SOURCE_NEXT_ACTION,
+             )
+         return BuildResult(
+             status=BuildResultStatus.NO_DATA,
+             valid_row_count=0,
+             successful_sources=[],
+             rejected_sources=sorted(binding_ids),
+             reason_codes=[_REASON_NO_PRIMARY_DATA],
+             user_summary=_NO_DATA_SUMMARY,
+             recommended_next_action=_NO_DATA_NEXT_ACTION,
+         )
+diff --git a/backend/tests/test_dataset_build_tool.py b/backend/tests/test_dataset_build_tool.py
+index edd68b2..0b2d7dd 100644
+--- a/backend/tests/test_dataset_build_tool.py
++++ b/backend/tests/test_dataset_build_tool.py
+@@ -369,49 +369,97 @@ def test_no_data_classification_is_scoped_to_current_attempt(
+     assert data_b["retryable"] is True
+ 
+     # Attempt C: real data succeeds and publishes.
+     rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+     data_c = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+     assert data_c["status"] == "ok"
+     assert data_c["result"]["status"] == "succeeded"
+     assert data_c["result"]["publication_id"]
+ 
+ 
+-def test_execute_dataset_build_mixed_empty_and_usable_sources_not_all_rejected(
++def test_execute_dataset_build_mixed_empty_and_usable_sources_is_no_data_not_partial_success(
+     tmp_path: Path,
+ ) -> None:
+-    """H3: a mixed-source build (one empty + one usable) is NOT all-rejected
+-    as NO_DATA — the usable source is surfaced as a partial outcome.
++    """B5/K2: a mixed-source build (one empty + one usable) where the plan
++    aborts at the first empty source must NOT emit a contract-incoherent
++    zero-row/no-publication PARTIAL_SUCCESS (ARCHITECTURE §9.2 defines
++    PARTIAL_SUCCESS as remaining valid sources validated and publishable,
++    which this build never did). The contract-coherent outcome is a
++    structured NO_DATA envelope whose reason codes identify the empty
++    binding; it is not retryable.
+     """
+     ctx = _make_ctx(tmp_path)
+     run_ctx: RunContext = ctx.context
+     empty = run_ctx.work_dir.source_asset_file("empty.tsv")
+     empty.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
+     xena_rel = _stage_fixture(run_ctx, "ncbi/gse178352/xena_matrix.tsv", "xena.tsv")
+ 
+     data = _call_tool(
+         ctx,
+         _mixed_spec_json(),
+         json.dumps(
+             {
+                 "binding_gdc": "source_assets/empty.tsv",
+                 "binding_xena": xena_rel,
+             }
+         ),
+     )
+ 
+     assert data["status"] == "ok"
+     result = data["result"]
+-    assert result["status"] == "partial_success"
+-    assert result["successful_sources"] == ["binding_xena"]
++    # NOT the previous zero-row/no-publication PARTIAL_SUCCESS envelope.
++    assert result["status"] != "partial_success"
++    assert result["status"] == "no_data"
++    assert result["valid_row_count"] == 0
++    assert result["successful_sources"] == []
+     assert result["rejected_sources"] == ["binding_gdc"]
++    # The reason codes identify the empty binding(s), not just the generic
++    # code — the usable source was never parsed/validated/published.
++    assert result["reason_codes"] == ["no_primary_data:binding_gdc"]
++    assert result.get("publication_id") is None
++    assert data.get("retryable") is not True
++
++    build_root = run_ctx.work_dir.root / "datasets_build"
++    publish_dirs = list((build_root / "build_tool_test" / "publish").glob("build_tool_test_*"))
++    assert publish_dirs == []
++
++
++def test_execute_dataset_build_all_empty_mixed_sources_is_no_data(tmp_path: Path) -> None:
++    """B5/K2 regression: when every source is empty the mixed build keeps the
++    established all-empty NO_DATA envelope (generic reason code, all sources
++    rejected) — the per-binding codes are only for the mixed abort case.
++    """
++    ctx = _make_ctx(tmp_path)
++    run_ctx: RunContext = ctx.context
++    empty_gdc = run_ctx.work_dir.source_asset_file("empty_gdc.tsv")
++    empty_gdc.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
++    empty_xena = run_ctx.work_dir.source_asset_file("empty_xena.tsv")
++    empty_xena.write_text("gene_id\tS1\tS2\n", encoding="utf-8")
++
++    data = _call_tool(
++        ctx,
++        _mixed_spec_json(),
++        json.dumps(
++            {
++                "binding_gdc": "source_assets/empty_gdc.tsv",
++                "binding_xena": "source_assets/empty_xena.tsv",
++            }
++        ),
++    )
++
++    assert data["status"] == "ok"
++    result = data["result"]
++    assert result["status"] == "no_data"
+     assert result["valid_row_count"] == 0
++    assert result["successful_sources"] == []
++    assert result["rejected_sources"] == ["binding_gdc", "binding_xena"]
++    assert result["reason_codes"] == ["no_primary_data"]
+     assert result.get("publication_id") is None
+ 
+ 
+ @pytest.mark.asyncio
+ async def test_execute_dataset_build_refuses_publication_when_correction_pending_mid_build(
+     tmp_path: Path,
+     monkeypatch,
+ ) -> None:
+     """D1/H2: the entry gate is a point-in-time check; a correction that
+     becomes pending between validation and publication must still refuse the
+diff --git a/backend/tests/test_dataset_expression_runner.py b/backend/tests/test_dataset_expression_runner.py
+index f04ac22..6312845 100644
+--- a/backend/tests/test_dataset_expression_runner.py
++++ b/backend/tests/test_dataset_expression_runner.py
+@@ -681,20 +681,161 @@ async def test_cancellation_during_blocking_integrate_is_observed_and_blocks_pub
+     run_task = asyncio.create_task(executor.run())
+     # Wait for integrate to be in flight (inside its worker thread pre-fix, or
+     # blocking the loop pre-fix) before requesting cancellation.
+     await asyncio.to_thread(integrate_started.wait, 5.0)
+     token.set()
+     outcome = await asyncio.wait_for(run_task, timeout=2.0)
+     assert outcome.status == "cancelled"
+     assert not list((tmp_path / "publish").glob("build_runner_test_*"))
+ 
+ 
++@pytest.mark.asyncio
++async def test_cancelled_integrate_outputs_are_discarded_and_retry_publishes_clean(
++    tmp_path: Path,
++    monkeypatch,
++) -> None:
++    """D2/K1: a cancellation observed at the operation boundary must DISCARD
++    the cancelled operation's outputs — the completed-too-late worker thread's
++    files never remain in the build workspace — and a retry of the same
++    build_id with new inputs succeeds and publishes only the new run's data
++    (no overlap with the cancelled attempt's leftovers). Python cannot
++    interrupt the in-flight sync work; the honest close is output discard at
++    the boundary plus a clean checkpoint in the state dir.
++    """
++    import threading
++    import time
++
++    from app.datasets.build import expression_runner as expression_runner_module
++
++    token = _FlagToken()
++    real_integrate = expression_runner_module.integrate
++    integrate_started = threading.Event()
++
++    def blocking_integrate(*args, **kwargs):
++        integrate_started.set()
++        time.sleep(0.4)
++        return real_integrate(*args, **kwargs)
++
++    monkeypatch.setattr(expression_runner_module, "integrate", blocking_integrate)
++
++    bindings = [_binding("binding_gdc", "gdc", "gdc.expression.v1")]
++    spec = _spec(bindings)
++    registry = SchemaRegistry([build_gene_expression_schema()])
++    output_dir = tmp_path / "build"
++    assets = {"binding_gdc": _source_asset("gdc/gdc_expression.tsv", "src_binding_gdc")}
++    paths = {"binding_gdc": FIXTURES / "gdc/gdc_expression.tsv"}
++    runner = ExpressionBuildRunner(
++        spec=spec,
++        registry=registry,
++        source_assets=assets,
++        source_paths=paths,
++        output_dir=output_dir,
++        cancellation_requested=token,
++    )
++    plan = build_operation_plan(spec)
++    executor = DatasetBuildExecutor(
++        task_id="task_runner",
++        build_id=spec.build_id,
++        run_id="run_runner",
++        state_dir=tmp_path / "state" / spec.build_id,
++        lock_path=tmp_path / "build.lock",
++        task_root=tmp_path,
++        plan=plan,
++        run_operation=runner,
++        source_assets=assets,
++        cancellation_requested=token,
++        implementation_versions={op.operation_id: "1.0.0" for op in plan},
++    )
++    run_task = asyncio.create_task(executor.run())
++    await asyncio.to_thread(integrate_started.wait, 5.0)
++    token.set()
++    outcome = await asyncio.wait_for(run_task, timeout=2.0)
++
++    assert outcome.status == "cancelled"
++    assert not list((output_dir / "publish").glob("build_runner_test_*"))
++    # K1: the cancelled integrate operation's outputs are discarded — the
++    # completed-too-late thread's merged primary must not remain in the build
++    # workspace where a retry or an inspection could mistake it for valid
++    # build state (or overlap with the next run's writes).
++    assert not (output_dir / "merged" / "primary.csv").exists()
++    assert not (output_dir / "merged" / "conflicts.csv").exists()
++
++    # The state dir records the cancellation (clean checkpoint): no SUCCEEDED
++    # integrate attempt exists for the retry to reuse, and the next run starts
++    # from a clean integrate.
++    attempts = [
++        json.loads(line)
++        for line in (
++            tmp_path / "state" / spec.build_id / "operation_attempts.jsonl"
++        )
++        .read_text()
++        .splitlines()
++    ]
++    integrate_attempts = [a for a in attempts if a["operation_id"] == "integrate"]
++    assert integrate_attempts and all(
++        a["status"] == "cancelled" for a in integrate_attempts
++    )
++
++    # Retry the same build_id with NEW inputs: the build succeeds and the
++    # published artifact reflects only the new run's data.
++    monkeypatch.setattr(expression_runner_module, "integrate", real_integrate)
++    new_input = tmp_path / "new_input.tsv"
++    new_input.write_text(
++        "gene_id\tS1\tS2\nTP53\t9\t10\nBRCA1\t11\t12\n", encoding="utf-8"
++    )
++    checksum = hashlib.sha256(new_input.read_bytes()).hexdigest()
++    new_asset = SourceAsset(
++        asset_id=asset_id_from_sha256(checksum),
++        kind="source",
++        relative_path="source_assets/new_input.tsv",
++        sha256=checksum,
++        size_bytes=new_input.stat().st_size,
++        media_type="text/tab-separated-values",
++        source_id="src_binding_gdc",
++        successful_attempt_id="attempt_1",
++        data_level=DataLevel.REPOSITORY_PROCESSED,
++    )
++    retry_runner = ExpressionBuildRunner(
++        spec=spec,
++        registry=registry,
++        source_assets={"binding_gdc": new_asset},
++        source_paths={"binding_gdc": new_input},
++        output_dir=output_dir,
++    )
++    retry_executor = DatasetBuildExecutor(
++        task_id="task_runner",
++        build_id=spec.build_id,
++        run_id="run_runner_2",
++        state_dir=tmp_path / "state" / spec.build_id,
++        lock_path=tmp_path / "build.lock",
++        task_root=tmp_path,
++        plan=plan,
++        run_operation=retry_runner,
++        source_assets={"binding_gdc": new_asset},
++        implementation_versions={op.operation_id: "1.0.0" for op in plan},
++    )
++    retry = await retry_executor.run()
++
++    assert retry.status == "completed"
++    version_dir = next((output_dir / "publish").glob("build_runner_test_*"))
++    with (version_dir / "merged" / "primary.csv").open(encoding="utf-8") as handle:
++        published = list(csv.DictReader(handle))
++    assert len(published) == 4  # 2 genes x 2 samples from the new input
++    # Only the new run's data is published: none of the old input's values
++    # (1.5 / 2 / 3 / 4.25) leaked into the new publication, and the gene
++    # symbols are the canonical ensembl ids from the new input's rows.
++    values = {row["expression_value"] for row in published}
++    assert values == {"9", "10", "11", "12"}
++    assert {row["sample_id"] for row in published} == {"S1", "S2"}
++    assert {row["gene_id_namespace"] for row in published} == {"ensembl_gene"}
++
++
+ def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> None:
+     """B8/H5: older publication records may carry naive ISO timestamps;
+     mixing naive and timezone-aware values must not raise TypeError, and the
+     chronologically-later aware record wins deterministically.
+     """
+     from app.datasets.build.expression_runner import _find_latest_publication
+ 
+     publish_dir = tmp_path / "publish"
+     records = [
+         ("pub_build_x_aaaa", "2026-08-08T00:00:00"),  # naive
+diff --git a/frontend/src/hooks/useAgentStream.ts b/frontend/src/hooks/useAgentStream.ts
+index 1703652..3bd4f8a 100644
+--- a/frontend/src/hooks/useAgentStream.ts
++++ b/frontend/src/hooks/useAgentStream.ts
+@@ -7,20 +7,22 @@ import { useAgentStore } from "@/stores/agentStore";
+ export function useAgentStream(
+   onPermanentGap?: (taskId: string) => void,
+ ): AgentEventTransport {
+   const transport = useMemo(
+     () =>
+       new AgentEventTransport({
+         socketFactory: (url) => new WebSocket(url),
+         getLastSequence: (taskId) =>
+           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
+         applyEvent: (event) => useAgentStore.getState().applyEvent(event),
++        markContiguous: (taskId) =>
++          useAgentStore.getState().markContiguous(taskId),
+         applyAssistantStreamFrames: (frames) =>
+           useAgentStore.getState().applyAssistantStreamFrames(frames),
+         deactivateAssistantStreams: (taskId) =>
+           useAgentStore.getState().deactivateAssistantStreams(taskId),
+         setConnectionStatus: (status) =>
+           useAgentStore.getState().setConnectionStatus(status),
+         shouldSubscribe: (taskId) =>
+           useAgentStore.getState().activeItems.includes(taskId),
+         onPermanentGap,
+         onControlError: (frame) => {
+diff --git a/frontend/src/runtime/reducer.ts b/frontend/src/runtime/reducer.ts
+index dc89ca9..f386fd4 100644
+--- a/frontend/src/runtime/reducer.ts
++++ b/frontend/src/runtime/reducer.ts
+@@ -18,14 +18,15 @@
+ 
+ export {
+   isActiveStatus,
+   createInitialRuntimeState,
+   createTaskProjection,
+   compareTaskIds,
+   mergeTaskPage,
+   mergeOlderMessagePage,
+   hydrateTaskSnapshot,
+   prepareTaskSnapshotReplay,
++  markTaskContiguous,
+   reduceAssistantStreamFrames,
+   deactivateAssistantStreams,
+   reduceRuntimeEvent,
+ } from "./reducers";
+diff --git a/frontend/src/runtime/reducers/index.ts b/frontend/src/runtime/reducers/index.ts
+index 0d82437..4e4f58d 100644
+--- a/frontend/src/runtime/reducers/index.ts
++++ b/frontend/src/runtime/reducers/index.ts
+@@ -24,20 +24,21 @@ import { applyUserInputEvent } from "./hil";
+ 
+ export {
+   isActiveStatus,
+   createInitialRuntimeState,
+   createTaskProjection,
+   compareTaskIds,
+   mergeTaskPage,
+   mergeOlderMessagePage,
+   hydrateTaskSnapshot,
+   prepareTaskSnapshotReplay,
++  markTaskContiguous,
+ } from "./shared";
+ 
+ export {
+   reduceAssistantStreamFrames,
+   deactivateAssistantStreams,
+ } from "./stream";
+ 
+ export function reduceRuntimeEvent(
+   state: AgentRuntimeData,
+   envelope: EventEnvelope,
+diff --git a/frontend/src/runtime/reducers/shared.ts b/frontend/src/runtime/reducers/shared.ts
+index b6ec6e4..f0569b0 100644
+--- a/frontend/src/runtime/reducers/shared.ts
++++ b/frontend/src/runtime/reducers/shared.ts
+@@ -475,20 +475,36 @@ export function prepareTaskSnapshotReplay(
+       ...hydrated.tasksById,
+       [snapshot.task.task_id]: {
+         ...hydrated.tasksById[snapshot.task.task_id],
+         lastSequence: 0,
+         hydration: "summary",
+       },
+     },
+   };
+ }
+ 
++export function markTaskContiguous(
++  state: AgentRuntimeData,
++  taskId: string,
++): AgentRuntimeData {
++  const task = state.tasksById[taskId];
++  if (task === undefined || task.sequenceGap === null) return state;
++  return {
++    ...state,
++    tasksById: {
++      ...state.tasksById,
++      [taskId]: { ...task, sequenceGap: null },
++    },
++  };
++}
++
++
+ function placeholderRun(
+   taskId: string,
+   runId: string,
+   status: RunStatus,
+   timestamp: string,
+ ): RunProjection {
+   return {
+     runId,
+     taskId,
+     requestId: null,
+diff --git a/frontend/src/runtime/transport.ts b/frontend/src/runtime/transport.ts
+index fccb768..9503aa1 100644
+--- a/frontend/src/runtime/transport.ts
++++ b/frontend/src/runtime/transport.ts
+@@ -79,20 +79,26 @@ export interface WebSocketLike {
+   send(data: string): void;
+   close(code?: number, reason?: string): void;
+ }
+ 
+ export type SocketFactory = (url: string) => WebSocketLike;
+ 
+ interface TransportOptions {
+   socketFactory: SocketFactory;
+   getLastSequence: (taskId: string) => number;
+   applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
++  /**
++   * Clear the store-level ``sequenceGap`` marker for a task on a fresh
++   * connection: the server replays every subscribed task from its current
++   * watermark, so the stream is contiguous again (K3/C2, Phase 4 review).
++   */
++  markContiguous?: (taskId: string) => void;
+   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
+   deactivateAssistantStreams: (taskId?: string) => void;
+   setConnectionStatus: (status: ConnectionStatus) => void;
+   onControlError?: (frame: Extract<WebSocketControlFrame, { type: "error" }>) => void;
+   reconnectDelayMs?: number;
+   pingTimeoutMs?: number;
+   scheduleAnimationFrame?: (callback: () => void) => number;
+   cancelAnimationFrame?: (handle: number) => void;
+   /**
+    * Whether a task should keep its live subscription. When this returns
+@@ -653,20 +659,28 @@ export class AgentEventTransport {
+         ? configuredUrl()
+         : configuredUrl ?? browserSocketUrl();
+     const socket = this.options.socketFactory(url);
+     this.socket = socket;
+ 
+     socket.onopen = () => {
+       if (this.socket !== socket) return;
+       this.active.clear();
+       this.awaitingUnsubscribe.clear();
+       this.hasConnected = true;
++      // K3 (C2, Phase 4 review): a fresh connection replays every desired
++      // task from its current watermark (flushSubscriptions below), so each
++      // stream is contiguous again — clear the store-level sequenceGap
++      // marker now instead of letting it linger after a recovery-driven
++      // socket replacement or a natural reconnect. A still-undeliverable
++      // frame simply re-sets the marker on the next replay; the transport's
++      // bounded recovery guards are untouched.
++      this.clearStoreSequenceGaps();
+       this.options.setConnectionStatus("connected");
+       this.flushSubscriptions();
+       this.resolveConnectionWaiters();
+       this.resolveConnect?.();
+       this.finishConnect();
+     };
+     socket.onmessage = (event) => {
+       if (this.socket !== socket) return;
+       this.handleFrame(parseFrame(event.data));
+     };
+@@ -797,20 +811,27 @@ export class AgentEventTransport {
+       this.gapRecoveryCursors.clear();
+       this.gapRecoveryFailures.clear();
+       this.gapFallbackFired.clear();
+       return;
+     }
+     this.gapRecoveryCursors.delete(taskId);
+     this.gapRecoveryFailures.delete(taskId);
+     this.gapFallbackFired.delete(taskId);
+   }
+ 
++  private clearStoreSequenceGaps(): void {
++    if (this.options.markContiguous === undefined) return;
++    for (const taskId of this.desired.keys()) {
++      this.options.markContiguous(taskId);
++    }
++  }
++
+   /**
+    * Drop the live subscription of a task that is no longer active (its last
+    * run reached a terminal state). Kept subscriptions otherwise accumulate
+    * for the whole session and are resubscribed on every reconnect.
+    */
+   private reconcileSubscription(taskId: string): void {
+     if (this.options.shouldSubscribe?.(taskId) ?? true) return;
+     if (!this.desired.has(taskId)) return;
+     this.desired.delete(taskId);
+     this.discardAssistantStreamFrames(taskId);
+diff --git a/frontend/src/stores/agentStore.ts b/frontend/src/stores/agentStore.ts
+index 5942097..6ba784a 100644
+--- a/frontend/src/stores/agentStore.ts
++++ b/frontend/src/stores/agentStore.ts
+@@ -12,20 +12,21 @@ import type {
+   TaskSnapshot,
+ } from "@/runtime/contracts";
+ import {
+   compareTaskIds,
+   createInitialRuntimeState,
+   createTaskProjection,
+   hydrateTaskSnapshot as projectTaskSnapshot,
+   mergeOlderMessagePage as projectOlderMessagePage,
+   mergeTaskPage as projectTaskPage,
+   prepareTaskSnapshotReplay as projectTaskSnapshotReplay,
++  markTaskContiguous as projectMarkTaskContiguous,
+   deactivateAssistantStreams as projectDeactivateAssistantStreams,
+   reduceAssistantStreamFrames,
+   reduceRuntimeEvent,
+ } from "@/runtime/reducer";
+ import type {
+   AgentRuntimeData,
+   ConnectionStatus,
+   HistoryStatus,
+   SequenceGapMarker,
+   TaskProjection,
+@@ -47,20 +48,28 @@ export interface AgentStore extends AgentRuntimeData {
+     preserveTaskIds?: ReadonlySet<string>,
+   ) => void;
+   hydrateTaskSnapshot: (snapshot: TaskSnapshot) => void;
+   prepareTaskSnapshotReplay: (snapshot: TaskSnapshot) => void;
+   mergeOlderMessagePage: (
+     taskId: string,
+     requestedCursor: string,
+     page: MessagePage,
+   ) => void;
+   applyEvent: (event: EventEnvelope) => SequenceGapMarker | null;
++  /**
++   * Clear the store-level ``sequenceGap`` marker for a task. The transport
++   * invokes this when a fresh connection establishes (the server replays
++   * every subscribed task from its watermark, so the stream is contiguous
++   * again) — a lingering marker must not keep treating valid replayed
++   * events as gapped (K3/C2, Phase 4 review).
++   */
++  markContiguous: (taskId: string) => void;
+   applyAssistantStreamFrames: (frames: readonly AssistantStreamFrame[]) => void;
+   deactivateAssistantStreams: (taskId?: string) => void;
+   setActiveTaskId: (taskId: string | null) => void;
+   setConnectionStatus: (status: ConnectionStatus) => void;
+   setHistoryState: (status: HistoryStatus, error?: string | null) => void;
+   setDatabases: (databases: DatabaseRecord[]) => void;
+   setDraftInput: (input: string) => void;
+   setDraftSelectedDatabaseIds: (databaseIds: string[]) => void;
+   setDraftMode: (mode: TaskMode) => void;
+   setDraftError: (error: string | null) => void;
+@@ -309,20 +318,23 @@ export const useAgentStore = create<AgentStore>()(
+       applyEvent: (event) => {
+         let gap: SequenceGapMarker | null = null;
+         set((state) => {
+           const next = reduceRuntimeEvent(state, event);
+           gap = next.tasksById[event.task_id]?.sequenceGap ?? null;
+           return next;
+         });
+         return gap;
+       },
+ 
++      markContiguous: (taskId) =>
++        set((state) => projectMarkTaskContiguous(state, taskId)),
++
+       applyAssistantStreamFrames: (frames) =>
+         set((state) => reduceAssistantStreamFrames(state, frames)),
+ 
+       deactivateAssistantStreams: (taskId) =>
+         set((state) => projectDeactivateAssistantStreams(state, taskId)),
+ 
+       setActiveTaskId: (activeTaskId) => set({ activeTaskId }),
+ 
+       setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+ 
+diff --git a/frontend/src/test/agent-stream.test.ts b/frontend/src/test/agent-stream.test.ts
+index 2273465..60eefda 100644
+--- a/frontend/src/test/agent-stream.test.ts
++++ b/frontend/src/test/agent-stream.test.ts
+@@ -98,20 +98,21 @@ function setupTransport(options: TransportTestOptions = {}) {
+     const socket = new FakeSocket();
+     sockets.push(socket);
+     return socket;
+   };
+   const controlErrors: unknown[] = [];
+   const transport = new AgentEventTransport({
+     socketFactory,
+     getLastSequence: (taskId) =>
+       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
+     applyEvent: (incoming) => useAgentStore.getState().applyEvent(incoming),
++    markContiguous: (taskId) => useAgentStore.getState().markContiguous(taskId),
+     applyAssistantStreamFrames:
+       options.applyAssistantStreamFrames ?? (() => undefined),
+     deactivateAssistantStreams:
+       options.deactivateAssistantStreams ?? (() => undefined),
+     setConnectionStatus: (status) =>
+       useAgentStore.getState().setConnectionStatus(status),
+     onControlError: (frame) => controlErrors.push(frame),
+     scheduleAnimationFrame: options.scheduleAnimationFrame,
+     cancelAnimationFrame: options.cancelAnimationFrame,
+     reconnectDelayMs: 10,
+@@ -429,20 +430,62 @@ describe("durable event transport", () => {
+     // Replay 5 then 6 → both applied, cursor 6, gap healed.
+     sockets[1].message(event("task_a", 5, "five"));
+     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+     sockets[1].message(event("task_a", 6, "six"));
+     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+     expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+     sockets[1].message({ type: "pong" });
+     await Promise.resolve();
+   });
+ 
++  it("clears the store-level sequenceGap when the replacement socket opens (K3)", async () => {
++    const { transport, sockets } = setupTransport();
++    // Seed task_a at lastSequence 4 (events 1..4 already applied); frame 5
++    // is dropped and the next valid frame is 6, arming one socket-replacement
++    // recovery.
++    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
++    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
++    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
++    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
++    transport.subscribe("task_a", 4);
++    const connected = transport.connect();
++    sockets[0].open();
++    await connected;
++
++    // Gap at 6 → the store records the marker and the transport replaces
++    // the socket for a replay from the watermark (4).
++    sockets[0].message(event("task_a", 6, "jumped"));
++    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toEqual({
++      expected: 5,
++      received: 6,
++    });
++    expect(sockets).toHaveLength(2);
++
++    // K3: opening the replacement socket clears the store-level marker —
++    // the fresh connection replays from the watermark, so the stream is
++    // contiguous again and the marker must not linger.
++    sockets[1].open();
++    await Promise.resolve();
++    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
++    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(4);
++
++    // Subsequent valid events apply normally without another recovery.
++    sockets[1].message(event("task_a", 5, "five"));
++    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
++    expect(sockets).toHaveLength(2);
++    sockets[1].message(event("task_a", 6, "six"));
++    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
++    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
++    sockets[1].message({ type: "pong" });
++    await Promise.resolve();
++  });
++
+   it("re-arms gap recovery after a natural reconnect clears the recovery guard (F2)", async () => {
+     const { transport, sockets } = setupTransport();
+     // Seed task_a at lastSequence 4 (events 1..4 already applied). Frame 5
+     // is permanently undeliverable; the first valid frame is 6.
+     useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+     useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+     useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+     useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+     transport.subscribe("task_a", 4);
+     const connected = transport.connect();

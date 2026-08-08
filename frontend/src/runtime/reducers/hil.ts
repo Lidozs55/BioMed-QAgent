@@ -48,6 +48,21 @@ export function applyUserInputEvent(
       },
     };
   }
+  const pending = task.pendingUserInput;
+  const awaitingRun = task.runsById[runId];
+  // A resume is a state-machine transition only when it matches the
+  // currently pending prompt identity. A stale resume (superseded request)
+  // or a resume for another run must not regress the task to RUNNING or
+  // switch the active run while the real prompt stays pending.
+  if (
+    pending === null ||
+    pending.runId !== runId ||
+    pending.requestId !== payload.request_id ||
+    awaitingRun === undefined ||
+    awaitingRun.status !== "awaiting_user_input"
+  ) {
+    return task;
+  }
   const next = upsertRun(
     task,
     runId,
@@ -66,10 +81,6 @@ export function applyUserInputEvent(
       status: "running",
       active_run_id: runId,
     },
-    pendingUserInput:
-      next.pendingUserInput?.runId === runId &&
-      next.pendingUserInput.requestId === payload.request_id
-        ? null
-        : next.pendingUserInput,
+    pendingUserInput: null,
   };
 }

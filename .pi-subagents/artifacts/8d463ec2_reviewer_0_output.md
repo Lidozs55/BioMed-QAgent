@@ -1,0 +1,2 @@
+<thinking>**Correcting test working directory**</thinking>
+The first test commands failed before collection because the repository requires backend commands from `/mnt/d/code-linux/BioMed-QAgent/backend`; no code failure is implied. I’m rerunning the same focused suites from that directory, then I’ll inspect any failing trace against the changed lines.

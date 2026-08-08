@@ -62,9 +62,10 @@ function snapshot(
   taskId: string,
   latestSequence: number,
   mode: TaskSummary["mode"] = "agent",
+  status: TaskSummary["status"] = "completed",
 ): TaskSnapshot {
   return {
-    task: summary(taskId, "completed", latestSequence, mode),
+    task: summary(taskId, status, latestSequence, mode),
     runs: [],
     messages: [],
     older_messages_cursor: null,
@@ -678,7 +679,7 @@ describe("runtime orchestration", () => {
     await Promise.resolve();
     expect(order).toEqual(["barrier", "fetch"]);
     expect(useAgentStore.getState().activeTaskId).toBe("task_a");
-    detail.resolve(snapshot("task_a", 9));
+    detail.resolve(snapshot("task_a", 9, "agent", "running"));
     await selection;
 
     expect(useAgentStore.getState().activeTaskId).toBe("task_a");
@@ -801,7 +802,7 @@ describe("runtime orchestration", () => {
     expect(eventTransport.subscribe).toHaveBeenCalledWith(taskId, 6);
   });
 
-  it("replays a summary-only fixture task through its snapshot watermark before subscribing", async () => {
+  it("replays a summary-only terminal task through its snapshot watermark without subscribing (F1)", async () => {
     useAgentStore.getState().mergeTaskPage(
       page([], [summary("task_fixture_history", "completed", 2, "fixture")]),
       false,
@@ -842,7 +843,7 @@ describe("runtime orchestration", () => {
       "task_fixture_history",
       { afterSequence: 0, limit: 1000 },
     );
-    expect(order).toEqual(["snapshot", "events", "subscribe"]);
+    expect(order).toEqual(["snapshot", "events"]);
     expect(
       useAgentStore.getState().tasksById.task_fixture_history.stages,
     ).toMatchObject({
@@ -851,9 +852,11 @@ describe("runtime orchestration", () => {
         stageAttemptId: "attempt_task_fixture_history_processing",
       },
     });
-    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+    // A terminal history task must not keep a permanent desired
+    // subscription after selection hydration (F1).
+    expect(eventTransport.subscribe).not.toHaveBeenCalled();
+    expect(useAgentStore.getState().activeItems).not.toContain(
       "task_fixture_history",
-      2,
     );
   });
 
@@ -904,10 +907,9 @@ describe("runtime orchestration", () => {
     expect(
       useAgentStore.getState().tasksById.task_replay_retry.stages.discovery,
     ).toMatchObject({ stageAttemptId: replayedStage.stage_attempt_id });
-    expect(eventTransport.subscribe).toHaveBeenCalledWith(
-      "task_replay_retry",
-      1001,
-    );
+    // The task is terminal after hydration, so the selection must not
+    // keep a permanent desired subscription (F1).
+    expect(eventTransport.subscribe).not.toHaveBeenCalled();
   });
 
   it("restores a background subscription when selection hydration fails", async () => {
@@ -1007,7 +1009,9 @@ describe("runtime orchestration", () => {
     const fetchesBeforeBarrier = vi.mocked(apiClient.fetchTask).mock.calls.length;
     barrier.resolve();
     await Promise.resolve();
-    detail.resolve(snapshot("task_a", 7));
+    // Keep the task active through hydration so the handoff still
+    // re-establishes its live subscription (F1).
+    detail.resolve(snapshot("task_a", 7, "agent", "running"));
     await Promise.all([first, second]);
 
     expect(fetchesBeforeBarrier).toBe(0);
@@ -1015,6 +1019,115 @@ describe("runtime orchestration", () => {
     expect(apiClient.fetchTask).toHaveBeenCalledTimes(1);
     expect(eventTransport.subscribe).toHaveBeenCalledTimes(1);
     expect(useAgentStore.getState().activeTaskId).toBe("task_a");
+  });
+
+  it("does not subscribe a terminal history task when it is selected and hydrated (F1)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_history_terminal", "completed", 4)]),
+      false,
+    );
+    const apiClient = api({
+      fetchTask: vi
+        .fn()
+        .mockResolvedValue(snapshot("task_history_terminal", 4)),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask("task_history_terminal");
+
+    expect(
+      useAgentStore.getState().tasksById.task_history_terminal,
+    ).toMatchObject({ hydration: "snapshot", lastSequence: 4 });
+    expect(useAgentStore.getState().activeItems).not.toContain(
+      "task_history_terminal",
+    );
+    expect(eventTransport.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("subscribes an active task when it is selected and hydrated (F1)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_history_active", "running", 3)]),
+      false,
+    );
+    const apiClient = api({
+      fetchTask: vi
+        .fn()
+        .mockResolvedValue(
+          snapshot("task_history_active", 6, "agent", "running"),
+        ),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask("task_history_active");
+
+    expect(useAgentStore.getState().activeItems).toContain(
+      "task_history_active",
+    );
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_history_active",
+      6,
+    );
+  });
+
+  it("hydrates a task from a REST snapshot and resumes after its watermark on a permanent gap (F2)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([summary("task_gap_fallback", "running", 4)]),
+      false,
+    );
+    const apiClient = api({
+      fetchTask: vi
+        .fn()
+        .mockResolvedValue(
+          snapshot("task_gap_fallback", 8, "agent", "running"),
+        ),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.hydrateTaskFromGap("task_gap_fallback");
+
+    expect(apiClient.fetchTask).toHaveBeenCalledWith("task_gap_fallback");
+    expect(
+      useAgentStore.getState().tasksById.task_gap_fallback,
+    ).toMatchObject({ hydration: "snapshot", lastSequence: 8 });
+    expect(
+      useAgentStore.getState().tasksById.task_gap_fallback.sequenceGap,
+    ).toBeNull();
+    expect(eventTransport.recoverSubscription).toHaveBeenCalledWith(
+      "task_gap_fallback",
+      8,
+    );
+  });
+
+  it("subscribes an awaiting-user-input history task when it is selected and hydrated (F1)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_prompt_history", "completed", 9)]),
+      false,
+    );
+    // The task is awaiting input per its snapshot — an active status — so
+    // the selection re-establishes its live subscription.
+    const apiClient = api({
+      fetchTask: vi.fn().mockResolvedValue(
+        snapshot("task_prompt_history", 10, "agent", "awaiting_user_input"),
+      ),
+      fetchArtifacts: vi.fn().mockResolvedValue([]),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.selectTask("task_prompt_history");
+
+    expect(useAgentStore.getState().activeItems).toContain(
+      "task_prompt_history",
+    );
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_prompt_history",
+      10,
+    );
   });
 
   it("keeps a newer task selection foreground when an earlier start resolves", async () => {
@@ -1988,9 +2101,15 @@ describe("runtime orchestration", () => {
     const apiClient = api({
       fetchTask: vi
         .fn<APIClient["fetchTask"]>()
-        .mockResolvedValueOnce(snapshot("task_snapshot_generation", 2))
-        .mockResolvedValueOnce(snapshot("task_snapshot_generation", 4)),
+        .mockResolvedValueOnce(
+          snapshot("task_snapshot_generation", 2, "agent", "running"),
+        )
+        .mockResolvedValueOnce(
+          snapshot("task_snapshot_generation", 4, "agent", "running"),
+        ),
       fetchEvents: vi.fn().mockResolvedValue([
+        runStartedEvent("task_snapshot_generation", 1),
+        runStartedEvent("task_snapshot_generation", 2),
         runStartedEvent("task_snapshot_generation", 3),
         runStartedEvent("task_snapshot_generation", 4),
       ]),
@@ -2224,6 +2343,40 @@ describe("runtime orchestration", () => {
     expect(useAgentStore.getState().activeItems).toContain("task_terminal");
     expect(useAgentStore.getState().taskOrder).not.toContain("task_terminal");
     expect(useAgentStore.getState().activeTaskId).toBe("task_terminal");
+  });
+
+  it("re-subscribes a terminal task when it is continued (replacing the leaked subscription)", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      page([], [summary("task_terminal", "completed", 5)]),
+      false,
+    );
+    // Model a fully-hydrated terminal task (the normal live-path case after
+    // F2 unsubscribes it): its watermark must be preserved on re-subscribe.
+    const merged = useAgentStore.getState().tasksById.task_terminal;
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        task_terminal: { ...merged, hydration: "snapshot" },
+      },
+    });
+    const accepted: TaskRunAccepted = {
+      request_id: "req_continue_subscribe",
+      task_id: "task_terminal",
+      run_id: "run_continue_subscribe",
+      status: "queued",
+    };
+    const apiClient = api({
+      continueTask: vi.fn().mockResolvedValue(accepted),
+    });
+    const eventTransport = transport();
+    const controller = new RuntimeController(apiClient, eventTransport);
+
+    await controller.continueTask("task_terminal", { input: "follow up" });
+
+    expect(eventTransport.subscribe).toHaveBeenCalledWith(
+      "task_terminal",
+      5,
+    );
   });
 
   it("sorts an older continued task among newer active tasks by immutable creation", async () => {
@@ -2583,6 +2736,7 @@ describe("runtime orchestration", () => {
       fetchEvents: vi
         .fn<APIClient["fetchEvents"]>()
         .mockResolvedValueOnce([
+          runStartedEvent("task_cancel_generation", 1),
           runStartedEvent("task_cancel_generation", 2),
         ])
         .mockResolvedValueOnce([

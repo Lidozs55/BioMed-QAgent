@@ -456,6 +456,122 @@ describe("runtime event projection", () => {
     });
   });
 
+  it("passes operation lifecycle events through without changing state (F4)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_operation", "running", 0)),
+      false,
+    );
+    const before = state.tasksById.task_operation;
+
+    // V2 build-execution events (Design §15.1) are informational: the
+    // cursor advances but no projection changes.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 1, {
+        type: "operation_started",
+        operation_id: "op-1",
+        label: "build skeleton",
+        category: "build",
+        attempt: 1,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 2, {
+        type: "operation_progress",
+        operation_id: "op-1",
+        kind: "rows_parsed",
+        current: 42,
+        total: 100,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 3, {
+        type: "operation_completed",
+        operation_id: "op-1",
+        status: "succeeded",
+        output_digest: "a".repeat(64),
+        reused_operation_attempt_id: null,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_operation", "run_operation", 4, {
+        type: "operation_failed",
+        operation_id: "op-1",
+        status: "failed",
+        error: null,
+      }),
+    );
+
+    const after = state.tasksById.task_operation;
+    expect(after.lastSequence).toBe(4);
+    expect(after.sequenceGap).toBeNull();
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runsById).toEqual(before.runsById);
+    expect(after.items).toEqual(before.items);
+    expect(after.summary.status).toBe(before.summary.status);
+    expect(after.summary.latest_sequence).toBe(4);
+  });
+
+  it("rejects a sequence gap without reducing or advancing the cursor", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_gap", "running", 4)),
+      false,
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(4);
+
+    // A frame at 5 was dropped or rejected; the next valid frame is 6.
+    // The cursor must NOT advance past the missing event, and the event
+    // must not be reduced; a recoverable gap is recorded from 4.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 6, {
+        type: "warning",
+        code: "rate_limit",
+        message: "Approaching rate limit",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(4);
+    expect(state.tasksById.task_gap.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+    expect(state.tasksById.task_gap.items).toHaveLength(0);
+
+    // Replay 5 then 6 → both applied, cursor 6, gap healed.
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 5, {
+        type: "assistant_delta",
+        delta: "five",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(5);
+    expect(state.tasksById.task_gap.sequenceGap).toBeNull();
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_gap", "run_gap", 6, {
+        type: "warning",
+        code: "rate_limit",
+        message: "Approaching rate limit",
+      }),
+    );
+    expect(state.tasksById.task_gap.lastSequence).toBe(6);
+    expect(state.tasksById.task_gap.sequenceGap).toBeNull();
+    // The replayed warning is now reduced (alongside the replayed delta).
+    expect(
+      state.tasksById.task_gap.items.some(
+        (item) => item.kind === "warning",
+      ),
+    ).toBe(true);
+  });
+
   it("routes overlapping task-local sequences independently", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),
@@ -535,7 +651,7 @@ describe("runtime event projection", () => {
   it("returns the same root for duplicate and stale envelopes", () => {
     const initial = mergeTaskPage(
       createInitialRuntimeState(),
-      page(summary("task_a")),
+      page(summary("task_a", "running", 2)),
       false,
     );
     const artifactEvent = envelope("task_a", "run_task_a", 3, {
@@ -773,6 +889,179 @@ describe("runtime event projection", () => {
       envelope("task_a", "run_prompt", 3, terminalPayload),
     );
     expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+  });
+
+  it("clears pending input for the owning run on run_cancel_requested", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).not.toBeNull();
+
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 2, {
+        type: "run_cancel_requested",
+        reason: "user cancelled",
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toBeNull();
+    expect(state.tasksById.task_a.runsById.run_prompt?.status).toBe(
+      "cancel_requested",
+    );
+    expect(state.tasksById.task_a.summary.status).toBe("cancel_requested");
+  });
+
+  it("keeps another run's pending input when a different run is cancel-requested", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_prompt", 1, {
+        type: "user_input_required",
+        request_id: "request_prompt",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_other", 2, {
+        type: "run_cancel_requested",
+        reason: "stopped",
+      }),
+    );
+    expect(state.tasksById.task_a.pendingUserInput).toMatchObject({
+      runId: "run_prompt",
+      requestId: "request_prompt",
+    });
+  });
+
+  it("ignores a stale user_input_resumed for a superseded request without regressing state", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 2, {
+        type: "user_input_resumed",
+        request_id: "request_old",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toMatchObject({
+      runId: "run_a",
+      requestId: "request_new",
+    });
+    expect(task.summary.status).toBe("awaiting_user_input");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_a?.status).toBe("awaiting_user_input");
+  });
+
+  it("ignores a user_input_resumed for a different run without regressing state", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_b", 2, {
+        type: "user_input_resumed",
+        request_id: "request_other",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toMatchObject({
+      runId: "run_a",
+      requestId: "request_new",
+    });
+    expect(task.summary.status).toBe("awaiting_user_input");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_b).toBeUndefined();
+  });
+
+  it("still applies a matching user_input_resumed as the running transition", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_a")),
+      false,
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 1, {
+        type: "user_input_required",
+        request_id: "request_new",
+        prompt_kind: "plan_confirmation",
+        summary: "Confirm the new plan",
+        expires_at: null,
+        fixture_exempt: false,
+        detail: {},
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_a", "run_a", 2, {
+        type: "user_input_resumed",
+        request_id: "request_new",
+        decision: "approve",
+        detail: {},
+      }),
+    );
+    const task = state.tasksById.task_a;
+    expect(task.pendingUserInput).toBeNull();
+    expect(task.summary.status).toBe("running");
+    expect(task.summary.active_run_id).toBe("run_a");
+    expect(task.runsById.run_a?.status).toBe("running");
   });
 
   it("clears an older pending prompt when a new Run is queued", () => {
@@ -1372,7 +1661,7 @@ describe("runtime event projection", () => {
     );
     state = reduceRuntimeEvent(
       state,
-      envelope("task_reentry", "run_one", 50, {
+      envelope("task_reentry", "run_one", 2, {
         type: "assistant_delta",
         delta: "first reply",
         stream_id: "stream_one",
@@ -1382,7 +1671,7 @@ describe("runtime event projection", () => {
     );
     state = reduceRuntimeEvent(
       state,
-      envelope("task_reentry", "run_two", 90, {
+      envelope("task_reentry", "run_two", 3, {
         type: "run_queued",
         request_id: "req_two",
         input: "second request",
@@ -1400,7 +1689,7 @@ describe("runtime event projection", () => {
 
     // Re-entry: hydrate from the snapshot. user messages come from
     // snapshot.messages (ordinals 1 and 2), which would sort before the
-    // assistant reply at event sequence 50 without the fix.
+    // assistant reply at event sequence 2 without the fix.
     state = hydrateTaskSnapshot(
       state,
       taskSnapshot(
@@ -1426,7 +1715,7 @@ describe("runtime event projection", () => {
           }),
         ],
         null,
-        90,
+        3,
       ),
     );
 
@@ -1435,8 +1724,8 @@ describe("runtime event projection", () => {
     );
     expect(afterHydrate).toEqual([
       ["user_message", 1],
-      ["assistant_segment", 50],
-      ["user_message", 90],
+      ["assistant_segment", 2],
+      ["user_message", 3],
     ]);
   });
 

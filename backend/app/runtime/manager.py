@@ -63,6 +63,12 @@ logger = logging.getLogger(__name__)
 
 _NO_DATA_SUMMARY = "任务完成，但未产出可发布的主数据。"
 
+#: H4 (Phase 4 review): bounded retry for the worker-failure terminalization
+#: of a CANCEL_REQUESTED run whose fallback append fails transiently; after
+#: the last attempt fails the run stays owned for startup recovery.
+_TERMINAL_APPEND_MAX_ATTEMPTS = 3
+_TERMINAL_APPEND_RETRY_DELAY = 0.05
+
 
 def _no_data_build_result() -> BuildResult:
     """Structured NO_DATA outcome for a normally completed, zero-artifact run."""
@@ -1294,16 +1300,6 @@ class TaskManager:
 
         if not self._started or self._closing:
             raise RuntimeError("task manager is not running")
-        if self._subagent_input_broker is not None and (
-            await self._subagent_input_broker.try_resume(
-                task_id=task_id,
-                run_id=run_id,
-                request_id=request_id,
-                decision=decision,
-                detail=detail,
-            )
-        ):
-            return await self._require_snapshot(task_id)
         lock = self._task_locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             snapshot = await self.repository.get_snapshot(task_id)
@@ -1319,6 +1315,26 @@ class TaskManager:
             )
             if run is None:
                 raise LookupError(run_id)
+            # A5 (Phase 4 review): validate parent state before routing any
+            # resume. A child request must never be resolved after the parent
+            # run is terminal (cleanup race / late request) — terminal cleanup
+            # and broker removal both run under this same task lock, so the
+            # parent terminal event and the broker mutation are serialized.
+            if run.status in _TERMINAL_RUN_STATUSES:
+                raise RuntimeError(
+                    f"run {run_id} is not awaiting user input "
+                    f"(status: {run.status.value})"
+                )
+            if self._subagent_input_broker is not None and (
+                await self._subagent_input_broker.try_resume(
+                    task_id=task_id,
+                    run_id=run_id,
+                    request_id=request_id,
+                    decision=decision,
+                    detail=detail,
+                )
+            ):
+                return await self._require_snapshot(task_id)
             if run.status is not RunStatus.AWAITING_USER_INPUT:
                 raise RuntimeError(
                     f"run {run_id} is not awaiting user input "
@@ -1599,7 +1615,53 @@ class TaskManager:
                             error_code=_classify_error(error),
                         ),
                     )
-                if run.status is not RunStatus.CANCEL_REQUESTED:
+                elif run.status is RunStatus.CANCEL_REQUESTED:
+                    # A1/H4 (Phase 4 review): the worker failed while a
+                    # cancellation was already requested, and no terminal event
+                    # was persisted (the cancel waiter/executor itself failed
+                    # after the cancel request). Reconcile the run to exactly
+                    # one terminal cancellation event with a bounded retry of
+                    # the fallback append. Live ownership is released only
+                    # AFTER the append succeeds; if every retry fails the run
+                    # stays in ``_running`` (durable state stays
+                    # CANCEL_REQUESTED) so startup recovery converts it to a
+                    # terminal interrupted event — never a silent ownership
+                    # drop that strands the run nonterminal.
+                    appended = False
+                    last_error: BaseException | None = None
+                    for attempt in range(_TERMINAL_APPEND_MAX_ATTEMPTS):
+                        try:
+                            await self._append_status(
+                                accepted,
+                                RunCancelledPayload(
+                                    reason=None,
+                                    cancelled_at_stage=None,
+                                ),
+                            )
+                            appended = True
+                            break
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:  # noqa: PERF203
+                            last_error = exc
+                            if attempt < _TERMINAL_APPEND_MAX_ATTEMPTS - 1:
+                                await asyncio.sleep(_TERMINAL_APPEND_RETRY_DELAY)
+                    if appended:
+                        self._running.pop(
+                            (accepted.task_id, accepted.run_id),
+                            None,
+                        )
+                    else:
+                        logger.critical(
+                            "worker failure while run %s was CANCEL_REQUESTED "
+                            "could not persist a terminal event after %d "
+                            "attempts (%s); leaving the run owned so startup "
+                            "recovery reconciles it",
+                            accepted.run_id,
+                            _TERMINAL_APPEND_MAX_ATTEMPTS,
+                            last_error,
+                        )
+                else:
                     self._running.pop(
                         (accepted.task_id, accepted.run_id),
                         None,
@@ -1750,7 +1812,8 @@ class TaskManager:
                 ):
                     outcome.retain_cancellation = True
                     return
-                await self._append_status(
+                await self._persist_failure_or_retain_ownership(
+                    outcome,
                     accepted,
                     RunFailedPayload(
                         error=self._format_completion_error(error, cleanup_error),
@@ -1844,7 +1907,8 @@ class TaskManager:
                     outcome.completion_durable = True
                     execution.discard_completion()
                     return
-                await self._append_status(
+                await self._persist_failure_or_retain_ownership(
+                    outcome,
                     accepted,
                     RunFailedPayload(
                         error=self._format_completion_error(
@@ -1874,16 +1938,48 @@ class TaskManager:
                     await self._abort_completion_and_drain(execution)
                 except BaseException as cleanup_error:
                     outcome.retain_cancellation = False
-                    await self._record_completion_cleanup_failure(
-                        accepted,
-                        cleanup_error,
-                    )
+                    try:
+                        await self._record_completion_cleanup_failure(
+                            accepted,
+                            cleanup_error,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except BaseException:
+                        # H4: the terminal failure event could not be persisted;
+                        # keep live ownership so the worker-failure path retries
+                        # terminalization (startup recovery stays a safety net)
+                        # instead of silently dropping the run nonterminal.
+                        outcome.retain_cancellation = True
+                        raise
                 else:
                     execution.discard_completion()
         finally:
             execution._mark_drained()
             if not outcome.retain_cancellation:
                 self._running.pop((accepted.task_id, accepted.run_id), None)
+
+    async def _persist_failure_or_retain_ownership(
+        self,
+        outcome: _DispatchOutcome,
+        accepted: TaskRunAccepted,
+        payload: object,
+    ) -> None:
+        """Persist a terminal failure event, retaining live ownership on failure.
+
+        H4 (Phase 4 review): when a terminal failure event cannot be
+        persisted, the run must never be silently dropped nonterminal —
+        ownership stays so ``_handle_worker_failure`` can retry
+        terminalization and startup recovery remains a safety net.
+        """
+
+        try:
+            await self._append_status(accepted, payload)
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            outcome.retain_cancellation = True
+            raise
 
     @staticmethod
     async def _abort_completion_and_drain(execution: RunExecution) -> None:

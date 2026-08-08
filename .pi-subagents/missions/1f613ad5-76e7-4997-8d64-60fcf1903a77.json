@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "id": "1f613ad5-76e7-4997-8d64-60fcf1903a77",
+  "title": "Read-only scoped final re-review in /mnt/d/code-linux/BioMed-QAgent branch fix/phase4-review-bugs...",
+  "goal": "Read-only scoped final re-review in /mnt/d/code-linux/BioMed-QAgent branch fix/phase4-review-bugs. Inspect full diff .superpowers/review-phase4/final-fix-review.diff, original review-{A,B,C,D}.md, wave reports, docs/REVIEW_2026-08-08-phase4-bug-sweep.md, and actual branch files. Focus backend fixes B1 B2 B7 B8 B9 D2 D3 A8 A1 A5 B3+B4 B5 B6 D1. For each return ADDRESSED/NOT ADDRESSED/REGRESSION with exact current file:line evidence. Deeply assess B5 dual NO_DATA signals, G3 validation_result_ref residual scope/inventory impact, and backend cross-wave interactions. Do not modify or run controller-verified gates. Report only concrete issues.",
+  "status": "completed",
+  "createdAt": "2026-08-07T18:16:56.055Z",
+  "updatedAt": "2026-08-07T18:26:10.657Z",
+  "runs": [
+    {
+      "runId": "5dfacca8",
+      "mode": "single",
+      "agent": "reviewer",
+      "status": "completed",
+      "startedAt": "2026-08-07T18:26:10.657Z",
+      "completedAt": "2026-08-07T18:26:10.657Z"
+    }
+  ],
+  "decisions": [],
+  "artifacts": [
+    {
+      "kind": "output",
+      "path": "/mnt/d/code-linux/BioMed-QAgent/.pi-subagents/artifacts/5dfacca8_reviewer_0_output.md"
+    },
+    {
+      "kind": "other",
+      "path": "/mnt/d/code-linux/BioMed-QAgent/.pi-subagents/artifacts/5dfacca8_reviewer_0_transcript.jsonl",
+      "description": "Child transcript"
+    }
+  ],
+  "receipts": [],
+  "cwd": "/mnt/d/code-linux/BioMed-QAgent",
+  "ownerSessionId": "019fdd70-74b7-7d6e-98bb-5e42cce038c4",
+  "summary": "## Review\n- **Important, G3 / B3+B4 NOT ADDRESSED:** `DatasetPublication.validation_result_ref` advertises `validation_report.json` at `backend/app/datasets/build/expression_runner.py:359-366`, but the manifest inventory is assembled without that report at `backend/app/datasets/build/manifest.py:233-241`, and publication copies only `manifest.artifacts` plus the manifest/publication records at `backend/app/datasets/build/expression_runner.py:375-394`. The immutable version therefore contains a dangling required reference, and the report is outside the size/SHA-256 gate at `backend/app/datasets/build/invariants.py:145-185`. Relative paths and declared artifact hashes were fixed, but publication integrity is still incomplete.\n- **Important, B5 REGRESSION:** the two NO_DATA signals are not scoped to the current attempt. The string signal returns immediately without checking row count or publication state at `backend/app/pipeline/dataset_build_tool.py:320-321`; the manifest signal reads the reused build workspace at `:322-337`, while that workspace is stable by `build_id` at `:197-200`. Consequently, a stale zero-row manifest can convert a later unrelated failure into NO_DATA, while a genuine zero-row manifest after an earlier successful publication becomes a generic retryable error because *any historical* version directory exists. In a multi-source parse failure, the response also marks every binding rejected at `:241-249`, even if earlier bindings parsed successfully.\n- **Important, D1 NOT ADDRESSED:** exclusivity remains an entry-only race. The build checks `main_input_pending` once at `backend/app/pipeline/dataset_build_tool.py:117-130`; the correction coroutine does not set the flag until `backend/app/agent_loop/main_input_broker.py:152`, and there is no recheck before publication at `backend/app/datasets/build/expression_runner.py:314-394`. If the concurrently scheduled build reaches line 118 first, the original same-turn HIL/publication scenario still occurs....",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "review-findings above provide severity, exact current file:line evidence, and ADDRESSED/NOT ADDRESSED/REGRESSION for every requested backend finding"
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git status --short --branch && git branch --show-current && git diff --stat && git diff --name-only",
+          "result": "passed",
+          "summary": "confirmed fix/phase4-review-bugs, no staged files, and only untracked review/scratch paths"
+        },
+        {
+          "command": "read/grep/nl/sed inspection of final diff, review A-D, wave reports, review summary, backend implementation and tests",
+          "result": "passed",
+          "summary": "read-only evidence collection completed; no quality gates executed"
+        }
+      ],
+      "validationOutput": [
+        "All 14 requested finding groups were traced to current branch implementation and tests.",
+        "No controller-verified test, lint, build, import, or server gate was run."
+      ],
+      "residualRisks": [
+        "G3 publication advertises a validation report that is absent from the immutable version and excluded from inventory hashing.",
+        "B5 NO_DATA detection is based on unscoped error text and reused workspace state, allowing false positives and false negatives.",
+        "D1 exclusivity and D2 cancellation remain vulnerable while synchronous build work wins scheduling and blocks the event loop.",
+        "A1 can leave CANCEL_REQUESTED without live ownership when fallback cancellation persistence fails.",
+        "A8 does not reject conflicting duplicate artifact identities or migrate pre-fix dedup state.",
+        "B8 can crash on mixed timezone-naive and timezone-aware publication timestamps."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Backend review-fix waves add path validation, digest closure, chunked hashing, structured outcomes, cancellation plumbing, runtime lifecycle handling, publication checks, and tests; seven concrete backend gaps/regressions remain.",
+      "reviewFindings": [
+        "important: backend/app/datasets/build/expression_runner.py:359 - validation_result_ref points to a report not copied or inventoried",
+        "important: backend/app/pipeline/dataset_build_tool.py:320 - NO_DATA signals are not scoped to the current build attempt",
+        "important: backend/app/pipeline/dataset_build_tool.py:118 - HIL exclusivity is a racy one-time entry check",
+        "important: backend/app/datasets/build/expression_runner.py:142 - synchronous build handlers still block cancellation and HIL scheduling",
+        "important: backend/app/runtime/manager.py:1623 - fallback cancellation append failure clears ownership without terminalizing",
+        "minor: backend/app/runtime/state.py:397 - artifact dedup tracks ID only and accepts conflicting duplicate payloads",
+        "important: backend/app/datasets/build/expression_runner.py:499 - mixed naive/aware publication timestamps raise during max selection"
+      ],
+      "manualNotes": "Read-only final re-review; no files modified and no controller-owned gates run."
+    }
+  }
+}

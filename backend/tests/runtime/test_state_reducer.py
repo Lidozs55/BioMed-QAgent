@@ -563,3 +563,176 @@ def test_terminal_events_populate_run_summary_interrupted() -> None:
     assert run.summary is not None
     assert run.summary.run_status is RunStatus.INTERRUPTED
     assert run.summary.user_message == "agent stopped"
+
+
+def test_reducer_dedups_identical_artifact_produced_events() -> None:
+    """A8: the same (run_id, artifact_id) payload at two sequences counts once."""
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(
+            2,
+            RunStartedPayload(),
+        ),
+    )
+    artifact = ArtifactManifestEntry(
+        artifact_id="artifact_dup",
+        role=ArtifactRole.AUDIT_REPORT,
+        name="result.csv",
+        relative_path="artifacts/result.csv",
+        media_type="text/csv",
+        size_bytes=42,
+        sha256="0" * 64,
+        generated_by_step_id="stage_123",
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(3, ArtifactProducedPayload(artifact=artifact)),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(4, ArtifactProducedPayload(artifact=artifact)),
+    )
+
+    assert snapshot.task.artifact_count == 1
+
+
+def test_reducer_counts_distinct_artifact_ids() -> None:
+    """A8: a different artifact_id in the same run still increments."""
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(2, RunStartedPayload()),
+    )
+
+    def entry(artifact_id: str) -> ArtifactManifestEntry:
+        return ArtifactManifestEntry(
+            artifact_id=artifact_id,
+            role=ArtifactRole.AUDIT_REPORT,
+            name=f"{artifact_id}.csv",
+            relative_path=f"artifacts/{artifact_id}.csv",
+            media_type="text/csv",
+            size_bytes=42,
+            sha256="0" * 64,
+            generated_by_step_id="stage_123",
+        )
+
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(3, ArtifactProducedPayload(artifact=entry("a1"))),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(4, ArtifactProducedPayload(artifact=entry("a2"))),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(5, ArtifactProducedPayload(artifact=entry("a1"))),
+    )
+
+    assert snapshot.task.artifact_count == 2
+
+
+def test_reducer_dedup_survives_run_boundary() -> None:
+    """A8: the same artifact_id under a different run_id is a new artifact."""
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(2, RunStartedPayload()),
+    )
+    artifact = ArtifactManifestEntry(
+        artifact_id="artifact_shared",
+        role=ArtifactRole.AUDIT_REPORT,
+        name="result.csv",
+        relative_path="artifacts/result.csv",
+        media_type="text/csv",
+        size_bytes=42,
+        sha256="0" * 64,
+        generated_by_step_id="stage_123",
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(3, ArtifactProducedPayload(artifact=artifact)),
+    )
+    # First run finishes so a second run can be queued.
+    snapshot = reduce_task_event(snapshot, runtime_event(4, RunFinalizingPayload()))
+    snapshot = reduce_task_event(snapshot, runtime_event(5, RunCompletedPayload()))
+    snapshot = reduce_task_event(
+        snapshot,
+        build_event(
+            task_id="task_123",
+            run_id="run_456",
+            sequence=6,
+            timestamp=NOW + timedelta(seconds=6),
+            payload=RunQueuedPayload(request_id="req_456", input="question"),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        build_event(
+            task_id="task_123",
+            run_id="run_456",
+            sequence=7,
+            timestamp=NOW + timedelta(seconds=7),
+            payload=RunStartedPayload(),
+        ),
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        build_event(
+            task_id="task_123",
+            run_id="run_456",
+            sequence=8,
+            timestamp=NOW + timedelta(seconds=8),
+            payload=ArtifactProducedPayload(artifact=artifact),
+        ),
+    )
+
+    assert snapshot.task.artifact_count == 2
+
+
+def test_reducer_rejects_conflicting_duplicate_artifact_event() -> None:
+    """H6/A8: a duplicate artifact_id whose digest/path conflicts with the
+    first occurrence is a conflicting duplicate and must be rejected with a
+    ValueError (mirroring the publication duplicate handling) — an identical
+    replay stays a no-op.
+    """
+    snapshot = queued_snapshot()
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(2, RunStartedPayload()),
+    )
+    first = ArtifactManifestEntry(
+        artifact_id="artifact_x",
+        role=ArtifactRole.AUDIT_REPORT,
+        name="result.csv",
+        relative_path="artifacts/result.csv",
+        media_type="text/csv",
+        size_bytes=42,
+        sha256="0" * 64,
+        generated_by_step_id="stage_123",
+    )
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(3, ArtifactProducedPayload(artifact=first)),
+    )
+    # Identical replay stays a no-op (existing dedup semantics).
+    snapshot = reduce_task_event(
+        snapshot,
+        runtime_event(4, ArtifactProducedPayload(artifact=first)),
+    )
+    assert snapshot.task.artifact_count == 1
+
+    # Same artifact_id with a different digest/path is a conflicting duplicate.
+    conflicting = first.model_copy(update={"sha256": "f" * 64})
+    with pytest.raises(ValueError, match="conflicting duplicate artifact"):
+        reduce_task_event(
+            snapshot,
+            runtime_event(5, ArtifactProducedPayload(artifact=conflicting)),
+        )
+    conflicting_path = first.model_copy(update={"relative_path": "artifacts/other.csv"})
+    with pytest.raises(ValueError, match="conflicting duplicate artifact"):
+        reduce_task_event(
+            snapshot,
+            runtime_event(6, ArtifactProducedPayload(artifact=conflicting_path)),
+        )

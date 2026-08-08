@@ -88,6 +88,8 @@ interface TransportTestOptions {
   deactivateAssistantStreams?: (taskId?: string) => void;
   scheduleAnimationFrame?: (callback: () => void) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  shouldSubscribe?: (taskId: string) => boolean;
+  onPermanentGap?: (taskId: string) => void;
 }
 
 function setupTransport(options: TransportTestOptions = {}) {
@@ -103,6 +105,7 @@ function setupTransport(options: TransportTestOptions = {}) {
     getLastSequence: (taskId) =>
       useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
     applyEvent: (incoming) => useAgentStore.getState().applyEvent(incoming),
+    markContiguous: (taskId) => useAgentStore.getState().markContiguous(taskId),
     applyAssistantStreamFrames:
       options.applyAssistantStreamFrames ?? (() => undefined),
     deactivateAssistantStreams:
@@ -113,6 +116,8 @@ function setupTransport(options: TransportTestOptions = {}) {
     scheduleAnimationFrame: options.scheduleAnimationFrame,
     cancelAnimationFrame: options.cancelAnimationFrame,
     reconnectDelayMs: 10,
+    shouldSubscribe: options.shouldSubscribe,
+    onPermanentGap: options.onPermanentGap,
   });
   return { transport, sockets, controlErrors };
 }
@@ -221,6 +226,369 @@ describe("durable event transport", () => {
     expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(1);
     expect(useAgentStore.getState().tasksById.task_b.lastSequence).toBe(4);
     expect(controlErrors).toHaveLength(1);
+  });
+
+  it("unsubscribes a task whose last run becomes terminal and never resubscribes it on reconnect", async () => {
+    const { transport, sockets } = setupTransport({
+      shouldSubscribe: (taskId) =>
+        useAgentStore.getState().activeItems.includes(taskId),
+    });
+    transport.subscribe("task_a", 0);
+    transport.subscribe("task_b", 3);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // task_a's only run completes → the task leaves activeItems.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_done",
+      type: "run_completed",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: { type: "run_completed", build_result: null },
+    });
+
+    expect(transport.isSubscribed("task_a")).toBe(false);
+    expect(transport.isSubscribed("task_b")).toBe(true);
+    expect(
+      sockets[0].sent.some((raw) => {
+        const command = JSON.parse(raw);
+        return command.type === "unsubscribe" && command.task_id === "task_a";
+      }),
+    ).toBe(true);
+
+    // Reconnect: only the still-active task may be resubscribed.
+    sockets[0].abnormalClose(1013);
+    await vi.advanceTimersByTimeAsync(10);
+    sockets[1].open();
+
+    const commands = sockets[1].sent.map((raw) => JSON.parse(raw));
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: "subscribe", task_id: "task_a" }),
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({ type: "subscribe", task_id: "task_b" }),
+    );
+  });
+
+  it("accepts backend operation lifecycle envelopes without crashing or changing state (F4)", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    const before = useAgentStore.getState().tasksById.task_a;
+
+    const operationEnvelope = (
+      type: string,
+      sequence: number,
+      payload: Record<string, unknown>,
+    ) => ({
+      schema_version: "2.0",
+      event_id: `event_task_a_${sequence}`,
+      type,
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence,
+      timestamp: `2026-07-14T00:00:${String(sequence).padStart(2, "0")}Z`,
+      payload: { type, ...payload },
+    });
+
+    sockets[0].message(
+      operationEnvelope("operation_started", 1, {
+        operation_id: "op-1",
+        label: "build skeleton",
+        category: "build",
+        attempt: 1,
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_progress", 2, {
+        operation_id: "op-1",
+        kind: "rows_parsed",
+        current: 42,
+        total: 100,
+        detail: {},
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_completed", 3, {
+        operation_id: "op-1",
+        status: "succeeded",
+        output_digest: "a".repeat(64),
+        reused_operation_attempt_id: null,
+      }),
+    );
+    sockets[0].message(
+      operationEnvelope("operation_failed", 4, {
+        operation_id: "op-1",
+        status: "failed",
+        error: null,
+      }),
+    );
+
+    const after = useAgentStore.getState().tasksById.task_a;
+    // Informational frames: the cursor advances but no projection changes.
+    expect(after.lastSequence).toBe(4);
+    expect(after.sequenceGap).toBeNull();
+    expect(after.messages).toEqual(before.messages);
+    expect(after.runsById).toEqual(before.runsById);
+    expect(after.activityOrder).toEqual(before.activityOrder);
+    expect(after.summary.status).toBe(before.summary.status);
+  });
+
+  it("accepts publication_created on the live path and keeps the cursor moving", async () => {
+    const { transport, sockets } = setupTransport();
+    transport.subscribe("task_a", 0);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_1",
+      type: "publication_created",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 1,
+      timestamp: "2026-07-14T00:00:01Z",
+      payload: {
+        type: "publication_created",
+        publication_id: "pub-1",
+        run_id: "run_task_a",
+        manifest_sha256: "a".repeat(64),
+        supersedes_publication_id: null,
+        published_at: "2026-07-14T00:00:01Z",
+      },
+    });
+
+    const task = useAgentStore.getState().tasksById.task_a;
+    expect(task.currentPublicationId).toBe("pub-1");
+    expect(task.lastSequence).toBe(1);
+
+    // A later terminal event must still be applied after the publication.
+    sockets[0].message({
+      schema_version: "2.0",
+      event_id: "event_task_a_2",
+      type: "run_completed",
+      task_id: "task_a",
+      run_id: "run_task_a",
+      stage_attempt_id: null,
+      sequence: 2,
+      timestamp: "2026-07-14T00:00:02Z",
+      payload: { type: "run_completed", build_result: null },
+    });
+
+    const after = useAgentStore.getState().tasksById.task_a;
+    expect(after.lastSequence).toBe(2);
+    expect(after.summary.status).toBe("completed");
+  });
+
+  it("detects a sequence gap and re-subscribes after the last applied sequence", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied).
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // A frame at 5 was dropped or rejected; the next valid frame is 6.
+    // The event must not be reduced and the cursor must not advance.
+    sockets[0].message(event("task_a", 6, "jumped"));
+
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(4);
+    expect(useAgentStore.getState().tasksById.task_a.messages[0]?.content).toBe(
+      "onetwothreefour",
+    );
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+
+    // Recovery requested: the socket is replaced and the fresh connection
+    // re-subscribes after the last applied sequence (4).
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+    expect(sockets[1].sent.map((item) => JSON.parse(item))).toContainEqual({
+      type: "subscribe",
+      task_id: "task_a",
+      after_sequence: 4,
+    });
+
+    // Replay 5 then 6 → both applied, cursor 6, gap healed.
+    sockets[1].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    sockets[1].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("clears the store-level sequenceGap when the replacement socket opens (K3)", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied); frame 5
+    // is dropped and the next valid frame is 6, arming one socket-replacement
+    // recovery.
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → the store records the marker and the transport replaces
+    // the socket for a replay from the watermark (4).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toEqual({
+      expected: 5,
+      received: 6,
+    });
+    expect(sockets).toHaveLength(2);
+
+    // K3: opening the replacement socket clears the store-level marker —
+    // the fresh connection replays from the watermark, so the stream is
+    // contiguous again and the marker must not linger.
+    sockets[1].open();
+    await Promise.resolve();
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(4);
+
+    // Subsequent valid events apply normally without another recovery.
+    sockets[1].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    expect(sockets).toHaveLength(2);
+    sockets[1].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("re-arms gap recovery after a natural reconnect clears the recovery guard (F2)", async () => {
+    const { transport, sockets } = setupTransport();
+    // Seed task_a at lastSequence 4 (events 1..4 already applied). Frame 5
+    // is permanently undeliverable; the first valid frame is 6.
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → one socket-replacement recovery (sockets[1]).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+
+    // The replay cannot deliver frame 5, so the gap re-appears at the same
+    // cursor. The bounded guard must NOT arm a second recovery yet.
+    sockets[1].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].message({ type: "pong" });
+    await Promise.resolve();
+
+    // A natural reconnect (server-side close) clears the recovery guard so
+    // the next gap event can arm a fresh recovery on the new connection.
+    sockets[1].abnormalClose(1013);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(3);
+    sockets[2].open();
+    await Promise.resolve();
+
+    // Without the F2 guard-clearing, this gap would be silently blocked;
+    // with it, a fresh socket-replacement recovery is armed (sockets[3]).
+    sockets[2].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(4);
+    sockets[3].open();
+    await Promise.resolve();
+
+    // The fresh replay can now deliver the missing frame → gap healed.
+    sockets[3].message(event("task_a", 5, "five"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(5);
+    sockets[3].message(event("task_a", 6, "six"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(6);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[3].message({ type: "pong" });
+    await Promise.resolve();
+  });
+
+  it("falls back to an authoritative snapshot when replay cannot heal a permanent gap (F2)", async () => {
+    const onPermanentGap = vi.fn((taskId: string) => {
+      // Controller-style fallback: rebuild the task authoritatively from a
+      // REST snapshot (watermark 8 covers the undeliverable frame 5) and
+      // resume the live subscription after that watermark.
+      useAgentStore.getState().hydrateTaskSnapshot({
+        task: summary(taskId, 8, "running"),
+        runs: [],
+        messages: [],
+        older_messages_cursor: null,
+      });
+      void harness.transport.recoverSubscription(taskId, 8);
+    });
+    const harness = setupTransport({ onPermanentGap });
+    const transport = harness.transport;
+    const { sockets } = harness;
+    useAgentStore.getState().applyEvent(event("task_a", 1, "one"));
+    useAgentStore.getState().applyEvent(event("task_a", 2, "two"));
+    useAgentStore.getState().applyEvent(event("task_a", 3, "three"));
+    useAgentStore.getState().applyEvent(event("task_a", 4, "four"));
+    transport.subscribe("task_a", 4);
+    const connected = transport.connect();
+    sockets[0].open();
+    await connected;
+
+    // Gap at 6 → first socket-replacement recovery (sockets[1]).
+    sockets[0].message(event("task_a", 6, "jumped"));
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    await Promise.resolve();
+
+    // The replay still cannot deliver frame 5 → the same gap re-appears;
+    // one failed recovery alone must not trigger the snapshot fallback.
+    sockets[1].message(event("task_a", 6, "jumped"));
+    expect(onPermanentGap).not.toHaveBeenCalled();
+
+    // A second failed recovery crosses the bounded threshold → fallback.
+    sockets[1].message(event("task_a", 7, "seven"));
+    expect(onPermanentGap).toHaveBeenCalledWith("task_a");
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(8);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+
+    // Settle the first recovery's pending ping so the queued resume runs.
+    sockets[1].message({ type: "pong" });
+    // The ping resolution unwinds through the control barrier queue across
+    // several await boundaries before the resume replaces the socket.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sockets).toHaveLength(3);
+    sockets[2].open();
+    await Promise.resolve();
+
+    // Valid events after the snapshot watermark are contiguous → applied.
+    sockets[2].message(event("task_a", 9, "nine"));
+    expect(useAgentStore.getState().tasksById.task_a.lastSequence).toBe(9);
+    expect(useAgentStore.getState().tasksById.task_a.sequenceGap).toBeNull();
+    sockets[2].message({ type: "pong" });
+    await Promise.resolve();
   });
 
   it("applies valid realtime frames once on the next animation frame without advancing sequence", async () => {
@@ -842,7 +1210,9 @@ describe("durable event transport", () => {
     const connected = transport.connect();
     sockets[0].open();
     await connected;
-    sockets[0].message(event("task_a", 8, "latest"));
+    for (let sequence = 1; sequence <= 8; sequence += 1) {
+      sockets[0].message(event("task_a", sequence, "latest"));
+    }
 
     sockets[0].abnormalClose(1013);
     expect(useAgentStore.getState().connectionStatus).toBe("reconnecting");

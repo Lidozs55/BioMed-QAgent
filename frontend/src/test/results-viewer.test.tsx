@@ -75,6 +75,21 @@ describe("ResultsViewer", () => {
     );
   });
 
+  it("treats a header-only CSV as an empty dataset instead of a blank table (F6)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: async () => "sample_id,condition\n",
+      }),
+    );
+    render(<ResultsViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "CSV 预览" }));
+
+    expect(await screen.findByText("无数据")).toBeVisible();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
   it("keeps the final artifact inside a bounded results scroll area", async () => {
     const task = useAgentStore.getState().tasksById.task_results;
     const artifacts = Array.from({ length: 14 }, (_, index) => {

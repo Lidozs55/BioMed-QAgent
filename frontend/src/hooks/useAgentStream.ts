@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { AgentEventTransport } from "@/runtime/transport";
 import { useAgentStore } from "@/stores/agentStore";
 
-export function useAgentStream(): AgentEventTransport {
+export function useAgentStream(
+  onPermanentGap?: (taskId: string) => void,
+): AgentEventTransport {
   const transport = useMemo(
     () =>
       new AgentEventTransport({
@@ -12,12 +14,17 @@ export function useAgentStream(): AgentEventTransport {
         getLastSequence: (taskId) =>
           useAgentStore.getState().tasksById[taskId]?.lastSequence ?? 0,
         applyEvent: (event) => useAgentStore.getState().applyEvent(event),
+        markContiguous: (taskId) =>
+          useAgentStore.getState().markContiguous(taskId),
         applyAssistantStreamFrames: (frames) =>
           useAgentStore.getState().applyAssistantStreamFrames(frames),
         deactivateAssistantStreams: (taskId) =>
           useAgentStore.getState().deactivateAssistantStreams(taskId),
         setConnectionStatus: (status) =>
           useAgentStore.getState().setConnectionStatus(status),
+        shouldSubscribe: (taskId) =>
+          useAgentStore.getState().activeItems.includes(taskId),
+        onPermanentGap,
         onControlError: (frame) => {
           // Recovery-path errors (task_not_found during resubscribe) are
           // already surfaced via transport internals; only surface generic
@@ -28,7 +35,7 @@ export function useAgentStream(): AgentEventTransport {
           });
         },
       }),
-    [],
+    [onPermanentGap],
   );
 
   useEffect(() => () => transport.disconnect(), [transport]);

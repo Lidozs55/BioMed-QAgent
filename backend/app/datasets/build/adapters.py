@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, TextIO
 
-from app.datasets.build.errors import AdapterError
+from app.datasets.build.errors import AdapterError, EmptySourceError
 from app.datasets.build.hashing import sha256_file
 from app.datasets.contracts import (
     ConfidenceLevel,
@@ -462,7 +462,7 @@ class GdcExpressionAdapter(SourceAdapter):
             row_count += emitted
             rejected_count += rejected
         if source_row_count == 0:
-            raise AdapterError("GDC expression TSV contains no data rows")
+            raise EmptySourceError("GDC expression TSV contains no data rows")
         statistics: dict[str, JsonValue] = {
             "source_database": self.source_database,
             "dataset_type": "gene_expression",
@@ -583,7 +583,7 @@ class GdcExpressionAdapter(SourceAdapter):
             source_row_count += 1
             row_count += 1
         if source_row_count == 0:
-            raise AdapterError("GDC STAR-counts TSV contains no data rows")
+            raise EmptySourceError("GDC STAR-counts TSV contains no data rows")
         statistics: dict[str, JsonValue] = {
             "source_database": self.source_database,
             "dataset_type": "gene_expression",
@@ -653,7 +653,7 @@ class XenaMatrixAdapter(SourceAdapter):
             row_count += emitted
             rejected_count += rejected
         if source_row_count == 0:
-            raise AdapterError("Xena matrix contains no data rows")
+            raise EmptySourceError("Xena matrix contains no data rows")
         statistics: dict[str, JsonValue] = {
             "source_database": self.source_database,
             "dataset_type": "gene_expression",
