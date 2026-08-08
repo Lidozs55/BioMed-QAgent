@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
@@ -7,6 +7,7 @@ import {
 import { toast } from "sonner";
 
 import { AgentComposer } from "@/components/AgentComposer";
+import { LoadingScreen } from "@/components/LoadingScreen";
 import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
@@ -45,6 +46,8 @@ import {
 } from "@/stores/agentSelectors";
 import { useAgentStore } from "@/stores/agentStore";
 import type { ModelInfo } from "@/hooks/useAPI";
+
+const LOADING_SCREEN_DELAY_MS = 250;
 
 interface ChatPanelProps {
   startTask: (input: StartTaskInput) => Promise<TaskRunAccepted>;
@@ -209,6 +212,20 @@ export function ChatPanel({
   const items = useAgentStore(selectActiveItems);
   const activeItem = useAgentStore(selectActiveItem);
   const connected = useAgentStore(selectConnectionIsConnected);
+  const activeTaskHydrating =
+    activeTaskId !== null && activeTask?.hydration === "summary";
+  const [showLoadingScreen, setShowLoadingScreen] = useState(false);
+  useEffect(() => {
+    if (!activeTaskHydrating) {
+      setShowLoadingScreen(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setShowLoadingScreen(true),
+      LOADING_SCREEN_DELAY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [activeTaskHydrating]);
   const draftInput = useAgentStore((state) => state.draft.input);
   const selectedDatabases = useAgentStore(
     (state) => state.draft.selectedDatabaseIds,
@@ -487,6 +504,10 @@ export function ChatPanel({
         </div>
       </div>
     );
+  }
+
+  if (showLoadingScreen) {
+    return <LoadingScreen />;
   }
 
   return (
