@@ -112,6 +112,23 @@ def test_platform_url_prefixes_match_ncbi_ftp_layout() -> None:
     )
 
 
+def test_platform_dir_prefix_delegates_to_single_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The GPL-prefix rule has ONE implementation (review-loop R2b-02).
+
+    ``platform_dir_prefix`` must be normalize + the shared rule
+    (``geo_annotation.geo_platform_dir``) — if it re-implements the rule
+    itself, the patch below does not propagate and this fails.
+    """
+    monkeypatch.setattr(
+        "app.pipeline.processing.geo_provider.geo_platform_dir",
+        lambda gpl: f"RULE-{gpl}",
+    )
+    assert platform_dir_prefix("GPL19072") == "RULE-GPL19072"
+    assert platform_dir_prefix("gpl570") == "RULE-GPL570"
+
+
 # --- fixture asset selection ------------------------------------------------
 
 

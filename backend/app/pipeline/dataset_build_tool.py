@@ -32,6 +32,8 @@ from app.datasets.build.expression_runner import (
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
 from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
 from app.datasets.contracts import (
+    CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
+    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
     AdapterParams,
     BindingRejection,
     DatasetBuildSpec,
@@ -70,8 +72,9 @@ _MANIFEST_WRITING_OPERATIONS = frozenset({"validate_profile", "publish"})
 
 #: Phase 5 T7 (D5): stable reason code for a gene-required build that could
 #: not produce any publishable gene rows (probe->gene coverage zero or a
-#: partial mapping that leaves residual probe rows).
-_REASON_PROBE_MAPPING_UNAVAILABLE = "probe_mapping_unavailable_required_gene_level"
+#: partial mapping that leaves residual probe rows). Shared constant lives in
+#: ``app.datasets.contracts`` (review-loop R3-6).
+_REASON_PROBE_MAPPING_UNAVAILABLE = REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL
 
 #: Phase 5 T7 (D5 row 3): NO_DATA copy for a gene-required build that could
 #: not produce any publishable gene rows (probe->gene mapping unavailable).
@@ -550,7 +553,7 @@ def _classify_failed_outcome(
             except (OSError, json.JSONDecodeError):
                 report = None
             if report is not None and any(
-                check.get("check_id") == "probe_coverage_required_gene_level"
+                check.get("check_id") == CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL
                 and check.get("passed") is False
                 for check in report.get("checks", [])
             ):

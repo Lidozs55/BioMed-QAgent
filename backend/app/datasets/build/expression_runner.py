@@ -52,6 +52,7 @@ from app.datasets.build.profiles import (
     get_validation_profile,
 )
 from app.datasets.contracts import (
+    REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
     BindingRejection,
     BindingRejectionKind,
     DatasetBuildSpec,
@@ -464,7 +465,7 @@ class ExpressionBuildRunner:
                 BindingRejection(
                     binding_id=binding_id,
                     kind=BindingRejectionKind.NO_PRIMARY,
-                    reason_code="probe_mapping_unavailable_required_gene_level",
+                    reason_code=REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL,
                     message=(
                         "gene-required build: binding produced no publishable "
                         "gene rows (probe->gene coverage is zero)"

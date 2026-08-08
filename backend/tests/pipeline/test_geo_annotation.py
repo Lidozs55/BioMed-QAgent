@@ -16,6 +16,7 @@ from app.pipeline.processing.geo_annotation import (
     fetch_platform_annotation,
     geo_platform_dir,
     parse_platform_annotation,
+    platform_table_columns,
 )
 from app.tools.content_cache import ContentCache
 
@@ -203,3 +204,56 @@ def test_live_gpl19072_annotation_reports_unmapped(tmp_path: Path) -> None:
     mapping, status = fetch_platform_annotation("GPL19072", cache)
     assert status == UNMAPPED
     assert mapping == {}
+
+
+# --- shared SOFT-table parser parity (review-loop R2b-04) -------------------
+
+
+def test_v1_v2_platform_parsers_share_single_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """V1 (parse_platform_annotation / platform_table_columns) and V2
+    (probe_mapping.parse_platform_table) must both go through the shared
+    :func:`parse_platform_table_text` and agree on the same table.
+
+    If either path re-implemented table parsing, the monkeypatch below would
+    not propagate to it and the parity assertions would fail.
+    """
+    import app.datasets.build.probe_mapping as probe_mapping_mod
+    from app.datasets.build.probe_mapping import parse_platform_table
+    from app.pipeline.processing import geo_annotation as ga
+
+    calls: list[str] = []
+    _original = ga.parse_platform_table_text
+
+    def spy(text: str) -> ga.SoftPlatformTable:
+        calls.append("parse_platform_table_text")
+        return _original(text)
+
+    monkeypatch.setattr(ga, "parse_platform_table_text", spy)
+    # probe_mapping imports the symbol by name, so patch it there too.
+    monkeypatch.setattr(
+        probe_mapping_mod, "parse_platform_table_text", spy
+    )
+
+    annotation_path = tmp_path / "GPL99999.annot.gz"
+    annotation_path.write_bytes(_gzip(PLATFORM_TABLE))
+
+    # V1 paths.
+    v1_mapping, v1_status = parse_platform_annotation(_gzip(PLATFORM_TABLE))
+    v1_probe, v1_gene = platform_table_columns(_gzip(PLATFORM_TABLE))
+    # V2 path.
+    v2_mapping, v2_namespace, v2_status, v2_ambiguous = parse_platform_table(
+        annotation_path
+    )
+
+    # Both entry points must have reached the shared parser.
+    assert len(calls) == 3, f"shared parser used {len(calls)} times, expected 3"
+    # Same gene columns detected.
+    assert v1_probe == "ID" and v1_gene == "GENE_SYMBOL"
+    assert v2_namespace == "gene_symbol"
+    # Same mapping for non-ambiguous probes, same status.
+    assert v1_mapping == v2_mapping == {"A_19_P00000001": "METTL5", "A_19_P00000002": "BRCA1"}
+    assert v1_status == MAPPED == v2_status
+    assert v2_ambiguous == frozenset()

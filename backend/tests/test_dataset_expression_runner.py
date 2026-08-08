@@ -2145,9 +2145,10 @@ async def test_t7_fanout_one_empty_binding_completes_with_other_binding_data(
     assert set(per_binding_outcomes) == {"binding_gdc"}
     assert per_binding_outcomes["binding_gdc"].kind.value == "no_primary"
     assert per_binding_outcomes["binding_gdc"].reason_code == "no_primary_data"
-    # The usable binding's data is published.
+    # The usable binding's data is published (2 genes x 2 samples from the
+    # fixed xena fixture).
     rows = _primary_rows(output_dir)
-    assert len(rows) >= 1
+    assert len(rows) == 4
     assert {row["source_logical_file"] for row in rows} == {"xena_matrix.tsv"}
     assert any((output_dir / "publish").glob("build_runner_test_*"))
 
@@ -2205,7 +2206,7 @@ async def test_t7_fanout_parse_error_in_one_binding_does_not_abort_other(
     assert per_binding_outcomes["binding_gdc"].kind.value == "error"
     assert per_binding_outcomes["binding_gdc"].reason_code == "parse_error"
     rows = _primary_rows(output_dir)
-    assert len(rows) >= 1
+    assert len(rows) == 4  # surviving xena binding: 2 genes x 2 samples
 
 
 @pytest.mark.asyncio
@@ -2281,6 +2282,9 @@ async def test_t7_probe_build_publishes_probe_primary_with_mapping_asset(
     # ProbeMappingSummary audit CSVs are published with the build.
     assert (output_dir / "probe_mapping_summaries.csv").is_file()
     assert (output_dir / "canonical" / "binding_geo_probe_mapping.csv").is_file()
+    # The probe primary must not leak the internal source-long column: the
+    # canonical output shape mirrors the gene primary (review-loop R1-01).
+    assert "gene_id_namespace_declared" not in rows[0]
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ import gzip
 import hashlib
 import logging
 import re
+from dataclasses import dataclass
 
 import httpx
 
@@ -51,8 +52,77 @@ _FTP_ROOT = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
 _MISSING_SENTINELS = {"", "---", "null", "NA", "NaN"}
 
 
+@dataclass(frozen=True)
+class SoftPlatformTable:
+    """Parsed SOFT platform table (shared V1/V2 parser).
+
+    ``rows`` preserves file order so callers keep their own mapping
+    semantics: the V1 annotation parser uses last-wins (``dict(rows)``) while
+    the V2 probe mapper groups by probe to detect ambiguous multi-target
+    probes. ``has_table`` is False when the ``!platform_table_begin/end``
+    block is missing or empty; ``gene_column`` is None when no
+    :data:`_GENE_COLUMN_PRIORITY` column exists.
+    """
+
+    probe_column: str | None
+    gene_column: str | None
+    rows: tuple[tuple[str, str], ...]
+    has_table: bool
+
+
+def parse_platform_table_text(text: str) -> SoftPlatformTable:
+    """Parse a SOFT platform table from decoded text.
+
+    Single source of truth for the table-marker scan, header parsing,
+    gene-column priority and missing-value sentinels; both the V1 annotation
+    parser (:func:`parse_platform_annotation`) and the V2 probe mapper
+    (``probe_mapping.parse_platform_table``) delegate here so a
+    gene-column-priority or sentinel change lands in exactly one place.
+    """
+    lines = text.splitlines()
+    begin: int | None = None
+    end: int | None = None
+    for index, line in enumerate(lines):
+        marker = line.strip().casefold()
+        if marker == "!platform_table_begin":
+            begin = index
+        elif marker == "!platform_table_end" and begin is not None:
+            end = index
+            break
+    if begin is None or end is None or end <= begin + 1:
+        return SoftPlatformTable(None, None, (), False)
+
+    header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
+    if not header:
+        return SoftPlatformTable(None, None, (), True)
+    gene_column: str | None = None
+    for candidate in _GENE_COLUMN_PRIORITY:
+        if candidate in header:
+            gene_column = candidate
+            break
+    gene_index = header.index(gene_column) if gene_column is not None else None
+    rows: list[tuple[str, str]] = []
+    if gene_index is not None:
+        for line in lines[begin + 2 : end]:
+            values = [part.strip().strip('"') for part in line.split("\t")]
+            if len(values) <= gene_index:
+                continue
+            probe = values[0]
+            gene = values[gene_index]
+            if probe and gene not in _MISSING_SENTINELS:
+                rows.append((probe, gene))
+    return SoftPlatformTable(header[0], gene_column, tuple(rows), True)
+
+
 def geo_platform_dir(gpl: str) -> str:
     """Return the NCBI GEO platform directory prefix for a GPL accession.
+
+    Single implementation of the GPL-prefix rule (review-loop R2b-02):
+    ``geo_provider.platform_dir_prefix`` normalizes and delegates here, and
+    the V1 URL helpers (:func:`_listing_url`/:func:`_file_url`,
+    :func:`fetch_platform_annotation`) build on it. The rule itself is on
+    the production path; only the V1 *URL/listing* helpers are test-only
+    (pinned V1 URL-layout tests, review-loop R3-3).
 
     NCBI stores platforms under ``geo/platforms/GPL{prefix}nnn/`` where the
     numeric prefix is the accession with its last three digits replaced by
@@ -120,38 +190,14 @@ def parse_platform_annotation(compressed: bytes) -> tuple[dict[str, str], str]:
         logger.warning("geo annotation: cannot decompress platform table: %s", exc)
         return {}, NO_GENE_ANNOTATION
 
-    lines = text.splitlines()
-    begin: int | None = None
-    end: int | None = None
-    for index, line in enumerate(lines):
-        marker = line.strip().casefold()
-        if marker == "!platform_table_begin":
-            begin = index
-        elif marker == "!platform_table_end" and begin is not None:
-            end = index
-            break
-    if begin is None or end is None or end <= begin + 1:
+    table = parse_platform_table_text(text)
+    if not table.has_table:
         logger.warning("geo annotation: platform table markers not found")
         return {}, NO_GENE_ANNOTATION
-
-    header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
-    gene_index: int | None = None
-    for candidate in _GENE_COLUMN_PRIORITY:
-        if candidate in header:
-            gene_index = header.index(candidate)
-            break
-    if gene_index is None:
+    if table.gene_column is None:
         return {}, NO_GENE_ANNOTATION
 
-    mapping: dict[str, str] = {}
-    for line in lines[begin + 2 : end]:
-        values = [part.strip().strip('"') for part in line.split("\t")]
-        if len(values) <= gene_index:
-            continue
-        probe = values[0]
-        gene = values[gene_index]
-        if probe and gene not in _MISSING_SENTINELS:
-            mapping[probe] = gene
+    mapping = dict(table.rows)
     if not mapping:
         return {}, UNMAPPED
     return mapping, MAPPED
@@ -169,29 +215,8 @@ def platform_table_columns(compressed: bytes) -> tuple[str | None, str | None]:
     except (gzip.BadGzipFile, OSError):
         return None, None
 
-    lines = text.splitlines()
-    begin: int | None = None
-    end: int | None = None
-    for index, line in enumerate(lines):
-        marker = line.strip().casefold()
-        if marker == "!platform_table_begin":
-            begin = index
-        elif marker == "!platform_table_end" and begin is not None:
-            end = index
-            break
-    if begin is None or end is None or end <= begin + 1:
-        return None, None
-
-    header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
-    if not header:
-        return None, None
-    probe_column = header[0]
-    gene_column: str | None = None
-    for candidate in _GENE_COLUMN_PRIORITY:
-        if candidate in header:
-            gene_column = candidate
-            break
-    return probe_column, gene_column
+    table = parse_platform_table_text(text)
+    return table.probe_column, table.gene_column
 
 
 def fetch_platform_annotation(
@@ -200,6 +225,11 @@ def fetch_platform_annotation(
     client: httpx.Client | None = None,
 ) -> tuple[dict[str, str], str]:
     """Download (with content cache) and parse the annotation for *gpl*.
+
+    # seam: test-only — the V1 production path uses
+    # ``geo_provider.acquire_platform_annotation`` (platform→sample
+    # association); this legacy helper is kept for the pinned V1
+    # download/cache tests (review-loop R3-3).
 
     Returns ``(probe → gene map, status)``. The bytes are cached by request
     identity ``(database="geo", accession=gpl, url)`` so repeat runs skip the

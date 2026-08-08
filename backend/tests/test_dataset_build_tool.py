@@ -772,7 +772,8 @@ def test_execute_dataset_build_corrupted_geo_tximport_is_no_data(tmp_path: Path)
     assert result["valid_row_count"] == 0
     assert result["reason_codes"] == ["parse_error:binding_geo"]
     assert result.get("publication_id") is None
-    assert data.get("retryable") is not True
+    # Success envelope (no_data) carries no retryable flag — never retryable.
+    assert "retryable" not in data
 
 
 def test_execute_dataset_build_multi_binding_geo_failed_gdc_usable_is_partial(
