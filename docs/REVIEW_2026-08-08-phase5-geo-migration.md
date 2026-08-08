@@ -51,7 +51,7 @@
 
 ## 5. 遗留与后续
 
-- **Provider dispatcher 是 forward seam**：`geo.series.v1`/`geo.platform.v1` 的 `resolve_provider` dispatcher 与 `acquire_series_asset`/`normalize_series_accession` 目前**零 production 消费者**（仅 `test_geo_provider.py`）——V1 直接 import URL/fixture helper（`geo_provider`/`geo_annotation` 的模块函数），Phase 7 build API 将接线 dispatcher。`fetch_platform_annotation`（geo_annotation）已被 `acquire_platform_annotation`（geo_provider）取代，保留为 test-only seam（review-loop R3-1/R3-3）。
+- **Provider dispatcher 是 forward seam**：`geo.series.v1`/`geo.platform.v1` 的 `resolve_provider` dispatcher 与 `acquire_series_asset` 目前**零 production 消费者**（仅 `test_geo_provider.py`）——V1 直接 import URL/fixture helper（`geo_provider`/`geo_annotation` 的模块函数），Phase 7 build API 将接线 dispatcher。`normalize_series_accession` 经 `series_suppl_directory_url`/`series_matrix_url`/`series_family_soft_url` 传递生产消费（非零消费者）；`fetch_platform_annotation`（geo_annotation）已被 `acquire_platform_annotation`（geo_provider）取代，保留为 test-only seam。GPL-prefix 规则为单一实现：`platform_dir_prefix` 规范化后委托 `geo_annotation.geo_platform_dir`（review-loop R2b-02）。（review-loop R3-1/R3-3/R2b-05）
 - **F4/F5** 见 §3（文档化偏差，Phase 7/后续）。
 - **Phase 6 P0 接线项**：probe mapping 覆盖率阈值入 Profile（Phase 5 已交付 `probe_coverage_required_gene_level` 语义完整性检查；校准门槛留 Phase 6 后续）。
 - **Phase 7 承接**：`PlatformRecord` V2 publication 发射、corrections_todo/audit 可见性、build API（`MultiBuildOrchestrator` 为接缝）、operation event UI。

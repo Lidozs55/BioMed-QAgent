@@ -40,6 +40,7 @@ from app.integrations.acquisition import (
 from app.pipeline.processing.geo_annotation import (
     ANNOTATION_UNAVAILABLE,
     discover_annotation_file,
+    geo_platform_dir,
     parse_platform_annotation,
     platform_table_columns,
 )
@@ -163,14 +164,15 @@ def series_suppl_directory_url(gse: str) -> str:
 def platform_dir_prefix(gpl: str) -> str:
     """Return the NCBI GEO platform directory prefix (``GPL19nnn``).
 
+    Single implementation of the rule: normalize then delegate to
+    ``geo_annotation.geo_platform_dir`` (review-loop R2b-02).
+
     NCBI stores platforms under ``geo/platforms/GPL{prefix}nnn/`` where the
     numeric prefix is the accession with its last three digits replaced by
     ``nnn`` (GPL19072 → GPL19nnn, GPL4133 → GPL4nnn, GPL570 → GPLnnn).
     """
     normalized = normalize_platform_accession(gpl)
-    digits = normalized[3:]
-    prefix = "nnn" if len(digits) <= 3 else f"{digits[:-3]}nnn"
-    return f"GPL{prefix}"
+    return geo_platform_dir(normalized)
 
 
 def platform_suppl_listing_url(gpl: str) -> str:

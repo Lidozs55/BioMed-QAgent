@@ -114,20 +114,15 @@ def parse_platform_table_text(text: str) -> SoftPlatformTable:
     return SoftPlatformTable(header[0], gene_column, tuple(rows), True)
 
 
-def _decode_table_bytes(compressed: bytes) -> str | None:
-    """Decode a possibly-gzipped platform table; None on undecodable input."""
-    try:
-        return gzip.decompress(compressed).decode("utf-8", errors="replace")
-    except (gzip.BadGzipFile, OSError):
-        return None
-
-
 def geo_platform_dir(gpl: str) -> str:
     """Return the NCBI GEO platform directory prefix for a GPL accession.
 
-    # seam: test-only — the V1 production path normalizes through
-    ``geo_provider.platform_dir_prefix``; kept for pinned V1 URL-layout tests
-    (review-loop R3-3).
+    Single implementation of the GPL-prefix rule (review-loop R2b-02):
+    ``geo_provider.platform_dir_prefix`` normalizes and delegates here, and
+    the V1 URL helpers (:func:`_listing_url`/:func:`_file_url`,
+    :func:`fetch_platform_annotation`) build on it. The rule itself is on
+    the production path; only the V1 *URL/listing* helpers are test-only
+    (pinned V1 URL-layout tests, review-loop R3-3).
 
     NCBI stores platforms under ``geo/platforms/GPL{prefix}nnn/`` where the
     numeric prefix is the accession with its last three digits replaced by
