@@ -25,6 +25,7 @@ export {
   mergeOlderMessagePage,
   hydrateTaskSnapshot,
   prepareTaskSnapshotReplay,
+  restoreTaskProjection,
   markTaskContiguous,
   reduceAssistantStreamFrames,
   deactivateAssistantStreams,
