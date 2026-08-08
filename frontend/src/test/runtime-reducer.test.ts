@@ -528,6 +528,152 @@ describe("runtime event projection", () => {
     expect(after.summary.latest_sequence).toBe(4);
   });
 
+  it("suppresses stage/progress timeline items for runs carrying operation events (R1S-01)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_items", "running", 0)),
+      false,
+    );
+    // Managed run: pipeline stage events are mirrored by operation events.
+    // The timeline must render by operation identity (§17.2) — exactly one
+    // operation item, no stage/progress duplicates for the same run.
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "operation_started",
+        operation_id: "op-1",
+        label: "检索 PubMed",
+        category: "discovery",
+        attempt: 1,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 3, {
+        type: "operation_completed",
+        operation_id: "op-1",
+        status: "succeeded",
+        output_digest: "a".repeat(64),
+        reused_operation_attempt_id: null,
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        4,
+        {
+          type: "stage_completed",
+          stage: "discovery",
+          status: "succeeded",
+          output_digest: "a".repeat(64),
+        },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        5,
+        {
+          type: "stage_progress",
+          stage: "discovery",
+          kind: "records_discovered",
+          current: 5,
+          total: 10,
+          detail: {},
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "operation",
+      itemId: "operation:run_items:op-1",
+      operationId: "op-1",
+      label: "检索 PubMed",
+      category: "discovery",
+      status: "completed",
+    });
+    // The stage state map is still tracked (drives pipeline status panels).
+    expect(state.tasksById.task_items.stages.discovery!.status).toBe(
+      "succeeded",
+    );
+  });
+
+  it("keeps stage/progress timeline items when a run has no operation events (legacy compat, R1S-01)", () => {
+    let state = mergeTaskPage(
+      createInitialRuntimeState(),
+      page(summary("task_items", "running", 0)),
+      false,
+    );
+    // Legacy replay (pre-T3 events.jsonl): no operation events — stage and
+    // progress items must still render unchanged.
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        1,
+        { type: "stage_started", stage: "discovery", attempt: 1 },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        2,
+        {
+          type: "stage_completed",
+          stage: "discovery",
+          status: "succeeded",
+          output_digest: "a".repeat(64),
+        },
+        "stage_attempt_1",
+      ),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope(
+        "task_items",
+        "run_items",
+        3,
+        {
+          type: "stage_progress",
+          stage: "discovery",
+          kind: "records_discovered",
+          current: 5,
+          total: 10,
+          detail: {},
+        },
+        "stage_attempt_1",
+      ),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items.map((item) => item.kind).sort()).toEqual([
+      "progress",
+      "stage",
+    ]);
+  });
+
   it("rejects a sequence gap without reducing or advancing the cursor", () => {
     let state = mergeTaskPage(
       createInitialRuntimeState(),

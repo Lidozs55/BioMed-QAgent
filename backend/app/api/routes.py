@@ -1426,7 +1426,15 @@ async def list_builds(
 
     items: list[BuildSummary] = []
     for _build_dir, task_id, build_id in found:
-        loaded = _load_build(repository.tasks_dir, task_id, build_id)
+        try:
+            loaded = _load_build(repository.tasks_dir, task_id, build_id)
+        except HTTPException as error:
+            # R1C-01: a corrupt/truncated manifest must never take down
+            # the whole listing — skip the broken build (the detail
+            # endpoint still fails loudly with 409).
+            if error.status_code == 409:
+                continue
+            raise
         if loaded is None:
             continue
         _resolved_build_dir, manifest, publication = loaded

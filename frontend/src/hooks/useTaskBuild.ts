@@ -12,7 +12,7 @@ export interface TaskBuildState {
  * Resolve the V2 build of a task from the builds API.
  *
  * The durable run summary carries a structured BuildResult but no build_id
- * (the backend correlates builds via `datasets_build/<build_id>` directories
+ * (the backend correlates builds via `datasets_build/<build_id>` directories; the fetch key includes the latest run id so a second build-producing run refetches
  * served by `GET /builds`). This hook maps a task to its newest manifest
  * build by listing builds and matching `task_id`. Tasks without a completed
  * run summary (or without a build_result) never hit the network — the
@@ -31,7 +31,9 @@ export function useTaskBuildId(taskId: string | null): TaskBuildState {
   const latestRun =
     latestRunId === undefined ? undefined : task?.runsById[latestRunId];
   // A primitive signal so the effect only re-runs when the run outcome
-  // actually changes (never on unrelated store churn).
+  // actually changes (never on unrelated store churn). The latest run id is
+  // part of the key: a NEW run producing its own build_result must refetch
+  // (F3/R1S-02) — (taskId, hasBuildResult) alone stays true across runs.
   const hasBuildResult = latestRun?.summary?.build_result != null;
 
   const [result, setResult] = useState<{
@@ -41,7 +43,7 @@ export function useTaskBuildId(taskId: string | null): TaskBuildState {
 
   useEffect(() => {
     if (taskId === null || !hasBuildResult) return;
-    const key = `${taskId}:${hasBuildResult}`;
+    const key = `${taskId}:${latestRunId ?? ""}:${hasBuildResult}`;
     let cancelled = false;
     void api
       .fetchBuilds({ limit: 50 })
@@ -56,10 +58,10 @@ export function useTaskBuildId(taskId: string | null): TaskBuildState {
     return () => {
       cancelled = true;
     };
-  }, [api, taskId, hasBuildResult]);
+  }, [api, taskId, latestRunId, hasBuildResult]);
 
   const active = taskId !== null && hasBuildResult;
-  const key = active ? `${taskId}:${hasBuildResult}` : "";
+  const key = active ? `${taskId}:${latestRunId ?? ""}:${hasBuildResult}` : "";
   if (!active) {
     return { status: "idle", buildId: null };
   }
