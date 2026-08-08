@@ -27,6 +27,7 @@ from app.datasets.contracts import (
     DatasetManifest,
     DatasetSchema,
     NormalizationProfile,
+    ProbeMappingSummary,
     ValidationProfile,
     ValidationResult,
     ValidationResultStatus,
@@ -146,8 +147,11 @@ class ExpressionValidationProfile:
         schema: DatasetSchema,
         manifest_digest: str,
         output_dir: Path,
+        probe_mapping_summaries: list[ProbeMappingSummary] | None = None,
     ) -> ValidationResult:
-        checks = self._run_checks(manifest, primary_path, schema)
+        checks = self._run_checks(
+            manifest, primary_path, schema, probe_mapping_summaries
+        )
         # The confidence check reads the primary file; skip it when the
         # encoding check already failed (a non-UTF-8 file must not crash it).
         encoding_failed = any(
@@ -155,12 +159,17 @@ class ExpressionValidationProfile:
             for check in checks
         )
         if primary_path.is_file() and not encoding_failed:
-            confidence_check, warnings = self._run_confidence_check(
+            confidence_check, confidence_warnings = self._run_confidence_check(
                 primary_path, output_dir
             )
             checks.append(confidence_check)
         else:
-            warnings = []
+            confidence_warnings = []
+        # Phase 5 D4/T5: probe-level builds surface probe-coverage as warnings
+        # (data_confidence-style) instead of failing the release gate.
+        warnings = confidence_warnings + self._probe_coverage_warnings(
+            probe_mapping_summaries
+        )
         report = {
             "profile_ref": self.profile_id,
             "manifest_digest": manifest_digest,
@@ -198,6 +207,7 @@ class ExpressionValidationProfile:
         manifest: DatasetManifest,
         primary_path: Path,
         schema: DatasetSchema,
+        probe_mapping_summaries: list[ProbeMappingSummary] | None = None,
     ) -> list[ProfileCheck]:
         if not primary_path.is_file():
             return [
@@ -219,6 +229,16 @@ class ExpressionValidationProfile:
             encoding_check,
         ]
         checks.extend(self._check_rows(primary_path, schema))
+        # Phase 5 D4/T5: ``required_entity_level == "gene"`` demands complete
+        # probe→gene coverage — any residual geo_probe/ambiguous row fails the
+        # release gate (output-integrity semantics, not a calibrated
+        # threshold). Probe-level profiles skip this and warn instead.
+        if self.required_entity_level == "gene":
+            checks.append(
+                self._check_probe_coverage_required_gene_level(
+                    primary_path, probe_mapping_summaries
+                )
+            )
         return checks
 
     def _check_csv_encoding(self, primary_path: Path) -> ProfileCheck:
@@ -358,6 +378,86 @@ class ExpressionValidationProfile:
         ]
         return checks
 
+    def _check_probe_coverage_required_gene_level(
+        self,
+        primary_path: Path,
+        summaries: list[ProbeMappingSummary] | None,
+    ) -> ProfileCheck:
+        """Phase 5 D4: gene-required builds need complete probe→gene coverage.
+
+        Any residual ``geo_probe``/ambiguous row in the primary, or any
+        binding whose ``ProbeMappingSummary`` coverage is below 1.0, fails the
+        release gate.  The 1.0 requirement is server-owned output-integrity
+        semantics (D4), never a calibrated threshold the Agent can pass.
+        Builds with no probes at all (e.g. GDC/Xena gene sources) have no
+        residual rows and no summaries, so they are unaffected.
+        """
+        residual = self._count_residual_geo_probe_rows(primary_path)
+        below_one: list[str] = []
+        if summaries:
+            for summary in summaries:
+                if summary.total_probe_count > 0 and not math.isclose(
+                    summary.coverage_ratio, 1.0, rel_tol=0.0, abs_tol=1e-9
+                ):
+                    below_one.append(summary.binding_id)
+        passed = residual == 0 and not below_one
+        detail = f"residual_geo_probe_rows={residual}"
+        if summaries:
+            detail += f"; coverage_below_1.0={below_one if below_one else 'none'}"
+        return ProfileCheck(
+            check_id="probe_coverage_required_gene_level",
+            description=(
+                "gene-required build: probe→gene coverage must be 1.0 with "
+                "no residual geo_probe/ambiguous rows in the primary dataset"
+            ),
+            passed=passed,
+            detail=detail,
+        )
+
+    def _count_residual_geo_probe_rows(self, primary_path: Path) -> int:
+        """Count primary rows whose ``gene_id_namespace`` is still ``geo_probe``.
+
+        Ambiguous probes remain ``geo_probe`` (D2), so this scan covers both
+        unmapped and ambiguous residual rows in one pass.
+        """
+        residual = 0
+        with primary_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if row.get("gene_id_namespace", "").strip() == "geo_probe":
+                    residual += 1
+        return residual
+
+    def _probe_coverage_warnings(
+        self, summaries: list[ProbeMappingSummary] | None
+    ) -> list[dict[str, str]]:
+        """Phase 5 D4: probe-level builds surface coverage as warnings only.
+
+        A probe-level build publishes any coverage (0 included) as honest
+        ``geo_probe`` data plus audit; the warning mirrors the
+        ``data_confidence`` policy and never blocks release.
+        """
+        if self.required_entity_level != "probe" or not summaries:
+            return []
+        warnings: list[dict[str, str]] = []
+        for summary in summaries:
+            warnings.append(
+                {
+                    "check_id": "probe_coverage",
+                    "binding_id": summary.binding_id,
+                    "platform_id": summary.platform_id or "",
+                    "mapping_status": summary.mapping_status.value,
+                    "coverage_ratio": f"{summary.coverage_ratio:.4f}",
+                    "detail": (
+                        f"probe-level build: probe→gene coverage "
+                        f"{summary.coverage_ratio:.4f} (mapped "
+                        f"{summary.mapped_probe_count}/"
+                        f"{summary.total_probe_count}) is publishable at probe "
+                        "level (warning-only; entity policy requires probe)"
+                    ),
+                }
+            )
+        return warnings
 
     def _run_confidence_check(
         self,

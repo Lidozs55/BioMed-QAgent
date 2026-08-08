@@ -12,6 +12,8 @@ from app.datasets.contracts import (
     ArtifactRole,
     DatasetManifest,
     ManifestArtifactEntry,
+    ProbeMappingStatus,
+    ProbeMappingSummary,
     ValidationResultStatus,
 )
 from app.datasets.schema_registry import build_gene_expression_schema
@@ -108,7 +110,9 @@ def test_valid_primary_passes(tmp_path: Path) -> None:
     result, _ = _validate(tmp_path, [_valid_row()])
     assert result.status is ValidationResultStatus.PASSED
     assert result.failed_count == 0
-    assert result.checked_count == 9
+    # 3 schema-level checks + 5 row checks + 1 probe-coverage (Phase 5 T5 D4)
+    # + 1 confidence check.
+    assert result.checked_count == 10
     assert (tmp_path / "validation_report.json").is_file()
     assert (tmp_path / "confidence_report.csv").is_file()
 
@@ -375,3 +379,131 @@ def test_probe_release_profile_runs_the_release_gate(tmp_path: Path) -> None:
     assert result.profile_ref == "gene_expression.probe_release.v1"
     assert result.status is ValidationResultStatus.PASSED
     assert result.failed_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T5: probe-coverage policy (spec D4 — gene required vs probe warning)
+# ---------------------------------------------------------------------------
+
+
+def _probe_summary(
+    *,
+    binding_id: str = "binding_geo",
+    platform_id: str = "GPL570",
+    total: int,
+    mapped: int,
+    unmapped: int,
+    ambiguous: int = 0,
+    status: str = "partial",
+) -> ProbeMappingSummary:
+    """A contract-valid ProbeMappingSummary (counts/status/coverage consistent)."""
+    return ProbeMappingSummary(
+        binding_id=binding_id,
+        platform_id=platform_id,
+        target_namespace="gene_symbol",
+        mapping_status=ProbeMappingStatus(status),
+        total_probe_count=total,
+        mapped_probe_count=mapped,
+        unmapped_probe_count=unmapped,
+        ambiguous_probe_count=ambiguous,
+        coverage_ratio=0.0 if total == 0 else mapped / total,
+        mapping_asset_id="asset_mapping" + "0" * 50,
+        mapping_rule_id="geo.probe-map.v1",
+    )
+
+
+def _validate_with_summaries(
+    tmp_path: Path,
+    rows: list[dict[str, str]],
+    summaries: list[ProbeMappingSummary] | None,
+    profile_ref: str = "gene_expression.release.v1",
+):
+    primary = tmp_path / "primary.csv"
+    _write_primary(primary, rows)
+    manifest = _manifest(len(rows))
+    profile = get_validation_profile(profile_ref)
+    return (
+        profile.validate(
+            manifest=manifest,
+            primary_path=primary,
+            schema=build_gene_expression_schema(),
+            manifest_digest="d" * 64,
+            output_dir=tmp_path,
+            probe_mapping_summaries=summaries,
+        ),
+        primary,
+    )
+
+
+def test_gene_profile_coverage_below_one_fails(tmp_path: Path) -> None:
+    """D4: gene-required build with coverage < 1.0 is FAILED, never published.
+
+    The threshold (1.0) is server-owned; a partial probe→gene mapping cannot
+    masquerade as a complete gene-level dataset.
+    """
+    result, _ = _validate_with_summaries(
+        tmp_path,
+        [_valid_row()],
+        [_probe_summary(total=10, mapped=8, unmapped=2, status="partial")],
+    )
+    assert result.status is ValidationResultStatus.FAILED
+    assert result.failed_count >= 1
+    report = _load_report(tmp_path)
+    checks = {check["check_id"]: check for check in report["checks"]}
+    coverage = checks["probe_coverage_required_gene_level"]
+    assert coverage["passed"] is False
+
+
+def test_gene_profile_zero_coverage_fails(tmp_path: Path) -> None:
+    """D4: gene-required build with zero probe coverage is FAILED."""
+    result, _ = _validate_with_summaries(
+        tmp_path,
+        [_valid_row()],
+        [_probe_summary(total=10, mapped=0, unmapped=10, status="unmapped")],
+    )
+    assert result.status is ValidationResultStatus.FAILED
+    assert result.failed_count >= 1
+
+
+def test_gene_profile_residual_geo_probe_rows_fail(tmp_path: Path) -> None:
+    """D4: residual geo_probe/ambiguous rows in the primary fail the gate.
+
+    No summaries are supplied here: the profile reads the primary dataset and
+    sees the residual ``geo_probe`` namespace rows itself.
+    """
+    row = _valid_row()
+    row["gene_id_namespace"] = "geo_probe"
+    row["gene_id"] = "AFFX-BioB-5"
+    result, _ = _validate_with_summaries(tmp_path, [row], None)
+    assert result.status is ValidationResultStatus.FAILED
+    report = _load_report(tmp_path)
+    checks = {check["check_id"]: check for check in report["checks"]}
+    assert checks["probe_coverage_required_gene_level"]["passed"] is False
+
+
+def test_gene_profile_no_probes_passes(tmp_path: Path) -> None:
+    """D4: gene builds with no probes (GDC/Xena) are unaffected."""
+    result, _ = _validate_with_summaries(tmp_path, [_valid_row()], None)
+    assert result.status is ValidationResultStatus.PASSED
+    assert result.failed_count == 0
+
+
+def test_probe_profile_zero_coverage_passes_with_warning(tmp_path: Path) -> None:
+    """D4: probe-level build publishes at any coverage (0 publishable, warning-only)."""
+    result, _ = _validate_with_summaries(
+        tmp_path,
+        [_valid_row()],
+        [_probe_summary(total=10, mapped=0, unmapped=10, status="unmapped")],
+        profile_ref="gene_expression.probe_release.v1",
+    )
+    assert result.status is ValidationResultStatus.PASSED
+    assert result.failed_count == 0
+    report = _load_report(tmp_path)
+    warnings = {w["check_id"] for w in report["warnings"]}
+    assert "probe_coverage" in warnings
+
+
+def _load_report(tmp_path: Path) -> dict:
+    import json
+
+    return json.loads((tmp_path / "validation_report.json").read_text(encoding="utf-8"))

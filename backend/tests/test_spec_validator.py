@@ -363,3 +363,42 @@ def test_non_geo_binding_parameters_rejected() -> None:
     ).validate(_spec(source_bindings=[binding]))
     assert result.valid is False
     assert "invalid_adapter_parameters" in result.reason_codes
+
+
+def test_geo_binding_coverage_threshold_rejected() -> None:
+    """T5 D4: an Agent cannot smuggle a coverage threshold via parameters."""
+    params = {
+        "format": "series_matrix",
+        "value_semantics": "expression",
+        "value_scale": "log2",
+        "expression_unit": "expression",
+        "coverage_threshold": 0.8,
+    }
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_geo_spec(_geo_binding(parameters=params)))
+    assert result.valid is False
+    assert "invalid_adapter_parameters" in result.reason_codes
+
+
+def test_geo_binding_entity_policy_parameter_rejected() -> None:
+    """T5 D4: entity-level policy cannot be smuggled via binding parameters.
+
+    ``required_entity_level`` is a server-owned versioned profile field
+    (D4); the Spec Validator enforces its compatibility with the build's
+    schema/target, never from adapter parameters.
+    """
+    params = {
+        "format": "series_matrix",
+        "value_semantics": "expression",
+        "value_scale": "log2",
+        "expression_unit": "expression",
+        "required_entity_level": "gene",
+    }
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_geo_spec(_geo_binding(parameters=params)))
+    assert result.valid is False
+    assert "invalid_adapter_parameters" in result.reason_codes
