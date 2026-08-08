@@ -52,7 +52,10 @@ def test_event_envelope_carries_schema_version_and_canonical_fields(
     assert len(events) > 0
 
     for envelope in events:
-        assert envelope.schema_version == "1.0"
+        # T3 (Phase 7): stage_* events stay schema 1.0; their operation_*
+        # mirrors are run-scoped RuntimeEventType events and therefore carry
+        # schema_version 2.0 + run_id (ARCHITECTURE §14.2).
+        assert envelope.schema_version in {"1.0", "2.0"}
         assert envelope.task_id == "task_envelope_fields"
         assert envelope.event_id
         assert envelope.type

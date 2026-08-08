@@ -39,6 +39,10 @@ from app.domain.contracts import (
     ErrorCode,
     ErrorDetail,
     EventEnvelope,
+    OperationCompletedPayload,
+    OperationFailedPayload,
+    OperationProgressPayload,
+    OperationStartedPayload,
     PlanReadyPayload,
     RunManifest,
     StageAttempt,
@@ -64,6 +68,7 @@ from app.domain.contracts import (
     WarningSeverity,
     build_event,
     generate_prefixed_uuid,
+    stage_operation_spec,
 )
 from app.domain.contracts.dataset_state import (
     ArtifactRole,
@@ -746,6 +751,18 @@ class PipelineRunner:
             ),
             stage_attempt_id=skipped_attempt.stage_attempt_id,
         )
+        operation_id, label, category = stage_operation_spec(stage)
+        await self._emit_operation_event(
+            OperationCompletedPayload(
+                operation_id=operation_id,
+                label=label,
+                category=category,
+                status=AttemptStatus.SKIPPED,
+                output_digest=reusable.output_digest,
+                reused_operation_attempt_id=reusable.stage_attempt_id,
+            ),
+            stage_attempt_id=skipped_attempt.stage_attempt_id,
+        )
         save_state(self.workdir.state, self.state)
         return True
 
@@ -788,6 +805,16 @@ class PipelineRunner:
             save_state(self.workdir.state, self.state)
             await self._emit_stage_event(
                 StageStartedPayload(stage=stage, attempt=running_attempt.attempt),
+                stage_attempt_id=stage_attempt_id,
+            )
+            operation_id, label, category = stage_operation_spec(stage)
+            await self._emit_operation_event(
+                OperationStartedPayload(
+                    operation_id=operation_id,
+                    label=label,
+                    category=category,
+                    attempt=running_attempt.attempt,
+                ),
                 stage_attempt_id=stage_attempt_id,
             )
             await self._emit_stage_event(
@@ -871,6 +898,16 @@ class PipelineRunner:
                 StageCompletedPayload(
                     stage=stage,
                     status=AttemptStatus.SUCCEEDED,
+                    output_digest=result.output_digest,
+                ),
+                stage_attempt_id=stage_attempt_id,
+            )
+            operation_id, label, category = stage_operation_spec(stage)
+            await self._emit_operation_event(
+                OperationCompletedPayload(
+                    operation_id=operation_id,
+                    label=label,
+                    category=category,
                     output_digest=result.output_digest,
                 ),
                 stage_attempt_id=stage_attempt_id,
@@ -1295,12 +1332,14 @@ class PipelineRunner:
         payload: Any,
         *,
         stage_attempt_id: str | None = None,
+        run_id: str | None = None,
     ) -> EventEnvelope:
         event = build_event(
             task_id=self.task_id,
             sequence=self._sequence,
             payload=payload,
             stage_attempt_id=stage_attempt_id,
+            run_id=run_id,
         )
         self._sequence += 1
         return event
@@ -1378,6 +1417,27 @@ class PipelineRunner:
             self._build_event(payload, stage_attempt_id=stage_attempt_id)
         )
 
+    async def _emit_operation_event(
+        self,
+        payload: Any,
+        stage_attempt_id: str | None,
+    ) -> None:
+        """Emit a run-scoped operation event mirroring a stage_* event.
+
+        Operation events are RuntimeEventType so they require run linkage
+        (schema_version 2.0); the legacy stage_* events stay schema 1.0 with
+        no run_id. T3 (Phase 7): ARCHITECTURE §14.2 — every stage_* event is
+        mirrored by an operation_* event carrying operation_id/label/category.
+        """
+
+        await self._publish_event(
+            self._build_event(
+                payload,
+                stage_attempt_id=stage_attempt_id,
+                run_id=self.ctx.run_id,
+            )
+        )
+
     async def _emit_progress_event(
         self,
         stage: StageName,
@@ -1393,6 +1453,11 @@ class PipelineRunner:
         See docs/REVIEW_2026-07-18.md §4.
         """
 
+        stage_attempt_id = (
+            self.state.inflight_attempt.stage_attempt_id
+            if self.state.inflight_attempt is not None
+            else None
+        )
         await self._publish_event(
             self._build_event(
                 StageProgressPayload(
@@ -1402,10 +1467,23 @@ class PipelineRunner:
                     total=total,
                     detail=detail,
                 ),
-                stage_attempt_id=self.state.inflight_attempt.stage_attempt_id
-                if self.state.inflight_attempt is not None
-                else None,
+                stage_attempt_id=stage_attempt_id,
             )
+        )
+        # T3 (Phase 7): mirror the stage_progress event with an
+        # operation_progress event (ARCHITECTURE §14.2).
+        operation_id, label, category = stage_operation_spec(stage)
+        await self._emit_operation_event(
+            OperationProgressPayload(
+                operation_id=operation_id,
+                label=label,
+                category=category,
+                kind=kind,
+                current=current,
+                total=total,
+                detail=detail,
+            ),
+            stage_attempt_id=stage_attempt_id,
         )
 
     async def _finalize_stage_failed(
@@ -1450,6 +1528,17 @@ class PipelineRunner:
         )
         await self._emit_stage_event(
             StageFailedPayload(stage=stage, status=AttemptStatus.FAILED, error=error),
+            stage_attempt_id=inflight.stage_attempt_id,
+        )
+        operation_id, label, category = stage_operation_spec(stage)
+        await self._emit_operation_event(
+            OperationFailedPayload(
+                operation_id=operation_id,
+                label=label,
+                category=category,
+                status=AttemptStatus.FAILED,
+                error=error,
+            ),
             stage_attempt_id=inflight.stage_attempt_id,
         )
         # _persist_logs is called once by _finalize_failed; no duplicate call here.
@@ -1507,6 +1596,18 @@ class PipelineRunner:
                 ToolCompletedPayload(
                     tool_name=f"run_{inflight.stage.value}",
                     is_error=True,
+                ),
+                stage_attempt_id=inflight.stage_attempt_id,
+            )
+            # T3 (Phase 7): close the mirrored operation lifecycle on cancel
+            # (same shape as the V2 executor's BuildCancelledError path).
+            operation_id, label, category = stage_operation_spec(inflight.stage)
+            await self._emit_operation_event(
+                OperationFailedPayload(
+                    operation_id=operation_id,
+                    label=label,
+                    category=category,
+                    status=AttemptStatus.CANCELLED,
                 ),
                 stage_attempt_id=inflight.stage_attempt_id,
             )
