@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.pipeline.processing.geo_tximport import GeoSampleMetadata
+from app.pipeline.processing.geo_tximport import (
+    GeoSampleMetadata,
+    validate_pairings,
+)
 from app.pipeline.stages.base import CleaningReportModel
 
 
@@ -41,15 +44,65 @@ def _build_cell_line_warnings(
     return warnings
 
 
+def _build_sample_group_warnings(
+    samples: list[GeoSampleMetadata],
+    geo_source_id: str,
+    asset_id: str,
+    retrieved_at: datetime,
+) -> list[dict[str, object]]:
+    """Build warnings.csv rows for T8 sample-group conflicts + one-sided pairings.
+
+    Phase 5 final review (F6): the T8 extractors expose conflict and
+    one-sided-pairing warnings at the extraction layer but do not persist
+    them; this mirrors the cell-line pattern and folds them into the
+    warnings channel.  A conflict is exactly ``sample_group="unknown"`` with
+    non-empty ``sample_group_raw`` (the extractor keeps raw evidence only for
+    a classified/conflicting hit); one-sided pairings are re-derived with
+    the same ``validate_pairings`` the extraction layer exposes.
+    """
+    warnings: list[dict[str, object]] = []
+    for sample in samples:
+        if sample.sample_group == "unknown" and sample.sample_group_raw:
+            warnings.append({
+                "warning_id": f"warn_sample_group_{sample.sample_id.lower()}",
+                "severity": "warning",
+                "stage": "processing",
+                "code": "sample_group_conflict",
+                "message": (
+                    f"{sample.group_rule_id}: conflicting tumor/normal evidence "
+                    f"({sample.sample_group_raw}) → sample_group=unknown"
+                ),
+                "source_id": geo_source_id,
+                "asset_id": asset_id,
+                "record_id": sample.sample_id,
+                "created_at": retrieved_at.isoformat(),
+            })
+    for index, message in enumerate(validate_pairings(samples)):
+        warnings.append({
+            "warning_id": f"warn_pairing_{index}",
+            "severity": "warning",
+            "stage": "processing",
+            "code": "pairing_one_sided",
+            "message": message,
+            "source_id": geo_source_id,
+            "asset_id": asset_id,
+            "record_id": "",
+            "created_at": retrieved_at.isoformat(),
+        })
+    return warnings
+
+
 def _build_warnings_rows(
     cell_line_warnings: list[dict[str, object]],
     cleaning_report: CleaningReportModel | None,
     geo_source_id: str,
     asset_id: str,
     retrieved_at: datetime,
+    sample_group_warnings: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
-    """Merge cell-line warnings with cleaning anomalies into ``warnings.csv``."""
+    """Merge cell-line + sample-group warnings with cleaning anomalies."""
     warnings: list[dict[str, object]] = list(cell_line_warnings)
+    warnings.extend(sample_group_warnings or [])
 
     if cleaning_report is None:
         return warnings

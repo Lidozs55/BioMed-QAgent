@@ -820,3 +820,55 @@ def test_execute_dataset_build_multi_binding_geo_failed_gdc_usable_is_partial(
     # The published manifest only lists the successful binding's source.
     manifest = json.loads((build_root / "dataset_manifest.json").read_text("utf-8"))
     assert set(manifest["source_summary"]) == {"binding_gdc"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 final review F1: SpecValidator wired at the tool entry
+# ---------------------------------------------------------------------------
+
+
+def test_execute_dataset_build_rejects_probe_schema_with_gene_profile_as_invalid_input(
+    tmp_path: Path,
+) -> None:
+    """F1: a probe-schema build submitted with the gene validation profile
+    must be rejected ``invalid_input`` at the tool entry — never run a build
+    that could publish probe rows under the gene release gate. The spec is
+    fully wired (staged source file supplied) so only the entity-level
+    compatibility check can stop it, and no build workspace may be created."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("PROBE1", "1.5", "2.0")])
+
+    spec = _geo_spec_json(
+        schema_ref="gene_expression.probe_long.v1",
+        row_granularity="probe_sample_measurement",
+        profile_ref="gene_expression.release.v1",
+    )
+
+    data = _call_tool(ctx, spec, json.dumps({"binding_geo": rel}))
+
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+    assert "entity_level" in data["message"]
+    # The validator fired before any build was started.
+    assert not (run_ctx.work_dir.root / "datasets_build").exists()
+
+
+def test_execute_dataset_build_rejects_target_entity_level_mismatch_as_invalid_input(
+    tmp_path: Path,
+) -> None:
+    """F1: an explicit ``target_entity_level`` that contradicts the selected
+    schema's granularity is invalid input at the tool entry."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_geo_matrix(run_ctx, [("PROBE1", "1.5", "2.0")])
+
+    spec = json.loads(_geo_spec_json())
+    spec["target_entity_level"] = "probe"  # gene schema + probe target
+
+    data = _call_tool(ctx, json.dumps(spec), json.dumps({"binding_geo": rel}))
+
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+    assert "entity_level" in data["message"]
+    assert not (run_ctx.work_dir.root / "datasets_build").exists()

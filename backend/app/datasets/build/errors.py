@@ -47,3 +47,15 @@ class BindingRejectedError(BuildError):
 
 class IntegratorError(BuildError):
     """The merge strategy or merge inputs are invalid."""
+
+
+class ProbeMappingAssetMismatchError(BuildError):
+    """The annotation asset's declared sha256 does not match the file parsed.
+
+    Phase 5 final review (F2, D3 bidirectional invariant): a
+    ``ProbeMappingSummary.mapping_asset_id`` may only be recorded against a
+    ``SourceAsset`` whose digest is consistent with the annotation file the
+    mapping was actually computed from.  The FileAsset contract already
+    enforces ``asset_id == asset_<sha256>``; this error closes the remaining
+    gap between the declared digest and the parsed file's content.
+    """

@@ -406,9 +406,7 @@ class ExpressionBuildRunner:
                 batch_path=self._output_dir / batch.file_asset.relative_path,
                 binding_id=binding_id,
                 platform_id=platform_ids[0] if platform_ids else None,
-                source_asset_id=(
-                    mapping_asset.asset_id if mapping_asset is not None else None
-                ),
+                annotation_asset=mapping_asset,
                 output_dir=self._output_dir,
             )
             probe_map = mapping_result.probe_to_gene

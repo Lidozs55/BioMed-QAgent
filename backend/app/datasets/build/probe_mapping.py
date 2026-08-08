@@ -23,14 +23,17 @@ from __future__ import annotations
 
 import csv
 import gzip
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.datasets.build.errors import ProbeMappingAssetMismatchError
 from app.datasets.contracts import (
     ProbeMappingStatus,
     ProbeMappingSummary,
 )
+from app.domain.contracts import SourceAsset
 
 #: Gene-identifier columns in SOFT platform tables, best first (mirrors the
 #: V1 geo_annotation parser).  The parser picks the first column (in this
@@ -110,7 +113,7 @@ def parse_platform_table(
             end = index
             break
     if begin is None or end is None or end <= begin + 1:
-        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION
+        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION, frozenset()
 
     header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
     gene_index: int | None = None
@@ -119,10 +122,11 @@ def parse_platform_table(
             gene_index = header.index(candidate)
             break
     if gene_index is None:
-        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION
+        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION, frozenset()
     target_namespace = _target_namespace_for(header[gene_index])
 
     mapping: dict[str, str] = {}
+    targets: dict[str, set[str]] = {}
     for line in lines[begin + 2 : end]:
         values = [part.strip().strip('"') for part in line.split("\t")]
         if len(values) <= gene_index:
@@ -130,10 +134,23 @@ def parse_platform_table(
         probe = values[0]
         gene = values[gene_index]
         if probe and gene not in _MISSING_SENTINELS:
-            mapping[probe] = gene
+            targets.setdefault(probe, set()).add(gene)
+    # Phase 5 final review (F3, D2): a probe mapping to MULTIPLE DISTINCT
+    # gene targets has no explicit disambiguation rule → it is ambiguous and
+    # stays ``geo_probe``: excluded from the map (the canonicalizer keeps it
+    # in the probe namespace) and counted separately by the caller. Duplicate
+    # rows mapping to the SAME target are not ambiguous.
+    ambiguous_probes = frozenset(
+        probe for probe, genes in targets.items() if len(genes) > 1
+    )
+    mapping = {
+        probe: next(iter(genes))
+        for probe, genes in targets.items()
+        if len(genes) == 1
+    }
     if not mapping:
-        return {}, target_namespace, ProbeMappingStatus.UNMAPPED
-    return mapping, target_namespace, ProbeMappingStatus.MAPPED
+        return {}, target_namespace, ProbeMappingStatus.UNMAPPED, ambiguous_probes
+    return mapping, target_namespace, ProbeMappingStatus.MAPPED, ambiguous_probes
 
 
 def _distinct_probes(batch_path: Path) -> list[str]:
@@ -158,7 +175,7 @@ def build_probe_mapping(
     batch_path: Path,
     binding_id: str,
     platform_id: str | None,
-    source_asset_id: str | None,
+    annotation_asset: SourceAsset | None = None,
     output_dir: Path,
     mapping_rule_id: str = PROBE_MAPPING_RULE_ID,
 ) -> ProbeMappingResult:
@@ -166,14 +183,27 @@ def build_probe_mapping(
 
     Writes the D3 mapping-detail audit CSV under ``canonical/`` and returns
     the map (consumed by the canonicalizer), the target namespace and the
-    contract-valid summary.
+    contract-valid summary.  When ``annotation_asset`` is supplied its
+    declared sha256 must match the annotation file actually parsed (F2, D3
+    bidirectional invariant) or ``ProbeMappingAssetMismatchError`` is
+    raised.  Multi-target probes are ambiguous and stay unmapped (F3).
     """
-    probe_to_gene, target_namespace, table_status = parse_platform_table(
-        annotation_path
+    if annotation_asset is not None:
+        actual = hashlib.sha256(annotation_path.read_bytes()).hexdigest()
+        if annotation_asset.sha256 != actual:
+            raise ProbeMappingAssetMismatchError(
+                f"annotation asset {annotation_asset.asset_id} sha256 does not "
+                f"match the parsed file ({annotation_path}): declared "
+                f"{annotation_asset.sha256}, actual {actual}"
+            )
+    probe_to_gene, target_namespace, table_status, ambiguous_probes = (
+        parse_platform_table(annotation_path)
     )
     probes = _distinct_probes(batch_path)
     total = len(probes)
     mapped = sum(1 for probe in probes if probe in probe_to_gene)
+    ambiguous = [probe for probe in probes if probe in ambiguous_probes]
+    ambiguous_count = len(ambiguous)
     unmapped = total - mapped
     coverage = (mapped / total) if total else 0.0
     if total and mapped == total:
@@ -191,11 +221,18 @@ def build_probe_mapping(
 
     detail_path = output_dir / "canonical" / f"{binding_id}_probe_mapping.csv"
     detail_path.parent.mkdir(parents=True, exist_ok=True)
+    ambiguous_set = set(ambiguous)
     with detail_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=MAPPING_DETAIL_COLUMNS)
         writer.writeheader()
         for probe in probes:
             gene = probe_to_gene.get(probe, "")
+            if gene:
+                row_status = "mapped"
+            elif probe in ambiguous_set:
+                row_status = "ambiguous"
+            else:
+                row_status = "unmapped"
             writer.writerow(
                 {
                     "binding_id": binding_id,
@@ -203,8 +240,12 @@ def build_probe_mapping(
                     "probe_id": probe,
                     "target_gene_id": gene,
                     "target_namespace": target_namespace if gene else "",
-                    "status": "mapped" if gene else "unmapped",
-                    "evidence_asset_id": source_asset_id or "",
+                    "status": row_status,
+                    "evidence_asset_id": (
+                        annotation_asset.asset_id
+                        if annotation_asset is not None
+                        else ""
+                    ),
                     "rule_id": mapping_rule_id if gene else "",
                 }
             )
@@ -218,9 +259,11 @@ def build_probe_mapping(
         total_probe_count=total,
         mapped_probe_count=mapped,
         unmapped_probe_count=unmapped,
-        ambiguous_probe_count=0,
+        ambiguous_probe_count=ambiguous_count,
         coverage_ratio=coverage,
-        mapping_asset_id=source_asset_id,
+        mapping_asset_id=(
+            annotation_asset.asset_id if annotation_asset is not None else None
+        ),
         mapping_rule_id=mapping_rule_id,
     )
     return ProbeMappingResult(

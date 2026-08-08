@@ -47,6 +47,7 @@ from app.pipeline.stages.artifact_build.samples import (
 )
 from app.pipeline.stages.artifact_build.warnings import (
     _build_cell_line_warnings,
+    _build_sample_group_warnings,
     _build_warnings_rows,
 )
 from app.pipeline.stages.base import (
@@ -416,10 +417,20 @@ def run_artifact_build(
         asset_id=source_asset.asset_id,
         retrieved_at=retrieved_at,
     )
+    # Phase 5 final review (F6): T8 sample-group conflict + one-sided-pairing
+    # warnings are persisted into warnings.csv through the same artifact
+    # channel as the cell-line corrections (mirroring the cell-line pattern).
+    sample_group_warnings = [] if is_reactome else _build_sample_group_warnings(
+        samples=samples,
+        geo_source_id=geo_source_id or primary_source_id,
+        asset_id=source_asset.asset_id,
+        retrieved_at=retrieved_at,
+    )
     # Merge cleaning anomalies into the warnings list so
     # warnings_metrics_consistency validation stays satisfied.
     all_warnings = _build_warnings_rows(
         cell_line_warnings=cell_line_warnings,
+        sample_group_warnings=sample_group_warnings,
         cleaning_report=cleaning_report,
         geo_source_id=geo_source_id,
         asset_id=source_asset.asset_id,

@@ -534,3 +534,69 @@ def test_sample_metadata_artifact_unchanged_without_group_evidence(
         "cell_line_raw", "cell_line_canonical", "normalization_rule",
         "treatment", "replicate", "organism", "source_url",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 final review F6: T8 warnings persisted into warnings.csv
+# ---------------------------------------------------------------------------
+
+
+def test_artifact_warnings_persist_group_conflict_and_one_sided_pairing(
+    tmp_path: Path,
+) -> None:
+    """F6: conflict (unknown + raw evidence) and one-sided-pairing warnings
+    exposed by the T8 extractors must reach the built warnings.csv via the
+    same artifact channel as the cell-line corrections."""
+    ctx = _stage_context(tmp_path)
+    now = datetime.now(UTC)
+    result = _build_no_data(ctx, now, samples=[
+        # Conflict: high-confidence tumor marker + normal marker → the
+        # extractor emits a warning and keeps sample_group_raw evidence.
+        _sample(
+            "GSM9999991",
+            sample_group="unknown",
+            sample_group_raw="tissue type:tumor",
+        ),
+        # One-sided pairing: only a tumor side exists for pairing p9.
+        _sample(
+            "GSM9999992",
+            sample_group="tumor",
+            sample_group_raw="tissue type:tumor",
+            pairing_id="p9",
+        ),
+    ])
+    warning_rows = _read_csv(result.output.staging_dir / "warnings.csv")
+    codes = {row["code"] for row in warning_rows}
+    assert "sample_group_conflict" in codes
+    assert "pairing_one_sided" in codes
+    conflict = [row for row in warning_rows if row["code"] == "sample_group_conflict"]
+    assert len(conflict) == 1
+    assert "conflict" in conflict[0]["message"]
+    assert conflict[0]["record_id"] == "GSM9999991"
+    one_sided = [row for row in warning_rows if row["code"] == "pairing_one_sided"]
+    assert any("p9" in row["message"] for row in one_sided)
+
+
+def test_artifact_warnings_skip_clean_group_evidence(tmp_path: Path) -> None:
+    """F6 complement: samples with clean (non-conflicting) group evidence and
+    a valid tumor/normal pairing produce no T8 warning rows."""
+    ctx = _stage_context(tmp_path)
+    now = datetime.now(UTC)
+    result = _build_no_data(ctx, now, samples=[
+        _sample(
+            "GSM9999991",
+            sample_group="tumor",
+            sample_group_raw="tissue type:tumor",
+            pairing_id="p1",
+        ),
+        _sample(
+            "GSM9999992",
+            sample_group="normal",
+            sample_group_raw="tissue type:normal",
+            pairing_id="p1",
+        ),
+    ])
+    warning_rows = _read_csv(result.output.staging_dir / "warnings.csv")
+    codes = {row["code"] for row in warning_rows}
+    assert "sample_group_conflict" not in codes
+    assert "pairing_one_sided" not in codes

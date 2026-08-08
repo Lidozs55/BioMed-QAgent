@@ -30,7 +30,7 @@ from app.datasets.build.expression_runner import (
     ExpressionBuildRunner,
 )
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
-from app.datasets.build.profiles import get_validation_profile
+from app.datasets.build.profiles import VALIDATION_PROFILES, get_validation_profile
 from app.datasets.contracts import (
     AdapterParams,
     BindingRejection,
@@ -42,6 +42,7 @@ from app.datasets.schema_registry import (
     build_gene_expression_schema,
     build_probe_expression_schema,
 )
+from app.datasets.spec_validator import SpecValidator
 from app.domain.contracts import (
     DataLevel,
     ErrorDetail,
@@ -199,6 +200,32 @@ async def execute_dataset_build(
             },
             ensure_ascii=False,
         )
+    # Phase 5 final review (F1): the SpecValidator's registry + entity-level
+    # compatibility checks are wired into the production entry here, before
+    # any source file is touched or any build workspace is created. A gene
+    # build under a probe schema (or a probe build under the gene profile) is
+    # invalid_input with the validator's structured reasons — never a build
+    # that could publish probe rows under the gene release gate.
+    spec_validation = SpecValidator(
+        registry=SchemaRegistry(
+            [build_gene_expression_schema(), build_probe_expression_schema()]
+        ),
+        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
+    ).validate(build_spec)
+    if not spec_validation.valid:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": (
+                    "spec validation failed ["
+                    + ", ".join(spec_validation.reason_codes)
+                    + "]: "
+                    + "; ".join(spec_validation.reasons)
+                ),
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     if not isinstance(files_mapping, dict):
         return json.dumps(
             {
@@ -285,8 +312,10 @@ async def execute_dataset_build(
     # AdapterParams JSON enters the operation digest, so changing a binding's
     # format/scale/unit/platform_ids invalidates every checkpoint.  Invalid
     # declared parameters are rejected as invalid input before any operation
-    # runs (the SpecValidator is wired into the runtime in T5/T7; this is the
-    # tool-level fail-closed guard).
+    # runs (the SpecValidator at the tool entry already rejects
+    # missing/invalid AdapterParams for geo bindings — final review F1 —
+    # this block additionally rejects binding-level parameter errors that
+    # only surface at model validation time, e.g. an invalid scale).
     try:
         parameter_scope = {
             binding.binding_id: AdapterParams.model_validate(
