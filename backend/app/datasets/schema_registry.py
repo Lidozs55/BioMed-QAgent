@@ -75,7 +75,6 @@ _PROBE_EXPRESSION_FIELDS: tuple[str, ...] = (
     "source_column_index",
     "source_column_name",
     "source_raw_value",
-    "gene_id_namespace_declared",
 )
 
 _PROBE_PRIMARY_KEY: tuple[str, ...] = ("probe_id", "platform_id", "sample_id")
@@ -105,12 +104,6 @@ _PROBE_FIELD_META: dict[str, tuple[str, str, str]] = {
         "Namespace of the row identifier: geo_probe for unmapped probes, "
         "or the target gene namespace for successfully mapped rows",
         "entity_identifier",
-    ),
-    "gene_id_namespace_declared": (
-        "string",
-        "Internal source-long namespace declared by the adapter for the row; "
-        "canonical output keeps gene_id_namespace authoritative",
-        "provenance",
     ),
 }
 

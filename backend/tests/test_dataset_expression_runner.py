@@ -2281,6 +2281,9 @@ async def test_t7_probe_build_publishes_probe_primary_with_mapping_asset(
     # ProbeMappingSummary audit CSVs are published with the build.
     assert (output_dir / "probe_mapping_summaries.csv").is_file()
     assert (output_dir / "canonical" / "binding_geo_probe_mapping.csv").is_file()
+    # The probe primary must not leak the internal source-long column: the
+    # canonical output shape mirrors the gene primary (review-loop R1-01).
+    assert "gene_id_namespace_declared" not in rows[0]
 
 
 @pytest.mark.asyncio
