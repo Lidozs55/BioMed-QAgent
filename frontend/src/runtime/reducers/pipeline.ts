@@ -4,6 +4,7 @@ import type {
 } from "../contracts";
 import type {
   ArtifactProjection,
+  OperationItem,
   StageProjection,
   TaskProjection,
 } from "../types";
@@ -63,6 +64,97 @@ export function applyArtifactProducedEvent(
     sizeBytes: artifact.size,
     mediaType: artifact.media_type,
   });
+}
+
+type OperationPayload = Extract<
+  EventPayload,
+  | { type: "operation_started" }
+  | { type: "operation_progress" }
+  | { type: "operation_completed" }
+  | { type: "operation_failed" }
+>;
+
+function operationItemBase(
+  runId: string,
+  operationId: string,
+  sequence: number,
+  timestamp: string,
+  existing: OperationItem | undefined,
+): OperationItem {
+  return {
+    kind: "operation",
+    itemId: `operation:${runId}:${operationId}`,
+    runId,
+    sequence,
+    createdAt: existing?.createdAt ?? timestamp,
+    operationId,
+    label: existing?.label ?? null,
+    category: existing?.category ?? null,
+    status: existing?.status ?? "running",
+    progress: existing?.progress ?? null,
+    error: existing?.error ?? null,
+  };
+}
+
+/**
+ * V2 build-execution lifecycle (Design §15.1): project one conversation
+ * item per ``operation_id`` grouping started/progress/completed/failed into
+ * a single node. ``label``/``category`` are optional on the wire (pre-T3
+ * events.jsonl) — fallbacks are applied at render time. Events without a
+ * run (legacy replay) stay informational: cursor advances, no item.
+ */
+export function applyOperationEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: OperationPayload,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const operationId = payload.operation_id;
+  const existingItem = task.items.find(
+    (item) => item.itemId === `operation:${runId}:${operationId}`,
+  );
+  const existing =
+    existingItem?.kind === "operation" ? existingItem : undefined;
+  const base = operationItemBase(
+    runId,
+    operationId,
+    envelope.sequence,
+    envelope.timestamp,
+    existing,
+  );
+
+  let nextItem: OperationItem;
+  if (payload.type === "operation_started") {
+    nextItem = {
+      ...base,
+      label: payload.label ?? null,
+      category: payload.category ?? null,
+      status: "running",
+      error: null,
+    };
+  } else if (payload.type === "operation_progress") {
+    nextItem = {
+      ...base,
+      progress: {
+        kind: payload.kind,
+        current: payload.current,
+        total: payload.total ?? null,
+      },
+    };
+  } else if (payload.type === "operation_completed") {
+    nextItem = {
+      ...base,
+      status: payload.status === "skipped" ? "skipped" : "completed",
+    };
+  } else {
+    nextItem = {
+      ...base,
+      status: payload.status === "cancelled" ? "cancelled" : "failed",
+      error: payload.error?.message ?? null,
+    };
+  }
+  return upsertItem(task, nextItem);
 }
 
 export function applyStageTransitionEvent(

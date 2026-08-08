@@ -464,8 +464,9 @@ describe("runtime event projection", () => {
     );
     const before = state.tasksById.task_operation;
 
-    // V2 build-execution events (Design §15.1) are informational: the
-    // cursor advances but no projection changes.
+    // V2 build-execution events (Design §15.1) project one conversation
+    // item per operation (label + category + lifecycle status) while the
+    // cursor keeps advancing.
     state = reduceRuntimeEvent(
       state,
       envelope("task_operation", "run_operation", 1, {
@@ -512,7 +513,17 @@ describe("runtime event projection", () => {
     expect(after.sequenceGap).toBeNull();
     expect(after.messages).toEqual(before.messages);
     expect(after.runsById).toEqual(before.runsById);
-    expect(after.items).toEqual(before.items);
+    // The four operation events project a single grouped operation item
+    // keyed by operation_id; the terminal event wins the status.
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0]).toMatchObject({
+      kind: "operation",
+      operationId: "op-1",
+      label: "build skeleton",
+      category: "build",
+      status: "failed",
+      progress: { kind: "rows_parsed", current: 42, total: 100 },
+    });
     expect(after.summary.status).toBe(before.summary.status);
     expect(after.summary.latest_sequence).toBe(4);
   });

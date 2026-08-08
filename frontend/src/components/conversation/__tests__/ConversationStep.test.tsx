@@ -87,6 +87,21 @@ describe("ConversationStep dispatcher", () => {
     expect(screen.getByText("运行中")).toBeInTheDocument();
   });
 
+  it("renders operation items via OperationStep (label + category badge)", () => {
+    const item = makeItem({
+      kind: "operation",
+      operationId: "stage:validation",
+      label: "结果验证",
+      category: "validation",
+      status: "running",
+      progress: null,
+      error: null,
+    });
+    render(<ConversationStep item={item} isActive={false} />);
+    expect(screen.getByText("结果验证")).toBeInTheDocument();
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+  });
+
   it("renders progress items via ProgressStep", () => {
     const item = makeItem({
       kind: "progress",

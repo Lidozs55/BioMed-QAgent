@@ -1,6 +1,7 @@
 import type { ConversationItem } from "@/runtime/types";
 import { ArtifactStep } from "./ArtifactStep";
 import { AssistantSegment } from "./AssistantSegment";
+import { OperationStep } from "./OperationStep";
 import { ProgressStep } from "./ProgressStep";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { StageStep } from "./StageStep";
@@ -25,6 +26,8 @@ export function ConversationStep({ item }: ConversationStepProps) {
       return <ToolCallStep item={item} />;
     case "stage":
       return <StageStep item={item} />;
+    case "operation":
+      return <OperationStep item={item} />;
     case "progress":
       return <ProgressStep item={item} />;
     case "warning":

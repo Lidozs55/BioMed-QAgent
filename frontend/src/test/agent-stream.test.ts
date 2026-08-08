@@ -275,7 +275,7 @@ describe("durable event transport", () => {
     );
   });
 
-  it("accepts backend operation lifecycle envelopes without crashing or changing state (F4)", async () => {
+  it("accepts backend operation lifecycle envelopes and projects a grouped item (F4)", async () => {
     const { transport, sockets } = setupTransport();
     transport.subscribe("task_a", 0);
     const connected = transport.connect();
@@ -334,12 +334,19 @@ describe("durable event transport", () => {
     );
 
     const after = useAgentStore.getState().tasksById.task_a;
-    // Informational frames: the cursor advances but no projection changes.
+    // Operation lifecycle frames project a grouped operation item; the
+    // cursor advances without disturbing messages/runs/activities.
     expect(after.lastSequence).toBe(4);
     expect(after.sequenceGap).toBeNull();
     expect(after.messages).toEqual(before.messages);
     expect(after.runsById).toEqual(before.runsById);
     expect(after.activityOrder).toEqual(before.activityOrder);
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0]).toMatchObject({
+      kind: "operation",
+      operationId: "op-1",
+      status: "failed",
+    });
     expect(after.summary.status).toBe(before.summary.status);
   });
 
