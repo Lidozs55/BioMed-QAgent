@@ -187,6 +187,7 @@ def process_geo_series_matrix_expression(
     workdir: TaskWorkDir,
     samples: list[GeoSampleMetadata],
     gene_map: dict[str, str] | None = None,
+    sample_gene_maps: dict[str, dict[str, str]] | None = None,
     probe_gene_mapping: str = "not_attempted",
 ) -> ParsedDataset | None:
     """Parse the expression matrix block from a GEO ``*_series_matrix.txt.gz``.
@@ -204,6 +205,13 @@ def process_geo_series_matrix_expression(
     annotation status (mapped/unmapped/no_gene_annotation/...) in
     ``processing_parameters`` so the artifact builder can surface a warning
     when the platform provides no usable gene mapping.
+
+    ``sample_gene_maps`` (Phase 5 D8) is the per-sample variant: a dict
+    mapping each sample id to the gene map of the GPL that sample declares.
+    When provided it takes precedence over ``gene_map`` and each row uses
+    only its sample's GPL annotation — a GPL A annotation is never applied
+    to GPL B samples. Samples absent from the map (no attributable GPL) keep
+    raw probe IDs.
 
     Raises ``ValueError`` for malformed data within the block (e.g. a header
     row with no sample columns), and ``FileNotFoundError`` when the source
@@ -254,11 +262,6 @@ def process_geo_series_matrix_expression(
             if len(values) < 2:
                 continue
             gene_id_raw = values[0]
-            mapped_gene = (gene_map or {}).get(gene_id_raw)
-            if mapped_gene:
-                mapped_probes.add(gene_id_raw)
-            gene_id_out = mapped_gene or gene_id_raw
-            gene_namespace = "gene_symbol" if mapped_gene else "geo_id_ref"
             source_row_count += 1
             source_line_number = begin_idx + 3 + offset
             for col_idx, sample_id in enumerate(sample_ids):
@@ -270,6 +273,11 @@ def process_geo_series_matrix_expression(
                     float(raw_value)
                 except (ValueError, TypeError):
                     continue
+                mapped_gene = _lookup_gene(gene_id_raw, sample_id, gene_map, sample_gene_maps)
+                if mapped_gene:
+                    mapped_probes.add(gene_id_raw)
+                gene_id_out = mapped_gene or gene_id_raw
+                gene_namespace = "gene_symbol" if mapped_gene else "geo_id_ref"
                 sample = sample_map.get(sample_id)
                 source_alias = sample.source_alias if sample else sample_id
                 writer.writerow({
@@ -347,6 +355,27 @@ def process_geo_series_matrix_expression(
         source_row_count=source_row_count,
         processing_parameters=processing_parameters,
     )
+
+
+def _lookup_gene(
+    gene_id_raw: str,
+    sample_id: str,
+    gene_map: dict[str, str] | None,
+    sample_gene_maps: dict[str, dict[str, str]] | None,
+) -> str | None:
+    """Resolve a probe row's mapped gene for one sample (Phase 5 D8).
+
+    ``sample_gene_maps`` (per-sample GPL attribution) takes precedence: the
+    sample's own GPL annotation decides the mapping, and samples without an
+    attributable GPL get no mapping. Otherwise the single ``gene_map``
+    applies (single-platform series).
+    """
+    if sample_gene_maps is not None:
+        sample_map = sample_gene_maps.get(sample_id)
+        if not sample_map:
+            return None
+        return sample_map.get(gene_id_raw)
+    return (gene_map or {}).get(gene_id_raw)
 
 
 def _build_sample(values: dict[str, object]) -> GeoSampleMetadata:

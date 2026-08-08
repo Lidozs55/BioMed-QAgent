@@ -1013,6 +1013,8 @@ class PipelineRunner:
                 cleaning_report=processing.cleaning_report,
                 field_alignment=processing.field_alignment,
                 no_primary_reason=processing.no_primary_reason,
+                platform_records=processing.platform_records,
+                sample_platform_evidence=processing.sample_platform_evidence,
             )
         if stage is StageName.VALIDATION:
             build = self._get_output(stage_outputs, StageName.ARTIFACT_BUILD, ArtifactBuildOutput)

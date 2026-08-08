@@ -14,6 +14,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.datasets.contracts import PlatformRecord
 from app.domain.contracts import (
     DownloadAttempt,
     LiteratureRecord,
@@ -23,6 +24,7 @@ from app.domain.contracts import (
     TaskSpecification,
 )
 from app.domain.contracts.discovery import GeoSeriesRecord
+from app.pipeline.processing.geo_association import SamplePlatformEvidenceRow
 from app.pipeline.processing.geo_tximport import GeoSampleMetadata
 from app.pipeline.stages.artifact_build.catalog import (
     _build_dataset_catalog_rows,
@@ -67,6 +69,22 @@ _GENE_TOKEN_STOP = frozenset({
     "PANCREAS", "BREAST", "LUNG", "LIVER", "COLON", "GASTRIC", "RENAL",
     "HEPATIC", "OVARIAN", "PROSTATE", "BRAIN", "BLOOD", "SERUM",
 })
+
+# Phase 5 T3 D8: platform→sample association audit columns (written only
+# when a live GEO run produced PlatformRecords / sample evidence).
+_PLATFORM_AUDIT_COLUMNS = [
+    "platform_id",
+    "source_id",
+    "annotation_status",
+    "annotation_asset_id",
+    "probe_id_field",
+    "gene_id_field",
+    "target_namespace",
+    "mapping_source_url",
+    "annotation_sha256",
+]
+
+_SAMPLE_PLATFORM_EVIDENCE_COLUMNS = ["sample_id", "platform_id"]
 
 
 def _extract_target_gene(topic: str) -> str | None:
@@ -292,6 +310,8 @@ def run_artifact_build(
     parsed_datasets: list[ParsedDataset] | None = None,
     merged_dataset: ParsedDataset | None = None,
     no_primary_reason: str | None = None,
+    platform_records: list[PlatformRecord] | None = None,
+    sample_platform_evidence: list[SamplePlatformEvidenceRow] | None = None,
     dataset_source_id: str | None = None,
     dataset_accession: str | None = None,
     dataset_title: str | None = None,
@@ -571,6 +591,39 @@ def run_artifact_build(
 
     for name, columns in _ARTIFACT_COLUMNS.items():
         write_csv(staging / name, columns, rows_by_file.get(name, []))
+
+    # Phase 5 T3 D8 platform→sample audit: written ONLY when a live GEO run
+    # produced per-GPL PlatformRecords / per-sample GPL evidence, so historic
+    # artifact sets stay unchanged for every other flow. Both files default
+    # to ArtifactRole.AUDIT_REPORT in the manifest.
+    if platform_records:
+        write_csv(
+            staging / "platform_audit.csv",
+            _PLATFORM_AUDIT_COLUMNS,
+            [
+                {
+                    "platform_id": record.platform_id,
+                    "source_id": record.source_id,
+                    "annotation_status": record.annotation_status.value,
+                    "annotation_asset_id": record.annotation_asset_id or "",
+                    "probe_id_field": record.probe_id_field or "",
+                    "gene_id_field": record.gene_id_field or "",
+                    "target_namespace": record.target_namespace or "",
+                    "mapping_source_url": record.mapping_source_url or "",
+                    "annotation_sha256": record.annotation_sha256 or "",
+                }
+                for record in platform_records
+            ],
+        )
+    if sample_platform_evidence:
+        write_csv(
+            staging / "sample_platform_evidence.csv",
+            _SAMPLE_PLATFORM_EVIDENCE_COLUMNS,
+            [
+                {"sample_id": row.sample_id, "platform_id": row.platform_id}
+                for row in sample_platform_evidence
+            ],
+        )
 
     # Target-gene subset artifact (P0-2): when the task topic names a gene
     # symbol that exists in main_data.csv, ship a filtered ``{gene}_expression.csv``
