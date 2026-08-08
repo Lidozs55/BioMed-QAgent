@@ -12,7 +12,7 @@ export interface TaskBuildState {
  * Resolve the V2 build of a task from the builds API.
  *
  * The durable run summary carries a structured BuildResult but no build_id
- * (the backend correlates builds via `datasets_build/<build_id>` directories
+ * (the backend correlates builds via `datasets_build/<build_id>` directories; the fetch key includes the latest run id so a second build-producing run refetches
  * served by `GET /builds`). This hook maps a task to its newest manifest
  * build by listing builds and matching `task_id`. Tasks without a completed
  * run summary (or without a build_result) never hit the network — the

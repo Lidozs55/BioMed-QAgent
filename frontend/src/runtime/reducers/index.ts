@@ -24,7 +24,8 @@ import {
   applyOperationEvent,
   applyStageTransitionEvent,
   pruneStageItemsForOperationRuns,
-} from "./pipeline";import { applyUserInputEvent } from "./hil";
+} from "./pipeline";
+import { applyUserInputEvent } from "./hil";
 
 export {
   isActiveStatus,
