@@ -83,6 +83,7 @@ from app.domain.contracts.events import (
     UserInputResumedPayload,
     WarningPayload,
     build_event,
+    stage_operation_spec,
 )
 from app.domain.contracts.ids import (
     asset_id_from_sha256,
@@ -276,4 +277,5 @@ __all__ = [
     "make_dataset_id",
     "make_record_id",
     "make_source_id",
+    "stage_operation_spec",
 ]

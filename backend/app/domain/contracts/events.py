@@ -366,7 +366,13 @@ class ConversationCompactedPayload(ContractModel):
 
 
 class OperationStartedPayload(ContractModel):
-    """One skeleton operation started (V2 build execution; Design §15.1)."""
+    """One operation started (V2 build execution; Design §15.1; T3 stage mirror).
+
+    ``label`` / ``category`` are stable display strings the frontend groups and
+    icons by (ARCHITECTURE §14.2). V2 skeleton operations emit them here;
+    the pipeline stage mirror (``stage_operation_spec``) emits them on every
+    operation event so the UI never needs the StageName union.
+    """
 
     type: Literal[RuntimeEventType.OPERATION_STARTED] = (
         RuntimeEventType.OPERATION_STARTED
@@ -378,12 +384,18 @@ class OperationStartedPayload(ContractModel):
 
 
 class OperationProgressPayload(ContractModel):
-    """Mid-operation progress (rows parsed, candidates found, ...)."""
+    """Mid-operation progress (rows parsed, candidates found, ...).
+
+    ``label`` / ``category`` are optional (T3): pre-T3 events.jsonl and the V2
+    executor's emissions omit them; the pipeline stage mirror fills them.
+    """
 
     type: Literal[RuntimeEventType.OPERATION_PROGRESS] = (
         RuntimeEventType.OPERATION_PROGRESS
     )
     operation_id: str = Field(min_length=1)
+    label: str = ""
+    category: str = ""
     kind: str = Field(min_length=1)
     current: int = Field(ge=0)
     total: int | None = Field(default=None, ge=0)
@@ -391,10 +403,17 @@ class OperationProgressPayload(ContractModel):
 
 
 class OperationCompletedPayload(ContractModel):
+    """One operation reached a terminal success/skip state.
+
+    ``label`` / ``category`` are optional (T3); see OperationProgressPayload.
+    """
+
     type: Literal[RuntimeEventType.OPERATION_COMPLETED] = (
         RuntimeEventType.OPERATION_COMPLETED
     )
     operation_id: str = Field(min_length=1)
+    label: str = ""
+    category: str = ""
     status: Literal[AttemptStatus.SUCCEEDED, AttemptStatus.SKIPPED] = (
         AttemptStatus.SUCCEEDED
     )
@@ -403,10 +422,17 @@ class OperationCompletedPayload(ContractModel):
 
 
 class OperationFailedPayload(ContractModel):
+    """One operation failed or was cancelled.
+
+    ``label`` / ``category`` are optional (T3); see OperationProgressPayload.
+    """
+
     type: Literal[RuntimeEventType.OPERATION_FAILED] = (
         RuntimeEventType.OPERATION_FAILED
     )
     operation_id: str = Field(min_length=1)
+    label: str = ""
+    category: str = ""
     status: Literal[AttemptStatus.FAILED, AttemptStatus.CANCELLED]
     error: ErrorDetail | None = None
 
@@ -576,6 +602,31 @@ _SUBAGENT_EVENTS = {
     RuntimeEventType.SUBAGENT_INPUT_REQUIRED,
     RuntimeEventType.SUBAGENT_INPUT_RESUMED,
 }
+
+# T3 (Phase 7): generic operation-event superset for the fixed StageName
+# union. The display labels mirror frontend STAGE_LABELS
+# (frontend/src/components/conversation/stageLabels.ts) so the wire label is
+# self-contained and the UI never needs the StageName union to render.
+_STAGE_OPERATION_LABELS: dict[StageName, str] = {
+    StageName.DISCOVERY: "文献/数据发现",
+    StageName.ACQUISITION: "数据获取",
+    StageName.PROCESSING: "数据处理",
+    StageName.ARTIFACT_BUILD: "产物构建",
+    StageName.VALIDATION: "结果验证",
+}
+
+
+def stage_operation_spec(stage: StageName) -> tuple[str, str, str]:
+    """Map a pipeline stage to a stable operation identity.
+
+    Returns ``(operation_id, label, category)``. Every ``stage_*`` event is
+    mirrored by an ``operation_*`` event carrying these three stable strings
+    (ARCHITECTURE §14.2) so the frontend can group/icon by operation identity;
+    the legacy ``stage_*`` stream stays emitted unchanged during the
+    compatibility period.
+    """
+
+    return (f"stage:{stage.value}", _STAGE_OPERATION_LABELS[stage], stage.value)
 
 
 class EventEnvelope(ContractModel):

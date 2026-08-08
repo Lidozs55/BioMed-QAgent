@@ -41,6 +41,7 @@ from app.domain.contracts import (
     AssistantStreamEndFrame,
     CancelRequestedPayload,
     EventEnvelope,
+    OperationProgressPayload,
     PublicationCreatedPayload,
     StageName,
     StageProgressPayload,
@@ -53,6 +54,7 @@ from app.domain.contracts import (
     UserInputResumedPayload,
     WarningPayload,
     build_event,
+    stage_operation_spec,
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
 from app.domain.contracts.runtime import validate_task_databases
@@ -913,6 +915,20 @@ class AgentRunExecutor:
                 await execution.emit(
                     StageProgressPayload(
                         stage=stage,
+                        kind=kind,
+                        current=current,
+                        total=total,
+                        detail=detail,
+                    )
+                )
+                # T3 (Phase 7): mirror the stage_progress event with an
+                # operation_progress event (ARCHITECTURE §14.2).
+                operation_id, label, category = stage_operation_spec(stage)
+                await execution.emit(
+                    OperationProgressPayload(
+                        operation_id=operation_id,
+                        label=label,
+                        category=category,
                         kind=kind,
                         current=current,
                         total=total,

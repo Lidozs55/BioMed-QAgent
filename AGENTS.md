@@ -97,12 +97,21 @@ Key points:
      `tool_started`, `tool_completed`, `assistant_delta`,
      `assistant_reasoning_delta`, `stage_started`, `stage_completed`,
      `stage_failed`, `stage_skipped`, `stage_progress`,
+     `operation_started`, `operation_progress`, `operation_completed`,
+     `operation_failed`,
      `artifact_produced`, `warning`, `user_input_required`,
      `user_input_resumed`, `plan_ready`, `conversation_compacted`,
      `task_created`, `task_cancel_requested`, `task_recovered`,
      `task_completed`, `task_failed`. See
      [backend/app/domain/contracts/events.py](backend/app/domain/contracts/events.py)
      for the authoritative payload schemas.
+
+     > Phase 7 T3: the fixed `stage_*` union is superseded by generic
+     > `operation_*` events carrying `operation_id` / `label` / `category`
+     > (stable strings the UI groups/icons by). During the compatibility
+     > period every `stage_*` event is still emitted **and** mirrored by an
+     > `operation_*` event; the frontend should render by operation identity
+     > (see docs/ARCHITECTURE.md §14.2 / §17.2).
    - `{"type":"pong"}` — response to ping
    - `{"type":"error","message":"..."}` — protocol error (e.g. unsupported command)
 
