@@ -215,6 +215,11 @@ export interface TaskSummary {
   latest_sequence: number;
   /** Number of validated artifacts produced by the task (absent in older snapshots). */
   artifact_count?: number;
+  /**
+   * Outcome of the most recent terminal run (absent in older snapshots).
+   * Lets the history list classify a conversation before its runs hydrate.
+   */
+  latest_build_status?: BuildResultStatus | null;
 }
 
 export interface RunRecord {

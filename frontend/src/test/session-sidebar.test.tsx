@@ -23,6 +23,8 @@ function summary(
   taskId: string,
   status: RunStatus,
   title = taskId,
+  artifactCount?: number,
+  latestBuildStatus?: BuildResultStatus,
 ): TaskSummary {
   return {
     task_id: taskId,
@@ -30,6 +32,8 @@ function summary(
     databases: [],
     title,
     status,
+    artifact_count: artifactCount,
+    latest_build_status: latestBuildStatus,
     active_run_id:
       status === "queued" ||
       status === "running" ||
@@ -397,12 +401,14 @@ describe("SessionSidebar", () => {
       screen.getByRole("button", { name }).querySelector("svg");
     expect(iconFor("Running 运行中")).toHaveClass("text-primary");
     expect(iconFor("Queued 排队中")).toHaveClass("text-primary");
-    expect(iconFor("Completed 已完成")).toHaveClass(
+    expect(iconFor("Completed 已完成")).not.toHaveClass(
       "text-sky-600",
       "dark:text-sky-400",
+      "text-emerald-600",
+      "text-destructive",
     );
     expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
-    expect(iconFor("Cancelled 已取消")).toHaveClass("text-destructive");
+    expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
     expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
     expect(container.querySelector('[data-slot="badge"]')).not.toHaveTextContent(
       /运行中|排队中|已完成|失败|已取消|已中断/,
@@ -452,14 +458,13 @@ describe("SessionSidebar", () => {
       "text-emerald-600",
       "dark:text-emerald-400",
     );
-    expect(iconFor("No Data 已完成")).toHaveClass(
+    expect(iconFor("No Data 已完成")).not.toHaveClass(
       "text-sky-600",
       "dark:text-sky-400",
+      "text-emerald-600",
+      "text-destructive",
     );
-    expect(iconFor("Rejected 已完成")).toHaveClass(
-      "text-amber-600",
-      "dark:text-amber-400",
-    );
+    expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
     expect(iconFor("Error 失败")).toHaveClass("text-destructive");
     // icon identity matches the build result (not just color classes)
     expect(iconPath("Succeeded 已完成")).toContain("M173.66,98.34a8,8"); // CheckCircleIcon
@@ -467,6 +472,133 @@ describe("SessionSidebar", () => {
     expect(iconPath("No Data 已完成")).toContain("M112,84a12,12,0,1,1"); // InfoIcon
     expect(iconPath("Rejected 已完成")).toContain("m88,104a87.56"); // ProhibitIcon
     expect(iconPath("Error 失败")).toContain("Zm-8-80V80"); // WarningCircleIcon
+  });
+
+  it("classifies history summaries without hydrated runs via artifact_count", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("with_data", "completed", "With Data", 2),
+          summary("no_data", "completed", "No Data", 0),
+          summary("cancelled", "cancelled", "Cancelled", 0),
+          summary("failed", "failed", "Failed", 0),
+          summary("interrupted", "interrupted", "Interrupted", 0),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("With Data 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("No Data 已完成")).not.toHaveClass(
+      "text-sky-600",
+      "dark:text-sky-400",
+      "text-emerald-600",
+      "text-destructive",
+    );
+    expect(iconFor("Cancelled 已取消")).not.toHaveClass("text-destructive");
+    expect(iconFor("Failed 失败")).toHaveClass("text-destructive");
+    expect(iconFor("Interrupted 已中断")).toHaveClass("text-destructive");
+  });
+
+  it("classifies history rows from summary.latest_build_status", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("legacy_no_data", "failed", "Legacy No Data", 0, "no_data"),
+          summary("genuine_error", "failed", "Genuine Error", 0, null),
+          summary("with_data", "completed", "With Data", 0, "succeeded"),
+          summary("rejected", "completed", "Rejected", 0, "spec_rejected"),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
+    expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
+    expect(iconFor("With Data 已完成")).toHaveClass(
+      "text-emerald-600",
+      "dark:text-emerald-400",
+    );
+    expect(iconFor("Rejected 已完成")).toHaveClass("text-destructive");
+  });
+
+  it("renders legacy no-artifact failures as neutral once run data hydrates", () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [
+          summary("legacy_no_data", "failed", "Legacy No Data", 0),
+          summary("genuine_error", "failed", "Genuine Error", 0),
+        ],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.setState({
+      tasksById: {
+        ...useAgentStore.getState().tasksById,
+        legacy_no_data: {
+          ...useAgentStore.getState().tasksById.legacy_no_data,
+          runsById: {
+            run_legacy_no_data: {
+              runId: "run_legacy_no_data",
+              taskId: "legacy_no_data",
+              requestId: null,
+              status: "failed",
+              input: null,
+              createdAt: CREATED_AT,
+              updatedAt: CREATED_AT,
+              startedAt: CREATED_AT,
+              finishedAt: CREATED_AT,
+              error: "run failed without producing any artifacts",
+              summary: null,
+            },
+          },
+          runOrder: ["run_legacy_no_data"],
+        },
+        genuine_error: {
+          ...useAgentStore.getState().tasksById.genuine_error,
+          runsById: {
+            run_genuine_error: {
+              runId: "run_genuine_error",
+              taskId: "genuine_error",
+              requestId: null,
+              status: "failed",
+              input: null,
+              createdAt: CREATED_AT,
+              updatedAt: CREATED_AT,
+              startedAt: CREATED_AT,
+              finishedAt: CREATED_AT,
+              error: "model request failed: connection refused",
+              summary: null,
+            },
+          },
+          runOrder: ["run_genuine_error"],
+        },
+      },
+    });
+
+    renderSidebar();
+
+    const iconFor = (name: string) =>
+      screen.getByRole("button", { name }).querySelector("svg");
+    expect(iconFor("Legacy No Data 失败")).not.toHaveClass("text-destructive");
+    expect(iconFor("Genuine Error 失败")).toHaveClass("text-destructive");
   });
 
   it("separates active cancellation from terminal deletion", async () => {

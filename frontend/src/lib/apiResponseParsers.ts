@@ -302,6 +302,11 @@ export function parseTaskSnapshot(json: unknown): TaskSnapshot {
       updated_at: assertString(Reflect.get(task, "updated_at"), "task.updated_at"),
       latest_sequence: assertNumber(Reflect.get(task, "latest_sequence"), "task.latest_sequence"),
       artifact_count: optionalNumber(Reflect.get(task, "artifact_count")),
+      latest_build_status: assertOptionalNull(
+        Reflect.get(task, "latest_build_status"),
+        "task.latest_build_status",
+        assertBuildResultStatus,
+      ),
     },
     runs: assertArray(Reflect.get(obj, "runs"), "runs", parseRunRecord),
     messages: assertArray(Reflect.get(obj, "messages"), "messages", parseMessageRecord),
@@ -340,6 +345,11 @@ function parseTaskSummary(json: unknown, path: string): TaskPage["active_items"]
     updated_at: assertString(Reflect.get(obj, "updated_at"), `${path}.updated_at`),
     latest_sequence: assertNumber(Reflect.get(obj, "latest_sequence"), `${path}.latest_sequence`),
     artifact_count: optionalNumber(Reflect.get(obj, "artifact_count")),
+    latest_build_status: assertOptionalNull(
+      Reflect.get(obj, "latest_build_status"),
+      `${path}.latest_build_status`,
+      assertBuildResultStatus,
+    ),
   };
 }
 

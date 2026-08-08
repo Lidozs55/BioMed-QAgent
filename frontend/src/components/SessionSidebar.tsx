@@ -16,6 +16,10 @@ import biomedLogoV2 from "../../../assets/logo/biomed-qagent-logo-v2.svg";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import {
+  latestBuildStatus,
+  taskOutcome,
+} from "@/components/taskOutcome";
+import {
   Alert,
   AlertDescription,
   AlertTitle,
@@ -104,23 +108,15 @@ function TaskRow({
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
   const active = isActiveStatus(summary.status);
-  const latestRunId = task.runOrder[task.runOrder.length - 1];
-  const latestRun =
-    latestRunId === undefined ? null : task.runsById[latestRunId] ?? null;
-  const buildStatus = latestRun?.summary?.build_result?.status ?? null;
+  const buildStatus = latestBuildStatus(task);
+  const outcome = taskOutcome(task);
   const statusIconClass = active
     ? "text-primary"
-    : buildStatus === "no_data"
-      ? "text-sky-600 dark:text-sky-400"
-      : buildStatus === "spec_rejected"
-        ? "text-amber-600 dark:text-amber-400"
-        : buildStatus === "succeeded" || buildStatus === "partial_success"
-          ? "text-emerald-600 dark:text-emerald-400"
-          : summary.status === "failed" ||
-              summary.status === "cancelled" ||
-              summary.status === "interrupted"
-            ? "text-destructive"
-            : undefined;
+    : outcome === "data"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : outcome === "problem"
+        ? "text-destructive"
+        : undefined;
   const cancelling = summary.status === "cancel_requested" || pendingCancel;
 
   return (

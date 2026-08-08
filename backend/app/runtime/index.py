@@ -23,6 +23,7 @@ from app.domain.contracts import (
     TaskSnapshot,
     TaskSummary,
 )
+from app.domain.contracts.dataset_state import BuildResultStatus
 from app.runtime.event_store import CorruptEventLogError, EventStore
 from app.runtime.state import (
     artifact_identities_from_events,
@@ -39,6 +40,14 @@ _ACTIVE_STATUSES = (
     RunStatus.FINALIZING.value,
     RunStatus.CANCEL_REQUESTED.value,
     RunStatus.AWAITING_USER_INPUT.value,
+)
+
+#: Legacy failures recorded before NO_DATA became a completed outcome. The
+#: frontend previously matched these strings; keep them so old conversations
+#: are not mistaken for genuine errors in the history list.
+_LEGACY_NO_ARTIFACT_FAILURE_MARKERS = (
+    "without producing any artifacts",
+    "manifest missing or unchanged",
 )
 
 _T = TypeVar("_T")
@@ -69,6 +78,31 @@ def _utc_text(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def _latest_build_status_for(snapshot: TaskSnapshot) -> BuildResultStatus | None:
+    """Project the latest terminal run outcome onto the task summary.
+
+    Modern runs carry a structured ``build_result``; legacy failed runs that
+    produced no artifacts are normalized to NO_DATA so the history list can
+    tell them apart from genuine errors without hydrating run details.
+    """
+
+    if not snapshot.runs:
+        return None
+    latest = snapshot.runs[-1]
+    if latest.summary is not None and latest.summary.build_result is not None:
+        return latest.summary.build_result.status
+    if (
+        latest.status is RunStatus.FAILED
+        and latest.error is not None
+        and any(
+            marker in latest.error
+            for marker in _LEGACY_NO_ARTIFACT_FAILURE_MARKERS
+        )
+    ):
+        return BuildResultStatus.NO_DATA
+    return None
 
 
 def _encode_cursor(created_at: str, task_id: str) -> str:
@@ -190,7 +224,8 @@ class TaskIndex:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 latest_sequence INTEGER NOT NULL,
-                artifact_count INTEGER NOT NULL DEFAULT 0
+                artifact_count INTEGER NOT NULL DEFAULT 0,
+                latest_build_status TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_task_summaries_history
                 ON task_summaries(created_at DESC, task_id DESC);
@@ -217,6 +252,10 @@ class TaskIndex:
             connection.execute(
                 "ALTER TABLE task_summaries "
                 "ADD COLUMN artifact_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "latest_build_status" not in columns:
+            connection.execute(
+                "ALTER TABLE task_summaries ADD COLUMN latest_build_status TEXT"
             )
         request_columns = {
             row["name"]
@@ -257,12 +296,14 @@ class TaskIndex:
         include_requests: bool = True,
     ) -> None:
         task = snapshot.task
+        latest_build_status = _latest_build_status_for(snapshot)
         connection.execute(
             """
             INSERT INTO task_summaries (
                 task_id, mode, databases, title, status, active_run_id,
-                created_at, updated_at, latest_sequence, artifact_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, latest_sequence, artifact_count,
+                latest_build_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 mode = excluded.mode,
                 databases = excluded.databases,
@@ -271,7 +312,8 @@ class TaskIndex:
                 active_run_id = excluded.active_run_id,
                 updated_at = excluded.updated_at,
                 latest_sequence = excluded.latest_sequence,
-                artifact_count = excluded.artifact_count
+                artifact_count = excluded.artifact_count,
+                latest_build_status = excluded.latest_build_status
             """,
             (
                 task.task_id,
@@ -284,6 +326,11 @@ class TaskIndex:
                 _utc_text(task.updated_at),
                 task.latest_sequence,
                 task.artifact_count,
+                (
+                    latest_build_status.value
+                    if latest_build_status is not None
+                    else None
+                ),
             ),
         )
         if include_requests:
@@ -404,6 +451,7 @@ class TaskIndex:
 
     @staticmethod
     def _summary_from_row(row: sqlite3.Row) -> TaskSummary:
+        latest_build_status = row["latest_build_status"]
         return TaskSummary(
             task_id=row["task_id"],
             mode=row["mode"],
@@ -415,6 +463,11 @@ class TaskIndex:
             updated_at=row["updated_at"],
             latest_sequence=row["latest_sequence"],
             artifact_count=row["artifact_count"],
+            latest_build_status=(
+                BuildResultStatus(latest_build_status)
+                if latest_build_status is not None
+                else None
+            ),
         )
 
     def _rebuild_sync(self) -> None:
