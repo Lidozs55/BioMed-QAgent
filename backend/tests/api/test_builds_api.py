@@ -184,6 +184,33 @@ async def test_builds_api_paginates_with_cursor(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_builds_api_lists_skips_corrupt_manifest(
+    tmp_path: Path,
+) -> None:
+    """A corrupt manifest must not take down the whole listing (R1C-01)."""
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await _run_build(repository, "task_a", "build_alpha")
+        await _run_build(repository, "task_a", "build_beta")
+        manifest_path = (
+            repository.tasks_dir
+            / "task_a"
+            / "datasets_build"
+            / "build_alpha"
+            / "dataset_manifest.json"
+        )
+        manifest_path.write_text('{"truncated": ', encoding="utf-8")
+
+        response = await client.get("/api/v1/builds")
+        payload = response.json()
+
+    assert response.status_code == 200
+    items = payload["items"]
+    assert [item["build_id"] for item in items] == ["build_beta"]
+    assert payload["next_cursor"] is None
+
+
+@pytest.mark.asyncio
 async def test_builds_api_single_build_detail(tmp_path: Path) -> None:
     async with api_client(tmp_path) as (application, client):
         repository = application.state.task_repository
