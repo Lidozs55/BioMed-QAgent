@@ -438,7 +438,7 @@ def test_find_latest_publication_selects_newest_by_published_at(
     """
     from datetime import UTC, datetime, timedelta
 
-    from app.datasets.build.expression_runner import _find_latest_publication
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
     publish_dir = tmp_path / "publish"
     base = datetime(2026, 8, 1, tzinfo=UTC)
@@ -470,7 +470,7 @@ def test_find_latest_publication_tie_breaks_deterministically(
     """Equal published_at timestamps resolve deterministically."""
     from datetime import UTC, datetime
 
-    from app.datasets.build.expression_runner import _find_latest_publication
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
     publish_dir = tmp_path / "publish"
     same_time = datetime(2026, 8, 1, tzinfo=UTC)
@@ -500,7 +500,7 @@ def test_find_latest_publication_ignores_malformed_records(tmp_path: Path) -> No
     """Records without a parseable publication_id/published_at are skipped."""
     from datetime import UTC, datetime
 
-    from app.datasets.build.expression_runner import _find_latest_publication
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
     publish_dir = tmp_path / "publish"
     good = publish_dir / "0123456789abcdef"
@@ -1661,7 +1661,7 @@ def test_find_latest_publication_normalizes_naive_timestamps(tmp_path: Path) -> 
     mixing naive and timezone-aware values must not raise TypeError, and the
     chronologically-later aware record wins deterministically.
     """
-    from app.datasets.build.expression_runner import _find_latest_publication
+    from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
     publish_dir = tmp_path / "publish"
     records = [
