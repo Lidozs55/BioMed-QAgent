@@ -51,6 +51,7 @@ from app.domain.contracts import (
 from app.domain.contracts.dataset_state import BuildResult, BuildResultStatus
 from app.domain.contracts.enums import ErrorCode
 from app.domain.contracts.runtime import validate_task_databases
+from app.logging_setup import set_log_context
 from app.model_config import RunModelSettings
 from app.model_settings import get_current_model_configuration
 from app.runtime.hub import AssistantStreamHub, EventHub
@@ -1508,7 +1509,10 @@ class TaskManager:
                     request_id="recovery",
                     task_id=summary.task_id,
                     run_id=run.run_id,
-                    request_fingerprint="recovery",
+                    # 确定性指纹满足 ^[0-9a-f]{64}$ 契约，避免补发事件被幂等校验拒绝
+                    request_fingerprint=hashlib.sha256(
+                        f"recovery:{summary.task_id}:{run.run_id}".encode()
+                    ).hexdigest(),
                 )
                 lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
                 async with lock:
@@ -1679,10 +1683,16 @@ class TaskManager:
         state = await self._prepare_execution(queued)
         if state is None:
             return
-        try:
-            await self._dispatch_run(state)
-        finally:
-            await self._finalize_run(state)
+        # 结构化日志上下文（REVIEW 2026-07-18 §9.3）：绑定 task_id/run_id，
+        # 使 run 生命周期内（Agent loop / pipeline 工具链）的日志可跨模块关联。
+        async with set_log_context(
+            task_id=queued.accepted.task_id,
+            run_id=queued.accepted.run_id,
+        ):
+            try:
+                await self._dispatch_run(state)
+            finally:
+                await self._finalize_run(state)
 
     async def _prepare_execution(self, queued: _QueuedRun) -> _ExecutionState | None:
         """Acquire lock, read snapshot, validate state, and build RunExecution.

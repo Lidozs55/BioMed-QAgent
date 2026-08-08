@@ -9,11 +9,45 @@ import app.pipeline.tool as pipeline_tool_module
 import pytest
 from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
-from app.domain.contracts import Database, TaskRequest
+from app.domain.contracts import Database, StageName, TaskRequest
 from app.model_config import RunModelSettings, UserSettings
 from app.pipeline.runner import PendingPublicationCleanup
-from app.pipeline.tool import _build_tool_specification, run_research_pipeline
+from app.pipeline.tool import (
+    _build_tool_specification,
+    _stage_timeouts_from_settings,
+    run_research_pipeline,
+)
 from app.tools.workdir import create_task_workdir
+
+
+def test_stage_timeouts_from_settings_empty_returns_none() -> None:
+    """空 STAGE_TIMEOUTS 配置返回 None，runner 使用内置默认。"""
+    import app.pipeline.tool as tool_module
+    from app.config import Settings as SettingsCls
+
+    tool_module.app_settings = SettingsCls()
+    assert _stage_timeouts_from_settings() is None
+
+
+def test_stage_timeouts_from_settings_maps_known_stages(monkeypatch) -> None:
+    """STAGE_TIMEOUTS 映射到 StageName 键，未知 stage 被跳过。"""
+    import app.pipeline.tool as tool_module
+    from app.config import Settings as SettingsCls
+
+    monkeypatch.setenv(
+        "STAGE_TIMEOUTS",
+        '{"discovery": 60, "acquisition": 120, "unknown_stage": 999}',
+    )
+    tool_module.app_settings = SettingsCls()
+    try:
+        mapped = _stage_timeouts_from_settings()
+        assert mapped is not None
+        assert mapped[StageName.DISCOVERY] == 60.0
+        assert mapped[StageName.ACQUISITION] == 120.0
+        assert StageName.PROCESSING not in mapped
+    finally:
+        monkeypatch.delenv("STAGE_TIMEOUTS")
+        tool_module.app_settings = SettingsCls()
 
 
 def test_tool_specification_adds_explicit_reactome_pathway() -> None:

@@ -199,20 +199,12 @@ def test_reactome_get_pathway_live_returns_details() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Known: toil-xena-hub S3 bucket returns HTTP 403 from domestic "
-        "networks. Tracked in TODO.md Phase 1F (Xena hub 403). Remove "
-        "this xfail once Xena hub access is restored or an alternative "
-        "hub URL is wired in. Will XPASS to remind us when fixed."
-    ),
-    strict=False,
-)
 def test_xena_search_live_returns_datasets() -> None:
-    """UCSC Xena hub S3 listing returns dataset entries.
+    """UCSC Xena hub query API returns dataset entries.
 
-    Note: Xena hub S3 listing may return 0 matches for specific terms due to
-    filtering logic; this test verifies the API is reachable and returns
+    Uses the official hub ``/data/`` query endpoint (all-datasets), which
+    is not blocked by the S3 bucket policy that denies ListObjectsV2 with
+    HTTP 403.  This test verifies the API is reachable and returns
     structured JSON (not necessarily with results).
     """
     ctx = _context("live_xena_search", "search_xena")
@@ -221,7 +213,7 @@ def test_xena_search_live_returns_datasets() -> None:
     ))
     data = json.loads(result)
     assert data["source"] == "xena"
-    # Verify API is reachable (no error key means S3 listing succeeded)
+    # Verify API is reachable (no error key means the query succeeded)
     assert "error" not in data, f"Xena search failed: {data.get('error')}"
     assert "count" in data
     assert isinstance(data["records"], list)

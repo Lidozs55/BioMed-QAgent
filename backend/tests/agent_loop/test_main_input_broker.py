@@ -1398,8 +1398,11 @@ async def test_agent_loop_data_correction_timeout_e2e(
             and p.tool_name == "request_human_correction_timeout_probe"
         ]
         assert len(tool_outputs) == 1
-        assert '"status": "timed_out"' in tool_outputs[0]
-        assert str(csv_path) in tool_outputs[0]
+        parsed_output = json.loads(tool_outputs[0])
+        assert parsed_output["status"] == "timed_out"
+        # 经 JSON 序列化后比较,避免 Windows 反斜杠转义 (json.dumps → \\)
+        # 导致子串匹配失败
+        assert parsed_output["corrections_path"] == str(csv_path)
         assert not any(isinstance(p, RunFailedPayload) for p in payloads)
     finally:
         model.allow_tool_call.set()

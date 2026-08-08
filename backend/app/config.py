@@ -2,13 +2,39 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()  # 从 .env 加载
+
+
+def _parse_stage_timeouts() -> dict[str, float]:
+    """Parse the optional ``STAGE_TIMEOUTS`` JSON env into a float map.
+
+    Example: ``STAGE_TIMEOUTS='{"discovery": 60, "acquisition": 120}'``.
+    Invalid JSON or non-numeric values fall back to an empty dict, letting
+    the PipelineRunner use its built-in defaults.
+    """
+    raw = os.getenv("STAGE_TIMEOUTS", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    result: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            result[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 @dataclass(frozen=True)
@@ -32,8 +58,16 @@ class Settings:
     # 后端
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
-    # 数据产物目录
-    output_dir: str = os.getenv("OUTPUT_DIR", "data/output")
+    # 数据产物目录 — 默认解析为绝对路径，避免 cwd 变化导致输出散落
+    output_dir: str = os.getenv(
+        "OUTPUT_DIR",
+        str(Path.cwd().resolve() / "data" / "output"),
+    )
+    # 爬虫行为（原 §5.3）：真实浏览器 UA 与请求间隔限速
+    crawler_ua: str = os.getenv("CRAWLER_UA", "")
+    rate_limit_seconds: float = float(os.getenv("RATE_LIMIT_SECONDS", "2.0"))
+    # Pipeline stage 超时（秒）— JSON 映射，键为 StageName 值（原 §5.3）
+    stage_timeouts: dict[str, float] = field(default_factory=_parse_stage_timeouts)
     # User-installed skills live outside the bundled Python package.  When
     # unset, derive a sibling of OUTPUT_DIR so packaged application upgrades
     # cannot overwrite user data.

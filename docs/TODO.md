@@ -303,11 +303,34 @@
 
 ## 独立维护项（不阻塞 V2 主线，随阶段推进）
 
-- [ ] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
-- [ ] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
-- [ ] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
-- [ ] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
+- [x] **P1** 结构化日志（structlog / python-json-logger）（原 §4.4）
+      （零新依赖标准库实现 `app/logging_setup.py`：`JsonFormatter` 输出
+      `logs/app.jsonl` JSON 行 + `RotatingFileHandler` 轮转（1MB×5）；
+      `set_log_context` 基于 contextvars 绑定 task_id/run_id/stage，
+      manager `_execute` 绑定 task/run、runner `_run_stage` 绑定 stage
+      （`asyncio.to_thread` 自动传播 context 到 stage 线程）；控制台保持
+      人类可读文本；事件审计 pipeline.jsonl 通道不变；7 项新测试。
+      附带修复：`_recover` 补发 PublicationCreatedPayload 时
+      `request_fingerprint="recovery"` 违反 `^[0-9a-f]{64}$` 契约导致
+      带历史 marker 数据启动崩溃 → 改确定性 sha256 指纹）
+- [x] **P1** Xena 403 修复：移除 `test_all_data_sources_live.py` 的 xfail（原 §2.2）
+      （根因是 S3 ListObjectsV2 桶策略拒绝（403）；`search_xena` 改走官方
+      hub 查询 API `POST https://toil.xenahubs.net/data/`（all-datasets，
+      text/plain body，xenaPython 同款查询），S3 XML 列表保留为兜底；
+      crawler `api_request` 新增 `raw_body` 支持；live xfail 移除；
+      END-TO-END 实测返回 27 个 TCGA 数据集）
+- [x] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
+      （BrowserPool 已由 Semaphore 保证排队；补充监控：`active_operations` /
+      `queued_operations` / `max_contexts` 只读属性，`_begin_operation` 维护
+      排队计数（acquire 取消时正确归还），1 项新测试验证 2 active + 2 queued）
+- [x] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
       `DASHSCOPE_API_KEY` 启动校验、`OUTPUT_DIR` 绝对路径默认值（原 §5.3）
+      （`Settings` 新增 crawler_ua / rate_limit_seconds / stage_timeouts（frozen
+      dataclass 用 `field(default_factory=...)` 解析 `STAGE_TIMEOUTS` JSON）；
+      `main.py` lifespan 接线 `CrawlerFacade(min_interval=rate_limit_seconds)`
+      并校验 `DASHSCOPE_API_KEY` 缺失告警；`tool.py` 新增
+      `_stage_timeouts_from_settings` 映射 StageName；`OUTPUT_DIR` 默认解析为
+      绝对路径；`.env.example` 补充文档；5 项新测试）
 - [ ] **P2** Agent INSTRUCTIONS 增加"达到 max_turns 后输出 `[MAX_TURNS_REACHED]`"
       指导（原 §4.5）
 - [ ] **P2** 新增 UniProt / ChEMBL 等 Agent-only 来源能力（不接入 Pipeline）（原 §1.4）

@@ -326,6 +326,43 @@ async def test_pool_uses_one_browser_and_at_most_four_contexts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pool_exposes_concurrency_monitoring_metrics() -> None:
+    """REVIEW 2026-07-18 §8.2 P2：监控并发 context 数与排队等待数。"""
+    fake = FakePlaywright(block_operations=True)
+    pool = BrowserPool(max_contexts=2, playwright_factory=fake.factory)
+    await pool.start()
+    assert pool.max_contexts == 2
+    assert pool.active_operations == 0
+    assert pool.queued_operations == 0
+
+    tasks = [
+        asyncio.create_task(
+            pool.fetch(
+                f"https://example.org/page?index={index}",
+                authorize_request=_allow_request,
+            )
+        )
+        for index in range(4)
+    ]
+    # 2 个操作持有 context（active），另外 2 个在 semaphore 上排队
+    deadline = asyncio.get_running_loop().time() + 2
+    while pool.active_operations < 2 or pool.queued_operations < 2:
+        if asyncio.get_running_loop().time() > deadline:
+            break
+        await asyncio.sleep(0.01)
+
+    assert pool.active_operations == 2
+    assert pool.queued_operations == 2
+    assert fake.max_active_contexts == 2
+
+    fake.release_operations.set()
+    await asyncio.gather(*tasks)
+    assert pool.active_operations == 0
+    assert pool.queued_operations == 0
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_route_authorizes_main_frames_redirects_and_subresources_before_transport() -> None:
     fake = FakePlaywright()
     pool = BrowserPool(playwright_factory=fake.factory)
