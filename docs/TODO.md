@@ -292,7 +292,10 @@
       text/plain body，xenaPython 同款查询），S3 XML 列表保留为兜底；
       crawler `api_request` 新增 `raw_body` 支持；live xfail 移除；
       END-TO-END 实测返回 27 个 TCGA 数据集）
-- [ ] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
+- [x] **P2** 监控并发 Chromium 实例数，超阈值排队（原 §5.2）
+      （BrowserPool 已由 Semaphore 保证排队；补充监控：`active_operations` /
+      `queued_operations` / `max_contexts` 只读属性，`_begin_operation` 维护
+      排队计数（acquire 取消时正确归还），1 项新测试验证 2 active + 2 queued）
 - [x] **P2** `config.py` 扩展（crawler_ua / rate_limit / stage_timeouts）、
       `DASHSCOPE_API_KEY` 启动校验、`OUTPUT_DIR` 绝对路径默认值（原 §5.3）
       （`Settings` 新增 crawler_ua / rate_limit_seconds / stage_timeouts（frozen

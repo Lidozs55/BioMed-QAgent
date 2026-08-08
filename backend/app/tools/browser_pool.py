@@ -272,6 +272,7 @@ class BrowserPool:
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._active_operations = 0
+        self._queued_operations = 0
         self._started = False
         self._closed = False
 
@@ -282,6 +283,21 @@ class BrowserPool:
     @property
     def is_closed(self) -> bool:
         return self._closed
+
+    @property
+    def max_contexts(self) -> int:
+        """并发 context 上限（超出的操作排队等待）。"""
+        return self._max_contexts
+
+    @property
+    def active_operations(self) -> int:
+        """当前持有 context 的活动操作数（并发 Chromium context 数）。"""
+        return self._active_operations
+
+    @property
+    def queued_operations(self) -> int:
+        """等待获取 context 的排队操作数（REVIEW 2026-07-18 §8.2 P2 监控）。"""
+        return self._queued_operations
 
     async def start(self) -> None:
         """Make the pool available; Chromium is launched lazily on first use."""
@@ -510,17 +526,24 @@ class BrowserPool:
             await session.close()
 
     async def _begin_operation(self) -> None:
-        await self._semaphore.acquire()
+        async with self._condition:
+            self._queued_operations += 1
         try:
-            async with self._condition:
-                if not self._started:
-                    raise RuntimeError("browser pool is not started")
-                if self._closed:
-                    raise RuntimeError("browser pool is closed")
-                self._active_operations += 1
+            await self._semaphore.acquire()
         except BaseException:
-            self._semaphore.release()
+            # acquire 被取消：排队者退出，归还排队名额
+            async with self._condition:
+                self._queued_operations -= 1
             raise
+        async with self._condition:
+            self._queued_operations -= 1
+            if not self._started:
+                self._semaphore.release()
+                raise RuntimeError("browser pool is not started")
+            if self._closed:
+                self._semaphore.release()
+                raise RuntimeError("browser pool is closed")
+            self._active_operations += 1
 
     async def _end_operation(self) -> None:
         async with self._condition:
