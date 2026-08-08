@@ -401,3 +401,48 @@ def test_unknown_adapter_execution_failure(tmp_path: Path) -> None:
             source_paths=paths,
             output_dir=tmp_path / "build",
         )
+
+
+def _geo_binding(binding_id: str, scale: str) -> SourceBinding:
+    """A GEO binding whose adapter parameters declare an explicit scale."""
+    return SourceBinding(
+        binding_id=binding_id,
+        source="geo",
+        acquisition=SourceBindingAcquisition(
+            mode=AcquisitionMode.BUILTIN, provider_id="geo.series.v1"
+        ),
+        adapter_id="geo.expression.v1",
+        parameters={
+            "format": "tximport_counts",
+            "value_semantics": "raw_count",
+            "value_scale": scale,
+            "expression_unit": "expression_value",
+        },
+    )
+
+
+def test_unknown_scale_cross_source_chain_rejected(tmp_path: Path) -> None:
+    """D4 at chain level (review-loop R2-04): two GEO bindings whose
+    measurement identity triples both carry an *unknown* scale never merge.
+
+    The gate alone cannot prove two unknown-scale sources equivalent
+    (Phase 5 registers no evidence-backed normalization rule), so the build
+    is rejected with ``measurement_identity_mismatch`` and no primary is
+    produced — the unit-gate test (``test_unknown_scale_cross_source_merge_rejected``)
+    is pinned here end-to-end through ``build_expression_dataset``.
+    """
+    result = _run_chain(
+        tmp_path,
+        [
+            _geo_binding("binding_geo_a", "unknown"),
+            _geo_binding("binding_geo_b", "unknown"),
+        ],
+        {
+            "binding_geo_a": "ncbi/gse178352/tximport_counts_slice.tsv",
+            "binding_geo_b": "ncbi/gse178352/tximport_counts_slice.tsv",
+        },
+    )
+    assert result.status == "rejected"
+    assert "measurement_identity_mismatch" in result.reason_codes
+    assert result.manifest is None
+    assert not (result.output_dir / "merged" / "primary.csv").exists()
