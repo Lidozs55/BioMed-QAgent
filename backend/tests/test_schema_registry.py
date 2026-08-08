@@ -7,6 +7,7 @@ from app.datasets.contracts import DatasetSchema, SchemaField
 from app.datasets.schema_registry import (
     SchemaRegistry,
     build_gene_expression_schema,
+    build_probe_expression_schema,
 )
 
 
@@ -96,3 +97,50 @@ def test_gene_expression_required_fields() -> None:
     # gene_id_version is optional by definition; source_sample_alias is optional
     # because single-sample GDC STAR-counts files have no sample column header.
     assert optional == ["gene_id_version", "source_sample_alias"]
+
+
+def test_probe_expression_schema_registered() -> None:
+    """Phase 5 D2: the probe-level contract is a first-class registry schema."""
+    schema = build_probe_expression_schema()
+    assert schema.schema_id == "gene_expression.probe_long.v1"
+    assert schema.dataset_family == "gene_expression"
+    assert schema.row_granularity == "probe_sample_measurement"
+    assert schema.primary_key == ["probe_id", "platform_id", "sample_id"]
+    names = [field.name for field in schema.fields]
+    for required in (
+        "probe_id",
+        "platform_id",
+        "sample_id",
+        "value",
+        "gene_id_namespace",
+        "value_semantics",
+        "value_scale",
+        "expression_unit",
+        "is_normalized",
+    ):
+        assert required in names, f"probe schema must carry {required!r}"
+    # Entity-level mirror: gene-level primary columns do not belong here.
+    assert "gene_id" not in names
+    assert "gene_symbol" not in names
+    assert "ensembl_gene" not in names
+
+
+def test_gene_and_probe_schemas_coexist_in_registry() -> None:
+    registry = SchemaRegistry(
+        [build_gene_expression_schema(), build_probe_expression_schema()]
+    )
+    assert registry.contains("gene_expression.long.v1")
+    assert registry.contains("gene_expression.probe_long.v1")
+    assert (
+        registry.get("gene_expression.probe_long.v1").row_granularity
+        == "probe_sample_measurement"
+    )
+
+
+def test_probe_schema_primary_key_fields_are_required() -> None:
+    schema = build_probe_expression_schema()
+    by_name = {field.name: field for field in schema.fields}
+    assert by_name["probe_id"].required is True
+    assert by_name["platform_id"].required is True
+    assert by_name["sample_id"].required is True
+    assert by_name["value"].unit_policy == "declared_per_record"

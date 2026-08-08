@@ -16,8 +16,11 @@ breaking the datasets <-> contracts import cycle.
 
 from __future__ import annotations
 
+import math
+import re
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -58,6 +61,47 @@ class MappingReviewStatus(StrEnum):
     PROPOSED = "proposed"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+
+
+class ValueScale(StrEnum):
+    """Honest value-scale declaration for expression measurements (Phase 5 D3).
+
+    ``unknown`` is a legitimate value: a scale that cannot be proven from
+    metadata/parameters must be declared ``unknown`` and is never promoted to
+    a known scale by guessing.  ``raw_count`` is a value *semantics*, not a
+    scale.
+    """
+
+    LINEAR = "linear"
+    LOG2 = "log2"
+    LOG10 = "log10"
+    UNKNOWN = "unknown"
+
+
+class AnnotationStatus(StrEnum):
+    """GEO platform annotation outcome (Phase 5 D3 ``PlatformRecord``)."""
+
+    MAPPED = "mapped"
+    UNMAPPED = "unmapped"
+    NO_GENE_ANNOTATION = "no_gene_annotation"
+    ANNOTATION_UNAVAILABLE = "annotation_unavailable"
+    NOT_ATTEMPTED = "not_attempted"
+
+
+class ProbeMappingStatus(StrEnum):
+    """Probe→gene mapping outcome per canonicalized binding/platform (D3).
+
+    ``mapped`` means full coverage (1.0), ``partial`` means 0 < coverage < 1,
+    ``unmapped`` means zero coverage.  The remaining values mirror
+    ``AnnotationStatus`` for platforms whose annotation could not be used.
+    """
+
+    MAPPED = "mapped"
+    PARTIAL = "partial"
+    UNMAPPED = "unmapped"
+    NO_GENE_ANNOTATION = "no_gene_annotation"
+    ANNOTATION_UNAVAILABLE = "annotation_unavailable"
+    NOT_ATTEMPTED = "not_attempted"
 
 
 class ConfidenceLevel(StrEnum):
@@ -138,6 +182,54 @@ class SourceBinding(ContractModel):
         return validate_safe_path_id(value, "binding_id")
 
 
+# GEO platform accessions and content-addressed asset digests.
+_GPL_PATTERN = re.compile(r"^GPL\d+$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+class AdapterParams(ContractModel):
+    """Typed adapter parameters for GEO expression parsing (Phase 5 D1).
+
+    The caller declares the parse format, measurement semantics/scale/unit
+    and platform accessions up front; the adapter never infers a value scale
+    from file names or metadata.  ``unknown`` scales are honest and allowed.
+    ``delimiter`` is only meaningful for the ``supplementary_matrix`` format.
+    """
+
+    format: Literal["tximport_counts", "series_matrix", "supplementary_matrix"]
+    value_semantics: str = Field(min_length=1)
+    value_scale: ValueScale
+    expression_unit: str = Field(min_length=1)
+    is_normalized: bool = False
+    platform_ids: list[str] = Field(default_factory=list)
+    delimiter: str = "auto"
+
+    @field_validator("platform_ids")
+    @classmethod
+    def validate_platform_ids(cls, value: list[str]) -> list[str]:
+        for platform_id in value:
+            if not _GPL_PATTERN.fullmatch(platform_id):
+                raise ValueError(
+                    f"platform_id {platform_id!r} must match ^GPL\\d+$"
+                )
+        return value
+
+    @field_validator("delimiter")
+    @classmethod
+    def validate_delimiter(cls, value: str) -> str:
+        if value != "auto" and len(value) != 1:
+            raise ValueError("delimiter must be 'auto' or a single character")
+        return value
+
+    @model_validator(mode="after")
+    def validate_format_applicability(self) -> AdapterParams:
+        if self.delimiter != "auto" and self.format != "supplementary_matrix":
+            raise ValueError(
+                "delimiter is only applicable to supplementary_matrix format"
+            )
+        return self
+
+
 class DatasetBuildSpec(ContractModel):
     """Self-contained build input produced by the Agent (ARCHITECTURE §3.1).
 
@@ -158,6 +250,9 @@ class DatasetBuildSpec(ContractModel):
     merge_strategy: str = "append_by_canonical_row"
     validation_profile_ref: str = Field(min_length=1)
     output_format: str = "csv"
+    # Phase 5 D2: optional entity-level declaration; None defers to the
+    # selected validation profile's ``required_entity_level`` (T4/T5).
+    target_entity_level: Literal["gene", "probe"] | None = None
 
     @field_validator("build_id")
     @classmethod
@@ -379,3 +474,180 @@ class NormalizationProfile(ContractModel):
     unit_conversions: list[UnitConversionRule] = Field(default_factory=list)
     aggregation_policy: str = Field(default="keep_all", min_length=1)
     description: str = ""
+
+
+class PlatformRecord(ContractModel):
+    """One GEO platform's annotation provenance and outcome (Phase 5 D3).
+
+    A platform may be reused across matrices and mapping attempts; organism
+    and asset provenance belong here, not in per-build statistics.
+    """
+
+    platform_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    annotation_asset_id: str | None = None
+    organism: str | None = None
+    annotation_status: AnnotationStatus
+    probe_id_field: str | None = None
+    gene_id_field: str | None = None
+    target_namespace: Literal["gene_symbol", "ensembl_gene"] | None = None
+    mapping_source_url: str | None = None
+    annotation_sha256: str | None = None
+
+    @field_validator("platform_id")
+    @classmethod
+    def validate_platform_id(cls, value: str) -> str:
+        if not _GPL_PATTERN.fullmatch(value):
+            raise ValueError(f"platform_id {value!r} must match ^GPL\\d+$")
+        return value
+
+    @field_validator("annotation_sha256")
+    @classmethod
+    def validate_annotation_sha256(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256_PATTERN.fullmatch(value):
+            raise ValueError("annotation_sha256 must be 64 hex characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_annotation_consistency(self) -> PlatformRecord:
+        if (
+            self.annotation_status is AnnotationStatus.NOT_ATTEMPTED
+            and any(
+                value is not None
+                for value in (
+                    self.annotation_asset_id,
+                    self.mapping_source_url,
+                    self.annotation_sha256,
+                )
+            )
+        ):
+            raise ValueError(
+                "not_attempted requires annotation_asset_id, "
+                "mapping_source_url and annotation_sha256 to be None"
+            )
+        if self.annotation_asset_id is not None:
+            if self.annotation_sha256 is None:
+                raise ValueError(
+                    "annotation_asset_id requires annotation_sha256 "
+                    "(64 hex characters)"
+                )
+            if self.annotation_status not in (
+                AnnotationStatus.MAPPED,
+                AnnotationStatus.UNMAPPED,
+                AnnotationStatus.NO_GENE_ANNOTATION,
+            ):
+                raise ValueError(
+                    "annotation_asset_id requires annotation_status in "
+                    "{mapped, unmapped, no_gene_annotation}"
+                )
+        if self.annotation_status is AnnotationStatus.MAPPED:
+            if self.target_namespace is None:
+                raise ValueError("mapped requires target_namespace")
+            if self.gene_id_field is None:
+                raise ValueError("mapped requires gene_id_field")
+        return self
+
+
+class ProbeMappingSummary(ContractModel):
+    """Probe→gene mapping audit summary per binding/platform (Phase 5 D3).
+
+    Counts distinct probes; rows expanded to gene×sample are never recounted.
+    ``coverage_ratio`` is always ``mapped_probe_count / total_probe_count``
+    (``0.0`` when ``total_probe_count == 0``), verified within 1e-9.
+    """
+
+    binding_id: str = Field(min_length=1)
+    platform_id: str | None = None
+    source_namespace: str = "geo_probe"
+    target_namespace: Literal["gene_symbol", "ensembl_gene"] | None = None
+    mapping_status: ProbeMappingStatus
+    total_probe_count: int = Field(ge=0)
+    mapped_probe_count: int = Field(ge=0)
+    unmapped_probe_count: int = Field(ge=0)
+    ambiguous_probe_count: int = Field(ge=0)
+    coverage_ratio: float = Field(ge=0.0, le=1.0)
+    mapping_asset_id: str | None = None
+    mapping_rule_id: str | None = None
+
+    @field_validator("platform_id")
+    @classmethod
+    def validate_platform_id(cls, value: str | None) -> str | None:
+        if value is not None and not _GPL_PATTERN.fullmatch(value):
+            raise ValueError(f"platform_id {value!r} must match ^GPL\\d+$")
+        return value
+
+    @field_validator("source_namespace")
+    @classmethod
+    def validate_source_namespace(cls, value: str) -> str:
+        if value != "geo_probe":
+            raise ValueError("source_namespace must be 'geo_probe'")
+        return value
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> ProbeMappingSummary:
+        if (
+            self.mapped_probe_count + self.unmapped_probe_count
+            != self.total_probe_count
+        ):
+            raise ValueError(
+                "mapped_probe_count + unmapped_probe_count must equal "
+                "total_probe_count"
+            )
+        if self.mapped_probe_count > self.total_probe_count:
+            raise ValueError(
+                "mapped_probe_count must not exceed total_probe_count"
+            )
+        if self.ambiguous_probe_count > self.unmapped_probe_count:
+            raise ValueError(
+                "ambiguous_probe_count must not exceed unmapped_probe_count"
+            )
+        expected = (
+            0.0
+            if self.total_probe_count == 0
+            else self.mapped_probe_count / self.total_probe_count
+        )
+        if not math.isclose(self.coverage_ratio, expected, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError(
+                "coverage_ratio must equal mapped_probe_count / total_probe_count"
+            )
+        if self.mapping_status is ProbeMappingStatus.MAPPED:
+            if not math.isclose(self.coverage_ratio, 1.0, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(
+                    "mapping_status 'mapped' requires coverage_ratio == 1.0"
+                )
+        elif self.mapping_status is ProbeMappingStatus.PARTIAL:
+            if not 0.0 < self.coverage_ratio < 1.0:
+                raise ValueError(
+                    "mapping_status 'partial' requires 0 < coverage_ratio < 1"
+                )
+        elif self.mapping_status is ProbeMappingStatus.UNMAPPED:
+            if not math.isclose(self.coverage_ratio, 0.0, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(
+                    "mapping_status 'unmapped' requires coverage_ratio == 0.0"
+                )
+        elif self.mapping_status is ProbeMappingStatus.NOT_ATTEMPTED:
+            if any(
+                count != 0
+                for count in (
+                    self.total_probe_count,
+                    self.mapped_probe_count,
+                    self.unmapped_probe_count,
+                    self.ambiguous_probe_count,
+                )
+            ):
+                raise ValueError(
+                    "not_attempted requires all probe counts to be zero"
+                )
+            if self.mapping_asset_id is not None or self.mapping_rule_id is not None:
+                raise ValueError(
+                    "not_attempted requires mapping_asset_id and "
+                    "mapping_rule_id to be None"
+                )
+        if self.mapping_status in (
+            ProbeMappingStatus.MAPPED,
+            ProbeMappingStatus.PARTIAL,
+        ) and self.mapping_asset_id is None:
+            raise ValueError(
+                "mapping_status mapped/partial requires mapping_asset_id"
+            )
+        return self

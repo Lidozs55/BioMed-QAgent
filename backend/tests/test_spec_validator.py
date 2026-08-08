@@ -8,7 +8,11 @@ from app.datasets.contracts import (
     SourceBinding,
     SourceBindingAcquisition,
 )
-from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
+from app.datasets.schema_registry import (
+    SchemaRegistry,
+    build_gene_expression_schema,
+    build_probe_expression_schema,
+)
 from app.datasets.spec_validator import SpecValidator
 
 
@@ -38,6 +42,12 @@ def _spec(**overrides: object) -> DatasetBuildSpec:
 
 def _registry() -> SchemaRegistry:
     return SchemaRegistry([build_gene_expression_schema()])
+
+
+def _dual_registry() -> SchemaRegistry:
+    return SchemaRegistry(
+        [build_gene_expression_schema(), build_probe_expression_schema()]
+    )
 
 
 def test_valid_spec_passes() -> None:
@@ -104,3 +114,61 @@ def test_multiple_failures_are_aggregated() -> None:
     assert {"family_mismatch", "unknown_required_field"} <= set(
         result.reason_codes
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T1: target_entity_level consistency with the selected schema
+# ---------------------------------------------------------------------------
+
+
+def test_probe_schema_selectable_with_matching_entity_level() -> None:
+    """The probe-level contract is a valid Spec Validator target (Phase 5 D2)."""
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(
+        _spec(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            target_entity_level="probe",
+        )
+    )
+    assert result.valid is True
+    assert result.reason_codes == ()
+
+
+def test_entity_level_mismatch_with_schema_rejected() -> None:
+    """target_entity_level must agree with the selected schema's granularity."""
+    validator = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    )
+    # probe build on the gene schema
+    result = validator.validate(
+        _spec(schema_ref="gene_expression.long.v1", target_entity_level="probe")
+    )
+    assert result.valid is False
+    assert "entity_level_schema_mismatch" in result.reason_codes
+    # gene build on the probe schema
+    result = validator.validate(
+        _spec(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+            target_entity_level="gene",
+        )
+    )
+    assert result.valid is False
+    assert "entity_level_schema_mismatch" in result.reason_codes
+
+
+def test_unset_target_entity_level_is_always_consistent() -> None:
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(
+        _spec(
+            schema_ref="gene_expression.probe_long.v1",
+            row_granularity="probe_sample_measurement",
+        )
+    )
+    assert result.valid is True

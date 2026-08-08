@@ -191,7 +191,14 @@ def canonicalize(
                 version = ""
                 mapped = True
                 mapped_count += 1
-            canonical_row = dict(row)
+            canonical_row = {
+                # Canonical output carries exactly the schema's columns: internal
+                # source-long columns the schema does not declare (e.g. the
+                # Phase 5 ``gene_id_namespace_declared``) must not leak into the
+                # published contract, which keeps ``gene_id_namespace``
+                # authoritative.
+                key: value for key, value in row.items() if key in columns
+            }
             canonical_row["record_id"] = make_record_id(
                 row["dataset_id"], row["gene_id_raw"], row["sample_id"]
             )

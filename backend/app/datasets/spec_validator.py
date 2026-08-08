@@ -19,6 +19,15 @@ class SpecValidationResult:
     reasons: tuple[str, ...] = ()
 
 
+# Phase 5 D2: map a registered schema's row granularity to the entity level
+# it publishes.  ``target_entity_level`` in the spec must agree with this;
+# a mismatch is a spec error (invalid_input), not a later pipeline failure.
+_ENTITY_LEVEL_BY_GRANULARITY: dict[str, str] = {
+    "gene_sample_measurement": "gene",
+    "probe_sample_measurement": "probe",
+}
+
+
 class SpecValidator:
     """Checks a spec against the registry before any download starts.
 
@@ -54,6 +63,17 @@ class SpecValidator:
             if missing:
                 codes.append("unknown_required_field")
                 reasons.append(f"required fields not in schema: {sorted(missing)}")
+            if spec.target_entity_level is not None:
+                granularity_level = _ENTITY_LEVEL_BY_GRANULARITY.get(
+                    schema.row_granularity
+                )
+                if granularity_level != spec.target_entity_level:
+                    codes.append("entity_level_schema_mismatch")
+                    reasons.append(
+                        f"target_entity_level {spec.target_entity_level!r} is not "
+                        f"consistent with schema {spec.schema_ref!r} "
+                        f"(row_granularity {schema.row_granularity!r})"
+                    )
 
         if spec.validation_profile_ref not in self._allowed_profiles:
             codes.append("profile_not_allowed")

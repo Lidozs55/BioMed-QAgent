@@ -39,13 +39,17 @@ from app.domain.contracts import SourceAsset, asset_id_from_sha256, make_record_
 
 # Source-long layout emitted by every expression adapter.  ``gene_id_raw`` is
 # verbatim; namespace/version authorization and unit policy are applied later
-# by the Canonicalizer.
+# by the Canonicalizer.  ``gene_id_namespace_declared`` (Phase 5 D1) is the
+# internal namespace the adapter declares for the row; the canonical schema
+# output keeps ``gene_id_namespace`` authoritative, and the canonicalizer
+# (T2) consumes the declared value instead of guessing from the ID shape.
 SOURCE_LONG_COLUMNS: tuple[str, ...] = (
     "record_id",
     "dataset_id",
     "source_id",
     "asset_id",
     "gene_id_raw",
+    "gene_id_namespace_declared",
     "sample_id",
     "measurement_type",
     "value_semantics",

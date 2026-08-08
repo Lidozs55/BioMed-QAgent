@@ -6,6 +6,7 @@ import csv
 import hashlib
 from pathlib import Path
 
+import pytest
 from app.datasets.build.adapters import GdcExpressionAdapter, XenaMatrixAdapter
 from app.datasets.build.canonicalizer import (
     CanonicalizationResult,
@@ -72,6 +73,28 @@ def test_authorize_namespace_rules() -> None:
     assert authorize_namespace("BRCA1") == ("BRCA1", "gene_symbol", "")
     assert authorize_namespace("1007_s_at") is None
     assert authorize_namespace("") is None
+
+
+@pytest.mark.xfail(
+    reason=(
+        "T2 fix target: canonicalizer must consume gene_id_namespace_declared "
+        "instead of inferring the namespace from the ID shape"
+    ),
+    strict=False,
+)
+def test_probe_id_misclassified_by_symbol_regex_is_regression_target() -> None:
+    """GEO probe IDs must not be authorized as ``gene_symbol`` by shape alone.
+
+    ``authorize_namespace`` (canonicalizer.py:88-96) currently treats any
+    alphanumeric token starting with a letter as ``gene_symbol``, so a probe
+    like ``AFFX-BioB-5`` is misclassified into the gene contract (and a
+    numeric probe like ``1007_s_at`` is wrongly rejected instead of being
+    declared ``geo_probe``).  T2 replaces the shape heuristic with the
+    adapter-declared ``gene_id_namespace_declared`` source-long column; this
+    test pins the bug until that fix lands.
+    """
+    assert authorize_namespace("AFFX-BioB-5") is None
+    assert authorize_namespace("1007_s_at") is None
 
 
 def test_canonical_matrix_rows(tmp_path: Path) -> None:
