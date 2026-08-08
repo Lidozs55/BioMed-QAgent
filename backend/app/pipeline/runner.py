@@ -70,6 +70,7 @@ from app.domain.contracts.dataset_state import (
     BuildResult,
     BuildResultStatus,
 )
+from app.logging_setup import _STAGE as _LOG_STAGE
 from app.model_config import RunModelSettings
 from app.pipeline.stages import (
     STANDALONE_RUN_ID,
@@ -936,6 +937,9 @@ class PipelineRunner:
         # ``ctx.emit_progress_sync`` and reach the async emitter via
         # ``run_coroutine_threadsafe``. See docs/REVIEW_2026-07-18.md §4.
         self.ctx.bind_event_loop(asyncio.get_running_loop())
+        # 结构化日志上下文：绑定 stage（asyncio.to_thread 会把调用点 context
+        # 复制到 stage 线程，线程内日志自动携带 stage 字段）。
+        stage_token = _LOG_STAGE.set(stage.value)
         worker = asyncio.create_task(
             asyncio.to_thread(
                 self._execute_stage,
@@ -945,22 +949,25 @@ class PipelineRunner:
             )
         )
         try:
-            return await asyncio.wait_for(asyncio.shield(worker), timeout)
-        except TimeoutError as timeout_error:
-            with suppress(BaseException):
-                await asyncio.shield(worker)
-            raise timeout_error
-        except asyncio.CancelledError:
-            while not worker.done():
-                try:
+            try:
+                return await asyncio.wait_for(asyncio.shield(worker), timeout)
+            except TimeoutError as timeout_error:
+                with suppress(BaseException):
                     await asyncio.shield(worker)
-                except asyncio.CancelledError:
-                    continue
-                except BaseException:
-                    break
-            if not worker.cancelled():
-                worker.exception()
-            raise
+                raise timeout_error
+            except asyncio.CancelledError:
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
+                if not worker.cancelled():
+                    worker.exception()
+                raise
+        finally:
+            _LOG_STAGE.reset(stage_token)
 
     def _execute_stage(
         self,

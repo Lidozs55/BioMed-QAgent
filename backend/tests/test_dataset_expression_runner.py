@@ -509,7 +509,7 @@ def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
     """Phase 5 T6: ``find_latest_publication(..., build_id=...)`` must only
     consider version directories of THAT build — distinct builds sharing one
     publish directory never see each other's versions."""
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     from app.datasets.build.invariants import find_latest_publication as _find_latest_publication
 
@@ -529,9 +529,12 @@ def test_find_latest_publication_scopes_to_build_id(tmp_path: Path) -> None:
             "utf-8",
         )
 
+    # 同一 build 的两个版本用不同 published_at 区分新旧；相同时间戳时
+    # “先到者胜”依赖目录遍历顺序（Windows NTFS 与 Linux 不同），会造成
+    # 跨平台 flaky。Build 作用域隔离才是本测试的意图。
     _write("build_a", "aaaaaaaaaaaaaaaa", base)
     _write("build_b", "bbbbbbbbbbbbbbbb", base)
-    _write("build_a", "cccccccccccccccc", base)
+    _write("build_a", "cccccccccccccccc", base + timedelta(seconds=1))
 
     # build-scoped: each build sees only its own newest version.
     assert _find_latest_publication(publish_dir, build_id="build_a") == "pub_build_a_cccccccccccccccc"
