@@ -1,8 +1,8 @@
 # Phase 5 设计：迁移 GEO（Acquisition Provider + Adapter）
 
 > 日期：2026-08-08
-> 状态：**定稿（spec review 修订版 v2）**
-> 作者：sol（finalization）→ 修订：controller（闭合 spec review 9 项 MUST-FIX）
+> 状态：**定稿（spec review 修订版 v3）**
+> 作者：sol（finalization）→ controller（闭合 round-1 9 项 MUST-FIX，v2）→ controller（闭合 round-2 5 项 MUST-FIX，v3）→ ds（v3 最终验收）
 > 分支：`feat/phase5-geo-migration`
 > 权威依据：`docs/TODO.md` Phase 5、`docs/BioMed-QAgent_Pipeline_Refactor_Design.md` §16 Phase 5、Phase 4b NO_DATA 契约与 Phase 4 bug sweep 延后项。
 
@@ -311,7 +311,7 @@ Gate 继续复用 `check_expression_compatibility`，不引入 GEO 特例绕过�
 - **交付物**：D4 完整 gate 矩阵（含 unknown×unknown 与 entity-level 矩阵）；`required_entity_level` 校验（gene/probe profile 互斥选择）；稳定 reason/check ids；V1 allowlist 不变测试。
 - **关键文件**：`backend/app/datasets/build/compat_gate.py`、`backend/app/datasets/build/profiles.py`、gate/profile tests。
 - **red-first 测试**：逐项覆盖 D4 表；尤其 unknown×unknown FAIL、log2/linear、geo_probe/gene、probe-only、empty source、非 gene-level coverage 0 warning、gene-level coverage<1 FAILED、Agent 经 binding 参数切换 entity policy 被拒。
-- **依赖**：T1、T4。
+- **依赖**：T1、T4（§8 的 `T2+T4 → T5` 经 T2→T1 传递闭合，等价）。
 
 ### T6. 多 GSE 编排、双向 relations 与 raise-not-truncate
 
@@ -389,6 +389,6 @@ Gate 继续复用 `check_expression_compatibility`，不引入 GEO 特例绕过�
 
 ## 8. 实施顺序与完成定义
 
-依赖 DAG：`T1 → T2`；`T1 → T3`；`T1 → T4`；`T2+T4 → T5`；`T1+T5 → T6`；`T2+T3+T5 → T7`；T8 无依赖、可并行（最终与 T2 做 E2E）。**T1 是主实现链的唯一根任务，先于一切实现提交**；T8 为独立并行支线（自身根），不与主链共享前置。
+依赖 DAG：`T1 → T2`；`T1 → T3`；`T1 → T4`；`T2+T4 → T5`（T5 依赖行同：T1、T4；T2 经 T1 传递）；`T1+T5 → T6`；`T2+T3+T5 → T7`；T8 无依赖、可并行（最终与 T2 做 E2E）。**T1 是主实现链的唯一根任务，先于主链一切实现提交**；T8 为独立并行支线（自身根），不与主链共享前置。
 
 每个任务先提交失败测试，再做最小实现，再跑目标测试。Phase 5 完成前必须通过全部新增测试、GEO V1/V2 相关回归、后端全量 pytest 与 ruff，并验证应用导入/启动；TODO 六项和 §16 三项只能在对应证据全部成立后勾选。
