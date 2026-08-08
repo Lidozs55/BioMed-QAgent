@@ -24,7 +24,7 @@ function summary(
   status: RunStatus,
   title = taskId,
   artifactCount?: number,
-  latestBuildStatus?: BuildResultStatus,
+  latestBuildStatus?: BuildResultStatus | null,
 ): TaskSummary {
   return {
     task_id: taskId,
