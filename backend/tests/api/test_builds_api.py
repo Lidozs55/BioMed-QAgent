@@ -252,6 +252,69 @@ async def test_builds_api_unknown_build_and_artifact_404(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_builds_api_task_filter_disambiguates_colliding_build_ids(
+    tmp_path: Path,
+) -> None:
+    """F7-02 regression: build ids are agent-supplied and may collide across
+    tasks. ``GET /builds/{build_id}?task_id=`` must scope the lookup to one
+    task so the viewer (which knows its task) always gets the right build;
+    without the filter the newest build still wins."""
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        # Same build_id in two tasks, different content (row counts differ:
+        # 1 probe row -> 2 records, 2 probe rows -> 4 records).
+        await _run_build(
+            repository,
+            "task_a",
+            "build_shared",
+            rows=[("AFFX-PA", "1.0", "2.0")],
+        )
+        await _run_build(
+            repository,
+            "task_b",
+            "build_shared",
+            rows=[("AFFX-PB", "1.0", "2.0"), ("AFFX-PC", "3.0", "4.0")],
+        )
+
+        unfiltered = await client.get("/api/v1/builds/build_shared")
+        task_a = await client.get("/api/v1/builds/build_shared?task_id=task_a")
+        task_b = await client.get("/api/v1/builds/build_shared?task_id=task_b")
+        unknown = await client.get("/api/v1/builds/build_shared?task_id=task_nope")
+        detail_a = task_a.json()
+        primary_a = next(
+            entry
+            for entry in detail_a["artifacts"]
+            if entry["role"] == "primary_dataset"
+        )
+        download_a = await client.get(
+            f"/api/v1/builds/build_shared/artifacts/{primary_a['artifact_id']}"
+            "?task_id=task_a"
+        )
+        download_unfiltered = await client.get(
+            f"/api/v1/builds/build_shared/artifacts/{primary_a['artifact_id']}"
+        )
+
+    # Newest build wins without the filter (task_b built last).
+    assert unfiltered.status_code == 200
+    assert unfiltered.json()["task_id"] == "task_b"
+    assert unfiltered.json()["manifest"]["row_count"] == 4
+    # The task filter resolves the collision to the right task.
+    assert task_a.status_code == 200
+    assert task_a.json()["task_id"] == "task_a"
+    assert task_a.json()["manifest"]["row_count"] == 2
+    assert task_b.status_code == 200
+    assert task_b.json()["task_id"] == "task_b"
+    assert task_b.json()["manifest"]["row_count"] == 4
+    assert unknown.status_code == 404
+    # The artifact endpoint honors the same filter: the task_a artifact
+    # resolves to task_a's primary (2 records), never task_b's (4 records).
+    assert download_a.status_code == 200
+    assert download_a.headers["content-type"].startswith("text/csv")
+    assert len(download_a.content) == primary_a["size_bytes"]
+    assert len(download_unfiltered.content) != primary_a["size_bytes"]
+
+
+@pytest.mark.asyncio
 async def test_builds_api_prefers_durable_build_result_from_events(
     tmp_path: Path,
 ) -> None:

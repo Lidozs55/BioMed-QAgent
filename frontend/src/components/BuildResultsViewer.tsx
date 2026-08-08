@@ -154,15 +154,17 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
 function BuildArtifactCard({
   entry,
   buildId,
+  taskId,
   previewCsv,
 }: {
   entry: ManifestArtifactEntry;
   buildId: string;
+  taskId?: string | null;
   previewCsv?: boolean;
 }) {
   const { getBuildArtifactUrl } = useAPI();
   const name = artifactBasename(entry);
-  const url = getBuildArtifactUrl(buildId, entry.artifact_id);
+  const url = getBuildArtifactUrl(buildId, entry.artifact_id, taskId);
   return (
     <Card size="sm" className="min-w-0">
       <CardHeader>
@@ -196,8 +198,10 @@ function BuildArtifactCard({
 
 function PrimaryDataTab({
   detail,
+  taskId,
 }: {
   detail: BuildDetail;
+  taskId?: string | null;
 }) {
   const primary = detail.manifest.artifacts.find(
     (entry) => entry.role === "primary_dataset",
@@ -214,12 +218,23 @@ function PrimaryDataTab({
   }
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <BuildArtifactCard entry={primary} buildId={detail.build_id} previewCsv />
+      <BuildArtifactCard
+        entry={primary}
+        buildId={detail.build_id}
+        taskId={taskId}
+        previewCsv
+      />
     </div>
   );
 }
 
-function SourceTab({ detail }: { detail: BuildDetail }) {
+function SourceTab({
+  detail,
+  taskId,
+}: {
+  detail: BuildDetail;
+  taskId?: string | null;
+}) {
   const provenance = detail.manifest.provenance_summary;
   const coverage = summaryRecord(provenance, "coverage");
   const traced = summaryNumber(coverage, "traced_rows");
@@ -255,16 +270,30 @@ function SourceTab({ detail }: { detail: BuildDetail }) {
         </CardContent>
       </Card>
       {provenanceEntry !== undefined && (
-        <BuildArtifactCard entry={provenanceEntry} buildId={detail.build_id} />
+        <BuildArtifactCard
+          entry={provenanceEntry}
+          buildId={detail.build_id}
+          taskId={taskId}
+        />
       )}
       {schemaEntry !== undefined && (
-        <BuildArtifactCard entry={schemaEntry} buildId={detail.build_id} />
+        <BuildArtifactCard
+          entry={schemaEntry}
+          buildId={detail.build_id}
+          taskId={taskId}
+        />
       )}
     </div>
   );
 }
 
-function ProcessingTab({ detail }: { detail: BuildDetail }) {
+function ProcessingTab({
+  detail,
+  taskId,
+}: {
+  detail: BuildDetail;
+  taskId?: string | null;
+}) {
   const validation = detail.manifest.validation_summary;
   const confidence = detail.manifest.confidence_summary;
   const validationStatus = summaryString(validation, "status");
@@ -313,6 +342,7 @@ function ProcessingTab({ detail }: { detail: BuildDetail }) {
           key={entry.artifact_id}
           entry={entry}
           buildId={detail.build_id}
+          taskId={taskId}
           previewCsv
         />
       ))}
@@ -320,7 +350,13 @@ function ProcessingTab({ detail }: { detail: BuildDetail }) {
   );
 }
 
-function WarningsTab({ detail }: { detail: BuildDetail }) {
+function WarningsTab({
+  detail,
+  taskId,
+}: {
+  detail: BuildDetail;
+  taskId?: string | null;
+}) {
   const warningEntries = detail.manifest.artifacts.filter((entry) =>
     /warning/i.test(artifactBasename(entry)),
   );
@@ -341,6 +377,7 @@ function WarningsTab({ detail }: { detail: BuildDetail }) {
           key={entry.artifact_id}
           entry={entry}
           buildId={detail.build_id}
+          taskId={taskId}
           previewCsv
         />
       ))}
@@ -362,7 +399,13 @@ type LoadState =
   | { status: "ready"; detail: BuildDetail }
   | { status: "error" };
 
-function BuildViewerContent({ buildId }: { buildId: string }) {
+function BuildViewerContent({
+  buildId,
+  taskId,
+}: {
+  buildId: string;
+  taskId?: string | null;
+}) {
   const api = useAPI();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -370,7 +413,7 @@ function BuildViewerContent({ buildId }: { buildId: string }) {
   useEffect(() => {
     let cancelled = false;
     void api
-      .fetchBuild(buildId)
+      .fetchBuild(buildId, taskId)
       .then((detail) => {
         if (!cancelled) setState({ status: "ready", detail });
       })
@@ -380,7 +423,7 @@ function BuildViewerContent({ buildId }: { buildId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [api, buildId, reloadKey]);
+  }, [api, buildId, taskId, reloadKey]);
 
   if (state.status === "loading") {
     return (
@@ -483,16 +526,16 @@ function BuildViewerContent({ buildId }: { buildId: string }) {
         </TabsList>
         <ScrollArea className="min-h-0 min-w-0 flex-1">
           <TabsContent value="primary" className="min-h-0">
-            <PrimaryDataTab detail={detail} />
+            <PrimaryDataTab detail={detail} taskId={taskId} />
           </TabsContent>
           <TabsContent value="sources" className="min-h-0">
-            <SourceTab detail={detail} />
+            <SourceTab detail={detail} taskId={taskId} />
           </TabsContent>
           <TabsContent value="processing" className="min-h-0">
-            <ProcessingTab detail={detail} />
+            <ProcessingTab detail={detail} taskId={taskId} />
           </TabsContent>
           <TabsContent value="warnings" className="min-h-0">
-            <WarningsTab detail={detail} />
+            <WarningsTab detail={detail} taskId={taskId} />
           </TabsContent>
         </ScrollArea>
       </Tabs>
@@ -502,8 +545,15 @@ function BuildViewerContent({ buildId }: { buildId: string }) {
 
 export default function BuildResultsViewer({
   buildId,
+  taskId,
 }: BuildResultsViewerProps) {
   // Remount per build id so a new build always starts from a fresh loading
   // state (no stale detail, no setState-in-effect reset).
-  return <BuildViewerContent key={buildId} buildId={buildId} />;
+  return (
+    <BuildViewerContent
+      key={buildId}
+      buildId={buildId}
+      taskId={taskId}
+    />
+  );
 }

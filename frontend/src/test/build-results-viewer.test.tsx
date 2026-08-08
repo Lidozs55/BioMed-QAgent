@@ -168,7 +168,7 @@ function stubBuildFetchPerArtifact(
   const fetchMock: FetchMock = (input) => {
     const url = String(input);
     if (url.includes("/artifacts/")) {
-      const artifactId = url.split("/artifacts/").pop() ?? "";
+      const artifactId = (url.split("/artifacts/").pop() ?? "").split("?")[0] ?? "";
       return Promise.resolve({
         ok: true,
         text: async () => csvByArtifact[artifactId] ?? PRIMARY_CSV,
@@ -208,6 +208,32 @@ describe("BuildResultsViewer", () => {
     expect(screen.getByText("2 处异常")).toBeInTheDocument();
     // provenance coverage (header stat + sources tab both render the ratio)
     expect(screen.getAllByText("95.24%").length).toBeGreaterThan(0);
+  });
+
+  it("passes the task id to the builds API so colliding build ids resolve to this task", async () => {
+    const urls: string[] = [];
+    const fetchMock: FetchMock = (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/artifacts/")) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => PRIMARY_CSV,
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => buildDetail() });
+    };
+    vi.stubGlobal("fetch", vi.fn(fetchMock));
+
+    render(<BuildResultsViewer buildId="build_abc" taskId="task_results" />);
+    await screen.findByText("gene_expression");
+
+    const buildUrl = urls.find((url) => url.includes("/builds/build_abc?"));
+    const artifactUrl = urls.find((url) => url.includes("/artifacts/"));
+    expect(buildUrl).toBeDefined();
+    expect(buildUrl).toContain("task_id=task_results");
+    expect(artifactUrl).toBeDefined();
+    expect(artifactUrl).toContain("task_id=task_results");
   });
 
   it("shows the NO_DATA reason in an informational banner, never as a red error", async () => {

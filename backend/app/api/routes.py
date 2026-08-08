@@ -1209,18 +1209,30 @@ def _build_sort_key(item: tuple[Path, str, str]) -> tuple[int, str, str]:
     return (build_dir.stat().st_mtime_ns, task_id, build_id)
 
 
-def _locate_build_id(tasks_dir: Path, build_id: str) -> tuple[str, Path] | None:
-    """Locate the newest build dir with the given build_id across tasks."""
+def _locate_build_id(
+    tasks_dir: Path,
+    build_id: str,
+    task_id: str | None = None,
+) -> tuple[str, Path] | None:
+    """Locate the newest build dir with the given build_id.
+
+    Build ids are agent-supplied and may collide across tasks, so
+    ``task_id`` optionally scopes the search to one task (F7-02).
+    """
 
     if _SAFE_RUNTIME_ID.fullmatch(build_id) is None:
         return None
+    if task_id is not None and _SAFE_RUNTIME_ID.fullmatch(task_id) is None:
+        return None
     best: tuple[int, str, Path] | None = None
-    for build_dir, task_id, candidate in _scan_build_dirs(tasks_dir):
+    for build_dir, candidate_task, candidate in _scan_build_dirs(tasks_dir):
+        if task_id is not None and candidate_task != task_id:
+            continue
         if candidate != build_id:
             continue
         key = build_dir.stat().st_mtime_ns
         if best is None or key > best[0]:
-            best = (key, task_id, build_dir)
+            best = (key, candidate_task, build_dir)
     if best is None:
         return None
     return best[1], best[2]
@@ -1478,28 +1490,33 @@ async def list_builds(
 async def get_build(
     build_id: str,
     repository: TaskRepositoryDep,
+    task_id: str | None = Query(default=None),
 ) -> BuildDetail:
-    """Return one build's BuildResult with its manifest summary."""
+    """Return one build's BuildResult with its manifest summary.
 
-    located = _locate_build_id(repository.tasks_dir, build_id)
+    ``task_id`` disambiguates when the same build_id exists in several
+    tasks (F7-02); without it the newest build wins.
+    """
+
+    located = _locate_build_id(repository.tasks_dir, build_id, task_id=task_id)
     if located is None:
         raise HTTPException(status_code=404, detail="Build not found")
-    task_id, _build_dir = located
-    loaded = _load_build(repository.tasks_dir, task_id, build_id)
+    resolved_task_id, _build_dir = located
+    loaded = _load_build(repository.tasks_dir, resolved_task_id, build_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Build not found")
     _resolved_build_dir, manifest, publication = loaded
     events = (
-        await repository.list_events(task_id)
+        await repository.list_events(resolved_task_id)
         if publication is not None
         else []
     )
     build_result = await _resolve_build_result(
-        repository, task_id, manifest, publication, events=events
+        repository, resolved_task_id, manifest, publication, events=events
     )
     return BuildDetail(
         build_id=build_id,
-        task_id=task_id,
+        task_id=resolved_task_id,
         manifest_ref=f"datasets_build/{build_id}/{_BUILD_MANIFEST_NAME}",
         build_result=build_result,
         manifest=manifest,
@@ -1513,14 +1530,18 @@ async def get_build_artifact(
     build_id: str,
     artifact_id: str,
     repository: TaskRepositoryDep,
+    task_id: str | None = Query(default=None),
 ):
-    """Resolve a build artifact (manifest inventory + dataset manifest)."""
+    """Resolve a build artifact (manifest inventory + dataset manifest).
 
-    located = _locate_build_id(repository.tasks_dir, build_id)
+    ``task_id`` disambiguates colliding build ids across tasks (F7-02).
+    """
+
+    located = _locate_build_id(repository.tasks_dir, build_id, task_id=task_id)
     if located is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    task_id, build_dir = located
-    loaded = _load_build(repository.tasks_dir, task_id, build_id)
+    resolved_task_id, build_dir = located
+    loaded = _load_build(repository.tasks_dir, resolved_task_id, build_id)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
     resolved_build_dir, manifest, _publication = loaded
@@ -1731,17 +1752,62 @@ def _cache_summary_legacy(entry: LegacyCacheEntry) -> CacheDatasetSummary:
     )
 
 
+def _task_build_identity(
+    tasks_dir: Path, task_id: str
+) -> tuple[set[str], set[str]]:
+    """Return ``(build_ids, sha256 digests)`` of a task's V2 build manifests.
+
+    A build lives at ``tasks_dir/<task_id>/datasets_build/<build_id>/``
+    (``_scan_build_dirs``). The manifests written there are byte-identical to
+    the committed cache entries (``cache.commit`` copies the build dir), so
+    build_id + digest pin the exact cache entry for this task — even when two
+    tasks reuse the same build_id with different content.
+    """
+
+    build_ids: set[str] = set()
+    digests: set[str] = set()
+    build_root = tasks_dir / task_id / "datasets_build"
+    if not build_root.is_dir():
+        return build_ids, digests
+    for build_dir in sorted(build_root.iterdir(), key=lambda item: item.name):
+        if not build_dir.is_dir() or build_dir.name.startswith("."):
+            continue
+        manifest_path = build_dir / _BUILD_MANIFEST_NAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = DatasetManifest.model_validate_json(
+                manifest_path.read_text("utf-8")
+            )
+        except (ValidationError, OSError, json.JSONDecodeError):
+            continue
+        build_ids.add(manifest.build_id)
+        digests.add(manifest.sha256)
+    return build_ids, digests
+
+
 def _cache_artifacts_for_task(
     repository: TaskRepository,
     task_id: str,
 ) -> tuple[DatasetManifest, Path] | None:
-    """Newest V2 cache entry whose manifest belongs to ``task_id``.
+    """Newest V2 cache entry whose build belongs to ``task_id``.
 
     The content-addressed cache is authoritative for V2 builds: the legacy
     artifact endpoints read it first and fall back to the V1 ``artifacts/``
     dirs (dual-read, Phase 7 T2).
+
+    F7-01: the entry is tied to the task via the dataset build directory
+    shape (``tasks_dir/<task_id>/datasets_build/<build_id>/``) — the
+    expression runner stamps the manifest's ``task_id`` field with the
+    agent-supplied build_id, so matching on ``manifest.task_id`` never fires
+    in production.
     """
 
+    task_build_ids, task_digests = _task_build_identity(
+        repository.tasks_dir, task_id
+    )
+    if not task_build_ids:
+        return None
     cache = DatasetCacheV2(_cache_root(repository))
     for entry in cache.list(namespace="build", limit=10_000):
         manifest_path = entry.directory / "dataset_manifest.json"
@@ -1751,7 +1817,9 @@ def _cache_artifacts_for_task(
             )
         except (ValidationError, OSError, json.JSONDecodeError):
             continue
-        if manifest.task_id != task_id:
+        if manifest.build_id not in task_build_ids:
+            continue
+        if manifest.sha256 not in task_digests:
             continue
         return manifest, entry.directory
     return None

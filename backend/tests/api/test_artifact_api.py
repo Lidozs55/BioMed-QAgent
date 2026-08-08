@@ -402,6 +402,12 @@ async def test_artifact_routes_hash_chunked_without_full_file_reads(
 # Phase 7 T2 dual-read: artifact endpoints read the V2 dataset cache first
 # ---------------------------------------------------------------------------
 
+#: F7-01: the V2 expression runner stamps the manifest's ``task_id`` with the
+#: agent-supplied build_id (the spec carries no task id), so production
+#: manifests are tied to a task by the build dir shape
+#: ``tasks_dir/<task_id>/datasets_build/<build_id>/`` — never by task_id.
+_DUAL_READ_BUILD_ID = "build_dual_read"
+
 
 def _seed_v2_cache_entry(
     repository: object,
@@ -409,11 +415,13 @@ def _seed_v2_cache_entry(
     *,
     primary_rows: bytes = b"record_id,gene_id\nrow_1,TP53\n",
 ) -> tuple[str, Path]:
-    """Commit one V2 cache entry whose manifest belongs to ``task_id``.
+    """Commit one V2 cache entry in the real production shape.
 
-    Returns ``(dataset_id, entry_dir)``. The entry lives under the app's
-    cache root (``<output_dir>/../cache``), the same root the dual-read
-    resolution uses.
+    The build output dir is ``tasks_dir/<task_id>/datasets_build/<build_id>/``
+    (the same path ``execute_dataset_build`` writes) and the manifest's
+    ``task_id`` field holds the build_id, mirroring ExpressionBuildRunner.
+    ``cache.commit`` copies that build dir into the content-addressed cache
+    root (``<output_dir>/../cache``). Returns ``(dataset_id, entry_dir)``.
     """
     import hashlib as _hashlib
 
@@ -428,7 +436,9 @@ def _seed_v2_cache_entry(
     from app.domain.contracts import DataLevel, SourceAsset, asset_id_from_sha256
 
     cache_root = repository.tasks_dir.parent.parent / "cache"
-    output_dir = repository.tasks_dir.parent.parent / "build_fixture"
+    output_dir = (
+        repository.tasks_dir / task_id / "datasets_build" / _DUAL_READ_BUILD_ID
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     primary = output_dir / "merged" / "primary.csv"
     primary.parent.mkdir(parents=True, exist_ok=True)
@@ -440,8 +450,8 @@ def _seed_v2_cache_entry(
         json.dumps(
             {
                 "manifest_id": "manifest_dual_read",
-                "task_id": task_id,
-                "build_id": "build_dual_read",
+                "task_id": _DUAL_READ_BUILD_ID,
+                "build_id": _DUAL_READ_BUILD_ID,
                 "dataset_family": "gene_expression",
                 "row_granularity": "gene_sample_measurement",
                 "schema_ref": "gene_expression.long.v1",
@@ -480,7 +490,7 @@ def _seed_v2_cache_entry(
     )
     checksum = _hashlib.sha256(source_path.read_bytes()).hexdigest()
     spec = DatasetBuildSpec(
-        build_id="build_dual_read",
+        build_id=_DUAL_READ_BUILD_ID,
         objective="compare TP53 expression",
         dataset_family="gene_expression",
         row_granularity="gene_sample_measurement",
@@ -522,6 +532,30 @@ def _seed_v2_cache_entry(
     return entry.dataset_id, entry.directory
 
 
+def _mirror_v1_bridge(repository: object, task_id: str) -> None:
+    """Dual-write reality: mirror the task's V2 build onto the legacy V1
+    artifacts surface with V1-style (relative-path-hashed) artifact ids, so
+    the legacy fallback would serve if the cache match failed."""
+    from app.datasets.build.v1_bridge import mirror_build_to_legacy_artifacts
+
+    build_dir = repository.tasks_dir / task_id / "datasets_build" / _DUAL_READ_BUILD_ID
+    mirror_build_to_legacy_artifacts(
+        task_id=task_id,
+        task_root=repository.tasks_dir / task_id,
+        build_dir=build_dir,
+        objective="compare TP53 expression",
+    )
+
+
+def _v1_bridge_artifact_id(relative_path: str) -> str:
+    """The V1 bridge derives path-unique ids by hashing the relative path."""
+    import hashlib as _hashlib
+
+    return "artifact_" + _hashlib.sha256(
+        relative_path.encode("utf-8")
+    ).hexdigest()[:32]
+
+
 @pytest.mark.asyncio
 async def test_artifact_api_reads_v2_cache_first(tmp_path: Path) -> None:
     """A V2 build committed to the dataset cache is served by the legacy
@@ -559,7 +593,7 @@ async def test_artifact_api_reads_v2_cache_first(tmp_path: Path) -> None:
     assert primary.status_code == 200
     assert primary.content.startswith(b"record_id,gene_id")
     assert run_manifest.status_code == 200
-    assert json.loads(run_manifest.content)["task_id"] == task_id
+    assert json.loads(run_manifest.content)["task_id"] == _DUAL_READ_BUILD_ID
     assert dataset_id.startswith("dataset_")
 
 
@@ -645,3 +679,104 @@ async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> Non
 
     assert listed.status_code == 409
     assert listed.json() == {"detail": "Artifact integrity check failed"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_api_cache_matches_task_via_build_dir_shape(
+    tmp_path: Path,
+) -> None:
+    """F7-01 regression: the dual-read ties a cache entry to a task through
+    the dataset build directory shape
+    (``tasks_dir/<task_id>/datasets_build/<build_id>/``), never the
+    manifest's ``task_id`` field — the V2 expression runner stamps that
+    field with the agent-supplied build_id. A production-shaped manifest
+    (task_id == build_id) must resolve through the cache (content-addressed
+    ids), even with the V1 bridge mirror present."""
+    task_id = "task_build_dir_match"
+    run_id = "run_build_dir_match"
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        await repository.save_snapshot(
+            snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
+        )
+        dataset_id, _entry_dir = _seed_v2_cache_entry(repository, task_id)
+        _mirror_v1_bridge(repository, task_id)
+        v1_bridge_id = _v1_bridge_artifact_id("merged/primary.csv")
+
+        listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
+        primary = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/artifact_primary"
+        )
+        legacy_download = await client.get(
+            f"/api/v1/tasks/{task_id}/artifacts/{v1_bridge_id}"
+        )
+
+    assert listed.status_code == 200
+    assert listed.json()["degraded"] is False
+    artifact_ids = [entry["artifact_id"] for entry in listed.json()["artifacts"]]
+    assert "artifact_primary" in artifact_ids  # cache/content-addressed id
+    assert "artifact_schema" in artifact_ids
+    assert v1_bridge_id not in artifact_ids  # V1 bridge id never served
+    assert primary.status_code == 200
+    assert primary.content.startswith(b"record_id,gene_id")
+    # Cache-first: the V1-bridge id is unknown to the cache path and is not
+    # served by falling back to the legacy surface.
+    assert legacy_download.status_code == 404
+    assert dataset_id.startswith("dataset_")
+
+
+# F7-05: path-traversal pins for the artifact path guards. The guards are
+# correct by inspection; these regression tests prove a malicious
+# relative_path can never resolve (or read) outside the build/cache dir.
+# ---------------------------------------------------------------------------
+
+
+def test_verified_build_artifact_path_rejects_traversal(tmp_path: Path) -> None:
+    """``_verified_build_artifact_path`` must reject traversal/absolute
+    paths with 409 before any file access — even when the target exists."""
+    from app.api.routes import _verified_build_artifact_path
+    from fastapi import HTTPException
+
+    build_dir = tmp_path / "build_x"
+    build_dir.mkdir()
+    secret = tmp_path / "secret.csv"
+    secret.write_text("top-secret\n", "utf-8")
+    (build_dir / "ok.csv").write_text("fine\n", "utf-8")
+
+    for malicious in ("../secret.csv", "../../etc/passwd", "/etc/passwd"):
+        with pytest.raises(HTTPException) as exc:
+            _verified_build_artifact_path(build_dir, malicious)
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Invalid build artifact path"
+
+    # The sentinel was never read: the guard fires on the containment
+    # check, before is_file()/stat ever touch the filesystem.
+    assert secret.read_text("utf-8") == "top-secret\n"
+    # In-dir artifacts still resolve normally (the guard is not over-broad).
+    assert _verified_build_artifact_path(build_dir, "ok.csv") == (
+        build_dir / "ok.csv"
+    ).resolve()
+
+
+def test_verified_cache_artifact_path_rejects_traversal(tmp_path: Path) -> None:
+    """``_verified_cache_artifact_path`` must reject traversal/absolute
+    paths with 409 before any file access."""
+    from app.api.routes import _verified_cache_artifact_path
+    from fastapi import HTTPException
+
+    entry_dir = tmp_path / "entry"
+    entry_dir.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("s3cret\n", "utf-8")
+    (entry_dir / "ok.json").write_text("{}", "utf-8")
+
+    for malicious in ("../secret.txt", "../../etc/passwd", "/etc/hostname"):
+        with pytest.raises(HTTPException) as exc:
+            _verified_cache_artifact_path(entry_dir, malicious)
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "Invalid cache artifact path"
+
+    assert secret.read_text("utf-8") == "s3cret\n"
+    assert _verified_cache_artifact_path(entry_dir, "ok.json") == (
+        entry_dir / "ok.json"
+    ).resolve()
