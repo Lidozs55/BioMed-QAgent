@@ -18,12 +18,16 @@ import pytest
 from app.datasets.build.expression_runner import ExpressionBuildRunner
 from app.datasets.contracts import (
     AcquisitionMode,
+    AdapterParams,
     DatasetBuildSpec,
     SourceBinding,
     SourceBindingAcquisition,
+    ValueScale,
 )
 from app.datasets.runtime import (
     DatasetBuildExecutor,
+    OperationKind,
+    OperationSpec,
     build_operation_plan,
 )
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
@@ -1785,3 +1789,83 @@ async def test_failed_outcome_carries_structured_no_data_reason(
     assert outcome.error is not None
     assert outcome.error.details.get("reason_code") == "no_primary_data"
     assert outcome.error.details.get("failed_operation") == "parse:binding_gdc"
+
+
+def test_runner_forwards_binding_adapter_params_to_geo_adapter(
+    tmp_path: Path,
+) -> None:
+    """Phase 5 D1: run_operation forwards binding.parameters to adapter.parse.
+
+    The GEO adapter receives the typed ``AdapterParams``; the parsed batch
+    must reflect the declared format/semantics/scale/unit — proving the
+    parameters flow through the runner (never inferred from the file name).
+    """
+    import gzip as gzip_module
+
+    matrix = tmp_path / "GSE1_series_matrix.txt.gz"
+    text = (
+        "!series_matrix_table_begin\n"
+        "\"ID_REF\"\t\"GSM1\"\t\"GSM2\"\n"
+        "\"AFFX-BioB-5\"\t1.5\t2.0\n"
+        "!series_matrix_table_end\n"
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+
+    binding = SourceBinding(
+        binding_id="binding_geo",
+        source="geo",
+        acquisition=SourceBindingAcquisition(
+            mode=AcquisitionMode.BUILTIN, provider_id="geo.series.v1"
+        ),
+        adapter_id="geo.expression.v1",
+        accession="GSE1",
+        parameters=AdapterParams(
+            format="series_matrix",
+            value_semantics="normalized_expression_value",
+            value_scale=ValueScale.LOG2,
+            expression_unit="normalized_expression_value",
+            platform_ids=["GPL570"],
+        ).model_dump(mode="json"),
+    )
+    spec = _spec([binding])
+    registry = SchemaRegistry([build_gene_expression_schema()])
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/series.txt.gz",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_binding_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    runner = ExpressionBuildRunner(
+        spec=spec,
+        registry=registry,
+        source_assets={"binding_geo": asset},
+        source_paths={"binding_geo": matrix},
+        output_dir=tmp_path,
+    )
+    parse_op = OperationSpec(
+        operation_id="parse:binding_geo",
+        kind=OperationKind.PARSE,
+        label="解析 geo",
+        category="binding_geo",
+        upstream=("acquire:binding_geo",),
+    )
+    output = asyncio.run(runner.run_operation(parse_op, {}))
+    assert output.output["batch_id"] == "batch_binding_geo"
+
+    batch = runner._batches["binding_geo"]
+    assert batch.parser_id == "geo.expression.v1"
+    assert batch.statistics["format"] == "series_matrix"
+    assert batch.statistics["value_semantics"] == "normalized_expression_value"
+    assert batch.statistics["value_scale"] == "log2"
+    assert batch.statistics["expression_unit"] == "normalized_expression_value"
+    rows = (tmp_path / batch.file_asset.relative_path).read_text().splitlines()[1:]
+    assert len(rows) == 2
+    assert all(",geo_probe," in row for row in rows)
+    assert all(",log2," in row for row in rows)

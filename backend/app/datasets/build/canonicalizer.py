@@ -36,6 +36,10 @@ from app.domain.contracts import asset_id_from_sha256, make_record_id
 
 _ENSEMBL_PATTERN = re.compile(r"^(ENSG\d{11})(?:\.(\d+))?$")
 _SYMBOL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]*$")
+#: Affymetrix control/quality probes (``AFFX-...``) are not gene symbols;
+#: namespace must come from the adapter declaration, never the ID shape
+#: (Phase 5 D1).
+_AFFYMETRIX_CONTROL_PATTERN = re.compile(r"^AFFX-", re.IGNORECASE)
 
 NORMALIZATION_LOG_COLUMNS = (
     "record_id",
@@ -85,12 +89,35 @@ class CanonicalizationResult:
     audit_paths: tuple[Path, ...]
 
 
-def authorize_namespace(gene_id_raw: str) -> tuple[str, str, str] | None:
-    """Return ``(gene_id, namespace, version)`` or None when unauthorized."""
+def authorize_namespace(
+    gene_id_raw: str, declared_namespace: str = ""
+) -> tuple[str, str, str] | None:
+    """Return ``(gene_id, namespace, version)`` or None when unauthorized.
+
+    Phase 5 D1: the adapter-declared namespace
+    (``gene_id_namespace_declared`` source-long column) is authoritative when
+    present — ``geo_probe`` rows are never guessed into ``gene_symbol`` by ID
+    shape.  Without a declaration (legacy GDC/Xena rows) the ENSG shape and a
+    conservative gene-symbol shape authorize; probe-like identifiers such as
+    Affymetrix control probes are never authorized as ``gene_symbol``.
+    """
+    if declared_namespace:
+        if declared_namespace == "ensembl_gene":
+            ensembl = _ENSEMBL_PATTERN.fullmatch(gene_id_raw)
+            if ensembl:
+                return ensembl.group(1), "ensembl_gene", ensembl.group(2) or ""
+            return None
+        if declared_namespace == "gene_symbol":
+            return gene_id_raw, "gene_symbol", ""
+        if declared_namespace == "geo_probe":
+            return gene_id_raw, "geo_probe", ""
+        return None
     ensembl = _ENSEMBL_PATTERN.fullmatch(gene_id_raw)
     if ensembl:
         return ensembl.group(1), "ensembl_gene", ensembl.group(2) or ""
-    if _SYMBOL_PATTERN.fullmatch(gene_id_raw):
+    if _SYMBOL_PATTERN.fullmatch(gene_id_raw) and not (
+        _AFFYMETRIX_CONTROL_PATTERN.match(gene_id_raw)
+    ):
         return gene_id_raw, "gene_symbol", ""
     return None
 
@@ -142,7 +169,10 @@ def canonicalize(
         log_writer.writeheader()
         for row in reader:
             gene_id_raw = row.get("gene_id_raw", "")
-            normalized = authorize_namespace(gene_id_raw) if gene_id_raw else None
+            declared = row.get("gene_id_namespace_declared", "") or ""
+            normalized = (
+                authorize_namespace(gene_id_raw, declared) if gene_id_raw else None
+            )
             if normalized is None:
                 rejected_writer.writerow(_rejected_row(row, batch, "unauthorized_namespace"))
                 rejected_count += 1

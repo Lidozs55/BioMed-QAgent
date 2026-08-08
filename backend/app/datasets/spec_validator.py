@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.datasets.contracts import DatasetBuildSpec
+from pydantic import ValidationError
+
+from app.datasets.build.adapters import GeoExpressionAdapter
+from app.datasets.contracts import AdapterParams, DatasetBuildSpec
 from app.datasets.schema_registry import SchemaRegistry
 
 
@@ -81,6 +84,37 @@ class SpecValidator:
                 f"validation profile {spec.validation_profile_ref!r} is not on "
                 "the server allowlist"
             )
+
+        # Phase 5 D1: per-binding AdapterParams.  geo.expression.v1 bindings
+        # must declare valid typed parameters (format is mandatory); any other
+        # adapter declaring parameters is invalid input (parameters are not
+        # applicable to it).  Unknown/inapplicable parameters are rejected
+        # here, never left for a later parse failure.
+        for binding in spec.source_bindings:
+            if binding.adapter_id == GeoExpressionAdapter.adapter_id:
+                if not binding.parameters:
+                    codes.append("invalid_adapter_parameters")
+                    reasons.append(
+                        f"binding {binding.binding_id!r} (geo.expression.v1) "
+                        "requires adapter parameters "
+                        "(format/value_semantics/value_scale/expression_unit)"
+                    )
+                else:
+                    try:
+                        AdapterParams.model_validate(binding.parameters)
+                    except ValidationError as exc:
+                        codes.append("invalid_adapter_parameters")
+                        reasons.append(
+                            f"binding {binding.binding_id!r} has invalid "
+                            f"adapter parameters: {exc}"
+                        )
+            elif binding.parameters:
+                codes.append("invalid_adapter_parameters")
+                reasons.append(
+                    f"binding {binding.binding_id!r} (adapter "
+                    f"{binding.adapter_id!r}) declares adapter parameters "
+                    "that are not applicable"
+                )
 
         if codes:
             return SpecValidationResult(

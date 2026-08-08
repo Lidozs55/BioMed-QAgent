@@ -109,6 +109,8 @@ def build_expression_dataset(
                 f"no source asset supplied for binding {binding.binding_id!r}"
             ) from exc
         adapter = adapters.get_adapter(binding.adapter_id)
+        # Phase 5 D1: the binding's typed AdapterParams flow into the parse.
+        parameters = adapters.adapter_params_for_binding(binding)
         batch = adapter.parse(
             asset,
             source_path,
@@ -116,6 +118,7 @@ def build_expression_dataset(
             binding_id=binding.binding_id,
             schema_ref=spec.schema_ref,
             output_dir=output_dir,
+            parameters=parameters,
         )
         result = canonicalize(
             batch=batch,

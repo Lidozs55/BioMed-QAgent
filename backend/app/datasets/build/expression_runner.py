@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from app.datasets.build.adapters import get_adapter
+from app.datasets.build.adapters import adapter_params_for_binding, get_adapter
 from app.datasets.build.canonicalizer import (
     CanonicalizationResult,
     canonicalize,
@@ -323,6 +323,8 @@ class ExpressionBuildRunner:
         asset = self._source_assets[binding.binding_id]
         source_path = self._source_paths[binding.binding_id]
         adapter = get_adapter(binding.adapter_id)
+        # Phase 5 D1: the binding's typed AdapterParams flow into the parse.
+        parameters = adapter_params_for_binding(binding)
         # D2/H1 (Phase 4 review): full-file parsing is heavy synchronous work;
         # run it in a worker thread so the event loop stays responsive (the
         # manager can process a cancel request while the parse runs) and the
@@ -335,6 +337,7 @@ class ExpressionBuildRunner:
             binding_id=binding.binding_id,
             schema_ref=self._spec.schema_ref,
             output_dir=self._output_dir,
+            parameters=parameters,
         )
         self._batches[binding.binding_id] = batch
         file_outputs = _file_outputs(

@@ -858,6 +858,12 @@ class DatasetBuildExecutor:
                 for operation_id, value in upstream.items()
             },
         }
+        # Phase 5 D1: per-binding adapter parameters are part of the input
+        # digest, so changing a binding's format/scale/unit/platform_ids
+        # invalidates every checkpoint (the parameter digest separately
+        # carries the same scope; folding it in here keeps the reuse gate
+        # conservative across the whole plan).
+        payload["parameter_scope"] = self._parameter_scope
         if self._source_assets:
             # B2 (Phase 4 review): checkpoint reuse must never serve stale
             # output after a source file changed. Operation outputs are

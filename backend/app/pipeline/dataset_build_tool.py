@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
+from pydantic import ValidationError
 
 from app.agent_loop.context import RunContext
 from app.config import settings
@@ -29,7 +30,7 @@ from app.datasets.build.expression_runner import (
     ExpressionBuildRunner,
 )
 from app.datasets.build.invariants import PUBLISH_DIR, find_latest_publication
-from app.datasets.contracts import DatasetBuildSpec
+from app.datasets.contracts import AdapterParams, DatasetBuildSpec
 from app.datasets.runtime import DatasetBuildExecutor, build_operation_plan
 from app.datasets.schema_registry import SchemaRegistry, build_gene_expression_schema
 from app.domain.contracts import (
@@ -254,6 +255,29 @@ async def execute_dataset_build(
         cancellation_requested=run_ctx.cancellation_requested,
         pending_check=lambda: run_ctx.main_input_pending,
     )
+    # Phase 5 D1: per-binding parameter scope — each binding's normalized
+    # AdapterParams JSON enters the operation digest, so changing a binding's
+    # format/scale/unit/platform_ids invalidates every checkpoint.  Invalid
+    # declared parameters are rejected as invalid input before any operation
+    # runs (the SpecValidator is wired into the runtime in T5/T7; this is the
+    # tool-level fail-closed guard).
+    try:
+        parameter_scope = {
+            binding.binding_id: AdapterParams.model_validate(
+                binding.parameters
+            ).model_dump(mode="json")
+            for binding in build_spec.source_bindings
+            if binding.parameters
+        }
+    except ValidationError as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": f"binding adapter parameters are invalid: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
     plan = build_operation_plan(build_spec)
     executor = DatasetBuildExecutor(
         task_id=run_ctx.task_id,
@@ -265,6 +289,7 @@ async def execute_dataset_build(
         plan=plan,
         run_operation=runner,
         source_assets=assets,
+        parameter_scope=parameter_scope,
         cancellation_requested=run_ctx.cancellation_requested,
         implementation_versions={op.operation_id: "1.0.0" for op in plan},
     )

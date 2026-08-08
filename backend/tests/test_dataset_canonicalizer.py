@@ -6,7 +6,6 @@ import csv
 import hashlib
 from pathlib import Path
 
-import pytest
 from app.datasets.build.adapters import GdcExpressionAdapter, XenaMatrixAdapter
 from app.datasets.build.canonicalizer import (
     CanonicalizationResult,
@@ -75,13 +74,6 @@ def test_authorize_namespace_rules() -> None:
     assert authorize_namespace("") is None
 
 
-@pytest.mark.xfail(
-    reason=(
-        "T2 fix target: canonicalizer must consume gene_id_namespace_declared "
-        "instead of inferring the namespace from the ID shape"
-    ),
-    strict=False,
-)
 def test_probe_id_misclassified_by_symbol_regex_is_regression_target() -> None:
     """GEO probe IDs must not be authorized as ``gene_symbol`` by shape alone.
 
@@ -378,3 +370,128 @@ def test_multi_unit_batch_detected_as_inconsistency(tmp_path: Path) -> None:
         "expression_value",
         "unstranded",
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 T2: the canonicalizer consumes the adapter-declared namespace
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalizer_consumes_declared_namespace(tmp_path: Path) -> None:
+    """GEO probe rows are not authorized as gene_symbol by ID shape alone.
+
+    Phase 5 D1: the adapter declares ``geo_probe`` for non-ENSG ID_REF rows;
+    the canonicalizer must consume that declaration, so under the gene schema
+    (whose normalization profile allows only ensembl_gene/gene_symbol) the
+    probe row is rejected as an unauthorized namespace instead of being
+    silently accepted as ``gene_symbol``.
+    """
+    import gzip as gzip_module
+
+    from app.datasets.build.adapters import GeoExpressionAdapter
+
+    matrix = tmp_path / "geo_series_matrix.txt.gz"
+    text = (
+        "!series_matrix_table_begin\n"
+        "\"ID_REF\"\t\"GSM1\"\t\"GSM2\"\n"
+        "\"AFFX-BioB-5\"\t1.5\t2.0\n"
+        "\"ENSG00000141510\"\t5.0\t6.0\n"
+        "!series_matrix_table_end\n"
+    )
+    with gzip_module.open(matrix, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    from app.datasets.contracts import AdapterParams, ValueScale
+
+    params = AdapterParams(
+        format="series_matrix",
+        value_semantics="normalized_expression",
+        value_scale=ValueScale.LOG2,
+        expression_unit="log2_expression",
+        platform_ids=["GPL570"],
+    )
+    checksum = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path=f"source_assets/{matrix.name}",
+        sha256=checksum,
+        size_bytes=matrix.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GeoExpressionAdapter().parse(
+        asset,
+        matrix,
+        build_id="build_geo",
+        binding_id="binding_geo",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+        parameters=params,
+    )
+    result = canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+    )
+    # Only the declared ensembl_gene row is accepted under the gene schema;
+    # the declared geo_probe row is rejected (never guessed as gene_symbol).
+    assert result.namespaces == ("ensembl_gene",)
+    assert result.row_count == 2
+    assert result.rejected_count == 2  # AFFX-BioB-5 x 2 samples
+    rejected = result.audit_paths[0].read_text()
+    assert "AFFX-BioB-5" in rejected
+    assert "unauthorized_namespace" in rejected
+
+
+def test_canonicalizer_accepts_declared_ensembl_gene(tmp_path: Path) -> None:
+    """tximport rows (declared ensembl_gene) canonicalize under the gene schema."""
+    from app.datasets.build.adapters import GeoExpressionAdapter
+    from app.datasets.contracts import AdapterParams, ValueScale
+
+    counts = tmp_path / "counts.tsv"
+    counts.write_text(
+        "counts.S1\tcounts.S2\n"
+        "ENSG00000141510\t10\t20\n"
+        "ENSG00000000003\t30\t40\n",
+        encoding="utf-8",
+    )
+    params = AdapterParams(
+        format="tximport_counts",
+        value_semantics="raw_count",
+        value_scale=ValueScale.LINEAR,
+        expression_unit="estimated_count",
+        is_normalized=False,
+    )
+    checksum = hashlib.sha256(counts.read_bytes()).hexdigest()
+    asset = SourceAsset(
+        asset_id=asset_id_from_sha256(checksum),
+        kind="source",
+        relative_path="source_assets/counts.tsv",
+        sha256=checksum,
+        size_bytes=counts.stat().st_size,
+        media_type="text/tab-separated-values",
+        source_id="src_geo",
+        successful_attempt_id="attempt_1",
+        data_level=DataLevel.REPOSITORY_PROCESSED,
+    )
+    batch = GeoExpressionAdapter().parse(
+        asset,
+        counts,
+        build_id="build_geo",
+        binding_id="binding_geo",
+        schema_ref="gene_expression.long.v1",
+        output_dir=tmp_path,
+        parameters=params,
+    )
+    result = canonicalize(
+        batch=batch,
+        schema=build_gene_expression_schema(),
+        profile=_expression_normalization_v1(),
+        output_dir=tmp_path,
+    )
+    assert result.namespaces == ("ensembl_gene",)
+    assert result.row_count == 4
+    assert result.rejected_count == 0
