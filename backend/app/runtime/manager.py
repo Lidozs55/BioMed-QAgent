@@ -1508,7 +1508,7 @@ class TaskManager:
                     request_id="recovery",
                     task_id=summary.task_id,
                     run_id=run.run_id,
-                    request_fingerprint="recovery",
+                    request_fingerprint=run.request_fingerprint,
                 )
                 lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
                 async with lock:

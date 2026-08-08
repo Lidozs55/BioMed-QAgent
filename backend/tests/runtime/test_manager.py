@@ -3969,6 +3969,81 @@ async def test_unreadable_publication_marker_warns_and_skips(
 
 
 @pytest.mark.asyncio
+async def test_recovery_reconciles_valid_publication_marker(tmp_path) -> None:
+    """A valid .runtime-publication.json marker for a COMPLETED run must be
+    reconciled into a publication_created event on startup, not crash it."""
+    manager_module = importlib.import_module("app.runtime.manager")
+    output_dir = tmp_path / "output"
+    task_id = "task_valid_marker"
+    run_id = "run_valid_marker"
+    manifest_sha256 = "0" * 64
+    seed = TaskRepository(output_dir)
+    await seed.initialize()
+    await seed.save_snapshot(empty_snapshot(task_id))
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunQueuedPayload(
+            request_id="req_valid_marker",
+            input="valid marker test",
+            request_fingerprint="1" * 64,
+        ),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunStartedPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunFinalizingPayload(),
+    )
+    await seed.append_event_payload(
+        task_id=task_id,
+        run_id=run_id,
+        payload=RunCompletedPayload(),
+    )
+
+    artifacts_dir = output_dir / "tasks" / task_id / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    (artifacts_dir / ".runtime-publication.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "manifest_sha256": manifest_sha256,
+        }),
+        "utf-8",
+    )
+    await seed.close()
+
+    repository = TaskRepository(output_dir)
+    manager = manager_module.TaskManager(
+        repository,
+        run_executor=_do_nothing,
+    )
+    await manager.start()
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        assert any(
+            pub.publication_id == f"pub-{run_id}"
+            and pub.manifest_sha256 == manifest_sha256
+            for pub in snapshot.publications
+        )
+        events = await repository.list_events(task_id)
+        assert any(
+            isinstance(event.payload, PublicationCreatedPayload)
+            and event.payload.publication_id == f"pub-{run_id}"
+            and event.payload.manifest_sha256 == manifest_sha256
+            for event in events
+        )
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_parent_terminal_waits_for_retryable_child_terminal_persistence(
     tmp_path,
     monkeypatch,
