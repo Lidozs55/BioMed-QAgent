@@ -157,11 +157,6 @@ def series_suppl_directory_url(gse: str) -> str:
     )
 
 
-def series_landing_url(gse: str) -> str:
-    """NCBI GEO query landing URL for a series."""
-    return f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={normalize_series_accession(gse)}"
-
-
 # --- platform URL construction (mirrors the verified V1 layout) --------------
 
 
@@ -179,11 +174,21 @@ def platform_dir_prefix(gpl: str) -> str:
 
 
 def platform_suppl_listing_url(gpl: str) -> str:
+    """suppl/ listing URL for a platform.
+
+    # seam: test-only — pinned URL-layout tests (review-loop R3-4); live
+    acquisition uses ``discover_annotation_file`` + ``acquire_platform_annotation``.
+    """
     normalized = normalize_platform_accession(gpl)
     return f"{_PLATFORM_FTP_ROOT}/{platform_dir_prefix(normalized)}/{normalized}/suppl/"
 
 
 def platform_annot_listing_url(gpl: str) -> str:
+    """annot/ listing URL for a platform.
+
+    # seam: test-only — pinned URL-layout tests (review-loop R3-4); live
+    acquisition uses ``discover_annotation_file`` + ``acquire_platform_annotation``.
+    """
     normalized = normalize_platform_accession(gpl)
     return f"{_PLATFORM_FTP_ROOT}/{platform_dir_prefix(normalized)}/{normalized}/annot/"
 

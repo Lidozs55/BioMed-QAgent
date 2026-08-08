@@ -24,6 +24,7 @@ from app.datasets.build.confidence import (
 )
 from app.datasets.contracts import (
     AcceptancePolicy,
+    CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
     DatasetManifest,
     DatasetSchema,
     NormalizationProfile,
@@ -423,7 +424,7 @@ class ExpressionValidationProfile:
         if summaries:
             detail += f"; coverage_below_1.0={below_one if below_one else 'none'}"
         return ProfileCheck(
-            check_id="probe_coverage_required_gene_level",
+            check_id=CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL,
             description=(
                 "gene-required build: probe→gene coverage must be 1.0 with "
                 "no residual geo_probe/ambiguous rows in the primary dataset"

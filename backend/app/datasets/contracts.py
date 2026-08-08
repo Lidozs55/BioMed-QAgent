@@ -38,6 +38,19 @@ from app.domain.contracts.source import FileAsset, SourceLocator
 from app.tools.workdir import validate_safe_path_id
 
 
+#: Stable validation check id for the gene-required probe-coverage policy
+#: (T5): shared by ``profiles.py`` (the check) and ``dataset_build_tool.py``
+#: (the outcome classifier) so the two cannot drift (review-loop R3-6).
+CHECK_ID_PROBE_COVERAGE_REQUIRED_GENE_LEVEL = "probe_coverage_required_gene_level"
+
+#: Stable NO_DATA reason code emitted when a gene-required build has no
+#: publishable gene rows (T7); shared by ``expression_runner.py`` and
+#: ``dataset_build_tool.py`` (review-loop R3-6).
+REASON_PROBE_MAPPING_UNAVAILABLE_REQUIRED_GENE_LEVEL = (
+    "probe_mapping_unavailable_required_gene_level"
+)
+
+
 class ValidationResultStatus(StrEnum):
     PASSED = "passed"
     FAILED = "failed"

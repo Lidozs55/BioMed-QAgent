@@ -34,23 +34,7 @@ from app.datasets.contracts import (
     ProbeMappingSummary,
 )
 from app.domain.contracts import SourceAsset
-
-#: Gene-identifier columns in SOFT platform tables, best first (mirrors the
-#: V1 geo_annotation parser).  The parser picks the first column (in this
-#: order) that carries at least one value.
-_GENE_COLUMN_PRIORITY: tuple[str, ...] = (
-    "GENE_SYMBOL",
-    "GENE_NAME",
-    "REFSEQ",
-    "GB_ACC",
-    "ENSEMBL_ID",
-    "UNIGENE_ID",
-    "LOCUSLINK_ID",
-    "TIGR_ID",
-    "ENTREZ_GENE_ID",
-)
-
-_MISSING_SENTINELS = {"", "---", "null", "NA", "NaN"}
+from app.pipeline.processing.geo_annotation import parse_platform_table_text
 
 #: Stable server-side mapping rule id (D3 ``mapping_rule_id``).
 PROBE_MAPPING_RULE_ID = "geo.probe-map.v1"
@@ -94,52 +78,30 @@ def _read_table(annotation_path: Path) -> str:
 
 def parse_platform_table(
     annotation_path: Path,
-) -> tuple[dict[str, str], Literal["gene_symbol", "ensembl_gene"], ProbeMappingStatus]:
-    """Parse a SOFT platform table into ``(probe→gene, target_namespace, status)``.
+) -> tuple[dict[str, str], Literal["gene_symbol", "ensembl_gene"], ProbeMappingStatus, frozenset[str]]:
+    """Parse a SOFT platform table into ``(probe→gene, target_namespace, status, ambiguous_probes)``.
 
     Status mirrors the V1 vocabulary: ``no_gene_annotation`` when the table
     block or a recognized gene column is missing, ``unmapped`` when the gene
     column exists but carries no usable values.
+
+    The table parsing itself (markers, header, gene-column priority, missing
+    sentinels) is delegated to the shared
+    :func:`~app.pipeline.processing.geo_annotation.parse_platform_table_text`
+    so the V1 and V2 pipelines cannot drift.  Probes mapping to MULTIPLE
+    DISTINCT gene targets have no explicit disambiguation rule (D2/F3): they
+    are ambiguous, excluded from the map (the canonicalizer keeps them in the
+    ``geo_probe`` namespace) and returned for the caller to count.
     """
     text = _read_table(annotation_path)
-    lines = text.splitlines()
-    begin: int | None = None
-    end: int | None = None
-    for index, line in enumerate(lines):
-        marker = line.strip().casefold()
-        if marker == "!platform_table_begin":
-            begin = index
-        elif marker == "!platform_table_end" and begin is not None:
-            end = index
-            break
-    if begin is None or end is None or end <= begin + 1:
+    table = parse_platform_table_text(text)
+    if not table.has_table or table.gene_column is None:
         return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION, frozenset()
+    target_namespace = _target_namespace_for(table.gene_column)
 
-    header = [part.strip().strip('"') for part in lines[begin + 1].split("\t")]
-    gene_index: int | None = None
-    for candidate in _GENE_COLUMN_PRIORITY:
-        if candidate in header:
-            gene_index = header.index(candidate)
-            break
-    if gene_index is None:
-        return {}, "gene_symbol", ProbeMappingStatus.NO_GENE_ANNOTATION, frozenset()
-    target_namespace = _target_namespace_for(header[gene_index])
-
-    mapping: dict[str, str] = {}
     targets: dict[str, set[str]] = {}
-    for line in lines[begin + 2 : end]:
-        values = [part.strip().strip('"') for part in line.split("\t")]
-        if len(values) <= gene_index:
-            continue
-        probe = values[0]
-        gene = values[gene_index]
-        if probe and gene not in _MISSING_SENTINELS:
-            targets.setdefault(probe, set()).add(gene)
-    # Phase 5 final review (F3, D2): a probe mapping to MULTIPLE DISTINCT
-    # gene targets has no explicit disambiguation rule → it is ambiguous and
-    # stays ``geo_probe``: excluded from the map (the canonicalizer keeps it
-    # in the probe namespace) and counted separately by the caller. Duplicate
-    # rows mapping to the SAME target are not ambiguous.
+    for probe, gene in table.rows:
+        targets.setdefault(probe, set()).add(gene)
     ambiguous_probes = frozenset(
         probe for probe, genes in targets.items() if len(genes) > 1
     )
