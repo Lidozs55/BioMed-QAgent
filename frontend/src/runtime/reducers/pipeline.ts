@@ -10,6 +10,38 @@ import type {
 } from "../types";
 import { upsertActivity, upsertItem } from "./shared";
 
+/**
+ * R1S-01: during the stage-star/operation-star compatibility window the
+ * timeline renders by operation identity (docs/ARCHITECTURE.md §17.2). Once
+ * a run carries operation items, its stage/progress items are redundant
+ * duplicates of the same work — prune them. Legacy replays (pre-T3
+ * events.jsonl, no operation events) keep stage/progress items untouched.
+ *
+ * Deterministic post-pass: applied after every reduced event, so it
+ * self-heals regardless of arrival order (stage_started precedes
+ * operation_started in real streams).
+ */
+export function pruneStageItemsForOperationRuns(
+  task: TaskProjection,
+): TaskProjection {
+  const operationRunIds = new Set(
+    task.items
+      .filter((item) => item.kind === "operation" && item.runId !== null)
+      .map((item) => item.runId),
+  );
+  if (operationRunIds.size === 0) return task;
+  const items = task.items.filter(
+    (item) =>
+      !(
+        (item.kind === "stage" || item.kind === "progress") &&
+        item.runId !== null &&
+        operationRunIds.has(item.runId)
+      ),
+  );
+  if (items.length === task.items.length) return task;
+  return { ...task, items };
+}
+
 export function applyArtifactProducedEvent(
   task: TaskProjection,
   envelope: EventEnvelope,
