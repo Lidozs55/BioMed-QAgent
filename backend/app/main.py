@@ -92,6 +92,13 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         loop = asyncio.get_running_loop()
         previous_default_executor = getattr(loop, "_default_executor", None)
+        if not configured.dashscope_api_key:
+            # 启动校验（原 §5.3）：缺少 key 时 LLM 调用必然失败，尽早暴露。
+            # 不阻断启动——用户仍可在前端模型设置中配置。
+            logging.getLogger("app.main").warning(
+                "DASHSCOPE_API_KEY 未配置：LLM 相关功能（Agent 编排 / VLM 图表提取）"
+                "将不可用。请在 .env 或前端模型设置中配置。"
+            )
         sync_executor = ThreadPoolExecutor(
             max_workers=configured.runtime_sync_worker_threads,
             thread_name_prefix="task-sync",
@@ -135,7 +142,10 @@ def create_app(
         )
         workflow_recipe_store = WorkflowRecipeStore(configured.skill_data_path / "recipes")
         browser_pool = BrowserPool(max_contexts=4)
-        crawler_facade = CrawlerFacade(browser_pool=browser_pool)
+        crawler_facade = CrawlerFacade(
+            browser_pool=browser_pool,
+            min_interval=configured.rate_limit_seconds,
+        )
         recipe_client = ControlledRecipeClient(
             transport_factory=recipe_http_transport_factory,
             browser_pool=browser_pool,

@@ -11,6 +11,7 @@ from typing import Literal
 from agents import RunContextWrapper, function_tool
 
 from app.agent_loop.context import RunContext
+from app.config import settings as app_settings
 from app.domain.contracts import (
     DATABASE_IDENTIFIER_ALIASES,
     SOURCE_CAPABILITIES,
@@ -19,6 +20,7 @@ from app.domain.contracts import (
     QuerySpecification,
     RequestedOutput,
     SourceCapability,
+    StageName,
     TaskSpecification,
     is_supported_pipeline_source_combination,
 )
@@ -31,6 +33,22 @@ _SUPPORTED_GDC_DATA_TYPES = {
     "expression",
     "gene expression quantification",
 }
+
+
+def _stage_timeouts_from_settings() -> dict[StageName, float] | None:
+    """Map the configurable ``STAGE_TIMEOUTS`` env map onto StageName keys.
+
+    Returns ``None`` when the env map is empty so the PipelineRunner keeps
+    its built-in defaults. Unknown stage names are skipped silently.
+    """
+    if not app_settings.stage_timeouts:
+        return None
+    mapped: dict[StageName, float] = {}
+    for stage in StageName:
+        value = app_settings.stage_timeouts.get(stage.value)
+        if value is not None:
+            mapped[stage] = value
+    return mapped if mapped else None
 
 
 def _build_tool_specification(
@@ -547,6 +565,7 @@ async def run_research_pipeline(
             mode=mode,
             databases=normalized_databases,
             specification=specification,
+            stage_timeouts=_stage_timeouts_from_settings(),
             cancellation_requested=run_context.cancellation_requested,
             defer_publication=managed_run_id is not None,
             event_sink=bridge.event_sink if bridge is not None else None,
