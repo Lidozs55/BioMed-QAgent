@@ -36,6 +36,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.api.skills import SkillStoreDep
+from app.datasets.build.cache import CacheEntry, DatasetCacheV2
+from app.datasets.build.legacy_cache import (
+    LegacyCacheEntry,
+    find_legacy,
+    find_legacy_global,
+    legacy_artifacts,
+    list_legacy,
+)
 from app.datasets.contracts import (
     DatasetManifest,
     DatasetPublication,
@@ -838,8 +846,49 @@ async def list_task_events(
 
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
-    """List only files registered by a valid completed run manifest."""
+    """List only files registered by a valid completed run manifest.
+
+    Dual-read (Phase 7 T2): the V2 dataset cache is authoritative for V2
+    builds; the legacy ``artifacts/`` dirs serve V1 runs and pre-cache V2
+    builds (fallback).
+    """
     snapshot = await _require_snapshot(repository, task_id)
+    cached = _cache_artifacts_for_task(repository, task_id)
+    if cached is not None and any(
+        run.status is RunStatus.COMPLETED for run in snapshot.runs
+    ):
+        manifest, entry_dir = cached
+        manifest_path = entry_dir / "dataset_manifest.json"
+        artifacts = [
+            {
+                "artifact_id": "run_manifest",
+                "name": "dataset_manifest.json",
+                "role": ArtifactRole.SCHEMA.value,
+                "size": manifest_path.stat().st_size,
+                "sha256": _file_sha256(manifest_path),
+                "media_type": "application/json",
+            }
+        ]
+        for entry in manifest.artifacts:
+            file_path = _verified_cache_artifact_path(entry_dir, entry.relative_path)
+            if (
+                file_path.stat().st_size != entry.size_bytes
+                or _file_sha256(file_path) != entry.sha256
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Artifact integrity check failed"
+                )
+            artifacts.append(
+                {
+                    "artifact_id": entry.artifact_id,
+                    "name": Path(entry.relative_path).name,
+                    "role": entry.role.value,
+                    "size": entry.size_bytes,
+                    "sha256": entry.sha256,
+                    "media_type": entry.media_type,
+                }
+            )
+        return {"artifacts": artifacts, "degraded": False}
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         return {"artifacts": [], "degraded": False}
@@ -883,8 +932,45 @@ async def get_artifact_file(
     artifact_id: str,
     repository: TaskRepositoryDep,
 ):
-    """Resolve an artifact ID through the valid manifest and stream it."""
+    """Resolve an artifact ID through the valid manifest and stream it.
+
+    Dual-read (Phase 7 T2): V2 builds resolve through the dataset cache
+    first; V1 runs fall back to the legacy ``artifacts/`` dirs.
+    """
     snapshot = await _require_snapshot(repository, task_id)
+    cached = _cache_artifacts_for_task(repository, task_id)
+    if cached is not None and any(
+        run.status is RunStatus.COMPLETED for run in snapshot.runs
+    ):
+        manifest, entry_dir = cached
+        if artifact_id == "run_manifest":
+            file_path = entry_dir / "dataset_manifest.json"
+            media_type = "application/json"
+        else:
+            entry = next(
+                (
+                    item
+                    for item in manifest.artifacts
+                    if item.artifact_id == artifact_id
+                ),
+                None,
+            )
+            if entry is None:
+                raise HTTPException(
+                    status_code=404, detail="Artifact not found"
+                )
+            file_path = _verified_cache_artifact_path(entry_dir, entry.relative_path)
+            if (
+                file_path.stat().st_size != entry.size_bytes
+                or _file_sha256(file_path) != entry.sha256
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Artifact integrity check failed"
+                )
+            media_type = entry.media_type
+        return FileResponse(
+            str(file_path), filename=file_path.name, media_type=media_type
+        )
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -1463,4 +1549,348 @@ async def get_build_artifact(
                 status_code=409, detail="Artifact integrity check failed"
             )
         media_type = entry.media_type
+    return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# V2 dataset cache (Phase 7 T2): content-addressed cache + legacy wrapper
+# ---------------------------------------------------------------------------
+
+
+class CacheDatasetSummary(ContractModel):
+    """One cached dataset entry (V2 cache or legacy 22-column record)."""
+
+    dataset_id: str = Field(min_length=1)
+    namespace: str = Field(min_length=1)
+    dataset_family: str = Field(min_length=1)
+    schema_ref: str = Field(min_length=1)
+    row_count: int = Field(ge=0)
+    published_at: str = Field(min_length=1)
+    keywords: list[str] = Field(default_factory=list)
+    manifest_ref: str = Field(min_length=1)
+
+
+class CacheDatasetPage(ContractModel):
+    """One page of cached datasets (newest first)."""
+
+    items: list[CacheDatasetSummary] = Field(default_factory=list)
+
+
+class CacheDatasetDetail(ContractModel):
+    """One cache entry's manifest pointer + artifact inventory."""
+
+    dataset_id: str = Field(min_length=1)
+    namespace: str = Field(min_length=1)
+    dataset_family: str = Field(min_length=1)
+    schema_ref: str = Field(min_length=1)
+    row_count: int = Field(ge=0)
+    published_at: str = Field(min_length=1)
+    keywords: list[str] = Field(default_factory=list)
+    manifest_ref: str = Field(min_length=1)
+    artifacts: list[ManifestArtifactEntry] = Field(default_factory=list)
+
+
+#: Cache dataset ids and namespaces become path segments; both must stay
+#: single safe components (V2 ids are ``dataset_<digest>``, legacy ids are
+#: ``^[a-z0-9][a-z0-9_-]*$``).
+_SAFE_CACHE_SEGMENT = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_CACHE_LIST_LIMIT = 200
+
+
+def _cache_root(repository: TaskRepository) -> Path:
+    """The cache root lives beside the tasks dir (``<output_dir>/../cache``)."""
+
+    return repository.tasks_dir.parent.parent / "cache"
+
+
+def _require_cache_namespace(namespace: str) -> str:
+    if not _SAFE_CACHE_SEGMENT.fullmatch(namespace) or namespace in {".", ".."}:
+        raise HTTPException(
+            status_code=422, detail="invalid cache namespace"
+        )
+    return namespace
+
+
+def _load_cache_entry_manifest(entry: CacheEntry) -> DatasetManifest:
+    """The authoritative ``dataset_manifest.json`` of a V2 cache entry."""
+
+    manifest_path = entry.directory / "dataset_manifest.json"
+    try:
+        manifest = DatasetManifest.model_validate_json(
+            manifest_path.read_text("utf-8")
+        )
+    except (ValidationError, OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=409, detail="Cache entry manifest is invalid"
+        ) from error
+    if manifest.manifest_id != entry.manifest_id:
+        raise HTTPException(
+            status_code=409, detail="Cache entry manifest is invalid"
+        )
+    return manifest
+
+
+def _verified_cache_artifact_path(entry_dir: Path, relative_path: str) -> Path:
+    """Resolve a cache artifact inside its entry directory (path-guarded)."""
+
+    file_path = (entry_dir / relative_path).resolve()
+    try:
+        file_path.relative_to(entry_dir.resolve())
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409, detail="Invalid cache artifact path"
+        ) from error
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=409, detail="Registered artifact is missing"
+        )
+    return file_path
+
+
+def _find_v2_global(cache: DatasetCacheV2, dataset_id: str) -> CacheEntry | None:
+    """Locate a V2 cache entry by dataset_id across every namespace."""
+
+    for entry in cache.list(limit=10_000):
+        if entry.dataset_id == dataset_id:
+            return entry
+    return None
+
+
+def _resolve_cache_dataset(
+    repository: TaskRepository,
+    dataset_id: str,
+    namespace: str | None,
+) -> CacheEntry | LegacyCacheEntry | None:
+    """Resolve a cache dataset: V2 first, then the legacy records tree."""
+
+    if not _SAFE_CACHE_SEGMENT.fullmatch(dataset_id):
+        return None
+    cache = DatasetCacheV2(_cache_root(repository))
+    if namespace is not None:
+        _require_cache_namespace(namespace)
+        v2_entry = cache.find(namespace, dataset_id)
+        if v2_entry is not None:
+            return v2_entry
+        return find_legacy(_cache_root(repository), namespace, dataset_id)
+    v2_entry = _find_v2_global(cache, dataset_id)
+    if v2_entry is not None:
+        return v2_entry
+    return find_legacy_global(_cache_root(repository), dataset_id)
+
+
+def _keyword_hits(entry: CacheEntry | LegacyCacheEntry, keyword: str) -> bool:
+    """Keyword filter over cache entry metadata (search-only, not identity)."""
+
+    needle = keyword.strip().lower()
+    if not needle:
+        return True
+    legacy_manifest = getattr(entry, "manifest", None)
+    return (
+        needle in entry.dataset_family.lower()
+        or needle in entry.schema_ref.lower()
+        or needle in getattr(entry, "build_id", "").lower()
+        or any(needle in kw.lower() for kw in entry.keywords)
+        or (
+            legacy_manifest is not None
+            and (
+                needle in legacy_manifest.topic.lower()
+                or needle in legacy_manifest.description.lower()
+            )
+        )
+    )
+
+
+def _cache_summary_v2(entry: CacheEntry) -> CacheDatasetSummary:
+    return CacheDatasetSummary(
+        dataset_id=entry.dataset_id,
+        namespace=entry.namespace,
+        dataset_family=entry.dataset_family,
+        schema_ref=entry.schema_ref,
+        row_count=entry.row_count,
+        published_at=entry.published_at,
+        keywords=list(entry.keywords),
+        manifest_ref=(
+            f"cache/datasets/{entry.namespace}/{entry.dataset_id}"
+            "/dataset_manifest.json"
+        ),
+    )
+
+
+def _cache_summary_legacy(entry: LegacyCacheEntry) -> CacheDatasetSummary:
+    return CacheDatasetSummary(
+        dataset_id=entry.dataset_id,
+        namespace=entry.namespace,
+        dataset_family=entry.dataset_family,
+        schema_ref=entry.schema_ref,
+        row_count=entry.row_count,
+        published_at=entry.published_at,
+        keywords=list(entry.keywords),
+        manifest_ref=(
+            f"cache/records/{entry.namespace}/{entry.dataset_id}/manifest.json"
+        ),
+    )
+
+
+def _cache_artifacts_for_task(
+    repository: TaskRepository,
+    task_id: str,
+) -> tuple[DatasetManifest, Path] | None:
+    """Newest V2 cache entry whose manifest belongs to ``task_id``.
+
+    The content-addressed cache is authoritative for V2 builds: the legacy
+    artifact endpoints read it first and fall back to the V1 ``artifacts/``
+    dirs (dual-read, Phase 7 T2).
+    """
+
+    cache = DatasetCacheV2(_cache_root(repository))
+    for entry in cache.list(namespace="build", limit=10_000):
+        manifest_path = entry.directory / "dataset_manifest.json"
+        try:
+            manifest = DatasetManifest.model_validate_json(
+                manifest_path.read_text("utf-8")
+            )
+        except (ValidationError, OSError, json.JSONDecodeError):
+            continue
+        if manifest.task_id != task_id:
+            continue
+        return manifest, entry.directory
+    return None
+
+
+@router.get("/cache/datasets", response_model=CacheDatasetPage)
+async def list_cache_datasets(
+    repository: TaskRepositoryDep,
+    namespace: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    limit: Annotated[int | None, Query(ge=1)] = None,
+) -> CacheDatasetPage:
+    """Return cached datasets: V2 cache entries plus legacy 22-column records.
+
+    ``namespace`` filters one cache namespace (V2 ``cache/datasets/<ns>`` or
+    legacy ``cache/records/<ns>``); ``keyword`` filters entry metadata
+    (family / schema ref / build id / keywords — search-only, never part of
+    the content-addressed identity).
+    """
+
+    if namespace is not None:
+        _require_cache_namespace(namespace)
+    page_limit = min(limit if limit is not None else 50, _CACHE_LIST_LIMIT)
+    cache = DatasetCacheV2(_cache_root(repository))
+    items: list[CacheDatasetSummary] = []
+    for entry in cache.list(namespace=namespace, limit=10_000):
+        if _keyword_hits(entry, keyword or ""):
+            items.append(_cache_summary_v2(entry))
+    for entry in list_legacy(_cache_root(repository), namespace=namespace):
+        if _keyword_hits(entry, keyword or ""):
+            items.append(_cache_summary_legacy(entry))
+    items.sort(key=lambda item: item.published_at, reverse=True)
+    return CacheDatasetPage(items=items[:page_limit])
+
+
+@router.get("/cache/datasets/{dataset_id}", response_model=CacheDatasetDetail)
+async def get_cache_dataset(
+    dataset_id: str,
+    repository: TaskRepositoryDep,
+    namespace: str | None = Query(default=None),
+) -> CacheDatasetDetail:
+    """Return one cache entry's manifest pointer + artifact inventory.
+
+    ``namespace`` disambiguates when the same dataset_id exists in both the
+    V2 cache and the legacy records tree; without it the V2 cache wins.
+    """
+
+    resolved = _resolve_cache_dataset(repository, dataset_id, namespace)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if isinstance(resolved, CacheEntry):
+        manifest = _load_cache_entry_manifest(resolved)
+        return CacheDatasetDetail(
+            dataset_id=resolved.dataset_id,
+            namespace=resolved.namespace,
+            dataset_family=resolved.dataset_family,
+            schema_ref=resolved.schema_ref,
+            row_count=resolved.row_count,
+            published_at=resolved.published_at,
+            keywords=list(resolved.keywords),
+            manifest_ref=(
+                f"cache/datasets/{resolved.namespace}/{resolved.dataset_id}"
+                "/dataset_manifest.json"
+            ),
+            artifacts=manifest.artifacts,
+        )
+    return CacheDatasetDetail(
+        dataset_id=resolved.dataset_id,
+        namespace=resolved.namespace,
+        dataset_family=resolved.dataset_family,
+        schema_ref=resolved.schema_ref,
+        row_count=resolved.row_count,
+        published_at=resolved.published_at,
+        keywords=list(resolved.keywords),
+        manifest_ref=(
+            f"cache/records/{resolved.namespace}/{resolved.dataset_id}"
+            "/manifest.json"
+        ),
+        artifacts=legacy_artifacts(resolved),
+    )
+
+
+@router.get("/cache/datasets/{dataset_id}/artifacts/{artifact_id}")
+async def get_cache_dataset_artifact(
+    dataset_id: str,
+    artifact_id: str,
+    repository: TaskRepositoryDep,
+    namespace: str | None = Query(default=None),
+):
+    """Download one cached dataset artifact.
+
+    V2 entries resolve through the entry manifest (plus the special
+    ``dataset_manifest`` id); legacy entries serve ``main_data`` /
+    ``manifest`` from the records tree.
+    """
+
+    resolved = _resolve_cache_dataset(repository, dataset_id, namespace)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if isinstance(resolved, CacheEntry):
+        manifest = _load_cache_entry_manifest(resolved)
+        if artifact_id == "dataset_manifest":
+            file_path = resolved.directory / "dataset_manifest.json"
+            media_type = "application/json"
+        else:
+            entry = next(
+                (
+                    candidate
+                    for candidate in manifest.artifacts
+                    if candidate.artifact_id == artifact_id
+                ),
+                None,
+            )
+            if entry is None:
+                raise HTTPException(
+                    status_code=404, detail="Artifact not found"
+                )
+            file_path = _verified_cache_artifact_path(
+                resolved.directory, entry.relative_path
+            )
+            if (
+                file_path.stat().st_size != entry.size_bytes
+                or _file_sha256(file_path) != entry.sha256
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Artifact integrity check failed"
+                )
+            media_type = entry.media_type
+    else:
+        if artifact_id == "main_data":
+            file_path = resolved.directory / "main_data.csv"
+            media_type = "text/csv"
+        elif artifact_id == "manifest":
+            file_path = resolved.directory / "manifest.json"
+            media_type = "application/json"
+        else:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        if not file_path.is_file():
+            raise HTTPException(
+                status_code=409, detail="Registered artifact is missing"
+            )
     return FileResponse(str(file_path), filename=file_path.name, media_type=media_type)
