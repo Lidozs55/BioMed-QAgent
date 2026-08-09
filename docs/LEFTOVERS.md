@@ -56,7 +56,7 @@
 ## 🟡 C. 技术债 / forward seam（已评估，多为"接受"级）
 
 ### C1. publication 完整性（REVIEW phase4-bug-sweep §3，Important）
-- **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构
+- **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构 ✅ **已修（2026-08-09, feat/leftovers-p1）**：finalize 在 task 锁内收敛 publication 落盘与 run_completed 事件；in-process 事件追加失败在发布事实（publication_created 事件已落盘）存在时幂等补发 run_completed 收敛 COMPLETED（判定 `RunExecution._publication_persisted`，不再用 committer 返回）；重启 `_recover` 按 `PublicationSummary.run_id == active_run_id` 关联发布事实（兼容 AGENT `pub-{run_id}` 与 V2 `pub_{build_id}_{sha}` 两种格式）闭合 FINALIZING run。**残余窗口（记录不修）**：进程崩溃于事件完全未持久化前 → run INTERRUPTED + 产物存在但无发布事件（builds API 仍按 manifest 投影展示）；AGENT 路径崩溃于 `pending.publish` 执行中 → FAILED + 部分发布文件；崩溃于 publish 完成后事件持久化前 → 发布文件无事件记录、重启不闭合（既有窗口，未恶化）
 - **C1b A3**：reducer 不校验 run 状态即接受 `publication_created`（随 A2 设计）
 - **C1c A4**：重启丢弃 pending HIL prompt（无 prompt-invalidated 事件）→ 需决策重启恢复或显式事件
 - **~~C1d V2-validation_ref~~** ✅ 已修复（2026-08-09）：`validation_report.json` 拷入 immutable version dir（TDD 测试）
