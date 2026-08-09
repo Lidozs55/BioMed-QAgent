@@ -528,6 +528,13 @@ class TaskRepository:
                             raise
 
                 await self._shield_and_drain(delete_tree_and_index())
+                # C5d: the task is gone — drop the strong-key entries so a
+                # long-lived runtime does not accumulate one lock/checkpoint
+                # per deleted task.  Delete runs under the task lock and the
+                # caller (TaskManager) only admits terminal tasks, so no
+                # concurrent operation can still be using this task's lock.
+                self._task_locks.pop(task_id, None)
+                self.events.forget(task_id)
 
     async def save_conversation_summary(
         self,

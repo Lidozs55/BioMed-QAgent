@@ -823,7 +823,7 @@ async def test_index_rebuild_loads_legacy_snapshot_with_no_artifact_failure_fiel
 
 
 @pytest.mark.asyncio
-async def test_active_and_inactive_tasks_are_globally_ordered_on_every_page(
+async def test_active_and_inactive_tasks_are_ordered_and_active_bounded(
     tmp_path,
 ) -> None:
     index = TaskIndex(tmp_path / "tasks")
@@ -857,15 +857,23 @@ async def test_active_and_inactive_tasks_are_globally_ordered_on_every_page(
         first = await index.list_tasks(limit=1)
         second = await index.list_tasks(limit=1, cursor=first.next_cursor)
 
+        # C5e: the active list is bounded by limit (newest active first); the
+        # inactive history keeps its cursor pagination.
+        assert [task.task_id for task in first.active_items] == [
+            "task_active_middle"
+        ]
+        assert [task.task_id for task in first.items] == ["task_inactive_new"]
         assert [task.task_id for task in first.tasks] == [
             "task_inactive_new",
             "task_active_middle",
-            "task_active_oldest",
         ]
+        assert [task.task_id for task in second.active_items] == [
+            "task_active_middle"
+        ]
+        assert [task.task_id for task in second.items] == ["task_inactive_old"]
         assert [task.task_id for task in second.tasks] == [
             "task_active_middle",
             "task_inactive_old",
-            "task_active_oldest",
         ]
         assert first.next_cursor is not None
         assert second.next_cursor is None
@@ -892,5 +900,31 @@ async def test_index_uses_configured_task_page_default_and_maximum(tmp_path) -> 
         assert page.next_cursor is not None
         with pytest.raises(ValueError, match="between 1 and 3"):
             await index.list_tasks(limit=4)
+    finally:
+        await index.close()
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_active_list_bounded_by_limit(tmp_path) -> None:
+    """C5e: active tasks must be truncated by limit, not serialized unbounded."""
+
+    index = TaskIndex(tmp_path / "tasks")
+    await index.initialize()
+    try:
+        for number in range(5):
+            await index.upsert_snapshot(
+                snapshot(
+                    f"task_active_{number}",
+                    status=RunStatus.RUNNING,
+                    request_id=f"req_active_{number}",
+                    run_id=f"run_active_{number}",
+                    created_at=NOW + timedelta(minutes=number),
+                )
+            )
+        page = await index.list_tasks(limit=3)
+        assert len(page.active_items) <= 3
+        # The newest active tasks win; no active task leaks into history page.
+        assert page.active_items[0].task_id == "task_active_4"
+        assert all(item.task_id not in page.items for item in page.active_items)
     finally:
         await index.close()

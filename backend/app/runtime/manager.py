@@ -984,6 +984,10 @@ class TaskManager:
             lock = self._task_locks.setdefault(task_id, asyncio.Lock())
             async with lock:
                 await self._shield_and_drain_locked(self._delete_task_locked(task_id))
+            # C5d: deletion only succeeds for fully-terminal tasks under the
+            # admission lock (no new runs can be admitted for a deleted task),
+            # so the strong-key entry is safe to drop once the delete returns.
+            self._task_locks.pop(task_id, None)
 
     async def _shield_and_drain_locked(
         self,

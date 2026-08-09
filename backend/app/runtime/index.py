@@ -414,8 +414,9 @@ class TaskIndex:
             SELECT * FROM task_summaries
             WHERE status IN ({placeholders})
             ORDER BY created_at DESC, task_id DESC
+            LIMIT ?
             """,
-            _ACTIVE_STATUSES,
+            [*_ACTIVE_STATUSES, limit],
         ).fetchall()
 
         parameters: list[Any] = [*_ACTIVE_STATUSES]
