@@ -31,10 +31,10 @@ from app.domain.contracts import (
 )
 from app.domain.contracts.dataset_state import BuildResultStatus
 from app.pipeline.dataset_build_tool import execute_dataset_build
-from app.pipeline.runner import PipelineRunner
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
 from app.tools.workdir import create_task_workdir
+from tests.agent_loop._v2_build_helpers import run_fixture_build
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -99,17 +99,9 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
             self.context = context
 
         async def stream_events(self):
-            run_id = self.context.reserve_pipeline_publication()
-            assert run_id is not None
-            runner = PipelineRunner(
-                task_id=self.context.task_id,
-                base_dir=output_dir / "tasks",
-                fixture_dir=FIXTURE_DIR,
-                defer_publication=True,
-                run_id=run_id,
-            )
-            await runner.run()
-            self.context.set_pending_publication(runner.pending_publication())
+            envelope = await run_fixture_build(self.context)
+            if envelope.get("status") != "ok":
+                raise RuntimeError(f"fixture build failed: {envelope}")
             if False:
                 yield None
 
@@ -141,10 +133,11 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
         assert any(isinstance(p, RunStartedPayload) for p in payloads)
         assert any(isinstance(p, RunFinalizingPayload) for p in payloads)
         assert any(isinstance(p, RunCompletedPayload) for p in payloads)
-        artifact_payloads = [
-            p for p in payloads if isinstance(p, ArtifactProducedPayload)
+        # V2 语义：成功构建以 PublicationCreated + durable BuildResult 为完成证据。
+        publication_payloads = [
+            p for p in payloads if isinstance(p, PublicationCreatedPayload)
         ]
-        assert len(artifact_payloads) > 1  # run_manifest + 至少一个 artifact
+        assert len(publication_payloads) == 1
 
         # 事件顺序严格校验
         started_idx = next(
@@ -153,30 +146,24 @@ async def test_agent_e2e_success_path_emits_artifacts_and_completed(
         finalizing_idx = next(
             i for i, p in enumerate(payloads) if isinstance(p, RunFinalizingPayload)
         )
-        first_artifact_idx = next(
-            i for i, p in enumerate(payloads) if isinstance(p, ArtifactProducedPayload)
+        publication_idx = next(
+            i
+            for i, p in enumerate(payloads)
+            if isinstance(p, PublicationCreatedPayload)
         )
         completed_idx = next(
             i for i, p in enumerate(payloads) if isinstance(p, RunCompletedPayload)
         )
-        assert started_idx < finalizing_idx < first_artifact_idx < completed_idx
+        assert started_idx < finalizing_idx < publication_idx < completed_idx
 
-        # run_manifest 一定是第一个 artifact
-        assert artifact_payloads[0].artifact.artifact_id == "run_manifest"
-
-        # publication marker 存在且 schema 正确
-        marker_path = (
-            repository.tasks_dir
-            / accepted.task_id
-            / "artifacts"
-            / ".runtime-publication.json"
-        )
-        assert marker_path.is_file()
-        marker = json.loads(marker_path.read_text("utf-8"))
-        assert marker["schema_version"] == 1
-        assert marker["task_id"] == accepted.task_id
-        assert marker["run_id"] == accepted.run_id
-        assert "manifest_sha256" in marker
+        # durable BuildResult 是真实成功（V2 四态之一），非通用 NO_DATA。
+        completed = [
+            p for p in payloads if isinstance(p, RunCompletedPayload)
+        ]
+        assert len(completed) == 1
+        assert completed[0].build_result is not None
+        assert completed[0].build_result.status is BuildResultStatus.SUCCEEDED
+        assert completed[0].build_result.valid_row_count == 4
     finally:
         await manager.close()
 
@@ -337,7 +324,14 @@ async def test_agent_e2e_no_artifact_path_emits_completed_no_data(
     class FakeResult:
         final_output = "e2e no artifact"
 
+        def __init__(self, context: RunContext) -> None:
+            self.context = context
+
         async def stream_events(self):
+            # header-only fixture → 结构化 NO_DATA outcome（V2 语义）。
+            envelope = await run_fixture_build(self.context, header_only=True)
+            if envelope.get("status") != "ok":
+                raise RuntimeError(f"fixture build failed: {envelope}")
             if False:
                 yield None
 
@@ -345,7 +339,7 @@ async def test_agent_e2e_no_artifact_path_emits_completed_no_data(
     monkeypatch.setattr(
         runner_module.Runner,
         "run_streamed",
-        lambda *args, **kwargs: FakeResult(),
+        lambda *args, **kwargs: FakeResult(kwargs["context"]),
     )
     manager = TaskManager(repository, run_executor=make_executor(repository))
     await manager.start()

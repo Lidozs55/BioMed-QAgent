@@ -41,8 +41,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.agent_loop.context import UserInputSubmitter
+
+#: 人工输入等待超时（原 V1 pipeline.runner 常量，随 V1 退役内联）。
+_USER_INPUT_TIMEOUT: float = 300.0
 from app.domain.contracts import UserInputRequiredPayload, UserInputResumedPayload
-from app.pipeline.runner import USER_INPUT_TIMEOUT
 from app.runtime.compaction import CompactionCancelledError
 
 logger = logging.getLogger(__name__)
@@ -99,7 +101,7 @@ class MainInputBroker:
         install_user_input_submitter: Callable[[UserInputSubmitter], None],
         clear_user_input_submitter: Callable[[UserInputSubmitter], None],
         cancellation_requested: asyncio.Event | None = None,
-        default_timeout_seconds: float = USER_INPUT_TIMEOUT,
+        default_timeout_seconds: float = _USER_INPUT_TIMEOUT,
         artifacts_dir: Path | None = None,
     ) -> None:
         self._run_id = run_id

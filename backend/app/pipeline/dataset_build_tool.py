@@ -553,7 +553,12 @@ async def execute_dataset_build(
     # dataset cache so later tasks can discover/reuse it by keyword.
     cache_entry = None
     try:
-        cache = DatasetCacheV2(Path(settings.output_dir).parent / "cache")
+        # T2 (Phase 7 review): derive the cache root from the task workdir
+        # (``<base>/tasks/<task_id>`` → ``<base>/cache``) so tool writes and
+        # API reads always share one root — the module-level
+        # ``settings.output_dir`` disagreed with the repository tasks dir
+        # under test deployments and dual-read 409'd on integrity checks.
+        cache = DatasetCacheV2(run_ctx.work_dir.root.parents[2] / "cache")
         cache_entry = cache.commit(
             namespace="build",
             output_dir=output_dir,

@@ -1,4 +1,1 @@
-"""Deterministic backend pipeline stages."""
-from app.pipeline.runner import PipelineRunner
-
-__all__ = ["PipelineRunner"]
+"""Deterministic backend pipeline (V2 dataset-build kernel entry points)."""

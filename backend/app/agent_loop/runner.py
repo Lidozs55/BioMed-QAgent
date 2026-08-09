@@ -7,16 +7,17 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
+from agents.tool_context import ToolContext
 
 from app.agent_loop.agent import (
     AGENT_MAX_TURNS as AGENT_MAX_TURNS,  # noqa: F401 — 测试契约 re-export
@@ -25,6 +26,7 @@ from app.agent_loop.agent import AgentBuild, build_agent, resolve_agent_max_turn
 from app.agent_loop.context import (
     ManagedPipelineBridge,
     PendingDatasetBuild,
+    PendingPublicationCleanup,
     RunContext,
 )
 from app.agent_loop.import_agent import (
@@ -51,7 +53,6 @@ from app.domain.contracts import (
     StageProgressPayload,
     TaskCompletedPayload,
     TaskMode,
-    TaskState,
     ToolCompletedPayload,
     ToolStartedPayload,
     UserInputRequiredPayload,
@@ -68,8 +69,7 @@ from app.model_config.token_estimation import (
     ChatCompletionsStructuralPolicy,
 )
 from app.model_settings import get_current_model_configuration
-from app.pipeline.runner import PendingPublicationCleanup, PipelineRunner
-from app.pipeline.stages import PipelineCancelledError
+from app.pipeline.dataset_build_tool import execute_dataset_build
 from app.runtime.compaction import CompactionCancelledError, ConversationCompactor
 from app.skills.catalog import SkillCatalog
 from app.subagents.agents import ManagedChildAgentRunner
@@ -105,6 +105,10 @@ def resolve_max_turns_resume_limit(
     if model_settings is not None:
         return model_settings.runtime_limits.max_turns_resume_limit
     return get_runtime_limits().max_turns_resume_limit
+
+
+class _AgentRunCancelled(RuntimeError):
+    """Agent run cancelled by a user decision (no-progress or max-turns reject)."""
 
 
 class NoProgressDetected(Exception):
@@ -1069,7 +1073,7 @@ class AgentRunExecutor:
                     detector=exc,
                 )
                 if decision.decision == "reject":
-                    raise PipelineCancelledError(
+                    raise _AgentRunCancelled(
                         "agent run cancelled by user after no-progress detected"
                     ) from None
                 # 用户选择继续：保留 durable Session 续跑，清空无进展计数
@@ -1094,7 +1098,7 @@ class AgentRunExecutor:
                     resume_count=resume_count,
                 )
                 if decision.decision == "reject":
-                    raise PipelineCancelledError(
+                    raise _AgentRunCancelled(
                         "agent run cancelled by user after max_turns reached"
                     ) from None
                 resume_count += 1
@@ -1460,44 +1464,23 @@ async def _run_sync_operation[ResultT](
         raise
 
 
-async def _run_pipeline_with_cancellation(execution, runner):
-    """Await an async PipelineRunner while draining it after cancellation."""
-
-    worker_task = asyncio.create_task(runner.run())
-    try:
-        return await asyncio.shield(worker_task)
-    except asyncio.CancelledError:
-        execution.context.cancellation_requested.set()
-        while not worker_task.done():
-            try:
-                await asyncio.shield(worker_task)
-            except asyncio.CancelledError:
-                continue
-            except BaseException:
-                break
-        if not worker_task.cancelled():
-            worker_task.exception()
-        raise
-
-
-def _check_fixture_bridge_cancellation(execution) -> None:
-    if execution.context.cancellation_requested.is_set():
-        raise PipelineCancelledError("fixture pipeline was cancelled")
-
-
 class FixtureRunExecutor:
-    """Run the deterministic PipelineRunner and bridge its v1 audit events."""
+    """Run the fixed V2 fixture build and bridge its durable outcome/events.
+
+    V1 退役后 FIXTURE 模式的 V2 实现：把官方 fixture 资产（GDC 表达矩阵）复制进
+    任务工作目录，用固定 DatasetBuildSpec 驱动 ``execute_dataset_build`` 内核，
+    再复用 ``_transfer_pending_publication`` 把 BuildResult 与 publication 事件
+    桥接到 durable Run（与 AGENT 模式同一转移路径）。
+    """
 
     def __init__(
         self,
         repository,
         *,
         fixture_dir: Path = OFFICIAL_FIXTURE_DIR,
-        pipeline_runner_factory=PipelineRunner,
     ) -> None:
         self._repository = repository
         self._fixture_dir = fixture_dir
-        self._pipeline_runner_factory = pipeline_runner_factory
 
     async def __call__(self, execution) -> None:
         validate_task_databases(execution.mode, execution.databases)
@@ -1505,139 +1488,63 @@ class FixtureRunExecutor:
             execution.run_id,
             execution.input,
         )
-        streamed_event_ids: set[str] = set()
-        completion_events: list[EventEnvelope] = []
+        # V2 工具只解析任务工作目录内的文件：先把 fixture 资产复制进去。
+        workdir = execution.context.work_dir
+        source_rel = "source_assets/fixture_gdc_expression.tsv"
+        asset_path = workdir.root / source_rel
+        asset_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_fixture_gdc_expression(self._fixture_dir), asset_path)
 
-        async def persist_pipeline_event(event: EventEnvelope) -> None:
-            if event.event_id in streamed_event_ids:
-                return
-            if isinstance(event.payload, CancelRequestedPayload):
-                streamed_event_ids.add(event.event_id)
-                return
-            if isinstance(
-                event.payload,
-                (ArtifactProducedPayload, TaskCompletedPayload),
-            ):
-                completion_events.append(event)
-            else:
-                await execution.emit(
-                    event.payload,
-                    stage_attempt_id=event.stage_attempt_id,
-                    timestamp=event.timestamp,
-                )
-            streamed_event_ids.add(event.event_id)
-
-        runner = self._pipeline_runner_factory(
-            task_id=execution.task_id,
-            base_dir=self._repository.tasks_dir,
-            fixture_dir=self._fixture_dir,
-            topic=execution.input,
-            cancellation_requested=execution.context.cancellation_requested,
-            defer_publication=True,
-            run_id=execution.run_id,
+        spec = {
+            "build_id": "fixture_build",
+            "objective": execution.input or "fixture dataset build",
+            "dataset_family": "gene_expression",
+            "row_granularity": "gene_sample_measurement",
+            "schema_ref": "gene_expression.long.v1",
+            "source_bindings": [
+                {
+                    "binding_id": "binding_gdc",
+                    "source": "gdc",
+                    "acquisition": {"mode": "builtin", "provider_id": "gdc.v1"},
+                    "adapter_id": "gdc.expression.v1",
+                    "accession": "TCGA-FIXTURE",
+                }
+            ],
+            "merge_strategy": "append_by_canonical_row",
+            "validation_profile_ref": "gene_expression.release.v1",
+            "normalization_profile_ref": "gene_expression.normalization.v1",
+        }
+        tool = ToolContext(
+            context=execution.context,
+            tool_name="execute_dataset_build",
+            tool_call_id="fixture_build",
+            tool_arguments="{}",
         )
-        abort = getattr(runner, "abort", None)
-        transferred = False
-        set_event_sink = getattr(runner, "set_event_sink", None)
-        streams_events = callable(set_event_sink)
-        if callable(set_event_sink):
-            set_event_sink(persist_pipeline_event)
-        submitter = getattr(runner, "submit_user_input", None)
-        if callable(submitter):
-            execution.set_user_input_submitter(submitter)
-        try:
-            manifest = await _run_pipeline_with_cancellation(execution, runner)
-            if not streams_events:
-                for event in list(runner.events):
-                    await persist_pipeline_event(event)
-            if manifest.task_state is TaskState.CANCELLED:
-                raise PipelineCancelledError("fixture pipeline was cancelled")
-            if manifest.task_state is TaskState.FAILED:
-                raise RuntimeError("fixture pipeline failed validation or execution")
-            _check_fixture_bridge_cancellation(execution)
-            execution.set_build_result(manifest.build_result)
-
-            pending_factory = getattr(runner, "pending_publication", None)
-            pending = pending_factory() if callable(pending_factory) else None
-            publish = pending.publish if pending is not None else getattr(
-                runner,
-                "publish",
-                None,
+        raw = await execute_dataset_build.on_invoke_tool(
+            tool,
+            json.dumps(
+                {
+                    "spec": json.dumps(spec),
+                    "source_files": json.dumps({"binding_gdc": source_rel}),
+                }
+            ),
+        )
+        envelope = json.loads(raw)
+        if envelope.get("status") != "ok":
+            raise RuntimeError(
+                f"fixture build failed: {envelope.get('message', envelope)}"
             )
-            abort = pending.abort if pending is not None else abort
-            if pending is not None:
-                completion_events.insert(
-                    0,
-                    build_event(
-                        task_id=execution.task_id,
-                        run_id=execution.run_id,
-                        sequence=1,
-                        payload=ArtifactProducedPayload(
-                            artifact=pending.manifest_entry
-                        ),
-                    ),
-                )
-            if callable(publish) or completion_events or callable(abort):
+        await AgentRunExecutor._transfer_pending_publication(execution)
 
-                async def commit_fixture_completion() -> list[EventEnvelope]:
-                    if callable(publish):
-                        operation = (
-                            publish
-                            if pending is not None
-                            else partial(publish, execution.run_id)
-                        )
-                        await _run_sync_operation(operation)
-                    if pending is not None:
-                        publication_id = f"pub-{execution.run_id}"
-                        # Phase 4b T4: see commit_agent_artifacts — NO_DATA
-                        # build results must not carry a publication_id.
-                        if (
-                            execution.build_result is not None
-                            and execution.build_result.status
-                            in (BuildResultStatus.SUCCEEDED, BuildResultStatus.PARTIAL_SUCCESS)
-                        ):
-                            execution.set_build_result(
-                                execution.build_result.model_copy(
-                                    update={"publication_id": publication_id}
-                                )
-                            )
-                        publication_event = build_event(
-                            task_id=execution.task_id,
-                            run_id=execution.run_id,
-                            sequence=len(completion_events) + 1,
-                            payload=PublicationCreatedPayload(
-                                publication_id=publication_id,
-                                run_id=execution.run_id,
-                                manifest_sha256=pending.manifest_entry.sha256,
-                                supersedes_publication_id=None,
-                                published_at=datetime.now(UTC),
-                            ),
-                        )
-                        return completion_events + [publication_event]
-                    return completion_events
 
-                async def abort_fixture_completion() -> None:
-                    if callable(abort):
-                        await _run_sync_operation(abort)
+def _fixture_gdc_expression(fixture_dir: Path) -> Path:
+    """Locate the official GDC expression fixture asset.
 
-                execution.set_completion_operations(
-                    commit_fixture_completion,
-                    abort_fixture_completion,
-                )
-                transferred = True
-        except BaseException:
-            if not transferred and callable(abort):
-                try:
-                    await _run_sync_operation(abort)
-                except BaseException:
-
-                    async def abort_fixture_cleanup() -> None:
-                        await _run_sync_operation(abort)
-
-                    execution.set_completion_cleanup(abort_fixture_cleanup)
-                    transferred = True
-                    raise
-            raise
+    ``fixture_dir`` points at the GEO series fixture
+    (``tests/fixtures/ncbi/gse178352/``); the GDC expression fixture lives at
+    the shared fixture root (``tests/fixtures/gdc/gdc_expression.tsv``).
+    """
+    return fixture_dir.parents[1] / "gdc" / "gdc_expression.tsv"
 
 
 class ModeDispatchRunExecutor:

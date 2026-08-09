@@ -17,9 +17,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.domain.contracts import (
+    ArtifactManifestEntry,
     DataLevel,
     EventEnvelope,
     QueryStatus,
+    RunManifest,
     SourceAsset,
     StageName,
     SubagentInputRequiredPayload,
@@ -35,7 +37,6 @@ if TYPE_CHECKING:
     from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
     from app.datasets.contracts import DatasetPublication
     from app.domain.contracts.dataset_state import BuildResult
-    from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
     from app.subagents.input_broker import SubagentInputBroker
     from app.subagents.staging import SubagentStagingWorkspace
@@ -163,6 +164,26 @@ def _default_run_model_settings() -> RunModelSettings:
     return RunModelSettings.default().model_copy(
         update={"runtime_limits": get_runtime_limits()}
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPublication:
+    """Validated Pipeline package awaiting manager-owned publication (V1 通道)."""
+
+    run_id: str
+    manifest: RunManifest
+    manifest_entry: ArtifactManifestEntry
+    publish: Callable[[], None]
+    abort: Callable[[], None]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPublicationCleanup:
+    """Failed pre-transfer cleanup awaiting a manager-owned retry (V1 通道)."""
+
+    run_id: str
+    abort: Callable[[], None]
+    error: BaseException
 
 
 @dataclass

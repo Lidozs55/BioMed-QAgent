@@ -290,7 +290,9 @@ Spec 模板（gene expression 单源）：
 2. **`no_data` 处理**：若表达块为空（GEO 下载只有样本元数据行），不要用同类数据
    **若目标是单基因/靶基因分析**，优先改用 GDC/Xena 的基因级矩阵（gene symbol
    直接可查，不受 probe 注释缺失影响）；若必须在 GEO 内重选，选择 `experiment_type`
-   含 "Expression profiling by array" 的 microarray 数据集
+   含 "Expression profiling by array" 的 microarray 数据集，其 series_matrix
+   通常包含完整表达矩阵——microarray 优先于 "Expression profiling by high
+   throughput sequencing"
 3. **不要用相同参数重试**：相同参数必然导致相同失败
 4. **适时止损**：若 2-3 次调整后仍无合适数据，停止重试，向用户如实汇报已尝试的
    方案和失败原因
