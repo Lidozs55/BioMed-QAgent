@@ -1488,6 +1488,22 @@ class TaskManager:
                         asyncio.Lock(),
                     )
                     async with lock:
+                        # C1c: 重启后 pending HIL 请求（AWAITING_USER_INPUT）
+                        # 没有 live executor 可恢复——显式失效（warning
+                        # code=prompt_invalidated），前端据此展示"该请求已失效"，
+                        # 而不是随 run_interrupted 静默丢弃。失效事件先于
+                        # run_interrupted 追加。
+                        if run.status is RunStatus.AWAITING_USER_INPUT:
+                            await self._append_status(
+                                accepted,
+                                WarningPayload(
+                                    message=(
+                                        f"重启后人工请求已失效（run {run.run_id}），"
+                                        "如需继续请重新发起该操作"
+                                    ),
+                                    code="prompt_invalidated",
+                                ),
+                            )
                         await self._append_status(
                             accepted,
                             RunInterruptedPayload(reason="server restarted"),

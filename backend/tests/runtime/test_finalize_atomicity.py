@@ -22,10 +22,13 @@ from app.domain.contracts import (
     RunCompletedPayload,
     RunFailedPayload,
     RunFinalizingPayload,
+    RunInterruptedPayload,
     RunQueuedPayload,
     RunStartedPayload,
     StartTaskRequest,
     TaskMode,
+    UserInputRequiredPayload,
+    WarningPayload,
 )
 from app.domain.contracts.events import build_event
 from app.domain.contracts.runtime import RunStatus, TaskSnapshot, TaskSummary
@@ -253,5 +256,104 @@ async def test_recover_closes_v2_publication_format_finalizing_run(
         ]
         assert len(completed) == 1
         assert snapshot.publications
+    finally:
+        await manager.close()
+
+
+async def _seed_awaiting_user_input(
+    repository: TaskRepository,
+    *,
+    task_id: str,
+    run_id: str,
+) -> None:
+    """Seed a run paused for a human decision whose broker died with the process.
+
+    After restart there is no live executor to resume the request; ``_recover``
+    must invalidate the pending prompt explicitly instead of silently dropping
+    it alongside ``run_interrupted``.
+    """
+
+    await repository.save_snapshot(
+        TaskSnapshot(
+            task=TaskSummary(
+                task_id=task_id,
+                mode=TaskMode.AGENT,
+                title="hitl recovery",
+                status=RunStatus.QUEUED,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+    )
+    request_id = "req_hitl"
+    events = [
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=1,
+            payload=RunQueuedPayload(request_id=request_id, input="hitl test"),
+        ),
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=2,
+            payload=RunStartedPayload(),
+        ),
+        build_event(
+            task_id=task_id,
+            run_id=run_id,
+            sequence=3,
+            payload=UserInputRequiredPayload(
+                request_id=request_id,
+                prompt_kind="max_turns_reached",
+                summary="是否继续工作？",
+            ),
+        ),
+    ]
+    for event in events:
+        await repository.append_event(event)
+
+
+@pytest.mark.asyncio
+async def test_recover_invalidates_pending_hil_prompt_explicitly(
+    tmp_path: Path,
+) -> None:
+    """C1c: 重启后 pending HIL 请求必须显式失效（warning code=prompt_invalidated），
+    而不是随 run_interrupted 静默丢弃——前端据此展示"该请求已失效"。"""
+
+    task_id = "task_hitl_recover"
+    run_id = "run_hitl_recover"
+    repository = TaskRepository(tmp_path / "output")
+    await _seed_awaiting_user_input(repository, task_id=task_id, run_id=run_id)
+
+    manager = make_manager(repository)
+    await manager.start()  # start 触发 _recover
+
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        run = snapshot.runs[0]
+        assert run.status.value == "interrupted", (
+            f"recover must interrupt the awaiting-input run, got {run.status.value}"
+        )
+        events = await repository.list_events(task_id)
+        invalidations = [
+            event
+            for event in events
+            if isinstance(event.payload, WarningPayload)
+            and event.payload.code == "prompt_invalidated"
+        ]
+        assert len(invalidations) == 1, (
+            "pending HIL prompt must be invalidated explicitly on restart"
+        )
+        message = invalidations[0].payload.message
+        assert message and run_id in message
+        # 失效事件必须早于 run_interrupted（前端先看到"已失效"再看到中断）。
+        interrupted = next(
+            event.sequence
+            for event in events
+            if isinstance(event.payload, RunInterruptedPayload)
+        )
+        assert invalidations[0].sequence < interrupted
     finally:
         await manager.close()
