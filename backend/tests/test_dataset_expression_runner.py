@@ -2344,3 +2344,27 @@ async def test_t7_gene_required_full_coverage_publishes_gene_primary(
     assert len(rows) == 2
     assert {row["gene_id_namespace"] for row in rows} == {"gene_symbol"}
     assert any((output_dir / "publish").glob("build_runner_test_*"))
+
+
+@pytest.mark.asyncio
+async def test_published_version_contains_validation_report(tmp_path: Path) -> None:
+    """C1d: the publication's ``validation_result_ref`` must resolve inside the
+    immutable version directory — validation_report.json is copied alongside
+    the manifest so the reference closure is never dangling.
+    """
+    outcome, output_dir = await _run_executor(
+        tmp_path,
+        [_binding("binding_gdc", "gdc", "gdc.expression.v1")],
+        {"binding_gdc": "gdc/gdc_expression.tsv"},
+    )
+    assert outcome.status == "completed"
+    version_dir = next((output_dir / "publish").glob("build_runner_test_*"))
+    publication = json.loads(
+        (version_dir / "publication.json").read_text("utf-8")
+    )
+    ref = publication["validation_result_ref"]
+    assert (version_dir / ref).is_file(), (
+        f"validation_result_ref {ref!r} is dangling: file not copied "
+        f"into the version directory"
+    )
+    assert ref == "validation_report.json"
