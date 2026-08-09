@@ -72,7 +72,7 @@ Main Agent
 6. `run_research_pipeline` 降级为兼容 facade（翻译旧参数为 DatasetBuildSpec 走 V2 kernel）或直接删除（视调用面）
 7. 删 `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁
 8. 删 22 列缓存写（CacheStore.commit_dataset / import_agent 链）/ `domain/processing.py` 旧 ParsedDataset / `alignment.merge_datasets` 正式路径
-9. 迁移或删除 36 个 V1 依赖测试文件；V2 e2e 全量重跑（四态：SUCCEEDED/NO_DATA/partial/failed）
+9. 迁移或删除 36 个 V1 依赖测试文件；V2 e2e 全量重跑（BuildResult 四态：SUCCEEDED/PARTIAL_SUCCESS/NO_DATA/SPEC_REJECTED）
 10. 全量回归 + 前端回归 + 冒烟
 
 **Phase C — 顺手发布层缺口**

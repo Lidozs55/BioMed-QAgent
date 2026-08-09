@@ -264,7 +264,8 @@ Spec 模板（gene expression 单源）：
 - `partial_success`：部分 binding 被拒（读 `rejected_sources` 与拒绝原因）
 - `no_data`：无主数据（读 `reason_codes`，如 `no_primary_data` / 表达块为空）
 - `spec_rejected`：spec 未通过服务端校验（先用 `validate_dataset_build_spec` 修正）
-- `failed`：执行失败（读 `error` 信息）
+
+执行层失败不产生 BuildResult：工具信封返回 `status: "error"`（处理方式见上）。
 
 ### 第 6 步：汇报发现
 说明来源追踪、研究思路、关键发现和产物内容。引用产物时用 `list_files` 查看

@@ -11,10 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import app.agent_loop.runner as runner_module
 import pytest
-from agents import function_tool
 from agents.exceptions import MaxTurnsExceeded
-from agents.items import ModelResponse
-from agents.models.interface import Model
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
@@ -52,14 +49,6 @@ from app.runtime.compaction import CompactionCancelledError
 from app.runtime.hub import AssistantStreamHub
 from app.runtime.manager import RunExecution, TaskManager
 from app.runtime.repository import TaskRepository
-from openai.types.responses import (
-    Response,
-    ResponseCompletedEvent,
-    ResponseFunctionToolCall,
-    ResponseOutputItemDoneEvent,
-    ResponseOutputMessage,
-    ResponseOutputText,
-)
 
 
 def test_extract_text_delta_supports_responses_api_event() -> None:
@@ -86,112 +75,6 @@ class NoopCompactor:
             estimate=Mock(total=0),
         )
 
-
-
-@function_tool
-def run_research_pipeline(
-    topic: str,
-    databases: list[str] | None = None,
-    mode: str = "fixture",
-) -> str:
-    """Stub of the retired V1 pipeline tool (execution-framework tests only)."""
-    return json.dumps({
-        "status": "ok",
-        "artifact_dir": "artifacts",
-        "mode": mode,
-        "databases": databases or [],
-    })
-
-
-class ScriptedPipelineModel(Model):
-    def __init__(
-        self,
-        *,
-        mode: str = "fixture",
-        topic: str = "real SDK managed fixture",
-    ) -> None:
-        self.mode = mode
-        self.topic = topic
-        self.allow_tool_call = asyncio.Event()
-        self.tool_round_entered = asyncio.Event()
-        self.final_round_entered = asyncio.Event()
-        self.release_final_answer = asyncio.Event()
-        self.stream_calls = 0
-        self.close_calls = 0
-
-    async def get_response(
-        self,
-        *args: object,
-        **kwargs: object,
-    ) -> ModelResponse:
-        raise AssertionError("scripted integration must use streaming")
-
-    async def stream_response(
-        self,
-        *args: object,
-        **kwargs: object,
-    ) -> AsyncIterator[object]:
-        self.stream_calls += 1
-        if self.stream_calls == 1:
-            self.tool_round_entered.set()
-            await self.allow_tool_call.wait()
-            item = ResponseFunctionToolCall(
-                arguments=json.dumps(
-                    {
-                        "topic": self.topic,
-                        "databases": ["pubmed", "geo"],
-                        "mode": self.mode,
-                    }
-                ),
-                call_id="call_real_pipeline",
-                name="run_research_pipeline",
-                type="function_call",
-                status="completed",
-            )
-        elif self.stream_calls == 2:
-            self.final_round_entered.set()
-            await self.release_final_answer.wait()
-            item = ResponseOutputMessage(
-                id="message_real_pipeline",
-                content=[
-                    ResponseOutputText(
-                        annotations=[],
-                        text="pipeline finished",
-                        type="output_text",
-                    )
-                ],
-                role="assistant",
-                status="completed",
-                type="message",
-            )
-        else:
-            raise AssertionError("scripted model received an unexpected round")
-
-        response = Response(
-            id=f"response_{self.stream_calls}",
-            created_at=0.0,
-            model="scripted-pipeline-model",
-            object="response",
-            output=[item],
-            parallel_tool_calls=False,
-            tool_choice="auto",
-            tools=[],
-            status="completed",
-        )
-        yield ResponseOutputItemDoneEvent(
-            item=item,
-            output_index=0,
-            sequence_number=1,
-            type="response.output_item.done",
-        )
-        yield ResponseCompletedEvent(
-            response=response,
-            sequence_number=2,
-            type="response.completed",
-        )
-
-    async def close(self) -> None:
-        self.close_calls += 1
 
 
 def make_executor(repository):

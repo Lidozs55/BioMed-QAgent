@@ -290,22 +290,19 @@
 > 审计发现大部分删除目标**已不存在**或**依赖 V1 生产路径退役**（未决架构决策，
 > 见下「遗留」）。本阶段勾选已完成的清理项 + 全量回归；未决项标注 `[~]` 遗留。
 
-- [~] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
+- [x] **P1** 删除固定 `_STAGES`、`StageName` 业务依赖、
       `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 语义门禁（可保留来源级安全 allowlist）
-      （**遗留**：V1 runner 仍是 agent 生产主线（INSTRUCTIONS 引导
-      `run_research_pipeline`），`StageName` 遍布 runner/state/stages/skills/events
-      共 36 个测试文件依赖；`SUPPORTED_...` 门禁为 spec 准入校验（工具层 + 发现阶段
-      preflight），符合「可保留来源级安全 allowlist」——依赖 V1 退役后重审）
-- [~] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
-      （**遗留**：`CacheStore.commit_dataset` 仍被生产 import_agent 调用；
-      `ParsedDataset` 链挂 `merge_datasets`，连锁依赖第 3 项）
-- [~] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
-      （**遗留**：审计确认 merge_datasets 仍是生产 V1 合并路径
-      （`stages/processing.py:630` → `merge_parsed_datasets`），非死代码；
-      `test_multisource_merge.py` 守卫其行为——删除=行为变更，依赖 V1 退役）
-- [~] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
-      （metadata-only 占位已在 Phase 4b 删除，回归测试守卫保留 ✅；
-      `run_research_pipeline` 9 参数仍全活（agent INSTRUCTIONS 主线 + 12+ 测试）
+      （✅ V1 退役后完成：`_STAGES` 已删、`StageName` 枚举保留供 runtime/skills/events；
+      兼容门禁及守卫测试随 review R2 删除）
+- [x] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
+      （✅ V1 退役后完成：`domain/processing.py` 已删；`CacheStore.commit_dataset`
+      已随 V1 面移除）
+- [x] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
+      （✅ V1 退役后完成：`tools/alignment` 已删，V2 合并由
+      ExpressionBuildRunner 的 append_by_canonical_row 承担）
+- [x] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
+      （✅ metadata-only 占位已在 Phase 4b 删除；`run_research_pipeline`
+      已随 V1 退役删除（agent 主线切换 `execute_dataset_build`））
       ——**遗留**：参数面裁剪依赖 V1 退役）
 - [x] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
       `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl

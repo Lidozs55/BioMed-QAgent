@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | A2a | 无 Agent-facing `validate_dataset_build_spec` 工具 | ✅ 完成（SpecValidator 包装 + 注册 + 4 TDD 用例） |
 | A2b/c | V2 acquisition 血缘伪造 | ✅ 完成（真实 DownloadAttempt 登记 + provenance 暴露 + 2 TDD 用例） |
-| A2d | Acquisition Dispatcher 接线（WorkflowRecipeSourceFetcher / acquire_series_asset 生产消费者） | ⏳ **延后**（agent skills 已覆盖取数，不阻塞主线；待后续架构增强） |
+| A2d | Acquisition Dispatcher 接线（WorkflowRecipeSourceFetcher 生产消费者） | ⏳ **延后**（agent skills 已覆盖取数，不阻塞主线；待后续架构增强） |
 | A2e | V1/V2 混用无 fail-fast | ✅ 完成（V1 工具已删除，混用面不复存在） |
 
 ### A3. V1 已知缺陷（2026-08-09 日志调试，**不修复，已随 V1 删除** — REVIEW_2026-08-09 §3）
@@ -34,7 +34,7 @@
 
 | 子项 | 状态 |
 | --- | --- |
-| A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | ✅ 删除（StageName 枚举本身保留——runtime/skills/events 仍用） |
+| A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | ✅ 删除（StageName 枚举本身保留——runtime/skills/events 仍用；兼容门禁及其守卫测试已随 review R2 删除） |
 | A4b 22 列缓存写入接口 + `domain/processing.py` | ✅ 删除（`CacheStore` 读侧保留——V2 legacy_cache/API 用） |
 | A4c `alignment.merge_datasets` 正式路径 | ✅ 删除（V2 自有 merge_strategy） |
 | A4d `run_research_pipeline` 旧参数面 | ✅ 删除（agent 工具表无 V1 工具） |
@@ -74,8 +74,9 @@
 - **C3d R1C-04**：`list_artifacts` 每请求重哈希 artifact（O(bytes)，GB CSV 慢）→ 缓存已验证 digest
 - **C3e R1C-05/R1S-03**：`useTaskBuildId` 只取 `/builds` 首页（limit 50）→ 超 50 条静默 legacy 回退
 
-### C4. GEO / V1 seam（REVIEW phase5 §5）
-- **C4a**：provider dispatcher（`geo.series/geo.platform` `resolve_provider` + `acquire_series_asset`）**零 production 消费者**（Phase 7 未接线）
+### C4. V1 seam（REVIEW phase5 §5，V1 退役后收口）
+- **C4a**：~~provider dispatcher（`geo.series/geo.platform` `resolve_provider` + `acquire_series_asset`）零 production 消费者~~
+  ✅ **已随 V1 退役关闭**（`geo_provider.py` / `acquire_series_asset` / `resolve_provider` 已删除，无残留引用）
 - **C4b F5**：coverage<1.0 时 per-binding 排除未实现（整 build NO_DATA，与 wave-7 一致，接受）
 - **C4c**：probe 覆盖阈值校准门槛（`probe_coverage_required_gene_level` 语义检查已交付，门槛校准留后续）
 
