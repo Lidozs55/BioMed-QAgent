@@ -14,6 +14,7 @@ import type {
   SubagentType,
 } from "@/runtime/contracts";
 import { assertString, assertNumber, assertOptionalNull, assertJsonRecord } from "./eventValidatorHelpers";
+import { parseErrorDetail } from "./eventParsersPipeline";
 
 export type SubagentEventPayload = Extract<
   EventPayload,
@@ -375,6 +376,59 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
         request_id: assertRequiredString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
         decision,
         detail: assertJsonRecord(Reflect.get(payloadObj, "detail"), path + ".detail"),
+      };
+    }
+    /* ---- V2 build-execution lifecycle (Design §15.1; T3 stage mirror) ---- */
+    case "operation_started": {
+      const label = Reflect.get(payloadObj, "label");
+      const category = Reflect.get(payloadObj, "category");
+      const attempt = Reflect.get(payloadObj, "attempt");
+      return {
+        type: "operation_started",
+        operation_id: assertRequiredString(Reflect.get(payloadObj, "operation_id"), path + ".operation_id"),
+        label: typeof label === "string" ? label : undefined,
+        category: typeof category === "string" ? category : undefined,
+        attempt: attempt === undefined || attempt === null ? undefined : assertNumber(attempt, path + ".attempt"),
+      };
+    }
+    case "operation_progress": {
+      const detail = Reflect.get(payloadObj, "detail");
+      return {
+        type: "operation_progress",
+        operation_id: assertRequiredString(Reflect.get(payloadObj, "operation_id"), path + ".operation_id"),
+        kind: assertRequiredString(Reflect.get(payloadObj, "kind"), path + ".kind"),
+        current: assertNonNegativeInteger(Reflect.get(payloadObj, "current"), path + ".current"),
+        total: assertOptionalNull(Reflect.get(payloadObj, "total"), path + ".total", assertNonNegativeInteger),
+        detail: detail === undefined || detail === null ? undefined : assertJsonRecord(detail, path + ".detail"),
+      };
+    }
+    case "operation_completed": {
+      const rawStatus = Reflect.get(payloadObj, "status");
+      const status = rawStatus === undefined || rawStatus === null ? "succeeded" : rawStatus;
+      if (status !== "succeeded" && status !== "skipped") {
+        throw new APIError(502, `Invalid operation status "${String(status)}" at ${path}.status`);
+      }
+      const outputDigest = Reflect.get(payloadObj, "output_digest");
+      const reused = Reflect.get(payloadObj, "reused_operation_attempt_id");
+      return {
+        type: "operation_completed",
+        operation_id: assertRequiredString(Reflect.get(payloadObj, "operation_id"), path + ".operation_id"),
+        status,
+        output_digest: outputDigest === undefined || outputDigest === null ? undefined : assertHex64(outputDigest, path + ".output_digest"),
+        reused_operation_attempt_id: reused === undefined || reused === null ? null : assertRequiredString(reused, path + ".reused_operation_attempt_id"),
+      };
+    }
+    case "operation_failed": {
+      const rawStatus = Reflect.get(payloadObj, "status");
+      if (rawStatus !== "failed" && rawStatus !== "cancelled") {
+        throw new APIError(502, `Invalid operation status "${String(rawStatus)}" at ${path}.status`);
+      }
+      const rawError = Reflect.get(payloadObj, "error");
+      return {
+        type: "operation_failed",
+        operation_id: assertRequiredString(Reflect.get(payloadObj, "operation_id"), path + ".operation_id"),
+        status: rawStatus,
+        error: rawError === undefined || rawError === null ? null : parseErrorDetail(assertJsonRecord(rawError, path + ".error"), path + ".error"),
       };
     }
     default:

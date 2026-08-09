@@ -13,7 +13,7 @@ function assertNonEmpty(v: unknown, path: string): string {
   return s;
 }
 
-function parseErrorDetail(errObj: Record<string, unknown>, path: string): {
+export function parseErrorDetail(errObj: Record<string, unknown>, path: string): {
   code: string; message: string; retryable: boolean;
   stage: "discovery" | "acquisition" | "processing" | "artifact_build" | "validation" | null;
   details: Record<string, JsonValue>;

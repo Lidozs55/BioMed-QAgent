@@ -261,9 +261,9 @@ def _geo_binding(**overrides: object) -> SourceBinding:
         "accession": "GSE178352",
         "parameters": {
             "format": "series_matrix",
-            "value_semantics": "normalized_expression_value",
+            "value_semantics": "normalized_expression",
             "value_scale": "log2",
-            "expression_unit": "normalized_expression_value",
+            "expression_unit": "log2_expression",
             "platform_ids": ["GPL570"],
         },
     }
@@ -293,6 +293,40 @@ def test_geo_binding_missing_parameters_rejected() -> None:
     ).validate(_geo_spec(_geo_binding(parameters={})))
     assert result.valid is False
     assert "invalid_adapter_parameters" in result.reason_codes
+
+
+def test_geo_binding_unit_not_in_profile_rejected() -> None:
+    """REVIEW_2026-08-09: a unit the canonicalizer would reject (e.g.
+    ``arbitrary_unit``) fails the spec pre-check with ``unknown_unit`` instead
+    of silently producing a zero-row NO_DATA build after a full run."""
+    params = {
+        "format": "series_matrix",
+        "value_semantics": "normalized_expression",
+        "value_scale": "log2",
+        "expression_unit": "arbitrary_unit",
+    }
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_geo_spec(_geo_binding(parameters=params)))
+    assert result.valid is False
+    assert "unknown_unit" in result.reason_codes
+
+
+def test_geo_binding_semantics_not_in_profile_rejected() -> None:
+    """A value_semantics outside the normalization profile fails fast."""
+    params = {
+        "format": "series_matrix",
+        "value_semantics": "not_a_real_semantics",
+        "value_scale": "log2",
+        "expression_unit": "log2_expression",
+    }
+    result = SpecValidator(
+        _dual_registry(),
+        allowed_validation_profiles=frozenset({"gene_expression.release.v1"}),
+    ).validate(_geo_spec(_geo_binding(parameters=params)))
+    assert result.valid is False
+    assert "unknown_semantics" in result.reason_codes
 
 
 def test_geo_binding_unknown_format_rejected() -> None:

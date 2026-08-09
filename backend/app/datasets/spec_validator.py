@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from app.datasets.build.adapters import GeoExpressionAdapter
-from app.datasets.build.profiles import get_validation_profile
+from app.datasets.build.profiles import get_normalization_profile, get_validation_profile
 from app.datasets.contracts import AdapterParams, DatasetBuildSpec
 from app.datasets.schema_registry import SchemaRegistry
 
@@ -42,6 +42,19 @@ def _profile_entity_level(profile_ref: str) -> str | None:
     """
     try:
         return get_validation_profile(profile_ref).required_entity_level
+    except KeyError:
+        return None
+
+
+def _resolve_normalization_profile(profile_ref: str | None):
+    """Resolve the normalization profile (default when omitted).
+
+    Returns ``None`` when an explicit ref is unregistered: the build would
+    fail later in the runner anyway, so the pre-check degrades to skipping
+    the unit/semantics/scale cross-check instead of crashing the validator.
+    """
+    try:
+        return get_normalization_profile(profile_ref)
     except KeyError:
         return None
 
@@ -131,6 +144,16 @@ class SpecValidator:
         # adapter declaring parameters is invalid input (parameters are not
         # applicable to it).  Unknown/inapplicable parameters are rejected
         # here, never left for a later parse failure.
+        #
+        # REVIEW_2026-08-09-task-3eb85407: declared units/semantics/scales are
+        # additionally cross-checked against the resolved normalization
+        # profile so an agent-chosen unit that the canonicalizer would reject
+        # (e.g. ``arbitrary_unit``) fails the spec pre-check immediately
+        # (reason code ``unknown_unit``) instead of silently producing a
+        # zero-row NO_DATA build after a full run.
+        normalization_profile = _resolve_normalization_profile(
+            spec.normalization_profile_ref
+        )
         for binding in spec.source_bindings:
             if binding.adapter_id == GeoExpressionAdapter.adapter_id:
                 if not binding.parameters:
@@ -142,13 +165,50 @@ class SpecValidator:
                     )
                 else:
                     try:
-                        AdapterParams.model_validate(binding.parameters)
+                        params = AdapterParams.model_validate(binding.parameters)
                     except ValidationError as exc:
                         codes.append("invalid_adapter_parameters")
                         reasons.append(
                             f"binding {binding.binding_id!r} has invalid "
                             f"adapter parameters: {exc}"
                         )
+                    else:
+                        if normalization_profile is not None:
+                            if params.expression_unit not in normalization_profile.allowed_units:
+                                codes.append("unknown_unit")
+                                reasons.append(
+                                    f"binding {binding.binding_id!r} "
+                                    f"expression_unit {params.expression_unit!r} "
+                                    "is not in the normalization profile's "
+                                    "allowed units: "
+                                    f"{sorted(normalization_profile.allowed_units)}"
+                                )
+                            if (
+                                params.value_semantics
+                                not in normalization_profile.allowed_semantics
+                            ):
+                                codes.append("unknown_semantics")
+                                reasons.append(
+                                    f"binding {binding.binding_id!r} "
+                                    f"value_semantics {params.value_semantics!r} "
+                                    "is not in the normalization profile's "
+                                    "allowed semantics: "
+                                    f"{sorted(normalization_profile.allowed_semantics)}"
+                                )
+                            if params.value_scale not in normalization_profile.allowed_value_scales:
+                                codes.append("unknown_scale")
+                                reasons.append(
+                                    f"binding {binding.binding_id!r} "
+                                    f"value_scale {params.value_scale!r} "
+                                    "is not in the normalization profile's "
+                                    "allowed scales: "
+                                    + ", ".join(
+                                        sorted(
+                                            s.value
+                                            for s in normalization_profile.allowed_value_scales
+                                        )
+                                    )
+                                )
             elif binding.parameters:
                 codes.append("invalid_adapter_parameters")
                 reasons.append(

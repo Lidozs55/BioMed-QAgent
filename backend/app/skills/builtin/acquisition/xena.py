@@ -430,11 +430,20 @@ async def search_xena(
     }, ensure_ascii=False)
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Download a specific UCSC Xena dataset file by dataset_id "
+        "(e.g. 'TCGA.PAAD.sampleMap/HiSeqV2'). "
+        "Parameters: ``dataset_id`` (required), ``file_type`` (optional, "
+        "'tsv'), ``cohort`` (optional, informational cohort label). "
+        "Writes the decompressed file into the task raw directory."
+    ),
+)
 async def download_xena(
     ctx: RunContextWrapper[Any],
     dataset_id: str,
     file_type: str = "tsv",
+    cohort: str | None = None,
 ) -> str:
     """Download a specific UCSC Xena dataset file.
 
@@ -457,6 +466,8 @@ async def download_xena(
         file_type: Hint for the file format ("tsv" or "json"). Used only for
             the ``format_hint`` field in the response; the URL is always
             ``{dataset_id}.gz`` because Xena stores files with that naming.
+        cohort: Optional informational cohort label (e.g. "TCGA Pancreatic
+            Cancer (PAAD)"). Echoed back in the response for traceability.
 
     Returns:
         JSON with source, dataset_id, source_url, local_files, format_hint,
@@ -545,6 +556,7 @@ async def download_xena(
     return json.dumps({
         "source": "xena",
         "dataset_id": dataset_id,
+        "cohort": cohort,
         "source_url": url,
         "local_files": local_files,
         "format_hint": f"xena_{file_type}",

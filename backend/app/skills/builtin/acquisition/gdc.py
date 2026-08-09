@@ -152,16 +152,18 @@ def _match_term(term: str, search_text: str) -> bool:
 @function_tool(
     description_override=(
         "Search the NCI Genomic Data Commons for projects matching a keyword. "
-        "Parameters: ``term`` (required, search keyword like 'lung cancer' or "
-        "'TCGA-BRCA'), ``max_results`` (optional, default 20). "
+        "Parameters: ``query`` (required, search keyword like 'lung cancer' or "
+        "'TCGA-BRCA') — ``term`` is accepted as a legacy alias; "
+        "``max_results`` (optional, default 20). "
         "Returns JSON with project_id, name, disease_type, and primary_site. "
         "Use ``describe_gdc`` to get detailed metadata for a project."
     ),
 )
 async def search_gdc(
     ctx: RunContextWrapper[Any],
-    term: str,
+    query: str = "",
     max_results: int = 20,
+    term: str = "",
 ) -> str:
     """Search the NCI Genomic Data Commons for projects matching a keyword.
 
@@ -177,10 +179,13 @@ async def search_gdc(
 
     Args:
         ctx: Run context (injected by the OpenAI Agents SDK).
-        term: Search keyword or phrase (e.g. "lung", "TCGA-LUAD",
-              "breast cancer", "breast cancer TP53").
+        query: Search keyword or phrase (e.g. "lung", "TCGA-LUAD",
+              "breast cancer", "breast cancer TP53"). Recommended parameter
+              name, aligned with the other search skills; ``term`` is
+              accepted as a legacy alias.
         max_results: Maximum number of project records to return
                      (default 20).
+        term: Legacy alias for ``query``. Ignored when ``query`` is non-empty.
 
     Returns:
         JSON string with keys:
@@ -193,6 +198,7 @@ async def search_gdc(
             error        – present only on failure
     """
     run_ctx: RunContext = ctx.context
+    effective_term = query or term
     try:
         url = _build_url("/projects", {
             "format": "json",
@@ -204,10 +210,10 @@ async def search_gdc(
         })
         data = await _fetch_json_for_run(run_ctx, url)
     except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
-        run_ctx.log_query(term, "gdc", QueryStatus.FAILED, 0)
+        run_ctx.log_query(effective_term, "gdc", QueryStatus.FAILED, 0)
         return json.dumps({
             "source": "gdc",
-            "term": term,
+            "term": effective_term,
             "project_ids": [],
             "records": [],
             "error": str(exc),
@@ -230,7 +236,7 @@ async def search_gdc(
             *disease,
             *primary_site,
         ])
-        if not _match_term(term, search_text):
+        if not _match_term(effective_term, search_text):
             continue
 
         data_categories = [
@@ -251,18 +257,30 @@ async def search_gdc(
         if len(records) >= max_results:
             break
 
-    run_ctx.log_query(term, "gdc", QueryStatus.SUCCESS, len(records))
+    run_ctx.log_query(effective_term, "gdc", QueryStatus.SUCCESS, len(records))
 
     return json.dumps({
         "source": "gdc",
-        "term": term,
+        "term": effective_term,
         "project_ids": [r["project_id"] for r in records],
         "records": records,
     }, ensure_ascii=False)
 
 
-@function_tool
-async def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
+@function_tool(
+    description_override=(
+        "Get detailed metadata about a GDC project. "
+        "Parameters: ``project_id`` (required, e.g. 'TCGA-BRCA'), "
+        "``data_category`` (optional, filters the returned data categories "
+        "e.g. 'Transcriptome Profiling'). "
+        "Returns project metadata including data categories and file counts."
+    ),
+)
+async def describe_gdc(
+    ctx: RunContextWrapper[Any],
+    project_id: str,
+    data_category: str | None = None,
+) -> str:
     """Get detailed metadata about a GDC project.
 
     Calls /projects/{project_id} with summary expansion to return disease
@@ -273,6 +291,8 @@ async def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
         ctx: Run context (injected by the OpenAI Agents SDK).
         project_id: GDC project identifier (e.g. "TCGA-LUAD",
                     "TARGET-AML", "CPTAC-3").
+        data_category: Optional filter; when given, only data categories
+            whose name contains this value (case-insensitive) are returned.
 
     Returns:
         JSON string with keys:
@@ -329,6 +349,11 @@ async def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
             "category": dc.get("data_category", ""),
             "file_count": dc.get("file_count", 0),
         })
+    if data_category:
+        needle = data_category.lower()
+        data_categories = [
+            dc for dc in data_categories if needle in dc["category"].lower()
+        ]
 
     exp_strategies: list[str] = []
     for es in (summary.get("experimental_strategies", []) or []):
@@ -351,11 +376,22 @@ async def describe_gdc(ctx: RunContextWrapper[Any], project_id: str) -> str:
     }, ensure_ascii=False)
 
 
-@function_tool
+@function_tool(
+    description_override=(
+        "Download data files from a GDC project. "
+        "Parameters: ``project_id`` (required, e.g. 'TCGA-PAAD'), "
+        "``data_type`` (optional, default 'RNA-Seq'), "
+        "``data_category`` (optional, e.g. 'Transcriptome Profiling'), "
+        "``workflow_type`` (optional, e.g. 'STAR - Counts'). "
+        "Downloads up to 5 matching files and writes a manifest."
+    ),
+)
 async def download_gdc(
     ctx: RunContextWrapper[Any],
     project_id: str,
     data_type: str = "RNA-Seq",
+    data_category: str | None = None,
+    workflow_type: str | None = None,
 ) -> str:
     """Download data files from a GDC project via the Data Transfer API.
 
@@ -371,6 +407,10 @@ async def download_gdc(
                    "CNA" / "CNV", "Methylation", "Somatic" / "Mutation",
                    "Clinical", "Slide", "Biospecimen", or any raw GDC
                    data_type value.  Defaults to "RNA-Seq".
+        data_category: Optional filter restricting results to a GDC data
+            category (e.g. "Transcriptome Profiling").
+        workflow_type: Optional filter restricting results to a GDC
+            workflow type (e.g. "STAR - Counts").
 
     Returns:
         JSON string with keys:
@@ -410,6 +450,22 @@ async def download_gdc(
             },
         ],
     }
+    if data_category:
+        filters["content"].append({
+            "op": "=",
+            "content": {
+                "field": "files.data_category",
+                "value": [data_category],
+            },
+        })
+    if workflow_type:
+        filters["content"].append({
+            "op": "=",
+            "content": {
+                "field": "files.analysis.workflow_type",
+                "value": [workflow_type],
+            },
+        })
     encoded_filters = json.dumps(filters, separators=(",", ":"))
 
     try:
