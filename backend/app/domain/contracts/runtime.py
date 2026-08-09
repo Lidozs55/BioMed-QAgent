@@ -62,6 +62,8 @@ class RunRecord(ContractModel):
     error: str | None = Field(default=None, min_length=1)
     summary: RunSummary | None = Field(default=None)
     specification: TaskSpecification | None = None  # B1: 新 Run 携带版本化 spec
+    # C5c: terminal run 后到达的非权威迟到事件计数（replay 安全忽略）。
+    dropped_late_events: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> Self:
