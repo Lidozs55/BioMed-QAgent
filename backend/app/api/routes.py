@@ -844,6 +844,40 @@ async def list_task_events(
 # Artifacts
 # ---------------------------------------------------------------------------
 
+# C2b: HIL 超时请求落盘在任务 artifacts 目录（main_input_broker
+# `_write_corrections_todo`），独立于任何 manifest。list_artifacts 把该文件
+# 追加为审计类条目；下载端点按固定 artifact_id 解析。
+_CORRECTIONS_TODO_ARTIFACT_ID = "corrections_todo"
+_CORRECTIONS_TODO_FILENAME = "corrections_todo.csv"
+_CORRECTIONS_TODO_MEDIA_TYPE = "text/csv"
+
+
+def _corrections_todo_path(repository: TaskRepositoryDep, task_id: str) -> Path:
+    """Return the task-scoped corrections todo path (may not exist)."""
+
+    return (
+        repository.tasks_dir / task_id / "artifacts" / _CORRECTIONS_TODO_FILENAME
+    )
+
+
+def _corrections_todo_entry(
+    repository: TaskRepositoryDep,
+    task_id: str,
+) -> dict[str, object] | None:
+    """Return the listing entry for an existing corrections todo file, else None."""
+
+    path = _corrections_todo_path(repository, task_id)
+    if not path.is_file():
+        return None
+    return {
+        "artifact_id": _CORRECTIONS_TODO_ARTIFACT_ID,
+        "name": _CORRECTIONS_TODO_FILENAME,
+        "role": ArtifactRole.AUDIT_REPORT.value,
+        "size": path.stat().st_size,
+        "sha256": _listing_sha256(path),
+        "media_type": _CORRECTIONS_TODO_MEDIA_TYPE,
+    }
+
 
 @router.get("/tasks/{task_id}/artifacts")
 async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
@@ -890,10 +924,16 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 }
             )
         else:
+            if corrections := _corrections_todo_entry(repository, task_id):
+                artifacts.append(corrections)
             return {"artifacts": artifacts, "degraded": False}
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
-        return {"artifacts": [], "degraded": False}
+        corrections = _corrections_todo_entry(repository, task_id)
+        return {
+            "artifacts": [corrections] if corrections else [],
+            "degraded": False,
+        }
     manifest, artifacts_dir, degraded = loaded
     manifest_path = artifacts_dir / "run_manifest.json"
     artifacts = [
@@ -925,6 +965,8 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 "media_type": entry.media_type,
             }
         )
+    if corrections := _corrections_todo_entry(repository, task_id):
+        artifacts.append(corrections)
     return {"artifacts": artifacts, "degraded": degraded}
 
 
@@ -948,6 +990,12 @@ async def get_artifact_file(
         if artifact_id == "run_manifest":
             file_path = entry_dir / "dataset_manifest.json"
             media_type = "application/json"
+        elif artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
+            corrections_path = _corrections_todo_path(repository, task_id)
+            if not corrections_path.is_file():
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            file_path = corrections_path
+            media_type = _CORRECTIONS_TODO_MEDIA_TYPE
         else:
             entry = next(
                 (
@@ -980,6 +1028,12 @@ async def get_artifact_file(
     if artifact_id == "run_manifest":
         file_path = artifacts_dir / "run_manifest.json"
         media_type = "application/json"
+    elif artifact_id == _CORRECTIONS_TODO_ARTIFACT_ID:
+        corrections_path = _corrections_todo_path(repository, task_id)
+        if not corrections_path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        file_path = corrections_path
+        media_type = _CORRECTIONS_TODO_MEDIA_TYPE
     else:
         entry = next(
             (item for item in manifest.artifacts if item.artifact_id == artifact_id),
