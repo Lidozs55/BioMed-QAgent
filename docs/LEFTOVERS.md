@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | A2a | 无 Agent-facing `validate_dataset_build_spec` 工具 | ✅ 完成（SpecValidator 包装 + 注册 + 4 TDD 用例） |
 | A2b/c | V2 acquisition 血缘伪造 | ✅ 完成（真实 DownloadAttempt 登记 + provenance 暴露 + 2 TDD 用例） |
-| A2d | Acquisition Dispatcher 接线（WorkflowRecipeSourceFetcher 生产消费者） | ⏳ **延后**（agent skills 已覆盖取数，不阻塞主线；待后续架构增强） |
+| A2d | Acquisition Dispatcher 接线（WorkflowRecipeSourceFetcher 生产消费者） | ✅ **已修（2026-08-09, feat/leftovers-p2, commit 2757bba）**：`execute_dataset_build` 对 `AcquisitionMode.WORKFLOW_RECIPE` binding 经 `WorkflowRecipeSourceFetcher.fetch` 获取（lazy 注入、PROMOTED 限制内置、拒绝进 `rejected_sources`），血缘经 `record_download_attempt` 闭合（TDD 3 用例） |
 | A2e | V1/V2 混用无 fail-fast | ✅ 完成（V1 工具已删除，混用面不复存在） |
 
 ### A3. V1 已知缺陷（2026-08-09 日志调试，**不修复，已随 V1 删除** — REVIEW_2026-08-09 §3）
@@ -48,7 +48,7 @@
 | B1 | P0 | ~~新 Run 携带版本化 `TaskSpecification`（原 §1.6）~~ ✅ **已修（2026-08-09, feat/leftovers-p1, commits 767d0ba/f69537c）**：`RunQueuedPayload`/`RunRecord`/`StartTaskRequest` 携带可选 `specification`（向后兼容 None），reducer 投影；`POST /tasks` 接受并持久化到 run（TDD 3 用例） | TODO:63 |
 | B2 | ~~P2~~ | ~~删除 `validated_intermediate`/`validated_final` 状态（ADR-010 否决，任务/会话改 `current_publication_id`）~~ **已过时**：2026-08-09 审计确认仓库已无旧状态实现（当前即 `current_publication_id` 模型） | TODO:71 |
 | B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
-| B4 | P2 | UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline） | TODO:367 |
+| B4 | P2 | ~~UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline）~~ ✅ **已修（2026-08-09, feat/leftovers-p2, commit 7d5893a）**：`Database.UNIPROT/CHEMBL` + alias + RESEARCH_ONLY 能力声明；`spec_validator` 硬门禁拒绝 research_only binding 进 build；两个 discovery skill（`search_uniprot`/`search_chembl`，reactome 模式：httpx→crawl 回退、log_query 审计、usage_hint 宣传 research_only）；`/databases` 投影为 Agent-only 来源（TDD 16 用例） | TODO:367 |
 | B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | TODO:278 `[~]` |
 | B6 | P0 | GEO probe→gene 映射接线：GPL 注释下载 → `mapping_paths`/`mapping_assets` 注入 `ExpressionBuildRunner`，使探针平台数据集可产出基因级或 probe-primary（`gene_expression.probe_release.v1`）产物。当前 spec 预检只保证 fail-fast（`unknown_unit` 等 reason code），不保证 GEO 探针数据可用 | REVIEW_2026-08-09-task-3eb85407 §7.1 |
 
@@ -58,21 +58,21 @@
 
 ### C1. publication 完整性（REVIEW phase4-bug-sweep §3，Important）
 - **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构 ✅ **已修（2026-08-09, feat/leftovers-p1）**：finalize 在 task 锁内收敛 publication 落盘与 run_completed 事件；in-process 事件追加失败在发布事实（publication_created 事件已落盘）存在时幂等补发 run_completed 收敛 COMPLETED（判定 `RunExecution._publication_persisted`，不再用 committer 返回）；重启 `_recover` 按 `PublicationSummary.run_id == active_run_id` 关联发布事实（兼容 AGENT `pub-{run_id}` 与 V2 `pub_{build_id}_{sha}` 两种格式）闭合 FINALIZING run。**残余窗口（记录不修）**：进程崩溃于事件完全未持久化前 → run INTERRUPTED + 产物存在但无发布事件（builds API 仍按 manifest 投影展示）；AGENT 路径崩溃于 `pending.publish` 执行中 → FAILED + 部分发布文件；崩溃于 publish 完成后事件持久化前 → 发布文件无事件记录、重启不闭合（既有窗口，未恶化）
-- **C1b A3**：reducer 不校验 run 状态即接受 `publication_created`（随 A2 设计）
+- **C1b A3**：reducer 不校验 run 状态即接受 `publication_created`（随 A2 设计）✅ **已修（2026-08-09, feat/leftovers-p2, commit c8b10ca）**：terminal run 后到达的 `publication_created` 走 C5c 容忍路径（忽略计数、不产生 second publication、不抛错）；run_id 不匹配检查保持最前；active run 专用分支不变（TDD 用例锁定）
 - **C1c A4**：重启丢弃 pending HIL prompt（无 prompt-invalidated 事件）✅ **已修（2026-08-09, feat/leftovers-p1, commit 2d99ed9）**：`_recover` 对 AWAITING_USER_INPUT run 在 `run_interrupted` 前显式发 `WarningPayload(code="prompt_invalidated", message 含 run_id)`，前端 warning 渲染可见；run 收敛 INTERRUPTED 且保留重放 input 行为（集成测试断言恰 1 条 warning + 顺序）。**残余（延后）**：崩溃窗口在 warning 与 run_interrupted 之间 → 下次重启重复发 prompt_invalidated（极窄窗口，重复信息性 warning）；同进程 broker 移除导致的 pending 丢弃不在重启路径（超出 C1c 范围）
 - **~~C1d V2-validation_ref~~** ✅ 已修复（2026-08-09）：`validation_report.json` 拷入 immutable version dir（TDD 测试）
-- **C1e F7-03**：NO_DATA 信封 `user_summary`/`reason_codes` 因 `publication_id=None` 无法关联 → API 通用投影（phase7 §5）
+- **C1e F7-03**：NO_DATA 信封 `user_summary`/`reason_codes` 因 `publication_id=None` 无法关联 → API 通用投影（phase7 §5）✅ **已修（2026-08-09, feat/leftovers-p2, commits bdbbb95/97f8a42）**：`BuildResult.build_id` 关联键（工具在 managed-run 信封注入）；builds API 对无 publication build 也加载 events 并按 build_id 匹配 durable `RunCompletedPayload` 信封——listing 与 detail 端点均携带真实 reason_codes/user_summary（TDD 2 用例）
 
 ### C2. 前端 artifact 归属与可见性
 - **C2a C7**：NO_DATA banner/预览按 role 存在性推断归属（task 级聚合无法按 run/publication 过滤）→ 前端 store 引入 artifact 归属元数据（REVIEW phase4-bug-sweep §3）
-- **C2b**：`corrections_todo.csv` 仍是任务工作目录文件、不进 `list_artifacts`（phase4c §5 遗留）→ 按 artifact role 纳入发布清单
-- **C2c F7-06**：`list_artifacts` cache 路径首个坏条目 409 而非回退 legacy 面（phase7 §5）
+- **C2b**：`corrections_todo.csv` 仍是任务工作目录文件、不进 `list_artifacts`（phase4c §5 遗留）→ 按 artifact role 纳入发布清单 ✅ **已修（2026-08-09, feat/leftovers-p2, commits 7816f5e/97f8a42）**：list 三分支（cache-valid else / loaded-None / legacy-normal）均追加 `corrections_todo` 条目（role audit_report, text/csv）；download 端点解析前置到 loaded-None 守卫前，list/download 一致（TDD 修复 list 有 download 404 的 Medium）
+- **C2c F7-06**：`list_artifacts` cache 路径首个坏条目 409 而非回退 legacy 面（phase7 §5）✅ **已修（2026-08-09, feat/leftovers-p2, commit f81aeea）**：cache 条目文件完整性校验失败 `break` 回退 legacy 镜像面（for/else 仅全量成功返回）；traversal（"Invalid cache artifact path"）与 missing-file 保持 409；legacy 面自身损坏仍显式 409（最后手段，设计如此）
 
 ### C3. cache/builds 一致性（REVIEW phase7 §5）
-- **C3a F7-04**：content-addressed `artifact_id` 不含 path → 同字节双路径碰撞（修复方向：digest 含 `relative_path`）
-- **C3b T1 residual**：V2 build 不发 `artifact_produced`（builds API 为 serving surface）；单 run 单 outcome slot
+- **C3a F7-04**：content-addressed `artifact_id` 不含 path → 同字节双路径碰撞（修复方向：digest 含 `relative_path`）✅ **已修（2026-08-09, feat/leftovers-p2, commit 995fb2f）**：`artifact_id = artifact_{sha256(relative_path + "\0" + content_digest)[:32]}`，同字节双路径不再碰撞（确定性测试锁定；v1_bridge path-unique 方案不受影响）
+- **C3b T1 residual**：V2 build 不发 `artifact_produced`（builds API 为 serving surface）；单 run 单 outcome slot ✅ **已修（2026-08-09, feat/leftovers-p2, commits 9bbbcc5/a5dcd42）**：V2 build 镜像 `artifact_produced` 事件面（与 AGENT 路径一致：manifest entry 逐条发产物事件再发 publication，relative_path 带 `artifacts/` 前缀）；**publication 门禁**——NO_DATA build 零产物事件（TDD 红→绿锁定）；前端 WS 实时填充 artifact 面板（H6 dedup 防双渲染）
 - **~~C3c T2 residual~~** ✅ 已修复（2026-08-09）：build-tool cache root 改从 workdir 推导（`work_dir.root.parents[2] / "cache"`），与 API `_cache_root` 恒等
-- **C3d R1C-04**：`list_artifacts` 每请求重哈希 artifact（O(bytes)，GB CSV 慢）→ 缓存已验证 digest
+- **C3d R1C-04**：`list_artifacts` 每请求重哈希 artifact（O(bytes)，GB CSV 慢）→ 缓存已验证 digest ✅ **已修（2026-08-09, feat/leftovers-p2, commit 70269ac）**：`_cached_digest`（lru_cache 256，键含 mtime_ns+size）供 list 路径；二次 list 零新哈希、mtime 触摸仅重算变更文件（TDD 用例）；download/detail 路径保持实时校验
 - **C3e R1C-05/R1S-03**：`useTaskBuildId` 只取 `/builds` 首页（limit 50）→ 超 50 条静默 legacy 回退
 
 ### C4. V1 seam（REVIEW phase5 §5，V1 退役后收口）

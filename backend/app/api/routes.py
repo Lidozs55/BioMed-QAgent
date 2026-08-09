@@ -1507,8 +1507,9 @@ async def list_builds(
         ]
 
     # Durable event correlation is per-task; load each task's events at most
-    # once per request (published builds only — NO_DATA builds have no
-    # publication id to correlate and use the manifest projection).
+    # once per request (NO_DATA builds carry no publication but the durable
+    # ``RunCompletedPayload.build_result`` envelope is still authoritative —
+    # C1e, F7-03 — so events load for every build).
     events_by_task: dict[str, list[EventEnvelope]] = {}
 
     async def events_for(task_id: str) -> list[EventEnvelope]:
@@ -1609,11 +1610,10 @@ async def get_build(
     if loaded is None:
         raise HTTPException(status_code=404, detail="Build not found")
     _resolved_build_dir, manifest, publication = loaded
-    events = (
-        await repository.list_events(resolved_task_id)
-        if publication is not None
-        else []
-    )
+    # C1e (F7-03): NO_DATA builds have no publication but the durable
+    # ``RunCompletedPayload.build_result`` envelope is still authoritative —
+    # load the task events for build_id correlation either way.
+    events = await repository.list_events(resolved_task_id)
     build_result = await _resolve_build_result(
         repository, resolved_task_id, manifest, publication, events=events
     )

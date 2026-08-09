@@ -530,3 +530,76 @@ async def test_builds_api_no_data_carries_durable_envelope_fields(
     assert result["user_summary"] == (
         "GEO 数据源未产生可发布表达数据，请检查平台注释或更换数据集。"
     )
+
+
+@pytest.mark.asyncio
+async def test_builds_api_no_data_detail_carries_durable_envelope_fields(
+    tmp_path: Path,
+) -> None:
+    """C1e (F7-03): a NO_DATA build's DETAIL endpoint must carry the durable
+    envelope's real user_summary/reason_codes — not the generic manifest
+    projection — mirroring the listing behavior."""
+    async with api_client(tmp_path) as (application, client):
+        repository = application.state.task_repository
+        _seed_no_data_build_dir(repository, "task_nodata", "build_nodata")
+        await repository.save_snapshot(
+            TaskSnapshot(
+                task=TaskSummary(
+                    task_id="task_nodata",
+                    mode=TaskMode.FIXTURE,
+                    databases=["geo"],
+                    title="task_nodata",
+                    status=RunStatus.COMPLETED,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                runs=[
+                    RunRecord(
+                        run_id="run_nodata",
+                        task_id="task_nodata",
+                        request_id="request_nodata",
+                        status=RunStatus.RUNNING,
+                        input="task_nodata",
+                        created_at=NOW,
+                        updated_at=NOW,
+                        started_at=NOW,
+                    )
+                ],
+            )
+        )
+        await repository.append_event_payload(
+            task_id="task_nodata",
+            run_id="run_nodata",
+            payload=RunFinalizingPayload(),
+        )
+        await repository.append_event_payload(
+            task_id="task_nodata",
+            run_id="run_nodata",
+            payload=RunCompletedPayload(
+                build_result=BuildResult(
+                    status=BuildResultStatus.NO_DATA,
+                    valid_row_count=0,
+                    rejected_sources=["binding_geo"],
+                    reason_codes=["no_primary_data"],
+                    user_summary=(
+                        "GEO 数据源未产生可发布表达数据，请检查平台注释或更换数据集。"
+                    ),
+                    recommended_next_action="更换 GEO 数据集后重试。",
+                    build_id="build_nodata",
+                )
+            ),
+        )
+
+        response = await client.get("/api/v1/builds/build_nodata")
+        payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["build_id"] == "build_nodata"
+    result = payload["build_result"]
+    assert result is not None
+    assert result["status"] == "no_data"
+    # 真实信封字段（非通用投影 "build build_nodata produced no publishable data"）
+    assert result["reason_codes"] == ["no_primary_data"]
+    assert result["user_summary"] == (
+        "GEO 数据源未产生可发布表达数据，请检查平台注释或更换数据集。"
+    )
