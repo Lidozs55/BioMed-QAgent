@@ -1,6 +1,6 @@
 """ReviewerAgent — 策略审查子 Agent。
 
-通过 Agent.as_tool() 暴露给主 Agent，在调用 ``run_research_pipeline``
+通过 Agent.as_tool() 暴露给主 Agent，在调用 ``execute_dataset_build``
 前主动审查 query log，给出策略建议（哪些 source 已覆盖、哪些 not_found
 不应重试、是否需要换关键词）。
 
@@ -57,7 +57,7 @@ async def _reviewer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
 
     project_memory 硬约束："压缩前完整传递 query log 给 ReviewerAgent" —— 这里
     传递的是压缩前的完整 query_log（调用 review_query_strategy 工具的时机由
-    主 Agent 决定，INSTRUCTIONS 指导其在 run_research_pipeline 前调用）。
+    主 Agent 决定，INSTRUCTIONS 指导其在 execute_dataset_build 前调用）。
 
     TODO §4.6（REVIEW §7.1）: 除完整日志外，同时注入按 source 的确定性
     聚合统计（``aggregate_query_log_by_source``），引导 LLM 直接引用统计
@@ -83,7 +83,7 @@ async def _reviewer_instructions(ctx: RunContextWrapper, agent: Agent) -> str:
         "- 基于上述确定性统计，判断各 source 的查询覆盖情况（success/not_found/failed）\n"
         "- 指出哪些 source 已充分覆盖（有足够 success 记录）\n"
         "- 指出哪些 not_found 查询不应重试（关键词已穷尽或该 source 确无相关数据）\n"
-        "- 建议是否需要换关键词、换 source，或已可进入 pipeline 阶段\n"
+        "- 建议是否需要换关键词、换 source，或已可进入构建阶段\n"
         "- 输出纯文本，控制在 400 字以内，以「策略审查：」开头"
     )
 
@@ -135,7 +135,7 @@ async def _review_extractor(result: RunResult | RunResultStreaming) -> str:
 def build_review_query_strategy_tool(model: LazyDashScopeModel):
     """构造 review_query_strategy 工具（ReviewerAgent 经 as_tool 包装）。
 
-    主 Agent 在调用 ``run_research_pipeline`` 前应主动调用此工具，
+    主 Agent 在调用 ``execute_dataset_build`` 前应主动调用此工具，
     审查当前 query log 的策略合理性。审查结果写入
     ``RunContext.query_log_summary``，在后续 ``compress_query_log``
     压缩时保留。
@@ -149,7 +149,7 @@ def build_review_query_strategy_tool(model: LazyDashScopeModel):
     return reviewer_agent.as_tool(
         tool_name="review_query_strategy",
         tool_description=(
-            "审查当前任务的查询日志策略。在调用 run_research_pipeline 前"
+            "审查当前任务的查询日志策略。在调用 execute_dataset_build 前"
             "调用此工具，让 ReviewerAgent 检查 query log 中各数据源的"
             "查询覆盖情况、not_found 记录、是否需要换关键词或换 source。"
             "审查结果会写入 query_log_summary 供后续 compress_query_log 保留。"
