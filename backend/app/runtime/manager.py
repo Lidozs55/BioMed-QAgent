@@ -1393,6 +1393,40 @@ class TaskManager:
             snapshot = await self.repository.get_snapshot(summary.task_id)
             if snapshot is None:
                 raise LookupError(summary.task_id)
+            # C1a: 重启闭合——FINALIZING 且发布事实已持久化（publication_created
+            # 已落盘但 run_completed 缺失，如事件追加中途崩溃）→ 补发
+            # run_completed，避免恢复把它标 INTERRUPTED 留下“已发布但 run 非
+            # 成功”的孤立产物。build_result 无法从事件流还原（唯一载体是
+            # RunCompletedPayload 自身），按 NO_DATA 兜底并告警。
+            if (
+                summary.status is RunStatus.FINALIZING
+                and summary.active_run_id is not None
+                and any(
+                    publication.publication_id == f"pub-{summary.active_run_id}"
+                    for publication in snapshot.publications
+                )
+            ):
+                accepted = TaskRunAccepted(
+                    request_id="recovery",
+                    task_id=summary.task_id,
+                    run_id=summary.active_run_id,
+                    request_fingerprint=hashlib.sha256(
+                        f"recovery:{summary.task_id}:{summary.active_run_id}".encode()
+                    ).hexdigest(),
+                )
+                lock = self._task_locks.setdefault(summary.task_id, asyncio.Lock())
+                async with lock:
+                    await self._append_status(
+                        accepted,
+                        RunCompletedPayload(build_result=_no_data_build_result()),
+                    )
+                logger.warning(
+                    "Recovered FINALIZING run %s of task %s to COMPLETED after "
+                    "publication was already persisted (run_completed lost)",
+                    summary.active_run_id,
+                    summary.task_id,
+                )
+                continue
             if (
                 summary.status in recoverable
                 and summary.active_run_id is not None
@@ -1924,6 +1958,28 @@ class TaskManager:
                     if candidate.run_id == accepted.run_id
                 )
                 if run.status is RunStatus.COMPLETED:
+                    outcome.completion_durable = True
+                    execution.discard_completion()
+                    return
+                # C1a: 发布事实已提交（completion committer 成功——publication_created
+                # 事件已构造、产物已落盘）时，事件追加失败不得把 run 标 FAILED——
+                # 幂等补发 run_completed，收敛为 COMPLETED，避免“已发布但 run
+                # 非成功”的孤立产物。
+                if execution._completion_committed:
+                    try:
+                        await self._append_completion_status(
+                            accepted,
+                            RunCompletedPayload(
+                                build_result=(
+                                    execution.build_result
+                                    if execution.build_result is not None
+                                    else _no_data_build_result()
+                                )
+                            ),
+                        )
+                    except BaseException:
+                        outcome.retain_cancellation = True
+                        raise
                     outcome.completion_durable = True
                     execution.discard_completion()
                     return
