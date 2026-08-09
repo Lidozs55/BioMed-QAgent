@@ -78,8 +78,8 @@
 ### C4. V1 seam（REVIEW phase5 §5，V1 退役后收口）
 - **C4a**：~~provider dispatcher（`geo.series/geo.platform` `resolve_provider` + `acquire_series_asset`）零 production 消费者~~
   ✅ **已随 V1 退役关闭**（`geo_provider.py` / `acquire_series_asset` / `resolve_provider` 已删除，无残留引用）
-- **C4b F5**：coverage<1.0 时 per-binding 排除未实现（整 build NO_DATA，与 wave-7 一致，接受）
-- **C4c**：probe 覆盖阈值校准门槛（`probe_coverage_required_gene_level` 语义检查已交付，门槛校准留后续）
+- **C4b F5**：~~coverage<1.0 时 per-binding 排除未实现（整 build NO_DATA，与 wave-7 一致，接受）~~ 🔒 **已关闭（2026-08-09, REVIEW_2026-08-09-c4b-c4c.md）**：partial coverage 排除=静默丢弃已映射行（数据丢失伪装成功），与 D4 输出完整性语义矛盾；零 coverage binding 已有 per-binding 拒绝路径（`BindingRejectedError` → `rejected_sources` → PARTIAL_SUCCESS）。整 build NO_DATA 对 partial coverage 是正确行为
+- **C4c**：~~probe 覆盖阈值校准门槛（`probe_coverage_required_gene_level` 语义检查已交付，门槛校准留后续）~~ 🔒 **已关闭（2026-08-09, REVIEW_2026-08-09-c4b-c4c.md）**：1.0 是完整性判定（D4）非质量刻度；双档实体级矩阵（gene 严格 / probe 放宽）已交付；无真实分布可校准，中间阈值档需先建数据采集路径（产品决策前置）
 
 ### C5. 运行时健壮性（review-loop 记录）
 - **C5a R1C-02**：混合 run（V1+V2 工具）`take_pending()` 非 None 时 V2 outcome 不转移 → "V1 wins"，REVIEW 声称 "last build wins" 不符（doc 偏差，无数据丢失）
