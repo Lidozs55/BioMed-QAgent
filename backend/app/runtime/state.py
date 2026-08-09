@@ -277,40 +277,54 @@ def reduce_task_event(
             raise ValueError("publication events require run_id")
         if payload.run_id != event.run_id:
             raise ValueError("payload run_id must match envelope run_id")
-        _run_index(snapshot, event.run_id)
-        existing = next(
-            (
-                item
-                for item in publications
-                if item.publication_id == payload.publication_id
-            ),
-            None,
-        )
-        if existing is None:
-            previous = current_publication_id
-            publications.append(
-                PublicationSummary(
-                    publication_id=payload.publication_id,
-                    run_id=payload.run_id,
-                    manifest_sha256=payload.manifest_sha256,
-                    supersedes_publication_id=(
-                        payload.supersedes_publication_id or previous
-                    ),
-                    published_at=payload.published_at,
+        index = _run_index(snapshot, event.run_id)
+        if runs[index].status in _TERMINAL_STATUSES:
+            # C1b: terminal run 上的 publication_created 是非权威迟到事件
+            # （发布事实必然在 run 终态前已落盘，终态后的重复/乱序事件不应
+            # 产生 second publication）。复用 C5c 容忍机制：忽略并累计计数，
+            # 不改变权威状态。
+            dropped_late += 1
+            updates = {
+                "dropped_late_events": runs[index].dropped_late_events + 1
+            }
+            runs[index] = RunRecord.model_validate(
+                runs[index].model_dump() | updates
+            )
+            status = snapshot.task.status
+        else:
+            existing = next(
+                (
+                    item
+                    for item in publications
+                    if item.publication_id == payload.publication_id
+                ),
+                None,
+            )
+            if existing is None:
+                previous = current_publication_id
+                publications.append(
+                    PublicationSummary(
+                        publication_id=payload.publication_id,
+                        run_id=payload.run_id,
+                        manifest_sha256=payload.manifest_sha256,
+                        supersedes_publication_id=(
+                            payload.supersedes_publication_id or previous
+                        ),
+                        published_at=payload.published_at,
+                    )
                 )
-            )
-            current_publication_id = payload.publication_id
-        elif (
-            existing.manifest_sha256 != payload.manifest_sha256
-            or existing.published_at != payload.published_at
-        ):
-            raise ValueError(
-                f"conflicting duplicate publication event: "
-                f"{payload.publication_id}"
-            )
-        # Identical duplicate (same sha256 and published_at): no-op.
-        # supersedes_publication_id is state-derived, not compared.
-        status = snapshot.task.status
+                current_publication_id = payload.publication_id
+            elif (
+                existing.manifest_sha256 != payload.manifest_sha256
+                or existing.published_at != payload.published_at
+            ):
+                raise ValueError(
+                    f"conflicting duplicate publication event: "
+                    f"{payload.publication_id}"
+                )
+            # Identical duplicate (same sha256 and published_at): no-op.
+            # supersedes_publication_id is state-derived, not compared.
+            status = snapshot.task.status
     elif type(payload) in _STATUS_PAYLOADS:
         if event.run_id is None:
             raise ValueError("run-scoped events require run_id")
