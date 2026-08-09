@@ -1375,6 +1375,14 @@ class TaskManager:
 
     async def _recover(self) -> None:
         summaries: dict[str, TaskSummary] = {}
+        # 恢复扫描必须看到全部 active 任务（含超出 task_page_max_size 的最老
+        # 活跃任务）：分页 list_tasks 的 active 列表受 limit 截断（C5e），
+        # 用它扫描会在饱和队列重启时漏掉最老的 QUEUED/RUNNING 任务——
+        # 其 run 永不重新排队/永不中断，且每次重启都复发。
+        summaries.update(
+            (summary.task_id, summary)
+            for summary in await self.repository.list_active_tasks()
+        )
         cursor: str | None = None
         while True:
             page = await self.repository.list_tasks(

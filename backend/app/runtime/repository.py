@@ -27,6 +27,7 @@ from app.domain.contracts import (
     TaskPage,
     TaskRunAccepted,
     TaskSnapshot,
+    TaskSummary,
     build_event,
 )
 from app.domain.contracts.events import EventPayload
@@ -381,6 +382,13 @@ class TaskRepository:
         async with self._operation(), self._index_gate:
             await self._ensure_index_current_locked()
             return await self.index.list_tasks(limit=limit, cursor=cursor)
+
+    async def list_active_tasks(self) -> list[TaskSummary]:
+        """Return ALL active tasks, unbounded (recovery scan surface)."""
+
+        async with self._operation(), self._index_gate:
+            await self._ensure_index_current_locked()
+            return await self.index.list_active_tasks()
 
     async def list_messages(
         self,

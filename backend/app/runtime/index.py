@@ -198,6 +198,29 @@ class TaskIndex:
         boundary = _decode_cursor(cursor) if cursor else None
         return await self._run(self._list_tasks_sync, page_limit, boundary)
 
+    async def list_active_tasks(self) -> list[TaskSummary]:
+        """Return ALL active tasks, unbounded by any page limit.
+
+        The paginated ``list_tasks`` surface bounds its active list by
+        ``limit`` (C5e); recovery and any other consumer that must see every
+        active task (even beyond ``task_page_max_size``) uses this instead.
+        """
+
+        return await self._run(self._list_active_tasks_sync)
+
+    def _list_active_tasks_sync(self) -> list[TaskSummary]:
+        connection = self._get_connection()
+        placeholders = ", ".join("?" for _ in _ACTIVE_STATUSES)
+        rows = connection.execute(
+            f"""
+            SELECT * FROM task_summaries
+            WHERE status IN ({placeholders})
+            ORDER BY created_at DESC, task_id DESC
+            """,
+            [*_ACTIVE_STATUSES],
+        ).fetchall()
+        return [self._summary_from_row(row) for row in rows]
+
     async def rebuild(self) -> None:
         await self._run(self._rebuild_sync)
 
