@@ -399,6 +399,32 @@ def test_download_xena_success() -> None:
     assert rc.sources[0].database.value == "ucsc_xena"
 
 
+def test_download_xena_accepts_cohort() -> None:
+    """download_xena accepts the optional ``cohort`` label (previously
+    rejected as an unknown property).
+
+    REVIEW_2026-08-09-task-3eb85407: the agent passed ``cohort`` and the
+    schema rejected it, forcing two wasted download attempts.
+    """
+    raw_content = b"gene\tsample1\nBRCA1\t1.5\n"
+    gz_content = gzip.compress(raw_content)
+    mock_resp = _mock_urlopen_streaming(gz_content)
+
+    ctx = _make_ctx(task_id="test_xena_download_cohort")
+    ctx.tool_name = "download_xena"
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        args = json.dumps({
+            "dataset_id": "TCGA.PAAD.sampleMap/HiSeqV2",
+            "cohort": "TCGA Pancreatic Cancer (PAAD)",
+        })
+        result = asyncio.run(download_xena.on_invoke_tool(ctx, args))
+
+    data = json.loads(result)
+    assert data["source"] == "xena"
+    assert data["cohort"] == "TCGA Pancreatic Cancer (PAAD)"
+    assert len(data["local_files"]) == 2
+
+
 def test_download_xena_network_error_returns_error_json() -> None:
     """download_xena returns error JSON on network failure."""
     ctx = _make_ctx(task_id="test_xena_dl_err")
