@@ -135,6 +135,68 @@ def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
 
 
 @function_tool(
+    name_override="validate_dataset_build_spec",
+    description_override=(
+        "Validate a V2 DatasetBuildSpec JSON without starting a build. "
+        "Runs the same server-side SpecValidator (schema registry, entity-level "
+        "compatibility, per-binding adapter params, validation-profile "
+        "allowlist) that execute_dataset_build applies before any source file "
+        "is touched. Returns structured reason codes so the spec can be fixed "
+        "and retried instead of burning a build attempt on an invalid spec."
+    ),
+)
+async def validate_dataset_build_spec(
+    ctx: RunContextWrapper[RunContext],
+    spec: str,
+) -> str:
+    """Validate a V2 DatasetBuildSpec JSON without starting a build.
+
+    Args:
+        spec: DatasetBuildSpec as JSON.
+
+    Returns:
+        JSON string with ``status`` ("valid" | "invalid" | "invalid_input"),
+        ``valid``, ``reason_codes`` and ``reasons`` (empty when valid).
+    """
+    try:
+        build_spec = DatasetBuildSpec.model_validate_json(spec)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": f"could not parse spec: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    result = _build_spec_validator().validate(build_spec)
+    return json.dumps(
+        {
+            "status": "valid" if result.valid else "invalid",
+            "valid": result.valid,
+            "reason_codes": list(result.reason_codes),
+            "reasons": list(result.reasons),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _build_spec_validator() -> SpecValidator:
+    """Shared SpecValidator configuration for the V2 tools.
+
+    Single definition of the schema registry (gene/probe expression) and the
+    validation-profile allowlist so ``validate_dataset_build_spec`` and
+    ``execute_dataset_build`` can never drift apart.
+    """
+    return SpecValidator(
+        registry=SchemaRegistry(
+            [build_gene_expression_schema(), build_probe_expression_schema()]
+        ),
+        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
+    )
+
+
+@function_tool(
     name_override="execute_dataset_build",
     description_override=(
         "Execute a V2 dataset build: given a self-contained DatasetBuildSpec "
@@ -212,12 +274,7 @@ async def execute_dataset_build(
     # build under a probe schema (or a probe build under the gene profile) is
     # invalid_input with the validator's structured reasons — never a build
     # that could publish probe rows under the gene release gate.
-    spec_validation = SpecValidator(
-        registry=SchemaRegistry(
-            [build_gene_expression_schema(), build_probe_expression_schema()]
-        ),
-        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
-    ).validate(build_spec)
+    spec_validation = _build_spec_validator().validate(build_spec)
     if not spec_validation.valid:
         return json.dumps(
             {
