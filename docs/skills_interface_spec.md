@@ -786,7 +786,7 @@ skill_registry.register(my_source_skill)
 ### learned skill
 
 - 位置：`backend/app/skills/learned/<category>/<name>/`
-- 默认禁用，不能绕过 Pipeline 和 Validation Gate
+- 默认禁用，不能绕过 `execute_dataset_build` 的 release-invariants 发布门禁
 - 通过 [evolution.py](../backend/app/skills/evolution.py) 的 `save_learned_skill()` 自动生成
 - 当前未接入 `create_agent()` 的自动加载流程
 

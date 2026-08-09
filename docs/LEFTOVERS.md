@@ -35,7 +35,7 @@
 | 子项 | 状态 |
 | --- | --- |
 | A4a `_STAGES` / `StageName` 业务依赖 / `SUPPORTED_PIPELINE_SOURCE_COMBINATIONS` 门禁 | ✅ 删除（StageName 枚举本身保留——runtime/skills/events 仍用；兼容门禁及其守卫测试已随 review R2 删除） |
-| A4b 22 列缓存写入接口 + `domain/processing.py` | ✅ 删除（`CacheStore` 读侧保留——V2 legacy_cache/API 用） |
+| A4b 22 列缓存写入接口 + `domain/processing.py` | ✅ V1 直写调用面已删（`domain/processing.py` 随退役删除）；`CacheStore.commit_dataset` 写入接口仍保留（`cache_tools`/`import_agent` 生产调用），随 B 类 P2 重审 |
 | A4c `alignment.merge_datasets` 正式路径 | ✅ 删除（V2 自有 merge_strategy） |
 | A4d `run_research_pipeline` 旧参数面 | ✅ 删除（agent 工具表无 V1 工具） |
 

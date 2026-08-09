@@ -271,7 +271,7 @@ supersedes_publication_id
 | 任务锁、checkpoint、timeout/cancel | `runtime/manager.py` | 保留（V1 `pipeline/runner.py` 已删） |
 | durable event 持久化与重放 | `runtime/event_store.py`、`runtime/hub.py` | 保留 |
 | staging 区与原子发布 | `datasets/build/expression_runner.py`（immutable publication）、`datasets/build/v1_bridge.py`（legacy 镜像） | 保留（V1 `pipeline/stages/validation/publish.py` 已删） |
-| Validation Gate | `spec/` Profile 驱动门禁 | 保留门禁，替换为 Profile 驱动（§10） |
+| Validation Gate | `datasets/build/profiles.py`（`VALIDATION_PROFILES`）+ `datasets/spec_validator.py` + `datasets/build/invariants.py`（release 不变量） | 保留门禁，Profile 驱动（§10） |
 | fixture / live 区分 | 测试标记与 `mode` 参数 | 保留 |
 | 网络访问、安全下载、沙箱、egress 边界 | `integrations/`、BrowserPool | 保留 |
 

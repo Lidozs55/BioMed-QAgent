@@ -295,15 +295,15 @@
       （✅ V1 退役后完成：`_STAGES` 已删、`StageName` 枚举保留供 runtime/skills/events；
       兼容门禁及守卫测试随 review R2 删除）
 - [x] **P1** 删除 22 列缓存硬编码写入接口与 `domain/processing.py` 旧 ParsedDataset
-      （✅ V1 退役后完成：`domain/processing.py` 已删；`CacheStore.commit_dataset`
-      已随 V1 面移除）
+      （✅ `domain/processing.py` 已随 V1 退役删除；`CacheStore.commit_dataset`
+      写入接口仍保留——由 `cache_tools.commit_to_cache`（import_agent 生产路径）
+      调用，P2 重审 22 列写入面）
 - [x] **P1** 正式路径删除 `tools/alignment.merge_datasets`（保留为映射候选生成器）
-      （✅ V1 退役后完成：`tools/alignment` 已删，V2 合并由
-      ExpressionBuildRunner 的 append_by_canonical_row 承担）
+      （✅ V1 退役后完成：`tools/alignment` 已删，V2 合并由 integrator
+      的 append_by_canonical_row 策略承担）
 - [x] **P1** 删除 metadata-only 占位与 `run_research_pipeline` 旧参数面
       （✅ metadata-only 占位已在 Phase 4b 删除；`run_research_pipeline`
       已随 V1 退役删除（agent 主线切换 `execute_dataset_build`））
-      ——**遗留**：参数面裁剪依赖 V1 退役）
 - [x] **P1** 删除遗留死代码：`tools/parse_pdb.py` / `parse_geo.py` / `parse_excel.py` /
       `cleaning.py` 及相关测试（`test_processing.py`、`test_config.py` 的 openpyxl
       依赖检查）——依据 REVIEW §5.2 结论
@@ -320,12 +320,11 @@
       passed (47 files) / lint 0 / tsc 0 / build OK。ARCHITECTURE 顶注已诚实标注
       「代码仍为 V1、V2 绞杀模式」，无需改动）
 
-**Phase 8 遗留（未决架构决策，需产品确认）**：V1 生产路径退役。
-删除清单中的 StageName 业务依赖、`_STAGES`、`merge_datasets` 正式路径、
-`run_research_pipeline` 旧参数面、22 列写入接口全部指向同一动作——把 agent 主线从
-V1 `run_research_pipeline` 切到 V2 `execute_dataset_build`（当前仅注册零引导，
-e2e 已走 V2 且四种必测结果有测试）。决策点与方案见
-REVIEW_2026-08-08-phase8-legacy-cleanup.md §5。
+**Phase 8 遗留（已决策并执行）**：V1 生产路径退役——已拍板全移除并合并
+（见 LEFTOVERS A1，main @ 9a7f19d + review R2 收尾）。agent 主线已切到
+V2 `execute_dataset_build`（INSTRUCTIONS 全量引导 + `validate_dataset_build_spec`
+预检），e2e 已走 V2 且四种必测结果有测试。下方 `[x]` 项均已达成；
+仅剩 A2d dispatcher 接线等真正遗留项（见 LEFTOVERS）。
 
 ---
 
