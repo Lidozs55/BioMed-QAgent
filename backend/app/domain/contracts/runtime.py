@@ -40,6 +40,9 @@ class PublicationSummary(ContractModel):
     """Immutable publication record aggregated from publication_created events."""
 
     publication_id: str = Field(min_length=1)
+    # C1a: run 归属（publication_created 事件必带）。旧快照/事件流无此字段时
+    # 为 None——恢复闭合只按 run_id 命中，None 永不误闭合。
+    run_id: str | None = Field(default=None, min_length=1)
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     supersedes_publication_id: str | None = Field(default=None, min_length=1)
     published_at: datetime

@@ -206,6 +206,9 @@ class RunExecution:
     _cancel_sent: bool = field(default=False, init=False, repr=False)
     _completion_sealed: bool = field(default=False, init=False, repr=False)
     _completion_committed: bool = field(default=False, init=False, repr=False)
+    # C1a: “发布事实已持久化”以 publication_created 事件成功落盘为准（而非
+    # _completion_committed——那只是 committer 返回、事件已构造但可能尚未持久化）。
+    _publication_persisted: bool = field(default=False, init=False, repr=False)
     _completion_abort_error: BaseException | None = field(
         default=None,
         init=False,
@@ -1402,7 +1405,11 @@ class TaskManager:
                 summary.status is RunStatus.FINALIZING
                 and summary.active_run_id is not None
                 and any(
-                    publication.publication_id == f"pub-{summary.active_run_id}"
+                    # 按 run_id 关联发布事实：AGENT 格式 pub-{run_id} 与 V2
+                    # 数据集构建格式 pub_{build_id}_{sha[:16]} 都携带正确
+                    # run_id（events.py PublicationCreatedPayload.run_id），
+                    # 不能按 id 字符串形状匹配（V2 主线会漏闭合）。
+                    publication.run_id == summary.active_run_id
                     for publication in snapshot.publications
                 )
             ):
@@ -1903,6 +1910,13 @@ class TaskManager:
                         stage_attempt_id=completion_event.stage_attempt_id,
                         timestamp=completion_event.timestamp,
                     )
+                    if isinstance(
+                        completion_event.payload, PublicationCreatedPayload
+                    ):
+                        # C1a: 发布事实已持久化的唯一可靠判定点是
+                        # publication_created 事件成功落盘之后——committer
+                        # 返回只说明事件已构造，尚未进入事件日志。
+                        execution._publication_persisted = True
                 # phase 4a：零产物完成不再是失败。空 completion_events + agent
                 # 确实跑过且未附上结构化 build_result → COMPLETED + BuildResult(NO_DATA)，
                 # 由 manager 构造；有产物时透传 executor 的 build_result（Task 5），
@@ -1961,11 +1975,13 @@ class TaskManager:
                     outcome.completion_durable = True
                     execution.discard_completion()
                     return
-                # C1a: 发布事实已提交（completion committer 成功——publication_created
-                # 事件已构造、产物已落盘）时，事件追加失败不得把 run 标 FAILED——
+                # C1a: 发布事实已持久化（publication_created 事件已成功落盘、
+                # 产物已落盘）时，事件追加失败不得把 run 标 FAILED——
                 # 幂等补发 run_completed，收敛为 COMPLETED，避免“已发布但 run
-                # 非成功”的孤立产物。
-                if execution._completion_committed:
+                # 非成功”的孤立产物。判定用 _publication_persisted（事件落盘），
+                # 不用 _completion_committed（只是 committer 返回、事件未持久化
+                # 时收敛 COMPLETED 会静默丢失 durable 发布记录）。
+                if execution._publication_persisted:
                     try:
                         await self._append_completion_status(
                             accepted,

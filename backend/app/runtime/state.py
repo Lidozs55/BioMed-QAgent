@@ -250,6 +250,7 @@ def reduce_task_event(
             publications.append(
                 PublicationSummary(
                     publication_id=payload.publication_id,
+                    run_id=payload.run_id,
                     manifest_sha256=payload.manifest_sha256,
                     supersedes_publication_id=(
                         payload.supersedes_publication_id or previous

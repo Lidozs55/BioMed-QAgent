@@ -51,9 +51,16 @@ async def _seed_finalizing_with_publication(
     *,
     task_id: str,
     run_id: str,
+    publication_id: str | None = None,
 ) -> None:
     """Seed a run that stopped mid-finalize: publication_created persisted,
-    run_completed missing (crash window)."""
+    run_completed missing (crash window).
+
+    ``publication_id`` defaults to the legacy agent format ``pub-{run_id}``;
+    pass the V2 dataset-build format (``pub_{build_id}_{sha[:16]}``) to cover
+    the fixture/AGENT dataset-build mainline, whose run correlation must come
+    from ``PublicationCreatedPayload.run_id``, not the id string shape.
+    """
 
     await repository.save_snapshot(
         TaskSnapshot(
@@ -94,7 +101,7 @@ async def _seed_finalizing_with_publication(
             run_id=run_id,
             sequence=4,
             payload=PublicationCreatedPayload(
-                publication_id=f"pub-{run_id}",
+                publication_id=publication_id or f"pub-{run_id}",
                 run_id=run_id,
                 manifest_sha256="0" * 64,
                 published_at=NOW,
@@ -202,6 +209,49 @@ async def test_recover_closes_finalizing_run_with_persisted_publication(
         ]
         assert len(completed) == 1
         # 发布事实保留。
+        assert snapshot.publications
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_recover_closes_v2_publication_format_finalizing_run(
+    tmp_path: Path,
+) -> None:
+    """重启恢复（V2 数据集构建主线）：publication_id 是 ``pub_{build_id}_{sha}``
+    而非 ``pub-{run_id}``——闭合判定必须按 ``run_id`` 关联，不能按 id 字符串形状。
+    否则 FIXTURE/AGENT dataset-build run 在崩溃窗口重启后仍被标 INTERRUPTED，
+    留下“已发布但 run 非成功”的孤立产物。
+    """
+
+    task_id = "task_atomic_recover_v2"
+    run_id = "run_atomic_recover_v2"
+    repository = TaskRepository(tmp_path / "output")
+    await _seed_finalizing_with_publication(
+        repository,
+        task_id=task_id,
+        run_id=run_id,
+        publication_id=f"pub_build_dual_read_{'0' * 16}",  # V2 格式
+    )
+
+    manager = make_manager(repository)
+    await manager.start()  # start 触发 _recover
+
+    try:
+        snapshot = await repository.get_snapshot(task_id)
+        assert snapshot is not None
+        run = snapshot.runs[0]
+        assert run.status.value == "completed", (
+            f"recover must close the V2-format finalizing run to COMPLETED, "
+            f"got {run.status.value}"
+        )
+        events = await repository.list_events(task_id)
+        completed = [
+            event
+            for event in events
+            if isinstance(event.payload, RunCompletedPayload)
+        ]
+        assert len(completed) == 1
         assert snapshot.publications
     finally:
         await manager.close()
