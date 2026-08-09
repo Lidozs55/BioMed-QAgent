@@ -1028,3 +1028,61 @@ def test_validate_dataset_build_spec_handles_bad_json(tmp_path: Path) -> None:
 
 
 
+
+
+def test_execute_dataset_build_records_real_download_attempts(tmp_path: Path) -> None:
+    """A2c: source assets carry a real, recorded DownloadAttempt (lineage closed).
+
+    Every pre-acquired source file must be backed by a persisted
+    ``DownloadAttempt`` on the RunContext instead of a bare generated uuid:
+    the SourceAsset's ``successful_attempt_id`` must resolve to a real
+    attempt with status ``succeeded``, and the published provenance.json must
+    expose the attempt reference.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.status.value == "succeeded"
+    assert attempt.attempt_id.startswith("download_attempt_")
+    assert attempt.source_id == "gdc"
+
+    # The published asset lineage points at the real attempt.
+    output_dir = Path(data["output_dir"])
+    publish_dirs = list((output_dir / "publish").glob("build_tool_test_*"))
+    provenance = json.loads(
+        (publish_dirs[0] / "provenance.json").read_text("utf-8")
+    )
+    assert provenance["sources"] == [
+        {
+            "binding_id": "binding_gdc",
+            "asset_id": provenance["sources"][0]["asset_id"],
+            "source_id": "binding_gdc",
+            "logical_file": "gdc_expression.tsv",
+            "sha256": provenance["sources"][0]["sha256"],
+            "successful_attempt_id": attempt.attempt_id,
+        }
+    ]
+
+
+def test_execute_dataset_build_records_attempt_per_binding(tmp_path: Path) -> None:
+    """A2c: one real attempt per source binding, each with its own asset link."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel_gdc = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    rel_xena = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "xena_expression.tsv")
+
+    data = _call_tool(ctx, _mixed_spec_json(), json.dumps(
+        {"binding_gdc": rel_gdc, "binding_xena": rel_xena}
+    ))
+
+    assert data["status"] == "ok"
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 2
+    assert {a.source_id for a in attempts} == {"gdc", "ucsc_xena"}
+    assert all(a.status.value == "succeeded" for a in attempts)

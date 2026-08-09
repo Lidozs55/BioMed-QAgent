@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
@@ -50,6 +51,8 @@ from app.datasets.schema_registry import (
 from app.datasets.spec_validator import SpecValidator
 from app.domain.contracts import (
     DataLevel,
+    DownloadAttempt,
+    DownloadStatus,
     ErrorDetail,
     SourceAsset,
     asset_id_from_sha256,
@@ -314,13 +317,32 @@ async def execute_dataset_build(
             ensure_ascii=False,
         )
 
-    # Resolve files and build content-addressed SourceAssets.
+    # Resolve files and build content-addressed SourceAssets. A2c: every
+    # pre-acquired source file is backed by a REAL DownloadAttempt recorded on
+    # the RunContext (status=succeeded), so the SourceAsset's
+    # ``successful_attempt_id`` resolves to a persisted attempt and the
+    # publication provenance chain is closed — never a bare generated uuid.
     assets: dict[str, SourceAsset] = {}
     paths: dict[str, Path] = {}
+    bindings_by_id = {
+        binding.binding_id: binding for binding in build_spec.source_bindings
+    }
     try:
         for binding_id, relative in files_mapping.items():
             path = resolve_task_local_file(run_ctx.work_dir, str(relative))
             checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+            binding = bindings_by_id.get(binding_id)
+            now = datetime.now(UTC)
+            attempt = DownloadAttempt(
+                attempt_id=generate_prefixed_uuid("download_attempt"),
+                source_id=binding.source if binding else binding_id,
+                url=f"local://{relative}",
+                status=DownloadStatus.SUCCEEDED,
+                bytes_received=path.stat().st_size,
+                started_at=now,
+                finished_at=now,
+            )
+            run_ctx.record_download_attempt(attempt)
             assets[binding_id] = SourceAsset(
                 asset_id=asset_id_from_sha256(checksum),
                 kind="source",
@@ -329,7 +351,7 @@ async def execute_dataset_build(
                 size_bytes=path.stat().st_size,
                 media_type=_infer_media_type(path),
                 source_id=binding_id,
-                successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                successful_attempt_id=attempt.attempt_id,
                 data_level=DataLevel.REPOSITORY_PROCESSED,
             )
             paths[binding_id] = path

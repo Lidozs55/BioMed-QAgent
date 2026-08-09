@@ -103,6 +103,7 @@ def build_provenance_document(
                 "source_id": asset.source_id,
                 "logical_file": asset.relative_path.split("/")[-1],
                 "sha256": asset.sha256,
+                "successful_attempt_id": asset.successful_attempt_id,
             }
             for binding_id, asset in sorted(source_assets.items())
         ],

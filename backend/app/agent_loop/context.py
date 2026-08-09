@@ -204,6 +204,7 @@ class RunContext:
     records: list[dict] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     warnings: list[dict] = field(default_factory=list)
+    download_attempts: list[Any] = field(default_factory=list)
 
     query_log: list[dict] = field(default_factory=list)
     query_log_summary: str = ""
@@ -838,6 +839,10 @@ class RunContext:
     def add_raw_asset(self, path: str) -> None:
         """记录 raw 目录下的本地文件路径。"""
         self.raw_assets.append(path)
+
+    def record_download_attempt(self, attempt: Any) -> None:
+        """登记一次完成的下载尝试（血缘闭合：asset 的 successful_attempt_id 可解析）。"""
+        self.download_attempts.append(attempt)
 
     def add_warning(self, severity: str, message: str, source: str | None = None) -> None:
         """记录一条警告。"""
