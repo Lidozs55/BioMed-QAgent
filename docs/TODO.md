@@ -60,7 +60,7 @@
       新 V2 入口为 `execute_dataset_build` function_tool（`app/pipeline/dataset_build_tool.py`，
       spec JSON + source_files 包装为 content-addressed SourceAsset 后走
       `ExpressionBuildRunner` + `DatasetBuildExecutor`）
-- [ ] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）
+- [x] **P0** 新 Run 支持携带版本化 `TaskSpecification`（原 §1.6）✅（2026-08-09, feat/leftovers-p1 commits 767d0ba/f69537c：`RunQueuedPayload`/`RunRecord` 携带可选 spec + `POST /tasks` 接受并持久化，向后兼容）
 - [x] **P0** 完整重跑完成新版本 Publication 的原子发布与旧版本保留（supersedes 链）
       （`expression_runner._publish` 写 `publication.json`：`publication_id` / manifest_ref /
       validation_result_ref / `published_at` / `supersedes_publication_id`（`_find_latest_publication`
