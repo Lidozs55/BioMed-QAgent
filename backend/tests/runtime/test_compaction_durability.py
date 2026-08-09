@@ -67,11 +67,12 @@ async def test_compaction_failure_preserves_raw_session_with_bounded_groups() ->
     repository = Repository()
 
     # When
+    request = budgeted_request()
     preparation = await ConversationCompactor(repository, summarize=summarize).prepare(
         "task_fallback",
         model_handle=object(),
         emit=emit,
-        request=budgeted_request(),
+        request=request,
     )
 
     # Then
@@ -79,8 +80,10 @@ async def test_compaction_failure_preserves_raw_session_with_bounded_groups() ->
     assert preparation.fallback is True
     assert emitted[0].code == "compaction_failed"
     effective = await preparation.session.get_items()
-    assert preparation.estimate.total <= 500
-    assert effective == []
+    # 保底：最新完整组永不丢弃（空输入会让续跑失败），允许超 target
+    # 但必须落在硬容量内。
+    assert effective == items[-2:]
+    assert preparation.estimate.total <= request.budget.input_capacity
 
 
 @pytest.mark.asyncio
@@ -146,11 +149,12 @@ async def test_corrupt_summary_marker_retains_bounded_compaction_failed_fallback
         emitted.append(payload)
 
     # When
+    request = budgeted_request()
     preparation = await ConversationCompactor(Repository()).prepare(
         "task_invalid_marker",
         model_handle=object(),
         emit=emit,
-        request=budgeted_request(),
+        request=request,
     )
 
     # Then
@@ -159,7 +163,9 @@ async def test_corrupt_summary_marker_retains_bounded_compaction_failed_fallback
     assert emitted[0].code == "compaction_failed"
     assert expected_fragment in emitted[0].message
     effective = await preparation.session.get_items()
-    assert preparation.estimate.total <= 500
+    # 保底保留最新完整组（可超 target，但永不空输入）。
+    assert effective
+    assert preparation.estimate.total <= request.budget.input_capacity
     assert effective == items[-len(effective) :]
     assert len(effective) % 2 == 0
 
@@ -233,17 +239,30 @@ async def test_non_unique_history_alignment_falls_back_with_bounded_groups(
         emitted.append(payload)
 
     # When
+    request = budgeted_request()
     preparation = await ConversationCompactor(Repository(), summarize=summarize).prepare(
         "task_alignment",
         model_handle=object(),
         emit=emit,
-        request=budgeted_request(),
+        request=request,
     )
 
     # Then
-    assert summarized is False
-    assert preparation.fallback is True
-    assert emitted[0].code == "compaction_failed"
     effective = await preparation.session.get_items()
-    assert preparation.estimate.total <= 500
-    assert effective == []
+    if alignment == "ambiguous":
+        # 歧义无法安全对齐 → fallback：保底保留最新完整组（可超 target，
+        # 但永不空输入）。
+        assert summarized is False
+        assert preparation.fallback is True
+        assert emitted[0].code == "compaction_failed"
+        assert effective
+        assert preparation.estimate.total <= request.budget.input_capacity
+        assert effective == items[-len(effective) :]
+        assert len(effective) % 2 == 0
+    else:
+        # 首组损坏（impossible）→ 尾部 peel 视为在飞会话：全部原样保留，
+        # 不警告、不摘要、不 fallback。
+        assert summarized is False
+        assert preparation.fallback is False
+        assert emitted == []
+        assert effective == items

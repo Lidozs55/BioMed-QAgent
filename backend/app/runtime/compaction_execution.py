@@ -151,6 +151,22 @@ async def compact_view(
     to_cover = select_coverage_prefix(request, view, retained)
     del retained[: len(to_cover)]
     covered.extend(to_cover)
+    if not to_cover and not covered:
+        # 无可压缩内容（纯在飞会话 / 摘要已覆盖全部）：不调用 summarize，
+        # 原样保留在飞段；超出硬容量时显式失败而不是产出空输入。
+        current_estimate = estimate(request, items_for_segments(retained))
+        if current_estimate.total > request.budget.input_capacity:
+            raise ContextBudgetOverflowError(
+                estimated_tokens=current_estimate.total,
+                limit_tokens=request.budget.input_capacity,
+            )
+        return CompactionPreparation(
+            session=EffectiveSession(task_session, items_for_segments(retained)),
+            agent_input=request.agent_input,
+            estimate=current_estimate,
+            compacted=False,
+            degraded_alignment=view.degraded_alignment,
+        )
     covered_through = covered[-1].run_id if covered else "history_start"
     summary_limit = max(
         1,
@@ -171,13 +187,25 @@ async def compact_view(
     effective = [summary_marker(summary, covered_through), *items_for_segments(retained)]
     current_estimate = estimate(request, effective)
     while current_estimate.total > request.budget.target_tokens and retained:
+        if not retained[0].run_ids:
+            # 在飞段（活动会话）永不弹岀。
+            break
         retained.pop(0)
         effective = [summary_marker(summary, covered_through), *items_for_segments(retained)]
         current_estimate = estimate(request, effective)
-    if current_estimate.total > request.budget.target_tokens:
+    if current_estimate.total > request.budget.target_tokens and any(
+        segment.run_ids for segment in retained
+    ):
+        # 仍有可压缩历史段却无法达标：摘要未充分减小，显式失败。
         raise ContextBudgetOverflowError(
             estimated_tokens=current_estimate.total,
             limit_tokens=request.budget.target_tokens,
+        )
+    if current_estimate.total > request.budget.input_capacity:
+        # 仅剩不可压缩的在飞段且超出硬容量。
+        raise ContextBudgetOverflowError(
+            estimated_tokens=current_estimate.total,
+            limit_tokens=request.budget.input_capacity,
         )
     record = summary_record(summary, covered)
     payload = ConversationCompactedPayload(
@@ -248,7 +276,7 @@ async def fallback(
     retained = _newest_groups_within_limit(groups, request, limit)
     effective = [item for group in retained for item in group]
     current_estimate = estimate(request, effective)
-    if current_estimate.total > limit:
+    if current_estimate.total > limit and len(retained) > 1:
         raise ContextBudgetOverflowError(
             estimated_tokens=current_estimate.total,
             limit_tokens=limit,
@@ -266,13 +294,18 @@ def _newest_groups_within_limit(
     request: CompactionRequest,
     limit: int,
 ) -> list[tuple[TResponseInputItem, ...]]:
-    """Return one newest-first-selected, chronological suffix of complete groups."""
+    """Return one newest-first-selected, chronological suffix of complete groups.
+
+    Never returns empty when *groups* is non-empty: the newest complete group
+    is always retained even when it alone exceeds the limit, so a continuation
+    can never reach ``Runner.run_streamed`` with an empty prepared input.
+    """
 
     retained: list[tuple[TResponseInputItem, ...]] = []
     for group in reversed(groups):
         candidate = [group, *retained]
         candidate_items = [item for run in candidate for item in run]
-        if estimate(request, candidate_items).total > limit:
+        if estimate(request, candidate_items).total > limit and retained:
             break
         retained = candidate
     return retained
