@@ -1,10 +1,8 @@
-"""V2 Dataset Build Agent-facing tool (Phase 2: PipelineRunner -> Legacy facade).
+"""V2 Dataset Build Agent-facing tool (V1 退役后唯一正式产物入口).
 
-``run_research_pipeline`` remains the V1 deterministic pipeline entry point;
-``execute_dataset_build`` is the V2 entry point that drives the same fixed
-skeleton through the Phase 2 execution kernel (ExpressionBuildRunner +
-DatasetBuildExecutor) with the Phase 6 release invariants gate and the
-Publication supersedes chain.
+``execute_dataset_build`` drives the fixed skeleton through the execution
+kernel (ExpressionBuildRunner + DatasetBuildExecutor) with the release
+invariants gate and the Publication supersedes chain.
 
 The Agent supplies a self-contained ``DatasetBuildSpec`` (JSON) plus a
 mapping of already-acquired source files (workdir-relative paths). The tool
@@ -208,8 +206,7 @@ def _build_spec_validator() -> SpecValidator:
         "validate profile -> publish) through the execution kernel and "
         "publishes an immutable version with a supersedes chain. "
         "Prefer this for expression-data builds when the required source files "
-        "have already been downloaded (e.g. GDC/Xena matrices); otherwise use "
-        "run_research_pipeline for full discovery-driven runs."
+        "have already been downloaded (e.g. GDC/Xena matrices)."
     ),
 )
 async def execute_dataset_build(

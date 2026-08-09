@@ -259,10 +259,11 @@ Spec 模板（gene expression 单源）：
 - `source_files`：`{"binding_gdc": "source_assets/<文件名>"}`——binding_id 到
   工作目录相对路径的映射，指向第 4 步下载的文件
 
-构建结果（BuildResult）四种状态：
+构建结果（BuildResult）状态：
 - `succeeded`：主表发布，读 `publication_id` / `valid_row_count` / `artifact_dir`
 - `partial_success`：部分 binding 被拒（读 `rejected_sources` 与拒绝原因）
 - `no_data`：无主数据（读 `reason_codes`，如 `no_primary_data` / 表达块为空）
+- `spec_rejected`：spec 未通过服务端校验（先用 `validate_dataset_build_spec` 修正）
 - `failed`：执行失败（读 `error` 信息）
 
 ### 第 6 步：汇报发现
