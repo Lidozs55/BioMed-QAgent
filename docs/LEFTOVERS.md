@@ -86,6 +86,7 @@
 - **C5c R1C-06**：`reduce_task_event` 对 terminal 后 run_id 事件抛"immutable"——replay 安全，晚到 operation 事件会崩（今日不可达，建议硬化）
 - **C5d A6**：`_task_locks`/repository `_task_locks`/EventStore `_checkpoints` 强键字典永不清除（内存增长，Minor）
 - **C5e A7**：`TaskIndex.list_tasks` active 列表不受 limit 约束（长会话 API 序列化无界，Minor）
+- **C5f ✅ 已修（2026-08-09, main @ 783784b）**：续跑 preflight compaction 崩溃——no_progress/max_turns 续跑时当前 RUNNING run 的活动组（SDK 输入副本 + 工具调用）无 terminal record，`align_groups_to_records` 恒抛 impossible → fallback 空会话 → SDK `Prepared model input is empty` → run_failed(internal_error)。修复：尾部无 record 组 peel 为在飞段原样保留（不警告/不摘要/不压缩），marker 分支同处理；`compact_view` 无可压缩内容守卫；`select_coverage_prefix`/弹段循环跳过在飞段；fallback 保底至少保留最新组。TDD 5 用例（`tests/runtime/test_compaction_inflight.py`）。**残余**：真超窗会话（在飞组 > input_capacity）→ 显式 `ContextBudgetOverflowError`（run 失败但错误明确；活动会话不可压缩是硬约束）。
 
 ### C6. 性能暂缓（ISSUES.md，审查结论"暂缓"，低优先级）
 - `_replay_cache` 深拷贝放大（session.py:182-204）；压缩流程 5-6 处 deepcopy；`_task_locks` 永不清理（128B/锁可忽略）；RunContext 只追加不清理；Pipeline `events` 无限增长（1-10MB 瞬态）；SubagentSupervisor 异常退出字典泄漏
