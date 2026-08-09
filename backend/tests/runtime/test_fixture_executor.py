@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from app.domain.contracts import (
+    ArtifactProducedPayload,
+    PublicationCreatedPayload,
     RunCompletedPayload,
     RunFailedPayload,
     StartTaskRequest,
@@ -107,6 +109,64 @@ async def test_fixture_mode_events_are_ordered(tmp_path) -> None:
         assert types.index("run_started") < types.index("run_completed")
         # 无 artifact_manifest_missing 警告：V2 build 是真实完成证据。
         assert "warning" not in [event.payload.type.value for event in events]
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_mode_emits_artifact_produced_for_v2_build(tmp_path) -> None:
+    """C3b: V2 build 完成必须镜像 artifact_produced（事件面与 AGENT 路径一致）。
+
+    V2 主线的 completion 事件此前只发 PublicationCreatedPayload，不发
+    ArtifactProducedPayload（reducer artifact_count / H6 dedup 状态重建 /
+    前端 WS 事件流均消费 artifact_produced）。本测试锁定 V2 产物事件面：
+    至少一条 artifact_produced（GDC fixture 产物 primary.csv + schema.json），
+    且都在 publication_created 之前（与 AGENT 路径的事件顺序一致）。
+    """
+
+    repository = TaskRepository(tmp_path / "output")
+    manager = make_manager(repository)
+    await manager.start()
+    try:
+        accepted = await manager.create_task(
+            StartTaskRequest(
+                request_id="req_fixture_artifacts",
+                input="fixture artifacts",
+                databases=["gdc"],
+                mode=TaskMode.FIXTURE,
+            )
+        )
+        await manager.wait_until_idle()
+
+        events = await repository.list_events(accepted.task_id)
+        produced = [
+            event
+            for event in events
+            if isinstance(event.payload, ArtifactProducedPayload)
+        ]
+        publications = [
+            event
+            for event in events
+            if isinstance(event.payload, PublicationCreatedPayload)
+        ]
+
+        # V2 产物事件非空（至少 primary + schema 两条）。
+        assert produced
+        for event in produced:
+            artifact = event.payload.artifact
+            assert artifact.artifact_id
+            assert artifact.role is not None
+            assert artifact.generated_by_step_id
+        # artifact_produced 全部先于 publication_created（AGENT 路径顺序）。
+        if publications:
+            assert all(
+                event.sequence < publications[0].sequence
+                for event in produced
+            )
+        # sequence 仍连续（新增事件不破坏既有不变量）。
+        assert [event.sequence for event in events] == list(
+            range(1, len(events) + 1)
+        )
     finally:
         await manager.close()
 

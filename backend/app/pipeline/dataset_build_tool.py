@@ -630,6 +630,7 @@ def _install_dataset_build_outcome(
     managed_run_id = ctx.context.managed_run_id
     if managed_run_id is None:
         return
+    manifest: DatasetManifest | None = None
     manifest_sha256: str | None = None
     if manifest_path.is_file():
         try:
@@ -655,6 +656,9 @@ def _install_dataset_build_outcome(
             build_result=result.model_copy(update={"build_id": build_id}),
             publication=publication,
             manifest_sha256=manifest_sha256,
+            manifest_artifacts=(
+                tuple(manifest.artifacts) if manifest is not None else ()
+            ),
         )
     )
 

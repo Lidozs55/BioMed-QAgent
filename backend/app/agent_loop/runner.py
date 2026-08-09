@@ -40,6 +40,7 @@ from app.agent_loop.invocation import (
 from app.agent_loop.main_input_broker import MainInputBroker
 from app.agent_loop.model import run_model_settings_scope, to_run_model_settings
 from app.domain.contracts import (
+    ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
     AssistantReasoningDeltaPayload,
@@ -82,6 +83,10 @@ if TYPE_CHECKING:
     from app.runtime.manager import RunExecution
 
 logger = logging.getLogger(__name__)
+
+# C3b: V2 dataset-build 产物的 step 标识（与 v1_bridge 的镜像步同值，
+# 保证 legacy 面与事件面的 generated_by_step_id 语义一致）。
+_DATASET_BUILD_STEP_ID = "step_dataset_build_v2"
 
 ASSISTANT_FLUSH_INTERVAL_SECONDS = 0.1
 ASSISTANT_FLUSH_MAX_BYTES = 1024
@@ -1419,13 +1424,36 @@ async def _transfer_dataset_build_outcome(
     manifest_sha256 = outcome.manifest_sha256
 
     async def commit_dataset_build() -> list[EventEnvelope]:
+        # C3b: 镜像 artifact_produced（与 AGENT 路径 commit_agent_artifacts 的
+        # 事件面一致——reducer artifact_count / H6 dedup 状态重建 / 前端 WS
+        # 事件流均消费 artifact_produced）。产物事件在前，publication 在后。
         events: list[EventEnvelope] = []
+        for index, entry in enumerate(outcome.manifest_artifacts, start=1):
+            events.append(
+                build_event(
+                    task_id=execution.task_id,
+                    run_id=execution.run_id,
+                    sequence=index,
+                    payload=ArtifactProducedPayload(
+                        artifact=ArtifactManifestEntry(
+                            artifact_id=entry.artifact_id,
+                            role=entry.role,
+                            name=Path(entry.relative_path).name,
+                            relative_path=f"artifacts/{entry.relative_path}",
+                            media_type=entry.media_type,
+                            size_bytes=entry.size_bytes,
+                            sha256=entry.sha256,
+                            generated_by_step_id=_DATASET_BUILD_STEP_ID,
+                        )
+                    ),
+                )
+            )
         if publication is not None and manifest_sha256 is not None:
             events.append(
                 build_event(
                     task_id=execution.task_id,
                     run_id=execution.run_id,
-                    sequence=1,
+                    sequence=len(events) + 1,
                     payload=PublicationCreatedPayload(
                         publication_id=publication.publication_id,
                         run_id=execution.run_id,

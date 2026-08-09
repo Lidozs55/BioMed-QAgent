@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from app.datasets.contracts import ManifestArtifactEntry
 from app.domain.contracts import (
     ArtifactManifestEntry,
     DataLevel,
@@ -117,6 +118,7 @@ class PendingDatasetBuild:
     build_result: BuildResult
     publication: DatasetPublication | None = None
     manifest_sha256: str | None = None
+    manifest_artifacts: tuple[ManifestArtifactEntry, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
