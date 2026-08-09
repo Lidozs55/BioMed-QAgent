@@ -50,6 +50,7 @@
 | B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
 | B4 | P2 | UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline） | TODO:367 |
 | B5 | P2 | §3.5 通用 UI：**command/menubar 跳过、对话路由延后**（缓存导出按钮已完成） | TODO:278 `[~]` |
+| B6 | P0 | GEO probe→gene 映射接线：GPL 注释下载 → `mapping_paths`/`mapping_assets` 注入 `ExpressionBuildRunner`，使探针平台数据集可产出基因级或 probe-primary（`gene_expression.probe_release.v1`）产物。当前 spec 预检只保证 fail-fast（`unknown_unit` 等 reason code），不保证 GEO 探针数据可用 | REVIEW_2026-08-09-task-3eb85407 §7.1 |
 
 ---
 
