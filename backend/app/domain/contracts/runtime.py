@@ -19,6 +19,7 @@ from app.domain.contracts.enums import (
     SubagentType,
     TaskMode,
 )
+from app.domain.contracts.task import TaskSpecification
 
 
 class RunSummary(ContractModel):
@@ -39,6 +40,9 @@ class PublicationSummary(ContractModel):
     """Immutable publication record aggregated from publication_created events."""
 
     publication_id: str = Field(min_length=1)
+    # C1a: run 归属（publication_created 事件必带）。旧快照/事件流无此字段时
+    # 为 None——恢复闭合只按 run_id 命中，None 永不误闭合。
+    run_id: str | None = Field(default=None, min_length=1)
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     supersedes_publication_id: str | None = Field(default=None, min_length=1)
     published_at: datetime
@@ -57,6 +61,9 @@ class RunRecord(ContractModel):
     finished_at: datetime | None = None
     error: str | None = Field(default=None, min_length=1)
     summary: RunSummary | None = Field(default=None)
+    specification: TaskSpecification | None = None  # B1: 新 Run 携带版本化 spec
+    # C5c: terminal run 后到达的非权威迟到事件计数（replay 安全忽略）。
+    dropped_late_events: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_timestamps(self) -> Self:
@@ -242,6 +249,8 @@ def validate_task_databases(mode: TaskMode | str, databases: list[str]) -> None:
 class StartTaskRequest(_StartRequest):
     databases: list[str] = Field(default_factory=list)
     mode: TaskMode = TaskMode.AGENT
+    # B1: 新 Run 携带版本化 TaskSpecification（可选，向后兼容）。
+    specification: TaskSpecification | None = None
 
     @model_validator(mode="after")
     def validate_databases(self) -> Self:

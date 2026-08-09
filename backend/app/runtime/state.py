@@ -6,7 +6,14 @@ from collections.abc import Iterable
 
 from app.domain.contracts import (
     ArtifactProducedPayload,
+    AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
+    ConversationCompactedPayload,
     EventEnvelope,
+    OperationCompletedPayload,
+    OperationFailedPayload,
+    OperationProgressPayload,
+    OperationStartedPayload,
     PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -18,6 +25,11 @@ from app.domain.contracts import (
     RunRecord,
     RunStartedPayload,
     RunStatus,
+    StageCompletedPayload,
+    StageFailedPayload,
+    StageProgressPayload,
+    StageSkippedPayload,
+    StageStartedPayload,
     SubagentCancelledPayload,
     SubagentCancelRequestedPayload,
     SubagentCompletedPayload,
@@ -31,8 +43,12 @@ from app.domain.contracts import (
     SubagentStartedPayload,
     SubagentStatus,
     TaskSnapshot,
+    ToolCalledPayload,
+    ToolCompletedPayload,
+    ToolStartedPayload,
     UserInputRequiredPayload,
     UserInputResumedPayload,
+    WarningPayload,
 )
 from app.domain.contracts.runtime import PublicationSummary, RunSummary
 
@@ -47,6 +63,30 @@ _STATUS_PAYLOADS = {
     UserInputRequiredPayload: RunStatus.AWAITING_USER_INPUT,
     UserInputResumedPayload: RunStatus.RUNNING,
 }
+
+# C5c: terminal run 后到达的可容忍迟到事件类型（非权威，replay 安全忽略）。
+# run/subagent/publication 生命周期在专门分支严格处理；此处只列到达通用
+# run_id 分支的进度/流式/告警类事件。新事件类型默认严格（terminal 后仍
+# 抛错），确属非权威时必须显式加入本集合。
+_TOLERABLE_LATE_PAYLOADS = (
+    ArtifactProducedPayload,
+    AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
+    ConversationCompactedPayload,
+    OperationCompletedPayload,
+    OperationFailedPayload,
+    OperationProgressPayload,
+    OperationStartedPayload,
+    StageCompletedPayload,
+    StageFailedPayload,
+    StageProgressPayload,
+    StageSkippedPayload,
+    StageStartedPayload,
+    ToolCalledPayload,
+    ToolCompletedPayload,
+    ToolStartedPayload,
+    WarningPayload,
+)
 
 _TERMINAL_STATUSES = {
     RunStatus.COMPLETED,
@@ -198,6 +238,7 @@ def reduce_task_event(
     publications = list(snapshot.publications)
     current_publication_id = snapshot.current_publication_id
     payload = event.payload
+    dropped_late = 0  # C5c: 本事件是否为被忽略的非权威迟到事件
     # A8: copy the private seen-artifact map so the returned snapshot never
     # aliases (or mutates) the input snapshot's bookkeeping.
     seen_artifact_ids = {
@@ -225,6 +266,7 @@ def reduce_task_event(
                 request_fingerprint=payload.request_fingerprint,
                 status=RunStatus.QUEUED,
                 input=payload.input,
+                specification=payload.specification,
                 created_at=event.timestamp,
                 updated_at=event.timestamp,
             )
@@ -249,6 +291,7 @@ def reduce_task_event(
             publications.append(
                 PublicationSummary(
                     publication_id=payload.publication_id,
+                    run_id=payload.run_id,
                     manifest_sha256=payload.manifest_sha256,
                     supersedes_publication_id=(
                         payload.supersedes_publication_id or previous
@@ -389,13 +432,26 @@ def reduce_task_event(
     elif event.run_id is not None:
         index = _run_index(snapshot, event.run_id)
         if runs[index].status in _TERMINAL_STATUSES:
-            raise ValueError(f"terminal run is immutable: {event.run_id}")
-        status = snapshot.task.status
+            if isinstance(payload, _TOLERABLE_LATE_PAYLOADS):
+                # C5c: 非权威迟到事件（replay 安全）——忽略并累计 dropped 计数，
+                # 不改变权威状态；dropped_late 标志同时跳过下方的迟到产物计数。
+                dropped_late += 1
+                updates = {
+                    "dropped_late_events": runs[index].dropped_late_events + 1
+                }
+                runs[index] = RunRecord.model_validate(
+                    runs[index].model_dump() | updates
+                )
+                status = snapshot.task.status
+            else:
+                raise ValueError(f"terminal run is immutable: {event.run_id}")
+        else:
+            status = snapshot.task.status
     else:
         status = snapshot.task.status
 
     artifact_count = snapshot.task.artifact_count
-    if isinstance(payload, ArtifactProducedPayload):
+    if isinstance(payload, ArtifactProducedPayload) and not dropped_late:
         # A8 (Phase 4 review): dedup artifact identities per run so a retry or
         # reconciliation path that re-appends the same artifact payload at a
         # new task sequence cannot inflate the count. Events without a run_id

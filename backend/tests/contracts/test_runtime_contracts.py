@@ -617,3 +617,23 @@ def test_task_summary_has_no_no_artifact_failure_field() -> None:
         status="completed", created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
     assert not hasattr(task, "no_artifact_failure")
+
+
+def test_run_queued_payload_carries_versioned_specification() -> None:
+    from app.domain.contracts.task import TaskSpecification
+
+    spec = TaskSpecification(topic="TP53 表达差异")
+    payload = RunQueuedPayload(
+        request_id="req_1",
+        input="开始",
+        request_fingerprint="0" * 64,
+        specification=spec,
+    )
+    assert payload.specification == spec
+    assert payload.specification.schema_version == "1.0"
+    # 向后兼容：旧载荷无 specification
+    legacy = RunQueuedPayload.model_validate_json(
+        '{"type":"run_queued","request_id":"r","input":"x",'
+        '"request_fingerprint":"' + "0" * 64 + '"}'
+    )
+    assert legacy.specification is None

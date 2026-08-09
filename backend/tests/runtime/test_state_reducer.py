@@ -8,7 +8,9 @@ from app.domain.contracts import (
     ArtifactManifestEntry,
     ArtifactProducedPayload,
     AssistantDeltaPayload,
+    AssistantReasoningDeltaPayload,
     EventEnvelope,
+    OperationStartedPayload,
     PublicationCreatedPayload,
     RunCancelledPayload,
     RunCancelRequestedPayload,
@@ -23,6 +25,8 @@ from app.domain.contracts import (
     TaskMode,
     TaskSnapshot,
     TaskSummary,
+    ToolStartedPayload,
+    WarningPayload,
     build_event,
 )
 from app.domain.contracts.dataset_state import ArtifactRole
@@ -232,19 +236,85 @@ def test_reducer_accepts_new_run_after_prior_run_is_terminal() -> None:
     assert snapshot.task.status is RunStatus.QUEUED
 
 
-def test_terminal_run_is_immutable() -> None:
+def _completed_snapshot() -> TaskSnapshot:
     snapshot = queued_snapshot()
     for sequence, payload in enumerate(
         [RunStartedPayload(), RunFinalizingPayload(), RunCompletedPayload()],
         start=2,
     ):
         snapshot = reduce_task_event(snapshot, runtime_event(sequence, payload))
+    return snapshot
 
-    with pytest.raises(ValueError, match="terminal"):
-        reduce_task_event(
-            snapshot,
-            runtime_event(5, AssistantDeltaPayload(delta="too late")),
+
+@pytest.mark.parametrize(
+    "late_payload",
+    [
+        AssistantDeltaPayload(delta="too late"),
+        OperationStartedPayload(operation_id="op_1", label="检索", category="discovery", attempt=1),
+        ToolStartedPayload(tool_call_id="call_1", tool_name="search"),
+        WarningPayload(message="late warning", code="late"),
+    ],
+)
+def test_late_tolerable_event_after_terminal_run_is_ignored_with_counter(
+    late_payload: object,
+) -> None:
+    # C5c: 非权威迟到事件（assistant/tool/operation/warning 等）不再抛
+    # "terminal run is immutable"——replay 安全：忽略并累计 dropped 计数。
+    snapshot = _completed_snapshot()
+
+    reduced = reduce_task_event(snapshot, runtime_event(5, late_payload))
+
+    assert reduced.runs[0].status is RunStatus.COMPLETED
+    assert reduced.runs[0].dropped_late_events == 1
+    assert reduced.task.latest_sequence == 5
+
+
+def test_late_tolerable_events_accumulate_counter_and_keep_sequence_advancing() -> None:
+    snapshot = _completed_snapshot()
+    for sequence, payload in enumerate(
+        [
+            AssistantDeltaPayload(delta="a"),
+            OperationStartedPayload(operation_id="op_1", label="l", category="c", attempt=1),
+            AssistantReasoningDeltaPayload(delta="r"),
+        ],
+        start=5,
+    ):
+        snapshot = reduce_task_event(snapshot, runtime_event(sequence, payload))
+
+    assert snapshot.runs[0].dropped_late_events == 3
+    assert snapshot.runs[0].status is RunStatus.COMPLETED
+    assert snapshot.task.latest_sequence == 7
+
+
+def test_late_authoritative_event_after_terminal_run_still_rejected() -> None:
+    # C5c: 权威事件（run 生命周期转换）迟到仍保持严格——防静默覆盖终态。
+    snapshot = _completed_snapshot()
+
+    with pytest.raises(ValueError, match="terminal run is immutable"):
+        reduce_task_event(snapshot, runtime_event(5, RunStartedPayload()))
+    with pytest.raises(ValueError, match="terminal run is immutable"):
+        reduce_task_event(snapshot, runtime_event(6, RunFailedPayload(error="x")))
+
+
+def test_late_artifact_produced_after_terminal_run_is_ignored() -> None:
+    snapshot = _completed_snapshot()
+    payload = ArtifactProducedPayload(
+        artifact=ArtifactManifestEntry(
+            artifact_id="artifact_1",
+            role=ArtifactRole.PRIMARY_DATASET,
+            name="primary.csv",
+            relative_path="artifacts/primary.csv",
+            media_type="text/csv",
+            size_bytes=10,
+            sha256="0" * 64,
+            generated_by_step_id="stage_1",
         )
+    )
+
+    reduced = reduce_task_event(snapshot, runtime_event(5, payload))
+
+    assert reduced.runs[0].dropped_late_events == 1
+    assert reduced.task.artifact_count == 0  # 迟到产物不计入 artifact_count
 
 
 def test_queued_run_can_be_cancelled_without_starting() -> None:

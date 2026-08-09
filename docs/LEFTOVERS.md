@@ -45,7 +45,7 @@
 
 | ID | 级别 | 项 | 来源 |
 | --- | --- | --- | --- |
-| B1 | P0 | 新 Run 携带版本化 `TaskSpecification`（原 §1.6） | TODO:63 |
+| B1 | P0 | ~~新 Run 携带版本化 `TaskSpecification`（原 §1.6）~~ ✅ **已修（2026-08-09, feat/leftovers-p1, commits 767d0ba/f69537c）**：`RunQueuedPayload`/`RunRecord`/`StartTaskRequest` 携带可选 `specification`（向后兼容 None），reducer 投影；`POST /tasks` 接受并持久化到 run（TDD 3 用例） | TODO:63 |
 | B2 | ~~P2~~ | ~~删除 `validated_intermediate`/`validated_final` 状态（ADR-010 否决，任务/会话改 `current_publication_id`）~~ **已过时**：2026-08-09 审计确认仓库已无旧状态实现（当前即 `current_publication_id` 模型） | TODO:71 |
 | B3 | P2 | Agent INSTRUCTIONS 增加"达 max_turns 输出 `[MAX_TURNS_REACHED]`" | TODO:365 |
 | B4 | P2 | UniProt / ChEMBL Agent-only 来源能力（不接入 Pipeline） | TODO:367 |
@@ -57,9 +57,9 @@
 ## 🟡 C. 技术债 / forward seam（已评估，多为"接受"级）
 
 ### C1. publication 完整性（REVIEW phase4-bug-sweep §3，Important）
-- **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构
+- **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构 ✅ **已修（2026-08-09, feat/leftovers-p1）**：finalize 在 task 锁内收敛 publication 落盘与 run_completed 事件；in-process 事件追加失败在发布事实（publication_created 事件已落盘）存在时幂等补发 run_completed 收敛 COMPLETED（判定 `RunExecution._publication_persisted`，不再用 committer 返回）；重启 `_recover` 按 `PublicationSummary.run_id == active_run_id` 关联发布事实（兼容 AGENT `pub-{run_id}` 与 V2 `pub_{build_id}_{sha}` 两种格式）闭合 FINALIZING run。**残余窗口（记录不修）**：进程崩溃于事件完全未持久化前 → run INTERRUPTED + 产物存在但无发布事件（builds API 仍按 manifest 投影展示）；AGENT 路径崩溃于 `pending.publish` 执行中 → FAILED + 部分发布文件；崩溃于 publish 完成后事件持久化前 → 发布文件无事件记录、重启不闭合（既有窗口，未恶化）
 - **C1b A3**：reducer 不校验 run 状态即接受 `publication_created`（随 A2 设计）
-- **C1c A4**：重启丢弃 pending HIL prompt（无 prompt-invalidated 事件）→ 需决策重启恢复或显式事件
+- **C1c A4**：重启丢弃 pending HIL prompt（无 prompt-invalidated 事件）✅ **已修（2026-08-09, feat/leftovers-p1, commit 2d99ed9）**：`_recover` 对 AWAITING_USER_INPUT run 在 `run_interrupted` 前显式发 `WarningPayload(code="prompt_invalidated", message 含 run_id)`，前端 warning 渲染可见；run 收敛 INTERRUPTED 且保留重放 input 行为（集成测试断言恰 1 条 warning + 顺序）。**残余（延后）**：崩溃窗口在 warning 与 run_interrupted 之间 → 下次重启重复发 prompt_invalidated（极窄窗口，重复信息性 warning）；同进程 broker 移除导致的 pending 丢弃不在重启路径（超出 C1c 范围）
 - **~~C1d V2-validation_ref~~** ✅ 已修复（2026-08-09）：`validation_report.json` 拷入 immutable version dir（TDD 测试）
 - **C1e F7-03**：NO_DATA 信封 `user_summary`/`reason_codes` 因 `publication_id=None` 无法关联 → API 通用投影（phase7 §5）
 
@@ -84,10 +84,12 @@
 ### C5. 运行时健壮性（review-loop 记录）
 - **C5a R1C-02**：混合 run（V1+V2 工具）`take_pending()` 非 None 时 V2 outcome 不转移 → "V1 wins"，REVIEW 声称 "last build wins" 不符（doc 偏差，无数据丢失）
 - **C5b R1C-03**：`_load_build_publication` 吞损坏 `publication.json` → 已发布 build 误报 NO_DATA（安全方向下报，磁盘损坏才触发）
-- **C5c R1C-06**：`reduce_task_event` 对 terminal 后 run_id 事件抛"immutable"——replay 安全，晚到 operation 事件会崩（今日不可达，建议硬化）
-- **C5d A6**：`_task_locks`/repository `_task_locks`/EventStore `_checkpoints` 强键字典永不清除（内存增长，Minor）
-- **C5e A7**：`TaskIndex.list_tasks` active 列表不受 limit 约束（长会话 API 序列化无界，Minor）
+- **C5c R1C-06**：`reduce_task_event` 对 terminal 后 run_id 事件抛"immutable" ✅ **已修（2026-08-09, feat/leftovers-p1, commit c5a0901）**：可容忍迟到事件（assistant/operation/stage 镜像/tool/warning/artifact_produced 等 17 类）忽略并累加 `dropped_late_events` 计数；权威状态事件（run 生命周期/subagent/user_input/publication）保持严格抛错；白名单外新事件默认严格（forward seam，state.py 注释记录）
+- **C5d A6**：`_task_locks`/repository `_task_locks`/EventStore `_checkpoints` 强键字典永不清除 ✅ **已修（2026-08-09, feat/leftovers-p1, commit d7342b6）**：删除任务路径（终态校验后、admission 锁内）pop 锁 + `EventStore.forget(task_id)`
+- **C5e A7**：`TaskIndex.list_tasks` active 列表不受 limit 约束 ✅ **已修（2026-08-09, feat/leftovers-p1, commits d7342b6/8a083e3）**：active 查询加 `LIMIT ?`（历史分页语义不变）；新增无界 `list_active_tasks()` 供 `_recover` 扫描，饱和队列（104 活跃 > limit 100）重启不漏恢复（TDD 2 用例）
 - **C5f ✅ 已修（2026-08-09, main @ 783784b）**：续跑 preflight compaction 崩溃——no_progress/max_turns 续跑时当前 RUNNING run 的活动组（SDK 输入副本 + 工具调用）无 terminal record，`align_groups_to_records` 恒抛 impossible → fallback 空会话 → SDK `Prepared model input is empty` → run_failed(internal_error)。修复：尾部无 record 组 peel 为在飞段原样保留（不警告/不摘要/不压缩），marker 分支同处理；`compact_view` 无可压缩内容守卫；`select_coverage_prefix`/弹段循环跳过在飞段；fallback 保底至少保留最新组。TDD 5 用例（`tests/runtime/test_compaction_inflight.py`）。**残余**：真超窗会话（在飞组 > input_capacity）→ 显式 `ContextBudgetOverflowError`（run 失败但错误明确；活动会话不可压缩是硬约束）。
+- **C5g B1 残余（延后）**：`_request_fingerprint` 不含 `specification`——同 `request_id` 重试携带不同 spec 时静默首写胜（input 冲突有检测，spec 冲突无；first-write-wins 可辩护，最终 review [low] 记录）
+- **C5h C1c 残余（延后）**：重启 `_recover` 崩溃于 prompt_invalidated warning 与 run_interrupted 事件之间 → 下次重启重复发 warning（极窄窗口，重复信息性 warning，最终 review [low] 记录）
 
 ### C6. 性能暂缓（ISSUES.md，审查结论"暂缓"，低优先级）
 - `_replay_cache` 深拷贝放大（session.py:182-204）；压缩流程 5-6 处 deepcopy；`_task_locks` 永不清理（128B/锁可忽略）；RunContext 只追加不清理；Pipeline `events` 无限增长（1-10MB 瞬态）；SubagentSupervisor 异常退出字典泄漏
