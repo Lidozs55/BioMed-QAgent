@@ -1427,27 +1427,32 @@ async def _transfer_dataset_build_outcome(
         # C3b: 镜像 artifact_produced（与 AGENT 路径 commit_agent_artifacts 的
         # 事件面一致——reducer artifact_count / H6 dedup 状态重建 / 前端 WS
         # 事件流均消费 artifact_produced）。产物事件在前，publication 在后。
+        # 门禁与 publication 事件同源：仅实际发布（publication 非 None）的
+        # build 才镜像产物——NO_DATA build（probe-coverage 失败 / zero-row
+        # manifest-signal 等仍会留下带 entries 的 manifest）零产物事件，否则
+        # 事件流与 BuildResult 的 available_artifact_roles=[] 矛盾。
         events: list[EventEnvelope] = []
-        for index, entry in enumerate(outcome.manifest_artifacts, start=1):
-            events.append(
-                build_event(
-                    task_id=execution.task_id,
-                    run_id=execution.run_id,
-                    sequence=index,
-                    payload=ArtifactProducedPayload(
-                        artifact=ArtifactManifestEntry(
-                            artifact_id=entry.artifact_id,
-                            role=entry.role,
-                            name=Path(entry.relative_path).name,
-                            relative_path=f"artifacts/{entry.relative_path}",
-                            media_type=entry.media_type,
-                            size_bytes=entry.size_bytes,
-                            sha256=entry.sha256,
-                            generated_by_step_id=_DATASET_BUILD_STEP_ID,
-                        )
-                    ),
+        if publication is not None:
+            for index, entry in enumerate(outcome.manifest_artifacts, start=1):
+                events.append(
+                    build_event(
+                        task_id=execution.task_id,
+                        run_id=execution.run_id,
+                        sequence=index,
+                        payload=ArtifactProducedPayload(
+                            artifact=ArtifactManifestEntry(
+                                artifact_id=entry.artifact_id,
+                                role=entry.role,
+                                name=Path(entry.relative_path).name,
+                                relative_path=f"artifacts/{entry.relative_path}",
+                                media_type=entry.media_type,
+                                size_bytes=entry.size_bytes,
+                                sha256=entry.sha256,
+                                generated_by_step_id=_DATASET_BUILD_STEP_ID,
+                            )
+                        ),
+                    )
                 )
-            )
         if publication is not None and manifest_sha256 is not None:
             events.append(
                 build_event(
