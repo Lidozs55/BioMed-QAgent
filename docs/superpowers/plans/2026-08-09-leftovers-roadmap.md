@@ -26,7 +26,7 @@
 | 批次 | 文件 | 子系统 | 覆盖项 | 优先级 |
 |---|---|---|---|---|
 | P1 | `2026-08-09-leftovers-p1-backend-runtime.md` | 后端运行时 | B1（P0）、C1a（Important）、C1c、C5c、C5d、C5e | ✅ **已合并 main @ be91dc9（2026-08-09）** |
-| P2 | `2026-08-09-leftovers-p2-build-publish.md` | 构建/发布/API | A2d、B4、C1b、C1e、C2b、C2c、C3a、C3b、C3d、C4b、C4c | 第二批 |
+| P2 | `2026-08-09-leftovers-p2-build-publish.md` | 构建/发布/API | A2d、B4、C1b、C1e、C2b、C2c、C3a、C3b、C3d、C4b、C4c | ✅ 已合并（main @ 2becfca） |
 | P3 | `2026-08-09-leftovers-p3-frontend.md` | 前端 | B3、B5、C2a、C3e、E 类 UI 5 项 | 第三批 |
 | P4 | `2026-08-09-leftovers-p4-tests-perf.md` | 测试补强/性能 | D1-D5、C5a、C5b、C6a | 可并行 |
 
