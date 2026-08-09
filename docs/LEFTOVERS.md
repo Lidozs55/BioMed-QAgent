@@ -59,7 +59,7 @@
 - **C1a A2**：发布先于终态可持久化——publication 提交与 run_completed 非同一事务，取消/崩溃窗口产生"已发布但 run 非成功"孤立产物 → 需 finalize 事务化重构
 - **C1b A3**：reducer 不校验 run 状态即接受 `publication_created`（随 A2 设计）
 - **C1c A4**：重启丢弃 pending HIL prompt（无 prompt-invalidated 事件）→ 需决策重启恢复或显式事件
-- **C1d V2-validation_ref**：`validation_result_ref → validation_report.json` 未拷入 version 目录（发布引用闭包缺口）
+- **~~C1d V2-validation_ref~~** ✅ 已修复（2026-08-09）：`validation_report.json` 拷入 immutable version dir（TDD 测试）
 - **C1e F7-03**：NO_DATA 信封 `user_summary`/`reason_codes` 因 `publication_id=None` 无法关联 → API 通用投影（phase7 §5）
 
 ### C2. 前端 artifact 归属与可见性
