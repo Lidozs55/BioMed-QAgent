@@ -20,8 +20,16 @@ async def test_database_api_lists_only_user_selectable_data_sources(
         response = await client.get("/api/v1/databases")
 
     assert response.status_code == 200
-    identifiers = {item["id"] for item in response.json()["databases"]}
-    assert identifiers == {"pubmed", "geo", "gdc", "pdb", "xena", "pubchem", "reactome"}
+    by_id = {item["id"]: item for item in response.json()["databases"]}
+    identifiers = set(by_id)
+    assert identifiers == {
+        "pubmed", "geo", "gdc", "pdb", "xena", "pubchem", "reactome",
+        "uniprot", "chembl",
+    }
+    # B4: Agent-only sources surface as research_only in the API projection.
+    assert by_id["uniprot"]["capability"] == "research_only"
+    assert by_id["chembl"]["capability"] == "research_only"
+    assert by_id["gdc"]["capability"] == "pipeline_supported"
     assert identifiers.isdisjoint(
         {
             "analysis",

@@ -14,6 +14,9 @@ class Database(StrEnum):
     REACTOME = "reactome"
     PUBCHEM = "pubchem"
     BROWSER = "browser"
+    # B4: Agent-only research sources — never accepted as verified build sources.
+    UNIPROT = "uniprot"
+    CHEMBL = "chembl"
 
 
 class SourceCapability(StrEnum):
@@ -44,6 +47,8 @@ SOURCE_CAPABILITIES: dict[Database, SourceCapability] = {
     Database.PDB: SourceCapability.RESEARCH_ONLY,
     Database.PUBCHEM: SourceCapability.RESEARCH_ONLY,
     Database.BROWSER: SourceCapability.RESEARCH_ONLY,
+    Database.UNIPROT: SourceCapability.RESEARCH_ONLY,
+    Database.CHEMBL: SourceCapability.RESEARCH_ONLY,
 }
 
 # Stable identifier aliases users may pass to pipeline/skill entry points
@@ -58,6 +63,8 @@ DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
     "reactome": Database.REACTOME,
     "pubchem": Database.PUBCHEM,
     "browser": Database.BROWSER,
+    "uniprot": Database.UNIPROT,
+    "chembl": Database.CHEMBL,
 }
 
 class DataLevel(StrEnum):
