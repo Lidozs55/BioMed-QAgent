@@ -215,8 +215,9 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
         # cache 分支内校验失败 → 409。
         ("traversal", 409, "Invalid cache artifact path"),
         ("missing_file", 409, "Registered artifact is missing"),
-        ("size_mismatch", 409, "Artifact integrity check failed"),
-        ("hash_mismatch", 409, "Artifact integrity check failed"),
+        # C2c：cache 文件损坏 → 跳过该 cache entry 回退 legacy 镜像面（200）
+        ("size_mismatch", 200, ""),
+        ("hash_mismatch", 200, ""),
     ],
 )
 async def test_artifact_api_preserves_manifest_and_integrity_conflicts(
@@ -667,8 +668,14 @@ async def test_artifact_api_cache_path_requires_completed_run(
 
 
 @pytest.mark.asyncio
-async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> None:
-    """A tampered cached artifact fails the same integrity gate as legacy."""
+async def test_artifact_api_cache_integrity_conflict_falls_back_to_legacy(
+    tmp_path: Path,
+) -> None:
+    """A tampered cached artifact skips the cache entry and falls back.
+
+    C2c: the listing no longer 409s on a corrupt cache file — it degrades to
+    the legacy mirror. Without a mirror the listing is empty, not an error.
+    """
     task_id = "task_cache_corrupt"
     run_id = "run_cache_corrupt"
     async with api_client(tmp_path) as (application, client):
@@ -682,8 +689,8 @@ async def test_artifact_api_cache_path_integrity_conflict(tmp_path: Path) -> Non
 
         listed = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
 
-    assert listed.status_code == 409
-    assert listed.json() == {"detail": "Artifact integrity check failed"}
+    assert listed.status_code == 200
+    assert listed.json() == {"artifacts": [], "degraded": False}
 
 
 @pytest.mark.asyncio

@@ -875,9 +875,9 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                 file_path.stat().st_size != entry.size_bytes
                 or _file_sha256(file_path) != entry.sha256
             ):
-                raise HTTPException(
-                    status_code=409, detail="Artifact integrity check failed"
-                )
+                # C2c：cache 文件完整性校验失败 → 跳过该 cache entry，
+                # 回退 legacy 镜像面（坏 manifest 的 continue 语义同源）。
+                break
             artifacts.append(
                 {
                     "artifact_id": entry.artifact_id,
@@ -888,7 +888,8 @@ async def list_artifacts(task_id: str, repository: TaskRepositoryDep) -> dict:
                     "media_type": entry.media_type,
                 }
             )
-        return {"artifacts": artifacts, "degraded": False}
+        else:
+            return {"artifacts": artifacts, "degraded": False}
     loaded = _load_validated_manifest(repository.tasks_dir, task_id, snapshot)
     if loaded is None:
         return {"artifacts": [], "degraded": False}
