@@ -77,17 +77,15 @@ def test_describe_geo_is_mandatory_vetting_gate_before_pipeline() -> None:
     聚焦阵列做共病机制）根因是未 vetting 即提交，工具已存在（skill 层），
     需要的是执行纪律的 prompt gate。"""
     from app.agent_loop.agent import INSTRUCTIONS
-    from app.pipeline.tool import run_research_pipeline
 
     # INSTRUCTIONS 必须把 describe_geo 设为 GEO 提交前的强制步骤，
-    # 并要求不匹配主题的数据集不得提交。
+    # 并要求不匹配主题的数据集不得提交（V1 工具已退役，vetting gate 纪律
+    # 完全由 prompt 承载）。
     assert "describe_geo" in INSTRUCTIONS
     assert "vetting" in INSTRUCTIONS.lower() or "不匹配" in INSTRUCTIONS
-    # 工具描述必须把 describe_geo 提升为提交 gse 前的强制 vetting，
-    # 而非仅提及工具名。
-    description = run_research_pipeline.description
-    assert "describe_geo" in description
-    assert "must" in description.lower() or "必须" in description
+    assert "未 vetting 的 GSE 不得提交给 `execute_dataset_build`" in INSTRUCTIONS
+    # probe 平台必须在 spec 声明 AdapterParams（vetting 的 spec 侧纪律）。
+    assert "AdapterParams" in INSTRUCTIONS
 
 
 # ---------------------------------------------------------------------------

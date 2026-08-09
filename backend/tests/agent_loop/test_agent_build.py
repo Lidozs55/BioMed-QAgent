@@ -48,7 +48,7 @@ def test_agent_exposes_only_gateway_and_core_runtime_tools() -> None:
     assert [tool.name for tool in build.agent.tools] == [
         "find_skill",
         "invoke_skill",
-        "run_research_pipeline",
+        "validate_dataset_build_spec",
         "request_human_correction",
         "execute_dataset_build",
         "read_file",

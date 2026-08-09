@@ -116,8 +116,13 @@ def mirror_build_to_legacy_artifacts(
             name="dataset_manifest.json",
             relative_path="artifacts/dataset_manifest.json",
             media_type="application/json",
-            size_bytes=manifest_path.stat().st_size,
-            sha256=manifest.sha256,
+            size_bytes=manifest_dest.stat().st_size,
+            # The legacy integrity check hashes the FILE, so the entry must
+            # carry the file's digest — not ``manifest.sha256`` (a content
+            # summary digest over artifact pairs, which never equals the
+            # file hash and made every mirrored legacy surface fail the
+            # artifact API integrity check with 409).
+            sha256=hashlib.sha256(manifest_dest.read_bytes()).hexdigest(),
             generated_by_step_id=_BRIDGE_GENERATED_BY_STEP,
         )
     )

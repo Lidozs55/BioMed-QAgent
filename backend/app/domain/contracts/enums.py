@@ -46,7 +46,7 @@ SOURCE_CAPABILITIES: dict[Database, SourceCapability] = {
     Database.BROWSER: SourceCapability.RESEARCH_ONLY,
 }
 
-# Stable identifier aliases users may pass to run_research_pipeline
+# Stable identifier aliases users may pass to pipeline/skill entry points
 # (e.g. "xena" for ucsc_xena). Keys are user-facing identifiers.
 DATABASE_IDENTIFIER_ALIASES: dict[str, Database] = {
     "pubmed": Database.PUBMED,

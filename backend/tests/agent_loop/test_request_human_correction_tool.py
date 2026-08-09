@@ -340,7 +340,7 @@ async def test_genuine_runtime_error_propagates_out_of_tool(
 
 
 def test_tool_registered_in_agent_tools_with_expected_params() -> None:
-    """build_agent registers request_human_correction after run_research_pipeline."""
+    """build_agent registers request_human_correction after validate_dataset_build_spec."""
 
     from app.agent_loop.agent import build_agent
 
@@ -348,7 +348,7 @@ def test_tool_registered_in_agent_tools_with_expected_params() -> None:
     names = [tool.name for tool in build.agent.tools]
 
     assert "request_human_correction" in names
-    assert names.index("run_research_pipeline") < names.index(
+    assert names.index("validate_dataset_build_spec") < names.index(
         "request_human_correction"
     )
     assert names.index("request_human_correction") < names.index("read_file")

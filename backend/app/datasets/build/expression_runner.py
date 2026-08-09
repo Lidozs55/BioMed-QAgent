@@ -750,6 +750,14 @@ class ExpressionBuildRunner:
             manifest_src = self._output_dir / MANIFEST_FILE
             if manifest_src.is_file():
                 shutil.copy2(manifest_src, staged_dir / MANIFEST_FILE)
+            # C1d (REVIEW_2026-08-09 §2): the publication's
+            # ``validation_result_ref`` must resolve inside the immutable
+            # version directory — validation_report.json is not a manifest
+            # artifact, so it needs an explicit copy here or the reference
+            # closure stays dangling.
+            validation_src = self._output_dir / "validation_report.json"
+            if validation_src.is_file():
+                shutil.copy2(validation_src, staged_dir / "validation_report.json")
             (staged_dir / "publication.json").write_text(
                 json.dumps(
                     publication.model_dump(mode="json"), ensure_ascii=False, indent=2

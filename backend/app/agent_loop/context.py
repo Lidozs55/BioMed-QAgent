@@ -17,9 +17,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.domain.contracts import (
+    ArtifactManifestEntry,
     DataLevel,
     EventEnvelope,
     QueryStatus,
+    RunManifest,
     SourceAsset,
     StageName,
     SubagentInputRequiredPayload,
@@ -35,7 +37,6 @@ if TYPE_CHECKING:
     from app.agent_loop.main_input_broker import MainInputBroker, MainInputDecision
     from app.datasets.contracts import DatasetPublication
     from app.domain.contracts.dataset_state import BuildResult
-    from app.pipeline.runner import PendingPublication, PendingPublicationCleanup
     from app.skills.builtin.processing.create_skill import CreateSkillRuntime
     from app.subagents.input_broker import SubagentInputBroker
     from app.subagents.staging import SubagentStagingWorkspace
@@ -165,6 +166,26 @@ def _default_run_model_settings() -> RunModelSettings:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PendingPublication:
+    """Validated Pipeline package awaiting manager-owned publication (V1 通道)."""
+
+    run_id: str
+    manifest: RunManifest
+    manifest_entry: ArtifactManifestEntry
+    publish: Callable[[], None]
+    abort: Callable[[], None]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPublicationCleanup:
+    """Failed pre-transfer cleanup awaiting a manager-owned retry (V1 通道)."""
+
+    run_id: str
+    abort: Callable[[], None]
+    error: BaseException
+
+
 @dataclass
 class RunContext:
     """任务级共享状态，通过 Runner.run(..., context=ctx) 注入。
@@ -204,6 +225,7 @@ class RunContext:
     records: list[dict] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     warnings: list[dict] = field(default_factory=list)
+    download_attempts: list[Any] = field(default_factory=list)
 
     query_log: list[dict] = field(default_factory=list)
     query_log_summary: str = ""
@@ -838,6 +860,10 @@ class RunContext:
     def add_raw_asset(self, path: str) -> None:
         """记录 raw 目录下的本地文件路径。"""
         self.raw_assets.append(path)
+
+    def record_download_attempt(self, attempt: Any) -> None:
+        """登记一次完成的下载尝试（血缘闭合：asset 的 successful_attempt_id 可解析）。"""
+        self.download_attempts.append(attempt)
 
     def add_warning(self, severity: str, message: str, source: str | None = None) -> None:
         """记录一条警告。"""

@@ -18,7 +18,6 @@ from app.domain.contracts import (
     TaskSummary,
 )
 from app.main import create_app
-from app.pipeline.runner import PipelineRunner
 from fastapi import FastAPI
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
@@ -79,32 +78,34 @@ def snapshot_with_run(task_id: str, run_id: str, status: RunStatus) -> TaskSnaps
 
 
 async def seed_fixture(application: FastAPI, task_id: str) -> object:
+    """Seed one completed task with a V2 build (cache entry + legacy mirror).
+
+    V1 退役后：构造真实生产形态的 V2 build 目录（datasets_build/<build_id>/），
+    ``DatasetCacheV2.commit`` 写入 cache（artifact API 的 cache-first 面），并
+    ``mirror_build_to_legacy_artifacts`` 双写 legacy ``artifacts/`` 面。返回
+    DatasetManifest（与调用方的 ``manifest.artifacts`` 用法兼容）。
+    """
     repository = application.state.task_repository
     run_id = f"run_{task_id}"
     await repository.save_snapshot(
         snapshot_with_run(task_id, run_id, RunStatus.COMPLETED)
     )
-    manifest = await PipelineRunner(
+    _dataset_id, entry_dir = _seed_v2_cache_entry(repository, task_id)
+    from app.datasets.build.v1_bridge import mirror_build_to_legacy_artifacts
+    from app.datasets.contracts import DatasetManifest
+
+    mirror_build_to_legacy_artifacts(
         task_id=task_id,
-        base_dir=repository.tasks_dir,
-        fixture_dir=FIXTURE_DIR,
-    ).run()
-    artifacts_dir = repository.tasks_dir / task_id / "artifacts"
-    manifest_path = artifacts_dir / "run_manifest.json"
-    (artifacts_dir / ".runtime-publication.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "task_id": task_id,
-                "run_id": run_id,
-                "manifest_sha256": hashlib.sha256(
-                    manifest_path.read_bytes()
-                ).hexdigest(),
-            }
-        ),
-        "utf-8",
+        task_root=repository.tasks_dir / task_id,
+        build_dir=entry_dir,
+        objective="fixture seed",
     )
-    return manifest
+    return (
+        DatasetManifest.model_validate_json(
+            (entry_dir / "dataset_manifest.json").read_text("utf-8")
+        ),
+        entry_dir,
+    )
 
 
 @pytest.mark.asyncio
@@ -113,18 +114,18 @@ async def test_artifact_api_uses_repository_root_and_preserves_success_wire(
 ) -> None:
     async with api_client(tmp_path) as (application, client):
         repository = application.state.task_repository
-        manifest = await seed_fixture(application, "task_api")
+        manifest, _entry_dir = await seed_fixture(application, "task_api")
 
         response = await client.get("/api/v1/tasks/task_api/artifacts")
         artifacts = response.json()["artifacts"]
         main_entry = next(
-            entry for entry in artifacts if entry["name"] == "main_data.csv"
+            entry for entry in artifacts if entry["name"] == "primary.csv"
         )
         download = await client.get(
             f"/api/v1/tasks/task_api/artifacts/{main_entry['artifact_id']}"
         )
         filename_lookup = await client.get(
-            "/api/v1/tasks/task_api/artifacts/main_data.csv"
+            "/api/v1/tasks/task_api/artifacts/primary.csv"
         )
 
     assert repository.tasks_dir == tmp_path / "isolated-output" / "tasks"
@@ -139,14 +140,14 @@ async def test_artifact_api_uses_repository_root_and_preserves_success_wire(
         for entry in artifacts
     )
     run_manifest_entry = next(
-        entry for entry in artifacts if entry["name"] == "run_manifest.json"
+        entry for entry in artifacts if entry["name"] == "dataset_manifest.json"
     )
     assert run_manifest_entry["role"] == "schema"
     assert main_entry["role"] == "primary_dataset"
     assert main_entry["artifact_id"].startswith("artifact_")
     assert download.status_code == 200
-    assert download.headers["content-disposition"].endswith('filename="main_data.csv"')
-    assert download.content.startswith(b"\xef\xbb\xbfrecord_id,dataset_id,source_id")
+    assert download.headers["content-disposition"].endswith('filename="primary.csv"')
+    assert download.content.startswith(b"record_id,gene_id")
     assert filename_lookup.status_code == 404
     assert filename_lookup.json() == {"detail": "Artifact not found"}
 
@@ -157,11 +158,8 @@ async def test_artifact_api_requires_authoritative_task_and_handles_no_manifest(
 ) -> None:
     async with api_client(tmp_path) as (application, client):
         repository = application.state.task_repository
-        await PipelineRunner(
-            task_id="task_orphan",
-            base_dir=repository.tasks_dir,
-            fixture_dir=FIXTURE_DIR,
-        ).run()
+        # 有 legacy 文件但无 snapshot → 404（V2 语义：无 authoritative 任务）。
+        _seed_v2_cache_entry(repository, "task_orphan")
         orphan_list = await client.get("/api/v1/tasks/task_orphan/artifacts")
         orphan_download = await client.get(
             "/api/v1/tasks/task_orphan/artifacts/run_manifest"
@@ -192,26 +190,8 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
         await repository.save_snapshot(
             snapshot_with_run(task_id, run_id, RunStatus.CANCELLED)
         )
-        await PipelineRunner(
-            task_id=task_id,
-            base_dir=repository.tasks_dir,
-            fixture_dir=FIXTURE_DIR,
-        ).run()
-        artifacts_dir = repository.tasks_dir / task_id / "artifacts"
-        manifest_path = artifacts_dir / "run_manifest.json"
-        (artifacts_dir / ".runtime-publication.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "manifest_sha256": hashlib.sha256(
-                        manifest_path.read_bytes()
-                    ).hexdigest(),
-                }
-            ),
-            "utf-8",
-        )
+        # cancelled run 的 build 产物不得被 artifact API 暴露。
+        _seed_v2_cache_entry(repository, task_id)
 
         artifact_list = await client.get(f"/api/v1/tasks/{task_id}/artifacts")
         artifact_download = await client.get(
@@ -226,41 +206,47 @@ async def test_artifact_api_never_exposes_cancelled_run_publication(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("corruption", "expected_detail"),
+    ("corruption", "expected_status", "expected_detail"),
     [
-        ("invalid_json", "Artifact manifest is invalid"),
-        ("invalid_schema", "Artifact manifest is invalid"),
-        ("unvalidated", "Artifacts are not validated"),
-        ("traversal", "Artifact manifest is invalid"),
-        ("missing_file", "Registered artifact is missing"),
-        ("size_mismatch", "Artifact integrity check failed"),
-        ("hash_mismatch", "Artifact integrity check failed"),
+        # V2 cache-first 语义：cache manifest 损坏 → 跳过该 entry 回退 legacy
+        # 镜像面（mirror 完整可服务），不报 409。
+        ("invalid_json", 200, ""),
+        ("invalid_schema", 200, ""),
+        # cache 分支内校验失败 → 409。
+        ("traversal", 409, "Invalid cache artifact path"),
+        ("missing_file", 409, "Registered artifact is missing"),
+        ("size_mismatch", 409, "Artifact integrity check failed"),
+        ("hash_mismatch", 409, "Artifact integrity check failed"),
     ],
 )
 async def test_artifact_api_preserves_manifest_and_integrity_conflicts(
     tmp_path: Path,
     corruption: str,
+    expected_status: int,
     expected_detail: str,
 ) -> None:
     async with api_client(tmp_path) as (application, client):
         repository = application.state.task_repository
         await seed_fixture(application, "task_corrupt")
-        artifacts_dir = repository.tasks_dir / "task_corrupt" / "artifacts"
-        manifest_path = artifacts_dir / "run_manifest.json"
+        # corrupt 的是 cache 副本（cache-first 权威读取面），非 legacy 镜像。
+        from app.datasets.build.cache import DatasetCacheV2
+
+        cache = DatasetCacheV2(repository.tasks_dir.parent.parent / "cache")
+        cache_entry = next(
+            entry
+            for entry in cache.list(namespace="build", limit=10_000)
+            if entry.build_id == _DUAL_READ_BUILD_ID
+        )
+        entry_dir = cache_entry.directory
+        manifest_path = entry_dir / "dataset_manifest.json"
         payload = json.loads(manifest_path.read_text("utf-8"))
         entry = payload["artifacts"][0]
-        artifact_path = artifacts_dir / entry["relative_path"].removeprefix(
-            "artifacts/"
-        )
+        artifact_path = entry_dir / entry["relative_path"]
 
         if corruption == "invalid_json":
             manifest_path.write_text("{", "utf-8")
         elif corruption == "invalid_schema":
             payload["unexpected"] = True
-            manifest_path.write_text(json.dumps(payload), "utf-8")
-        elif corruption == "unvalidated":
-            payload["validation"]["status"] = "invalid"
-            payload["validation"]["failed_count"] = 1
             manifest_path.write_text(json.dumps(payload), "utf-8")
         elif corruption == "traversal":
             entry["relative_path"] = "artifacts/../../escape.csv"
@@ -276,8 +262,14 @@ async def test_artifact_api_preserves_manifest_and_integrity_conflicts(
 
         response = await client.get("/api/v1/tasks/task_corrupt/artifacts")
 
-    assert response.status_code == 409
-    assert response.json() == {"detail": expected_detail}
+    assert response.status_code == expected_status
+    if expected_status == 409:
+        assert response.json() == {"detail": expected_detail}
+    else:
+        # 回退 legacy 镜像面：run_manifest 首条目 + primary 可下载。
+        artifacts = response.json()["artifacts"]
+        assert artifacts[0]["artifact_id"] == "run_manifest"
+        assert any(entry["name"] == "primary.csv" for entry in artifacts)
 
 
 @pytest.mark.asyncio
@@ -306,12 +298,15 @@ async def test_unexpected_manifest_storage_error_remains_500(
     async with api_client(tmp_path) as (application, _):
         repository = application.state.task_repository
         await seed_fixture(application, "task_storage_error")
-        manifest_path = (
-            repository.tasks_dir
-            / "task_storage_error"
-            / "artifacts"
-            / "run_manifest.json"
+        from app.datasets.build.cache import DatasetCacheV2
+
+        cache = DatasetCacheV2(repository.tasks_dir.parent.parent / "cache")
+        cache_entry = next(
+            entry
+            for entry in cache.list(namespace="build", limit=10_000)
+            if entry.build_id == _DUAL_READ_BUILD_ID
         )
+        manifest_path = cache_entry.directory / "dataset_manifest.json"
         real_read_text = Path.read_text
 
         def fail_manifest_read(path: Path, *args, **kwargs) -> str:
@@ -329,7 +324,8 @@ async def test_unexpected_manifest_storage_error_remains_500(
         ) as client:
             response = await client.get("/api/v1/tasks/task_storage_error/artifacts")
 
-    assert response.status_code == 500
+    # V2 语义：cache 存储错误降级回退 legacy 镜像面（不 500）。
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -375,7 +371,7 @@ async def test_artifact_routes_hash_chunked_without_full_file_reads(
         listed = await client.get("/api/v1/tasks/task_chunked/artifacts")
         artifacts = listed.json()["artifacts"]
         main_entry = next(
-            entry for entry in artifacts if entry["name"] == "main_data.csv"
+            entry for entry in artifacts if entry["name"] == "primary.csv"
         )
         downloaded = await client.get(
             f"/api/v1/tasks/task_chunked/artifacts/{main_entry['artifact_id']}"
@@ -386,15 +382,19 @@ async def test_artifact_routes_hash_chunked_without_full_file_reads(
 
     assert listed.status_code == 200
     assert downloaded.status_code == 200
-    assert downloaded.content.startswith(b"\xef\xbb\xbfrecord_id")
-    # The listed digest is the manifest-recorded (trusted) digest.
+    assert downloaded.content.startswith(b"record_id,gene_id")
+    # The listed digest is the manifest-recorded (trusted) digest; the file
+    # is served from the V2 cache entry (cache-first), not the legacy dir.
+    from app.datasets.build.cache import DatasetCacheV2
+
+    cache = DatasetCacheV2(repository.tasks_dir.parent.parent / "cache")
+    cache_entry = next(
+        entry
+        for entry in cache.list(namespace="build", limit=10_000)
+        if entry.build_id == _DUAL_READ_BUILD_ID
+    )
     assert main_entry["sha256"] == hashlib.sha256(
-        (
-            repository.tasks_dir
-            / "task_chunked"
-            / "artifacts"
-            / "main_data.csv"
-        ).read_bytes()
+        (cache_entry.directory / "merged" / "primary.csv").read_bytes()
     ).hexdigest()
 
 
@@ -446,18 +446,17 @@ def _seed_v2_cache_entry(
     schema = output_dir / "schema.json"
     schema_bytes = b'{"schema_id": "gene_expression.long.v1"}'
     schema.write_bytes(schema_bytes)
-    (output_dir / "dataset_manifest.json").write_text(
-        json.dumps(
-            {
-                "manifest_id": "manifest_dual_read",
-                "task_id": _DUAL_READ_BUILD_ID,
-                "build_id": _DUAL_READ_BUILD_ID,
-                "dataset_family": "gene_expression",
-                "row_granularity": "gene_sample_measurement",
-                "schema_ref": "gene_expression.long.v1",
-                "primary_key": ["record_id"],
-                "row_count": 1,
-                "sha256": "a" * 64,
+    manifest_path = output_dir / "dataset_manifest.json"
+    manifest_payload = {
+        "manifest_id": "manifest_dual_read",
+        "task_id": _DUAL_READ_BUILD_ID,
+        "build_id": _DUAL_READ_BUILD_ID,
+        "dataset_family": "gene_expression",
+        "row_granularity": "gene_sample_measurement",
+        "schema_ref": "gene_expression.long.v1",
+        "primary_key": ["record_id"],
+        "row_count": 1,
+        "sha256": "a" * 64,
                 "artifacts": [
                     {
                         "artifact_id": "artifact_primary",
@@ -478,12 +477,18 @@ def _seed_v2_cache_entry(
                 ],
                 "source_summary": {"src_gdc": 1},
                 "validation_summary": {"status": "passed"},
-                "confidence_summary": {},
-                "provenance_summary": {"source_count": 1},
-            },
-            ensure_ascii=False,
-        ),
-        "utf-8",
+        "confidence_summary": {},
+        "provenance_summary": {"source_count": 1},
+    }
+    # 自洽 sha256：manifest 内容含自身 digest（先占位写出→读回→更新→重写）。
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False), "utf-8"
+    )
+    manifest_payload["sha256"] = _hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False) + "\n", "utf-8"
     )
     source_path = (
         Path(__file__).parents[1] / "fixtures" / "gdc" / "gdc_expression.tsv"

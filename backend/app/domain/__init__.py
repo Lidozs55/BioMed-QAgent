@@ -16,7 +16,6 @@ REVIEW 2026-08-05: 已删除生产零引用的 ``domain.task`` / ``domain.events
 （旧 TaskStateMachine / EventFactory 已由 ``contracts`` 运行时体系取代）；
 同时删除 legacy ``CleaningReport`` 与其唯一使用者 ``app.tools.cleaning``。
 """
-from app.domain.processing import ParsedDataset
 
 __all__ = [
     "ParsedDataset",

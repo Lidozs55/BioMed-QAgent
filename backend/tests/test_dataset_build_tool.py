@@ -13,7 +13,7 @@ from agents.tool_context import ToolContext
 from app.agent_loop.context import RunContext
 from app.agent_loop.main_input_broker import MainInputBroker
 from app.domain.contracts import RunManifest, TaskState
-from app.pipeline.dataset_build_tool import execute_dataset_build
+from app.pipeline.dataset_build_tool import execute_dataset_build, validate_dataset_build_spec
 from app.tools.workdir import create_task_workdir
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -97,6 +97,12 @@ def _stage_fixture(run_ctx: RunContext, fixture_rel: str, dest_name: str) -> str
 def _call_tool(ctx: ToolContext, spec: str, source_files: str) -> dict[str, object]:
     args = json.dumps({"spec": spec, "source_files": source_files})
     result = asyncio.run(execute_dataset_build.on_invoke_tool(ctx, args))
+    return json.loads(result)
+
+
+def _call_validate_tool(ctx: ToolContext, spec_json: str) -> dict[str, object]:
+    args = json.dumps({"spec": spec_json})
+    result = asyncio.run(validate_dataset_build_spec.on_invoke_tool(ctx, args))
     return json.loads(result)
 
 
@@ -981,3 +987,102 @@ def test_execute_dataset_build_rejects_target_entity_level_mismatch_as_invalid_i
     assert data["retryable"] is False
     assert "entity_level" in data["message"]
     assert not (run_ctx.work_dir.root / "datasets_build").exists()
+
+
+def test_validate_dataset_build_spec_accepts_valid_spec(tmp_path: Path) -> None:
+    """A2a: the Agent-facing spec validator accepts a valid gene-expression spec."""
+    ctx = _make_ctx(tmp_path)
+    data = _call_validate_tool(ctx, _spec_json())
+    assert data["status"] == "valid"
+    assert data["valid"] is True
+    assert data["reason_codes"] == []
+
+
+def test_validate_dataset_build_spec_rejects_unknown_schema(tmp_path: Path) -> None:
+    """A2a: an unregistered schema_ref is reported with structured reasons."""
+    ctx = _make_ctx(tmp_path)
+    spec = json.loads(_spec_json())
+    spec["schema_ref"] = "no.such.schema.v1"
+    data = _call_validate_tool(ctx, json.dumps(spec))
+    assert data["status"] == "invalid"
+    assert data["valid"] is False
+    assert "unknown_schema" in data["reason_codes"]
+
+
+def test_validate_dataset_build_spec_rejects_unallowed_profile(tmp_path: Path) -> None:
+    """A2a: a validation profile outside the server allowlist is fail-closed."""
+    ctx = _make_ctx(tmp_path)
+    spec = json.loads(_spec_json())
+    spec["validation_profile_ref"] = "mutation.release.v1"
+    data = _call_validate_tool(ctx, json.dumps(spec))
+    assert data["status"] == "invalid"
+    assert "profile_not_allowed" in data["reason_codes"]
+
+
+def test_validate_dataset_build_spec_handles_bad_json(tmp_path: Path) -> None:
+    """A2a: malformed spec JSON is invalid_input, never a crash."""
+    ctx = _make_ctx(tmp_path)
+    data = _call_validate_tool(ctx, "{not json")
+    assert data["status"] == "invalid_input"
+    assert data["retryable"] is False
+
+
+
+
+
+def test_execute_dataset_build_records_real_download_attempts(tmp_path: Path) -> None:
+    """A2c: source assets carry a real, recorded DownloadAttempt (lineage closed).
+
+    Every pre-acquired source file must be backed by a persisted
+    ``DownloadAttempt`` on the RunContext instead of a bare generated uuid:
+    the SourceAsset's ``successful_attempt_id`` must resolve to a real
+    attempt with status ``succeeded``, and the published provenance.json must
+    expose the attempt reference.
+    """
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+
+    data = _call_tool(ctx, _spec_json(), json.dumps({"binding_gdc": rel}))
+
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.status.value == "succeeded"
+    assert attempt.attempt_id.startswith("download_attempt_")
+    assert attempt.source_id == "gdc"
+
+    # The published asset lineage points at the real attempt.
+    output_dir = Path(data["output_dir"])
+    publish_dirs = list((output_dir / "publish").glob("build_tool_test_*"))
+    provenance = json.loads(
+        (publish_dirs[0] / "provenance.json").read_text("utf-8")
+    )
+    assert provenance["sources"] == [
+        {
+            "binding_id": "binding_gdc",
+            "asset_id": provenance["sources"][0]["asset_id"],
+            "source_id": "binding_gdc",
+            "logical_file": "gdc_expression.tsv",
+            "sha256": provenance["sources"][0]["sha256"],
+            "successful_attempt_id": attempt.attempt_id,
+        }
+    ]
+
+
+def test_execute_dataset_build_records_attempt_per_binding(tmp_path: Path) -> None:
+    """A2c: one real attempt per source binding, each with its own asset link."""
+    ctx = _make_ctx(tmp_path)
+    run_ctx: RunContext = ctx.context
+    rel_gdc = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "gdc_expression.tsv")
+    rel_xena = _stage_fixture(run_ctx, "gdc/gdc_expression.tsv", "xena_expression.tsv")
+
+    data = _call_tool(ctx, _mixed_spec_json(), json.dumps(
+        {"binding_gdc": rel_gdc, "binding_xena": rel_xena}
+    ))
+
+    assert data["status"] == "ok"
+    attempts = run_ctx.download_attempts
+    assert len(attempts) == 2
+    assert {a.source_id for a in attempts} == {"gdc", "ucsc_xena"}
+    assert all(a.status.value == "succeeded" for a in attempts)

@@ -22,15 +22,16 @@ from agents.exceptions import MaxTurnsExceeded
 from app.agent_loop.context import RunContext
 from app.domain.contracts import (
     ArtifactProducedPayload,
+    PublicationCreatedPayload,
     RunCompletedPayload,
     RunFailedPayload,
     StartTaskRequest,
     UserInputRequiredPayload,
     UserInputResumedPayload,
 )
-from app.pipeline.runner import PipelineRunner
 from app.runtime.manager import TaskManager
 from app.runtime.repository import TaskRepository
+from tests.agent_loop._v2_build_helpers import run_fixture_build
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "ncbi" / "gse178352"
 
@@ -98,17 +99,9 @@ class _SuccessResult:
         self.output_dir = output_dir
 
     async def stream_events(self):
-        run_id = self.context.reserve_pipeline_publication()
-        assert run_id is not None
-        runner = PipelineRunner(
-            task_id=self.context.task_id,
-            base_dir=self.output_dir / "tasks",
-            fixture_dir=FIXTURE_DIR,
-            defer_publication=True,
-            run_id=run_id,
-        )
-        await runner.run()
-        self.context.set_pending_publication(runner.pending_publication())
+        envelope = await run_fixture_build(self.context)
+        if envelope.get("status") != "ok":
+            raise RuntimeError(f"fixture build failed: {envelope}")
         if False:
             yield None
 
@@ -230,7 +223,8 @@ async def test_max_turns_exceeded_emits_prompt_and_resumes_on_approve(
         completed_idx = payloads.index(completed[0])
 
         assert required_idx < resumed_idx < completed_idx
-        assert any(isinstance(p, ArtifactProducedPayload) for p in payloads)
+        # V2 语义：成功构建以 PublicationCreated 为完成证据。
+        assert any(isinstance(p, PublicationCreatedPayload) for p in payloads)
         assert not any(isinstance(p, RunFailedPayload) for p in payloads)
     finally:
         await manager.close()

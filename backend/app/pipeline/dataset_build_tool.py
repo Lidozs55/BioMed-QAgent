@@ -1,10 +1,8 @@
-"""V2 Dataset Build Agent-facing tool (Phase 2: PipelineRunner -> Legacy facade).
+"""V2 Dataset Build Agent-facing tool (V1 退役后唯一正式产物入口).
 
-``run_research_pipeline`` remains the V1 deterministic pipeline entry point;
-``execute_dataset_build`` is the V2 entry point that drives the same fixed
-skeleton through the Phase 2 execution kernel (ExpressionBuildRunner +
-DatasetBuildExecutor) with the Phase 6 release invariants gate and the
-Publication supersedes chain.
+``execute_dataset_build`` drives the fixed skeleton through the execution
+kernel (ExpressionBuildRunner + DatasetBuildExecutor) with the release
+invariants gate and the Publication supersedes chain.
 
 The Agent supplies a self-contained ``DatasetBuildSpec`` (JSON) plus a
 mapping of already-acquired source files (workdir-relative paths). The tool
@@ -17,13 +15,13 @@ import hashlib
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agents import RunContextWrapper, function_tool
 from pydantic import ValidationError
 
 from app.agent_loop.context import PendingDatasetBuild, RunContext
-from app.config import settings
 from app.datasets.build.cache import DatasetCacheV2
 from app.datasets.build.expression_runner import (
     _PUBLICATION_REFUSED_PREFIX,
@@ -50,6 +48,8 @@ from app.datasets.schema_registry import (
 from app.datasets.spec_validator import SpecValidator
 from app.domain.contracts import (
     DataLevel,
+    DownloadAttempt,
+    DownloadStatus,
     ErrorDetail,
     SourceAsset,
     asset_id_from_sha256,
@@ -135,6 +135,68 @@ def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
 
 
 @function_tool(
+    name_override="validate_dataset_build_spec",
+    description_override=(
+        "Validate a V2 DatasetBuildSpec JSON without starting a build. "
+        "Runs the same server-side SpecValidator (schema registry, entity-level "
+        "compatibility, per-binding adapter params, validation-profile "
+        "allowlist) that execute_dataset_build applies before any source file "
+        "is touched. Returns structured reason codes so the spec can be fixed "
+        "and retried instead of burning a build attempt on an invalid spec."
+    ),
+)
+async def validate_dataset_build_spec(
+    ctx: RunContextWrapper[RunContext],
+    spec: str,
+) -> str:
+    """Validate a V2 DatasetBuildSpec JSON without starting a build.
+
+    Args:
+        spec: DatasetBuildSpec as JSON.
+
+    Returns:
+        JSON string with ``status`` ("valid" | "invalid" | "invalid_input"),
+        ``valid``, ``reason_codes`` and ``reasons`` (empty when valid).
+    """
+    try:
+        build_spec = DatasetBuildSpec.model_validate_json(spec)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return json.dumps(
+            {
+                "status": "invalid_input",
+                "message": f"could not parse spec: {exc}",
+                "retryable": False,
+            },
+            ensure_ascii=False,
+        )
+    result = _build_spec_validator().validate(build_spec)
+    return json.dumps(
+        {
+            "status": "valid" if result.valid else "invalid",
+            "valid": result.valid,
+            "reason_codes": list(result.reason_codes),
+            "reasons": list(result.reasons),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _build_spec_validator() -> SpecValidator:
+    """Shared SpecValidator configuration for the V2 tools.
+
+    Single definition of the schema registry (gene/probe expression) and the
+    validation-profile allowlist so ``validate_dataset_build_spec`` and
+    ``execute_dataset_build`` can never drift apart.
+    """
+    return SpecValidator(
+        registry=SchemaRegistry(
+            [build_gene_expression_schema(), build_probe_expression_schema()]
+        ),
+        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
+    )
+
+
+@function_tool(
     name_override="execute_dataset_build",
     description_override=(
         "Execute a V2 dataset build: given a self-contained DatasetBuildSpec "
@@ -144,8 +206,7 @@ def _ensure_build_output_inside(build_root: Path, build_id: str) -> Path:
         "validate profile -> publish) through the execution kernel and "
         "publishes an immutable version with a supersedes chain. "
         "Prefer this for expression-data builds when the required source files "
-        "have already been downloaded (e.g. GDC/Xena matrices); otherwise use "
-        "run_research_pipeline for full discovery-driven runs."
+        "have already been downloaded (e.g. GDC/Xena matrices)."
     ),
 )
 async def execute_dataset_build(
@@ -212,12 +273,7 @@ async def execute_dataset_build(
     # build under a probe schema (or a probe build under the gene profile) is
     # invalid_input with the validator's structured reasons — never a build
     # that could publish probe rows under the gene release gate.
-    spec_validation = SpecValidator(
-        registry=SchemaRegistry(
-            [build_gene_expression_schema(), build_probe_expression_schema()]
-        ),
-        allowed_validation_profiles=frozenset(VALIDATION_PROFILES),
-    ).validate(build_spec)
+    spec_validation = _build_spec_validator().validate(build_spec)
     if not spec_validation.valid:
         return json.dumps(
             {
@@ -257,13 +313,32 @@ async def execute_dataset_build(
             ensure_ascii=False,
         )
 
-    # Resolve files and build content-addressed SourceAssets.
+    # Resolve files and build content-addressed SourceAssets. A2c: every
+    # pre-acquired source file is backed by a REAL DownloadAttempt recorded on
+    # the RunContext (status=succeeded), so the SourceAsset's
+    # ``successful_attempt_id`` resolves to a persisted attempt and the
+    # publication provenance chain is closed — never a bare generated uuid.
     assets: dict[str, SourceAsset] = {}
     paths: dict[str, Path] = {}
+    bindings_by_id = {
+        binding.binding_id: binding for binding in build_spec.source_bindings
+    }
     try:
         for binding_id, relative in files_mapping.items():
             path = resolve_task_local_file(run_ctx.work_dir, str(relative))
             checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+            binding = bindings_by_id.get(binding_id)
+            now = datetime.now(UTC)
+            attempt = DownloadAttempt(
+                attempt_id=generate_prefixed_uuid("download_attempt"),
+                source_id=binding.source if binding else binding_id,
+                url=f"local://{relative}",
+                status=DownloadStatus.SUCCEEDED,
+                bytes_received=path.stat().st_size,
+                started_at=now,
+                finished_at=now,
+            )
+            run_ctx.record_download_attempt(attempt)
             assets[binding_id] = SourceAsset(
                 asset_id=asset_id_from_sha256(checksum),
                 kind="source",
@@ -272,7 +347,7 @@ async def execute_dataset_build(
                 size_bytes=path.stat().st_size,
                 media_type=_infer_media_type(path),
                 source_id=binding_id,
-                successful_attempt_id=generate_prefixed_uuid("download_attempt"),
+                successful_attempt_id=attempt.attempt_id,
                 data_level=DataLevel.REPOSITORY_PROCESSED,
             )
             paths[binding_id] = path
@@ -474,7 +549,12 @@ async def execute_dataset_build(
     # dataset cache so later tasks can discover/reuse it by keyword.
     cache_entry = None
     try:
-        cache = DatasetCacheV2(Path(settings.output_dir).parent / "cache")
+        # T2 (Phase 7 review): derive the cache root from the task workdir
+        # (``<base>/tasks/<task_id>`` → ``<base>/cache``) so tool writes and
+        # API reads always share one root — the module-level
+        # ``settings.output_dir`` disagreed with the repository tasks dir
+        # under test deployments and dual-read 409'd on integrity checks.
+        cache = DatasetCacheV2(run_ctx.work_dir.root.parents[2] / "cache")
         cache_entry = cache.commit(
             namespace="build",
             output_dir=output_dir,
